@@ -122,6 +122,25 @@ class HistoryEntrySupportTest {
         )
     }
 
+    @Test
+    fun trimAppStateHistoryToLimit_dropsLeastRecentlyVisitedAndProtectsNewEntries() {
+        val history = listOf(
+            historyEntry(threadId = "1", lastVisitedEpochMillis = 500L),
+            historyEntry(threadId = "2", lastVisitedEpochMillis = 100L),
+            historyEntry(threadId = "3", lastVisitedEpochMillis = 300L),
+            historyEntry(threadId = "4", lastVisitedEpochMillis = 100L),
+            historyEntry(threadId = "new", lastVisitedEpochMillis = 50L)
+        )
+        assertEquals(history, trimAppStateHistoryToLimit(history, maxEntries = 5))
+
+        val newKey = historyEntryIdentity(history.last())
+        val trimmed = trimAppStateHistoryToLimit(history, maxEntries = 3, protectedKeys = setOf(newKey))
+        // Oldest first; on a tie the entry further down the list goes first.
+        assertEquals(listOf("1", "3", "new"), trimmed.map { it.threadId })
+
+        assertEquals(listOf("1", "2", "3"), trimAppStateHistoryToLimit(history, maxEntries = 3).map { it.threadId })
+    }
+
     private fun historyEntry(
         threadId: String = "123",
         boardId: String = "b",

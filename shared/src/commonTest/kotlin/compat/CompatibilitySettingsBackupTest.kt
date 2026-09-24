@@ -65,4 +65,20 @@ class CompatibilitySettingsBackupTest {
 
         assertEquals(setOf(COMPAT_WATCH_WORDS_PREFERENCE_KEY), filtered.preferences.keys)
     }
+
+    @Test
+    fun imageHashCacheIsNeitherExportedNorBlockingRestoreOfOldBackups() {
+        val hashes = (0 until 5_000).associate { compatImagePhashCachePreferenceKey("https://img/$it.jpg") to "0123456789abcdef" }
+        val backup = CompatSettingsBackup(
+            exportedAtEpochMillis = 1L,
+            preferences = hashes + ("compat.thread.threadExtractSoudaneNum" to "5")
+        )
+
+        assertEquals(mapOf("compat.thread.threadExtractSoudaneNum" to "5"), backup.settingsOnly().preferences)
+
+        // Files written by older versions contain thousands of hash rows; they
+        // must restore instead of failing the 4096-setting check.
+        val raw = kotlinx.serialization.json.Json.encodeToString(CompatSettingsBackup.serializer(), backup)
+        assertEquals(mapOf("compat.thread.threadExtractSoudaneNum" to "5"), decodeCompatSettingsBackup(raw).preferences)
+    }
 }

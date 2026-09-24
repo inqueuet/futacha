@@ -73,4 +73,14 @@ class CompatDrawerSwipeSupportTest {
             )
         )
     }
+
+    @Test
+    fun visibleDrawerWidthFollowsPreviewAndSheetOffset() {
+        assertEquals(40f, compatDrawerVisibleWidthPx(40f, isClosed = true, isOpen = false, currentOffset = -320f, widthPx = 320f))
+        assertEquals(120f, compatDrawerVisibleWidthPx(0f, isClosed = false, isOpen = false, currentOffset = -200f, widthPx = 320f))
+        assertEquals(0f, compatDrawerVisibleWidthPx(0f, isClosed = true, isOpen = false, currentOffset = -400f, widthPx = 320f))
+        assertEquals(320f, compatDrawerVisibleWidthPx(0f, isClosed = false, isOpen = true, currentOffset = 10f, widthPx = 320f))
+        assertEquals(320f, compatDrawerVisibleWidthPx(0f, isClosed = false, isOpen = true, currentOffset = Float.NaN, widthPx = 320f))
+        assertEquals(0f, compatDrawerVisibleWidthPx(0f, isClosed = true, isOpen = false, currentOffset = Float.NaN, widthPx = 320f))
+    }
 }

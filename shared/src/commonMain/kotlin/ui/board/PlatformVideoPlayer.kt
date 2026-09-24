@@ -157,3 +157,15 @@ internal expect fun NativePlatformVideoPlayer(
     onPlaybackError: (VideoPlaybackError) -> Unit,
     editing: VideoEditPlayback? = null
 )
+
+/**
+ * How long the iOS player status loop may wait before checking again. While
+ * loading or playing it polls every 200 ms; once paused or finished with its
+ * media info reported it waits up to 2 seconds, and AVPlayer rate / end
+ * notifications wake it earlier, so a paused viewer does not poll 5 times a second.
+ */
+internal fun avPlayerStatusPollDelayMillis(
+    state: VideoPlayerState?,
+    itemReady: Boolean,
+    mediaInfoReported: Boolean
+): Long = if (state == VideoPlayerState.Idle && itemReady && mediaInfoReported) 2_000L else 200L

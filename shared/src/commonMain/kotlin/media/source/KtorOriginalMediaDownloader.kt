@@ -103,7 +103,7 @@ class KtorOriginalMediaDownloader(
     override suspend fun retryAfter(retry: Int, failure: Throwable): Boolean {
         if (failure is CancellationException) return false
         val retryable = when (failure) {
-            is OriginalMediaRejectedResponse, is OriginalMediaWriteFailure -> false
+            is OriginalMediaRejectedResponse, is OriginalMediaWriteFailure, is OriginalMediaNotCached -> false
             is OriginalMediaIncompleteResponse -> true
             is HttpException -> failure.response.code in setOf(500, 502, 503, 504)
             else -> isRetryableImageConnectionFailure(failure)

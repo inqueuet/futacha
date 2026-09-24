@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
 import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 
@@ -14,7 +15,9 @@ suspend fun refreshSharedFeatures(
     store: CompatibilityStore, repository: BoardRepository, isWifiConnected: Boolean,
     maxTabs: Int = 20,
     onNewMatches: suspend (List<CompatWatchMatch>) -> Unit = {},
-    commitGate: suspend (suspend () -> Unit) -> Boolean = { commit -> commit(); true }
+    commitGate: suspend (suspend () -> Unit) -> Boolean = { commit -> commit(); true },
+    /** See [refreshCompatTabsInBackground]; background hosts leave time for the history refresh. */
+    budgetMillis: Long? = null
 ) {
     val preferences = store.preferences.first()
     val now = Clock.System.now().toEpochMilliseconds()
@@ -23,15 +26,24 @@ suspend fun refreshSharedFeatures(
         parseCompatForegroundLastCheckEpochMillis(preferences[COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE]),
         parseCompatForegroundNetworkPolicy(preferences["compat.background.backgroundThreadUpdateCheck"]),
         parseCompatForegroundNetworkPolicy(preferences["compat.background.backgroundThreadExistCheck"]), isWifiConnected)
-    val watch = compatWatchAllowed(preferences, isWifiConnected)
+    // Persisted like the other check times, so returning to the foreground or a
+    // new process does not restart the interval (the foreground loop ticks every minute).
+    val watch = compatWatchAllowed(preferences, isWifiConnected) && hasEpochIntervalElapsed(
+        nowMillis = now,
+        startedAtMillis = parseCompatForegroundLastCheckEpochMillis(preferences[COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE]),
+        intervalMillis = COMPAT_WATCH_INTERVAL_MILLIS
+    )
     if (!plan.hasWork && !watch) return
     val result = refreshCompatTabsInBackground(store, repository, maxTabs = maxTabs,
         checkUpdates = plan.checkUpdates, checkExistence = plan.checkExistence,
-        checkWatchWords = watch, commitGate = commitGate)
+        checkWatchWords = watch, commitGate = commitGate, budgetMillis = budgetMillis)
     commitGate {
         val completed = compatForegroundLastCheckStoredValue(now)
-        if (plan.checkUpdates) store.savePreference(COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE, completed)
-        if (plan.checkExistence) store.savePreference(COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE, completed)
+        store.savePreferences(buildMap {
+            if (plan.checkUpdates) put(COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE, completed)
+            if (plan.checkExistence) put(COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE, completed)
+            if (watch) put(COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE, completed)
+        })
     }
     if (preferences[COMPAT_WATCH_NOTIFY_KEY] != "OFF" && result.newWatchMatches.isNotEmpty())
         commitGate { onNewMatches(result.newWatchMatches) }

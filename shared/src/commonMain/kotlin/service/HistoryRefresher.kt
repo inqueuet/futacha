@@ -37,6 +37,9 @@ import kotlin.time.Clock
 
 private const val HISTORY_REFRESH_TAG = "HistoryRefresher"
 private const val SKIP_THREAD_TTL_MILLIS = 12 * 60 * 60 * 1000L
+// Deliberately shorter than one HTTP attempt (35 s): the background run has a
+// fixed budget and one hung thread must not use it up. A fast failure still
+// leaves time for a retry inside this budget.
 private const val DEFAULT_THREAD_FETCH_TIMEOUT_MILLIS = 30_000L
 private const val DEFAULT_MAX_AUTO_SAVES_PER_REFRESH = 5
 private const val HISTORY_FLUSH_MAX_RETRIES = 5

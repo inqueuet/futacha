@@ -77,6 +77,21 @@ internal class ModelStore(
         }
     }
 
+    /**
+     * Whether a model file of the right size is installed, without hashing it.
+     * For listings only: sessions still use [verified], so a same-size corrupt
+     * file is never executed.
+     */
+    suspend fun present(model: AnalysisModel, permit: MediaFeaturePermit): Boolean = allowed(permit) {
+        owned {
+            locks.getValue(model).withLock {
+                val spec = catalog.getValue(model)
+                val metadata = fileSystem.metadataOrNull(modelDirectory().resolve("${spec.sha256}.onnx"))
+                metadata != null && metadata.isRegularFile && metadata.symlinkTarget == null && metadata.size == spec.bytes
+            }
+        }
+    }
+
     /** Rehash on every session acquisition. A same-size corrupted file is never executable. */
     suspend fun verified(model: AnalysisModel, permit: MediaFeaturePermit): VerifiedModel? = allowed(permit) {
         owned { locks.getValue(model).withLock { verifiedOnDisk(catalog.getValue(model)) } }

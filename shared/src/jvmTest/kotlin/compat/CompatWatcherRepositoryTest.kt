@@ -21,6 +21,7 @@ class CompatWatcherRepositoryTest {
     private class Fixture(boards: List<CompatBoard> = emptyList()) {
         val preferences = MutableStateFlow<Map<String, String>>(emptyMap())
         val history = MutableStateFlow<List<CompatHistoryEntry>>(emptyList())
+        var savePreferencesCalls = 0
         val store = Proxy.newProxyInstance(CompatibilityStore::class.java.classLoader, arrayOf(CompatibilityStore::class.java)) { _, method, args ->
             when (method.name) {
                 "getPreferences" -> preferences
@@ -30,6 +31,16 @@ class CompatWatcherRepositoryTest {
                 "savePreference" -> {
                     requireValidCompatPreference(args[0] as String, args[1] as String)
                     preferences.value += (args[0] as String to args[1] as String)
+                    Unit
+                }
+                "savePreferences" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val values = args[0] as Map<String, String?>
+                    savePreferencesCalls++
+                    values.forEach { (key, value) -> if (value != null) requireValidCompatPreference(key, value) }
+                    preferences.value = preferences.value.toMutableMap().apply {
+                        values.forEach { (key, value) -> if (value == null) remove(key) else put(key, value) }
+                    }
                     Unit
                 }
                 "upsertHistory" -> {
@@ -150,6 +161,82 @@ class CompatWatcherRepositoryTest {
         assertFailsWith<CancellationException> {
             refreshCompatTabsInBackground(f.store, repository, 100, checkUpdates = false, checkExistence = false, checkWatchWords = true)
         }
+    }
+
+    @Test fun recordAllWritesOnceAndMatchesSequentialRecordSemantics() = runBlocking {
+        val batched = Fixture()
+        val sequential = Fixture()
+        val matches = listOf(match(1, 100), match(2, 100), match(1, 100), match(3, 100))
+
+        val newUrls = CompatWatcherRepository(batched.store).recordAll(matches)
+        val sequentialNew = matches.filter { CompatWatcherRepository(sequential.store).record(it) }
+            .map { it.history.canonicalUrl }.toSet()
+
+        assertEquals(1, batched.savePreferencesCalls)
+        assertEquals(sequentialNew, newUrls)
+        assertEquals(
+            CompatWatcherRepository(sequential.store).load(100),
+            CompatWatcherRepository(batched.store).load(100)
+        )
+    }
+
+    @Test fun expiredAndLegacyBlankResultsAreDeletedInsteadOfBlanked() = runBlocking {
+        val f = Fixture()
+        val r = CompatWatcherRepository(f.store)
+        r.record(match(1, 100))
+        f.preferences.value += ("compat.watcher.result.499" to "")
+
+        val later = 100 + COMPAT_WATCH_RETENTION_MILLIS + 1
+        assertTrue(r.load(later).isEmpty())
+        assertTrue(f.preferences.value.keys.none { it.startsWith("compat.watcher.result.") })
+    }
+
+    @Test fun probeOutcomesAreWrittenInBatches() = runBlocking {
+        val f = Fixture(listOf(board))
+        val r = CompatWatcherRepository(f.store)
+        r.saveRules(listOf(CompatWatchRule("猫", board.key)))
+        r.recordAll((1..25).map { match(it, 10) })
+        val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getCatalog" -> emptyList<CatalogItem>()
+                "probeThreadGone" -> false
+                else -> error("Unexpected repository call: ${method.name}")
+            }
+        } as BoardRepository
+        f.savePreferencesCalls = 0
+
+        refreshCompatTabsInBackground(f.store, repository, 100, checkUpdates = false, checkExistence = false, checkWatchWords = true)
+
+        // 25 outcomes -> batches of 10, 10 and 5, not 25 separate writes.
+        assertEquals(3, f.savePreferencesCalls)
+        assertTrue(r.load(100).all { it.checkedAtEpochMillis == 100L })
+    }
+
+    @Test fun sharedRefreshSkipsWatchWithinTheIntervalAndResumesAfterIt() = runBlocking {
+        val f = Fixture(listOf(board))
+        CompatWatcherRepository(f.store).saveRules(listOf(CompatWatchRule("猫", board.key)))
+        var catalogRequests = 0
+        val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getCatalog" -> { catalogRequests++; emptyList<CatalogItem>() }
+                else -> error("Unexpected repository call: ${method.name}")
+            }
+        } as BoardRepository
+
+        refreshSharedFeatures(f.store, repository, isWifiConnected = true)
+        assertEquals(2, catalogRequests) // new and old order
+        val stored = f.preferences.value.getValue(COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE)
+        // Epoch seconds, like the other stored check times.
+        assertTrue(stored.toLong() < 100_000_000_000L)
+
+        // The foreground loop ticks every minute and after every return to the app.
+        refreshSharedFeatures(f.store, repository, isWifiConnected = true)
+        assertEquals(2, catalogRequests)
+
+        f.preferences.value += (COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE to
+            compatForegroundLastCheckStoredValue(System.currentTimeMillis() - COMPAT_WATCH_INTERVAL_MILLIS - 1_000L))
+        refreshSharedFeatures(f.store, repository, isWifiConnected = true)
+        assertEquals(4, catalogRequests)
     }
 
     @Test fun matchingFoldsAsciiAndVoicedHalfwidthKana() {

@@ -63,7 +63,8 @@ class AppStateStore internal constructor(
     private val historyFileStore: AppStateHistoryFileStore? = null,
     private val json: Json = Json {
         ignoreUnknownKeys = true
-    }
+    },
+    scrollDebounceDelayMillis: Long = SCROLL_DEBOUNCE_DELAY_MS
 ) {
     // FIX: 複数のMutexを使用する際のデッドロック防止ガイドライン
     // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
@@ -114,7 +115,7 @@ class AppStateStore internal constructor(
         rethrowIfCancellation = ::rethrowIfCancellation
     )
     private val scrollPersistenceCoordinator = AppStateHistoryScrollPersistenceCoordinator(
-        debounceDelayMillis = SCROLL_DEBOUNCE_DELAY_MS,
+        debounceDelayMillis = scrollDebounceDelayMillis,
         buildScrollKey = { request ->
             buildHistoryScrollJobKey(request.threadId, request.boardId, request.boardUrl)
         },
@@ -298,6 +299,16 @@ class AppStateStore internal constructor(
     ) = boardsCoordinator.updateBoards(transform)
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) = historyOperations.setHistory(history)
+
+    /** See [AppStateHistoryOperations.beginHistoryImport]. */
+    suspend fun beginHistoryImport(): HistoryImportTicket = historyOperations.beginHistoryImport()
+
+    suspend fun mergeImportedHistory(
+        imported: Collection<ThreadHistoryEntry>,
+        ticket: HistoryImportTicket
+    ): HistoryArchiveImportMergeResult = historyOperations.mergeImportedHistory(imported, ticket)
+
+    suspend fun endHistoryImport(ticket: HistoryImportTicket) = historyOperations.endHistoryImport(ticket)
 
     suspend fun clearHistory() = historyOperations.clearHistory()
 
@@ -486,17 +497,16 @@ class AppStateStore internal constructor(
 
     suspend fun updateHistoryScrollPositionImmediately(
         request: AppStateHistoryScrollUpdateRequest
-    ) = performHistoryScrollPositionImmediateUpdate(request)
+    ) = historyOperations.updateHistoryScrollPositionImmediate(request)
 
     /**
-     * Immediate update of scroll position without debouncing.
-     * Internal method used by the debounced public method.
-     * FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
+     * Write used by the debounced scroll job and the scope-less fallback.
+     * It must not cancel pending jobs: the caller is that pending job.
      */
     private suspend fun performHistoryScrollPositionImmediateUpdate(
         request: AppStateHistoryScrollUpdateRequest
     ) {
-        historyOperations.updateHistoryScrollPositionImmediate(request)
+        historyOperations.persistHistoryScrollPosition(request)
     }
 
     suspend fun seedIfEmpty(defaults: AppStateSeedDefaults) {

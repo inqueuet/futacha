@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -26,6 +27,7 @@ import com.valoser.futacha.shared.ui.board.*
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Rule
@@ -51,11 +53,17 @@ class FutachaSharedFeaturesInstrumentedTest {
         loader?.shutdown()
     }
 
-    private fun openThread(preferences: Map<String, String> = emptyMap()): AndroidCompatibilityStore {
+    private fun openThread(
+        preferences: Map<String, String> = emptyMap(),
+        ngRules: List<CompatNgRule> = emptyList(),
+        awaitContent: Boolean = true,
+        ngRulesDelayMillis: Long = 0L
+    ): AndroidCompatibilityStore {
         val storage = AndroidCompatibilityStore(rule.activity, databaseName = databaseName).also { store = it }
         runBlocking {
             storage.initialize()
             preferences.forEach { (key, value) -> storage.savePreference(key, value) }
+            ngRules.forEach { storage.upsertNgRule(it) }
         }
         val board = BoardSummary("shared-ui", "共有確認板", "test", "https://may.2chan.net/b/", "")
         val page = ThreadPage("123", board.name, null, null, listOf(
@@ -66,11 +74,19 @@ class FutachaSharedFeaturesInstrumentedTest {
             override suspend fun getThreadContentByUrl(threadUrl: String) = ThreadPageContent(page)
         }
         val images = ImageLoader(rule.activity).also { loader = it }
+        // A slow store delivers its NG rules late; screens must not show posts meanwhile.
+        // Built outside composition so recomposing does not restart the delayed flow.
+        val sharedStore: CompatibilityStore = if (ngRulesDelayMillis <= 0L) storage else object : CompatibilityStore by storage {
+            // Real time: composition coroutines here run on the test's virtual clock.
+            override val ngRules = storage.ngRules.onStart {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Thread.sleep(ngRulesDelayMillis) }
+            }
+        }
         rule.runOnUiThread { rule.activity.setContent {
             FutachaTheme(themeMode, themePalette) { CompositionLocalProvider(LocalFutachaImageLoader provides images) {
                 hostColors = MaterialTheme.colorScheme
                 hostChrome = LocalFutachaChromeColors.current
-                ProvideFutachaSharedFeatures(storage, null, repository, null, null, "test") {
+                ProvideFutachaSharedFeatures(sharedStore, null, repository, null, null, "test") {
                     sharedColors = MaterialTheme.colorScheme
                     sharedChrome = LocalFutachaChromeColors.current
                     val screenPreferences = ScreenPreferencesState("test", themeMode = themeMode, themePalette = themePalette)
@@ -90,7 +106,9 @@ class FutachaSharedFeaturesInstrumentedTest {
                 }
             } }
         } }
-        rule.waitUntil(15_000) { rule.onAllNodesWithText("通常の投稿です").fetchSemanticsNodes().isNotEmpty() }
+        if (awaitContent) {
+            rule.waitUntil(15_000) { rule.onAllNodesWithText("通常の投稿です").fetchSemanticsNodes().isNotEmpty() }
+        }
         return storage
     }
 
@@ -167,10 +185,21 @@ class FutachaSharedFeaturesInstrumentedTest {
             rule.onNodeWithText("端末の通知を許可").performScrollTo()
             assertReadableText("端末の通知を許可", colors.surfaceContainerHigh)
             saveScreenshot("readable-watcher-$palette.png")
-            androidx.test.espresso.Espresso.pressBack()
-            androidx.test.espresso.Espresso.pressBack()
-            androidx.test.espresso.Espresso.pressBack()
+            // Back closes the watcher manager, the watcher results dialog and the
+            // drawer in turn. Wait for each layer to leave before the next Back:
+            // a Back sent while a dialog window is still being removed finds no
+            // focused window and Espresso times out.
+            pressBackUntil { gone("端末の通知を許可") && !gone("保存済み結果を再読込") }
+            pressBackUntil { gone("保存済み結果を再読込") && rule.activity.hasWindowFocus() }
+            pressBackUntil { rule.activity.hasWindowFocus() }
         }
+    }
+
+    private fun gone(label: String) = rule.onAllNodesWithText(label).fetchSemanticsNodes().isEmpty()
+
+    private fun pressBackUntil(condition: () -> Boolean) {
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(10_000, condition)
     }
 
     private fun assertReadableText(label: String, background: Color) {
@@ -203,14 +232,31 @@ class FutachaSharedFeaturesInstrumentedTest {
         rule.onNodeWithText("バックグラウンド・通信").performClick()
         rule.onNodeWithText("巡回管理").performScrollTo().performClick()
         rule.onNodeWithText("履歴・巡回のヘルプ").performScrollTo().performClick()
+        rule.waitUntil(10_000) { helpDocumentScript("document.querySelectorAll('label').length > 0") == "true" }
+        assertEquals("\"板一覧\"", helpDocumentScript("document.querySelector('label').textContent"))
+        assertEquals("false", helpDocumentScript("document.getElementById('watcher-help').checked"))
+        helpDocumentScript("document.querySelector('label[for=\"watcher-help\"]').click()")
+        assertEquals("true", helpDocumentScript("document.getElementById('watcher-help').nextElementSibling.offsetHeight > 0"))
+        helpDocumentScript("document.querySelector('label[for=\"watcher-help\"]').click()")
+        assertEquals("false", helpDocumentScript("document.getElementById('watcher-help').checked"))
         rule.onNodeWithTag("help-search-field").performTextInput("にじろぐ")
         rule.onNodeWithTag("help-search-results").assertIsDisplayed()
-        rule.onNodeWithText("標準のアプリ内巡回に、にじろぐのインストールや起動は不要です。", substring = true).performScrollTo().assertIsDisplayed()
+        rule.waitUntil(10_000) { helpDocumentScript("document.querySelectorAll('mark').length > 0") == "true" }
+        assertHelpSearchDocument("にじろぐ")
+        helpDocumentScript("document.querySelector('label[for=\"watcher-help\"]').click()")
+        assertEquals("false", helpDocumentScript("document.getElementById('watcher-help').checked"))
+        rule.onNodeWithTag("help-search-field").performTextReplacement("強制停止")
+        rule.waitUntil(10_000) { helpDocumentScript("document.querySelector('mark')?.textContent === '強制停止'") == "true" }
+        assertHelpSearchDocument("強制停止")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        helpDocumentScript("document.querySelector('mark').scrollIntoView({block:'center'})")
         saveScreenshot("v11.4-help-search.png")
         rule.onNodeWithTag("help-search-field").performTextReplacement("no-such-help-word-114")
         rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
         rule.onNodeWithText("クリア").performClick()
         rule.onNodeWithTag("compat-help-content").assertIsDisplayed()
+        rule.waitUntil(10_000) { helpDocumentScript("document.querySelectorAll('label').length > 0") == "true" }
+        assertEquals("false", helpDocumentScript("document.getElementById('watcher-help').checked"))
         androidx.test.espresso.Espresso.closeSoftKeyboard()
         rule.onAllNodesWithContentDescription("戻る").onLast().performClick()
         rule.onNodeWithText("履歴・巡回のヘルプ").assertExists()
@@ -244,5 +290,40 @@ class FutachaSharedFeaturesInstrumentedTest {
         rule.onNodeWithText("通常の投稿です").assertExists()
         rule.waitUntil(5_000) { runBlocking { storage.tabs.first().any { it.threadNo == "123" } } }
         assertEquals("共有確認スレッド", runBlocking { storage.tabs.first().single().title })
+    }
+
+    @Test fun lateSharedNgRulesNeverLetTheirPostShow() {
+        openThread(ngRules = listOf(CompatNgRule("ui-late-ng", CompatNgKind.THREAD_IGNORE, "*",
+            "共通で隠れる", System.currentTimeMillis())), awaitContent = false, ngRulesDelayMillis = 1_500L)
+        val start = System.currentTimeMillis()
+        var shown = false
+        // Watch until the post is shown and the delayed rules have arrived, up to 20 s.
+        while (System.currentTimeMillis() - start < 20_000L && !(shown && System.currentTimeMillis() - start > 3_000L)) {
+            // Used to render with an empty rule list until the rules arrived.
+            assertTrue(rule.onAllNodesWithText("共通で隠れる投稿").fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty())
+            shown = shown || rule.onAllNodesWithText("通常の投稿です").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            Thread.sleep(50)
+        }
+        assertTrue("thread never showed its visible post: " +
+            rule.onAllNodes(hasText("", substring = true), useUnmergedTree = true).fetchSemanticsNodes(false)
+                .mapNotNull { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() }
+                .take(40), shown)
+    }
+
+    @Test fun existingSharedNgNeverShowsItsPostWhenTheThreadOpens() {
+        rule.mainClock.autoAdvance = false
+        openThread(ngRules = listOf(CompatNgRule("ui-initial-ng", CompatNgKind.THREAD_IGNORE, "*",
+            "共通で隠れる", System.currentTimeMillis())), awaitContent = false)
+        var shown = false
+        repeat(600) {
+            if (shown) return@repeat
+            rule.mainClock.advanceTimeByFrame()
+            // Used to render the post first and hide it once the rules arrived.
+            assertTrue(rule.onAllNodesWithText("共通で隠れる投稿").fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty())
+            shown = rule.onAllNodesWithText("通常の投稿です").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            if (!shown) Thread.sleep(5)
+        }
+        assertTrue("thread never showed its visible post", shown)
+        rule.mainClock.autoAdvance = true
     }
 }

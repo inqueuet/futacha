@@ -262,6 +262,47 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         validateFileSystemRelativePath(relativePath, paramName, allowEmpty)
     }.exceptionOrNull()
 
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> = runCatching {
+        validateFileSystemPath(fromPath)
+        validateFileSystemPath(toPath)
+        val from = File(resolveAbsolutePath(fromPath)).toPath()
+        val to = File(resolveAbsolutePath(toPath)).toPath()
+        to.parent?.let { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.deleteIfExists(to)
+        try {
+            java.nio.file.Files.createLink(to, from)
+        } catch (_: Exception) {
+            // Other volume or no link support: copy the finished file instead.
+            java.nio.file.Files.copy(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        Unit
+    }
+
+    override fun supportsAtomicReplace(base: SaveLocation): Boolean = base is SaveLocation.Path
+
+    override suspend fun replaceAtomically(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<Unit> = runCatching {
+        val path = base as? SaveLocation.Path
+            ?: throw UnsupportedOperationException("Atomic replace needs a file path location")
+        validateFileSystemPath(fromRelative)
+        validateFileSystemPath(toRelative)
+        val from = File(resolveAbsolutePath(join(path.path, fromRelative))).toPath()
+        val to = File(resolveAbsolutePath(join(path.path, toRelative))).toPath()
+        try {
+            java.nio.file.Files.move(
+                from, to,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            // Still a move of the finished file; the destination is never truncated first.
+            java.nio.file.Files.move(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
     private fun join(base: String, relativePath: String): String =
         if (relativePath.isBlank()) base else "$base/$relativePath"
 

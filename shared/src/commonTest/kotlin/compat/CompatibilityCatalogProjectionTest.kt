@@ -6,7 +6,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.CoroutineContext
-import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.measureTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -143,14 +144,21 @@ class CompatibilityCatalogProjectionTest {
     @Test
     fun largeProjectionKeepsDeterministicWorkWithinRegressionBudget() {
         val request = projectionRequest(3_000)
+        assertEquals(referenceProjection(request), buildCompatCatalogProjection(request))
 
-        val elapsed = measureTime {
-            repeat(10) {
-                assertEquals(referenceProjection(request), buildCompatCatalogProjection(request))
-            }
+        // Interleave both runs so machine load (parallel Gradle workers, a busy simulator) slows them alike;
+        // an absolute wall-clock budget failed under qualityGate while each run took ~0.13 s on iOS.
+        var referenceElapsed = Duration.ZERO
+        var projectionElapsed = Duration.ZERO
+        repeat(10) {
+            referenceElapsed += measureTime { referenceProjection(request) }
+            projectionElapsed += measureTime { buildCompatCatalogProjection(request) }
         }
 
-        assertTrue(elapsed < 5.seconds, "3000-item projection regression: $elapsed")
+        assertTrue(
+            projectionElapsed < referenceElapsed * 3 + 200.milliseconds,
+            "3000-item projection regression: $projectionElapsed vs reference $referenceElapsed"
+        )
     }
 
     private fun projectionRequest(size: Int): CompatCatalogProjectionRequest {

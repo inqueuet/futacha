@@ -3,6 +3,11 @@
 
 package com.valoser.futacha.shared.ui.board
 
+import platform.AVFoundation.AVPlayerItemFailedToPlayToEndTimeNotification
+import platform.AVFoundation.AVPlayerItemDidPlayToEndTimeNotification
+import platform.AVFoundation.AVPlayerRateDidChangeNotification
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.Channel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -238,6 +243,17 @@ private fun NativeAvVideoPlayer(
             }
         } finally { preview.pausePlayer = null }
     }
+    // Woken by rate/end notifications so the idle wait below reacts immediately.
+    val statusWake = remember(player) { Channel<Unit>(Channel.CONFLATED) }
+    DisposableEffect(player) {
+        val center = NSNotificationCenter.defaultCenter
+        val observers = listOf(
+            center.addObserverForName(AVPlayerRateDidChangeNotification, player, null) { statusWake.trySend(Unit) },
+            center.addObserverForName(AVPlayerItemDidPlayToEndTimeNotification, null, null) { statusWake.trySend(Unit) },
+            center.addObserverForName(AVPlayerItemFailedToPlayToEndTimeNotification, null, null) { statusWake.trySend(Unit) }
+        )
+        onDispose { observers.forEach(center::removeObserver) }
+    }
     LaunchedEffect(videoUrl, player) {
         onStateChanged(VideoPlayerState.Buffering)
         var lastState: VideoPlayerState? = VideoPlayerState.Buffering
@@ -297,7 +313,16 @@ private fun NativeAvVideoPlayer(
                     onMediaInfoKnown(info)
                 }
             }
-            delay(200)
+            val wait = avPlayerStatusPollDelayMillis(
+                state = lastState,
+                itemReady = item?.status == AVPlayerItemStatusReadyToPlay,
+                mediaInfoReported = reportedMediaInfo != null
+            )
+            if (wait > 200L) {
+                withTimeoutOrNull(wait) { statusWake.receive() }
+            } else {
+                delay(wait)
+            }
         }
     }
     UIKitView(

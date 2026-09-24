@@ -90,6 +90,7 @@ class HistoryRefreshWorker(
             )
             return Result.success()
         }
+        awaitNetworkServicesOrResult()?.let { return it }
 
         return try {
             AnalyticsTracker.event("background_refresh_started", mapOf("source" to "workmanager"))
@@ -103,7 +104,7 @@ class HistoryRefreshWorker(
                                 markWatchAlertMatchesNotified(applicationContext, fresh)
                         }, commitGate = { commit ->
                             app.experienceProfileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
-                        })
+                        }, budgetMillis = SHARED_FEATURES_BUDGET_MILLIS)
                 }
                 if (enabledState.isBackgroundRefreshEnabled) {
                     app.historyRefresher.refresh(
@@ -215,7 +216,9 @@ class HistoryRefreshWorker(
                     "last_background_refresh_source" to "workmanager"
                 )
             )
-            if (hasHistoryFlushFailure(app.historyRefresher.lastRefreshError.value?.stageCounts.orEmpty())) {
+            // Reading historyRefresher here would throw again when the failure came
+            // from services that were never initialised.
+            if (hasHistoryFlushFailure(app.historyRefresherOrNull?.lastRefreshError?.value?.stageCounts.orEmpty())) {
                 Logger.e(TAG, "History flush failed; skipping immediate retry to avoid retry churn")
                 return Result.failure()
             }
@@ -261,6 +264,7 @@ class HistoryRefreshWorker(
             val existenceAllowed = allowed(existencePolicy)
             val enabled = updateAllowed || existenceAllowed || compatWatchWordsEnabled
             if (!enabled) return Result.success()
+            awaitNetworkServicesOrResult()?.let { return it }
 
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
                 val refreshResult = refreshCompatTabsInBackground(
@@ -332,7 +336,29 @@ class HistoryRefreshWorker(
         )
     }
 
+    /** Returns the result to finish with when network services are not usable, or null to continue. */
+    private suspend fun awaitNetworkServicesOrResult(): Result? {
+        val app = applicationContext.applicationContext as? FutachaApplication ?: return null
+        return when (
+            awaitBackgroundNetworkServices(app.networkServicesReady, app.networkServicesError, NETWORK_SERVICES_WAIT_MILLIS)
+        ) {
+            NetworkServicesReadiness.READY -> null
+            NetworkServicesReadiness.FAILED -> {
+                // This process does not retry initialisation; a later run starts fresh.
+                Logger.e(TAG, "Network services failed to initialise: ${app.networkServicesError.value}")
+                Result.failure()
+            }
+            NetworkServicesReadiness.TIMED_OUT -> {
+                Logger.w(TAG, "Network services not ready after ${NETWORK_SERVICES_WAIT_MILLIS}ms")
+                if (runAttemptCount < MAX_RETRY_ATTEMPTS) Result.retry() else Result.failure()
+            }
+        }
+    }
+
     companion object {
+        private val NETWORK_SERVICES_WAIT_MILLIS = TimeUnit.SECONDS.toMillis(30)
+        // About a third of REFRESH_TIMEOUT_MILLIS, so the history refresh after it keeps 4+ minutes.
+        private val SHARED_FEATURES_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(2)
         private const val TAG = "HistoryRefreshWorker"
         private const val WATCH_ALERT_THREAD_ID_MAX_CHARS = 128
         private const val WATCH_ALERT_BOARD_ID_MAX_CHARS = 256

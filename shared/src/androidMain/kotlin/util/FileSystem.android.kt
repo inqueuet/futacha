@@ -23,6 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -538,10 +539,81 @@ class AndroidFileSystem(
         parentDir: DocumentFile,
         fileName: String
     ): DocumentFile {
-        val existing = runInterruptible { parentDir.findFile(fileName) }
+        val existing = findTreeChild(parentDir, fileName)
         return existing?.takeIf { file -> !runInterruptible { file.isDirectory } }
-            ?: runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
+            ?: (runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
+                ?.also { recordTreeChild(parentDir, fileName, it) })
             ?: throw IllegalStateException("Failed to create file: $fileName")
+    }
+
+    /**
+     * Resolves [relativePath] under [baseDir], creating folders and the file as
+     * needed, and opens it with [mode]. A save batch's folder listings go stale
+     * when a document is removed or renamed outside the app after it was
+     * listed, and opening it then fails. The batch drops its listings and
+     * resolves the path from the provider once more.
+     */
+    private suspend fun openTreeFileForWrite(baseDir: DocumentFile, relativePath: String, mode: String): OutputStream {
+        suspend fun open(): OutputStream {
+            val (parentDir, fileName) = resolveTreeParentDirectory(baseDir, relativePath, createDirectories = true)
+            val file = findOrCreateTreeFile(parentDir, fileName)
+            return runInterruptible { context.contentResolver.openOutputStream(file.uri, mode) }
+                ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+        }
+        val index = coroutineContext[SafTreeIndex] ?: return open()
+        return try {
+            open()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (stale: Exception) {
+            Logger.w("AndroidFileSystem", "Re-reading SAF folders after a stale listing for $relativePath: ${stale.message}")
+            index.listings.clear()
+            open()
+        }
+    }
+
+    /**
+     * DocumentFile.findFile lists the folder and queries every child's name, so
+     * resolving each file of a save separately costs about N^2/2 provider
+     * queries for N files. Inside a save batch, each folder is listed once.
+     */
+    private suspend fun findTreeChild(parent: DocumentFile, name: String): DocumentFile? {
+        val index = coroutineContext[SafTreeIndex] ?: return runInterruptible { parent.findFile(name) }
+        return index.listings.child(parent.uri.toString(), name) { listTreeChildren(parent) }
+    }
+
+    private suspend fun recordTreeChild(parent: DocumentFile, name: String, child: DocumentFile) {
+        coroutineContext[SafTreeIndex]?.listings?.record(parent.uri.toString(), name, child)
+    }
+
+    private suspend fun forgetTreeChild(parent: DocumentFile, name: String) {
+        coroutineContext[SafTreeIndex]?.listings?.forget(parent.uri.toString(), name)
+    }
+
+    /** One provider query for all children of [parent], keyed by display name (first match wins). */
+    private suspend fun listTreeChildren(parent: DocumentFile): Map<String, DocumentFile> = runInterruptible {
+        val parentUri = parent.uri
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+            parentUri, android.provider.DocumentsContract.getDocumentId(parentUri)
+        )
+        val children = linkedMapOf<String, DocumentFile>()
+        context.contentResolver.query(
+            childrenUri,
+            arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
+            ),
+            null, null, null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val documentId = cursor.getString(0) ?: continue
+                val name = cursor.getString(1) ?: continue
+                if (name in children) continue
+                val childUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
+                DocumentFile.fromTreeUri(context, childUri)?.let { children[name] = it }
+            }
+        }
+        children
     }
 
     private suspend fun readTreeFileUtf8(file: DocumentFile, fileName: String): String {
@@ -630,15 +702,7 @@ class AndroidFileSystem(
             is SaveLocation.TreeUri -> {
                 runTreeUriCatching(base, requireWrite = true) { baseDir ->
                     withSafWriteTimeout {
-                        val (parentDir, fileName) = resolveTreeParentDirectory(
-                            baseDir = baseDir,
-                            relativePath = relativePath,
-                            createDirectories = true
-                        )
-                        val file = findOrCreateTreeFile(parentDir, fileName)
-                        val output = runInterruptible {
-                            context.contentResolver.openOutputStream(file.uri, "wt")
-                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        val output = openTreeFileForWrite(baseDir, relativePath, "wt")
                         withFileWriteCompletion(
                             close = { withSafWriteTimeout { runInterruptible { output.close() } } }
                         ) {
@@ -735,21 +799,7 @@ class AndroidFileSystem(
             is SaveLocation.TreeUri -> {
                 try {
                     val result = runTreeUriCatching(base, requireWrite = true) { baseDir ->
-                        val (parentDir, fileName) = withSafWriteTimeout {
-                            resolveTreeParentDirectory(
-                                baseDir = baseDir,
-                                relativePath = relativePath,
-                                createDirectories = true
-                            )
-                        }
-                        val file = withSafWriteTimeout {
-                            findOrCreateTreeFile(parentDir, fileName)
-                        }
-                        val output = withSafWriteTimeout {
-                            runInterruptible {
-                                context.contentResolver.openOutputStream(file.uri, "wt")
-                            } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
-                        }
+                        val output = withSafWriteTimeout { openTreeFileForWrite(baseDir, relativePath, "wt") }
                         withFileWriteCompletion(
                             close = { withSafWriteTimeout { runInterruptible { output.close() } } }
                         ) {
@@ -791,6 +841,85 @@ class AndroidFileSystem(
         }
     }
 
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(fromPath, "fromPath")
+            validatePath(toPath, "toPath")
+            val from = File(resolveAbsolutePath(fromPath)).toPath()
+            val to = File(resolveAbsolutePath(toPath)).toPath()
+            to.parent?.let { java.nio.file.Files.createDirectories(it) }
+            java.nio.file.Files.deleteIfExists(to)
+            try {
+                java.nio.file.Files.createLink(to, from)
+            } catch (_: Exception) {
+                // Other volume or no link support: copy the finished file instead.
+                java.nio.file.Files.copy(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+            Unit
+        }
+    }
+
+    override fun saveBatchContext(): kotlin.coroutines.CoroutineContext = SafTreeIndex()
+
+    override fun supportsAtomicReplace(base: SaveLocation): Boolean = base is SaveLocation.Path
+
+    override suspend fun replaceAtomically(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(fromRelative, "fromRelative")
+            validatePath(toRelative, "toRelative")
+            val path = base as? SaveLocation.Path
+                ?: throw UnsupportedOperationException("Atomic replace needs a file path location")
+            // rename(2) replaces the destination in one step on the same filesystem.
+            Os.rename(
+                resolveSaveLocationPath(path.path, fromRelative),
+                resolveSaveLocationPath(path.path, toRelative)
+            )
+        }
+    }
+
+    override suspend fun renameIfAbsent(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<String?> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(fromRelative, "fromRelative")
+            validatePath(toRelative, "toRelative")
+            require(fromRelative.substringBeforeLast('/', "") == toRelative.substringBeforeLast('/', "")) {
+                "Rename must stay in the same directory"
+            }
+        }.getOrElse { return@withContext Result.failure(it) }
+        when (base) {
+            is SaveLocation.Path -> runFsCatching {
+                val from = File(resolveSaveLocationPath(base.path, fromRelative))
+                val to = File(resolveSaveLocationPath(base.path, toRelative))
+                if (to.exists() || !from.renameTo(to)) null else toRelative
+            }
+            is SaveLocation.TreeUri -> runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                val (parentDir, fileName) = withSafWriteTimeout {
+                    resolveTreeParentDirectory(baseDir = baseDir, relativePath = fromRelative, createDirectories = false)
+                }
+                val targetName = toRelative.substringAfterLast('/')
+                val source = withSafWriteTimeout { parentDir.findFile(fileName) }
+                    ?: throw IllegalStateException("File to rename is missing: $fromRelative")
+                if (withSafWriteTimeout { parentDir.findFile(targetName) } != null) {
+                    return@runTreeUriCatching null
+                }
+                // Providers without rename support return false or throw; the
+                // complete file then simply keeps its alternate name.
+                val renamed = withSafWriteTimeout { runCatching { source.renameTo(targetName) }.getOrDefault(false) }
+                if (!renamed) return@runTreeUriCatching null
+                val actualName = source.name ?: targetName
+                siblingSavedFilePath(fromRelative, actualName)
+            }
+            is SaveLocation.Bookmark -> Result.success(null)
+        }
+    }
+
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
         // FIX: 入力検証はwriteBytesで実行される
         return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
@@ -826,7 +955,7 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    val file = parentDir.findFile(fileName)
+                    val file = findTreeChild(parentDir, fileName)
                         ?: throw IllegalStateException("File not found: $fileName")
                     readTreeFileBytes(file, fileName)
                 }
@@ -854,7 +983,7 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    val file = parentDir.findFile(fileName)
+                    val file = findTreeChild(parentDir, fileName)
                         ?: throw IllegalStateException("File not found: $fileName")
                     readTreeFileUtf8(file, fileName)
                 }
@@ -889,7 +1018,7 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    parentDir.findFile(fileName)?.exists() ?: false
+                    findTreeChild(parentDir, fileName)?.exists() ?: false
                 } catch (e: Exception) {
                     Logger.e("AndroidFileSystem", "Error checking existence for TreeUri: ${base.uri}, path: $relativePath", e)
                     false
@@ -923,7 +1052,7 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    parentDir.findFile(fileName)?.length() ?: 0L
+                    findTreeChild(parentDir, fileName)?.length() ?: 0L
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -990,7 +1119,8 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    val target = parentDir.findFile(fileName) ?: return@runTreeUriCatching Unit
+                    val target = findTreeChild(parentDir, fileName) ?: return@runTreeUriCatching Unit
+                    forgetTreeChild(parentDir, fileName)
 
                     if (!deleteDocumentRecursively(target)) {
                         throw IllegalStateException("Failed to delete: $relativePath")
@@ -1020,7 +1150,7 @@ class AndroidFileSystem(
         var current = base
         for ((index, segment) in segments.withIndex()) {
             coroutineContext.ensureActive()
-            val next = runInterruptible { current.findFile(segment) }
+            val next = findTreeChild(current, segment)
             if (next == null) {
                 Logger.d("AndroidFileSystem", "Directory not found at segment[$index]: $segment (path: $relativePath)")
                 return null
@@ -1044,11 +1174,12 @@ class AndroidFileSystem(
         var current = base
         for ((index, segment) in segments.withIndex()) {
             coroutineContext.ensureActive()
-            val existing = runInterruptible { current.findFile(segment) }
+            val existing = findTreeChild(current, segment)
+            val parent = current
             current = if (existing != null && runInterruptible { existing.isDirectory }) {
                 existing
             } else if (existing == null) {
-                runInterruptible { current.createDirectory(segment) }
+                (runInterruptible { parent.createDirectory(segment) }?.also { recordTreeChild(parent, segment, it) })
                     ?: throw IllegalStateException("Failed to create directory at segment[$index]: $segment (path: $relativePath, base: ${base.uri})")
             } else {
                 throw IllegalStateException("Path segment exists but is not a directory at segment[$index]: $segment (path: $relativePath)")
@@ -1221,4 +1352,11 @@ class AndroidFileSystem(
 actual fun createFileSystem(platformContext: Any?): FileSystem {
     require(platformContext is Context) { "Android requires Context" }
     return AndroidFileSystem(platformContext.applicationContext)
+}
+
+/** One save's SAF folder listings; see [TreeChildIndex] and FileSystem.saveBatchContext. */
+internal class SafTreeIndex : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<SafTreeIndex>
+
+    val listings = TreeChildIndex<DocumentFile>()
 }

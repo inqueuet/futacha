@@ -74,4 +74,15 @@ class FutachaSharedFeaturesTest {
         assertEquals(threadUrl, selection.threadUrl)
         assertEquals("123", selection.threadId)
     }
+
+    @Test fun projectionSettingsIgnoreUnrelatedPreferences() {
+        val base = mapOf("compat.thread.threadExtractSoudaneNum" to "5")
+        val withCacheCheck = base + mapOf(
+            "compat.cache.checkTime" to "123",
+            "compat.background.watcherCheckTime" to "456"
+        )
+        assertEquals(FutachaThreadProjectionSettings.from(base), FutachaThreadProjectionSettings.from(withCacheCheck))
+        assertEquals(5, FutachaThreadProjectionSettings.from(base).saidaneThreshold)
+        assertEquals(false, FutachaThreadProjectionSettings.from(base + ("compat.thread.threadNg" to "OFF")).ngEnabled)
+    }
 }

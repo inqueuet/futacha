@@ -7,6 +7,9 @@ import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import com.valoser.futacha.shared.compat.isValidCompatImagePhash
+import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
+import com.valoser.futacha.shared.compat.pinnedTo
 import com.valoser.futacha.shared.compat.ClosedCompatTab
 import com.valoser.futacha.shared.compat.ClosedTabBatch
 import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_MAX_ROWS
@@ -136,6 +139,9 @@ class AndroidCompatibilityStore(
 
     suspend fun initialize() {
         val cleanup = mutate(refreshOnly = true) { db ->
+            // Before anything reads preferences: the old per-image rows could
+            // push real settings past the 4096-row read limit.
+            db.migrateImagePhashPreferences()
             db.repairCanonicalBoards()
             db.repairThreadSnapshotCache()
             db.enforceThreadSnapshotQuota()
@@ -352,6 +358,16 @@ class AndroidCompatibilityStore(
         )
     }
 
+    override suspend fun updateTabIfPresent(
+        tabKey: String,
+        transform: (CompatTab) -> CompatTab?
+    ): Boolean = mutate(refresh = setOf(CompatObservableState.TABS)) { db ->
+        val current = db.readTab(tabKey) ?: return@mutate false
+        val next = transform(current)?.pinnedTo(current) ?: return@mutate false
+        db.upsertTab(next)
+        true
+    }
+
     override suspend fun selectTab(tabKey: String?) = mutate(
         refresh = setOf(CompatObservableState.WORKSPACE)
     ) { db ->
@@ -470,6 +486,17 @@ class AndroidCompatibilityStore(
         val current = db.readHistory().firstOrNull { it.canonicalUrl == entry.canonicalUrl }
         db.upsertHistory(mergeCompatHistoryEntry(entry, current))
         db.trimHistory()
+    }
+
+    override suspend fun updateHistoryIfPresent(
+        canonicalUrl: String,
+        transform: (CompatHistoryEntry) -> CompatHistoryEntry?
+    ): Boolean = mutate(refresh = setOf(CompatObservableState.HISTORY)) { db ->
+        if (db.hasHistoryTombstone(canonicalUrl)) return@mutate false
+        val current = db.readHistory().firstOrNull { it.canonicalUrl == canonicalUrl } ?: return@mutate false
+        val next = transform(current)?.copy(canonicalUrl = current.canonicalUrl) ?: return@mutate false
+        db.upsertHistory(next)
+        true
     }
 
     override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate(
@@ -961,7 +988,12 @@ class AndroidCompatibilityStore(
     }
 
     override suspend fun savePreference(key: String, value: String) = mutate(
-        refresh = setOf(CompatObservableState.PREFERENCES, CompatObservableState.TABS)
+        // Tabs change only when the cache-size setting trims snapshots.
+        refresh = if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) {
+            setOf(CompatObservableState.PREFERENCES, CompatObservableState.TABS)
+        } else {
+            setOf(CompatObservableState.PREFERENCES)
+        }
     ) { db ->
         requireValidCompatPreference(key, value)
         db.insertWithOnConflict(
@@ -972,6 +1004,56 @@ class AndroidCompatibilityStore(
         )
         if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) db.enforceThreadSnapshotQuota()
         Unit
+    }
+
+    override suspend fun savePreferences(values: Map<String, String?>) {
+        if (values.isEmpty()) return
+        val touchesCacheSize = COMPAT_THREAD_CACHE_PREFERENCE_KEY in values
+        mutate(
+            refresh = if (touchesCacheSize) {
+                setOf(CompatObservableState.PREFERENCES, CompatObservableState.TABS)
+            } else {
+                setOf(CompatObservableState.PREFERENCES)
+            }
+        ) { db ->
+            values.forEach { (key, value) -> if (value != null) requireValidCompatPreference(key, value) }
+            values.forEach { (key, value) ->
+                if (value == null) {
+                    db.delete("compat_preference", "key=?", arrayOf(key))
+                } else {
+                    db.insertWithOnConflict(
+                        "compat_preference",
+                        null,
+                        ContentValues().apply { put("key", key); put("value_json", value) },
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
+            }
+            if (touchesCacheSize) db.enforceThreadSnapshotQuota()
+        }
+    }
+
+    override suspend fun loadImagePhashes(keys: Collection<String>): Map<String, String> {
+        if (keys.isEmpty()) return emptyMap()
+        // A write because hits are re-inserted to mark them recently used.
+        return mutate(refresh = emptySet()) { db ->
+            buildMap {
+                keys.distinct().forEach { key ->
+                    val value = db.metadataValue(IMAGE_PHASH_METADATA_PREFIX + key) ?: return@forEach
+                    db.putImagePhash(key, value)
+                    put(key, value)
+                }
+            }
+        }
+    }
+
+    override suspend fun saveImagePhashes(entries: Map<String, String>) {
+        val valid = entries.filter { (key, value) -> isCompatImagePhashCacheKey(key) && isValidCompatImagePhash(value) }
+        if (valid.isEmpty()) return
+        mutate(refresh = emptySet()) { db ->
+            valid.forEach { (key, value) -> db.putImagePhash(key, value) }
+            db.trimImagePhashes()
+        }
     }
 
     override suspend fun exportSettingsBackup(): String = read { db ->
@@ -2420,6 +2502,50 @@ class AndroidCompatibilityStore(
         }
     }
 
+    /** REPLACE deletes and re-inserts, so rowid order is least recently used first. */
+    private fun SQLiteDatabase.putImagePhash(key: String, value: String) {
+        insertWithOnConflict(
+            "compat_metadata",
+            null,
+            ContentValues().apply { put("key", IMAGE_PHASH_METADATA_PREFIX + key); put("value", value) },
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    private fun SQLiteDatabase.trimImagePhashes() {
+        val count = rawQuery(
+            "SELECT COUNT(*) FROM compat_metadata WHERE key GLOB ?",
+            arrayOf("$IMAGE_PHASH_METADATA_PREFIX*")
+        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        if (count <= IMAGE_PHASH_CACHE_MAX_ENTRIES) return
+        execSQL(
+            "DELETE FROM compat_metadata WHERE rowid IN (" +
+                "SELECT rowid FROM compat_metadata WHERE key GLOB ? ORDER BY rowid ASC LIMIT ?)",
+            arrayOf<Any>("$IMAGE_PHASH_METADATA_PREFIX*", count - IMAGE_PHASH_CACHE_TRIM_TO)
+        )
+    }
+
+    /** Moves hashes stored as preferences by older versions into the cache table. */
+    private fun SQLiteDatabase.migrateImagePhashPreferences() {
+        val legacy = query(
+            "compat_preference",
+            arrayOf("key", "value_json"),
+            "key GLOB ?",
+            arrayOf("compat.imagePhash.*"),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            buildMap {
+                while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1))
+            }
+        }
+        if (legacy.isEmpty()) return
+        legacy.forEach { (key, value) -> if (isValidCompatImagePhash(value)) putImagePhash(key, value) }
+        delete("compat_preference", "key GLOB ?", arrayOf("compat.imagePhash.*"))
+        trimImagePhashes()
+    }
+
     private fun SQLiteDatabase.metadataValue(key: String): String? = query(
         "compat_metadata", arrayOf("value"), "key=?", arrayOf(key), null, null, null, "1"
     ).use { if (it.moveToFirst()) it.getString(0) else null }
@@ -2456,6 +2582,9 @@ class AndroidCompatibilityStore(
         const val UNDO_WINDOW_MILLIS = 7_000L
         const val CLOSED_BATCH_DEADLINE_RECHECK_MILLIS = 1_000L
         const val THREAD_SNAPSHOT_ACCESS_PREFIX = "thread_snapshot_access:"
+        const val IMAGE_PHASH_METADATA_PREFIX = "image_phash:"
+        const val IMAGE_PHASH_CACHE_MAX_ENTRIES = 8_192L
+        const val IMAGE_PHASH_CACHE_TRIM_TO = 6_144L
         val TAB_COLUMNS = arrayOf(
             "tab_key", "canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url",
             "reply_count", "checked_reply_count", "is_dead", "is_isolated", "is_exploded", "is_old", "favorite", "inserted_at",

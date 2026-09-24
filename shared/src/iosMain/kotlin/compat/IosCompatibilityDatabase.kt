@@ -39,6 +39,8 @@ internal const val MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES = 32 * 1024 * 1024
 private const val MAX_COMPATIBILITY_DATABASE_OVERLAY_ROWS = 20_000
 private const val MAX_COMPATIBILITY_DATABASE_TAB_KEY_BYTES = 4 * 1024
 private const val MAX_COMPATIBILITY_DATABASE_ANCHOR_BYTES = 64 * 1024
+private const val IMAGE_PHASH_CACHE_MAX_ENTRIES = 8_192
+private const val IMAGE_PHASH_CACHE_TRIM_TO = 6_144
 private const val SQLITE_CORRUPT = 11
 private const val SQLITE_NOTADB = 26
 
@@ -223,6 +225,70 @@ internal class IosCompatibilityDatabase(
         }
     }
 
+    /** Reads cached image hashes and marks the hits as recently used. */
+    fun readImagePhashes(keys: Collection<String>, usedAtMillis: Long): Map<String, String> {
+        val db = open()
+        val found = buildMap {
+            keys.distinct().forEach { key ->
+                if (key.encodeToByteArray().size > MAX_COMPATIBILITY_DATABASE_TAB_KEY_BYTES) return@forEach
+                val statement = prepare(db, "SELECT phash FROM compat_image_phash WHERE key = ?")
+                try {
+                    checkSqlite(
+                        sqlite3_bind_text(statement, 1, key, -1, sqliteTransientDestructor),
+                        db,
+                        "bind compatibility image hash key"
+                    )
+                    when (val stepCode = sqlite3_step(statement)) {
+                        SQLITE_ROW -> readBoundedColumnText(statement, 0, 64, "compatibility image hash")
+                            ?.let { put(key, it) }
+                        SQLITE_DONE -> Unit
+                        else -> throw failure(db, "read compatibility image hash", stepCode)
+                    }
+                } finally {
+                    sqlite3_finalize(statement)
+                }
+            }
+        }
+        if (found.isNotEmpty()) writeImagePhashes(found, usedAtMillis)
+        return found
+    }
+
+    /** Upserts hashes and trims the table to its bound, least recently used first. */
+    fun writeImagePhashes(entries: Map<String, String>, usedAtMillis: Long) {
+        if (entries.isEmpty()) return
+        val db = open()
+        execute(db, "BEGIN IMMEDIATE", "begin compatibility image hash write")
+        try {
+            entries.forEach { (key, phash) ->
+                requireUtf8Size(key, MAX_COMPATIBILITY_DATABASE_TAB_KEY_BYTES, "Compatibility image hash key")
+                val statement = prepare(
+                    db,
+                    "INSERT INTO compat_image_phash(key, phash, used_at) VALUES(?, ?, ?) " +
+                        "ON CONFLICT(key) DO UPDATE SET phash = excluded.phash, used_at = excluded.used_at"
+                )
+                try {
+                    checkSqlite(sqlite3_bind_text(statement, 1, key, -1, sqliteTransientDestructor), db, "bind image hash key")
+                    checkSqlite(sqlite3_bind_text(statement, 2, phash, -1, sqliteTransientDestructor), db, "bind image hash")
+                    checkSqlite(sqlite3_bind_int64(statement, 3, usedAtMillis), db, "bind image hash use time")
+                    checkSqlite(sqlite3_step(statement), db, "write compatibility image hash", expected = SQLITE_DONE)
+                } finally {
+                    sqlite3_finalize(statement)
+                }
+            }
+            execute(
+                db,
+                "DELETE FROM compat_image_phash WHERE (SELECT COUNT(*) FROM compat_image_phash) > " +
+                    "$IMAGE_PHASH_CACHE_MAX_ENTRIES AND key IN (SELECT key FROM compat_image_phash " +
+                    "ORDER BY used_at ASC LIMIT (SELECT COUNT(*) FROM compat_image_phash) - $IMAGE_PHASH_CACHE_TRIM_TO)",
+                "trim compatibility image hash cache"
+            )
+            execute(db, "COMMIT", "commit compatibility image hash write")
+        } catch (error: Throwable) {
+            runCatching { execute(db, "ROLLBACK", "roll back compatibility image hash write") }
+            throw error
+        }
+    }
+
     fun writePayload(payload: String, updatedAtMillis: Long) {
         requireUtf8Size(payload, MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES, "Compatibility state")
         val db = open()
@@ -334,6 +400,14 @@ internal class IosCompatibilityDatabase(
                     "tab_key TEXT PRIMARY KEY, " +
                     "accessed_at INTEGER NOT NULL)",
                 "create compatibility snapshot access overlay table"
+            )
+            execute(
+                db,
+                "CREATE TABLE IF NOT EXISTS compat_image_phash(" +
+                    "key TEXT PRIMARY KEY, " +
+                    "phash TEXT NOT NULL, " +
+                    "used_at INTEGER NOT NULL)",
+                "create compatibility image hash cache table"
             )
             execute(db, "PRAGMA user_version=8", "set compatibility schema version")
             handle = db

@@ -22,6 +22,8 @@ import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.MAX_COMPAT_THREAD_SNAPSHOT_POSTS
 import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatTabKey
+import com.valoser.futacha.shared.compat.compatImagePhashCachePreferenceKey
+import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
 import com.valoser.futacha.shared.model.CatalogItem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -765,6 +767,26 @@ class CompatibilitySnapshotCacheInstrumentedTest {
         fullImageUrl = "https://may.2chan.net/b/src/$id.jpg",
         replyCount = id.filter(Char::isDigit).takeLast(2).toIntOrNull() ?: 0
     )
+
+    @Test
+    fun legacyImageHashPreferencesMoveToTheCacheAndLaterSettingsStayVisible() = runBlocking {
+        val first = newStore()
+        // As an older version left it: more hash rows than the 4096-row read
+        // limit, and a real setting whose key sorts after them.
+        val legacy = (0 until 4_200).associate {
+            compatImagePhashCachePreferenceKey("https://img/$it.jpg") to "0123456789abcdef"
+        }
+        first.savePreferences(legacy + ("compat.thread.threadExtractSoudaneNum" to "5"))
+        first.closeForTest()
+        openStore = null
+
+        val reopened = newStore()
+        val preferences = reopened.preferences.first()
+        assertEquals("5", preferences["compat.thread.threadExtractSoudaneNum"])
+        assertTrue(preferences.keys.none(::isCompatImagePhashCacheKey))
+        val key = compatImagePhashCachePreferenceKey("https://img/7.jpg")
+        assertEquals(mapOf(key to "0123456789abcdef"), reopened.loadImagePhashes(listOf(key)))
+    }
 
     private suspend fun newStore(
         currentTimeMillis: () -> Long = System::currentTimeMillis,

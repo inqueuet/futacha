@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.media.source
 
 import coil3.disk.DiskCache
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import okio.Path.Companion.toPath
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -59,6 +60,29 @@ class OriginalMediaSessionTest {
             old.close()
             withTimeout(5000) { waiting.await() }.use { assertTrue(it.fromCache) }
             assertEquals(2, opens.get())
+        } finally { withTimeout(5000) { session.closeAndAwait() }; directory.deleteRecursively() }
+    }
+
+    @Test fun quotaChangeReportsItsWaitAndSizeQueriesDoNotBlock(): Unit = runBlocking {
+        val directory = Files.createTempDirectory("original-quota-wait").toFile()
+        val session = OriginalMediaSession("test", { _, sink ->
+            sink.writeUtf8("bytes"); OriginalMediaInfo("image/png", 5, resolvedUrl = request.url)
+        }, shutdownReportIntervalMillis = 20L)
+        try {
+            val config = OriginalMediaCacheConfiguration(directory.path.toPath(), quota)
+            session.configure(config)
+            val old = session.acquire(request)
+            assertEquals(OriginalMediaTransitionState.Idle, session.transitionState.value)
+
+            session.configure(config.copy(maxBytes = quota / 2))
+            withTimeout(5000) {
+                session.transitionState.first { it == OriginalMediaTransitionState.WaitingForLeases(1) }
+            }
+            // The settings screen reads the size while a video still holds the old cache.
+            withTimeout(1000) { session.sizeBytes() }
+
+            old.close()
+            withTimeout(5000) { session.transitionState.first { it == OriginalMediaTransitionState.Idle } }
         } finally { withTimeout(5000) { session.closeAndAwait() }; directory.deleteRecursively() }
     }
 

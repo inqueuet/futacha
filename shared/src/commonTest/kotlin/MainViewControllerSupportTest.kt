@@ -67,4 +67,15 @@ class MainViewControllerSupportTest {
         assertFalse(completed)
         assertTrue(closeJob.isCancelled)
     }
+
+    @Test
+    fun explicitUsedVersionArgumentWinsAndDefaultsMigrateOnlyOnce() {
+        // A UI test passing -commonUsedVersion must override what a previous run stored.
+        assertEquals("9999.0", resolveCommonUsedVersionToStore(stored = "10.8", defaultsValue = "9999.0", explicitArgument = "9999.0"))
+        assertNull(resolveCommonUsedVersionToStore(stored = "9999.0", defaultsValue = "9999.0", explicitArgument = "9999.0"))
+        // Ordinary launches migrate the old NSUserDefaults value once.
+        assertEquals("10.8", resolveCommonUsedVersionToStore(stored = null, defaultsValue = "10.8", explicitArgument = null))
+        assertNull(resolveCommonUsedVersionToStore(stored = "11.0", defaultsValue = "10.8", explicitArgument = null))
+        assertNull(resolveCommonUsedVersionToStore(stored = null, defaultsValue = " ", explicitArgument = null))
+    }
 }

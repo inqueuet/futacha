@@ -81,7 +81,8 @@ internal fun CatalogSettingsSheet(
                 )
             }
             LocalFutachaCatalogTools.current.forEach { tool ->
-                ListItem(headlineContent = { Text(tool.label) }, modifier = Modifier
+                ListItem(headlineContent = { Text(tool.label) },
+                    leadingContent = { Icon(tool.icon, contentDescription = null) }, modifier = Modifier
                     .fillMaxWidth().clickable(enabled = tool.enabled) { onDismiss(); tool.action() })
             }
         }

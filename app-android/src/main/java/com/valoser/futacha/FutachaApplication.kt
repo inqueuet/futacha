@@ -95,6 +95,10 @@ class FutachaApplication : Application() {
     val historyRefresher: HistoryRefresher
         get() = requireMainProcessValue("historyRefresher", historyRefresherValue)
 
+    /** For error paths that must not throw when initialisation never finished. */
+    internal val historyRefresherOrNull: HistoryRefresher?
+        get() = historyRefresherValue
+
     @Volatile
     private var catalogWatchAlertRefresherValue: CatalogWatchAlertRefresher? = null
     val catalogWatchAlertRefresher: CatalogWatchAlertRefresher

@@ -47,10 +47,12 @@ class PromptMediaSourceTest {
                 assertEquals(1, reads.get())
                 proceed.complete(Unit)
                 source.changes.first { source.metadata(url)?.candidates?.single()?.positive == "local1" }
-                // Let completion release its in-flight slot before reopening.
-                yield(); delay(10)
-                source.inspectCached(url)
-                source.changes.first { source.metadata(url)?.candidates?.single()?.positive == "local2" }
+                // Reopen until the finished first read has released its in-flight slot;
+                // a fixed short delay was not enough under a loaded full test run.
+                while (source.metadata(url)?.candidates?.single()?.positive != "local2") {
+                    source.inspectCached(url)
+                    delay(10)
+                }
                 gate.update(MediaFeatureSettings.Disabled)
                 assertNull(source.metadata(url))
                 source.inspectCached(url); assertEquals(2, reads.get())
@@ -146,6 +148,51 @@ class PromptMediaSourceTest {
                 assertNull(source.metadata(request.url))
                 assertEquals("v1", retained.readAt(0, 2).decodeToString())
             } finally { retained.close(); source.close() }
+        }
+    }
+
+    @Test fun reacquiringTheSameOriginalDoesNotNotifyWatchers(): Unit = runBlocking {
+        fixture { store, _ ->
+            val gate = MediaFeatureGate().apply { update(on) }
+            val source = PromptMediaSource(store, gate) { result(it.readAt(0, 2).decodeToString()) }
+            try {
+                source.acquire(request).close()
+                source.changes.first { source.metadata(request.url) != null }
+                yield(); delay(20)
+                val before = source.changes.value
+
+                // Scrolling back or a second viewer acquires the same original again.
+                source.acquire(request).close()
+                source.acquire(request).close()
+                yield(); delay(20)
+
+                assertEquals(before, source.changes.value)
+            } finally { source.close() }
+        }
+    }
+
+    @Test fun timedOutParseIsRetriedAfterItsCooldown(): Unit = runBlocking {
+        fixture { store, _ ->
+            val gate = MediaFeatureGate().apply { update(on) }
+            var now = 1_000L
+            val reads = AtomicInteger()
+            val source = PromptMediaSource(store, gate, readMetadata = { lease ->
+                if (reads.incrementAndGet() == 1) delay(5_000)
+                result(lease.readAt(0, 2).decodeToString())
+            }, parseTimeoutMillis = 50L, budgetRetryAfterMillis = 30_000L, nowMillis = { now })
+            try {
+                source.acquire(request).close()
+                source.changes.first { source.metadata(request.url)?.coverage == MetadataCoverage.BUDGET_EXCEEDED }
+
+                source.acquire(request).close()
+                yield(); delay(50)
+                assertEquals(1, reads.get(), "no retry during the cooldown")
+
+                now += 30_001L
+                source.acquire(request).close()
+                source.changes.first { source.metadata(request.url)?.candidates?.singleOrNull()?.positive == "v1" }
+                assertEquals(2, reads.get())
+            } finally { source.close() }
         }
     }
 

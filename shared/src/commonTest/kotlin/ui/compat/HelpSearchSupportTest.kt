@@ -31,4 +31,42 @@ class HelpSearchSupportTest {
         assertFalse(html.contains("にじろぐ(仮) バージョン1.0.5以上が必要です"))
         assertFalse(html.contains("別アプリ にじろぐ(仮)が行います"))
     }
+
+    @Test fun helpStartsWithBasicOperationsAndAllSectionsCanCollapse() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val headings = Regex("<label for=\"([^\"]+)\"").findAll(html).map { it.groupValues[1] }.toList()
+        assertEquals("board", headings.first())
+        assertEquals(headings.indexOf("drawer") + 1, headings.indexOf("watcher-help"))
+        assertEquals(headings.indexOf("viewer") + 1, headings.indexOf("media-help"))
+        for (id in headings) {
+            assertTrue(html.contains("<input type=\"checkbox\" id=\"$id\" class=\"on-off\" />"), id)
+        }
+        assertFalse(html.contains(" checked"))
+    }
+
+    @Test fun searchOpensClosedMatchesHighlightsWordsAndResetsOnClear() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val result = searchedHelpHtml(html, " 強制停止 ")
+        assertTrue(result.contains("<input checked type=\"checkbox\" id=\"watcher-help\""))
+        assertTrue(result.contains("<mark>強制停止</mark>"))
+        assertFalse(result.contains("<label for=\"board\""))
+        val changed = searchedHelpHtml(html, "onnx")
+        assertTrue(changed.contains("<input checked type=\"checkbox\" id=\"media-help\""))
+        assertTrue(changed.contains("<mark>ONNX</mark>"))
+        assertFalse(changed.contains("id=\"watcher-help\""))
+        assertEquals(html, searchedHelpHtml(html, " "))
+        assertFalse(searchedHelpHtml(html, "no-such-help-word").contains("<label"))
+    }
+
+    @Test fun highlightPreservesImagesLinksAndEscapesLiteralSearchText() {
+        val html = """<label for="test">A&amp;B</label><input type="checkbox" id="test" class="on-off" />
+            <div><p><a href="https://example.com/?a=1&amp;b=2">A&amp;B</a> a&amp;b &lt;tag&gt; [検索]
+            <img src="data:image/png;base64,A&amp;B" /></p></div>"""
+        val result = searchedHelpHtml(html, "a&b")
+        assertEquals(3, Regex("<mark>").findAll(result).count())
+        assertTrue(result.contains("href=\"https://example.com/?a=1&amp;b=2\""))
+        assertTrue(result.contains("src=\"data:image/png;base64,A&amp;B\""))
+        assertTrue(searchedHelpHtml(html, "<tag>").contains("<mark>&lt;tag&gt;</mark>"))
+        assertTrue(searchedHelpHtml(html, "[検索]").contains("<mark>[検索]</mark>"))
+    }
 }

@@ -19,7 +19,7 @@ private const val HISTORY_FILE_STORE_MANIFEST_PATH = "$HISTORY_FILE_STORE_DIR/ma
 private const val HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH = "$HISTORY_FILE_STORE_DIR/manifest.json.backup"
 private const val HISTORY_FILE_STORE_VERSION = 1
 private const val HISTORY_FILE_KEY_PREFIX_MAX_LENGTH = 48
-private const val HISTORY_FILE_STORE_MAX_ENTRIES = 20_000
+private const val HISTORY_FILE_STORE_MAX_ENTRIES = APP_STATE_HISTORY_MAX_ENTRIES
 private const val HISTORY_FILE_STORE_MAX_MANIFEST_BYTES = 8L * 1024L * 1024L
 private const val HISTORY_FILE_STORE_MAX_ENTRY_BYTES = 2L * 1024L * 1024L
 private const val HISTORY_FILE_STORE_MAX_KEY_LENGTH = 96
@@ -41,7 +41,9 @@ private data class AppStateHistoryFileManifestEntry(
 internal class AppStateHistoryFileStore(
     private val fileSystem: FileSystem,
     private val json: Json,
-    private val tag: String
+    private val tag: String,
+    /** Write limit; history mutations trim to it before reaching this store. */
+    val maxEntries: Int = APP_STATE_HISTORY_MAX_ENTRIES
 ) {
     private val mutex = Mutex()
     private val _changes = MutableStateFlow(0L)
@@ -119,7 +121,8 @@ internal class AppStateHistoryFileStore(
     }
 
     private suspend fun persistHistorySnapshotLocked(history: List<ThreadHistoryEntry>) {
-        require(history.size <= HISTORY_FILE_STORE_MAX_ENTRIES) {
+        // Last line of defence: the coordinator trims before writing.
+        require(history.size <= maxEntries) {
             "History contains too many entries"
         }
         fileSystem.createDirectory(HISTORY_FILE_STORE_DIR).getOrThrow()

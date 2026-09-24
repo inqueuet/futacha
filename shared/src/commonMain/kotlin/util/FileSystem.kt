@@ -254,6 +254,53 @@ interface FileSystem {
      * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を削除)
      */
     suspend fun delete(base: SaveLocation, relativePath: String = ""): Result<Unit>
+
+    /**
+     * Writes [relativePath] without ever truncating an existing file before a
+     * complete replacement exists. Returns the relative path that was written;
+     * it differs from [relativePath] when the location cannot rename files.
+     */
+    suspend fun writeByteStreamReplacing(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<String> = writeByteStreamReplacingImpl(base, relativePath, block)
+
+    /**
+     * Makes [toPath] hold the bytes of [fromPath], preferring a hard link so a
+     * new auto-save generation can take over media without copying or
+     * downloading. The source is never modified; thread-save writers delete a
+     * media file before rewriting it, so a shared link is not written in place.
+     */
+    suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> =
+        runSuspendCatchingPreservingCancellation {
+            writeBytes(toPath, readBytes(fromPath).getOrThrow()).getOrThrow()
+        }
+
+    /**
+     * Context to run one multi-file save in. Android adds a per-save index of
+     * SAF folder listings so writing N files does not list the folder N times;
+     * other file systems need nothing.
+     */
+    fun saveBatchContext(): kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext
+
+    /** Whether [replaceAtomically] works for this location. */
+    fun supportsAtomicReplace(base: SaveLocation): Boolean = false
+
+    /**
+     * Moves [fromRelative] over [toRelative] in one step; both are in the same
+     * directory. Only called when [supportsAtomicReplace] is true.
+     */
+    suspend fun replaceAtomically(base: SaveLocation, fromRelative: String, toRelative: String): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Atomic replace is not supported here"))
+
+    /**
+     * Renames [fromRelative] to the unused name [toRelative] in the same
+     * directory. Returns the resulting relative path (a provider may adjust the
+     * name) or null when renaming is not possible; nothing changes then.
+     */
+    suspend fun renameIfAbsent(base: SaveLocation, fromRelative: String, toRelative: String): Result<String?> =
+        Result.success(null)
 }
 
 /**

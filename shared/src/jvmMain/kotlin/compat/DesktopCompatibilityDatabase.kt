@@ -11,6 +11,9 @@ internal fun Throwable.isRecoverableDesktopCompatibilityDatabaseCorruption(): Bo
     this is SQLException && errorCode in setOf(11, 26)
 
 /** Same state envelope and overlay transactions as the iOS implementation, through JDBC. */
+private const val IMAGE_PHASH_CACHE_MAX_ENTRIES = 8_192
+private const val IMAGE_PHASH_CACHE_TRIM_TO = 6_144
+
 internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) {
     private var connection: Connection? = null
     private fun open(): Connection = connection ?: run {
@@ -26,6 +29,7 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
                     s.execute("CREATE TABLE IF NOT EXISTS compat_state(id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)")
                     s.execute("CREATE TABLE IF NOT EXISTS compat_scroll_anchor(tab_key TEXT PRIMARY KEY, anchor_payload TEXT NOT NULL, updated_at INTEGER NOT NULL)")
                     s.execute("CREATE TABLE IF NOT EXISTS compat_snapshot_access(tab_key TEXT PRIMARY KEY, accessed_at INTEGER NOT NULL)")
+                    s.execute("CREATE TABLE IF NOT EXISTS compat_image_phash(key TEXT PRIMARY KEY, phash TEXT NOT NULL, used_at INTEGER NOT NULL)")
                 }
                 connection = db
             } catch (failure: Throwable) { db.close(); throw failure }
@@ -56,6 +60,47 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
             s.setString(1, bounded(tabKey, 4096)); s.setLong(2, accessedAtMillis); s.executeUpdate()
         }
     }
+    /** Reads cached image hashes and marks the hits as recently used. */
+    fun readImagePhashes(keys: Collection<String>, usedAtMillis: Long): Map<String, String> {
+        val found = open().prepareStatement("SELECT phash FROM compat_image_phash WHERE key = ?").use { s ->
+            buildMap {
+                keys.distinct().forEach { key ->
+                    s.setString(1, key)
+                    s.executeQuery().use { rows -> if (rows.next()) put(key, rows.getString(1)) }
+                }
+            }
+        }
+        if (found.isNotEmpty()) writeImagePhashes(found, usedAtMillis)
+        return found
+    }
+
+    /** Upserts hashes and trims the table to its bound, least recently used first. */
+    fun writeImagePhashes(entries: Map<String, String>, usedAtMillis: Long) {
+        if (entries.isEmpty()) return
+        val db = open(); db.autoCommit = false
+        try {
+            db.prepareStatement("INSERT OR REPLACE INTO compat_image_phash VALUES(?,?,?)").use { s ->
+                entries.forEach { (key, phash) ->
+                    s.setString(1, bounded(key, 4096)); s.setString(2, bounded(phash, 64)); s.setLong(3, usedAtMillis)
+                    s.executeUpdate()
+                }
+            }
+            db.createStatement().use { s ->
+                s.executeUpdate(
+                    "DELETE FROM compat_image_phash WHERE (SELECT COUNT(*) FROM compat_image_phash) > $IMAGE_PHASH_CACHE_MAX_ENTRIES " +
+                        "AND key IN (SELECT key FROM compat_image_phash ORDER BY used_at ASC " +
+                        "LIMIT (SELECT COUNT(*) FROM compat_image_phash) - $IMAGE_PHASH_CACHE_TRIM_TO)"
+                )
+            }
+            db.commit()
+        } catch (error: Throwable) {
+            runCatching { db.rollback() }
+            throw error
+        } finally {
+            db.autoCommit = true
+        }
+    }
+
     fun writePayload(payload: String, updatedAtMillis: Long) {
         bounded(payload, MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES)
         val db = open(); db.autoCommit = false

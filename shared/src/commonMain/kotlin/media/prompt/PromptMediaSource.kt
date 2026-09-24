@@ -16,6 +16,11 @@ class PromptMediaSource(
     private val source: OriginalMediaSource,
     private val gate: MediaFeatureGate,
     private val readLocalMetadata: (suspend (String) -> GenerationMetadata)? = null,
+    private val parseTimeoutMillis: Long = 2_000L,
+    /** A parse that ran out of time is retried after this, not remembered for good. */
+    private val budgetRetryAfterMillis: Long = 30_000L,
+    private val nowMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
+    // Last so callers can pass it as a trailing lambda.
     private val readMetadata: suspend (OriginalMediaStore.Lease) -> GenerationMetadata = {
         MediaGenerationMetadataReader().read(it.info.sizeBytes, it::readAt)
     }
@@ -30,6 +35,8 @@ class PromptMediaSource(
     private data class MetadataRead(val read: suspend () -> GenerationMetadata, val close: () -> Unit)
     private val jobs = mutableMapOf<String, ParseTask>()
     private val results = LinkedHashMap<String, GenerationMetadata>()
+    // identity -> time after which a timed-out parse may run again
+    private val budgetExceeded = LinkedHashMap<String, Long>()
     private val revision = MutableStateFlow(0L)
     val changes: StateFlow<Long> = revision.asStateFlow()
     private var epoch = 0L
@@ -72,7 +79,9 @@ class PromptMediaSource(
                 known.remove(request.url)
                 known[request.url] = Known(request.copy(headers = request.headers.toMap()), lease.identity)
                 while (known.size > 512) known.remove(known.keys.first())
-                revision.value++
+                // Every watcher re-queries on a change; re-acquiring the same original
+                // (scrolling, a second viewer) changes nothing they can see.
+                if (previous?.identity != lease.identity) revision.value++
                 true
             }
             if (accepted) parse(lease, startedIn)
@@ -94,12 +103,13 @@ class PromptMediaSource(
         val permit = gate.permit(MediaFeature.PROMPT) ?: return
         mutex.withLock {
             if (startedIn != sourceEpoch || clearsInProgress > 0) return
-            if (!gate.isCurrent(permit) || (!refresh && results.containsKey(identity))) return
+            val coolingDown = (budgetExceeded[identity] ?: Long.MIN_VALUE) > nowMillis()
+            if (!gate.isCurrent(permit) || (!refresh && (results.containsKey(identity) || coolingDown))) return
             jobs[identity]?.let { previous ->
                 if (gate.isCurrent(previous.permit)) return
                 previous.job.cancel()
             }
-            if (refresh) { results.remove(identity); revision.value++ }
+            if (refresh) { results.remove(identity); budgetExceeded.remove(identity); revision.value++ }
             val input = prepare()
             val generation = epoch
             val job = scope.launch(start = CoroutineStart.LAZY) {
@@ -107,13 +117,23 @@ class PromptMediaSource(
                     val result = parsing.withPermit {
                         if (!gate.isCurrent(permit)) return@launch
                         try {
-                            withTimeoutOrNull(2_000) { input.read() }
+                            withTimeoutOrNull(parseTimeoutMillis) { input.read() }
                                 ?: GenerationMetadata(coverage = MetadataCoverage.BUDGET_EXCEEDED)
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { GenerationMetadata(coverage = MetadataCoverage.SOURCE_UNAVAILABLE) }
                     }
                     mutex.withLock {
-                        if (generation == epoch && gate.isCurrent(permit)) {
+                        if (generation == epoch && gate.isCurrent(permit) &&
+                            result.coverage == MetadataCoverage.BUDGET_EXCEEDED
+                        ) {
+                            // A busy device must not hide the prompt of this original for good.
+                            results.remove(identity)
+                            budgetExceeded.remove(identity)
+                            budgetExceeded[identity] = nowMillis() + budgetRetryAfterMillis
+                            while (budgetExceeded.size > 128) budgetExceeded.remove(budgetExceeded.keys.first())
+                            revision.value++
+                        } else if (generation == epoch && gate.isCurrent(permit)) {
+                            budgetExceeded.remove(identity)
                             results[identity] = result
                             // Conservative accounting includes candidate strings referenced more than once.
                             fun weight() = results.values.sumOf { metadata -> metadata.candidates.sumOf {
@@ -179,7 +199,10 @@ class PromptMediaSource(
 
     suspend fun metadata(url: String): GenerationMetadata? = mutex.withLock {
         if (gate.permit(MediaFeature.PROMPT) == null) null
-        else known[aliases[url] ?: url]?.identity?.let(results::get)
+        else known[aliases[url] ?: url]?.identity?.let { identity ->
+            results[identity] ?: budgetExceeded[identity]?.takeIf { it > nowMillis() }
+                ?.let { GenerationMetadata(coverage = MetadataCoverage.BUDGET_EXCEEDED) }
+        }
     }
 
     private suspend fun invalidate() = mutex.withLock {
@@ -187,6 +210,7 @@ class PromptMediaSource(
         jobs.values.forEach { it.job.cancel() }
         jobs.clear()
         results.clear()
+        budgetExceeded.clear()
         revision.value++
     }
 

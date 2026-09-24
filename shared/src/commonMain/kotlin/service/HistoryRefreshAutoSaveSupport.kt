@@ -86,6 +86,11 @@ internal class HistoryRefreshAutoSaveLauncher(
                         }
                         return@withPermit null
                     }
+                    // The previous generation (or the screen's stable save) seeds this
+                    // one, so unchanged media is linked instead of downloaded again.
+                    val seedStorageId = runSuspendCatchingPreservingCancellation {
+                        autoSavedThreadRepository.resolveIndexedStorageId(entry.threadId, resolvedBoardId)
+                    }.getOrNull()
                     withTimeoutOrNull(autoSaveThreadTimeoutMillis) {
                         ThreadStorageLockRegistry.withStorageLock(
                             buildThreadStorageLockKey(
@@ -93,25 +98,28 @@ internal class HistoryRefreshAutoSaveLauncher(
                                 baseDirectory = AUTO_SAVE_DIRECTORY
                             )
                         ) {
-                            autoSaveService.saveThread(
-                                threadId = entry.threadId,
-                                boardId = resolvedBoardId,
-                                boardName = plan.boardName,
-                                boardUrl = baseUrl,
-                                title = plan.resolvedTitle,
-                                expiresAtLabel = plan.expiresAtLabel,
-                                posts = plan.posts,
-                                isTruncated = plan.isTruncated,
-                                truncationReason = plan.truncationReason,
-                                baseDirectory = AUTO_SAVE_DIRECTORY,
-                                writeMetadata = true,
-                                storageOptions = ThreadSaveStorageOptions(
-                                    storageIdOverride = stagingStorageId,
-                                    clearExistingOutput = true,
-                                    reuseExistingMedia = false,
-                                    pruneUnreferencedExistingMedia = false
-                                )
-                            ).getOrThrow()
+                            withSeedStorageLock(seedStorageId, stableStorageId) {
+                                autoSaveService.saveThread(
+                                    threadId = entry.threadId,
+                                    boardId = resolvedBoardId,
+                                    boardName = plan.boardName,
+                                    boardUrl = baseUrl,
+                                    title = plan.resolvedTitle,
+                                    expiresAtLabel = plan.expiresAtLabel,
+                                    posts = plan.posts,
+                                    isTruncated = plan.isTruncated,
+                                    truncationReason = plan.truncationReason,
+                                    baseDirectory = AUTO_SAVE_DIRECTORY,
+                                    writeMetadata = true,
+                                    storageOptions = ThreadSaveStorageOptions(
+                                        storageIdOverride = stagingStorageId,
+                                        clearExistingOutput = true,
+                                        reuseExistingMedia = false,
+                                        pruneUnreferencedExistingMedia = false,
+                                        seedFromStorageId = seedStorageId
+                                    )
+                                ).getOrThrow()
+                            }
                         }
                     }
                 }
@@ -191,4 +199,18 @@ internal suspend fun hasHistoryAutoSavedCopy(
     } catch (_: Throwable) {
         false
     }
+}
+
+/**
+ * Holds the seed generation's lock while its files are linked, so its cleanup
+ * cannot delete them midway. Locks are always taken stable first, then seed;
+ * cleanup takes one lock at a time, so this cannot deadlock. The stable lock
+ * is already held and the registry is not reentrant, so it is not taken again.
+ */
+internal suspend fun <T> withSeedStorageLock(seedStorageId: String?, stableStorageId: String, block: suspend () -> T): T {
+    if (seedStorageId == null || seedStorageId == stableStorageId) return block()
+    return ThreadStorageLockRegistry.withStorageLock(
+        buildThreadStorageLockKey(storageId = seedStorageId, baseDirectory = AUTO_SAVE_DIRECTORY),
+        block
+    )
 }

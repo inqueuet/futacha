@@ -67,7 +67,16 @@ internal class DesktopCompatibilityStore(
             val repairedTabs = if (validTabs.size > MAX_TABS) trimTabs(validTabs) else validTabs
             val validHistory = state.history.filter { it.boardKey in validBoardKeys }
             val repairedHistory = if (validHistory.size > MAX_HISTORY) trimHistory(validHistory) else validHistory
+            // Move image hashes stored as preferences by older versions into
+            // their cache table before the preference cap drops real settings.
+            // The table is written first; a crash before the state is saved
+            // just repeats this idempotent copy.
+            val legacyImagePhashes = state.preferences.filterKeys(::isCompatImagePhashCacheKey)
+            if (legacyImagePhashes.isNotEmpty()) {
+                database.writeImagePhashes(legacyImagePhashes.filterValues(::isValidCompatImagePhash), nowMillis())
+            }
             val repairedPreferences = state.preferences.asSequence()
+                .filterNot { (key, _) -> isCompatImagePhashCacheKey(key) }
                 .filter { (key, value) -> isValidCompatPreference(key, value) }
                 .take(MAX_PREFERENCES)
                 .associate { it.toPair() }
@@ -317,6 +326,14 @@ internal class DesktopCompatibilityStore(
         state = it.copy(tabs = replaceTab(it.tabs, anchor?.let { tab.copy(scrollAnchor = it) } ?: tab))
     }
 
+    override suspend fun updateTabIfPresent(tabKey: String, transform: (CompatTab) -> CompatTab?): Boolean = mutate {
+        val current = it.tabs.firstOrNull { tab -> tab.key == tabKey } ?: return@mutate false
+        val next = transform(current)?.pinnedTo(current) ?: return@mutate false
+        // Replace in place: re-appending would reorder the tab strip.
+        state = it.copy(tabs = it.tabs.map { tab -> if (tab.key == tabKey) next else tab })
+        true
+    }
+
     override suspend fun selectTab(tabKey: String?) = mutate {
         require(tabKey == null || it.tabs.any { tab -> tab.key == tabKey }) { "Unknown compatibility tab: $tabKey" }
         state = it.copy(workspace = it.workspace.copy(activeTabKey = tabKey, generation = it.workspace.generation + 1))
@@ -389,6 +406,17 @@ internal class DesktopCompatibilityStore(
         if (entry.canonicalUrl in it.historyTombstones) return@mutate
         val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
         state = it.copy(history = trimHistory(replaceHistory(it.history, mergeCompatHistoryEntry(entry, current))))
+    }
+
+    override suspend fun updateHistoryIfPresent(
+        canonicalUrl: String,
+        transform: (CompatHistoryEntry) -> CompatHistoryEntry?
+    ): Boolean = mutate {
+        if (canonicalUrl in it.historyTombstones) return@mutate false
+        val current = it.history.firstOrNull { entry -> entry.canonicalUrl == canonicalUrl } ?: return@mutate false
+        val next = transform(current)?.copy(canonicalUrl = current.canonicalUrl) ?: return@mutate false
+        state = it.copy(history = it.history.map { entry -> if (entry.canonicalUrl == canonicalUrl) next else entry })
+        true
     }
 
     override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate {
@@ -660,8 +688,42 @@ internal class DesktopCompatibilityStore(
     override suspend fun savePreference(key: String, value: String) = mutate {
         requireValidCompatPreference(key, value)
         state = it.copy(preferences = it.preferences + (key to value))
-        enforceSnapshotQuotaLocked()
+        // Only the cache-size setting changes the snapshot quota. Checking it for
+        // every preference encoded all cached snapshots on each save.
+        if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) enforceSnapshotQuotaLocked()
         Unit
+    }
+
+    override suspend fun loadImagePhashes(keys: Collection<String>): Map<String, String> {
+        if (keys.isEmpty()) return emptyMap()
+        return withContext(AppDispatchers.io) {
+            mutex.withLock {
+                ensureInitializedLocked()
+                database.readImagePhashes(keys, nowMillis())
+            }
+        }
+    }
+
+    override suspend fun saveImagePhashes(entries: Map<String, String>) {
+        val valid = entries.filter { (key, value) -> isCompatImagePhashCacheKey(key) && isValidCompatImagePhash(value) }
+        if (valid.isEmpty()) return
+        withContext(AppDispatchers.io) {
+            mutex.withLock {
+                ensureInitializedLocked()
+                database.writeImagePhashes(valid, nowMillis())
+            }
+        }
+    }
+
+    override suspend fun savePreferences(values: Map<String, String?>) {
+        if (values.isEmpty()) return
+        mutate {
+            values.forEach { (key, value) -> if (value != null) requireValidCompatPreference(key, value) }
+            val updated = it.preferences.toMutableMap()
+            values.forEach { (key, value) -> if (value == null) updated.remove(key) else updated[key] = value }
+            state = it.copy(preferences = updated)
+            if (COMPAT_THREAD_CACHE_PREFERENCE_KEY in values) enforceSnapshotQuotaLocked()
+        }
     }
 
     override suspend fun exportSettingsBackup(): String = read { current ->

@@ -77,6 +77,7 @@ internal fun ThreadScreenScaffoldHost(
             drawerContent = {
                 HistoryDrawerContent(
                     history = bindings.history,
+                    isVisible = bindings.isDrawerOpen,
                     onHistoryEntryDismissed = bindings.historyDrawerCallbacks.onHistoryEntryDismissed,
                     onHistoryEntrySelected = bindings.historyDrawerCallbacks.onHistoryEntrySelected,
                     isHistoryRefreshing = bindings.isHistoryRefreshing,

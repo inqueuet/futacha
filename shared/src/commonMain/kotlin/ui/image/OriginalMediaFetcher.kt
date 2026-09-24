@@ -16,6 +16,10 @@ import com.valoser.futacha.shared.media.source.OriginalMediaRequest
 import com.valoser.futacha.shared.media.source.OriginalMediaSource
 import com.valoser.futacha.shared.media.source.OriginalMediaCacheUnavailable
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import okio.IOException
 
 /** A confirmed original URL, distinct from a thumbnail or a guessed extension. */
 class OriginalMediaRef(request: OriginalMediaRequest) {
@@ -66,7 +70,15 @@ internal class OriginalMediaFetcher(
     private val request: OriginalMediaRequest
 ) : Fetcher {
     override suspend fun fetch(): SourceFetchResult {
-        val lease = store.acquire(request)
+        val lease = try {
+            store.acquire(request)
+        } catch (cancelled: CancellationException) {
+            // Coil rethrows cancellation without an error result, which would
+            // leave the image loading forever. If this request itself is still
+            // wanted, report the lost download as an ordinary failure.
+            currentCoroutineContext().ensureActive()
+            throw IOException("Original media request was cancelled by another operation", cancelled)
+        }
         try {
             return SourceFetchResult(
                 source = ImageSource(lease.file, lease.fileSystem, closeable = lease),

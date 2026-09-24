@@ -39,3 +39,22 @@ internal fun shouldDismissCompatDrawerSwipe(
         absoluteYVelocity < absoluteXVelocity &&
         directionMatches
 }
+
+/**
+ * Visible drawer width for the scrim. Material's open anchor is 0 and its
+ * closed anchor is the negative drawer width, so deriving the scrim from the
+ * same offset keeps the dimmed area attached to the moving sheet during both
+ * open and close animations (#38). An edge-swipe preview wins while closed.
+ */
+internal fun compatDrawerVisibleWidthPx(
+    previewOffsetPx: Float,
+    isClosed: Boolean,
+    isOpen: Boolean,
+    currentOffset: Float,
+    widthPx: Float
+): Float = when {
+    previewOffsetPx > 0f && isClosed -> previewOffsetPx
+    !currentOffset.isNaN() -> (widthPx + currentOffset).coerceIn(0f, widthPx)
+    isOpen -> widthPx
+    else -> 0f
+}

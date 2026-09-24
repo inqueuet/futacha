@@ -1,7 +1,7 @@
 package com.valoser.futacha.shared.network
 
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
@@ -33,7 +33,10 @@ internal suspend fun executeHttpBoardApiTextGet(
     readResponseBodyAsString: suspend (HttpResponse) -> String,
     readResponseHeadAsString: suspend (HttpResponse, Int) -> String
 ): String {
-    val response: HttpResponse = client.get(request.url) {
+    // prepareGet/execute streams the body: a plain get() buffers the whole
+    // response before returning, so the size limit and the head-only read
+    // below could not stop an oversized or endless body from being received.
+    return client.prepareGet(request.url) {
         // HttpBoardApi owns a bounded retry loop around this entire request,
         // including response-body reading. Suppress the platform retry plugin
         // so a closed Futaba keep-alive connection produces two attempts, not
@@ -46,8 +49,17 @@ internal suspend fun executeHttpBoardApiTextGet(
         headers[HttpHeaders.Pragma] = "no-cache"
         request.referer?.let { headers[HttpHeaders.Referrer] = it }
         request.rangeHeader?.let { headers[HttpHeaders.Range] = it }
-    }
+    }.execute { response -> readHttpBoardApiTextResponse(response, request, readSmallResponseSummary,
+        readResponseBodyAsString, readResponseHeadAsString) }
+}
 
+private suspend fun readHttpBoardApiTextResponse(
+    response: HttpResponse,
+    request: HttpBoardApiTextGetRequest,
+    readSmallResponseSummary: suspend (HttpResponse) -> String?,
+    readResponseBodyAsString: suspend (HttpResponse) -> String,
+    readResponseHeadAsString: suspend (HttpResponse, Int) -> String
+): String {
     try {
         if (!response.status.isSuccess()) {
             val detail = readSmallResponseSummary(response)

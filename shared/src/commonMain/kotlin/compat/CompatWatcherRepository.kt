@@ -57,56 +57,96 @@ class CompatWatcherRepository(private val store: CompatibilityStore) {
         store.savePreference(COMPAT_WATCH_RULES_KEY, encoded)
     }
 
-    private suspend fun slots(): Map<String, CompatWatchResult> = store.preferences.first()
+    private suspend fun slots(): Map<String, CompatWatchResult> = decodeSlots(store.preferences.first())
+
+    private fun decodeSlots(preferences: Map<String, String>): Map<String, CompatWatchResult> = preferences
         .filterKeys { it.startsWith(RESULT_PREFIX) }
         .mapNotNull { (key, value) -> runCatching {
             key to watcherJson.decodeFromString<CompatWatchResult>(value)
         }.getOrNull() }.toMap()
 
-    private suspend fun prune(now: Long): Map<String, CompatWatchResult> {
-        val all = slots()
+    /**
+     * Live results after dropping expired ones. Expired rows, and blank rows left
+     * by older versions, are added to [removals] (null = delete the row) so the
+     * caller writes everything in one change.
+     */
+    private suspend fun pruneInto(now: Long, removals: MutableMap<String, String?>): Map<String, CompatWatchResult> {
+        val preferences = store.preferences.first()
+        preferences.filter { (key, value) -> key.startsWith(RESULT_PREFIX) && value.isBlank() }
+            .keys.forEach { removals[it] = null }
+        val all = decodeSlots(preferences)
         val expired = all.filterValues { now - it.insertedAtEpochMillis > COMPAT_WATCH_RETENTION_MILLIS }
-        expired.keys.forEach { store.savePreference(it, "") }
+        expired.keys.forEach { removals[it] = null }
         return all - expired.keys
     }
 
     suspend fun load(now: Long): List<CompatWatchResult> = watcherMutex.withLock {
-        prune(now).values.sortedByDescending { it.history.contentUpdatedAtEpochMillis }
+        val removals = mutableMapOf<String, String?>()
+        val live = pruneInto(now, removals)
+        if (removals.isNotEmpty()) store.savePreferences(removals)
+        live.values.sortedByDescending { it.history.contentUpdatedAtEpochMillis }
     }
 
     /** Returns true for a newly detected URL, independently of whether it has been read. */
-    suspend fun record(match: CompatWatchMatch): Boolean = watcherMutex.withLock {
-        val now = match.history.contentUpdatedAtEpochMillis
-        val all = prune(now)
-        val previous = all.entries.firstOrNull { it.value.history.canonicalUrl == match.history.canonicalUrl }
-        if (previous != null && previous.value.history.contentUpdatedAtEpochMillis > now) return@withLock false
-        val slot = previous?.key ?: (0 until MAX_COMPAT_WATCH_RESULTS)
-            .map { "$RESULT_PREFIX$it" }.firstOrNull { it !in all }
-            ?: all.minBy { it.value.insertedAtEpochMillis }.key
-        val result = CompatWatchResult(
-            history = match.history.copy(title = match.history.title.take(1000), scrollAnchor = ScrollAnchor()),
-            keyword = match.keyword.take(1000),
-            insertedAtEpochMillis = previous?.value?.insertedAtEpochMillis ?: now,
-            checkedAtEpochMillis = now
-        )
-        store.savePreference(slot, watcherJson.encodeToString(result))
-        previous == null
+    suspend fun record(match: CompatWatchMatch): Boolean =
+        match.history.canonicalUrl in recordAll(listOf(match))
+
+    /**
+     * Records every match of one catalog with a single preference write, applying
+     * the same rules as recording them one by one. Returns the newly detected URLs.
+     */
+    suspend fun recordAll(matches: List<CompatWatchMatch>): Set<String> = watcherMutex.withLock {
+        if (matches.isEmpty()) return@withLock emptySet()
+        val writes = mutableMapOf<String, String?>()
+        val live = pruneInto(matches.minOf { it.history.contentUpdatedAtEpochMillis }, writes).toMutableMap()
+        val newUrls = linkedSetOf<String>()
+        matches.forEach { match ->
+            val now = match.history.contentUpdatedAtEpochMillis
+            val previous = live.entries.firstOrNull { it.value.history.canonicalUrl == match.history.canonicalUrl }
+            if (previous != null && previous.value.history.contentUpdatedAtEpochMillis > now) return@forEach
+            val slot = previous?.key ?: (0 until MAX_COMPAT_WATCH_RESULTS)
+                .map { "$RESULT_PREFIX$it" }.firstOrNull { it !in live }
+                ?: live.minBy { it.value.insertedAtEpochMillis }.key
+            val result = CompatWatchResult(
+                history = match.history.copy(title = match.history.title.take(1000), scrollAnchor = ScrollAnchor()),
+                keyword = match.keyword.take(1000),
+                insertedAtEpochMillis = previous?.value?.insertedAtEpochMillis ?: now,
+                checkedAtEpochMillis = now
+            )
+            live[slot] = result
+            writes[slot] = watcherJson.encodeToString(result)
+            if (previous == null) newUrls += match.history.canonicalUrl
+        }
+        if (writes.isNotEmpty()) store.savePreferences(writes)
+        newUrls
     }
 
     suspend fun delete(url: String) = watcherMutex.withLock {
-        slots().filterValues { it.history.canonicalUrl == url }.keys.forEach { store.savePreference(it, "") }
+        val keys = slots().filterValues { it.history.canonicalUrl == url }.keys
+        if (keys.isNotEmpty()) store.savePreferences(keys.associateWith { null })
     }
 
     suspend fun deleteAll() = watcherMutex.withLock {
-        slots().keys.forEach { store.savePreference(it, "") }
+        val keys = slots().keys
+        if (keys.isNotEmpty()) store.savePreferences(keys.associateWith { null })
     }
 
     suspend fun markGone(checked: CompatWatchResult) = markChecked(checked, true, checked.history.contentUpdatedAtEpochMillis)
 
-    suspend fun markChecked(checked: CompatWatchResult, gone: Boolean, now: Long) = watcherMutex.withLock {
-        // Do not resurrect deleted results or overwrite a later successful catalog refresh.
-        slots().entries.firstOrNull { it.value == checked }?.let { (slot, current) ->
-            store.savePreference(slot, watcherJson.encodeToString(current.copy(active = !gone, checkedAtEpochMillis = now)))
-        }
+    suspend fun markChecked(checked: CompatWatchResult, gone: Boolean, now: Long) =
+        markCheckedAll(mapOf(checked to gone), now)
+
+    /**
+     * Stores several probe outcomes in one write. Each applies only while the
+     * stored result still equals the checked one, so deleted results are not
+     * resurrected and a later catalog refresh is not overwritten.
+     */
+    suspend fun markCheckedAll(outcomes: Map<CompatWatchResult, Boolean>, now: Long) = watcherMutex.withLock {
+        if (outcomes.isEmpty()) return@withLock
+        val writes = slots().entries.mapNotNull { (slot, current) ->
+            val gone = outcomes[current] ?: return@mapNotNull null
+            slot to watcherJson.encodeToString(current.copy(active = !gone, checkedAtEpochMillis = now))
+        }.toMap()
+        if (writes.isNotEmpty()) store.savePreferences(writes)
     }
 }

@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
@@ -20,12 +21,13 @@ internal data class ThreadSaveRuntime(
 )
 
 internal fun buildThreadSaveRuntime(
-    saveService: ThreadSaveService
+    saveService: ThreadSaveService,
+    resolveIndexedAutoSaveStorageId: suspend (threadId: String, boardId: String) -> String? = { _, _ -> null }
 ): ThreadSaveRuntime {
     return ThreadSaveRuntime(
         saveService = saveService,
         manualCallbacks = buildThreadManualSaveRunnerCallbacks(saveService),
-        autoCallbacks = buildThreadAutoSaveRunnerCallbacks(saveService)
+        autoCallbacks = buildThreadAutoSaveRunnerCallbacks(saveService, resolveIndexedAutoSaveStorageId)
     )
 }
 
@@ -33,11 +35,14 @@ internal fun buildThreadSaveRuntime(
     httpClient: HttpClient,
     fileSystem: FileSystem
 ): ThreadSaveRuntime {
+    // Read-only lookup of the auto-save index; the index file is replaced atomically.
+    val autoSaveIndex = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
     return buildThreadSaveRuntime(
         ThreadSaveService(
             httpClient = httpClient,
             fileSystem = fileSystem
-        )
+        ),
+        resolveIndexedAutoSaveStorageId = autoSaveIndex::resolveIndexedStorageId
     )
 }
 

@@ -1,9 +1,13 @@
 package com.valoser.futacha.wear
 
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
@@ -98,6 +102,8 @@ class WearMainActivity : ComponentActivity() {
 }
 
 private const val WATCH_NOW_TICK_MILLIS = 30_000L
+/** `adb shell setprop log.tag.FutachaWearPoll DEBUG` shows each reachability poll. */
+private const val POLL_LOG_TAG = "FutachaWearPoll"
 
 @Composable
 private fun FutachaWearApp() {
@@ -113,17 +119,23 @@ private fun FutachaWearApp() {
         commandClient.requestSnapshot()
     }
 
-    LaunchedEffect(context) {
-        while (true) {
-            Wearable.getNodeClient(context.applicationContext)
-                .connectedNodes
-                .addOnSuccessListener { nodes ->
-                    isPhoneReachable = nodes.isNotEmpty()
-                }
-                .addOnFailureListener {
-                    isPhoneReachable = false
-                }
-            delay(WATCH_NOW_TICK_MILLIS)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(context, lifecycleOwner) {
+        // Stop polling while the app is off screen (watch face shown); the
+        // composition can stay alive in the background.
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                if (Log.isLoggable(POLL_LOG_TAG, Log.DEBUG)) Log.d(POLL_LOG_TAG, "Checking phone reachability")
+                Wearable.getNodeClient(context.applicationContext)
+                    .connectedNodes
+                    .addOnSuccessListener { nodes ->
+                        isPhoneReachable = nodes.isNotEmpty()
+                    }
+                    .addOnFailureListener {
+                        isPhoneReachable = false
+                    }
+                delay(WATCH_NOW_TICK_MILLIS)
+            }
         }
     }
 
@@ -195,10 +207,14 @@ private fun FutachaWearContent(
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(WATCH_NOW_TICK_MILLIS)
-            nowMillis = System.currentTimeMillis()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        // Tick only while visible; refresh at once when shown again.
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                nowMillis = System.currentTimeMillis()
+                delay(WATCH_NOW_TICK_MILLIS)
+            }
         }
     }
 

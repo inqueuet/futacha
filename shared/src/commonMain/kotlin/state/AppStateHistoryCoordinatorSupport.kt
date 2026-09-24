@@ -12,7 +12,8 @@ internal class AppStateHistoryCoordinator(
     private val historyFileStore: AppStateHistoryFileStore?,
     private val json: Json,
     private val tag: String,
-    private val rethrowIfCancellation: (Throwable) -> Unit
+    private val rethrowIfCancellation: (Throwable) -> Unit,
+    private val maxEntries: Int = historyFileStore?.maxEntries ?: APP_STATE_HISTORY_MAX_ENTRIES
 ) {
     private val historyMutex = Mutex()
     private val historyPersistMutex = Mutex()
@@ -20,7 +21,8 @@ internal class AppStateHistoryCoordinator(
     private var historyRevision: Long = 0L
     private var persistedHistoryRevision: Long = 0L
 
-    suspend fun setHistory(history: List<ThreadHistoryEntry>) {
+    suspend fun setHistory(requestedHistory: List<ThreadHistoryEntry>) {
+        val history = boundToLimit(requestedHistory, emptySet())
         val (revision, previousRevision, previousHistory) = historyMutex.withLock {
             val beforeRevision = historyRevision
             val beforeHistory = cachedHistory
@@ -124,8 +126,23 @@ internal class AppStateHistoryCoordinator(
                 historyRevision = revision
                 cachedHistory = history
             },
-            buildPlan = buildPlan
+            buildPlan = { current ->
+                buildPlan(current)?.let { plan ->
+                    val currentKeys = current.mapTo(HashSet(), ::historyEntryIdentity)
+                    val addedKeys = plan.updatedHistory.map(::historyEntryIdentity)
+                        .filterTo(HashSet()) { it !in currentKeys }
+                    plan.copy(updatedHistory = boundToLimit(plan.updatedHistory, addedKeys))
+                }
+            }
         )
+    }
+
+    private fun boundToLimit(history: List<ThreadHistoryEntry>, protectedKeys: Set<String>): List<ThreadHistoryEntry> {
+        val bounded = trimAppStateHistoryToLimit(history, maxEntries, protectedKeys)
+        if (bounded.size < history.size) {
+            Logger.i(tag, "Dropped ${history.size - bounded.size} oldest history entries beyond the $maxEntries limit")
+        }
+        return bounded
     }
 
     private suspend fun <T> persistHistoryMutation(

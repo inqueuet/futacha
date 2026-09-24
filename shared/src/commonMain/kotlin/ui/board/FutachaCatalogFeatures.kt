@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -138,18 +140,18 @@ internal fun FutachaCatalogFeatureHost(
         message = "DEL依頼を送信しました"
     } }
     val tools = listOf(
-        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示") { stripVisible = !stripVisible },
-        FutachaThreadTool("更新前のカタログ", previous.isNotEmpty()) { undoOpen = true },
-        FutachaThreadTool("消えたスレ・隔離") { droppedOpen = true },
-        FutachaThreadTool(if (preference.replyPriorityEnabled) "レス数による優先表示を解除" else "レス数による優先表示") {
+        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
+        FutachaThreadTool("更新前のカタログ", Icons.Rounded.History, previous.isNotEmpty()) { undoOpen = true },
+        FutachaThreadTool("消えたスレ・隔離", Icons.Rounded.Inventory2) { droppedOpen = true },
+        FutachaThreadTool(if (preference.replyPriorityEnabled) "レス数による優先表示を解除" else "レス数による優先表示", Icons.Rounded.Sort) {
             savePreference(preference.copy(replyPriorityEnabled = !preference.replyPriorityEnabled))
         },
-        FutachaThreadTool(if (preference.showNonPriority) "少ないレスを非表示" else "少ないレスも表示") {
+        FutachaThreadTool(if (preference.showNonPriority) "少ないレスを非表示" else "少ないレスも表示", Icons.Rounded.FilterList) {
             savePreference(preference.copy(showNonPriority = !preference.showNonPriority))
         },
-        FutachaThreadTool("NGの詳細管理") { ngOpen = true },
-        FutachaThreadTool("キャッシュ検索") { searchOpen = true },
-        FutachaThreadTool("表示・取得の詳細設定") { features.openSettings("catalog") }
+        FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
+        FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true },
+        FutachaThreadTool("表示・取得の詳細設定", Icons.Rounded.Settings) { features.openSettings("catalog") }
     )
     val volume = features.displayValue("control", "controlCatalogVolumeKey")
     val owner = remember { Any() }
@@ -166,27 +168,33 @@ internal fun FutachaCatalogFeatureHost(
     }
     val phashRules = remember(scopedRules) { scopedRules.filter { it.kind == CompatNgKind.CATALOG_IMAGE_PHASH } }
     val threshold = features.value("thread", "threadImageNgPhashThreshold")?.toIntOrNull() ?: CompatImagePhash.DEFAULT_THRESHOLD
+    // Bounded like the compatibility catalog (per image and 15 s overall) and
+    // published in batches, so matching threads disappear while the rest load.
     val phashes by produceState(emptyMap<String, String>(), items, phashRules) {
-        value = if (phashRules.isEmpty() || features.httpClient == null) emptyMap() else buildMap {
-            items.take(256).forEach { item ->
-                (item.fullImageUrl ?: item.thumbnailUrl)?.let { url ->
-                    fetchCompatImagePhash(features.httpClient, url).getOrNull()?.let { put(item.id, it) }
-                }
-            }
+        val client = features.httpClient
+        if (phashRules.isEmpty() || client == null) {
+            value = emptyMap()
+            return@produceState
         }
+        val candidates = items.take(256).mapNotNull { item -> (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it } }
+        value = collectCompatImagePhashes(client, candidates, onPartial = { value = it })
     }
-    val projected by produceState(items, items, scopedRules, preference, features.preferences, phashes, dropped) {
+    // Only the preferences this projection uses are keys; others must not restart it.
+    val titleLimit = features.intValue("catalog", "catalogTitleLength", 10..30)
+    val delayFewReplies = features.intValue("catalog", "delayFewReplies", 0..30)
+    val appendDropped = features.value("catalog", "catalogAppendDropped") == "ON"
+    val projected by produceState(items, items, scopedRules, preference, titleLimit, delayFewReplies, appendDropped,
+        threshold, phashes, dropped) {
         value = withContext(AppDispatchers.parsing) {
             val index = buildCompatCatalogRuleIndex(scopedRules)
-            val titleLimit = features.intValue("catalog", "catalogTitleLength", 10..30)
             val filtered = items.filterNot { item -> index.hides(item) || phashes[item.id]?.let { phash ->
                 phashRules.any { CompatImagePhash.isSimilar(phash, it.normalizedValue, threshold) }
             } == true }
             val prioritized = projectCompatCatalogItems(filtered, preference.replyPriorityEnabled,
-                features.intValue("catalog", "delayFewReplies", 0..30) ?: preference.fewRepliesDelay,
+                delayFewReplies ?: preference.fewRepliesDelay,
                 preference.showNonPriority, index::extracts)
             val combined = appendCompatDroppedCatalogItems(prioritized, dropped.filterNot { index.hides(it.item) },
-                features.value("catalog", "catalogAppendDropped") == "ON")
+                appendDropped)
             if (titleLimit == null) combined else combined.map { it.copy(title = it.title?.take(titleLimit)) }
         }
     }

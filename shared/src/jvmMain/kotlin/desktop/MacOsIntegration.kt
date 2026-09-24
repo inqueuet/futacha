@@ -11,6 +11,7 @@ import java.util.UUID
 private interface MacBridge : Library {
     fun futacha_mac_call(request: String): Pointer
     fun futacha_mac_free(result: Pointer)
+    fun futacha_mac_home(): Pointer
 }
 
 /** The native bridge confines AppKit to its own main thread; callers use Dispatchers.IO. */
@@ -18,6 +19,12 @@ internal object MacNative {
     private val bridge by lazy {
         Native.load(desktopResource("native/libfutacha_macos.dylib").absolutePath, MacBridge::class.java,
             mapOf(Library.OPTION_STRING_ENCODING to "UTF-8"))
+    }
+
+    fun homeDirectory(): File {
+        val result = bridge.futacha_mac_home()
+        try { return File(result.getString(0, "UTF-8")) }
+        finally { bridge.futacha_mac_free(result) }
     }
 
     suspend fun call(operation: String, vararg fields: Pair<String, String>): JsonObject = withContext(Dispatchers.IO) {
@@ -80,7 +87,8 @@ object MacOsIntegration {
     /** No permission prompts, microphone capture or external sharing during this diagnostic. */
     suspend fun checkInstallation(output: File) {
         val capabilities = MacNative.call("capabilities").checked()
-        check(capabilities["bundle"]?.jsonPrimitive?.content == "com.valoser.futacha.desktop")
+        check(capabilities["bundle"]?.jsonPrimitive?.content ==
+            System.getProperty("futacha.desktop.bundleId", "com.valoser.futacha.desktop"))
         val permissions = withTimeout(10_000) { MacNative.operation("notificationStatus") }
         for (icon in com.valoser.futacha.shared.model.AppIconVariant.entries) applyDockIcon(icon)
         applyDockIcon(com.valoser.futacha.shared.model.AppIconVariant.Current)

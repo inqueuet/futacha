@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.util
 import com.valoser.futacha.shared.media.source.*
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.timeout
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -135,21 +135,26 @@ private suspend fun <T> withRemoteMediaSaveSource(
     url: String,
     block: suspend (MediaSaveSource) -> T
 ): T {
-    val response = withTimeoutOrNull(30_000L) {
-        httpClient.get(url) {
+    // Streamed: a plain get() downloaded the whole file into memory before
+    // returning, so a large video also had to finish within the old 30-second
+    // wait. Now 30 seconds without data fails, and the file streams to disk.
+    return try {
+        httpClient.prepareGet(url) {
             headers[HttpHeaders.Accept] = "image/*,video/*;q=0.9,*/*;q=0.2"
-            timeout { requestTimeoutMillis = 15 * 60_000L }
+            timeout {
+                requestTimeoutMillis = 15 * 60_000L
+                socketTimeoutMillis = 30_000L
+            }
+        }.execute { response ->
+            check(response.status.isSuccess()) { "保存に失敗しました: HTTP ${response.status.value}" }
+            val channel = response.bodyAsChannel()
+            block(MediaSaveSource(
+                contentType = response.headers[HttpHeaders.ContentType]?.let { runCatching { ContentType.parse(it) }.getOrNull() },
+                declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
+                read = { channel.readAvailable(it, 0, it.size) }
+            ))
         }
-    } ?: error("ダウンロードがタイムアウトしました")
-    try {
-        check(response.status.isSuccess()) { "保存に失敗しました: HTTP ${response.status.value}" }
-        val channel = response.bodyAsChannel()
-        return block(MediaSaveSource(
-            contentType = response.headers[HttpHeaders.ContentType]?.let { runCatching { ContentType.parse(it) }.getOrNull() },
-            declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
-            read = { channel.readAvailable(it, 0, it.size) }
-        ))
-    } finally {
-        runCatching { response.bodyAsChannel().cancel() }
+    } catch (timeout: io.ktor.client.plugins.HttpRequestTimeoutException) {
+        throw IllegalStateException("ダウンロードがタイムアウトしました", timeout)
     }
 }

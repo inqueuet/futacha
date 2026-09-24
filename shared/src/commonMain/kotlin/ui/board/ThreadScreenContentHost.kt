@@ -2,11 +2,9 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
 import coil3.compose.LocalPlatformContext
@@ -129,43 +127,47 @@ internal fun ThreadScreenContentHost(
                     ngWords = bindings.ngWords
                 )
             }
-            val cachedFilteredPage = remember(filterCacheKey, hasNgFilters, hasThreadFilters, state.page) {
-                if (!hasNgFilters && !hasThreadFilters) {
+            val filtersActive = hasNgFilters || hasThreadFilters
+            val cachedFilterOutcome = remember(filterCacheKey, filtersActive, state.page) {
+                if (!filtersActive) {
                     null
                 } else {
-                    bindings.threadFilterCache[filterCacheKey]?.toThreadPage(state.page)
+                    bindings.threadFilterCache[filterCacheKey]?.let { cached ->
+                        ThreadFilterOutcome(filterCacheKey, cached, state.page.posts.size)
+                    }
                 }
             }
-            var lastVisibleFilteredPage by remember(state.page) { mutableStateOf(state.page) }
-            val normallyFilteredPage by produceState(
-                initialValue = cachedFilteredPage ?: lastVisibleFilteredPage,
+            // Only which posts survive is cached here, never the page itself: a
+            // refresh with the same reply count keeps the same cache key but brings
+            // new bodies, deletions, saidane counts and expiry, which must show.
+            val filterOutcome by produceState(
+                initialValue = cachedFilterOutcome,
                 key1 = filterCacheKey
             ) {
                 bindings.threadFilterCache[filterCacheKey]?.let { cachedResult ->
-                    value = cachedResult.toThreadPage(state.page)
-                    lastVisibleFilteredPage = value
+                    value = ThreadFilterOutcome(filterCacheKey, cachedResult, state.page.posts.size)
                     return@produceState
                 }
-                if (!hasNgFilters && !hasThreadFilters) {
-                    value = state.page
-                    lastVisibleFilteredPage = value
+                if (!filtersActive) {
+                    value = null
                     return@produceState
                 }
                 if (threadFilterComputationState.criteria.options.contains(ThreadFilterOption.Keyword)) {
                     delay(THREAD_FILTER_DEBOUNCE_MILLIS)
                 }
+                val sourcePage = state.page
                 val filterResult = withContext(AppDispatchers.parsing) {
                     val hasNgWordFilters = hasNgFilters && bindings.ngWords.any { it.isNotBlank() }
                     val hasThreadLowerBodyFilters = threadFilterComputationState.criteria.options.any {
                         it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
                     }
                     val precomputedLowerBodyByPost = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
-                        buildLowerBodyByPost(state.page.posts, bindings.postTextCache)
+                        buildLowerBodyByPost(sourcePage.posts, bindings.postTextCache)
                     } else {
                         emptyMap()
                     }
                     applyThreadFilterResult(
-                        page = state.page,
+                        page = sourcePage,
                         criteria = threadFilterComputationState.criteria,
                         ngHeaders = bindings.ngHeaders,
                         ngWords = bindings.ngWords,
@@ -181,11 +183,25 @@ internal fun ThreadScreenContentHost(
                     }
                 }
                 bindings.threadFilterCache[filterCacheKey] = filterResult
-                value = filterResult.toThreadPage(state.page)
-                lastVisibleFilteredPage = value
+                value = ThreadFilterOutcome(filterCacheKey, filterResult, sourcePage.posts.size)
+            }
+            val lastFilteredPage = remember { ThreadFilteredPageHolder() }
+            val normallyFilteredPage = remember(state.page, filterOutcome, filterCacheKey, filtersActive) {
+                resolveNormallyFilteredThreadPage(
+                    page = state.page,
+                    outcome = filterOutcome,
+                    currentKey = filterCacheKey,
+                    filtersActive = filtersActive,
+                    previous = lastFilteredPage.page
+                ).also { lastFilteredPage.page = it }
             }
             val filteredPage = rememberFutachaFilteredThreadPage(state.page, normallyFilteredPage,
                 bindings.ngHeaders, bindings.ngWords)
+            if (filteredPage == null) {
+                // Shared NG is still being applied; never show posts it will hide.
+                ThreadLoading(modifier = modifier.fillMaxSize())
+                return
+            }
             val onPostLongPress: (Post) -> Unit = { post ->
                 bindings.setPostOverlayState(
                     openThreadPostActionOverlay(

@@ -306,7 +306,7 @@ internal fun ThreadContent(
             }
 
             if (LocalFutachaSharedFeatures.current?.value("thread", "threadFastScroll") == "ON") {
-                CompatFastScrollbar(true, listState.layoutInfo.totalItemsCount, listState)
+                CompatFastScrollbar(true, listState)
             }
             ThreadScrollbar(
                 listState = listState,

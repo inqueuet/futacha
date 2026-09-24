@@ -500,6 +500,88 @@ class OriginalMediaStoreTest {
         } finally { fixture.finish() }
     }
 
+    @Test fun cacheOnlyMissFailsOnceWithoutRetryingOrWaiting(): Unit = runBlocking {
+        val cachedCalls = AtomicInteger()
+        val retryCalls = AtomicInteger()
+        val fixture = Fixture(downloader = object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo =
+                error("a cache-only request must not download")
+            override suspend fun downloadCached(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo? {
+                cachedCalls.incrementAndGet()
+                return null
+            }
+            override suspend fun retryAfter(retry: Int, failure: Throwable): Boolean {
+                retryCalls.incrementAndGet()
+                return true
+            }
+        })
+        try {
+            assertFailsWith<OriginalMediaNotCached> { fixture.store.acquire(request.copy(allowNetwork = false)) }
+            // Previously the miss was retried like a dropped connection (with waits).
+            assertEquals(1, cachedCalls.get())
+            assertEquals(0, retryCalls.get())
+        } finally { fixture.finish() }
+    }
+
+    @Test fun waiterReceivesTheNewerVersionWhenAnotherScreenReloads(): Unit = runBlocking {
+        val calls = AtomicInteger()
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val fixture = Fixture(downloader = object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo {
+                return if (calls.incrementAndGet() == 1) {
+                    firstStarted.complete(Unit)
+                    releaseFirst.await()
+                    sink.writeUtf8("old!")
+                    info(4)
+                } else {
+                    sink.writeUtf8("new!")
+                    info(4)
+                }
+            }
+            override suspend fun retryAfter(retry: Int, failure: Throwable) = false
+        })
+        try {
+            val waiter = async(Dispatchers.IO) {
+                fixture.store.acquire(request).use { it.readAt(0, 100).decodeToString() }
+            }
+            firstStarted.await()
+            // Another screen asks for a fresh copy of the same original.
+            val reloaded = fixture.store.acquire(request.copy(reloadToken = 5)).use { it.readAt(0, 100).decodeToString() }
+            releaseFirst.complete(Unit)
+
+            assertEquals("new!", reloaded)
+            // Used to fail with the reload's CancellationException (Coil: endless spinner).
+            assertEquals("new!", withTimeout(5_000) { waiter.await() })
+            assertEquals(2, calls.get())
+        } finally { fixture.finish() }
+    }
+
+    @Test fun concurrentReloadsWithDifferentTokensBothComplete(): Unit = runBlocking {
+        val calls = AtomicInteger()
+        val gate = CompletableDeferred<Unit>()
+        val fixture = Fixture(downloader = object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo {
+                calls.incrementAndGet()
+                gate.await()
+                sink.writeUtf8("data")
+                return info(4)
+            }
+            override suspend fun retryAfter(retry: Int, failure: Throwable) = false
+        })
+        try {
+            // Coil gives each request with disk reads disabled its own random token.
+            val first = async(Dispatchers.IO) { fixture.store.acquire(request.copy(reloadToken = 11)).use { it.info.sizeBytes } }
+            while (calls.get() == 0) delay(5)
+            val second = async(Dispatchers.IO) { fixture.store.acquire(request.copy(reloadToken = 22)).use { it.info.sizeBytes } }
+            delay(50)
+            gate.complete(Unit)
+
+            assertEquals(4L, withTimeout(5_000) { first.await() })
+            assertEquals(4L, withTimeout(5_000) { second.await() })
+        } finally { fixture.finish() }
+    }
+
     @Test fun retryBudgetStopsAtThreeAttempts(): Unit = runBlocking {
         val calls = AtomicInteger()
         val fixture = Fixture(downloader = object : OriginalMediaDownloader {

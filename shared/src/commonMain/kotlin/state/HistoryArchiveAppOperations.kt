@@ -9,7 +9,9 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.repository.exportHistoryArchive
 import com.valoser.futacha.shared.repository.importHistoryArchive
 import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 data class AppHistoryArchiveImportResult(
     val archiveImport: HistoryArchiveImportResult,
@@ -46,22 +48,27 @@ suspend fun importAppHistoryArchive(
     archiveDirectory: String,
     selectedSnapshotIds: Set<String>? = null
 ): Result<AppHistoryArchiveImportResult> {
-    return importHistoryArchive(
-        fileSystem = fileSystem,
-        destinationRepository = destinationRepository,
-        request = HistoryArchiveImportRequest(
-            archiveDirectory = archiveDirectory,
-            selectedSnapshotIds = selectedSnapshotIds
-        )
-    ).mapCatching { archiveImport ->
-        val merge = resolveHistoryArchiveImportMergeEntries(
-            currentHistory = stateStore.history.first(),
-            importedHistory = archiveImport.importedHistoryEntries
-        )
-        stateStore.setHistory(merge.updatedHistory)
-        AppHistoryArchiveImportResult(
-            archiveImport = archiveImport,
-            merge = merge
-        )
+    // Taken before reading the archive: a deletion made while it is read must
+    // not be undone by the merge, while older deletions may be restored.
+    val ticket = stateStore.beginHistoryImport()
+    try {
+        return importHistoryArchive(
+            fileSystem = fileSystem,
+            destinationRepository = destinationRepository,
+            request = HistoryArchiveImportRequest(
+                archiveDirectory = archiveDirectory,
+                selectedSnapshotIds = selectedSnapshotIds
+            )
+        ).mapCatching { archiveImport ->
+            // Merged against the latest history in one mutation, so reading
+            // positions and entries changed during the import are kept.
+            val merge = stateStore.mergeImportedHistory(archiveImport.importedHistoryEntries, ticket)
+            AppHistoryArchiveImportResult(
+                archiveImport = archiveImport,
+                merge = merge
+            )
+        }
+    } finally {
+        withContext(NonCancellable) { stateStore.endHistoryImport(ticket) }
     }
 }

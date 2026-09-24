@@ -10,8 +10,16 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -708,6 +716,170 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun debouncedScrollPosition_isWrittenToDisk() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+
+        // The debounced job used to cancel itself before its file write.
+        assertEquals(40, store.history.first().single().lastReadItemIndex)
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun debouncedScrollPosition_survivesForcedExitSaveAtTheSamePosition() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40, forcePersist = true))
+
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun exitSave_waitsForADebouncedWriteThatAlreadyStarted() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = GatedHistoryEntryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            fileSystem.armed = true
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            // A debounced job that cancels itself never reaches the write.
+            withTimeout(5_000L) { fileSystem.writeStarted.await() }
+
+            // Leaving the thread at the same position while the debounced write
+            // is on disk I/O: cancelling that write used to leave memory ahead of
+            // disk, and the exit save then skipped the unchanged position.
+            val exitSave = launch {
+                store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40))
+            }
+            yield()
+            fileSystem.release.complete(Unit)
+            exitSave.join()
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun historyAtItsLimitDropsTheOldestEntryInsteadOfFailing() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest", maxEntries = 3),
+            json = json
+        )
+        store.setHistory((1..3).map { historyEntry("$it").copy(lastVisitedEpochMillis = 100L * it) })
+
+        store.prependOrReplaceHistoryEntry(historyEntry("4").copy(lastVisitedEpochMillis = 50L))
+
+        val expected = listOf("2", "3", "4")
+        assertEquals(expected, store.history.first().map { it.threadId }.sorted())
+        val reopened = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest", maxEntries = 3),
+            json = json
+        )
+        assertEquals(expected, reopened.history.first().map { it.threadId }.sorted())
+    }
+
+    @Test
+    fun historyImportRestoresDeletionsMadeBeforeItStarted() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val a = historyEntry("a")
+        store.setHistory(listOf(a))
+        store.removeHistoryEntry(a)
+
+        val ticket = store.beginHistoryImport()
+        store.mergeImportedHistory(listOf(a), ticket)
+
+        assertEquals(listOf("a"), store.history.first().map { it.threadId })
+    }
+
+    @Test
+    fun historyImportDoesNotResurrectAnEntryDeletedWhileTheArchiveWasRead() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val a = historyEntry("a")
+        val b = historyEntry("b")
+        store.setHistory(listOf(a, b))
+
+        val ticket = store.beginHistoryImport()
+        // The user deletes B and scrolls A while the archive is being read.
+        store.removeHistoryEntry(b)
+        store.updateHistoryScrollPositionImmediately(scrollRequest("a", index = 25))
+        val merge = store.mergeImportedHistory(listOf(b, historyEntry("c")), ticket)
+
+        val history = store.history.first()
+        assertEquals(listOf("a", "c"), history.map { it.threadId }.sorted())
+        assertEquals(25, history.single { it.threadId == "a" }.lastReadItemIndex)
+        assertEquals(1, merge.skippedCount)
+    }
+
+    @Test
+    fun historyImportIsDroppedWhenHistoryWasClearedDuringIt() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(historyEntry("a")))
+
+        val ticket = store.beginHistoryImport()
+        store.clearHistory()
+        store.mergeImportedHistory(listOf(historyEntry("a"), historyEntry("b")), ticket)
+
+        assertEquals(emptyList(), store.history.first())
+    }
+
+    private fun debouncedScrollStore(storage: FakePlatformStateStorage, fileSystem: FileSystem) = AppStateStore(
+        storage = storage,
+        historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+        json = json,
+        scrollDebounceDelayMillis = 10L
+    )
+
+    private suspend fun reopenedHistory(storage: FakePlatformStateStorage, fileSystem: FileSystem) = AppStateStore(
+        storage = storage,
+        historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+        json = json
+    ).history.first()
+
+    private fun scrollRequest(threadId: String, index: Int, forcePersist: Boolean = false) =
+        AppStateHistoryScrollUpdateRequest(
+            threadId = threadId,
+            index = index,
+            offset = 0,
+            boardId = "b",
+            title = "title-$threadId",
+            titleImageUrl = "thumb-$threadId",
+            boardName = "board",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            replyCount = 1,
+            forcePersist = forcePersist
+        )
+
+    @Test
     fun seedPayload_toSeedBundles_splitsBoardsHistoryAndPreferences() {
         val bundles = AppStateSeedPayload(
             defaultBoardsJson = "boards",
@@ -829,6 +1001,24 @@ private class ManifestWriteFailingFileSystem(
         } else {
             delegate.writeString(path, content)
         }
+    }
+}
+
+/** Blocks the first history entry write after [armed] until [release] completes. */
+private class GatedHistoryEntryFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var armed = false
+    val writeStarted = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        if (armed && path.contains("history_store/entries")) {
+            armed = false
+            writeStarted.complete(Unit)
+            release.await()
+        }
+        return delegate.writeString(path, content)
     }
 }
 

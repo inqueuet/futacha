@@ -33,7 +33,8 @@ internal object ImageSensitiveAnalyser {
         if (!gate.isCurrent(permit)) throw CancellationException("画像編集は無効になりました")
         if (settings.contours) {
             for (model in listOf(AnalysisModel.MOBILE_SAM_ENCODER, AnalysisModel.MOBILE_SAM_DECODER)) {
-                checkNotNull(store.verified(model, permit)) { "モデル画面で輪郭用の2モデルを導入してください" }
+                // Early, cheap check; MobileSamSegmenter.open verifies the content before running.
+                check(store.present(model, permit)) { "モデル画面で輪郭用の2モデルを導入してください" }
             }
         }
         val detections = detect(original, settings, store, gate, permit, progress)

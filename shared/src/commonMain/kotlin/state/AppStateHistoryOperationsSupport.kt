@@ -19,8 +19,14 @@ internal class AppStateHistoryOperations(
     ) -> Unit
 ) {
     private val deletionGate = Mutex()
-    private val deletedHistoryAtByKey = mutableMapOf<String, Long>()
+    private val deletedHistoryAtByKey = mutableMapOf<String, HistoryTombstone>()
     private var lastClearAtMillis: Long = 0L
+
+    // Orders deletions for imports. Wall-clock times can go backwards or tie, so
+    // "deleted after the import started" is decided by this counter.
+    private var deletionSequence: Long = 0L
+    private var lastClearSequence: Long = 0L
+    private val activeImports = mutableSetOf<HistoryImportTicket>()
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         deletionGate.withLock {
@@ -46,9 +52,11 @@ internal class AppStateHistoryOperations(
                 buildPlan = { currentHistory ->
                     val deletedAt = Clock.System.now().toEpochMilliseconds()
                     lastClearAtMillis = maxOf(lastClearAtMillis, deletedAt)
+                    val sequence = ++deletionSequence
+                    lastClearSequence = sequence
                     currentHistory.map(::historyEntryIdentity)
                         .filter(String::isNotBlank)
-                        .forEach { key -> deletedHistoryAtByKey[key] = deletedAt }
+                        .forEach { key -> deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, sequence) }
                     trimDeletedHistoryTombstones()
                     AppStateHistoryMutationPlan(emptyList(), currentHistory.size)
                 }
@@ -71,7 +79,7 @@ internal class AppStateHistoryOperations(
                             if (candidate.lastVisitedEpochMillis <= lastClearAtMillis) {
                                 return@filter false
                             }
-                            val deletedAt = deletedHistoryAtByKey[key] ?: return@filter true
+                            val deletedAt = deletedHistoryAtByKey[key]?.atMillis ?: return@filter true
                             if (candidate.lastVisitedEpochMillis > deletedAt) {
                                 deletedHistoryAtByKey.remove(key)
                                 true
@@ -160,7 +168,10 @@ internal class AppStateHistoryOperations(
         )
         deletionGate.withLock {
             historyEntryIdentity(entry).takeIf(String::isNotBlank)?.let { key ->
-                deletedHistoryAtByKey[key] = Clock.System.now().toEpochMilliseconds()
+                deletedHistoryAtByKey[key] = HistoryTombstone(
+                    atMillis = Clock.System.now().toEpochMilliseconds(),
+                    sequence = ++deletionSequence
+                )
                 trimDeletedHistoryTombstones()
             }
             runMutation(
@@ -211,6 +222,17 @@ internal class AppStateHistoryOperations(
         request: AppStateHistoryScrollUpdateRequest
     ) {
         scrollPersistenceCoordinator.cancelPending(request)
+        persistHistoryScrollPosition(request)
+    }
+
+    /**
+     * Writes a scroll position without touching pending debounced writes. The
+     * debounced job itself calls this; calling [updateHistoryScrollPositionImmediate]
+     * from there cancelled the running job before its file write.
+     */
+    suspend fun persistHistoryScrollPosition(
+        request: AppStateHistoryScrollUpdateRequest
+    ) {
         runMutation(
             missingSnapshotMessage = "Skipping history scroll persistence due to missing snapshot",
             buildPlan = { currentHistory ->
@@ -251,13 +273,71 @@ internal class AppStateHistoryOperations(
 
     private fun trimDeletedHistoryTombstones() {
         if (deletedHistoryAtByKey.size <= MAX_DELETED_HISTORY_TOMBSTONES) return
+        // A running import needs every deletion made after it started.
+        val oldestImport = activeImports.minOfOrNull { it.sequence }
         deletedHistoryAtByKey.entries
-            .sortedBy { it.value }
+            .filter { oldestImport == null || it.value.sequence <= oldestImport }
+            .sortedBy { it.value.atMillis }
             .take(deletedHistoryAtByKey.size - MAX_DELETED_HISTORY_TOMBSTONES)
             .forEach { deletedHistoryAtByKey.remove(it.key) }
+    }
+
+    /**
+     * Marks the start of an archive import. Call before reading the archive:
+     * deletions and clears made after this point win over the imported entries.
+     */
+    suspend fun beginHistoryImport(): HistoryImportTicket = deletionGate.withLock {
+        HistoryImportTicket(deletionSequence).also { activeImports += it }
+    }
+
+    /** Releases [ticket]; safe to call after [mergeImportedHistory] or on failure. */
+    suspend fun endHistoryImport(ticket: HistoryImportTicket) {
+        deletionGate.withLock { activeImports -= ticket }
+    }
+
+    /**
+     * Merges imported entries into the latest history in one mutation.
+     *
+     * An imported entry restores a deletion made before [ticket] (the user
+     * chose to import it), but not one made while the archive was being read.
+     * A clear during the import drops the whole import. Other changes made in
+     * the meantime (reading positions, new entries) are kept.
+     */
+    suspend fun mergeImportedHistory(
+        imported: Collection<ThreadHistoryEntry>,
+        ticket: HistoryImportTicket
+    ): HistoryArchiveImportMergeResult = deletionGate.withLock {
+        try {
+            val clearedDuringImport = lastClearSequence > ticket.sequence
+            val accepted = if (clearedDuringImport) {
+                emptyList()
+            } else {
+                imported.filter { entry ->
+                    val tombstone = deletedHistoryAtByKey[historyEntryIdentity(entry)]
+                    tombstone == null || tombstone.sequence <= ticket.sequence
+                }
+            }
+            accepted.mapTo(HashSet(), ::historyEntryIdentity).forEach(deletedHistoryAtByKey::remove)
+            var merge = resolveHistoryArchiveImportMergeEntries(emptyList(), emptyList())
+            runMutation(
+                missingSnapshotMessage = "Skipping history import due to missing snapshot",
+                buildPlan = { currentHistory ->
+                    merge = resolveHistoryArchiveImportMergeEntries(currentHistory, accepted)
+                    merge.updatedHistory.takeIf { it != currentHistory }
+                        ?.let { AppStateHistoryMutationPlan(it, Unit) }
+                }
+            ) { "Failed to merge ${accepted.size} imported history entries" }
+            merge.copy(skippedCount = merge.skippedCount + (imported.size - accepted.size))
+        } finally {
+            activeImports -= ticket
+        }
     }
 
     private companion object {
         const val MAX_DELETED_HISTORY_TOMBSTONES = 1_024
     }
 }
+
+internal data class HistoryTombstone(val atMillis: Long, val sequence: Long)
+
+class HistoryImportTicket internal constructor(internal val sequence: Long)

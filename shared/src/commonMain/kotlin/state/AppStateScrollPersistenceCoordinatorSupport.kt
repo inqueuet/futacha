@@ -2,9 +2,12 @@ package com.valoser.futacha.shared.state
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal class AppStateHistoryScrollPersistenceCoordinator(
     private val debounceDelayMillis: Long,
@@ -32,10 +35,17 @@ internal class AppStateHistoryScrollPersistenceCoordinator(
             startDebouncedJob = { scope, key ->
                 scope.launchHistoryScrollPersistence {
                     delay(debounceDelayMillis)
-                    try {
-                        performImmediateUpdate(request)
-                    } finally {
-                        scrollPositionJobs.removeIfSame(key, this.coroutineContext[Job])
+                    val self = this.coroutineContext[Job]
+                    // Once the debounce elapsed the write must finish: cancelling it
+                    // between the in-memory update and the file write would leave
+                    // memory ahead of disk, and a later identical position is then
+                    // skipped as unchanged and never written.
+                    withContext(NonCancellable) {
+                        try {
+                            performImmediateUpdate(request)
+                        } finally {
+                            scrollPositionJobs.removeIfSame(key, self)
+                        }
                     }
                 }
             },
@@ -55,7 +65,10 @@ internal class AppStateHistoryScrollPersistenceCoordinator(
         val pending = scrollPositionMutex.withLock {
             scrollPositionJobs.remove(scrollKey)
         }
-        pending?.cancel()
+        // A write already past its debounce cannot be cancelled; wait for it so
+        // the caller's final position is written after, not before, it.
+        // Must not be called from the debounced job itself: it would join itself.
+        pending?.cancelAndJoin()
     }
 
     suspend fun cancelPendingForHistoryEntry(

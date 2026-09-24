@@ -4,7 +4,9 @@ import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.http.ContentType
 import io.ktor.http.content.PartData
 import kotlinx.io.readByteArray
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
@@ -622,5 +624,36 @@ class HttpBoardApiSupportTest {
             upload.headers.getAll("Content-Disposition").orEmpty().any { it.contains("filename=") }
         )
         assertEquals("application/octet-stream", upload.headers["Content-Type"])
+    }
+
+    @Test
+    fun retry_propagatesTheCallersExpiredDeadlineAsCancellation() = runBlocking {
+        // Previously the caller's deadline was reported as NetworkException.
+        val result = withTimeoutOrNull(50L) {
+            withHttpBoardApiRetry(
+                logTag = "HttpBoardApiSupportTest",
+                requestAttemptTimeoutMillis = 10_000L,
+                maxAttempts = 1
+            ) { awaitCancellation() }
+        }
+        assertNull(result)
+    }
+
+    @Test
+    fun retry_stillRetriesAndReportsItsOwnAttemptTimeouts() = runBlocking {
+        var attempts = 0
+        val failure = runCatching {
+            withHttpBoardApiRetry(
+                logTag = "HttpBoardApiSupportTest",
+                requestAttemptTimeoutMillis = 20L,
+                maxAttempts = 2,
+                initialDelayMillis = 0L
+            ) {
+                attempts += 1
+                awaitCancellation()
+            }
+        }.exceptionOrNull()
+        assertEquals(2, attempts)
+        assertTrue(failure is NetworkException, "was $failure")
     }
 }

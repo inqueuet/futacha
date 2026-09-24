@@ -22,7 +22,8 @@ internal object VideoSensitiveAnalyser {
         if (settings.contours) {
             require(total <= 600) { "輪郭の自動抽出は1回600コマまでです。解析区間を短くしてください" }
             for (model in listOf(AnalysisModel.MOBILE_SAM_ENCODER, AnalysisModel.MOBILE_SAM_DECODER)) {
-                checkNotNull(store.verified(model, permit)) { "モデル画面で輪郭用の2モデルを導入してください" }
+                // Early, cheap check; MobileSamSegmenter.open verifies the content before running.
+                check(store.present(model, permit)) { "モデル画面で輪郭用の2モデルを導入してください" }
             }
         }
         val detectors = mutableListOf<SensitiveDetector>()

@@ -74,6 +74,40 @@ internal data class ThreadFilterResult(
     }
 }
 
+/** Which posts one filter computation kept, and for which cache key. */
+internal data class ThreadFilterOutcome(
+    val key: ThreadFilterCacheKey,
+    val result: ThreadFilterResult,
+    val sourcePostCount: Int
+)
+
+/** Last page shown while a new filter computation is still running. */
+internal class ThreadFilteredPageHolder {
+    var page: ThreadPage? = null
+}
+
+/**
+ * Builds the displayed page from the latest loaded page.
+ *
+ * Without filters the loaded page is shown as is. A finished computation for
+ * the current key is applied to the latest page, so page and post fields
+ * (bodies, deletions, saidane, expiry) always come from the newest load. While
+ * a computation for a new key is running the previously shown page stays, as
+ * before, instead of flashing posts that the filters would hide.
+ */
+internal fun resolveNormallyFilteredThreadPage(
+    page: ThreadPage,
+    outcome: ThreadFilterOutcome?,
+    currentKey: ThreadFilterCacheKey,
+    filtersActive: Boolean,
+    previous: ThreadPage?
+): ThreadPage = when {
+    !filtersActive -> page
+    outcome != null && outcome.key == currentKey && outcome.sourcePostCount == page.posts.size ->
+        outcome.result.toThreadPage(page)
+    else -> previous ?: page
+}
+
 internal fun applyThreadFilterResult(
     page: ThreadPage,
     criteria: ThreadFilterCriteria,

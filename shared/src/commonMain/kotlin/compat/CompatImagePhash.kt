@@ -101,6 +101,9 @@ object CompatImagePhash {
 
 private const val COMPAT_IMAGE_PHASH_CACHE_PREFIX = "compat.imagePhash."
 
+/** Image hashes are a cache kept outside preferences; older versions stored them as preferences. */
+fun isCompatImagePhashCacheKey(key: String): Boolean = key.startsWith(COMPAT_IMAGE_PHASH_CACHE_PREFIX)
+
 fun compatImagePhashCachePreferenceKey(url: String): String {
     var hash = 1469598103934665603UL
     url.trim().forEach { char ->

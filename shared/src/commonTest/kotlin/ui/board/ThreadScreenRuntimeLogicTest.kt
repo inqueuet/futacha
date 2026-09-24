@@ -795,4 +795,100 @@ class ThreadScreenRuntimeLogicTest {
         )
     }
 
+    @Test
+    fun normallyFilteredPage_showsTheLatestPageWhenAnEqualCountRefreshChangesContent() {
+        val before = filterTestPage(expires = "12:00", bodies = listOf("op", "old", "tail"))
+        val after = filterTestPage(expires = "13:00", bodies = listOf("op", "edited", "tail"), deletedIndex = 1)
+        // Same count, first and last id: the lightweight key does not change.
+        val key = filterTestKey(before)
+        assertEquals(key, filterTestKey(after))
+
+        val shown = resolveNormallyFilteredThreadPage(
+            page = after,
+            outcome = null,
+            currentKey = key,
+            filtersActive = false,
+            previous = before
+        )
+
+        assertSame(after, shown)
+        assertEquals("13:00", shown.expiresAtLabel)
+        assertEquals("edited", shown.posts[1].messageHtml)
+        assertTrue(shown.posts[1].isDeleted)
+    }
+
+    @Test
+    fun normallyFilteredPage_appliesAFinishedFilterToTheLatestPage() {
+        val before = filterTestPage(expires = "12:00", bodies = listOf("op", "ng", "tail"))
+        val after = filterTestPage(expires = "13:00", bodies = listOf("op", "ng", "tail"), saidane = "そうだね×3")
+        val key = filterTestKey(before)
+        val outcome = ThreadFilterOutcome(key, ThreadFilterResult(listOf(0, 2)), sourcePostCount = 3)
+
+        val shown = resolveNormallyFilteredThreadPage(
+            page = after,
+            outcome = outcome,
+            currentKey = key,
+            filtersActive = true,
+            previous = before
+        )
+
+        assertEquals(listOf("100", "102"), shown.posts.map { it.id })
+        assertEquals("13:00", shown.expiresAtLabel)
+        assertEquals("そうだね×3", shown.posts[0].saidaneLabel)
+    }
+
+    @Test
+    fun normallyFilteredPage_keepsThePreviousPageWhileANewFilterIsComputing() {
+        val previous = filterTestPage(expires = "12:00", bodies = listOf("op", "tail"))
+        val latest = filterTestPage(expires = "13:00", bodies = listOf("op", "ng", "tail"))
+        val oldKey = filterTestKey(previous)
+        val outcome = ThreadFilterOutcome(oldKey, ThreadFilterResult(listOf(0, 1)), sourcePostCount = 2)
+
+        val shown = resolveNormallyFilteredThreadPage(
+            page = latest,
+            outcome = outcome,
+            currentKey = filterTestKey(latest).copy(keyword = "ng"),
+            filtersActive = true,
+            previous = previous
+        )
+
+        assertSame(previous, shown)
+    }
+
+    private fun filterTestPage(
+        expires: String,
+        bodies: List<String>,
+        deletedIndex: Int? = null,
+        saidane: String? = null
+    ) = ThreadPage(
+        threadId = "100",
+        boardTitle = "b",
+        expiresAtLabel = expires,
+        deletedNotice = null,
+        posts = bodies.mapIndexed { index, body ->
+            Post(
+                id = (100 + if (index == bodies.lastIndex && bodies.size > 2) 2 else index).toString(),
+                order = index,
+                author = null,
+                subject = null,
+                timestamp = "",
+                messageHtml = body,
+                imageUrl = null,
+                thumbnailUrl = null,
+                saidaneLabel = saidane,
+                isDeleted = index == deletedIndex
+            )
+        }
+    )
+
+    private fun filterTestKey(page: ThreadPage) = ThreadFilterCacheKey(
+        postsFingerprint = buildLightweightThreadPostListFingerprint(page.posts),
+        ngEnabled = false,
+        ngHeadersFingerprint = 0,
+        ngWordsFingerprint = 0,
+        filterOptionsFingerprint = 0,
+        keyword = "",
+        selfIdentifiersFingerprint = 0,
+        sortOption = null
+    )
 }

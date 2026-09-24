@@ -79,6 +79,16 @@ class KtorOriginalMediaDownloaderTest {
         }
     }
 
+    @Test fun cacheMissIsNeverRetried(): Unit = runBlocking {
+        var waited = false
+        val client = HttpClient(MockEngine { error("no request expected") })
+        val downloader = KtorOriginalMediaDownloader(client, maxBytes = 128, waitBeforeRetry = { _, _ -> waited = true })
+        try {
+            assertFalse(downloader.retryAfter(0, OriginalMediaNotCached()))
+            assertFalse(waited)
+        } finally { downloader.close(); client.close() }
+    }
+
     @Test fun restrictedTransportRejectsScriptUrlsAndRangeRequests(): Unit = runBlocking {
         var sends = 0
         val client = HttpClient(MockEngine { sends++; respond("data") })

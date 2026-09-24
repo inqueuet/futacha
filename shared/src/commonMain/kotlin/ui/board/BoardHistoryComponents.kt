@@ -103,8 +103,16 @@ internal fun HistoryDrawerContent(
     onImportClick: () -> Unit = {},
     onImportSelectedClick: (Set<String>) -> Unit = {},
     onSettingsClick: () -> Unit = {},
-    bodyTextSize: ThreadBodyTextSize? = null
+    bodyTextSize: ThreadBodyTextSize? = null,
+    /**
+     * Whether the drawer is open. The drawer content stays composed while
+     * closed; freezing its list then avoids re-filtering and re-sorting the
+     * whole history on the main thread after every history save.
+     */
+    isVisible: Boolean = true
 ) {
+    val historySnapshot = remember { HistoryDrawerSnapshotHolder() }
+    val shownHistory = historySnapshot.resolve(history, isVisible)
     val content: @Composable () -> Unit = {
     val coroutineScope = rememberCoroutineScope()
     var archiveActionDialog by remember { mutableStateOf<HistoryArchiveAction?>(null) }
@@ -127,9 +135,9 @@ internal fun HistoryDrawerContent(
     var draftViewSettings by remember { mutableStateOf(HistoryViewSettings.Default) }
     var isFilterSheetVisible by remember { mutableStateOf(false) }
     var isBatchDeleteConfirmationVisible by remember { mutableStateOf(false) }
-    val boardFilterOptions = remember(history) { buildHistoryBoardFilterOptions(history) }
-    val displayedHistory = remember(history, appliedViewSettings) {
-        applyHistoryViewSettings(history, appliedViewSettings)
+    val boardFilterOptions = remember(shownHistory) { buildHistoryBoardFilterOptions(shownHistory) }
+    val displayedHistory = remember(shownHistory, appliedViewSettings) {
+        applyHistoryViewSettings(shownHistory, appliedViewSettings)
     }
     val activeViewLabels = remember(appliedViewSettings, boardFilterOptions) {
         buildHistoryViewSummaryLabels(appliedViewSettings, boardFilterOptions)
@@ -1104,5 +1112,15 @@ private fun HistoryEntryCard(
                 )
             }
         }
+    }
+}
+
+/** Keeps the last list shown while the drawer is closed; see HistoryDrawerContent.isVisible. */
+internal class HistoryDrawerSnapshotHolder {
+    private var shown: List<ThreadHistoryEntry>? = null
+
+    fun resolve(latest: List<ThreadHistoryEntry>, visible: Boolean): List<ThreadHistoryEntry> {
+        val previous = shown
+        return if (visible || previous == null) latest.also { shown = it } else previous
     }
 }

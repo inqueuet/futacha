@@ -8,7 +8,9 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -30,6 +32,11 @@ internal suspend fun <T> withHttpBoardApiRetry(
                 block()
             }
         } catch (e: TimeoutCancellationException) {
+            // An expired caller deadline (for example the history refresh's
+            // per-thread budget) arrives as the same exception type. That is a
+            // cancellation of this call, not a slow attempt to retry or to
+            // report as a network error.
+            currentCoroutineContext().ensureActive()
             attempt += 1
             if (attempt >= safeMaxAttempts) {
                 throw NetworkException(

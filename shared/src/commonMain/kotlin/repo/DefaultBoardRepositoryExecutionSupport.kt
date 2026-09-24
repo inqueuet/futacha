@@ -77,14 +77,17 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             if (!shouldInitialize) return
 
             if (!setupRequired && hasDefaultBoardRepositoryCookies(cookieRepository, board)) {
-                cookieSetupFailures.remove(board)
+                // The failure map is shared across boards and also touched by the
+                // repository under boardInitMutex; the per-board lock alone lets two
+                // boards mutate the same HashMap concurrently.
+                boardInitMutex.withLock { cookieSetupFailures.remove(board) }
                 Logger.d(logTag, "Skipping catalog setup for board $board (existing cookies found)")
                 onSetupCompleted()
                 return
             }
 
             if (!forceSetup && shouldSkipDefaultBoardRepositoryCookieSetup(
-                    failure = cookieSetupFailures[board],
+                    failure = boardInitMutex.withLock { cookieSetupFailures[board] },
                     nowMillis = nowMillis,
                     negativeCacheTtlMillis = negativeCacheTtlMillis
                 )
@@ -105,7 +108,7 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
             val setupCompleted = hasCookies || (cookieRepository == null && fetchedSetup)
             if (setupCompleted) {
-                cookieSetupFailures.remove(board)
+                boardInitMutex.withLock { cookieSetupFailures.remove(board) }
                 markDefaultBoardRepositoryBoardInitialized(
                     initializedBoards = initializedBoards,
                     board = board,
@@ -113,7 +116,9 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
                 )
                 onSetupCompleted()
             } else {
-                cookieSetupFailures[board] = DefaultBoardRepositoryCookieSetupFailure(nowMillis)
+                boardInitMutex.withLock {
+                    cookieSetupFailures[board] = DefaultBoardRepositoryCookieSetupFailure(nowMillis)
+                }
                 Logger.w(logTag, "Cookie initialization incomplete for board $board; will retry on next request")
             }
         }

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.runtime.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -19,12 +20,17 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.player.base.*
+import uk.co.caprica.vlcj.player.base.State as VlcState
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.*
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+
+private val DESKTOP_VLC_ACTIVE_STATES = setOf(VlcState.OPENING, VlcState.BUFFERING, VlcState.PLAYING)
+private const val DESKTOP_VLC_PAUSE_WAIT_NANOS = 1_000_000_000L
+private const val DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS = 3_000L
 
 internal object DesktopVlc {
     private var configured = false
@@ -54,6 +60,7 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
     val hasFrame = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val controlLock = Any()
+    private val frameConverter = DesktopVideoFrameConverter()
     fun <T> withPlayer(block: (uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer) -> T): T? =
         synchronized(controlLock) { if (closed.get()) null else block(player) }
     init {
@@ -75,10 +82,7 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
                 if (closed.get()) return
                 try {
                     val width = format.width; val height = format.height
-                    val pixels = IntArray(width * height)
-                    buffers[0].duplicate().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(pixels)
-                    for (i in pixels.indices) pixels[i] = pixels[i] or (0xff shl 24)
-                    val image = imageEditBitmap(EditRaster(width, height, pixels))
+                    val image = frameConverter.convert(buffers[0], width, height)
                     hasFrame.set(true)
                     if (!closed.get()) frameChanged(image, width, height)
                 } catch (_: Exception) { failed.set(true) }
@@ -87,10 +91,53 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
         player.videoSurface().set(factory.videoSurfaces().newVideoSurface(format, render, true))
     }
     fun play(path: String) { withPlayer { check(it.media().play(path)) { "動画を開始できません" } } }
-    override fun close() {
-        synchronized(controlLock) { if (closed.compareAndSet(false, true)) {
-            try { player.controls().stop(); player.release() } finally { factory.release() }
-        } }
+    override fun close() = close(afterRelease = {})
+
+    /**
+     * [afterRelease] runs once VLC has released the player, so files VLC may
+     * still have open (the source lease, a preview file) are not deleted under
+     * it. If VLC stays stuck past the timeout it runs when the release finally
+     * finishes, or never for an abandoned player.
+     */
+    fun close(afterRelease: () -> Unit) {
+        // Marking closed under the lock waits for in-flight controls; later ones see closed and skip the player.
+        if (!synchronized(controlLock) { closed.compareAndSet(false, true) }) {
+            afterRelease()
+            return
+        }
+        // libVLC 3.0.23's macOS audio output (auhal) waits without a deadline in its play/drain loops and only leaves
+        // them early once paused, so stopping a playing input can block forever in input_Close. Pausing first fixes
+        // closing during playback. Near the end of the audio the decoder thread that would apply that pause is
+        // itself parked in the drain loop, so release on a daemon thread and abandon a player that stays stuck
+        // instead of hanging the viewer, the IO pool or app shutdown.
+        val released = java.util.concurrent.CountDownLatch(1)
+        Thread({
+            try {
+                if (player.status().state() in DESKTOP_VLC_ACTIVE_STATES) {
+                    player.controls().setPause(true)
+                    val deadline = System.nanoTime() + DESKTOP_VLC_PAUSE_WAIT_NANOS
+                    while (player.status().state() in DESKTOP_VLC_ACTIVE_STATES && System.nanoTime() < deadline) {
+                        Thread.sleep(10)
+                    }
+                }
+                player.controls().stop(); player.release()
+            } catch (failure: Throwable) {
+                com.valoser.futacha.shared.util.Logger.e("DesktopVideoSession", "Failed to release the VLC player", failure)
+            } finally {
+                try { factory.release() } finally {
+                    released.countDown()
+                    try { afterRelease() } catch (failure: Throwable) {
+                        com.valoser.futacha.shared.util.Logger.e("DesktopVideoSession", "Cleanup after VLC release failed", failure)
+                    }
+                }
+            }
+        }, "futacha-vlc-release").apply { isDaemon = true }.start()
+        if (!released.await(DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            com.valoser.futacha.shared.util.Logger.w(
+                "DesktopVideoSession",
+                "VLC did not stop within ${DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS}ms; abandoning the native player"
+            )
+        }
     }
 }
 
@@ -131,6 +178,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                 editPin = editing?.retain()
                 if (editing != null) {
                     preview = File.createTempFile("preview-", ".mp4", desktopLocalFile(path).parentFile)
+                        .also { it.deleteOnExit() } // in case VLC never releases it
                     exportDeviceVideo(null, path, editing.info, editing.document, preview!!.absolutePath) {}
                     path = preview!!.absolutePath
                 }
@@ -171,7 +219,9 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
         } finally {
             session = null; editing?.pausePlayer = null; frameFlow.value = null
             withContext(NonCancellable + Dispatchers.IO) {
-                owned?.close(); lease?.close(); pin?.close(); editPin?.close(); preview?.delete()
+                val releasedFiles = { lease?.close(); pin?.close(); editPin?.close(); preview?.delete(); Unit }
+                // Release the source and delete the preview only after VLC let go of them.
+                owned?.close(afterRelease = releasedFiles) ?: releasedFiles()
             }
         }
     }
@@ -190,5 +240,34 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                 onValueChange = { value -> session?.let { active -> scope.launch(Dispatchers.IO) { active.withPlayer { it.controls().setTime((duration * value).toLong()) } } } }, modifier = Modifier.weight(1f))
             Text("${position / 1000}/${duration / 1000}秒")
         }
+    }
+}
+
+/**
+ * Turns VLC's RV32 frames into Compose bitmaps. RV32 is B, G, R, X in memory,
+ * which Skia reads as BGRA once X is set to 255. The byte buffer is reused while the frame size stays the same: allocating an
+ * IntArray and a ByteArray per frame cost about 0.5 GB/s at 1080p30.
+ * Called from VLC's single display thread.
+ */
+internal class DesktopVideoFrameConverter {
+    private var bytes = ByteArray(0)
+
+    /** The reusable frame buffer (exposed for tests). */
+    internal val buffer: ByteArray get() = bytes
+
+    fun convert(frame: ByteBuffer, width: Int, height: Int): androidx.compose.ui.graphics.ImageBitmap {
+        val size = width * height * 4
+        if (bytes.size != size) bytes = ByteArray(size)
+        frame.duplicate().get(bytes, 0, size)
+        // X is undefined (often 0); Skia keeps it as alpha, so make it opaque in place.
+        var alpha = 3
+        while (alpha < size) { bytes[alpha] = -1; alpha += 4 }
+        val info = org.jetbrains.skia.ImageInfo(width, height, org.jetbrains.skia.ColorType.BGRA_8888,
+            org.jetbrains.skia.ColorAlphaType.OPAQUE)
+        val bitmap = org.jetbrains.skia.Bitmap()
+        check(bitmap.allocPixels(info)) { "フレーム用のメモリを確保できません" }
+        check(bitmap.installPixels(bytes)) { "フレームを変換できません" }
+        bitmap.setImmutable()
+        return bitmap.asComposeImageBitmap()
     }
 }

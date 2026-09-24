@@ -147,6 +147,11 @@ class DefaultBoardRepository(
     private val boardInitMutex = Mutex()
     private val boardInitializationMutexes = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
     private val cookieSetupFailures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+    private val catalogLayoutLocksGuard = Mutex()
+    private val catalogLayoutLocks = mutableMapOf<String, Mutex>()
+
+    private suspend fun catalogLayoutLock(board: String): Mutex =
+        catalogLayoutLocksGuard.withLock { catalogLayoutLocks.getOrPut(board) { Mutex() } }
 
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
@@ -184,7 +189,13 @@ class DefaultBoardRepository(
     private suspend fun ensureCookiesInitialized(
         board: String,
         forceSetup: Boolean = false,
-        settingsOverride: CatalogFetchSettings? = null
+        settingsOverride: CatalogFetchSettings? = null,
+        /**
+         * Only catalog requests depend on the catalog layout cookie. Thread,
+         * posting and helper requests must not re-post catset merely because
+         * another caller last used a different layout.
+         */
+        layoutSensitive: Boolean = false
     ) {
         val settings = (settingsOverride ?: catalogFetchSettingsProvider()).normalized()
         initializeDefaultBoardRepositoryCookies(
@@ -202,9 +213,10 @@ class DefaultBoardRepository(
                 }
                 when {
                     previousSettings == null -> {
-                        !hasDefaultBoardRepositoryCatalogSettingsCookie(cookieRepository, board, settings)
+                        layoutSensitive &&
+                            !hasDefaultBoardRepositoryCatalogSettingsCookie(cookieRepository, board, settings)
                     }
-                    previousSettings != settings -> {
+                    layoutSensitive && previousSettings != settings -> {
                         boardInitMutex.withLock {
                             initializedBoards.remove(board)
                             initializedCatalogFetchSettings.remove(board)
@@ -245,13 +257,14 @@ class DefaultBoardRepository(
     private suspend fun <T> withRetryOnAuthFailure(
         board: String,
         settingsOverride: CatalogFetchSettings? = null,
+        layoutSensitive: Boolean = false,
         block: suspend () -> T
     ): T {
         return withDefaultBoardRepositoryAuthRetry(
             board = board,
             logTag = TAG,
             ensureCookiesInitialized = { targetBoard, forceSetup ->
-                ensureCookiesInitialized(targetBoard, forceSetup, settingsOverride)
+                ensureCookiesInitialized(targetBoard, forceSetup, settingsOverride, layoutSensitive)
             },
             invalidateCookies = ::invalidateCookies,
             block = block
@@ -305,19 +318,25 @@ class DefaultBoardRepository(
     }
 
     private suspend fun loadCatalogPage(board: String, mode: CatalogMode, settings: CatalogFetchSettings?): CatalogPageContent {
-        return withRetryOnAuthFailure(board, settingsOverride = settings) {
-            val html = withContext(AppDispatchers.io) {
-                api.fetchCatalog(board, mode)
-            }
-            val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-            withContext(AppDispatchers.parsing) {
-                attachCatalogDiagnostics(
-                    html = html,
-                    parsed = parser.parseCatalogPage(html, baseUrl).copy(
-                    embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
-                    ),
-                    fileSystem = diagnosticFileSystem
-                )
+        // Setup (which rewrites the board's cxyl layout cookie) and the GET run
+        // under one per-board lock: otherwise a concurrent request with other
+        // settings can switch the cookie between them and this GET returns the
+        // other caller's layout.
+        return catalogLayoutLock(board).withLock {
+            withRetryOnAuthFailure(board, settingsOverride = settings, layoutSensitive = true) {
+                val html = withContext(AppDispatchers.io) {
+                    api.fetchCatalog(board, mode)
+                }
+                val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+                withContext(AppDispatchers.parsing) {
+                    attachCatalogDiagnostics(
+                        html = html,
+                        parsed = parser.parseCatalogPage(html, baseUrl).copy(
+                        embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
+                        ),
+                        fileSystem = diagnosticFileSystem
+                    )
+                }
             }
         }
     }

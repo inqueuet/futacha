@@ -188,8 +188,10 @@ class RuntimeStabilityInstrumentedTest {
 
     @Test fun scrollingWithDisabledScrollbarDoesNotRecomposeParent() = checkScrollComposition(enabled = false)
     @Test fun scrollingWithEnabledScrollbarDoesNotRecomposeParent() = checkScrollComposition(enabled = true)
+    @Test fun scrollingWithStateOwnedTotalDoesNotRecomposeParent() =
+        checkScrollComposition(enabled = true, readTotalInScrollbar = true)
 
-    private fun checkScrollComposition(enabled: Boolean) {
+    private fun checkScrollComposition(enabled: Boolean, readTotalInScrollbar: Boolean = false) {
         val compositions = AtomicInteger()
         lateinit var state: LazyListState
         rule.setContent {
@@ -200,7 +202,8 @@ class RuntimeStabilityInstrumentedTest {
                     LazyColumn(state = state, modifier = Modifier.testTag("list")) {
                         items(200) { Text("row $it", Modifier.height(50.dp)) }
                     }
-                    CompatFastScrollbar(enabled, 200, state)
+                    // The thread screens use the overload that reads the item count itself.
+                    if (readTotalInScrollbar) CompatFastScrollbar(enabled, state) else CompatFastScrollbar(enabled, 200, state)
                 }
             }
         }

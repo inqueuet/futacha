@@ -107,6 +107,13 @@ internal suspend fun restoreThreadScrollPositionSafely(
     }
 }
 
+internal fun createThreadScrollPersistHandler(
+    layoutProvider: () -> ThreadDisplayedPostsLayout,
+    persist: (threadId: String, index: Int, offset: Int, postId: String?) -> Unit
+): (threadId: String, index: Int, offset: Int) -> Unit = { threadId, index, offset ->
+    persist(threadId, index, offset, resolveVisibleThreadPostId(index, layoutProvider()))
+}
+
 internal fun resolveVisibleThreadPostId(
     visibleItemIndex: Int,
     layout: ThreadDisplayedPostsLayout

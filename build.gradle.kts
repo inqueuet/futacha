@@ -525,6 +525,11 @@ val validateQualityContracts by tasks.registering {
             require(scenarios.containsAll(requiredScenarioSet)) {
                 "${row[0]} misses release scenarios ${requiredScenarioSet - scenarios}"
             }
+            if (row[2] == "ANDROID") {
+                // nonMinifiedRelease does not show what R8 inlining does to the
+                // split Compose screens; the shipped build must be opened too.
+                require("R8_RELEASE" in scenarios) { "${row[0]} must open the R8-minified release build" }
+            }
             if (row[3] == "PHYSICAL_LATEST") {
                 require(scenarios.containsAll(setOf("REAL_NETWORK", "PLATFORM_SERVICES"))) {
                     "${row[0]} physical-device run must include real network and platform services"

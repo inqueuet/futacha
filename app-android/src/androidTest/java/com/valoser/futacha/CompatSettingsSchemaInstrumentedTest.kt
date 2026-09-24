@@ -40,6 +40,8 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -471,7 +473,12 @@ class CompatSettingsSchemaInstrumentedTest {
         }
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.8-0")
+        // The newest version heads the list; do not pin it so each release keeps passing.
+        val firstChangeBounds = rule.onAllNodes(androidx.compose.ui.test.SemanticsMatcher("first change of the newest version") {
+            it.config.getOrNull(SemanticsProperties.TestTag)?.let { tag ->
+                tag.startsWith("compat-change-log-body-") && tag.endsWith("-0")
+            } == true
+        }).onFirst()
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }
@@ -502,7 +509,8 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("ライセンス").performClick()
         rule.onNodeWithTag("compat-license-list").assertIsDisplayed()
         rule.onNodeWithTag("compat-license-futacha-open-source-notices").assertIsDisplayed()
-        rule.onNodeWithTag("compat-license-list").performScrollToIndex(2)
+        // Scroll by tag: bundled licenses (e.g. ONNX Runtime, OpenCV) shift the index.
+        rule.onNodeWithTag("compat-license-list").performScrollToNode(hasTestTag("compat-license-apache-license-2.0"))
         rule.onNodeWithTag("compat-license-apache-license-2.0").assertIsDisplayed()
     }
 
@@ -1106,6 +1114,10 @@ class CompatSettingsSchemaInstrumentedTest {
                 )
             )
         }
+        // Without a save folder Android now asks for one first (system picker),
+        // which would cover the progress dialog this test checks.
+        val saveFolder = java.io.File(context.cacheDir, "folder-save-${System.nanoTime()}")
+        runBlocking { store.savePreference("compat.storage.dummyDownloadDir", saveFolder.absolutePath) }
         val client = HttpClient(MockEngine { awaitCancellation() })
         rule.setContent {
             CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
@@ -1148,6 +1160,7 @@ class CompatSettingsSchemaInstrumentedTest {
         }
         rule.onNodeWithText("キャンセルしました").assertIsDisplayed()
         client.close()
+        saveFolder.deleteRecursively()
     }
 
     @Test
@@ -2373,7 +2386,7 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("ストレージ").performClick()
         val settingsList = rule.onNodeWithTag("compat-settings-list-storage")
         rule.onNodeWithText("保存先").assertIsDisplayed()
-        rule.onNodeWithText("未設定時：標準フォルダに保存").assertIsDisplayed()
+        rule.onNodeWithText("未設定時：保存時にフォルダを選択").assertIsDisplayed()
         rule.onNodeWithTag("compat-setting-dummyDownloadDir").performClick()
         rule.onNodeWithText("ダウンロード").assertIsDisplayed()
         rule.onNodeWithText("画像の保存などに利用します", substring = true).assertIsDisplayed()
@@ -2382,7 +2395,7 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.waitUntil(5_000) {
             runBlocking { store.loadPreference("compat.storage.dummyDownloadDir") } == ""
         }
-        rule.onNodeWithText("未設定時：標準フォルダに保存").assertIsDisplayed()
+        rule.onNodeWithText("未設定時：保存時にフォルダを選択").assertIsDisplayed()
 
         rule.onNodeWithTag("compat-setting-dummyDrawingDir").performClick()
         rule.onNodeWithText("手書き").assertIsDisplayed()
@@ -2498,7 +2511,8 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("巡回管理").performScrollTo().performClick()
         rule.onNodeWithText("履歴・巡回のヘルプ").performScrollTo().performClick()
         rule.onNodeWithTag("help-search-field").performTextInput("強制停止")
-        rule.onNodeWithText("標準のアプリ内巡回に、にじろぐのインストールや起動は不要です。", substring = true).assertIsDisplayed()
+        rule.waitUntil(10_000) { helpDocumentScript("document.querySelectorAll('mark').length > 0") == "true" }
+        assertHelpSearchDocument("強制停止")
         rule.onNodeWithTag("help-search-field").performTextReplacement("missing-help-word-114")
         rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
         rule.onNodeWithText("クリア").performClick()
@@ -4601,7 +4615,11 @@ class CompatSettingsSchemaInstrumentedTest {
             "bottom toolbar popup must end above the toolbar",
             bottomPopup.bottom <= bottomToolbar.top + 2f
         )
-        rule.onNodeWithText("ページ最上部へ").performClick()
+        // The default toolbar carries "ページ最上部へ", so the overflow popup no
+        // longer repeats it: close the popup and use the toolbar button.
+        pressBack()
+        rule.onNodeWithTag("compat-bottom-popup").assertDoesNotExist()
+        rule.onNodeWithContentDescription("ページ最上部へ").performClick()
         refreshGate = CompletableDeferred()
         rule.onNodeWithTag("compat-thread-pull-refresh").performTouchInput { swipeDown() }
         rule.waitUntil(5_000) { requestCount.get() == 2 }

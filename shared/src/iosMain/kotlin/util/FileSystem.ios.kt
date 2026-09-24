@@ -10,6 +10,10 @@ import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.BooleanVar
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.plus
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
@@ -17,7 +21,6 @@ import kotlinx.cinterop.value
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import platform.Foundation.*
-import platform.posix.memcpy
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.cancellation.CancellationException
@@ -61,22 +64,32 @@ class IosFileSystem : FileSystem {
     private fun monotonicTimeMillis(): Long =
         (NSProcessInfo.processInfo.systemUptime * 1000.0).toLong()
 
-    private fun readFileHandleChunk(fileHandle: NSFileHandle, length: Int): NSData {
-        memScoped {
-            val error = alloc<ObjCObjectVar<NSError?>>()
-            val data = fileHandle.readDataUpToLength(length.toULong(), error = error.ptr)
-            return data ?: throw Exception(
-                "Failed to read file: ${error.value?.localizedDescription ?: "Unknown error"}"
-            )
+    /*
+     * Chunked copies go through the descriptor instead of NSData. A chunk NSData
+     * stays alive until Kotlin's GC collects its wrapper, and these off-heap
+     * buffers never make the GC run: importing a 512MB video raised the process
+     * footprint by about 760MB (IosLargeVideoImportMemoryTest).
+     */
+    private fun readFileHandleInto(fileHandle: NSFileHandle, target: CPointer<ByteVar>, length: Int): Int {
+        while (true) {
+            val count = platform.posix.read(fileHandle.fileDescriptor, target, length.convert())
+            if (count >= 0) return count.toInt()
+            if (platform.posix.errno != platform.posix.EINTR) {
+                throw Exception("Failed to read file: errno ${platform.posix.errno}")
+            }
         }
     }
 
-    private fun writeFileHandleChunk(fileHandle: NSFileHandle, data: NSData) {
-        memScoped {
-            val error = alloc<ObjCObjectVar<NSError?>>()
-            val success = fileHandle.writeData(data, error = error.ptr)
-            if (!success) {
-                throw Exception("Failed to write file: ${error.value?.localizedDescription ?: "Unknown error"}")
+    private fun writePinnedChunk(fileHandle: NSFileHandle, bytes: CPointer<ByteVar>, length: Int) {
+        var written = 0
+        while (written < length) {
+            val count = platform.posix.write(fileHandle.fileDescriptor, bytes + written, (length - written).convert())
+            if (count > 0) {
+                written += count.toInt()
+            } else if (count < 0L && platform.posix.errno == platform.posix.EINTR) {
+                continue
+            } else {
+                throw Exception("Failed to write file: errno ${platform.posix.errno}")
             }
         }
     }
@@ -243,12 +256,10 @@ class IosFileSystem : FileSystem {
                 while (offset < lengthInt) {
                     coroutineContext.ensureActive()
                     val requested = minOf(streamWriteChunkBytes, lengthInt - offset)
-                    val data = readFileHandleChunk(fileHandle, requested)
-                    val readLength = data.length.toInt()
-                    if (readLength <= 0) break
-                    bytes.usePinned { pinned ->
-                        memcpy(pinned.addressOf(offset), data.bytes, data.length)
+                    val readLength = bytes.usePinned { pinned ->
+                        readFileHandleInto(fileHandle, pinned.addressOf(offset), requested)
                     }
+                    if (readLength <= 0) break
                     offset += readLength
                 }
             } finally {
@@ -275,10 +286,10 @@ class IosFileSystem : FileSystem {
                                 coroutineContext.ensureActive()
                                 require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
                                 if (length == 0) return 0
-                                val data = readFileHandleChunk(handle, minOf(length, streamWriteChunkBytes))
-                                if (data.length == 0uL) return -1
-                                bytes.usePinned { memcpy(it.addressOf(offset), data.bytes, data.length) }
-                                return data.length.toInt()
+                                val count = bytes.usePinned {
+                                    readFileHandleInto(handle, it.addressOf(offset), minOf(length, streamWriteChunkBytes))
+                                }
+                                return if (count == 0) -1 else count
                             }
                         })
                     }
@@ -588,11 +599,7 @@ class IosFileSystem : FileSystem {
                     while (written < bytes.size) {
                         coroutineContext.ensureActive()
                         val chunkLength = minOf(streamWriteChunkBytes, bytes.size - written)
-                        val chunk = NSData.create(
-                            bytes = pinned.addressOf(written),
-                            length = chunkLength.toULong()
-                        )
-                        writeFileHandleChunk(fileHandle, chunk)
+                        writePinnedChunk(fileHandle, pinned.addressOf(written), chunkLength)
                         written += chunkLength
                         coroutineContext.ensureActive()
                     }
@@ -651,11 +658,7 @@ class IosFileSystem : FileSystem {
                             while (written < length) {
                                 coroutineContext.ensureActive()
                                 val chunkLength = minOf(streamWriteChunkBytes, length - written)
-                                val chunk = NSData.create(
-                                    bytes = pinned.addressOf(offset + written),
-                                    length = chunkLength.toULong()
-                                )
-                                writeFileHandleChunk(fileHandle, chunk)
+                                writePinnedChunk(fileHandle, pinned.addressOf(offset + written), chunkLength)
                                 written += chunkLength
                                 totalWritten += chunkLength
                                 coroutineContext.ensureActive()
@@ -753,6 +756,53 @@ class IosFileSystem : FileSystem {
             }
         ) { fullPath ->
             writeByteStream(fullPath, block)
+        }
+    }
+
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(fromPath, "fromPath")
+            validatePath(toPath, "toPath")
+        }.getOrElse { return@withContext Result.failure(it) }
+        toPath.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let { createDirectory(it).getOrThrow() }
+        val from = resolveAbsolutePath(fromPath)
+        val to = resolveAbsolutePath(toPath)
+        platform.posix.unlink(to)
+        if (platform.posix.link(from, to) == 0) {
+            Result.success(Unit)
+        } else {
+            // Fall back to copying the finished file.
+            runSuspendCatchingPreservingCancellation { writeBytes(toPath, readBytes(fromPath).getOrThrow()).getOrThrow() }
+        }
+    }
+
+    override fun supportsAtomicReplace(base: SaveLocation): Boolean = base !is SaveLocation.TreeUri
+
+    override suspend fun replaceAtomically(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(fromRelative, "fromRelative")
+            validatePath(toRelative, "toRelative")
+            require(fromRelative.substringBeforeLast('/', "") == toRelative.substringBeforeLast('/', "")) {
+                "Replace must stay in the same directory"
+            }
+        }.getOrElse { return@withContext Result.failure(it) }
+        // Both paths are resolved inside one security-scoped access for bookmarks.
+        withSaveLocationPath(
+            base = base,
+            relativePath = fromRelative,
+            onTreeUri = { Result.failure(unsupportedTreeUriOnIos()) }
+        ) { fromPath ->
+            runFsCatching {
+                val toPath = fromPath.substringBeforeLast('/') + "/" + toRelative.substringAfterLast('/')
+                // rename(2) replaces the destination atomically within one volume.
+                check(platform.posix.rename(fromPath, toPath) == 0) {
+                    "Failed to replace $toRelative (errno=${platform.posix.errno})"
+                }
+            }
         }
     }
 

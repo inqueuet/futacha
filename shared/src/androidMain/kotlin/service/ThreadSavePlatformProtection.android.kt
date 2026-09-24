@@ -5,9 +5,11 @@ import android.content.Context
 import android.content.Intent
 import com.valoser.futacha.shared.model.SaveProgress
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
 
 private var threadSaveApplicationContext: Context? = null
@@ -23,20 +25,23 @@ internal data class AndroidProtectedThreadSave(
 )
 
 internal object AndroidProtectedThreadSaveRegistry {
-    private val saves = ConcurrentHashMap<String, AndroidProtectedThreadSave>()
+    private val saves = MutableStateFlow<Map<String, AndroidProtectedThreadSave>>(emptyMap())
 
-    fun register(save: AndroidProtectedThreadSave): String = UUID.randomUUID().toString().also {
-        saves[it] = save
+    /** The service observes removal to decide when it may stop itself. */
+    val sessions: StateFlow<Map<String, AndroidProtectedThreadSave>> = saves.asStateFlow()
+
+    fun register(save: AndroidProtectedThreadSave): String = UUID.randomUUID().toString().also { id ->
+        saves.update { it + (id to save) }
     }
 
-    fun get(id: String): AndroidProtectedThreadSave? = saves[id]
+    fun get(id: String): AndroidProtectedThreadSave? = saves.value[id]
 
     fun cancel(id: String) {
-        saves[id]?.job?.cancel()
+        saves.value[id]?.job?.cancel()
     }
 
     fun remove(id: String) {
-        saves.remove(id)
+        saves.update { it - id }
     }
 }
 
@@ -68,8 +73,9 @@ actual suspend fun <T> withThreadSavePlatformProtection(
         if (protectionStarted && completed) {
             runCatching { AndroidThreadSaveForegroundService.notifySaveDone(context) }
         }
-        if (protectionStarted) {
-            runCatching { context.stopService(Intent(context, AndroidThreadSaveForegroundService::class.java)) }
-        }
+        // Do not stopService here: a fast save can finish before the service
+        // reached startForeground, and stopping a service that was started with
+        // startForegroundService before it goes foreground crashes the app. The
+        // service observes the session removal and stops itself once foreground.
     }
 }

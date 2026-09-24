@@ -14,6 +14,8 @@ import com.valoser.futacha.shared.network.PersistentCookieStorage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.Mutex
@@ -156,6 +158,61 @@ class DefaultBoardRepositoryTest {
         assertEquals(1, api.fetchCatalogSetupCalls)
         assertEquals(2, api.fetchCatalogCalls)
         assertEquals(1, api.fetchThreadCalls)
+    }
+
+    @Test
+    fun concurrentCatalogsWithDifferentSettingsNeverInterleaveSetupAndGet() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            fetchCatalogSetupDelayMillis = 20L,
+            fetchCatalogDelayMillis = 20L,
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(), cookieRepository = CookieRepository(storage))
+
+        coroutineScope {
+            listOf(60, 100, 60, 100).map { rows ->
+                async(Dispatchers.Default) {
+                    repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = rows))
+                }
+            }.awaitAll()
+        }
+
+        // Every GET must use the layout set up right before it.
+        val events = api.catalogEvents.toList()
+        events.forEachIndexed { index, event ->
+            if (event.startsWith("setup:")) assertEquals("get", events.getOrNull(index + 1), events.toString())
+        }
+        assertEquals(4, events.count { it == "get" })
+    }
+
+    @Test
+    fun threadRequestDoesNotRepostCatalogSetupWhenOnlyTheLayoutDiffers() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(onFetchCatalogSetup = {
+            storage.addCookie(
+                io.ktor.http.Url(boardUrl),
+                io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+            )
+        })
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+        repository.fetchOpImageUrl(boardUrl, "123")
+
+        assertEquals(listOf(100), api.fetchCatalogSetupSettings.map { it.rows })
     }
 
     @Test
@@ -949,6 +1006,38 @@ class DefaultBoardRepositoryTest {
         assertEquals(1, failures.size)
     }
 
+    @Test
+    fun cookieSetupFailureMapIsOnlyTouchedUnderTheGlobalLock() = runBlocking {
+        val globalLock = Mutex()
+        val failures = LockCheckingMap<String, DefaultBoardRepositoryCookieSetupFailure>(globalLock)
+        val board = "https://dec.2chan.net/b/"
+        suspend fun initialize(nowMillis: Long, fail: Boolean, cookieRepository: CookieRepository? = null) =
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = mutableSetOf(),
+                cookieRepository = cookieRepository,
+                boardInitMutex = globalLock,
+                cookieSetupFailures = failures,
+                nowMillis = nowMillis,
+                fetchCatalogSetup = { if (fail) error("setup failed") }
+            )
+
+        initialize(nowMillis = 1_000L, fail = true)          // records a failure
+        initialize(nowMillis = 1_001L, fail = true)          // negative cache read
+        initialize(nowMillis = 10_000_000L, fail = false)    // success removes it
+        val storageWithCookie = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH).apply {
+            addCookie(
+                io.ktor.http.Url(board),
+                io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+            )
+        }
+        initialize(nowMillis = 10_000_001L, fail = true, cookieRepository = CookieRepository(storageWithCookie))
+
+        assertTrue(failures.accesses >= 4, "accesses=${failures.accesses}")
+        assertEquals(emptyList(), failures.unlockedAccesses)
+    }
+
     companion object {
         private const val STORAGE_PATH = "private/cookies/default-board-repository-test.json"
     }
@@ -963,8 +1052,11 @@ private class FakeBoardApi(
     private val fetchCatalogSetupDelayMillis: Long = 0L,
     private val replyResult: String? = null,
     private val createThreadResult: String? = null,
-    private val onFetchCatalogSetup: suspend () -> Unit = {}
+    private val onFetchCatalogSetup: suspend () -> Unit = {},
+    private val fetchCatalogDelayMillis: Long = 0L
 ) : BoardApi {
+    /** Ordered catalog setup / GET calls, for layout interleaving checks. */
+    val catalogEvents = mutableListOf<String>()
     private val callsMutex = Mutex()
     var fetchCatalogSetupCalls = 0
     var fetchCatalogCalls = 0
@@ -982,6 +1074,7 @@ private class FakeBoardApi(
         callsMutex.withLock {
             fetchCatalogSetupCalls += 1
             fetchCatalogSetupSettings += settings
+            catalogEvents += "setup:${settings.rows}"
         }
         if (fetchCatalogSetupDelayMillis > 0L) {
             delay(fetchCatalogSetupDelayMillis)
@@ -994,6 +1087,8 @@ private class FakeBoardApi(
         callsMutex.withLock {
             fetchCatalogCalls += 1
         }
+        if (fetchCatalogDelayMillis > 0L) delay(fetchCatalogDelayMillis)
+        callsMutex.withLock { catalogEvents += "get" }
         return catalogHtml ?: "<catalog mode='${mode.name}'>$board</catalog>"
     }
 
@@ -1167,4 +1262,22 @@ private class FakeHtmlParser(
         extractOpImageUrlCalls += 1
         return opImageUrl
     }
+}
+
+/** Records map accesses made while [lock] was not held. */
+private class LockCheckingMap<K, V>(
+    private val lock: Mutex,
+    private val delegate: MutableMap<K, V> = mutableMapOf()
+) : MutableMap<K, V> by delegate {
+    var accesses = 0
+    val unlockedAccesses = mutableListOf<String>()
+
+    private fun check(operation: String) {
+        accesses += 1
+        if (!lock.isLocked) unlockedAccesses += operation
+    }
+
+    override fun get(key: K): V? = delegate[key].also { check("get") }
+    override fun put(key: K, value: V): V? = delegate.put(key, value).also { check("put") }
+    override fun remove(key: K): V? = delegate.remove(key).also { check("remove") }
 }

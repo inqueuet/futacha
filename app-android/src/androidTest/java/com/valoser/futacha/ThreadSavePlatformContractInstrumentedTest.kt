@@ -1,6 +1,7 @@
 package com.valoser.futacha
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -12,7 +13,11 @@ import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.service.AndroidThreadSaveForegroundService
+import com.valoser.futacha.shared.service.withThreadSavePlatformProtection
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import com.valoser.futacha.shared.service.THREAD_SAVE_NOTIFICATION_CHANNEL_DESCRIPTION
 import com.valoser.futacha.shared.util.PERSISTENT_ERROR_LOG_FILE_NAME
 import org.junit.Assert.assertEquals
@@ -118,6 +123,40 @@ class ThreadSavePlatformContractInstrumentedTest {
     }
 
     @Test
+    fun immediateSaveCompletionDoesNotCrashForegroundContract() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        // Starting a foreground service from the background is restricted on API 31+,
+        // and the user starts saves from a visible screen.
+        ActivityScenario.launch(MainActivity::class.java).use {
+            val progress = MutableStateFlow<SaveProgress?>(null)
+            runBlocking {
+                repeat(IMMEDIATE_SAVE_REPEATS) { index ->
+                    // A save that finishes before the service reached startForeground
+                    // used to stop the service first, which crashes the process.
+                    assertEquals(index, withThreadSavePlatformProtection("immediate", progress) { index })
+                    runCatching {
+                        withThreadSavePlatformProtection("failing", progress) {
+                            throw IllegalStateException("offline")
+                        }
+                    }.also { assertTrue(it.exceptionOrNull() is IllegalStateException) }
+                }
+            }
+            val manager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as ActivityManager
+            val deadline = SystemClock.elapsedRealtime() + 5_000L
+            var running = true
+            while (running && SystemClock.elapsedRealtime() < deadline) {
+                SystemClock.sleep(100L)
+                @Suppress("DEPRECATION")
+                running = manager.getRunningServices(Int.MAX_VALUE).any {
+                    it.service.className == AndroidThreadSaveForegroundService::class.java.name
+                }
+            }
+            // Reaching this line means the process survived every start/stop race.
+            assertFalse("save service must stop itself once every save finished", running)
+        }
+    }
+
+    @Test
     fun progressNotificationExposesADistinctCancelAction() {
         assertTrue(AndroidThreadSaveForegroundService.ACTION_START != AndroidThreadSaveForegroundService.ACTION_CANCEL)
         assertTrue(AndroidThreadSaveForegroundService.ACTION_FINISH != AndroidThreadSaveForegroundService.ACTION_CANCEL)
@@ -127,6 +166,8 @@ class ThreadSavePlatformContractInstrumentedTest {
         )
     }
 }
+
+private const val IMMEDIATE_SAVE_REPEATS = 20
 
 /**
  * The production diagnostic file is deliberately allowed to grow to 10 MB.

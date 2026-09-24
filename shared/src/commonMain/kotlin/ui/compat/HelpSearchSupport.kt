@@ -55,3 +55,41 @@ internal fun searchHelp(sections: List<HelpSearchSection>, query: String): List<
         it.title.contains(word, ignoreCase = true) || it.body.contains(word, ignoreCase = true)
     }
 }
+
+// The bundled help uses flat label / checkbox / div accordions. Keep their images,
+// links and controls when searching, and open matching sections without JavaScript.
+internal fun searchedHelpHtml(html: String, query: String): String {
+    val word = query.trim()
+    if (word.isEmpty()) return html
+    return Regex("(<label\\b[^>]*>[\\s\\S]*?</label>)\\s*(<input\\b[^>]*>)\\s*(<div\\b[^>]*>[\\s\\S]*?</div>)")
+        .replace(html) { accordion ->
+            if (searchHelp(helpSearchSections(accordion.value), word).isEmpty()) ""
+            else highlightHelpHtml(accordion.groupValues[1], word) +
+                accordion.groupValues[2].replace("<input", "<input checked") +
+                highlightHelpHtml(accordion.groupValues[3], word)
+        }
+}
+
+private fun highlightHelpHtml(html: String, word: String): String =
+    Regex("<[^>]*>|[^<]+").replace(html) { token ->
+        if (token.value.startsWith("<")) token.value
+        else {
+            val text = HtmlEntityDecoder.decode(token.value)
+            buildString {
+                var offset = 0
+                var match = text.indexOf(word, ignoreCase = true)
+                while (match >= 0) {
+                    append(escapeHelpText(text.substring(offset, match)))
+                    append("<mark>")
+                    append(escapeHelpText(text.substring(match, match + word.length)))
+                    append("</mark>")
+                    offset = match + word.length
+                    match = text.indexOf(word, offset, ignoreCase = true)
+                }
+                append(escapeHelpText(text.substring(offset)))
+            }
+        }
+    }
+
+private fun escapeHelpText(text: String): String = text
+    .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

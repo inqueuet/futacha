@@ -162,6 +162,17 @@ internal fun shouldScrollCompatCatalogToTopAfterRefresh(refreshSucceeded: Boolea
     refreshSucceeded
 
 /**
+ * The single mapping from the shared "スレッド数" preference to catalog fetch
+ * settings. Every caller (both modes and the watcher) must use it: different
+ * settings per caller make the repository re-post catset on every switch.
+ * Returns null when the preference is unset.
+ */
+internal fun compatCatalogFetchSettingsFromPreferences(preferences: Map<String, String>): CatalogFetchSettings? =
+    preferences.compatPreferenceValue("catalog", "catalogThreadSize", "スレッド数")
+        ?.filter(Char::isDigit)?.toIntOrNull()
+        ?.let(::compatCatalogFetchSettings)
+
+/**
  * The reference APK sends catalogThreadSize as `${size / 25}x25x256x0x1`.
  * The reference APK uses integer division here, not a ceiling. Keep the
  * exact wire value so the selected size is not silently changed by a mode
@@ -530,6 +541,35 @@ internal fun CompatBidirectionalPullRefresh(
 // Read layout state inside a small restart scope, and not at all when disabled.
 // Reading layoutInfo in the catalog/thread caller invalidates its entire screen
 // on every scroll frame, even if the first row and visible count did not change.
+private data class CompatFastScrollMetrics(
+    val totalItems: Int,
+    val firstVisible: Int,
+    val visibleCount: Int,
+    val scrolling: Boolean
+)
+
+/**
+ * Same as the overload taking totalItems, but also reads the item count here.
+ * Callers that passed listState.layoutInfo.totalItemsCount read layout state in
+ * their own body and recomposed the whole thread screen on every scroll frame.
+ */
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    listState: LazyListState
+) {
+    if (!enabled) return
+    val metrics by remember(listState) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            CompatFastScrollMetrics(layout.totalItemsCount, listState.firstVisibleItemIndex,
+                layout.visibleItemsInfo.size, listState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, metrics.totalItems, metrics.firstVisible, metrics.visibleCount, metrics.scrolling,
+        listState::scrollToItem)
+}
+
 @Composable
 internal fun BoxScope.CompatFastScrollbar(
     enabled: Boolean,

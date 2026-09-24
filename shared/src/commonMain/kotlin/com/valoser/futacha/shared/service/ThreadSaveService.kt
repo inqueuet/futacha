@@ -55,7 +55,14 @@ data class ThreadSaveStorageOptions(
     val storageIdOverride: String? = null,
     val clearExistingOutput: Boolean = true,
     val reuseExistingMedia: Boolean = false,
-    val pruneUnreferencedExistingMedia: Boolean = false
+    val pruneUnreferencedExistingMedia: Boolean = false,
+    /**
+     * An earlier generation of the same thread (same base directory) whose
+     * media is linked into this output before downloading, so unchanged
+     * originals and thumbnails are not fetched again. The caller must hold
+     * that generation's storage lock. Only used for path-based folders.
+     */
+    val seedFromStorageId: String? = null
 )
 
 internal const val THREAD_SAVE_READ_IDLE_TIMEOUT_MILLIS = 30_000L
@@ -135,7 +142,7 @@ class ThreadSaveService(
         storageOptions: ThreadSaveStorageOptions = ThreadSaveStorageOptions(),
         writeInitialMetadataBeforeMedia: Boolean = false,
         onInitialSavedThread: suspend (SavedThread) -> Unit = {}
-    ): Result<SavedThread> = withContext(AppDispatchers.io) {
+    ): Result<SavedThread> = withContext(AppDispatchers.io + fileSystem.saveBatchContext()) {
         val effectiveLimits = limits.copy(
             maxMediaItems = limits.maxMediaItems.coerceAtLeast(0),
             maxSaveDurationMs = limits.maxSaveDurationMs.coerceAtLeast(1L),
@@ -248,10 +255,26 @@ class ThreadSaveService(
                     null
                 }
                 val previousMetadata = existingMetadata?.metadata
-                val reusableMediaSeed = if (previousMetadata != null) {
+                // Overwriting saves keep files from a failed earlier run; the sidecar
+                // lists the ones that finished downloading before that run ended.
+                val keepsPartialMedia = storageOptions.reuseExistingMedia && !storageOptions.clearExistingOutput
+                val partialMedia = if (keepsPartialMedia) readThreadSavePartialMedia(storageTarget) else emptyMap()
+                val seedSourceId = storageOptions.seedFromStorageId
+                    ?.takeIf { it.isNotBlank() && it != storageId && baseSaveLocation == null }
+                val reusableMediaSeed = if (seedSourceId != null && previousMetadata == null && partialMedia.isEmpty()) {
+                    seedMediaFromGeneration(
+                        sourceStorageId = seedSourceId,
+                        target = storageTarget,
+                        baseDirectory = baseDirectory,
+                        boardPath = boardPath,
+                        scheduledItems = mediaPlan.scheduledItems,
+                        opPostId = opPostId
+                    )
+                } else if (previousMetadata != null || partialMedia.isNotEmpty()) {
                     buildReusableThreadSaveMediaSeed(
                         target = storageTarget,
                         metadata = previousMetadata,
+                        partialMedia = partialMedia,
                         boardPath = boardPath,
                         scheduledItems = mediaPlan.scheduledItems,
                         opPostId = opPostId
@@ -319,6 +342,9 @@ class ThreadSaveService(
                     },
                     enforceBudget = { totalSizeBytes ->
                         enforceBudget(totalSizeBytes, startedAtMillis, effectiveLimits.maxSaveDurationMs)
+                    },
+                    onChunkApplied = { stored ->
+                        if (keepsPartialMedia) writeThreadSavePartialMedia(storageTarget, stored)
                     }
                 )
                 val urlToPathMap = mediaDownloadResult.urlToPathMap
@@ -407,6 +433,7 @@ class ThreadSaveService(
                     ),
                     encodeMetadata = json::encodeToString
                 )
+                if (keepsPartialMedia && writeMetadata) deleteThreadSavePartialMedia(storageTarget)
                 val finalTotalSize = totalSize + metadataSize
                 enforceBudget(finalTotalSize, startedAtMillis, effectiveLimits.maxSaveDurationMs)
                 if (storageOptions.pruneUnreferencedExistingMedia && previousMetadata != null) {
@@ -470,7 +497,9 @@ class ThreadSaveService(
 
     private data class ExistingThreadSaveMedia(
         val relativePath: String,
-        val fileType: FileType
+        val fileType: FileType,
+        /** Size recorded by the partial-media sidecar; the file must still match it. */
+        val expectedBytes: Long? = null
     )
 
     private data class ExistingThreadSaveMetadata(
@@ -525,6 +554,65 @@ class ThreadSaveService(
         return payload
     }
 
+    /**
+     * Links the reusable media of another generation into [target], then builds
+     * the seed from what actually arrived in [target]; files that could not be
+     * linked or copied are simply downloaded.
+     */
+    private suspend fun seedMediaFromGeneration(
+        sourceStorageId: String,
+        target: ThreadSaveStorageTarget,
+        baseDirectory: String,
+        boardPath: String,
+        scheduledItems: List<ThreadSaveScheduledMediaItem>,
+        opPostId: String?
+    ): ThreadSaveMediaDownloadSeed {
+        val source = buildThreadSaveStorageTarget(saveLocation = null, baseDirectory = baseDirectory, storageId = sourceStorageId)
+        val sourceMetadata = readThreadSaveMetadataPayload(source, "metadata.json")?.metadata
+            ?: return ThreadSaveMediaDownloadSeed()
+        val sourceSeed = buildReusableThreadSaveMediaSeed(source, sourceMetadata, emptyMap(), boardPath, scheduledItems, opPostId)
+        sourceSeed.mediaKeyToFileInfoMap.values.map { it.relativePath }.distinct().forEach { relativePath ->
+            fileSystem.linkOrCopy(source.absoluteStoragePath(relativePath), target.absoluteStoragePath(relativePath))
+                .onFailure { Logger.w("ThreadSaveService", "Could not take over $relativePath: ${it.message}") }
+        }
+        return buildReusableThreadSaveMediaSeed(target, sourceMetadata, emptyMap(), boardPath, scheduledItems, opPostId)
+    }
+
+    private suspend fun readThreadSavePartialMedia(target: ThreadSaveStorageTarget): Map<String, ThreadSavePartialMediaEntry> =
+        runSuspendCatchingPreservingCancellation {
+            val payload = readThreadSaveText(target, THREAD_SAVE_PARTIAL_MEDIA_FILE)
+            json.decodeFromString<Map<String, ThreadSavePartialMediaEntry>>(payload)
+        }.getOrElse { emptyMap() } // Missing or damaged: download as usual.
+
+    private suspend fun writeThreadSavePartialMedia(
+        target: ThreadSaveStorageTarget,
+        stored: Map<String, ThreadSaveLocalFileInfo>
+    ) {
+        val payload = json.encodeToString(
+            stored.mapValues { (_, info) -> ThreadSavePartialMediaEntry(info.relativePath, info.fileType.name, info.byteSize) }
+        )
+        runSuspendCatchingPreservingCancellation {
+            if (target.saveLocation != null) {
+                fileSystem.writeString(target.saveLocation, target.relativeStoragePath(THREAD_SAVE_PARTIAL_MEDIA_FILE), payload).getOrThrow()
+            } else {
+                fileSystem.writeString(target.absoluteStoragePath(THREAD_SAVE_PARTIAL_MEDIA_FILE), payload).getOrThrow()
+            }
+        }.onFailure { Logger.w("ThreadSaveService", "Failed to record downloaded media: ${it.message}") }
+    }
+
+    private suspend fun deleteThreadSavePartialMedia(target: ThreadSaveStorageTarget) {
+        if (target.saveLocation != null) {
+            fileSystem.delete(target.saveLocation, target.relativeStoragePath(THREAD_SAVE_PARTIAL_MEDIA_FILE))
+        } else {
+            fileSystem.delete(target.absoluteStoragePath(THREAD_SAVE_PARTIAL_MEDIA_FILE))
+        }
+    }
+
+    private fun isSafeThreadSavePartialPath(relativePath: String, boardPath: String): Boolean {
+        val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
+        return relativePath.startsWith(boardPrefix) && relativePath.split('/').none { it == ".." || it.isEmpty() }
+    }
+
     private suspend fun writeThreadSaveMetadataBackup(
         target: ThreadSaveStorageTarget,
         payload: String
@@ -552,12 +640,21 @@ class ThreadSaveService(
 
     private suspend fun buildReusableThreadSaveMediaSeed(
         target: ThreadSaveStorageTarget,
-        metadata: SavedThreadMetadata,
+        metadata: SavedThreadMetadata?,
+        partialMedia: Map<String, ThreadSavePartialMediaEntry> = emptyMap(),
         boardPath: String,
         scheduledItems: List<ThreadSaveScheduledMediaItem>,
         opPostId: String?
     ): ThreadSaveMediaDownloadSeed {
-        val existingMediaByKey = buildExistingThreadSaveMediaMap(metadata.posts)
+        val existingMediaByKey = metadata?.let { buildExistingThreadSaveMediaMap(it.posts) }.orEmpty().toMutableMap()
+        // Sidecar entries only fill gaps, and only when they stay inside this
+        // thread's folder with a known file type.
+        partialMedia.forEach { (mediaKey, entry) ->
+            if (mediaKey in existingMediaByKey) return@forEach
+            val fileType = FileType.entries.firstOrNull { it.name == entry.fileType } ?: return@forEach
+            if (!isSafeThreadSavePartialPath(entry.relativePath, boardPath)) return@forEach
+            existingMediaByKey[mediaKey] = ExistingThreadSaveMedia(entry.relativePath, fileType, entry.byteSize)
+        }
         if (existingMediaByKey.isEmpty()) return ThreadSaveMediaDownloadSeed()
         val existingMediaByPath = existingMediaByKey.values.associateBy { it.relativePath }
 
@@ -577,6 +674,7 @@ class ThreadSaveService(
                 )
                 ?: return@forEach
             val sizeBytes = measureExistingThreadSaveMedia(target, existingMedia.relativePath) ?: return@forEach
+            if (existingMedia.expectedBytes != null && sizeBytes != existingMedia.expectedBytes) return@forEach
             val fileInfo = ThreadSaveLocalFileInfo(
                 relativePath = existingMedia.relativePath,
                 fileType = existingMedia.fileType,

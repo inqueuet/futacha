@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.BoardSummary
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 const val MAX_COMPAT_PREFERENCE_KEY_CHARS = 300
 const val MAX_COMPAT_PREFERENCE_VALUE_CHARS = 20_000
@@ -37,6 +38,24 @@ interface CompatibilityStore {
 
     suspend fun openTab(tab: CompatTab, historyEntry: CompatHistoryEntry? = null)
     suspend fun updateTab(tab: CompatTab)
+
+    /**
+     * Applies [transform] to the current stored tab and returns whether it was
+     * written. Background refreshers must use this instead of [updateTab] with a
+     * copy taken before a slow request: that copy rolls back read counts and
+     * favourites changed meanwhile, and [updateTab] re-adds a closed tab.
+     *
+     * A missing tab is never created. [transform] returns null for "no change".
+     * Key, canonical URL and scroll anchor always keep their current values.
+     * Stores override this to run inside their write lock; this default is for
+     * test doubles only.
+     */
+    suspend fun updateTabIfPresent(tabKey: String, transform: (CompatTab) -> CompatTab?): Boolean {
+        val current = tabs.first().firstOrNull { it.key == tabKey } ?: return false
+        val next = transform(current)?.pinnedTo(current) ?: return false
+        updateTab(next)
+        return true
+    }
     suspend fun selectTab(tabKey: String?)
     suspend fun closeTabs(
         tabKeys: Set<String>,
@@ -47,6 +66,20 @@ interface CompatibilityStore {
     suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch?
 
     suspend fun upsertHistory(entry: CompatHistoryEntry)
+
+    /**
+     * History counterpart of [updateTabIfPresent]: a deleted entry stays deleted
+     * and newer titles or visit times are not overwritten by an old copy.
+     */
+    suspend fun updateHistoryIfPresent(
+        canonicalUrl: String,
+        transform: (CompatHistoryEntry) -> CompatHistoryEntry?
+    ): Boolean {
+        val current = history.first().firstOrNull { it.canonicalUrl == canonicalUrl } ?: return false
+        val next = transform(current)?.copy(canonicalUrl = current.canonicalUrl) ?: return false
+        upsertHistory(next)
+        return true
+    }
     /** Called on thread activation, before any network request completes. */
     suspend fun recordHistoryVisit(entry: CompatHistoryEntry)
     suspend fun deleteHistory(canonicalUrl: String)
@@ -110,6 +143,26 @@ interface CompatibilityStore {
     suspend fun savePreference(key: String, value: String)
 
     /**
+     * Writes several preferences as one change; a null value removes the key.
+     * Stores override this to persist once (iOS and desktop rewrite their whole
+     * state per change). This default is for test doubles.
+     */
+    suspend fun savePreferences(values: Map<String, String?>) {
+        values.forEach { (key, value) -> savePreference(key, value ?: "") }
+    }
+
+    /**
+     * Catalog image hashes by [compatImagePhashCachePreferenceKey]. They are a
+     * bounded cache in their own table, not preferences: stored as preferences
+     * they grew without limit, were rewritten with the whole iOS state on each
+     * save and pushed real settings past the 4096-preference limit. Stores
+     * without a cache table (test doubles) keep nothing.
+     */
+    suspend fun loadImagePhashes(keys: Collection<String>): Map<String, String> = emptyMap()
+
+    suspend fun saveImagePhashes(entries: Map<String, String>) {}
+
+    /**
      * Export/import user settings only. Implementations that cannot persist a
      * portable file may keep the default unsupported behavior; Android's
      * compatibility store provides the transactional implementation.
@@ -160,3 +213,7 @@ interface CompatibilityStore {
         for (ruleId in ruleIds) deleteNgRule(ruleId)
     }
 }
+
+/** Keeps the identity and the durable scroll anchor of the stored tab. */
+fun CompatTab.pinnedTo(current: CompatTab): CompatTab =
+    copy(key = current.key, canonicalUrl = current.canonicalUrl, scrollAnchor = current.scrollAnchor)

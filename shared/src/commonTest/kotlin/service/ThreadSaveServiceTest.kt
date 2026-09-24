@@ -17,6 +17,7 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -160,6 +161,110 @@ class ThreadSaveServiceTest {
         assertEquals("b/src/1.jpg", metadata.posts.single().localImagePath)
         assertEquals("b/thumb/1s.jpg", metadata.posts.single().localThumbnailPath)
         assertTrue(fileSystem.exists("auto/$stableStorageId/metadata.json.backup"))
+    }
+
+    @Test
+    fun saveThread_reusesMediaDownloadedBeforeAnEarlierRunFailed() = runBlocking {
+        val fileSystem = MetadataWriteFailingFileSystem()
+        val storageId = buildThreadStorageId("b", "458")
+        val storageOptions = ThreadSaveStorageOptions(
+            storageIdOverride = storageId,
+            clearExistingOutput = false,
+            reuseExistingMedia = true
+        )
+        suspend fun save(client: io.ktor.client.HttpClient) = ThreadSaveService(httpClient = client, fileSystem = fileSystem)
+            .saveThread(
+                threadId = "458",
+                boardId = "b",
+                boardName = "may/b",
+                boardUrl = "https://may.2chan.net/b/futaba.php",
+                title = "title",
+                expiresAtLabel = null,
+                posts = listOf(samplePost()),
+                baseDirectory = "auto",
+                writeMetadata = true,
+                rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+                storageOptions = storageOptions
+            )
+
+        // The first run downloads the media but fails before its metadata exists.
+        fileSystem.failMetadata = true
+        assertTrue(save(createClient()).isFailure)
+        assertTrue(fileSystem.exists("auto/$storageId/media-reuse.partial.json"))
+
+        // The next run cannot download anything, yet still has the media.
+        fileSystem.failMetadata = false
+        val second = save(createFailingClient()).getOrThrow()
+        val metadata = readMetadata(fileSystem.delegate, "auto/$storageId/metadata.json")
+
+        assertEquals(SaveStatus.COMPLETED, second.status)
+        assertEquals("b/src/1.jpg", metadata.posts.single().localImagePath)
+        assertEquals("b/thumb/1s.jpg", metadata.posts.single().localThumbnailPath)
+        assertFalse(fileSystem.exists("auto/$storageId/media-reuse.partial.json"))
+    }
+
+    @Test
+    fun saveThread_ignoresADamagedPartialMediaRecord() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val storageId = buildThreadStorageId("b", "459")
+        fileSystem.writeString("auto/$storageId/media-reuse.partial.json", "{not json").getOrThrow()
+
+        val saved = ThreadSaveService(httpClient = createClient(), fileSystem = fileSystem).saveThread(
+            threadId = "459",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = listOf(samplePost()),
+            baseDirectory = "auto",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+            storageOptions = ThreadSaveStorageOptions(
+                storageIdOverride = storageId,
+                clearExistingOutput = false,
+                reuseExistingMedia = true
+            )
+        ).getOrThrow()
+
+        assertEquals(SaveStatus.COMPLETED, saved.status)
+        assertEquals("b/src/1.jpg", readMetadata(fileSystem, "auto/$storageId/metadata.json").posts.single().localImagePath)
+    }
+
+    @Test
+    fun saveThread_seedsMediaFromAnotherGenerationWithoutDownloading() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val previous = "b_460_generation_old"
+        suspend fun save(client: io.ktor.client.HttpClient, options: ThreadSaveStorageOptions) =
+            ThreadSaveService(httpClient = client, fileSystem = fileSystem).saveThread(
+                threadId = "460",
+                boardId = "b",
+                boardName = "may/b",
+                boardUrl = "https://may.2chan.net/b/futaba.php",
+                title = "title",
+                expiresAtLabel = null,
+                posts = listOf(samplePost()),
+                baseDirectory = "auto",
+                writeMetadata = true,
+                rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+                storageOptions = options
+            )
+        save(createClient(), ThreadSaveStorageOptions(storageIdOverride = previous)).getOrThrow()
+        val sourceImage = fileSystem.readBytes("auto/$previous/b/src/1.jpg").getOrThrow()
+
+        // A new generation cannot download anything but takes over the media.
+        val next = "b_460_generation_new"
+        val saved = save(
+            createFailingClient(),
+            ThreadSaveStorageOptions(storageIdOverride = next, seedFromStorageId = previous)
+        ).getOrThrow()
+        val metadata = readMetadata(fileSystem, "auto/$next/metadata.json")
+
+        assertEquals(SaveStatus.COMPLETED, saved.status)
+        assertEquals("b/src/1.jpg", metadata.posts.single().localImagePath)
+        assertEquals("b/thumb/1s.jpg", metadata.posts.single().localThumbnailPath)
+        assertTrue(fileSystem.exists("auto/$next/b/src/1.jpg"))
+        assertContentEquals(sourceImage, fileSystem.readBytes("auto/$previous/b/src/1.jpg").getOrThrow())
     }
 
     @Test
@@ -543,4 +648,18 @@ class ThreadSaveServiceTest {
             fileSystem.readString(path).getOrThrow()
         )
     }
+}
+
+private class MetadataWriteFailingFileSystem(
+    val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : com.valoser.futacha.shared.util.FileSystem by delegate {
+    var failMetadata = false
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> =
+        if (failMetadata && path.endsWith("/metadata.json")) Result.failure(IllegalStateException("disk full"))
+        else delegate.writeString(path, content)
+
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> =
+        if (failMetadata && path.endsWith("/metadata.json")) Result.failure(IllegalStateException("disk full"))
+        else delegate.writeBytes(path, bytes)
 }

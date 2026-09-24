@@ -197,6 +197,9 @@ class HttpBoardApi(
     override suspend fun probeThreadExists(threadUrl: String): Boolean {
         return try {
             client.head(threadUrl) {
+                // A failed probe is simply repeated on the next run; the client's own
+                // retries (up to 3 x 75 s on Android) only burn the background budget.
+                attributes.put(HigherLayerRetryManaged, true)
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = "*/*"
                 headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE

@@ -46,7 +46,9 @@ class DesktopEnvironment(val dataDirectory: File, val cacheDirectory: File) : Au
 
         fun default(): DesktopEnvironment {
             val override = System.getProperty("futacha.dataDir")
-            val home = File(System.getProperty("user.home"))
+            val home = if (override == null && DesktopPlatform.isMac &&
+                java.lang.Boolean.getBoolean("futacha.mac.appStore")) MacNative.homeDirectory()
+                else File(System.getProperty("user.home"))
             return if (override != null) DesktopEnvironment(File(override), File(override, "cache"))
             else if (DesktopPlatform.isWindows) {
                 val base = System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let(::File)

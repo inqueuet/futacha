@@ -62,8 +62,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -121,6 +123,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.NonRestartableComposable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -131,6 +135,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -150,6 +155,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -316,6 +322,7 @@ import com.valoser.futacha.shared.compat.ExperienceProfile
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
 import com.valoser.futacha.shared.compat.SelectorPresentation
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
+import com.valoser.futacha.shared.compat.applyCatalogReplyCount
 import com.valoser.futacha.shared.compat.reconcileCompatToolbar
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.compatTabKey
@@ -471,6 +478,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -486,9 +494,6 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
 
-private val CompatTeal: Color @Composable get() = LocalCompatibilityPalette.current.chrome
-private val CompatFutabaBackground: Color @Composable get() = LocalCompatibilityPalette.current.background
-private val CompatDivider: Color @Composable get() = LocalCompatibilityPalette.current.divider
 // HttpBoardApi deliberately gets two attempts for Futaba's occasionally
 // stale keep-alive sockets. The former 15-second screen timeout cancelled that
 // retry loop midway, leaving a cold thread dependent on a manual reload.
@@ -496,16 +501,11 @@ private const val COMPAT_THREAD_LOAD_TIMEOUT_MILLIS = 75_000L
 private const val COMPAT_CATALOG_REFRESH_TIMEOUT_MILLIS = 20_000L
 private const val COMPAT_CATALOG_MAX_ROLLBACK_GENERATIONS = 4
 private const val COMPAT_CATALOG_LAYOUT_SWITCH_LOADING_MIN_MILLIS = 320L
-private const val COMPAT_LOADING_ROTATION_MILLIS = 500
-// The reference APK rotates a circular PNG. Its default asset is a mathematically
-// complete ring, so reproducing it as a vector circle makes the 500 ms animation
-// visually invariant. Keep the same silhouette and timing while leaving a small
-// moving gap so the user can actually tell that the UI thread is still painting.
-private const val COMPAT_LOADING_DEFAULT_SWEEP_DEGREES = 300f
 private const val COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS = 5_000L
 private const val COMPAT_DROPPED_PROBE_MAX_ITEMS = 64
 private const val COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS = 3_000L
 private const val COMPAT_PHASH_BATCH_TIMEOUT_MILLIS = 15_000L
+private const val COMPAT_PHASH_SAVE_BATCH = 16
 private const val COMPAT_READ_ALOUD_TIMER_TICK_MILLIS = 5_000L
 private const val COMPAT_CLOSED_BATCH_DEADLINE_RECHECK_MILLIS = 1_000L
 private val COMPAT_THREAD_PLATFORM_AI_ACTIONS = setOf(
@@ -534,135 +534,11 @@ private val COMPAT_CATALOG_PLATFORM_AI_ACTIONS = setOf(
     FutachaAiAction.OpenBoardExternally
 )
 private const val COMPAT_EDGE_SWIPE_WIDTH_DP = 64
-// Keep the common small-thread path synchronous for the APK-compatible feel,
-// while moving large HTML/text scans away from the Compose dispatcher.
-private const val COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT = 96
 
 private fun compatCatalogLastFetchCountKey(boardKey: String, sort: CompatCatalogSort): String =
     "compat.catalog.lastFetchThreadCount.$boardKey.${sort.name}"
 
 private class CompatCatalogRefreshTimeoutException : IllegalStateException()
-
-private val CompatLoadingRotationSemanticsKey = SemanticsPropertyKey<Int>("CompatLoadingRotation")
-private var SemanticsPropertyReceiver.compatLoadingRotation by CompatLoadingRotationSemanticsKey
-
-@Composable
-internal fun CompatLoadingIndicator(
-    style: String?,
-    modifier: Modifier,
-    size: Dp
-) {
-    val iconStyle = compatibilityLoadingUsesIcon(style)
-    val color = compatibilityLoadingColor(LocalCompatibilityPalette.current, style)
-    val rotationTransition = rememberInfiniteTransition(label = "compat-loading")
-    val rotation by rotationTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(COMPAT_LOADING_ROTATION_MILLIS, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "compat-loading-rotation"
-    )
-    Box(
-        modifier = modifier.semantics {
-            contentDescription = "読み込み中"
-            stateDescription = if (iconStyle) "アイコン" else "デフォルト"
-        },
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(
-            modifier = Modifier
-                .size(size)
-                .testTag("compat-loading-artwork")
-                .semantics { compatLoadingRotation = rotation.roundToInt() }
-        ) {
-            val diameter = this.size.minDimension
-            val center = Offset(this.size.width / 2f, this.size.height / 2f)
-            // Read the animation state in the draw phase. This invalidates the
-            // Canvas itself on every frame on both Android and iOS; relying on
-            // a child graphics layer could leave the initial thread artwork's
-            // cached layer unchanged while the request was suspended.
-            rotate(degrees = rotation, pivot = center) {
-                if (iconStyle) {
-                    drawCircle(color = color, radius = diameter / 2f, center = center)
-
-                    // The compatibility APK uses a white futaba sprout inside a
-                    // solid theme-coloured disc. Keep the mark code-native so it
-                    // scales cleanly without redistributing the APK's raster.
-                    val stem = Path().apply {
-                        moveTo(diameter * 0.52f, diameter * 0.76f)
-                        cubicTo(
-                            diameter * 0.53f, diameter * 0.65f,
-                            diameter * 0.51f, diameter * 0.54f,
-                            diameter * 0.47f, diameter * 0.44f
-                        )
-                    }
-                    drawPath(
-                        path = stem,
-                        color = Color.White,
-                        style = Stroke(width = diameter * 0.075f, cap = StrokeCap.Round)
-                    )
-                    drawPath(
-                        path = Path().apply {
-                            moveTo(diameter * 0.48f, diameter * 0.49f)
-                            cubicTo(
-                                diameter * 0.35f, diameter * 0.48f,
-                                diameter * 0.25f, diameter * 0.37f,
-                                diameter * 0.24f, diameter * 0.24f
-                            )
-                            cubicTo(
-                                diameter * 0.38f, diameter * 0.24f,
-                                diameter * 0.49f, diameter * 0.34f,
-                                diameter * 0.48f, diameter * 0.49f
-                            )
-                            close()
-                        },
-                        color = Color.White
-                    )
-                    drawPath(
-                        path = Path().apply {
-                            moveTo(diameter * 0.48f, diameter * 0.48f)
-                            cubicTo(
-                                diameter * 0.50f, diameter * 0.34f,
-                                diameter * 0.62f, diameter * 0.25f,
-                                diameter * 0.76f, diameter * 0.27f
-                            )
-                            cubicTo(
-                                diameter * 0.73f, diameter * 0.41f,
-                                diameter * 0.62f, diameter * 0.50f,
-                                diameter * 0.48f, diameter * 0.48f
-                            )
-                            close()
-                        },
-                        color = Color.White
-                    )
-                } else {
-                    val strokeWidth = diameter * 0.17f
-                    val inset = strokeWidth / 2f
-                    drawArc(
-                        color = color,
-                        startAngle = -90f,
-                        sweepAngle = COMPAT_LOADING_DEFAULT_SWEEP_DEGREES,
-                        useCenter = false,
-                        topLeft = Offset(inset, inset),
-                        size = Size(diameter - strokeWidth, diameter - strokeWidth),
-                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                    )
-                }
-            }
-        }
-    }
-}
-private fun Modifier.compatReferenceStatusBarPadding(): Modifier {
-    // The reference APK follows the platform status-bar/cutout inset.  A
-    // fixed 24dp value is incorrect on devices whose camera cutout reports a
-    // taller top inset (for example the physical Pixel test device).
-    return statusBarsPadding()
-}
-
-private fun isCompatFixtureBoard(board: CompatBoard): Boolean =
-    board.originalUrl.contains("example.com", ignoreCase = true)
 
 private fun compatFixtureThreadUrl(board: CompatBoard, item: CatalogItem): String =
     "${board.canonicalUrl.trimEnd('/')}/res/${item.id}.htm"
@@ -671,51 +547,6 @@ private fun formatCompatCatalogTime(epochMillis: Long): String {
     val local = Instant.fromEpochMilliseconds(epochMillis)
         .toLocalDateTime(TimeZone.currentSystemDefault())
     return "${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}"
-}
-
-private fun formatCompatNgCreatedAt(epochMillis: Long): String {
-    val local = Instant.fromEpochMilliseconds(epochMillis)
-        .toLocalDateTime(TimeZone.currentSystemDefault())
-    return buildString {
-        append(local.year.toString().padStart(4, '0'))
-        append('/')
-        append((local.month.ordinal + 1).toString().padStart(2, '0'))
-        append('/')
-        append(local.day.toString().padStart(2, '0'))
-    }
-}
-
-private fun formatCompatImageNgCreatedAt(epochMillis: Long): String {
-    if (epochMillis <= 0L) return "-"
-    val local = Instant.fromEpochMilliseconds(epochMillis)
-        .toLocalDateTime(TimeZone.currentSystemDefault())
-    return buildString {
-        append(local.year.toString().padStart(4, '0'))
-        append('/')
-        append((local.month.ordinal + 1).toString().padStart(2, '0'))
-        append('/')
-        append(local.day.toString().padStart(2, '0'))
-        append(' ')
-        append(local.hour.toString().padStart(2, '0'))
-        append(':')
-        append(local.minute.toString().padStart(2, '0'))
-    }
-}
-
-private fun formatCompatDroppedLastSeen(epochMillis: Long): String {
-    val local = Instant.fromEpochMilliseconds(epochMillis)
-        .toLocalDateTime(TimeZone.currentSystemDefault())
-    return buildString {
-        append(local.year.toString().padStart(4, '0'))
-        append('/')
-        append((local.month.ordinal + 1).toString().padStart(2, '0'))
-        append('/')
-        append(local.day.toString().padStart(2, '0'))
-        append(' ')
-        append(local.hour.toString().padStart(2, '0'))
-        append(':')
-        append(local.minute.toString().padStart(2, '0'))
-    }
 }
 
 @Composable
@@ -1283,14 +1114,11 @@ private fun CompatibilityAppContent(
                                     ?: return@tabLoop
                                 if (item.replyCount != checkedTab.replyCount) {
                                     persistStoreSafely("foreground tab refresh") {
-                                        store.updateTab(checkedTab.copy(replyCount = item.replyCount))
-                                    }
-                                    latestCompatHistories.firstOrNull {
-                                        it.canonicalUrl == checkedTab.canonicalUrl
-                                    }?.let { history ->
-                                        persistStoreSafely("foreground history refresh") {
-                                            store.upsertHistory(history.copy(replyCount = item.replyCount))
-                                        }
+                                        store.applyCatalogReplyCount(
+                                            checkedTab.key,
+                                            checkedTab.canonicalUrl,
+                                            item.replyCount
+                                        )
                                     }
                                 }
                             }
@@ -1301,9 +1129,9 @@ private fun CompatibilityAppContent(
                                     watchWords = compatWatchWordsForBoard(currentPreferences, board.key),
                                     existingHistory = latestCompatHistories,
                                     nowEpochMillis = now
-                                ).forEach { match ->
+                                ).takeIf { it.isNotEmpty() }?.let { matches ->
                                     persistStoreSafely("foreground watch history refresh") {
-                                        CompatWatcherRepository(store).record(match)
+                                        CompatWatcherRepository(store).recordAll(matches)
                                     }
                                 }
                             }
@@ -1682,60 +1510,6 @@ private fun CompatibilityAppContent(
         }
     }
 
-    fun resolvePlatformAiBoard(command: FutachaAiCommand): CompatBoard? {
-        val requested = command.boardSelectorParameter()
-        if (requested.isNullOrBlank()) {
-            val active = state.activeTabKey?.let { key -> state.tabs.firstOrNull { it.key == key } }
-            return active?.let { tab -> boards.firstOrNull { it.key == tab.boardKey } }
-                ?: (state.host as? CompatHost.Catalog)?.let { host -> boards.firstOrNull { it.key == host.boardKey } }
-        }
-        val normalized = requested.trim().lowercase()
-        val canonical = canonicalizeBoardUrl(requested)
-        return boards.firstOrNull { board ->
-            board.key.equals(requested, ignoreCase = true) ||
-                board.name.equals(requested, ignoreCase = true) ||
-                board.originalUrl.equals(requested, ignoreCase = true) ||
-                (canonical != null && board.canonicalUrl.equals(canonical, ignoreCase = true))
-        } ?: boards.firstOrNull { board ->
-            board.name.lowercase().contains(normalized) || board.key.lowercase().contains(normalized)
-        }
-    }
-
-    fun resolvePlatformAiThread(command: FutachaAiCommand): Pair<CanonicalThreadUrl, CompatBoard>? {
-        val targetUrl = command.threadUrlParameter()
-            ?: run {
-                val board = resolvePlatformAiBoard(command) ?: return@run null
-                val number = command.threadIdParameter()?.takeIf { it.all(Char::isDigit) } ?: return@run null
-                "${board.canonicalUrl.trimEnd('/')}/res/$number.htm"
-            }
-            ?: return null
-        val parsed = canonicalizeThreadUrl(targetUrl) ?: return null
-        val board = boards.firstOrNull { it.canonicalUrl.equals(parsed.canonicalBoardUrl, ignoreCase = true) }
-            ?: CompatBoard(
-                key = compatBoardKey(parsed.canonicalBoardUrl),
-                name = parsed.boardPath.substringAfterLast('/'),
-                canonicalUrl = parsed.canonicalBoardUrl,
-                originalUrl = parsed.canonicalBoardUrl,
-                sortOrder = boards.size
-            )
-        return parsed to board
-    }
-
-    fun resolvePlatformAiCatalogSort(command: FutachaAiCommand): CompatCatalogSort? {
-        val raw = command.catalogModeParameter()?.trim()?.lowercase() ?: return null
-        return CompatCatalogSort.entries.firstOrNull { sort ->
-            sort.name.lowercase() == raw || sort.displayLabel.lowercase() == raw
-        } ?: when (raw) {
-            "catalog", "cat" -> CompatCatalogSort.CATALOG
-            "new", "newest", "newest_first" -> CompatCatalogSort.NEW
-            "old", "oldest", "oldest_first" -> CompatCatalogSort.OLD
-            "many", "most", "most_replies" -> CompatCatalogSort.MANY
-            "few", "least", "fewest_replies" -> CompatCatalogSort.FEW
-            "lively", "momentum", "speed" -> CompatCatalogSort.LIVELY
-            else -> null
-        }
-    }
-
     fun currentPlatformAiTab(): CompatTab? = state.activeTabKey?.let { key ->
         state.tabs.firstOrNull { it.key == key }
     }
@@ -1748,17 +1522,17 @@ private fun CompatibilityAppContent(
         when (command.action) {
             FutachaAiAction.OpenBoardList -> dispatch(CompatibilityEvent.OpenHost(CompatHost.Main))
             FutachaAiAction.OpenBoard, FutachaAiAction.SearchAndOpenBoard -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else dispatch(CompatibilityEvent.OpenCatalog(board.key))
             }
             FutachaAiAction.OpenThread, FutachaAiAction.OpenThreadFromUrl -> {
-                val target = resolvePlatformAiThread(command)
+                val target = resolvePlatformAiThread(command, state, boards)
                 if (target == null) deepLinkError = "対象スレを特定できませんでした"
                 else openCanonicalThread(target.first, target.second)
             }
             FutachaAiAction.OpenThreadExternally -> {
-                val target = resolvePlatformAiThread(command)
+                val target = resolvePlatformAiThread(command, state, boards)
                 if (target != null) {
                     pendingThreadAiCommand = command.copy(
                         parameters = command.parameters + ("threadId" to target.first.threadNo)
@@ -1771,7 +1545,7 @@ private fun CompatibilityAppContent(
                 }
             }
             FutachaAiAction.SaveThread -> {
-                val target = resolvePlatformAiThread(command)
+                val target = resolvePlatformAiThread(command, state, boards)
                 if (target == null) deepLinkError = "対象スレを特定できませんでした"
                 else {
                     openCanonicalThread(target.first, target.second)
@@ -1805,13 +1579,13 @@ private fun CompatibilityAppContent(
             FutachaAiAction.OpenCatalogDisplaySettings,
             FutachaAiAction.OpenNgManagement,
             FutachaAiAction.OpenWatchWords -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else dispatch(CompatibilityEvent.OpenHost(CompatHost.Settings(path = "catalog", origin = CompatHost.Catalog(board.key))))
             }
             FutachaAiAction.OpenThreadSettings -> dispatch(CompatibilityEvent.OpenHost(CompatHost.Settings(path = "thread", origin = state.host)))
             FutachaAiAction.DraftThread -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else dispatch(CompatibilityEvent.OpenHost(CompatHost.PostBuild(board.key)))
             }
@@ -1826,7 +1600,7 @@ private fun CompatibilityAppContent(
             }
             FutachaAiAction.RefreshCurrentBoard,
             FutachaAiAction.RefreshCatalog -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else {
                     toolbarRefreshToken += 1L
@@ -1837,7 +1611,7 @@ private fun CompatibilityAppContent(
             FutachaAiAction.StartCatalogSearch,
             FutachaAiAction.SearchCatalog,
             FutachaAiAction.OpenBoardExternally -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else {
                     pendingCatalogAiCommand = command
@@ -1862,7 +1636,7 @@ private fun CompatibilityAppContent(
             FutachaAiAction.EnableAiPostFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setAiPostFilterEnabled(true) }
             FutachaAiAction.DisableAiPostFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setAiPostFilterEnabled(false) }
             FutachaAiAction.SetCatalogMode -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 val sort = resolvePlatformAiCatalogSort(command)
                 when {
                     board == null -> deepLinkError = "対象板を特定できませんでした"
@@ -1942,7 +1716,7 @@ private fun CompatibilityAppContent(
                 }
             }
             FutachaAiAction.DeleteHistoryEntry -> {
-                val target = resolvePlatformAiThread(command)
+                val target = resolvePlatformAiThread(command, state, boards)
                 if (target == null) deepLinkError = "削除する履歴を特定できませんでした"
                 else launchStoreSafely("AI command", "操作に失敗しました") {
                     val compatibilityEntry = histories.firstOrNull { entry ->
@@ -1991,7 +1765,7 @@ private fun CompatibilityAppContent(
                 } else {
                     val active = currentPlatformAiTab()
                     val requestedThread = command.threadIdParameter() ?: active?.threadNo
-                    val requestedBoard = resolvePlatformAiBoard(command)?.key ?: active?.boardKey
+                    val requestedBoard = resolvePlatformAiBoard(command, state, boards)?.key ?: active?.boardKey
                     launchStoreSafely("AI command", "操作に失敗しました") {
                         val matches = repository.getAllThreads().filter { saved ->
                             (requestedThread == null || saved.threadId == requestedThread) &&
@@ -2042,7 +1816,7 @@ private fun CompatibilityAppContent(
                 }
             }
             FutachaAiAction.DeleteBoard -> {
-                val board = resolvePlatformAiBoard(command)
+                val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "削除する板を特定できませんでした"
                 else launchStoreSafely("AI command", "操作に失敗しました") {
                     store.deleteBoard(board.key)
@@ -3447,22 +3221,23 @@ private fun CompatibilityAppContent(
             )
         }
         }
-        val drawerVisibleWidthPx = when {
-            drawerPreviewOffsetPx > 0f && drawerState.isClosed -> drawerPreviewOffsetPx
-            !drawerState.currentOffset.isNaN() -> {
-                // Material's open anchor is 0 and its closed anchor is the
-                // negative drawer width. Deriving the scrim from the same
-                // offset keeps the dimmed area attached to the moving sheet
-                // during both open and close animations (#38).
-                (drawerPreviewWidthPx + drawerState.currentOffset)
-                    .coerceIn(0f, drawerPreviewWidthPx)
-            }
-            drawerState.isOpen -> drawerPreviewWidthPx
-            else -> 0f
+        // The sheet position changes on every drag and animation frame. Read it
+        // only in the layout/draw lambdas below; composition observes just
+        // whether the scrim is shown, so the drawer content is not recomposed
+        // per frame.
+        val drawerVisibleWidthPx: () -> Float = {
+            compatDrawerVisibleWidthPx(
+                previewOffsetPx = drawerPreviewOffsetPx,
+                isClosed = drawerState.isClosed,
+                isOpen = drawerState.isOpen,
+                currentOffset = drawerState.currentOffset,
+                widthPx = drawerPreviewWidthPx
+            )
         }
-        val drawerVisibleFraction = (drawerVisibleWidthPx / drawerPreviewWidthPx)
-            .coerceIn(0f, 1f)
-        if (drawerVisibleWidthPx > 0f) {
+        val drawerScrimShown by remember(drawerState, drawerPreviewWidthPx) {
+            derivedStateOf { drawerVisibleWidthPx() > 0f }
+        }
+        if (drawerScrimShown) {
             // Keep the action bar and drawer surface undimmed. The reference
             // APK dims only the catalog area to the right of the visible
             // drawer, starting below the platform status-bar inset plus the
@@ -3472,12 +3247,15 @@ private fun CompatibilityAppContent(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(drawerVisibleWidthPx.roundToInt(), 0) }
+                    .offset { IntOffset(drawerVisibleWidthPx().roundToInt(), 0) }
                     .statusBarsPadding()
                     .padding(top = 56.dp)
                     .navigationBarsPadding()
                     .clickable { dispatch(CompatibilityEvent.CloseDrawer) }
-                    .background(Color.Black.copy(alpha = compatDrawerScrimAlpha(drawerVisibleFraction)))
+                    .drawBehind {
+                        val fraction = (drawerVisibleWidthPx() / drawerPreviewWidthPx).coerceIn(0f, 1f)
+                        drawRect(Color.Black.copy(alpha = compatDrawerScrimAlpha(fraction)))
+                    }
             )
         }
         // ApplyCompatSystemBars owns the platform status-bar surface. A second
@@ -3562,7 +3340,10 @@ private fun CompatibilityAppContent(
             }
         }
     }
-    if (drawerPreviewOffsetPx > 0f && drawerState.isClosed) {
+    val drawerPreviewShown by remember(drawerState) {
+        derivedStateOf { drawerPreviewOffsetPx > 0f && drawerState.isClosed }
+    }
+    if (drawerPreviewShown) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -3676,385 +3457,6 @@ private fun remainingCompatDeadlineMillis(deadlineMillis: Long, nowMillis: Long)
     if (deadlineMillis <= nowMillis) return 0L
     val remaining = deadlineMillis - nowMillis
     return if (remaining < 0L) Long.MAX_VALUE else remaining
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun CompatMainScreen(
-    boards: List<CompatBoard>,
-    isDrawerOpen: Boolean = false,
-    onOpenDrawer: () -> Unit,
-    onCloseDrawer: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenHelp: () -> Unit,
-    onOpenSavedThreads: () -> Unit,
-    onUpdateBoards: () -> Unit,
-    onBoardSelected: (CompatBoard) -> Unit,
-    onBoardUpsert: (CompatBoard) -> Unit,
-    onBoardDelete: (CompatBoard) -> Unit,
-    onBoardsReordered: (List<CompatBoard>) -> Unit
-) {
-    var overflowOpen by remember { mutableStateOf(false) }
-    var reorderMode by remember { mutableStateOf(false) }
-    var deleteMode by remember { mutableStateOf(false) }
-    var addDialog by remember { mutableStateOf(false) }
-    var editingBoard by remember { mutableStateOf<CompatBoard?>(null) }
-    var deletingBoard by remember { mutableStateOf<CompatBoard?>(null) }
-    var contextBoard by remember { mutableStateOf<CompatBoard?>(null) }
-    var boardOperationNotice by remember { mutableStateOf<String?>(null) }
-    val uniqueBoards = remember(boards) { distinctCompatBoards(boards) }
-    var localBoards by remember(uniqueBoards) { mutableStateOf(uniqueBoards) }
-    var draggedBoardKey by remember { mutableStateOf<String?>(null) }
-    var draggedBoardOffset by remember { mutableFloatStateOf(0f) }
-    var dragStartBoards by remember { mutableStateOf<List<CompatBoard>>(emptyList()) }
-    var dragWorkingBoards by remember { mutableStateOf<List<CompatBoard>>(emptyList()) }
-    val latestLocalBoards by rememberUpdatedState(localBoards)
-    val latestBoardsReordered by rememberUpdatedState(onBoardsReordered)
-
-    PlatformBackHandler(
-        enabled = reorderMode || deleteMode,
-        iosEdgeGestureEnabled = false
-    ) { reorderMode = false; deleteMode = false }
-    LaunchedEffect(boardOperationNotice) {
-        if (boardOperationNotice != null) {
-            delay(2_000)
-            boardOperationNotice = null
-        }
-    }
-
-    Scaffold(
-            // TopAppBar owns the status-bar inset. Let the scaffold itself use
-            // the full window; its default system-bar union includes the
-            // mandatory gesture area on API 37 and leaves a 94px black band
-            // below the content instead of the reference 63px navigation bar.
-            contentWindowInsets = WindowInsets(),
-            containerColor = CompatFutabaBackground,
-            snackbarHost = {
-                boardOperationNotice?.let { message ->
-                    Snackbar(
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .testTag("compat-board-operation-toast")
-                    ) { Text(message) }
-                }
-            },
-            topBar = {
-                TopAppBar(
-                    expandedHeight = 56.dp,
-                    title = { Text("ふたば", modifier = Modifier.padding(start = 16.dp)) },
-                    navigationIcon = {
-                        IconButton(onClick = if (isDrawerOpen) onCloseDrawer else onOpenDrawer) {
-                            Icon(
-                                if (isDrawerOpen) Icons.Filled.ArrowBack else Icons.Filled.Menu,
-                                contentDescription = if (isDrawerOpen) "戻る" else "ドロワー"
-                            )
-                        }
-                    },
-                    actions = {
-                        Box {
-                            IconButton(onClick = { overflowOpen = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "その他")
-                            }
-                            if (overflowOpen) {
-                                CompatMainOverflowPopup(
-                                    onDismiss = { overflowOpen = false },
-                                    onItem = { label ->
-                                        overflowOpen = false
-                                        when (label) {
-                                            "板一覧" -> onUpdateBoards()
-                                            "新規追加" -> addDialog = true
-                                            "並び替え" -> { reorderMode = !reorderMode; deleteMode = false }
-                                            "削除" -> { deleteMode = !deleteMode; reorderMode = false }
-                                            "設定" -> onOpenSettings()
-                                            "ヘルプ" -> onOpenHelp()
-                                            "保存済みスレッド" -> onOpenSavedThreads()
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = CompatTeal,
-                        titleContentColor = Color.White,
-                        navigationIconContentColor = Color.White,
-                        actionIconContentColor = Color.White
-                    )
-                )
-            }
-    ) { padding ->
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .navigationBarsPadding()
-                    .testTag("compat-board-list")
-            ) {
-                items(localBoards, key = { it.key }) { board ->
-                    val index = localBoards.indexOfFirst { it.key == board.key }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .graphicsLayer {
-                                if (draggedBoardKey == board.key) {
-                                    translationY = draggedBoardOffset
-                                    shadowElevation = 12.dp.toPx()
-                                    alpha = 0.1f
-                                }
-                            }
-                            .combinedClickable(
-                                onClick = { if (!reorderMode && !deleteMode) onBoardSelected(board) },
-                                onLongClick = { if (!reorderMode && !deleteMode) contextBoard = board }
-                            )
-                            .semantics(mergeDescendants = true) { role = Role.Button },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier.size(60.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                painter = painterResource(Res.drawable.board_listview_ico_default),
-                                contentDescription = "アイコン",
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(board.name, fontSize = 18.sp, maxLines = 1)
-                            Text(board.canonicalUrl, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Clip)
-                        }
-                        if (reorderMode) {
-                            Box(
-                                modifier = Modifier
-                                    .size(60.dp)
-                                    .pointerInput(board.key, reorderMode) {
-                                        detectDragGestures(
-                                            onDragStart = {
-                                                dragStartBoards = latestLocalBoards
-                                                dragWorkingBoards = latestLocalBoards
-                                                draggedBoardKey = board.key
-                                                draggedBoardOffset = 0f
-                                            },
-                                            onDrag = { change, amount ->
-                                                change.consume()
-                                                if (draggedBoardKey != board.key) return@detectDragGestures
-                                                draggedBoardOffset += amount.y
-                                                // Snapshot state is updated synchronously, while
-                                                // rememberUpdatedState needs a recomposition. Use
-                                                // the gesture's working list so two move events in
-                                                // the same frame can still cross two rows.
-                                                val currentBoards = dragWorkingBoards.ifEmpty { latestLocalBoards }
-                                                val currentIndex = currentBoards.indexOfFirst { it.key == board.key }
-                                                if (currentIndex < 0) return@detectDragGestures
-                                                val rowHeightPx = size.height.toFloat().coerceAtLeast(1f)
-                                                val targetIndex = when {
-                                                    draggedBoardOffset > rowHeightPx / 2f -> currentIndex + 1
-                                                    draggedBoardOffset < -rowHeightPx / 2f -> currentIndex - 1
-                                                    else -> currentIndex
-                                                }
-                                                if (targetIndex !in currentBoards.indices || targetIndex == currentIndex) {
-                                                    return@detectDragGestures
-                                                }
-                                                localBoards = currentBoards.toMutableList().also {
-                                                    val moved = it.removeAt(currentIndex)
-                                                    it.add(targetIndex, moved)
-                                                }.also { dragWorkingBoards = it }
-                                                draggedBoardOffset +=
-                                                    if (targetIndex > currentIndex) -rowHeightPx else rowHeightPx
-                                            },
-                                            onDragEnd = {
-                                                if (dragWorkingBoards.isNotEmpty() && dragWorkingBoards != dragStartBoards) {
-                                                    latestBoardsReordered(dragWorkingBoards)
-                                                }
-                                                dragStartBoards = emptyList()
-                                                dragWorkingBoards = emptyList()
-                                                draggedBoardKey = null
-                                                draggedBoardOffset = 0f
-                                            },
-                                            onDragCancel = {
-                                                if (dragStartBoards.isNotEmpty()) localBoards = dragStartBoards
-                                                dragStartBoards = emptyList()
-                                                dragWorkingBoards = emptyList()
-                                                draggedBoardKey = null
-                                                draggedBoardOffset = 0f
-                                            }
-                                        )
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(
-                                    painter = painterResource(Res.drawable.cmn_listview_handle),
-                                    contentDescription = "ハンドル",
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                        if (deleteMode) {
-                            IconButton(onClick = { deletingBoard = board }) {
-                                Image(
-                                    painter = painterResource(Res.drawable.cmn_listview_delete),
-                                    contentDescription = "${board.name}を削除",
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = CompatDivider)
-                }
-                if (localBoards.isEmpty()) {
-                    item { Text("板が登録されていません。右上のメニューから板を追加してください。", modifier = Modifier.padding(16.dp)) }
-                }
-            }
-    }
-
-    if (addDialog) {
-        CompatBoardEditDialog(
-            title = "新しい板の追加",
-            initialName = "",
-            initialUrl = "",
-            urlEditable = true,
-            existingBoards = localBoards,
-            onDismiss = { addDialog = false },
-            onConfirm = { name, canonical, original ->
-                boardOperationNotice = "${name}を追加しました\n"
-                onBoardUpsert(
-                    CompatBoard(
-                        key = compatBoardKey(canonical),
-                        name = name,
-                        canonicalUrl = canonical,
-                        originalUrl = original,
-                        sortOrder = localBoards.size
-                    )
-                )
-                addDialog = false
-            }
-        )
-    }
-    editingBoard?.let { board ->
-        CompatBoardEditDialog(
-            title = "名前の変更",
-            initialName = board.name,
-            initialUrl = board.originalUrl,
-            urlEditable = false,
-            existingBoards = localBoards,
-            onDismiss = { editingBoard = null },
-            onConfirm = { name, _, _ ->
-                onBoardUpsert(board.copy(name = name))
-                editingBoard = null
-            }
-        )
-    }
-    contextBoard?.let { board ->
-        CompatLegacyChoiceDialog(
-            onDismiss = { contextBoard = null },
-            choices = listOf("名前を変更", "削除する"),
-            onChoice = { choice ->
-                contextBoard = null
-                if (choice == "名前を変更") editingBoard = board else deletingBoard = board
-            }
-        )
-    }
-    deletingBoard?.let { board ->
-        AlertDialog(
-            onDismissRequest = { deletingBoard = null },
-            title = { Text("板の削除") },
-            text = { Text("本当によろしいですか？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    boardOperationNotice = "${board.name}を削除しました\n"
-                    onBoardDelete(board)
-                    deletingBoard = null
-                }) {
-                    Text("削除する", color = Color.Red)
-                }
-            },
-            dismissButton = { TextButton(onClick = { deletingBoard = null }) { Text("キャンセル") } }
-        )
-    }
-}
-
-@Composable
-private fun CompatMainOverflowPopup(
-    onDismiss: () -> Unit,
-    onItem: (String) -> Unit
-) {
-    val palette = LocalCompatibilityPalette.current
-    // The legacy PopupWindow starts 10 px below the status-bar edge. At the
-    // emulator density this is the equivalent of a zero-dp Compose popup
-    // offset; the previous negative offset made the menu touch the status bar.
-    val topInset = with(LocalDensity.current) { 0.dp.roundToPx() }
-    Popup(
-        alignment = Alignment.TopEnd,
-        offset = IntOffset(0, topInset),
-        properties = PopupProperties(focusable = true),
-        onDismissRequest = onDismiss
-    ) {
-        Surface(
-            modifier = Modifier.width(196.dp),
-            shape = RoundedCornerShape(2.dp),
-            color = compatibilityPopupSurface(palette),
-            contentColor = compatibilityPopupContent(palette),
-            tonalElevation = 0.dp,
-            shadowElevation = 8.dp
-        ) {
-            Column {
-            com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem(onDismiss)
-            com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(onDismiss)
-            // board_menu.xml in sample/1.apk labels the update action simply
-            // "板一覧"; the action itself still refreshes the board list.
-            listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ").forEach { label ->
-                TextButton(
-                    onClick = { onItem(label) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text(
-                        label,
-                        modifier = Modifier.fillMaxWidth(),
-                        color = compatibilityPopupContent(palette)
-                    )
-                }
-            }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompatModeDialog(
-    activeProfile: ExperienceProfile,
-    onDismiss: () -> Unit,
-    onSwitch: (ExperienceProfile) -> Unit
-) {
-    var selected by remember { mutableStateOf(activeProfile) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("モード") },
-        text = {
-            Column {
-                ExperienceProfile.entries.forEach { profile ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { selected = profile }.padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(if (selected == profile) "●" else "○", modifier = Modifier.width(32.dp))
-                        Column {
-                            Text(profile.displayName)
-                            if (profile == ExperienceProfile.TOSHIAKI_COMPAT) {
-                                Text("非公式の旧型タブ互換表示です。", fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { if (selected == activeProfile) onDismiss() else onSwitch(selected) }) {
-                Text("切り替える")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
 }
 
 @Composable
@@ -4203,8 +3605,9 @@ private fun CompatCatalogScreen(
             val candidates = items.mapNotNull { item ->
                 (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it }
             }.distinctBy { it.second }.take(256)
+            val storedHashes = store.loadImagePhashes(candidates.map { compatImagePhashCachePreferenceKey(it.second) })
             val cached = candidates.mapNotNull { (itemId, url) ->
-                preferences[compatImagePhashCachePreferenceKey(url)]
+                storedHashes[compatImagePhashCachePreferenceKey(url)]
                     ?.takeIf(::isValidCompatImagePhash)
                     ?.let { itemId to it }
             }.toMap()
@@ -4215,6 +3618,14 @@ private fun CompatCatalogScreen(
                 return@LaunchedEffect
             }
             catalogImageNgProgress = 0 to missing.size
+            // New hashes are written in batches instead of one store write each.
+            val unsaved = mutableMapOf<String, String>()
+            suspend fun flushHashes() {
+                if (unsaved.isEmpty()) return
+                val batch = unsaved.toMap()
+                unsaved.clear()
+                store.saveImagePhashes(batch)
+            }
             val computed = try {
                 withTimeoutOrNull(COMPAT_PHASH_BATCH_TIMEOUT_MILLIS) {
                     buildMap {
@@ -4223,7 +3634,8 @@ private fun CompatCatalogScreen(
                             fetchCompatImagePhash(client, url).getOrNull()
                         }?.let { phash ->
                             put(itemId, phash)
-                            store.savePreference(compatImagePhashCachePreferenceKey(url), phash)
+                            unsaved[compatImagePhashCachePreferenceKey(url)] = phash
+                            if (unsaved.size >= COMPAT_PHASH_SAVE_BATCH) flushHashes()
                         }
                             catalogImageNgProgress = (index + 1) to missing.size
                         }
@@ -4231,6 +3643,7 @@ private fun CompatCatalogScreen(
                 }.orEmpty()
             } finally {
                 catalogImageNgProgress = null
+                withContext(NonCancellable) { runCatching { flushHashes() } }
             }
             catalogImagePhashes = cached + computed
         }
@@ -5625,181 +5038,6 @@ private fun CompatCatalogScreen(
 
 }
 
-@Composable
-fun CompatDroppedCatalogScreen(
-    boardName: String,
-    entries: List<CompatDroppedCatalogItem>,
-    onBack: () -> Unit,
-    onOpenThread: (CatalogItem) -> Unit,
-    onDeleteDieEntries: suspend () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val palette = LocalCompatibilityPalette.current
-    var message by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(message) {
-        if (message != null) {
-            delay(2_000)
-            message = null
-        }
-    }
-    Scaffold(
-        containerColor = palette.background,
-        topBar = {
-            TopAppBar(
-                expandedHeight = 56.dp,
-                title = {
-                    Text(
-                        if (boardName.isBlank()) "消えたスレ" else "$boardName / 消えたスレ",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "戻る")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.chrome,
-                    titleContentColor = palette.chromeContent,
-                    navigationIconContentColor = palette.chromeContent
-                )
-            )
-        },
-        snackbarHost = {
-            message?.let { text -> Snackbar { Text(text) } }
-        }
-    ) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding).testTag("compat-dropped-list")
-        ) {
-            if (entries.isEmpty()) {
-                item("empty") {
-                    Text(
-                        "消えたスレはありません",
-                        color = palette.text,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("compat-dropped-empty")
-                    )
-                }
-            } else {
-                entries.groupBy(CompatDroppedCatalogItem::lastSeenAtEpochMillis).forEach { (lastSeenAt, group) ->
-                    item("header-$lastSeenAt") {
-                        Text(
-                            "${formatCompatDroppedLastSeen(lastSeenAt)} 頃まで存在",
-                            color = palette.text,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                .testTag("compat-dropped-header-$lastSeenAt"),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    itemsIndexed(group, key = { index, entry -> "dropped-${entry.item.id}:$index" }) { _, entry ->
-                        var menuOpen by remember(entry.item.id) { mutableStateOf(false) }
-                        Box {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .combinedClickable(
-                                        onClick = { onOpenThread(entry.item) },
-                                        onLongClick = { menuOpen = true }
-                                    )
-                                    .testTag("compat-dropped-row-${entry.item.id}")
-                                    .padding(5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (entry.item.thumbnailUrl != null) {
-                                    AsyncImage(
-                                        model = entry.item.thumbnailUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .size(60.dp)
-                                            .testTag("compat-dropped-thumb-${entry.item.id}"),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(60.dp)
-                                            // 1.apk's cmn_no_thumb is an intentionally blank white bitmap.
-                                            .background(Color.White)
-                                            .testTag("compat-dropped-thumb-${entry.item.id}")
-                                    )
-                                }
-                                Spacer(Modifier.width(5.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        entry.item.title.orEmpty(),
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        fontSize = 13.sp,
-                                        color = palette.text,
-                                        modifier = Modifier.testTag("compat-dropped-title-${entry.item.id}")
-                                    )
-                                    Row(
-                                        modifier = Modifier.padding(top = 2.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        val (label, badgeColor) = when (entry.classification) {
-                                            CompatCatalogDroppedClass.ISOLATED -> "隔離" to Color(0xFF1565C0)
-                                            CompatCatalogDroppedClass.DELETED -> "削除" to Color(0xFFB71C1C)
-                                            CompatCatalogDroppedClass.DIE -> "落ち" to Color(0xFF558B2F)
-                                        }
-                                        Text(
-                                            label,
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            modifier = Modifier
-                                                .background(badgeColor)
-                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                .testTag("compat-dropped-badge-${entry.item.id}")
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            "${entry.item.replyCount}res",
-                                            fontSize = 11.sp,
-                                            color = palette.text,
-                                            modifier = Modifier.testTag("compat-dropped-replies-${entry.item.id}")
-                                        )
-                                    }
-                                }
-                            }
-                            DropdownMenu(
-                                expanded = menuOpen,
-                                onDismissRequest = { menuOpen = false },
-                                shape = RoundedCornerShape(2.dp),
-                                containerColor = compatibilityPopupSurface(LocalCompatibilityPalette.current),
-                                tonalElevation = 0.dp,
-                                shadowElevation = 8.dp
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("落ちスレを履歴から削除") },
-                                    colors = compatibilityMenuItemColors(),
-                                    onClick = {
-                                        menuOpen = false
-                                        scope.launch {
-                                            try {
-                                                onDeleteDieEntries()
-                                                message = "落ちスレを削除しました"
-                                            } catch (cancelled: CancellationException) {
-                                                throw cancelled
-                                            } catch (failure: Throwable) {
-                                                Logger.e("CompatibilityCatalog", "Failed to delete dropped entries", failure)
-                                                message = failure.toCompatUserMessage("落ちスレを削除できませんでした")
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 private data class CompatCatalogDeleteRequest(
     val item: CatalogItem,
     val addThreadNg: Boolean = false,
@@ -5810,128 +5048,6 @@ private data class CompatCatalogRuleRequest(
     val item: CatalogItem,
     val kind: CompatNgKind
 )
-
-private fun CompatNgKind.compatCatalogRuleLabel(): String = when (this) {
-    CompatNgKind.CATALOG_EXTRACT -> "抽出ワード"
-    CompatNgKind.CATALOG_IGNORE -> "無視ワード"
-    CompatNgKind.CATALOG_REFUSE -> "拒否スレッド"
-    else -> "NG"
-}
-
-private fun String.normalizeCompatNgValue(): String = normalizeCompatSearchText(this)
-
-private const val COMPAT_BOARD_NAME_MAX_CHARS = 200
-private const val COMPAT_BOARD_URL_MAX_CHARS = 8_192
-
-internal data class CompatBoardInputValidation(
-    val normalizedName: String,
-    val normalizedUrl: String,
-    val canonicalUrl: String?,
-    val errorMessage: String?
-)
-
-/**
- * Mirrors BoardFragment#checkAddBoardInputData in old.apk and 1.apk.
- * The reference removes ASCII/full-width spaces from the display name,
- * removes ASCII spaces from the URL, and reports every applicable error in
- * the same order before reopening the dialog with the normalized values.
- */
-internal fun validateCompatBoardInput(
-    rawName: String,
-    rawUrl: String,
-    existingBoards: List<CompatBoard>,
-    checkDuplicate: Boolean
-): CompatBoardInputValidation {
-    val normalizedName = rawName.replace(" ", "").replace("　", "")
-    val normalizedUrl = rawUrl.replace(" ", "")
-    val canonical = canonicalizeBoardUrl(normalizedUrl)
-    val errors = buildList {
-        if (normalizedName.isEmpty()) add("表示名を入力して下さい")
-        if (normalizedUrl.isEmpty()) add("アドレスを入力して下さい")
-        if (canonical == null) add("正しいURLを入力して下さい\nhttps://***.2chan.net/***/")
-        if (checkDuplicate && canonical != null && existingBoards.any { it.canonicalUrl == canonical }) {
-            add("既に登録されています")
-        }
-    }
-    return CompatBoardInputValidation(
-        normalizedName = normalizedName,
-        normalizedUrl = canonical ?: normalizedUrl,
-        canonicalUrl = canonical,
-        errorMessage = errors.takeIf { it.isNotEmpty() }?.joinToString("\n")
-    )
-}
-
-@Composable
-private fun CompatBoardEditDialog(
-    title: String,
-    initialName: String,
-    initialUrl: String,
-    urlEditable: Boolean,
-    existingBoards: List<CompatBoard>,
-    onDismiss: () -> Unit,
-    onConfirm: (name: String, canonicalUrl: String, originalUrl: String) -> Unit
-) {
-    var name by remember(initialName) { mutableStateOf(initialName) }
-    var url by remember(initialUrl, urlEditable) {
-        // The legacy APK shows `https://` as a hint, not as editable text.
-        // Keeping it out of the value avoids producing `https://https://...`
-        // when a user enters the complete URL (the normal APK workflow).
-        mutableStateOf(initialUrl)
-    }
-    var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.width(355.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-                    Column(modifier = Modifier.padding(start = 16.dp)) {
-                TextField(
-                    value = name,
-                    onValueChange = { name = it.take(COMPAT_BOARD_NAME_MAX_CHARS) },
-                    modifier = Modifier.testTag("compat-board-name-input"),
-                    label = { Text("表示名") },
-                    singleLine = true
-                )
-                TextField(
-                    value = url,
-                    onValueChange = { if (urlEditable) url = it.take(COMPAT_BOARD_URL_MAX_CHARS) },
-                    modifier = Modifier.testTag("compat-board-url-input"),
-                    enabled = urlEditable,
-                    label = { Text("URL") },
-                    placeholder = { if (urlEditable) Text("https://") },
-                    singleLine = true
-                )
-                error?.let { Text(it, color = Color.Red, fontSize = 12.sp) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val validation = validateCompatBoardInput(
-                    rawName = name,
-                    rawUrl = url,
-                    existingBoards = existingBoards,
-                    checkDuplicate = urlEditable
-                )
-                if (!urlEditable && validation.normalizedName.isEmpty()) {
-                    // BoardEditDialogFragment closes without changing the row
-                    // when its only editable value is empty.
-                    onDismiss()
-                    return@TextButton
-                }
-                error = validation.errorMessage
-                name = validation.normalizedName
-                url = validation.normalizedUrl
-                if (error == null) {
-                    validation.canonicalUrl?.let { value ->
-                        onConfirm(validation.normalizedName, value, validation.normalizedUrl)
-                    }
-                }
-            }) { Text(if (urlEditable) "追加する" else "更新する") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
-}
 
 @Composable
 private fun CompatThreadScreen(
@@ -6000,7 +5116,10 @@ private fun CompatThreadScreen(
     val tabIndex = tabs.indexOfFirst { it.key == tab.key }
     val previousTab = tabs.getOrNull(tabIndex - 1)
     val nextTab = tabs.getOrNull(tabIndex + 1)
-    val pagerNeighbor = if (pagerOffset.value < 0f) nextTab else previousTab
+    // Observe only the swipe direction: reading the animated offset here re-ran
+    // this whole screen body on every drag and settle frame.
+    val pagerShowsNext by remember(pagerOffset) { derivedStateOf { pagerOffset.value < 0f } }
+    val pagerNeighbor = if (pagerShowsNext) nextTab else previousTab
     // Keep a deliberate dead zone before the pager captures a gesture. The
     // reference app does not change tabs from a tiny/diagonal reading drag.
     val pagerTouchSlopPx = with(LocalDensity.current) { 16.dp.toPx() }
@@ -6097,19 +5216,24 @@ private fun CompatThreadScreen(
             .map { (key, _) -> key.removePrefix(prefix) }
             .toSet()
     }
-    var snapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    var snapshot by snapshotState
     val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
-    var undoRefreshSnapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
-    var newReplyNotice by remember(tab.key) { mutableStateOf<CompatNewReplyNotice?>(null) }
-    var manualRefreshNotice by remember(tab.key) {
+    val undoRefreshSnapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    var undoRefreshSnapshot by undoRefreshSnapshotState
+    val newReplyNoticeState = remember(tab.key) { mutableStateOf<CompatNewReplyNotice?>(null) }
+    var newReplyNotice by newReplyNoticeState
+    val manualRefreshNoticeState = remember(tab.key) {
         mutableStateOf<CompatManualRefreshNotice?>(null)
     }
+    var manualRefreshNotice by manualRefreshNoticeState
     var loading by remember(tab.key) { mutableStateOf(true) }
     val loadMutex = remember(tab.key) { Mutex() }
-    var error by remember(tab.key) { mutableStateOf<String?>(null) }
+    val errorState = remember(tab.key) { mutableStateOf<String?>(null) }
+    var error by errorState
     fun launchThreadStoreSafely(
         operation: String,
-        userMessage: String = "設定の保存に失敗しました",
+        userMessage: String = COMPAT_THREAD_STORE_FAILURE_MESSAGE,
         block: suspend () -> Unit
     ) {
         scope.launch {
@@ -6123,10 +5247,12 @@ private fun CompatThreadScreen(
             }
         }
     }
-    var searchActive by rememberSaveable(tab.key) { mutableStateOf(false) }
+    val searchActiveState = rememberSaveable(tab.key) { mutableStateOf(false) }
+    var searchActive by searchActiveState
     var searchQuery by rememberSaveable(tab.key) { mutableStateOf("") }
     var searchMatchIndex by rememberSaveable(tab.key) { mutableStateOf(0) }
-    var searchBackDismissStages by rememberSaveable(tab.key) { mutableStateOf(2) }
+    val searchBackDismissStagesState = rememberSaveable(tab.key) { mutableStateOf(2) }
+    var searchBackDismissStages by searchBackDismissStagesState
     // These are observations of the current IME window, not user state.  Do
     // not restore them with the search query: after state restoration the old
     // `true` value was mistaken for a real keyboard-dismiss transition and
@@ -6135,47 +5261,72 @@ private fun CompatThreadScreen(
     var searchImeWasVisible by remember(tab.key) { mutableStateOf(false) }
     var searchFocusLostWhileImeVisible by remember(tab.key) { mutableStateOf(false) }
     var searchFieldFocused by remember(tab.key) { mutableStateOf(false) }
-    var quoteStack by remember(tab.key) { mutableStateOf<List<CompatQuoteFrame>>(emptyList()) }
+    val quoteStackState = remember(tab.key) { mutableStateOf<List<CompatQuoteFrame>>(emptyList()) }
+    var quoteStack by quoteStackState
     // The old APK opens a full-width PopupWindow for a tapped >> reference.  Keep
     // this separate from the extraction stack: a quote preview is transient and
     // must not become a new navigation level or alter the tab history.
-    var replyPopupPosts by remember(tab.key) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
-    var replyPopupAnchorY by remember(tab.key) { mutableStateOf(0) }
+    val replyPopupPostsState = remember(tab.key) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
+    var replyPopupPosts by replyPopupPostsState
+    val replyPopupAnchorYState = remember(tab.key) { mutableStateOf(0) }
+    var replyPopupAnchorY by replyPopupAnchorYState
     // LazyListInfo offsets are viewport-relative; PopupWindow coordinates are
     // window-relative in the reference APK. Keep the Scaffold content inset.
-    var threadContentTopPx by remember(tab.key) { mutableStateOf(0) }
-    var contextPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var reportPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var delPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var selectionState by remember(tab.key) { mutableStateOf<CompatPostSelectionState?>(null) }
-    var ngPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var deletePost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var deletePassword by remember(tab.key) { mutableStateOf("") }
-    var deleteImageOnly by remember(tab.key) { mutableStateOf(false) }
-    var extractionMenuOpen by remember(tab.key) { mutableStateOf(false) }
-    var extractionKeywordOpen by remember(tab.key) { mutableStateOf(false) }
-    var extractionKeyword by remember(tab.key) { mutableStateOf("") }
+    val threadContentTopPxState = remember(tab.key) { mutableStateOf(0) }
+    var threadContentTopPx by threadContentTopPxState
+    val contextPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var contextPost by contextPostState
+    val reportPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var reportPost by reportPostState
+    val delPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var delPost by delPostState
+    val selectionStateHolder = remember(tab.key) { mutableStateOf<CompatPostSelectionState?>(null) }
+    var selectionState by selectionStateHolder
+    val ngPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var ngPost by ngPostState
+    val deletePostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var deletePost by deletePostState
+    val deletePasswordState = remember(tab.key) { mutableStateOf("") }
+    var deletePassword by deletePasswordState
+    val deleteImageOnlyState = remember(tab.key) { mutableStateOf(false) }
+    var deleteImageOnly by deleteImageOnlyState
+    val extractionMenuOpenState = remember(tab.key) { mutableStateOf(false) }
+    var extractionMenuOpen by extractionMenuOpenState
+    val extractionKeywordOpenState = remember(tab.key) { mutableStateOf(false) }
+    var extractionKeywordOpen by extractionKeywordOpenState
+    val extractionKeywordState = remember(tab.key) { mutableStateOf("") }
+    var extractionKeyword by extractionKeywordState
     var headerExtractionPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var mediaContextPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var imageNgRegistration by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var thumbnailReloadTokens by remember(tab.key) { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var ascii2dRegisterPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
-    var ascii2dRegistrationUrl by remember(tab.key) { mutableStateOf("") }
+    val mediaContextPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var mediaContextPost by mediaContextPostState
+    val imageNgRegistrationState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var imageNgRegistration by imageNgRegistrationState
+    val thumbnailReloadTokensState = remember(tab.key) { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var thumbnailReloadTokens by thumbnailReloadTokensState
+    val ascii2dRegisterPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    var ascii2dRegisterPost by ascii2dRegisterPostState
+    val ascii2dRegistrationUrlState = remember(tab.key) { mutableStateOf("") }
+    var ascii2dRegistrationUrl by ascii2dRegistrationUrlState
     var reverseSearchResult by remember(tab.key) { mutableStateOf<CompatImageSearchResult?>(null) }
-    var archiveSearchOpen by remember(tab.key) { mutableStateOf(false) }
+    val archiveSearchOpenState = remember(tab.key) { mutableStateOf(false) }
+    var archiveSearchOpen by archiveSearchOpenState
     val toolbarItems = rememberCompatThreadToolbarItems(
         tab.key, initialToolbarItems, toolbarRefreshToken, store
     )
-    var otherMenuRoute by remember { mutableStateOf<CompatOtherMenuRoute?>(null) }
-    var scrollDialogOpen by remember(tab.key) { mutableStateOf(false) }
-    var managedNgKinds by remember { mutableStateOf<Set<CompatNgKind>?>(null) }
+    val otherMenuRouteState = remember { mutableStateOf<CompatOtherMenuRoute?>(null) }
+    var otherMenuRoute by otherMenuRouteState
+    val scrollDialogOpenState = remember(tab.key) { mutableStateOf(false) }
+    var scrollDialogOpen by scrollDialogOpenState
+    val managedNgKindsState = remember { mutableStateOf<Set<CompatNgKind>?>(null) }
+    var managedNgKinds by managedNgKindsState
     var savingPage by remember(tab.key) { mutableStateOf(false) }
     var pageSaveJob by remember(tab.key) { mutableStateOf<Job?>(null) }
     var pageSaveCancelRequested by remember(tab.key) { mutableStateOf(false) }
     val auxiliaryPageSaveProgressFlow = remember(tab.key) { kotlinx.coroutines.flow.MutableStateFlow<SaveProgress?>(null) }
     val auxiliaryPageSaveProgress by auxiliaryPageSaveProgressFlow.collectAsState()
     var pageSavePartialSavedCount by remember(tab.key) { mutableIntStateOf(0) }
-    var readingAloud by remember(tab.key) { mutableStateOf(false) }
+    val readingAloudState = remember(tab.key) { mutableStateOf(false) }
+    var readingAloud by readingAloudState
     var readAloudDialogOpen by remember(tab.key) { mutableStateOf(false) }
     var readAloudDisplayPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
     var readAloudStatus by remember(tab.key) { mutableStateOf<String?>(null) }
@@ -6186,7 +5337,8 @@ private fun CompatThreadScreen(
     // last local snapshot. Keep an immediate signal for the read-aloud loop;
     // waiting for the parent tab Flow to recompose would allow another poll.
     var readAloudThreadGone by remember(tab.key) { mutableStateOf(tab.isDead) }
-    var autoScrolling by remember(tab.key) { mutableStateOf(false) }
+    val autoScrollingState = remember(tab.key) { mutableStateOf(false) }
+    var autoScrolling by autoScrollingState
     var autoScrollTouchGeneration by remember(tab.key) { mutableIntStateOf(0) }
     val clipboard = LocalClipboardManager.current
     val focusManager = LocalFocusManager.current
@@ -6366,26 +5518,6 @@ private fun CompatThreadScreen(
         textSpeaker = it
     }
 
-    fun compatPostsForSave(includeFullImages: Boolean, includeThumbnails: Boolean): List<Post> =
-        snapshot?.posts.orEmpty().map { post ->
-            Post(
-                id = post.postNo,
-                order = post.position,
-                author = post.author,
-                subject = post.subject,
-                timestamp = post.timestamp,
-                posterId = post.posterId,
-                messageHtml = post.messageHtml,
-                imageUrl = post.imageUrl.takeIf { includeFullImages },
-                thumbnailUrl = post.thumbnailUrl.takeIf { includeThumbnails },
-                saidaneLabel = post.saidaneLabel,
-                isDeleted = post.isDeleted,
-                isIsolated = post.isIsolated,
-                referencedCount = post.referencedCount,
-                mail = post.mail
-            )
-        }
-
     val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
         error = it.toCompatUserMessage("保存先の設定を記録できませんでした")
     }
@@ -6505,7 +5637,7 @@ private fun CompatThreadScreen(
                         } else {
                             val includeFull = mode == "save_all"
                             val includeThumb = mode == "save_thumb" || mode == "save_all"
-                            val posts = compatPostsForSave(includeFull, includeThumb)
+                            val posts = compatPostsForSave(snapshot, includeFull, includeThumb)
                             val result = pageSaver?.let { saver ->
                                     saver.saveThread(
                                         threadId = tab.threadNo,
@@ -6551,11 +5683,6 @@ private fun CompatThreadScreen(
         if (savingPage) return
         withSaveDestination { saveCompatPageNow(mode, it) }
     }
-    fun snapshotThumbnail(snapshot: CompatThreadSnapshot?): String? = snapshot
-        ?.posts
-        ?.firstOrNull { it.position == 0 || it.postNo == tab.threadNo }
-        ?.let { post -> post.thumbnailUrl ?: post.imageUrl }
-
     suspend fun load(
         manual: Boolean,
         refreshOnActivation: Boolean = false,
@@ -6612,7 +5739,7 @@ private fun CompatThreadScreen(
             // OP thumbnail. Persist the first post's media so tabs and history
             // do not stay transparent after opening a cached/dead thread.
             if (tab.thumbnailUrl.isNullOrBlank()) {
-                snapshotThumbnail(cached)?.let { thumbnail ->
+                compatSnapshotThumbnail(cached, tab.threadNo)?.let { thumbnail ->
                     val cachedTab = tab.copy(thumbnailUrl = thumbnail)
                     store.updateTab(cachedTab)
                     store.upsertHistory(
@@ -6776,7 +5903,7 @@ private fun CompatThreadScreen(
                     if (committed) {
                         val replyCount = page.compatReplyCount()
                         val statusFlags = parseCompatThreadStatusFlags(page.deletedNotice)
-                        val thumbnailUrl = tab.thumbnailUrl ?: snapshotThumbnail(newSnapshot)
+                        val thumbnailUrl = tab.thumbnailUrl ?: compatSnapshotThumbnail(newSnapshot, tab.threadNo)
                         store.updateTab(
                             tab.copy(
                                 title = resolvedThreadTitle,
@@ -7306,9 +6433,10 @@ private fun CompatThreadScreen(
         // ordinary post-media route as a safe fallback before opening a URL.
         return openViewerFromThread(fallbackPost)
     }
-    var posterIdentityProgress by remember(tab.key) {
+    val posterIdentityProgressState = remember(tab.key) {
         mutableStateOf<Map<String, List<CompatPosterIdentityProgress>>>(emptyMap())
     }
+    var posterIdentityProgress by posterIdentityProgressState
     LaunchedEffect(snapshot?.revision) {
         val posts = snapshot?.posts.orEmpty()
         posterIdentityProgress = if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
@@ -7597,7 +6725,12 @@ private fun CompatThreadScreen(
     // Compose BackHandler.  Track the visible-to-hidden transition so the
     // staged APK-compatible back behavior remains identical on compact and
     // full-size devices (three physical backs: hide IME, clear focus, close).
-    val searchImeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    // Only visibility matters; the IME height changes on every animation frame.
+    val imeInsets = WindowInsets.ime
+    val imeDensity = LocalDensity.current
+    val searchImeVisible by remember(imeInsets, imeDensity) {
+        derivedStateOf { imeInsets.getBottom(imeDensity) > 0 }
+    }
     LaunchedEffect(searchActive, searchImeVisible) {
         if (!searchActive) {
             searchImeWasVisible = false
@@ -7704,112 +6837,36 @@ private fun CompatThreadScreen(
                 persistScrollAnchor(anchor)
             }
     }
-    val threadCommands = listOf(
-        CompatToolbarCommand("post", compatToolbarArtwork(CompatToolbarSurface.THREAD, "post"), "書き込み", onClick = onOpenPost),
-        CompatToolbarCommand("reload", compatToolbarArtwork(CompatToolbarSurface.THREAD, "reload"), "リロード") { scope.launch { load(manual = true) } },
-        CompatToolbarCommand(
-            "undo",
-            compatToolbarArtwork(CompatToolbarSurface.THREAD, "undo"),
-            "リロード前に戻す",
-            onClick = undoRefreshSnapshot?.let {
-                {
-                    snapshot = it
-                    undoRefreshSnapshot = null
-                    newReplyNotice = null
-                    manualRefreshNotice = null
-                    error = "リロード前の表示に戻しました"
-                }
-            }
-        ),
-        CompatToolbarCommand("search", compatToolbarArtwork(CompatToolbarSurface.THREAD, "search"), "レス検索") {
-            quoteStack = emptyList()
-            replyPopupPosts = emptyList()
-            searchBackDismissStages = 2
-            searchActive = true
-        },
-        CompatToolbarCommand("top", compatToolbarArtwork(CompatToolbarSurface.THREAD, "top"), "ページ最上部へ") { scope.launch { listState.scrollToItem(0) } },
-        CompatToolbarCommand("page_up", compatToolbarArtwork(CompatToolbarSurface.THREAD, "page_up"), "1ページ上へ") {
-            scope.launch { listState.animateScrollToItem((listState.firstVisibleItemIndex - 6).coerceAtLeast(0)) }
-        },
-        CompatToolbarCommand("page_down", compatToolbarArtwork(CompatToolbarSurface.THREAD, "page_down"), "1ページ下へ") {
-            scope.launch {
-                val last = threadListLastIndex
-                listState.animateScrollToItem((listState.firstVisibleItemIndex + 6).coerceAtMost(last))
-            }
-        },
-        CompatToolbarCommand("bottom", compatToolbarArtwork(CompatToolbarSurface.THREAD, "bottom"), "ページ最下部へ") {
-            scope.launch {
-                scrollToNewRepliesOrBottom()
-            }
-        },
-        CompatToolbarCommand("gallery", compatToolbarArtwork(CompatToolbarSurface.THREAD, "gallery"), "画像一覧", onClick = onOpenGallery),
-        CompatToolbarCommand(
-            "tab",
-            compatToolbarArtwork(
-                CompatToolbarSurface.THREAD,
-                "tab",
-                selected = hasCompatTabToolbarUpdate(tabs)
-            ),
-            "タブ一覧",
-            showUpdateBadge = hasCompatTabToolbarUpdate(tabs),
-            onClick = onToggleSelector
-        ),
-        CompatToolbarCommand("privacy", compatToolbarArtwork(CompatToolbarSurface.THREAD, "privacy"), "プライバシー") {
-            launchThreadStoreSafely("thread privacy persistence") {
-                store.savePreference(COMPAT_COMMON_PRIVACY_STORAGE_KEY, if (threadPrivacyEnabled) "OFF" else "ON")
-            }
-        },
-        CompatToolbarCommand("extract", compatToolbarArtwork(CompatToolbarSurface.THREAD, "extract"), "レス抽出") { extractionMenuOpen = true },
-        CompatToolbarCommand(
-            "bypass",
-            compatToolbarArtwork(
-                CompatToolbarSurface.THREAD,
-                "bypass",
-                selected = preferences[COMPAT_CACHE_ENABLED_KEY] != "ON"
-            ),
-            "通信の軽量化"
-        ) {
-            val enabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON"
-            val toggle = nextCompatCacheToggle(enabled)
-            launchThreadStoreSafely("thread cache preference persistence") {
-                store.savePreference(COMPAT_CACHE_ENABLED_KEY, toggle.storedValue)
-                error = toggle.message
-            }
-        },
-        CompatToolbarCommand("scroll", compatToolbarArtwork(CompatToolbarSurface.THREAD, "scroll"), "スクロールバー") {
-            scrollDialogOpen = true
-        },
-        CompatToolbarCommand("check", compatToolbarArtwork(CompatToolbarSurface.THREAD, "check"), "更新の確認") {
-            error = "開いているスレの更新を確認しています"
-            onCheckUpdates()
-        },
-        CompatToolbarCommand("close", compatToolbarArtwork(CompatToolbarSurface.THREAD, "close"), "スレを閉じる") { closeCurrentThread() },
-        CompatToolbarCommand(
-            "quickng",
-            compatToolbarArtwork(CompatToolbarSurface.THREAD, "quickng", selected = threadNgEnabled),
-            "NG切り替え",
-            onClick = {
-                launchThreadStoreSafely("thread NG preference persistence") {
-                    store.savePreference(
-                        compatPreferenceStorageKey("thread", "threadNg"),
-                        if (threadNgEnabled) "OFF" else "ON"
-                    )
-                }
-            }
-        ),
-        CompatToolbarCommand("drawer", compatToolbarArtwork(CompatToolbarSurface.THREAD, "drawer"), "ドロワーを開く", onClick = onOpenDrawer),
-        CompatToolbarCommand(
-            "autoscroll",
-            compatToolbarArtwork(
-                CompatToolbarSurface.THREAD,
-                "autoscroll",
-                selected = autoScrolling
-            ),
-            "オートスクロール",
-            selected = autoScrolling
-        ) {
-            autoScrolling = !autoScrolling
-        }
+    val threadCommands = compatThreadToolbarCommands(
+        tabs = tabs,
+        preferences = preferences,
+        store = store,
+        scope = scope,
+        listState = listState,
+        threadListLastIndex = threadListLastIndex,
+        threadNgEnabled = threadNgEnabled,
+        threadPrivacyEnabled = threadPrivacyEnabled,
+        onOpenPost = onOpenPost,
+        onOpenGallery = onOpenGallery,
+        onToggleSelector = onToggleSelector,
+        onCheckUpdates = onCheckUpdates,
+        onOpenDrawer = onOpenDrawer,
+        loadManually = { load(manual = true) },
+        scrollToNewRepliesOrBottom = ::scrollToNewRepliesOrBottom,
+        closeCurrentThread = ::closeCurrentThread,
+        launchStore = ::launchThreadStoreSafely,
+        snapshotState = snapshotState,
+        undoRefreshSnapshotState = undoRefreshSnapshotState,
+        newReplyNoticeState = newReplyNoticeState,
+        manualRefreshNoticeState = manualRefreshNoticeState,
+        errorState = errorState,
+        quoteStackState = quoteStackState,
+        replyPopupPostsState = replyPopupPostsState,
+        searchBackDismissStagesState = searchBackDismissStagesState,
+        searchActiveState = searchActiveState,
+        extractionMenuOpenState = extractionMenuOpenState,
+        scrollDialogOpenState = scrollDialogOpenState,
+        autoScrollingState = autoScrollingState
     )
     Scaffold(
         containerColor = CompatFutabaBackground,
@@ -8315,329 +7372,59 @@ private fun CompatThreadScreen(
         )
     }
     otherMenuRoute?.let { route ->
-        val menuItems = compatThreadOtherMenu(
+        CompatThreadOtherMenuDialog(
             route = route,
-            ngEnabled = threadNgEnabled,
+            tab = tab,
+            ngRules = ngRules,
+            preferences = preferences,
+            store = store,
+            httpClient = httpClient,
             canUndoClose = canUndoClose,
-            ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
-            cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
-            activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key }
-        )
-        CompatHierarchicalOtherMenuDialog(
-            route = route,
-            items = menuItems,
-            onDismiss = { otherMenuRoute = null },
-            onItem = { menuItem ->
-                menuItem.childRoute?.let { child ->
-                    otherMenuRoute = child
-                    return@CompatHierarchicalOtherMenuDialog
-                }
-                otherMenuRoute = null
-                when (menuItem.key) {
-                    "save_html", "save_thumb", "save_all", "save_images_zip", "save_images_folder" ->
-                        saveCompatPage(menuItem.key)
-                    "top" -> scope.launch { listState.scrollToItem(0) }
-                    "page_up" -> scope.launch {
-                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 6).coerceAtLeast(0))
-                    }
-                    "page_down" -> scope.launch {
-                        listState.animateScrollToItem(
-                            (listState.firstVisibleItemIndex + 6).coerceAtMost(threadListLastIndex)
-                        )
-                    }
-                    "bottom" -> scope.launch {
-                        scrollToNewRepliesOrBottom()
-                    }
-                    "ng_header" -> managedNgKinds = setOf(CompatNgKind.THREAD_POST_NO, CompatNgKind.THREAD_POSTER_ID)
-                    "ng_word" -> managedNgKinds = setOf(CompatNgKind.THREAD_WORD)
-                    "ng_ignore" -> managedNgKinds = setOf(CompatNgKind.THREAD_IGNORE)
-                    "ng_refuse" -> managedNgKinds = setOf(CompatNgKind.THREAD_REFUSE)
-                    "ng_image" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE)
-                    "ng_image_phash" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE_PHASH)
-                    "ng_toggle" -> scope.launch {
-                        store.savePreference(
-                            compatPreferenceStorageKey("thread", "threadNg"),
-                            if (threadNgEnabled) "OFF" else "ON"
-                        )
-                    }
-                    "url_browser" -> openUrl(tab.originalUrl)
-                    "url_copy" -> {
-                        clipboard.setText(AnnotatedString(tab.originalUrl))
-                        error = "URLをコピーしました"
-                    }
-                    "url_share" -> share(tab.originalUrl, "text/plain", null)
-                    "url_ftbucket" -> openUrl(buildCompatFtbucketUrl(tab.originalUrl))
-                    "url_forest" -> buildCompatForestUrl(tab.originalUrl)?.let(openUrl)
-                        ?: run { error = "ふたばフォレストはmay板のスレだけ対応しています" }
-                    "url_futapo" -> buildCompatFutapoUrl(tab.originalUrl)?.let(openUrl)
-                        ?: run { error = "ふたポのURLを作成できませんでした（may/img板のみ対応）" }
-                    "url_tsumamne" -> scope.launch {
-                        registerCompatTsumanne(httpClient ?: run {
-                            error = "通信機能を初期化できませんでした"
-                            return@launch
-                        }, tab.originalUrl, tab.title)
-                            .onSuccess { openUrl(it); error = "つまんね。に登録しました" }
-                            .onFailure { error = it.toCompatUserMessage("つまんね。への登録に失敗しました") }
-                    }
-                    "search" -> {
-                        quoteStack = emptyList()
-                        replyPopupPosts = emptyList()
-                        searchBackDismissStages = 2
-                        searchActive = true
-                    }
-                    "extract" -> extractionMenuOpen = true
-                    "extract_own_direct", "extract_own" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.OWN,
-                        "自分の書き込み",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_saidane" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.MANY_SAIDANE,
-                        "そうだねが多い",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_replies" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.MANY_REPLIES,
-                        "返信が多い",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_deleted" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.DELETED,
-                        "削除されたレス",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_url" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.CONTAINS_URL,
-                        "URLを含むレス",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_image" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.HAS_IMAGE,
-                        "画像レス",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_ng" -> openCompatExtraction(
-                        scope,
-                        CompatExtractionKind.NG,
-                        "NGにマッチしたレス (タップでdel、長押しで削除)",
-                        snapshot,
-                        tab,
-                        ngRules,
-                        ownPostNos,
-                        saidaneExtractThreshold,
-                        quoteExtractThreshold
-                    ) { frame -> quoteStack = quoteStack + frame }
-                    "extract_keyword" -> {
-                        extractionKeyword = ""
-                        extractionKeywordOpen = true
-                    }
-                    "read_aloud" -> {
-                        if (readingAloud) {
-                            stopReadAloud("読み上げを停止しました")
-                        } else {
-                            startReadAloud()
-                        }
-                    }
-                    "autoscroll" -> autoScrolling = !autoScrolling
-                    "cache" -> archiveSearchOpen = true
-                    "privacy" -> launchThreadStoreSafely("thread privacy persistence") {
-                        val enabled = preferences.compatPrivacyEnabled()
-                        store.savePreference(COMPAT_COMMON_PRIVACY_STORAGE_KEY, if (enabled) "OFF" else "ON")
-                    }
-                    "bypass" -> {
-                        val enabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON"
-                        val toggle = nextCompatCacheToggle(enabled)
-                        launchThreadStoreSafely("thread cache preference persistence") {
-                            store.savePreference(COMPAT_CACHE_ENABLED_KEY, toggle.storedValue)
-                            error = toggle.message
-                        }
-                    }
-                    "check" -> {
-                        error = "開いているスレの更新を確認しています"
-                        onCheckUpdates()
-                    }
-                    "close" -> closeCurrentThread()
-                    "undo" -> onUndoClose()
-                }
-            }
+            clipboard = clipboard,
+            openUrl = openUrl,
+            share = share,
+            ownPostNos = ownPostNos,
+            saidaneExtractThreshold = saidaneExtractThreshold,
+            quoteExtractThreshold = quoteExtractThreshold,
+            threadNgEnabled = threadNgEnabled,
+            toolbarItems = toolbarItems,
+            listState = listState,
+            threadListLastIndex = threadListLastIndex,
+            scope = scope,
+            onCheckUpdates = onCheckUpdates,
+            onUndoClose = onUndoClose,
+            saveCompatPage = ::saveCompatPage,
+            scrollToNewRepliesOrBottom = ::scrollToNewRepliesOrBottom,
+            startReadAloud = { startReadAloud() },
+            stopReadAloud = ::stopReadAloud,
+            closeCurrentThread = ::closeCurrentThread,
+            launchStore = ::launchThreadStoreSafely,
+            otherMenuRouteState = otherMenuRouteState,
+            managedNgKindsState = managedNgKindsState,
+            errorState = errorState,
+            snapshotState = snapshotState,
+            quoteStackState = quoteStackState,
+            replyPopupPostsState = replyPopupPostsState,
+            searchBackDismissStagesState = searchBackDismissStagesState,
+            searchActiveState = searchActiveState,
+            extractionMenuOpenState = extractionMenuOpenState,
+            extractionKeywordState = extractionKeywordState,
+            extractionKeywordOpenState = extractionKeywordOpenState,
+            readingAloudState = readingAloudState,
+            autoScrollingState = autoScrollingState,
+            archiveSearchOpenState = archiveSearchOpenState
         )
     }
     managedNgKinds?.let { kinds ->
-        val threadReferenceKind = when {
-            CompatNgKind.THREAD_REFUSE in kinds -> CompatNgKind.THREAD_REFUSE
-            CompatNgKind.THREAD_IGNORE in kinds -> CompatNgKind.THREAD_IGNORE
-            else -> null
-        }
-        val imageReferenceSource = CompatImageNgSource.THREAD.takeIf {
-            kinds.any { it in compatImageNgKinds(CompatImageNgSource.THREAD) }
-        }
-        val managementKinds = threadReferenceKind?.let(::compatThreadReferenceKinds) ?: kinds
-        val managementRules = when {
-            threadReferenceKind != null -> compatThreadReferenceRules(ngRules, tab.key, threadReferenceKind)
-            imageReferenceSource != null -> compatImageNgManagementRules(
-                ngRules,
-                tab.boardKey,
-                imageReferenceSource,
-                legacyThreadKey = tab.key
-            )
-            else -> ngRules.filter { rule ->
-                rule.kind in kinds && (rule.scopeKey == tab.key || rule.scopeKey == "*")
-            }
-        }
-        CompatNgRuleManagementDialog(
-            title = when {
-                CompatNgKind.THREAD_IMAGE_PHASH in kinds -> "NG画像(pHash)"
-                CompatNgKind.THREAD_IMAGE in kinds -> "NG画像"
-                CompatNgKind.THREAD_IGNORE in kinds -> "ＮＧワード"
-                CompatNgKind.THREAD_REFUSE in kinds -> "ＮＧヘッダー"
-                CompatNgKind.THREAD_WORD in kinds -> "NGワード"
-                else -> "NGヘッダー"
-            },
-            rules = managementRules,
-            imageReferenceBoardName = tab.boardName.takeIf { imageReferenceSource != null },
-            phashThreshold = imageNgPhashThreshold.takeIf {
-                CompatNgKind.THREAD_IMAGE in kinds || CompatNgKind.THREAD_IMAGE_PHASH in kinds
-            },
-            onPhashThresholdChange = { value ->
-                launchThreadStoreSafely("thread image threshold persistence") {
-                    store.savePreference(
-                        compatPreferenceStorageKey("thread", "threadImageNgPhashThreshold"),
-                        value.toString()
-                    )
-                }
-            },
-            onDelete = { rule ->
-                launchThreadStoreSafely("thread NG deletion") { store.deleteNgRule(rule.id) }
-            },
-            onDeleteAll = { rulesToDelete ->
-                launchThreadStoreSafely("thread NG bulk deletion") {
-                    val ids = if (threadReferenceKind != null) {
-                        ngRules.filter { it.kind in managementKinds }.map(CompatNgRule::id)
-                    } else {
-                        rulesToDelete.map(CompatNgRule::id)
-                    }
-                    store.deleteNgRules(ids)
-                }
-            },
-            onEdit = { rule, value, allThreads, memo ->
-                val displayValue = when {
-                    threadReferenceKind != null -> cleanCompatThreadReferenceWord(value)
-                    imageReferenceSource != null -> rule.normalizedValue
-                    else -> value
-                }
-                val normalized = if (imageReferenceSource != null) {
-                    rule.normalizedValue
-                } else {
-                    displayValue.normalizeCompatNgValue()
-                }
-                if (normalized.isBlank()) {
-                    error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
-                } else if (
-                    threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
-                    isCompatThreadRefuseForbidden(displayValue)
-                ) {
-                    error = "登録できない単語です"
-                } else {
-                    launchThreadStoreSafely("thread NG edit", "NGの更新に失敗しました") {
-                        val scopeKey = if (allThreads) "*" else if (
-                            rule.kind == CompatNgKind.THREAD_IMAGE || rule.kind == CompatNgKind.THREAD_IMAGE_PHASH
-                        ) tab.boardKey else tab.key
-                        store.deleteNgRule(rule.id)
-                        val updatedKind = threadReferenceKind ?: rule.kind
-                        val updated = store.upsertNgRule(
-                            rule.copy(
-                                id = compatNgRuleId(updatedKind, scopeKey, normalized),
-                                kind = updatedKind,
-                                scopeKey = scopeKey,
-                                normalizedValue = normalized,
-                                memo = if (threadReferenceKind != null) displayValue else memo,
-                                createdAtEpochMillis = if (imageReferenceSource != null) {
-                                    rule.createdAtEpochMillis
-                                } else {
-                                    Clock.System.now().toEpochMilliseconds()
-                                }
-                            )
-                        )
-                        error = if (updated) {
-                            if (imageReferenceSource != null) "更新しました" else "$displayValue に更新しました"
-                        } else {
-                            "NGを更新できませんでした"
-                        }
-                    }
-                }
-            },
-            addScopeLabel = "全スレッドに適用",
-            onAdd = if (kinds.any { it == CompatNgKind.THREAD_IMAGE || it == CompatNgKind.THREAD_IMAGE_PHASH }) null else { value, allThreads ->
-                val displayValue = if (threadReferenceKind != null) {
-                    cleanCompatThreadReferenceWord(value)
-                } else value
-                val normalized = displayValue.normalizeCompatNgValue()
-                if (normalized.isBlank()) {
-                    error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
-                } else if (
-                    threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
-                    isCompatThreadRefuseForbidden(displayValue)
-                ) {
-                    error = "登録できない単語です"
-                } else {
-                    launchThreadStoreSafely("thread NG add", "NGの登録に失敗しました") {
-                        val scopeKey = if (allThreads) "*" else tab.key
-                        val now = Clock.System.now().toEpochMilliseconds()
-                        var added = false
-                        (threadReferenceKind?.let(::setOf) ?: kinds).forEach { kind ->
-                            added = store.upsertNgRule(
-                                CompatNgRule(
-                                    id = compatNgRuleId(kind, scopeKey, normalized),
-                                    kind = kind,
-                                    scopeKey = scopeKey,
-                                    normalizedValue = normalized,
-                                    createdAtEpochMillis = now,
-                                    memo = if (threadReferenceKind != null) displayValue else ""
-                                )
-                            ) || added
-                        }
-                        error = if (added) "$displayValue を追加しました" else "これ以上登録できません！"
-                    }
-                }
-            },
-            referenceKind = threadReferenceKind,
-            onDismiss = { managedNgKinds = null }
+        CompatThreadNgManagementDialog(
+            kinds = kinds,
+            tab = tab,
+            ngRules = ngRules,
+            store = store,
+            imageNgPhashThreshold = imageNgPhashThreshold,
+            errorState = errorState,
+            managedNgKindsState = managedNgKindsState,
+            launchStore = ::launchThreadStoreSafely
         )
     }
     if (archiveSearchOpen) {
@@ -8697,177 +7484,62 @@ private fun CompatThreadScreen(
         )
     }
 
-    // A quote link in the old APK is a full-width, outside-dismissible
-    // PopupWindow rather than a navigated extraction page.
-    if (replyPopupPosts.isNotEmpty()) {
-        CompatReplyPreviewPopup(
-            posts = replyPopupPosts,
-            ownPostNos = ownPostNos,
-            fontSize = threadFontSize,
-            thumbnailSize = threadThumbnailSize,
-            upsThumbnailSize = threadUpsThumbnailSize,
-            upsThumbnailMethod = threadUpsThumbMethod,
-            wifiConnected = compatWifiConnected,
-            anchorY = replyPopupAnchorY,
-            // PopupWindow is constrained below the status/action bar in the
-            // APK. Scaffold's content padding can be zero when the edge-to-edge
-            // host consumes the inset, so retain an explicit 56dp toolbar floor.
-            minimumTopY = maxOf(
-                threadContentTopPx,
-                with(LocalDensity.current) { 56.dp.roundToPx() }
-            ),
-            hideDefaultNameAndSubject = hideDefaultNameAndSubject,
-            simpleQuoteCount = simpleQuoteCount,
-            saidaneDisplayMode = saidaneDisplayMode,
-            saidaneThreshold = saidaneExtractThreshold,
-            privacyAlpha = if (threadPrivacyEnabled) {
-                compatPrivacyContentAlpha(threadPrivacyAlpha)
-            } else 1f,
-            posterIdentityProgress = posterIdentityProgress,
-            onDismiss = { replyPopupPosts = emptyList() },
-            onQuoteClick = { sourcePosition, query ->
-                val matches = resolveCompatQuotePosts(snapshot?.posts.orEmpty(), sourcePosition, query)
-                if (matches.isEmpty()) {
-                    compatMissingQuoteNotice()?.let { error = it }
-                } else {
-                    replyPopupPosts = listOf(matches.first())
-                }
-            },
-            onUrlClick = openUrl,
-            onMediaUrlClick = { url, post ->
-                if (!openViewerFromMediaUrl(url, post)) openUrl(url)
-            },
-            onLongClick = { contextPost = it },
-            onHeaderClick = ::onHeaderClick,
-            onHeaderLongClick = ::onHeaderLongClick,
-            onMediaClick = { post -> openViewerFromThread(post) },
-            onMediaLongClick = { mediaContextPost = it }
-        )
-    }
-    quoteStack.lastOrNull()?.let { frame ->
-        CompatExtractionResultPopup(
-            frame = frame,
-            ownPostNos = ownPostNos,
-            fontSize = threadFontSize,
-            thumbnailSize = threadThumbnailSize,
-            upsThumbnailSize = threadUpsThumbnailSize,
-            upsThumbnailMethod = threadUpsThumbMethod,
-            wifiConnected = compatWifiConnected,
-            minimumTopY = maxOf(
-                threadContentTopPx,
-                with(LocalDensity.current) { 56.dp.roundToPx() }
-            ),
-            hideDefaultNameAndSubject = hideDefaultNameAndSubject,
-            simpleQuoteCount = simpleQuoteCount,
-            saidaneDisplayMode = saidaneDisplayMode,
-            saidaneThreshold = saidaneExtractThreshold,
-            privacyAlpha = if (threadPrivacyEnabled) {
-                compatPrivacyContentAlpha(threadPrivacyAlpha)
-            } else 1f,
-            posterIdentityProgress = posterIdentityProgress,
-            onDismiss = { quoteStack = quoteStack.dropLast(1) },
-            onQuoteClick = { sourcePosition, query -> openQuotePopup(sourcePosition, query) },
-            onUrlClick = openUrl,
-            onMediaUrlClick = { url, post ->
-                if (!openViewerFromMediaUrl(url, post)) openUrl(url)
-            },
-            onPostClick = { post ->
-                if (frame.query == "extract:${CompatExtractionKind.NG.name}") {
-                    when (compatNgExtractionAction(isLongClick = false)) {
-                        CompatNgExtractionAction.REQUEST_DEL -> {
-                            if (reviewComplianceEnabled) reportPost = post else delPost = post
-                        }
-                        CompatNgExtractionAction.REQUEST_USER_DELETE -> Unit
-                    }
-                } else {
-                    quoteStack = quoteStack.dropLast(1)
-                }
-            },
-            onLongClick = { post ->
-                if (frame.query == "extract:${CompatExtractionKind.NG.name}") {
-                    when (compatNgExtractionAction(isLongClick = true)) {
-                        CompatNgExtractionAction.REQUEST_USER_DELETE -> {
-                            deletePassword = preferences.compatStoredPostDeleteKey()
-                            deleteImageOnly = false
-                            deletePost = post
-                        }
-                        CompatNgExtractionAction.REQUEST_DEL -> Unit
-                    }
-                } else {
-                    contextPost = post
-                }
-            },
-            onHeaderClick = ::onHeaderClick,
-            onHeaderLongClick = ::onHeaderLongClick,
-            onMediaClick = { post -> openViewerFromThread(post) },
-            onMediaLongClick = { mediaContextPost = it }
-        )
-    }
+    CompatThreadQuotePopups(
+        ownPostNos = ownPostNos,
+        threadFontSize = threadFontSize,
+        threadThumbnailSize = threadThumbnailSize,
+        threadUpsThumbnailSize = threadUpsThumbnailSize,
+        threadUpsThumbMethod = threadUpsThumbMethod,
+        compatWifiConnected = compatWifiConnected,
+        hideDefaultNameAndSubject = hideDefaultNameAndSubject,
+        simpleQuoteCount = simpleQuoteCount,
+        saidaneDisplayMode = saidaneDisplayMode,
+        saidaneExtractThreshold = saidaneExtractThreshold,
+        threadPrivacyEnabled = threadPrivacyEnabled,
+        threadPrivacyAlpha = threadPrivacyAlpha,
+        reviewComplianceEnabled = reviewComplianceEnabled,
+        preferences = preferences,
+        openUrl = openUrl,
+        openQuotePopup = ::openQuotePopup,
+        openViewerFromMediaUrl = ::openViewerFromMediaUrl,
+        openViewerFromThread = ::openViewerFromThread,
+        onHeaderClick = ::onHeaderClick,
+        onHeaderLongClick = ::onHeaderLongClick,
+        replyPopupPostsState = replyPopupPostsState,
+        replyPopupAnchorYState = replyPopupAnchorYState,
+        threadContentTopPxState = threadContentTopPxState,
+        posterIdentityProgressState = posterIdentityProgressState,
+        quoteStackState = quoteStackState,
+        snapshotState = snapshotState,
+        errorState = errorState,
+        contextPostState = contextPostState,
+        mediaContextPostState = mediaContextPostState,
+        reportPostState = reportPostState,
+        delPostState = delPostState,
+        deletePostState = deletePostState,
+        deletePasswordState = deletePasswordState,
+        deleteImageOnlyState = deleteImageOnlyState
+    )
     contextPost?.let { post ->
-        CompatPostContextDialog(
+        CompatThreadPostContextDialog(
             post = post,
-            onDismiss = { contextPost = null },
-            onWeb = {
-                val terms = compatGoogleSearchTerms(post)
-                selectionState = CompatPostSelectionState(
-                    CompatPostSelectionMode.WEB,
-                    post,
-                    terms.map { CompatPostActionCandidate("検索語", it) },
-                    emptySet()
-                )
-                contextPost = null
-            },
-            onExtract = {
-                onHeaderLongClick(post)
-                contextPost = null
-            },
-            onNg = { ngPost = post; contextPost = null },
-            onDel = {
-                contextPost = null
-                if (reviewComplianceEnabled) {
-                    reportPost = post
-                } else {
-                    delPost = post
-                }
-            },
-            onDelete = {
-                deletePassword = preferences.compatStoredPostDeleteKey()
-                deleteImageOnly = false
-                deletePost = post
-                contextPost = null
-            },
-            onSaidane = {
-                contextPost = null
-                scope.launch {
-                    if (repository == null) error = "通信機能を初期化できませんでした"
-                    else runSuspendCatchingPreservingCancellation {
-                        repository.voteSaidane(tab.originalUrl, tab.threadNo, post.postNo)
-                    }
-                        .onSuccess {
-                            val current = snapshot?.posts.orEmpty().firstOrNull { it.postNo == post.postNo }
-                            val oldCount = compatAppTrailingCountRegex
-                                .find(current?.saidaneLabel.orEmpty())
-                                ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                            val nextCount = oldCount + 1
-                            snapshot = snapshot?.copy(posts = snapshot?.posts.orEmpty().map {
-                                if (it.postNo == post.postNo) it.copy(saidaneLabel = "そうだねx$nextCount") else it
-                            })
-                            error = "そうだねx$nextCount"
-                        }
-                        .onFailure { error = it.toCompatUserMessage("そうだねを送信できませんでした") }
-                }
-            },
-            onQuick = { contextPost = null; onOpenPostWithText(compatQuickQuoteText(post), false) },
-            onReply = {
-                val candidates = compatPostActionCandidates(post)
-                selectionState = CompatPostSelectionState(CompatPostSelectionMode.REPLY, post, candidates, emptySet())
-                contextPost = null
-            },
-            onCopy = {
-                val candidates = compatPostActionCandidates(post)
-                selectionState = CompatPostSelectionState(CompatPostSelectionMode.COPY, post, candidates, emptySet())
-                contextPost = null
-            }
+            tab = tab,
+            repository = repository,
+            preferences = preferences,
+            reviewComplianceEnabled = reviewComplianceEnabled,
+            scope = scope,
+            onOpenPostWithText = onOpenPostWithText,
+            onHeaderLongClick = ::onHeaderLongClick,
+            errorState = errorState,
+            snapshotState = snapshotState,
+            contextPostState = contextPostState,
+            selectionStateHolder = selectionStateHolder,
+            ngPostState = ngPostState,
+            reportPostState = reportPostState,
+            delPostState = delPostState,
+            deletePostState = deletePostState,
+            deletePasswordState = deletePasswordState,
+            deleteImageOnlyState = deleteImageOnlyState
         )
     }
     delPost?.let { post ->
@@ -8904,31 +7576,13 @@ private fun CompatThreadScreen(
         )
     }
     selectionState?.let { selection ->
-        CompatPostSelectionDialog(
-            state = selection,
-            onStateChanged = { selectionState = it },
-            onDismiss = { selectionState = null },
-            onSearch = {
-                val query = selection.candidates.mapIndexedNotNull { i, item -> item.value.takeIf { i in selection.selected } }.joinToString(" ")
-                if (query.isNotBlank()) openUrl("https://www.google.com/search?q=${query.encodeURLParameter()}")
-                selectionState = null
-            },
-            onOverwrite = {
-                onOpenPostWithText(compatQuoteSelection(selection.candidates, selection.selected), false)
-                selectionState = null
-            },
-            onAppend = {
-                onOpenPostWithText(compatQuoteSelection(selection.candidates, selection.selected), true)
-                selectionState = null
-            },
-            onCopy = {
-                val text = if (selection.mode == CompatPostSelectionMode.COPY) {
-                    selection.candidates.mapIndexedNotNull { i, item -> item.value.takeIf { i in selection.selected } }.joinToString("\n")
-                } else compatQuoteSelection(selection.candidates, selection.selected)
-                clipboard.setText(AnnotatedString(text))
-                selectionState = null
-                error = "コピーしました"
-            }
+        CompatThreadPostSelectionDialog(
+            selection = selection,
+            clipboard = clipboard,
+            openUrl = openUrl,
+            onOpenPostWithText = onOpenPostWithText,
+            selectionStateHolder = selectionStateHolder,
+            errorState = errorState
         )
     }
     ngPost?.let { post ->
@@ -9024,160 +7678,42 @@ private fun CompatThreadScreen(
             dismissButton = { TextButton(onClick = { deletePost = null }) { Text("キャンセル") } }
         )
     }
-    if (extractionMenuOpen) {
-        CompatExtractionMenuDialog(
-            ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
-            onDismiss = { extractionMenuOpen = false },
-            onKeyword = {
-                extractionMenuOpen = false
-                extractionKeyword = ""
-                extractionKeywordOpen = true
-            },
-            onExtract = { kind, title ->
-                extractionMenuOpen = false
-                scope.launch {
-                    val matches = withContext(AppDispatchers.parsing) {
-                        extractCompatPosts(
-                            posts = snapshot?.posts.orEmpty(),
-                            kind = kind,
-                            scopeKey = tab.key,
-                            boardKey = tab.boardKey,
-                            ngRules = ngRules,
-                            ownPostNos = ownPostNos,
-                            saidaneThreshold = saidaneExtractThreshold,
-                            quoteThreshold = quoteExtractThreshold
-                        )
-                    }
-                    quoteStack = quoteStack + CompatQuoteFrame(title, "extract:${kind.name}", matches)
-                }
-            }
-        )
-    }
-    if (extractionKeywordOpen) {
-        AlertDialog(
-            onDismissRequest = { extractionKeywordOpen = false },
-            title = { Text("キーワード") },
-            text = {
-                TextField(
-                    extractionKeyword,
-                    { extractionKeyword = it },
-                    singleLine = true,
-                    modifier = Modifier.testTag("compat-thread-extraction-keyword")
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val keyword = extractionKeyword
-                    extractionKeywordOpen = false
-                    scope.launch {
-                        val matches = withContext(AppDispatchers.parsing) {
-                            extractCompatPosts(
-                                posts = snapshot?.posts.orEmpty(),
-                                kind = CompatExtractionKind.KEYWORD,
-                                scopeKey = tab.key,
-                                keyword = keyword
-                            )
-                        }
-                        quoteStack = quoteStack + CompatQuoteFrame("キーワード: $keyword", "extract:keyword", matches)
-                    }
-                }) { Text("検索する") }
-            },
-            dismissButton = { TextButton(onClick = { extractionKeywordOpen = false }) { Text("キャンセル") } }
-        )
-    }
+    CompatThreadExtractionDialogs(
+        tab = tab,
+        ngRules = ngRules,
+        ownPostNos = ownPostNos,
+        saidaneExtractThreshold = saidaneExtractThreshold,
+        quoteExtractThreshold = quoteExtractThreshold,
+        scope = scope,
+        extractionMenuOpenState = extractionMenuOpenState,
+        extractionKeywordOpenState = extractionKeywordOpenState,
+        extractionKeywordState = extractionKeywordState,
+        snapshotState = snapshotState,
+        quoteStackState = quoteStackState
+    )
     mediaContextPost?.let { post ->
-        val mediaUrl = resolveCompatViewerMediaUrl(post).orEmpty()
-        CompatInlineMediaContextDialog(
-            onDismiss = { mediaContextPost = null },
-            onSave = {
-                mediaContextPost = null
-                withSaveDestination { selectedLocation ->
-                scope.launch {
-                    val saver = mediaSaver
-                    if (saver == null) error = "保存機能を初期化できませんでした"
-                    else saver.saveMedia(
-                        mediaUrl,
-                        tab.boardKey,
-                        tab.threadNo,
-                        baseSaveLocation = selectedLocation,
-                        storageDirectoryOverride = "",
-                        useTypeSubdirectory = false
-                    )
-                        .onSuccess { error = compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) }
-                        .onFailure { error = it.toCompatUserMessage("画像を保存できませんでした") }
-                }
-                }
-            },
-            onReloadThumbnail = {
-                thumbnailReloadTokens = thumbnailReloadTokens + (post.postNo to Clock.System.now().toEpochMilliseconds())
-                mediaContextPost = null
-            },
-            onNgImage = {
-                imageNgRegistration = post
-                mediaContextPost = null
-            },
-            onCopyUrl = { clipboard.setText(AnnotatedString(mediaUrl)); mediaContextPost = null; error = "コピーしました" },
-            onBrowser = { openUrl(mediaUrl); mediaContextPost = null },
-            onShareUrl = { share(mediaUrl, "text/plain", null); mediaContextPost = null },
-            onShareImage = {
-                mediaContextPost = null
-                scope.launch {
-                    val saver = mediaSaver
-                    val fs = fileSystem
-                    if (saver == null || fs == null) error = "画像共有を初期化できませんでした"
-                    else saver.saveMedia(
-                        mediaUrl,
-                        tab.boardKey,
-                        tab.threadNo,
-                        baseSaveLocation = manualSaveLocation
-                    )
-                        .onSuccess { saved ->
-                            val mime = when (saved.mediaType.name) {
-                                "VIDEO" -> "video/*"
-                                else -> "image/*"
-                            }
-                            val localPath = if (manualSaveLocation == null) {
-                                fs.resolveAbsolutePath("$MANUAL_SAVE_DIRECTORY/${saved.relativePath}")
-                            } else null
-                            share(mediaUrl, mime, localPath)
-                        }
-                        .onFailure { error = it.toCompatUserMessage("画像を共有できませんでした") }
-                }
-            },
-            searchTargets = compatImageSearchActionTargets(
-                preferences[COMPAT_CUSTOM_IMAGE_SEARCH_KEY]
-            ),
-            onSearchTarget = { target ->
-                mediaContextPost = null
-                when (target) {
-                    CompatImageSearchTarget.GOOGLE_FILE ->
-                        searchGoogle(post, CompatGoogleImageSearchMode.GOOGLE_FILE)
-                    CompatImageSearchTarget.GOOGLE_URL ->
-                        searchGoogle(post, CompatGoogleImageSearchMode.LEGACY)
-                    CompatImageSearchTarget.LENS_FILE ->
-                        searchGoogle(post, CompatGoogleImageSearchMode.LENS_FILE)
-                    CompatImageSearchTarget.LENS_URL ->
-                        searchGoogle(post, CompatGoogleImageSearchMode.LENS_URL)
-                    CompatImageSearchTarget.ASCII2D_URL -> {
-                        if (!isCompatAscii2dRegistered(preferences)) {
-                            ascii2dRegistrationUrl = preferences[COMPAT_ASCII2D_ENDPOINT_KEY]
-                                ?.trim().orEmpty()
-                            ascii2dRegisterPost = post
-                        } else {
-                            searchAscii2d(post)
-                        }
-                    }
-                    else -> if (target.method == CompatImageSearchMethod.FILE) {
-                        searchFileTarget(post, target)
-                    } else if (!isCompatImageSearchableMediaUrl(mediaUrl)) {
-                        error = "WebM・MP4は検索できません"
-                    } else {
-                        buildCompatImageSearchTargetUrl(target, mediaUrl)?.let {
-                            openSearchResult(it, target.label)
-                        } ?: run { error = "検索する画像がありません" }
-                    }
-                }
-            }
+        CompatThreadMediaContextDialog(
+            post = post,
+            tab = tab,
+            preferences = preferences,
+            fileSystem = fileSystem,
+            mediaSaver = mediaSaver,
+            manualSaveLocation = manualSaveLocation,
+            withSaveDestination = withSaveDestination,
+            scope = scope,
+            clipboard = clipboard,
+            openUrl = openUrl,
+            share = share,
+            searchGoogle = ::searchGoogle,
+            searchAscii2d = ::searchAscii2d,
+            searchFileTarget = ::searchFileTarget,
+            openSearchResult = ::openSearchResult,
+            errorState = errorState,
+            mediaContextPostState = mediaContextPostState,
+            thumbnailReloadTokensState = thumbnailReloadTokensState,
+            imageNgRegistrationState = imageNgRegistrationState,
+            ascii2dRegistrationUrlState = ascii2dRegistrationUrlState,
+            ascii2dRegisterPostState = ascii2dRegisterPostState
         )
     }
     imageNgRegistration?.let { post ->
@@ -9243,6 +7779,1099 @@ private fun CompatThreadScreen(
     }
 }
 
+private const val COMPAT_THREAD_STORE_FAILURE_MESSAGE = "設定の保存に失敗しました"
+
+// The thread screen's larger dialogs live outside CompatThreadScreen so its
+// method stays well below the JVM size limit. They are non-restartable, so they
+// recompose exactly as the inline code did, and they read the caller's states
+// through the same MutableState objects.
+@Composable
+@NonRestartableComposable
+private fun CompatThreadNgManagementDialog(
+    kinds: Set<CompatNgKind>,
+    tab: CompatTab,
+    ngRules: List<CompatNgRule>,
+    store: CompatibilityStore,
+    imageNgPhashThreshold: Int,
+    errorState: MutableState<String?>,
+    managedNgKindsState: MutableState<Set<CompatNgKind>?>,
+    launchStore: (String, String, suspend () -> Unit) -> Unit
+) {
+    var error by errorState
+    var managedNgKinds by managedNgKindsState
+    fun launchThreadStoreSafely(
+        operation: String,
+        userMessage: String = COMPAT_THREAD_STORE_FAILURE_MESSAGE,
+        block: suspend () -> Unit
+    ) = launchStore(operation, userMessage, block)
+    val threadReferenceKind = when {
+        CompatNgKind.THREAD_REFUSE in kinds -> CompatNgKind.THREAD_REFUSE
+        CompatNgKind.THREAD_IGNORE in kinds -> CompatNgKind.THREAD_IGNORE
+        else -> null
+    }
+    val imageReferenceSource = CompatImageNgSource.THREAD.takeIf {
+        kinds.any { it in compatImageNgKinds(CompatImageNgSource.THREAD) }
+    }
+    val managementKinds = threadReferenceKind?.let(::compatThreadReferenceKinds) ?: kinds
+    val managementRules = when {
+        threadReferenceKind != null -> compatThreadReferenceRules(ngRules, tab.key, threadReferenceKind)
+        imageReferenceSource != null -> compatImageNgManagementRules(
+            ngRules,
+            tab.boardKey,
+            imageReferenceSource,
+            legacyThreadKey = tab.key
+        )
+        else -> ngRules.filter { rule ->
+            rule.kind in kinds && (rule.scopeKey == tab.key || rule.scopeKey == "*")
+        }
+    }
+    CompatNgRuleManagementDialog(
+        title = when {
+            CompatNgKind.THREAD_IMAGE_PHASH in kinds -> "NG画像(pHash)"
+            CompatNgKind.THREAD_IMAGE in kinds -> "NG画像"
+            CompatNgKind.THREAD_IGNORE in kinds -> "ＮＧワード"
+            CompatNgKind.THREAD_REFUSE in kinds -> "ＮＧヘッダー"
+            CompatNgKind.THREAD_WORD in kinds -> "NGワード"
+            else -> "NGヘッダー"
+        },
+        rules = managementRules,
+        imageReferenceBoardName = tab.boardName.takeIf { imageReferenceSource != null },
+        phashThreshold = imageNgPhashThreshold.takeIf {
+            CompatNgKind.THREAD_IMAGE in kinds || CompatNgKind.THREAD_IMAGE_PHASH in kinds
+        },
+        onPhashThresholdChange = { value ->
+            launchThreadStoreSafely("thread image threshold persistence") {
+                store.savePreference(
+                    compatPreferenceStorageKey("thread", "threadImageNgPhashThreshold"),
+                    value.toString()
+                )
+            }
+        },
+        onDelete = { rule ->
+            launchThreadStoreSafely("thread NG deletion") { store.deleteNgRule(rule.id) }
+        },
+        onDeleteAll = { rulesToDelete ->
+            launchThreadStoreSafely("thread NG bulk deletion") {
+                val ids = if (threadReferenceKind != null) {
+                    ngRules.filter { it.kind in managementKinds }.map(CompatNgRule::id)
+                } else {
+                    rulesToDelete.map(CompatNgRule::id)
+                }
+                store.deleteNgRules(ids)
+            }
+        },
+        onEdit = { rule, value, allThreads, memo ->
+            val displayValue = when {
+                threadReferenceKind != null -> cleanCompatThreadReferenceWord(value)
+                imageReferenceSource != null -> rule.normalizedValue
+                else -> value
+            }
+            val normalized = if (imageReferenceSource != null) {
+                rule.normalizedValue
+            } else {
+                displayValue.normalizeCompatNgValue()
+            }
+            if (normalized.isBlank()) {
+                error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
+            } else if (
+                threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
+                isCompatThreadRefuseForbidden(displayValue)
+            ) {
+                error = "登録できない単語です"
+            } else {
+                launchThreadStoreSafely("thread NG edit", "NGの更新に失敗しました") {
+                    val scopeKey = if (allThreads) "*" else if (
+                        rule.kind == CompatNgKind.THREAD_IMAGE || rule.kind == CompatNgKind.THREAD_IMAGE_PHASH
+                    ) tab.boardKey else tab.key
+                    store.deleteNgRule(rule.id)
+                    val updatedKind = threadReferenceKind ?: rule.kind
+                    val updated = store.upsertNgRule(
+                        rule.copy(
+                            id = compatNgRuleId(updatedKind, scopeKey, normalized),
+                            kind = updatedKind,
+                            scopeKey = scopeKey,
+                            normalizedValue = normalized,
+                            memo = if (threadReferenceKind != null) displayValue else memo,
+                            createdAtEpochMillis = if (imageReferenceSource != null) {
+                                rule.createdAtEpochMillis
+                            } else {
+                                Clock.System.now().toEpochMilliseconds()
+                            }
+                        )
+                    )
+                    error = if (updated) {
+                        if (imageReferenceSource != null) "更新しました" else "$displayValue に更新しました"
+                    } else {
+                        "NGを更新できませんでした"
+                    }
+                }
+            }
+        },
+        addScopeLabel = "全スレッドに適用",
+        onAdd = if (kinds.any { it == CompatNgKind.THREAD_IMAGE || it == CompatNgKind.THREAD_IMAGE_PHASH }) null else { value, allThreads ->
+            val displayValue = if (threadReferenceKind != null) {
+                cleanCompatThreadReferenceWord(value)
+            } else value
+            val normalized = displayValue.normalizeCompatNgValue()
+            if (normalized.isBlank()) {
+                error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
+            } else if (
+                threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
+                isCompatThreadRefuseForbidden(displayValue)
+            ) {
+                error = "登録できない単語です"
+            } else {
+                launchThreadStoreSafely("thread NG add", "NGの登録に失敗しました") {
+                    val scopeKey = if (allThreads) "*" else tab.key
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    var added = false
+                    (threadReferenceKind?.let(::setOf) ?: kinds).forEach { kind ->
+                        added = store.upsertNgRule(
+                            CompatNgRule(
+                                id = compatNgRuleId(kind, scopeKey, normalized),
+                                kind = kind,
+                                scopeKey = scopeKey,
+                                normalizedValue = normalized,
+                                createdAtEpochMillis = now,
+                                memo = if (threadReferenceKind != null) displayValue else ""
+                            )
+                        ) || added
+                    }
+                    error = if (added) "$displayValue を追加しました" else "これ以上登録できません！"
+                }
+            }
+        },
+        referenceKind = threadReferenceKind,
+        onDismiss = { managedNgKinds = null }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadQuotePopups(
+    ownPostNos: Set<String>,
+    threadFontSize: Int,
+    threadThumbnailSize: Int,
+    threadUpsThumbnailSize: Int,
+    threadUpsThumbMethod: String,
+    compatWifiConnected: Boolean,
+    hideDefaultNameAndSubject: Boolean,
+    simpleQuoteCount: Boolean,
+    saidaneDisplayMode: String,
+    saidaneExtractThreshold: Int,
+    threadPrivacyEnabled: Boolean,
+    threadPrivacyAlpha: Float,
+    reviewComplianceEnabled: Boolean,
+    preferences: Map<String, String>,
+    openUrl: (String) -> Unit,
+    openQuotePopup: (Int, String) -> Unit,
+    openViewerFromMediaUrl: (String, CompatPostSnapshot) -> Boolean,
+    openViewerFromThread: (CompatPostSnapshot) -> Boolean,
+    onHeaderClick: (CompatPostSnapshot) -> Unit,
+    onHeaderLongClick: (CompatPostSnapshot) -> Unit,
+    replyPopupPostsState: MutableState<List<CompatPostSnapshot>>,
+    replyPopupAnchorYState: MutableState<Int>,
+    threadContentTopPxState: MutableState<Int>,
+    posterIdentityProgressState: MutableState<Map<String, List<CompatPosterIdentityProgress>>>,
+    quoteStackState: MutableState<List<CompatQuoteFrame>>,
+    snapshotState: MutableState<CompatThreadSnapshot?>,
+    errorState: MutableState<String?>,
+    contextPostState: MutableState<CompatPostSnapshot?>,
+    mediaContextPostState: MutableState<CompatPostSnapshot?>,
+    reportPostState: MutableState<CompatPostSnapshot?>,
+    delPostState: MutableState<CompatPostSnapshot?>,
+    deletePostState: MutableState<CompatPostSnapshot?>,
+    deletePasswordState: MutableState<String>,
+    deleteImageOnlyState: MutableState<Boolean>
+) {
+    val quotePopupScope = rememberCoroutineScope()
+    val quoteSearchJob = remember { mutableStateOf<Job?>(null) }
+    var replyPopupPosts by replyPopupPostsState
+    val replyPopupAnchorY by replyPopupAnchorYState
+    val threadContentTopPx by threadContentTopPxState
+    val posterIdentityProgress by posterIdentityProgressState
+    var quoteStack by quoteStackState
+    val snapshot by snapshotState
+    var error by errorState
+    var contextPost by contextPostState
+    var mediaContextPost by mediaContextPostState
+    var reportPost by reportPostState
+    var delPost by delPostState
+    var deletePost by deletePostState
+    var deletePassword by deletePasswordState
+    var deleteImageOnly by deleteImageOnlyState
+    // A quote link in the old APK is a full-width, outside-dismissible
+    // PopupWindow rather than a navigated extraction page.
+    if (replyPopupPosts.isNotEmpty()) {
+        CompatReplyPreviewPopup(
+            posts = replyPopupPosts,
+            ownPostNos = ownPostNos,
+            fontSize = threadFontSize,
+            thumbnailSize = threadThumbnailSize,
+            upsThumbnailSize = threadUpsThumbnailSize,
+            upsThumbnailMethod = threadUpsThumbMethod,
+            wifiConnected = compatWifiConnected,
+            anchorY = replyPopupAnchorY,
+            // PopupWindow is constrained below the status/action bar in the
+            // APK. Scaffold's content padding can be zero when the edge-to-edge
+            // host consumes the inset, so retain an explicit 56dp toolbar floor.
+            minimumTopY = maxOf(
+                threadContentTopPx,
+                with(LocalDensity.current) { 56.dp.roundToPx() }
+            ),
+            hideDefaultNameAndSubject = hideDefaultNameAndSubject,
+            simpleQuoteCount = simpleQuoteCount,
+            saidaneDisplayMode = saidaneDisplayMode,
+            saidaneThreshold = saidaneExtractThreshold,
+            privacyAlpha = if (threadPrivacyEnabled) {
+                compatPrivacyContentAlpha(threadPrivacyAlpha)
+            } else 1f,
+            posterIdentityProgress = posterIdentityProgress,
+            onDismiss = { replyPopupPosts = emptyList() },
+            onQuoteClick = { sourcePosition, query ->
+                // Text quotes convert every earlier post; search off the main
+                // thread like the thread screen does, and drop the result if
+                // the popup was closed or replaced meanwhile.
+                val posts = snapshot?.posts.orEmpty()
+                val origin = replyPopupPosts
+                quoteSearchJob.value?.cancel()
+                quoteSearchJob.value = quotePopupScope.launch {
+                    val matches = withContext(AppDispatchers.parsing) {
+                        resolveCompatQuotePosts(posts, sourcePosition, query)
+                    }
+                    if (replyPopupPosts !== origin) return@launch
+                    if (matches.isEmpty()) {
+                        compatMissingQuoteNotice()?.let { error = it }
+                    } else {
+                        replyPopupPosts = listOf(matches.first())
+                    }
+                }
+            },
+            onUrlClick = openUrl,
+            onMediaUrlClick = { url, post ->
+                if (!openViewerFromMediaUrl(url, post)) openUrl(url)
+            },
+            onLongClick = { contextPost = it },
+            onHeaderClick = onHeaderClick,
+            onHeaderLongClick = onHeaderLongClick,
+            onMediaClick = { post -> openViewerFromThread(post) },
+            onMediaLongClick = { mediaContextPost = it }
+        )
+    }
+    quoteStack.lastOrNull()?.let { frame ->
+        CompatExtractionResultPopup(
+            frame = frame,
+            ownPostNos = ownPostNos,
+            fontSize = threadFontSize,
+            thumbnailSize = threadThumbnailSize,
+            upsThumbnailSize = threadUpsThumbnailSize,
+            upsThumbnailMethod = threadUpsThumbMethod,
+            wifiConnected = compatWifiConnected,
+            minimumTopY = maxOf(
+                threadContentTopPx,
+                with(LocalDensity.current) { 56.dp.roundToPx() }
+            ),
+            hideDefaultNameAndSubject = hideDefaultNameAndSubject,
+            simpleQuoteCount = simpleQuoteCount,
+            saidaneDisplayMode = saidaneDisplayMode,
+            saidaneThreshold = saidaneExtractThreshold,
+            privacyAlpha = if (threadPrivacyEnabled) {
+                compatPrivacyContentAlpha(threadPrivacyAlpha)
+            } else 1f,
+            posterIdentityProgress = posterIdentityProgress,
+            onDismiss = { quoteStack = quoteStack.dropLast(1) },
+            onQuoteClick = { sourcePosition, query -> openQuotePopup(sourcePosition, query) },
+            onUrlClick = openUrl,
+            onMediaUrlClick = { url, post ->
+                if (!openViewerFromMediaUrl(url, post)) openUrl(url)
+            },
+            onPostClick = { post ->
+                if (frame.query == "extract:${CompatExtractionKind.NG.name}") {
+                    when (compatNgExtractionAction(isLongClick = false)) {
+                        CompatNgExtractionAction.REQUEST_DEL -> {
+                            if (reviewComplianceEnabled) reportPost = post else delPost = post
+                        }
+                        CompatNgExtractionAction.REQUEST_USER_DELETE -> Unit
+                    }
+                } else {
+                    quoteStack = quoteStack.dropLast(1)
+                }
+            },
+            onLongClick = { post ->
+                if (frame.query == "extract:${CompatExtractionKind.NG.name}") {
+                    when (compatNgExtractionAction(isLongClick = true)) {
+                        CompatNgExtractionAction.REQUEST_USER_DELETE -> {
+                            deletePassword = preferences.compatStoredPostDeleteKey()
+                            deleteImageOnly = false
+                            deletePost = post
+                        }
+                        CompatNgExtractionAction.REQUEST_DEL -> Unit
+                    }
+                } else {
+                    contextPost = post
+                }
+            },
+            onHeaderClick = onHeaderClick,
+            onHeaderLongClick = onHeaderLongClick,
+            onMediaClick = { post -> openViewerFromThread(post) },
+            onMediaLongClick = { mediaContextPost = it }
+        )
+    }
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadPostContextDialog(
+    post: CompatPostSnapshot,
+    tab: CompatTab,
+    repository: BoardRepository?,
+    preferences: Map<String, String>,
+    reviewComplianceEnabled: Boolean,
+    scope: CoroutineScope,
+    onOpenPostWithText: (String, Boolean) -> Unit,
+    onHeaderLongClick: (CompatPostSnapshot) -> Unit,
+    errorState: MutableState<String?>,
+    snapshotState: MutableState<CompatThreadSnapshot?>,
+    contextPostState: MutableState<CompatPostSnapshot?>,
+    selectionStateHolder: MutableState<CompatPostSelectionState?>,
+    ngPostState: MutableState<CompatPostSnapshot?>,
+    reportPostState: MutableState<CompatPostSnapshot?>,
+    delPostState: MutableState<CompatPostSnapshot?>,
+    deletePostState: MutableState<CompatPostSnapshot?>,
+    deletePasswordState: MutableState<String>,
+    deleteImageOnlyState: MutableState<Boolean>
+) {
+    var error by errorState
+    var snapshot by snapshotState
+    var contextPost by contextPostState
+    var selectionState by selectionStateHolder
+    var ngPost by ngPostState
+    var reportPost by reportPostState
+    var delPost by delPostState
+    var deletePost by deletePostState
+    var deletePassword by deletePasswordState
+    var deleteImageOnly by deleteImageOnlyState
+    CompatPostContextDialog(
+        post = post,
+        onDismiss = { contextPost = null },
+        onWeb = {
+            val terms = compatGoogleSearchTerms(post)
+            selectionState = CompatPostSelectionState(
+                CompatPostSelectionMode.WEB,
+                post,
+                terms.map { CompatPostActionCandidate("検索語", it) },
+                emptySet()
+            )
+            contextPost = null
+        },
+        onExtract = {
+            onHeaderLongClick(post)
+            contextPost = null
+        },
+        onNg = { ngPost = post; contextPost = null },
+        onDel = {
+            contextPost = null
+            if (reviewComplianceEnabled) {
+                reportPost = post
+            } else {
+                delPost = post
+            }
+        },
+        onDelete = {
+            deletePassword = preferences.compatStoredPostDeleteKey()
+            deleteImageOnly = false
+            deletePost = post
+            contextPost = null
+        },
+        onSaidane = {
+            contextPost = null
+            scope.launch {
+                if (repository == null) error = "通信機能を初期化できませんでした"
+                else runSuspendCatchingPreservingCancellation {
+                    repository.voteSaidane(tab.originalUrl, tab.threadNo, post.postNo)
+                }
+                    .onSuccess {
+                        val current = snapshot?.posts.orEmpty().firstOrNull { it.postNo == post.postNo }
+                        val oldCount = compatAppTrailingCountRegex
+                            .find(current?.saidaneLabel.orEmpty())
+                            ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                        val nextCount = oldCount + 1
+                        snapshot = snapshot?.copy(posts = snapshot?.posts.orEmpty().map {
+                            if (it.postNo == post.postNo) it.copy(saidaneLabel = "そうだねx$nextCount") else it
+                        })
+                        error = "そうだねx$nextCount"
+                    }
+                    .onFailure { error = it.toCompatUserMessage("そうだねを送信できませんでした") }
+            }
+        },
+        onQuick = { contextPost = null; onOpenPostWithText(compatQuickQuoteText(post), false) },
+        onReply = {
+            val candidates = compatPostActionCandidates(post)
+            selectionState = CompatPostSelectionState(CompatPostSelectionMode.REPLY, post, candidates, emptySet())
+            contextPost = null
+        },
+        onCopy = {
+            val candidates = compatPostActionCandidates(post)
+            selectionState = CompatPostSelectionState(CompatPostSelectionMode.COPY, post, candidates, emptySet())
+            contextPost = null
+        }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadMediaContextDialog(
+    post: CompatPostSnapshot,
+    tab: CompatTab,
+    preferences: Map<String, String>,
+    fileSystem: FileSystem?,
+    mediaSaver: SingleMediaSaveService?,
+    manualSaveLocation: SaveLocation?,
+    withSaveDestination: ((SaveLocation?) -> Unit) -> Unit,
+    scope: CoroutineScope,
+    clipboard: ClipboardManager,
+    openUrl: (String) -> Unit,
+    share: (String, String, String?) -> Unit,
+    searchGoogle: (CompatPostSnapshot, CompatGoogleImageSearchMode) -> Unit,
+    searchAscii2d: (CompatPostSnapshot) -> Unit,
+    searchFileTarget: (CompatPostSnapshot, CompatImageSearchTarget) -> Unit,
+    openSearchResult: (String, String) -> Unit,
+    errorState: MutableState<String?>,
+    mediaContextPostState: MutableState<CompatPostSnapshot?>,
+    thumbnailReloadTokensState: MutableState<Map<String, Long>>,
+    imageNgRegistrationState: MutableState<CompatPostSnapshot?>,
+    ascii2dRegistrationUrlState: MutableState<String>,
+    ascii2dRegisterPostState: MutableState<CompatPostSnapshot?>
+) {
+    var error by errorState
+    var mediaContextPost by mediaContextPostState
+    var thumbnailReloadTokens by thumbnailReloadTokensState
+    var imageNgRegistration by imageNgRegistrationState
+    var ascii2dRegistrationUrl by ascii2dRegistrationUrlState
+    var ascii2dRegisterPost by ascii2dRegisterPostState
+    val mediaUrl = resolveCompatViewerMediaUrl(post).orEmpty()
+    CompatInlineMediaContextDialog(
+        onDismiss = { mediaContextPost = null },
+        onSave = {
+            mediaContextPost = null
+            withSaveDestination { selectedLocation ->
+            scope.launch {
+                val saver = mediaSaver
+                if (saver == null) error = "保存機能を初期化できませんでした"
+                else saver.saveMedia(
+                    mediaUrl,
+                    tab.boardKey,
+                    tab.threadNo,
+                    baseSaveLocation = selectedLocation,
+                    storageDirectoryOverride = "",
+                    useTypeSubdirectory = false
+                )
+                    .onSuccess { error = compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) }
+                    .onFailure { error = it.toCompatUserMessage("画像を保存できませんでした") }
+            }
+            }
+        },
+        onReloadThumbnail = {
+            thumbnailReloadTokens = thumbnailReloadTokens + (post.postNo to Clock.System.now().toEpochMilliseconds())
+            mediaContextPost = null
+        },
+        onNgImage = {
+            imageNgRegistration = post
+            mediaContextPost = null
+        },
+        onCopyUrl = { clipboard.setText(AnnotatedString(mediaUrl)); mediaContextPost = null; error = "コピーしました" },
+        onBrowser = { openUrl(mediaUrl); mediaContextPost = null },
+        onShareUrl = { share(mediaUrl, "text/plain", null); mediaContextPost = null },
+        onShareImage = {
+            mediaContextPost = null
+            scope.launch {
+                val saver = mediaSaver
+                val fs = fileSystem
+                if (saver == null || fs == null) error = "画像共有を初期化できませんでした"
+                else saver.saveMedia(
+                    mediaUrl,
+                    tab.boardKey,
+                    tab.threadNo,
+                    baseSaveLocation = manualSaveLocation
+                )
+                    .onSuccess { saved ->
+                        val mime = when (saved.mediaType.name) {
+                            "VIDEO" -> "video/*"
+                            else -> "image/*"
+                        }
+                        val localPath = if (manualSaveLocation == null) {
+                            fs.resolveAbsolutePath("$MANUAL_SAVE_DIRECTORY/${saved.relativePath}")
+                        } else null
+                        share(mediaUrl, mime, localPath)
+                    }
+                    .onFailure { error = it.toCompatUserMessage("画像を共有できませんでした") }
+            }
+        },
+        searchTargets = compatImageSearchActionTargets(
+            preferences[COMPAT_CUSTOM_IMAGE_SEARCH_KEY]
+        ),
+        onSearchTarget = { target ->
+            mediaContextPost = null
+            when (target) {
+                CompatImageSearchTarget.GOOGLE_FILE ->
+                    searchGoogle(post, CompatGoogleImageSearchMode.GOOGLE_FILE)
+                CompatImageSearchTarget.GOOGLE_URL ->
+                    searchGoogle(post, CompatGoogleImageSearchMode.LEGACY)
+                CompatImageSearchTarget.LENS_FILE ->
+                    searchGoogle(post, CompatGoogleImageSearchMode.LENS_FILE)
+                CompatImageSearchTarget.LENS_URL ->
+                    searchGoogle(post, CompatGoogleImageSearchMode.LENS_URL)
+                CompatImageSearchTarget.ASCII2D_URL -> {
+                    if (!isCompatAscii2dRegistered(preferences)) {
+                        ascii2dRegistrationUrl = preferences[COMPAT_ASCII2D_ENDPOINT_KEY]
+                            ?.trim().orEmpty()
+                        ascii2dRegisterPost = post
+                    } else {
+                        searchAscii2d(post)
+                    }
+                }
+                else -> if (target.method == CompatImageSearchMethod.FILE) {
+                    searchFileTarget(post, target)
+                } else if (!isCompatImageSearchableMediaUrl(mediaUrl)) {
+                    error = "WebM・MP4は検索できません"
+                } else {
+                    buildCompatImageSearchTargetUrl(target, mediaUrl)?.let {
+                        openSearchResult(it, target.label)
+                    } ?: run { error = "検索する画像がありません" }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun compatThreadToolbarCommands(
+    tabs: List<CompatTab>,
+    preferences: Map<String, String>,
+    store: CompatibilityStore,
+    scope: CoroutineScope,
+    listState: LazyListState,
+    threadListLastIndex: Int,
+    threadNgEnabled: Boolean,
+    threadPrivacyEnabled: Boolean,
+    onOpenPost: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onToggleSelector: () -> Unit,
+    onCheckUpdates: () -> Unit,
+    onOpenDrawer: () -> Unit,
+    loadManually: suspend () -> Unit,
+    scrollToNewRepliesOrBottom: suspend () -> Unit,
+    closeCurrentThread: () -> Unit,
+    launchStore: (String, String, suspend () -> Unit) -> Unit,
+    snapshotState: MutableState<CompatThreadSnapshot?>,
+    undoRefreshSnapshotState: MutableState<CompatThreadSnapshot?>,
+    newReplyNoticeState: MutableState<CompatNewReplyNotice?>,
+    manualRefreshNoticeState: MutableState<CompatManualRefreshNotice?>,
+    errorState: MutableState<String?>,
+    quoteStackState: MutableState<List<CompatQuoteFrame>>,
+    replyPopupPostsState: MutableState<List<CompatPostSnapshot>>,
+    searchBackDismissStagesState: MutableState<Int>,
+    searchActiveState: MutableState<Boolean>,
+    extractionMenuOpenState: MutableState<Boolean>,
+    scrollDialogOpenState: MutableState<Boolean>,
+    autoScrollingState: MutableState<Boolean>
+): List<CompatToolbarCommand> {
+    var snapshot by snapshotState
+    var undoRefreshSnapshot by undoRefreshSnapshotState
+    var newReplyNotice by newReplyNoticeState
+    var manualRefreshNotice by manualRefreshNoticeState
+    var error by errorState
+    var quoteStack by quoteStackState
+    var replyPopupPosts by replyPopupPostsState
+    var searchBackDismissStages by searchBackDismissStagesState
+    var searchActive by searchActiveState
+    var extractionMenuOpen by extractionMenuOpenState
+    var scrollDialogOpen by scrollDialogOpenState
+    var autoScrolling by autoScrollingState
+    fun launchThreadStoreSafely(
+        operation: String,
+        userMessage: String = COMPAT_THREAD_STORE_FAILURE_MESSAGE,
+        block: suspend () -> Unit
+    ) = launchStore(operation, userMessage, block)
+    return listOf(
+        CompatToolbarCommand("post", compatToolbarArtwork(CompatToolbarSurface.THREAD, "post"), "書き込み", onClick = onOpenPost),
+        CompatToolbarCommand("reload", compatToolbarArtwork(CompatToolbarSurface.THREAD, "reload"), "リロード") { scope.launch { loadManually() } },
+        CompatToolbarCommand(
+            "undo",
+            compatToolbarArtwork(CompatToolbarSurface.THREAD, "undo"),
+            "リロード前に戻す",
+            onClick = undoRefreshSnapshot?.let {
+                {
+                    snapshot = it
+                    undoRefreshSnapshot = null
+                    newReplyNotice = null
+                    manualRefreshNotice = null
+                    error = "リロード前の表示に戻しました"
+                }
+            }
+        ),
+        CompatToolbarCommand("search", compatToolbarArtwork(CompatToolbarSurface.THREAD, "search"), "レス検索") {
+            quoteStack = emptyList()
+            replyPopupPosts = emptyList()
+            searchBackDismissStages = 2
+            searchActive = true
+        },
+        CompatToolbarCommand("top", compatToolbarArtwork(CompatToolbarSurface.THREAD, "top"), "ページ最上部へ") { scope.launch { listState.scrollToItem(0) } },
+        CompatToolbarCommand("page_up", compatToolbarArtwork(CompatToolbarSurface.THREAD, "page_up"), "1ページ上へ") {
+            scope.launch { listState.animateScrollToItem((listState.firstVisibleItemIndex - 6).coerceAtLeast(0)) }
+        },
+        CompatToolbarCommand("page_down", compatToolbarArtwork(CompatToolbarSurface.THREAD, "page_down"), "1ページ下へ") {
+            scope.launch {
+                val last = threadListLastIndex
+                listState.animateScrollToItem((listState.firstVisibleItemIndex + 6).coerceAtMost(last))
+            }
+        },
+        CompatToolbarCommand("bottom", compatToolbarArtwork(CompatToolbarSurface.THREAD, "bottom"), "ページ最下部へ") {
+            scope.launch {
+                scrollToNewRepliesOrBottom()
+            }
+        },
+        CompatToolbarCommand("gallery", compatToolbarArtwork(CompatToolbarSurface.THREAD, "gallery"), "画像一覧", onClick = onOpenGallery),
+        CompatToolbarCommand(
+            "tab",
+            compatToolbarArtwork(
+                CompatToolbarSurface.THREAD,
+                "tab",
+                selected = hasCompatTabToolbarUpdate(tabs)
+            ),
+            "タブ一覧",
+            showUpdateBadge = hasCompatTabToolbarUpdate(tabs),
+            onClick = onToggleSelector
+        ),
+        CompatToolbarCommand("privacy", compatToolbarArtwork(CompatToolbarSurface.THREAD, "privacy"), "プライバシー") {
+            launchThreadStoreSafely("thread privacy persistence") {
+                store.savePreference(COMPAT_COMMON_PRIVACY_STORAGE_KEY, if (threadPrivacyEnabled) "OFF" else "ON")
+            }
+        },
+        CompatToolbarCommand("extract", compatToolbarArtwork(CompatToolbarSurface.THREAD, "extract"), "レス抽出") { extractionMenuOpen = true },
+        CompatToolbarCommand(
+            "bypass",
+            compatToolbarArtwork(
+                CompatToolbarSurface.THREAD,
+                "bypass",
+                selected = preferences[COMPAT_CACHE_ENABLED_KEY] != "ON"
+            ),
+            "通信の軽量化"
+        ) {
+            val enabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON"
+            val toggle = nextCompatCacheToggle(enabled)
+            launchThreadStoreSafely("thread cache preference persistence") {
+                store.savePreference(COMPAT_CACHE_ENABLED_KEY, toggle.storedValue)
+                error = toggle.message
+            }
+        },
+        CompatToolbarCommand("scroll", compatToolbarArtwork(CompatToolbarSurface.THREAD, "scroll"), "スクロールバー") {
+            scrollDialogOpen = true
+        },
+        CompatToolbarCommand("check", compatToolbarArtwork(CompatToolbarSurface.THREAD, "check"), "更新の確認") {
+            error = "開いているスレの更新を確認しています"
+            onCheckUpdates()
+        },
+        CompatToolbarCommand("close", compatToolbarArtwork(CompatToolbarSurface.THREAD, "close"), "スレを閉じる") { closeCurrentThread() },
+        CompatToolbarCommand(
+            "quickng",
+            compatToolbarArtwork(CompatToolbarSurface.THREAD, "quickng", selected = threadNgEnabled),
+            "NG切り替え",
+            onClick = {
+                launchThreadStoreSafely("thread NG preference persistence") {
+                    store.savePreference(
+                        compatPreferenceStorageKey("thread", "threadNg"),
+                        if (threadNgEnabled) "OFF" else "ON"
+                    )
+                }
+            }
+        ),
+        CompatToolbarCommand("drawer", compatToolbarArtwork(CompatToolbarSurface.THREAD, "drawer"), "ドロワーを開く", onClick = onOpenDrawer),
+        CompatToolbarCommand(
+            "autoscroll",
+            compatToolbarArtwork(
+                CompatToolbarSurface.THREAD,
+                "autoscroll",
+                selected = autoScrolling
+            ),
+            "オートスクロール",
+            selected = autoScrolling
+        ) {
+            autoScrolling = !autoScrolling
+        }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadOtherMenuDialog(
+    route: CompatOtherMenuRoute,
+    tab: CompatTab,
+    ngRules: List<CompatNgRule>,
+    preferences: Map<String, String>,
+    store: CompatibilityStore,
+    httpClient: HttpClient?,
+    canUndoClose: Boolean,
+    clipboard: ClipboardManager,
+    openUrl: (String) -> Unit,
+    share: (String, String, String?) -> Unit,
+    ownPostNos: Set<String>,
+    saidaneExtractThreshold: Int,
+    quoteExtractThreshold: Int,
+    threadNgEnabled: Boolean,
+    toolbarItems: List<CompatToolbarItem>,
+    listState: LazyListState,
+    threadListLastIndex: Int,
+    scope: CoroutineScope,
+    onCheckUpdates: () -> Unit,
+    onUndoClose: () -> Unit,
+    saveCompatPage: (String) -> Unit,
+    scrollToNewRepliesOrBottom: suspend () -> Unit,
+    startReadAloud: () -> Unit,
+    stopReadAloud: (String?) -> Unit,
+    closeCurrentThread: () -> Unit,
+    launchStore: (String, String, suspend () -> Unit) -> Unit,
+    otherMenuRouteState: MutableState<CompatOtherMenuRoute?>,
+    managedNgKindsState: MutableState<Set<CompatNgKind>?>,
+    errorState: MutableState<String?>,
+    snapshotState: MutableState<CompatThreadSnapshot?>,
+    quoteStackState: MutableState<List<CompatQuoteFrame>>,
+    replyPopupPostsState: MutableState<List<CompatPostSnapshot>>,
+    searchBackDismissStagesState: MutableState<Int>,
+    searchActiveState: MutableState<Boolean>,
+    extractionMenuOpenState: MutableState<Boolean>,
+    extractionKeywordState: MutableState<String>,
+    extractionKeywordOpenState: MutableState<Boolean>,
+    readingAloudState: MutableState<Boolean>,
+    autoScrollingState: MutableState<Boolean>,
+    archiveSearchOpenState: MutableState<Boolean>
+) {
+    var otherMenuRoute by otherMenuRouteState
+    var managedNgKinds by managedNgKindsState
+    var error by errorState
+    val snapshot by snapshotState
+    var quoteStack by quoteStackState
+    var replyPopupPosts by replyPopupPostsState
+    var searchBackDismissStages by searchBackDismissStagesState
+    var searchActive by searchActiveState
+    var extractionMenuOpen by extractionMenuOpenState
+    var extractionKeyword by extractionKeywordState
+    var extractionKeywordOpen by extractionKeywordOpenState
+    val readingAloud by readingAloudState
+    var autoScrolling by autoScrollingState
+    var archiveSearchOpen by archiveSearchOpenState
+    fun launchThreadStoreSafely(
+        operation: String,
+        userMessage: String = COMPAT_THREAD_STORE_FAILURE_MESSAGE,
+        block: suspend () -> Unit
+    ) = launchStore(operation, userMessage, block)
+    val menuItems = compatThreadOtherMenu(
+        route = route,
+        ngEnabled = threadNgEnabled,
+        canUndoClose = canUndoClose,
+        ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
+        cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
+        activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key }
+    )
+    CompatHierarchicalOtherMenuDialog(
+        route = route,
+        items = menuItems,
+        onDismiss = { otherMenuRoute = null },
+        onItem = { menuItem ->
+            menuItem.childRoute?.let { child ->
+                otherMenuRoute = child
+                return@CompatHierarchicalOtherMenuDialog
+            }
+            otherMenuRoute = null
+            when (menuItem.key) {
+                "save_html", "save_thumb", "save_all", "save_images_zip", "save_images_folder" ->
+                    saveCompatPage(menuItem.key)
+                "top" -> scope.launch { listState.scrollToItem(0) }
+                "page_up" -> scope.launch {
+                    listState.animateScrollToItem((listState.firstVisibleItemIndex - 6).coerceAtLeast(0))
+                }
+                "page_down" -> scope.launch {
+                    listState.animateScrollToItem(
+                        (listState.firstVisibleItemIndex + 6).coerceAtMost(threadListLastIndex)
+                    )
+                }
+                "bottom" -> scope.launch {
+                    scrollToNewRepliesOrBottom()
+                }
+                "ng_header" -> managedNgKinds = setOf(CompatNgKind.THREAD_POST_NO, CompatNgKind.THREAD_POSTER_ID)
+                "ng_word" -> managedNgKinds = setOf(CompatNgKind.THREAD_WORD)
+                "ng_ignore" -> managedNgKinds = setOf(CompatNgKind.THREAD_IGNORE)
+                "ng_refuse" -> managedNgKinds = setOf(CompatNgKind.THREAD_REFUSE)
+                "ng_image" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE)
+                "ng_image_phash" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE_PHASH)
+                "ng_toggle" -> scope.launch {
+                    store.savePreference(
+                        compatPreferenceStorageKey("thread", "threadNg"),
+                        if (threadNgEnabled) "OFF" else "ON"
+                    )
+                }
+                "url_browser" -> openUrl(tab.originalUrl)
+                "url_copy" -> {
+                    clipboard.setText(AnnotatedString(tab.originalUrl))
+                    error = "URLをコピーしました"
+                }
+                "url_share" -> share(tab.originalUrl, "text/plain", null)
+                "url_ftbucket" -> openUrl(buildCompatFtbucketUrl(tab.originalUrl))
+                "url_forest" -> buildCompatForestUrl(tab.originalUrl)?.let(openUrl)
+                    ?: run { error = "ふたばフォレストはmay板のスレだけ対応しています" }
+                "url_futapo" -> buildCompatFutapoUrl(tab.originalUrl)?.let(openUrl)
+                    ?: run { error = "ふたポのURLを作成できませんでした（may/img板のみ対応）" }
+                "url_tsumamne" -> scope.launch {
+                    registerCompatTsumanne(httpClient ?: run {
+                        error = "通信機能を初期化できませんでした"
+                        return@launch
+                    }, tab.originalUrl, tab.title)
+                        .onSuccess { openUrl(it); error = "つまんね。に登録しました" }
+                        .onFailure { error = it.toCompatUserMessage("つまんね。への登録に失敗しました") }
+                }
+                "search" -> {
+                    quoteStack = emptyList()
+                    replyPopupPosts = emptyList()
+                    searchBackDismissStages = 2
+                    searchActive = true
+                }
+                "extract" -> extractionMenuOpen = true
+                "extract_own_direct", "extract_own" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.OWN,
+                    "自分の書き込み",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_saidane" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.MANY_SAIDANE,
+                    "そうだねが多い",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_replies" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.MANY_REPLIES,
+                    "返信が多い",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_deleted" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.DELETED,
+                    "削除されたレス",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_url" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.CONTAINS_URL,
+                    "URLを含むレス",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_image" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.HAS_IMAGE,
+                    "画像レス",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_ng" -> openCompatExtraction(
+                    scope,
+                    CompatExtractionKind.NG,
+                    "NGにマッチしたレス (タップでdel、長押しで削除)",
+                    snapshot,
+                    tab,
+                    ngRules,
+                    ownPostNos,
+                    saidaneExtractThreshold,
+                    quoteExtractThreshold
+                ) { frame -> quoteStack = quoteStack + frame }
+                "extract_keyword" -> {
+                    extractionKeyword = ""
+                    extractionKeywordOpen = true
+                }
+                "read_aloud" -> {
+                    if (readingAloud) {
+                        stopReadAloud("読み上げを停止しました")
+                    } else {
+                        startReadAloud()
+                    }
+                }
+                "autoscroll" -> autoScrolling = !autoScrolling
+                "cache" -> archiveSearchOpen = true
+                "privacy" -> launchThreadStoreSafely("thread privacy persistence") {
+                    val enabled = preferences.compatPrivacyEnabled()
+                    store.savePreference(COMPAT_COMMON_PRIVACY_STORAGE_KEY, if (enabled) "OFF" else "ON")
+                }
+                "bypass" -> {
+                    val enabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON"
+                    val toggle = nextCompatCacheToggle(enabled)
+                    launchThreadStoreSafely("thread cache preference persistence") {
+                        store.savePreference(COMPAT_CACHE_ENABLED_KEY, toggle.storedValue)
+                        error = toggle.message
+                    }
+                }
+                "check" -> {
+                    error = "開いているスレの更新を確認しています"
+                    onCheckUpdates()
+                }
+                "close" -> closeCurrentThread()
+                "undo" -> onUndoClose()
+            }
+        }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadPostSelectionDialog(
+    selection: CompatPostSelectionState,
+    clipboard: ClipboardManager,
+    openUrl: (String) -> Unit,
+    onOpenPostWithText: (String, Boolean) -> Unit,
+    selectionStateHolder: MutableState<CompatPostSelectionState?>,
+    errorState: MutableState<String?>
+) {
+    var selectionState by selectionStateHolder
+    var error by errorState
+    CompatPostSelectionDialog(
+        state = selection,
+        onStateChanged = { selectionState = it },
+        onDismiss = { selectionState = null },
+        onSearch = {
+            val query = selection.candidates.mapIndexedNotNull { i, item -> item.value.takeIf { i in selection.selected } }.joinToString(" ")
+            if (query.isNotBlank()) openUrl("https://www.google.com/search?q=${query.encodeURLParameter()}")
+            selectionState = null
+        },
+        onOverwrite = {
+            onOpenPostWithText(compatQuoteSelection(selection.candidates, selection.selected), false)
+            selectionState = null
+        },
+        onAppend = {
+            onOpenPostWithText(compatQuoteSelection(selection.candidates, selection.selected), true)
+            selectionState = null
+        },
+        onCopy = {
+            val text = if (selection.mode == CompatPostSelectionMode.COPY) {
+                selection.candidates.mapIndexedNotNull { i, item -> item.value.takeIf { i in selection.selected } }.joinToString("\n")
+            } else compatQuoteSelection(selection.candidates, selection.selected)
+            clipboard.setText(AnnotatedString(text))
+            selectionState = null
+            error = "コピーしました"
+        }
+    )
+}
+
+@Composable
+@NonRestartableComposable
+private fun CompatThreadExtractionDialogs(
+    tab: CompatTab,
+    ngRules: List<CompatNgRule>,
+    ownPostNos: Set<String>,
+    saidaneExtractThreshold: Int,
+    quoteExtractThreshold: Int,
+    scope: CoroutineScope,
+    extractionMenuOpenState: MutableState<Boolean>,
+    extractionKeywordOpenState: MutableState<Boolean>,
+    extractionKeywordState: MutableState<String>,
+    snapshotState: MutableState<CompatThreadSnapshot?>,
+    quoteStackState: MutableState<List<CompatQuoteFrame>>
+) {
+    var extractionMenuOpen by extractionMenuOpenState
+    var extractionKeywordOpen by extractionKeywordOpenState
+    var extractionKeyword by extractionKeywordState
+    val snapshot by snapshotState
+    var quoteStack by quoteStackState
+    if (extractionMenuOpen) {
+        CompatExtractionMenuDialog(
+            ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
+            onDismiss = { extractionMenuOpen = false },
+            onKeyword = {
+                extractionMenuOpen = false
+                extractionKeyword = ""
+                extractionKeywordOpen = true
+            },
+            onExtract = { kind, title ->
+                extractionMenuOpen = false
+                scope.launch {
+                    val matches = withContext(AppDispatchers.parsing) {
+                        extractCompatPosts(
+                            posts = snapshot?.posts.orEmpty(),
+                            kind = kind,
+                            scopeKey = tab.key,
+                            boardKey = tab.boardKey,
+                            ngRules = ngRules,
+                            ownPostNos = ownPostNos,
+                            saidaneThreshold = saidaneExtractThreshold,
+                            quoteThreshold = quoteExtractThreshold
+                        )
+                    }
+                    quoteStack = quoteStack + CompatQuoteFrame(title, "extract:${kind.name}", matches)
+                }
+            }
+        )
+    }
+    if (extractionKeywordOpen) {
+        AlertDialog(
+            onDismissRequest = { extractionKeywordOpen = false },
+            title = { Text("キーワード") },
+            text = {
+                TextField(
+                    extractionKeyword,
+                    { extractionKeyword = it },
+                    singleLine = true,
+                    modifier = Modifier.testTag("compat-thread-extraction-keyword")
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val keyword = extractionKeyword
+                    extractionKeywordOpen = false
+                    scope.launch {
+                        val matches = withContext(AppDispatchers.parsing) {
+                            extractCompatPosts(
+                                posts = snapshot?.posts.orEmpty(),
+                                kind = CompatExtractionKind.KEYWORD,
+                                scopeKey = tab.key,
+                                keyword = keyword
+                            )
+                        }
+                        quoteStack = quoteStack + CompatQuoteFrame("キーワード: $keyword", "extract:keyword", matches)
+                    }
+                }) { Text("検索する") }
+            },
+            dismissButton = { TextButton(onClick = { extractionKeywordOpen = false }) { Text("キャンセル") } }
+        )
+    }
+}
 
 // Keep this state/effect outside the large thread composable. D8's release
 // register allocation otherwise emitted an invalid continuation reference in
@@ -9271,127 +8900,6 @@ private fun rememberCompatThreadToolbarItems(
     }
     return items
 }
-
-@Composable
-private fun CompatTopBar(
-    title: String,
-    subtitle: String,
-    onBack: () -> Unit,
-    onOpenDrawer: (() -> Unit)? = null,
-    isDrawerOpen: Boolean = false,
-    onCloseDrawer: (() -> Unit)? = null,
-    onSearch: (() -> Unit)? = null,
-    onDisplayOptions: (() -> Unit)? = null,
-    onToolbarEdit: (() -> Unit)? = null,
-    onSettings: (() -> Unit)? = null,
-    onOpenHelp: (() -> Unit)? = null
-) {
-    var overflowOpen by remember { mutableStateOf(false) }
-    val topBarHeight = compatTopBarHeightDp(LocalDensity.current.fontScale).dp
-    val showExplicitNavigationBack = shouldShowCompatExplicitNavigationBack(
-        isAndroidPlatform = isAndroid(),
-        isDrawerOpen = isDrawerOpen
-    )
-    Box(
-        modifier = Modifier.fillMaxWidth().background(CompatTeal).compatReferenceStatusBarPadding()
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(topBarHeight),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (showExplicitNavigationBack) {
-                Box(
-                    modifier = Modifier.width(48.dp).fillMaxHeight(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("compat-navigation-back")
-                    ) {
-                        Icon(
-                            Icons.Filled.ArrowBack,
-                            contentDescription = "戻る",
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-            Box(
-                modifier = Modifier.width(56.dp).fillMaxHeight(),
-                contentAlignment = Alignment.Center
-            ) {
-                val showDrawerBack = onOpenDrawer != null && isDrawerOpen
-                IconButton(onClick = if (showDrawerBack) onCloseDrawer ?: onBack else onOpenDrawer ?: onBack) {
-                    Icon(
-                        if (onOpenDrawer != null && !isDrawerOpen) Icons.Filled.Menu else Icons.Filled.ArrowBack,
-                        contentDescription = if (showDrawerBack) "戻る" else if (onOpenDrawer != null) "ドロワー" else "戻る",
-                        tint = Color.White
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.weight(1f).padding(start = 16.dp),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(title, maxLines = 1, fontSize = 20.sp, color = Color.White, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, fontSize = 12.sp, color = Color.White, maxLines = 1)
-            }
-            if (onSearch != null) {
-                Spacer(Modifier.width(16.dp))
-                Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    IconButton(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = "検索", tint = Color.White)
-                    }
-                }
-            }
-            Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                IconButton(onClick = { overflowOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "その他", tint = Color.White)
-                }
-                DropdownMenu(
-                    expanded = overflowOpen,
-                    onDismissRequest = { overflowOpen = false },
-                    shape = RoundedCornerShape(2.dp),
-                    containerColor = compatibilityPopupSurface(LocalCompatibilityPalette.current),
-                    tonalElevation = 0.dp,
-                    shadowElevation = 8.dp
-                ) {
-                    com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem { overflowOpen = false }
-                    com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem { overflowOpen = false }
-                    DropdownMenuItem(
-                        text = { Text("表示オプション") },
-                        colors = compatibilityMenuItemColors(),
-                        enabled = onDisplayOptions != null,
-                        onClick = { overflowOpen = false; onDisplayOptions?.invoke() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("ツールバー編集") },
-                        colors = compatibilityMenuItemColors(),
-                        enabled = onToolbarEdit != null,
-                        onClick = { overflowOpen = false; onToolbarEdit?.invoke() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("設定") },
-                        colors = compatibilityMenuItemColors(),
-                        enabled = onSettings != null,
-                        onClick = { overflowOpen = false; onSettings?.invoke() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("ヘルプ") },
-                        colors = compatibilityMenuItemColors(),
-                        onClick = {
-                            overflowOpen = false
-                            onOpenHelp?.invoke()
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-internal fun compatTopBarHeightDp(fontScale: Float): Float =
-    56f * fontScale.coerceAtLeast(1f)
 
 @Composable
 private fun CompatCatalogSearchTopBar(
@@ -9471,352 +8979,7 @@ private fun CompatCatalogSortDialog(
     }
 }
 
-@Composable
-private fun CompatCatalogGridItem(
-    item: CatalogItem,
-    imageRetryGeneration: Int,
-    thumbnailRequestSizePx: Int,
-    lowQuality: Boolean,
-    replyIndicator: CompatCatalogReplyIndicator?,
-    isOld: Boolean,
-    droppedClass: CompatCatalogDroppedClass? = null,
-    titleLength: Int,
-    fontSize: Int,
-    cropThumbnail: Boolean,
-    showReplyCount: Boolean,
-    privacyAlpha: Float = 1f,
-    matchedWatchWords: List<String> = emptyList(),
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    val palette = LocalCompatibilityPalette.current
-    // CatalogFragment leaves the item container transparent: its 5dp top
-    // spacer exposes the gray catalog surface, while the image/title surfaces
-    // themselves are explicitly white (or black in the black theme).
-    val catalogCardBackground = compatibilityCatalogSurface(palette)
-    val imageLoader = LocalFutachaImageLoader.current
-    val replyCountPlacement = compatCatalogReplyCountPlacement(showReplyCount)
-    val platformContext = LocalPlatformContext.current
-    val imageCandidates = remember(item.thumbnailUrl, item.fullImageUrl, lowQuality) {
-        compatCatalogPreviewCandidates(item, lowQuality)
-    }
-    // A failed AsyncImagePainter retains Error while its model is unchanged.
-    // Reset the candidate and painter identity after a completed catalog
-    // refresh; successful URLs are still served by Coil's stable URL caches.
-    var imageCandidateIndex by remember(imageCandidates, imageRetryGeneration) {
-        mutableIntStateOf(0)
-    }
-    val imageUrl = imageCandidates.getOrNull(imageCandidateIndex)
-    val imagePainter = key(imageRetryGeneration) {
-        rememberAsyncImagePainter(
-            model = remember(
-                platformContext,
-                imageUrl,
-                imageRetryGeneration,
-                thumbnailRequestSizePx
-            ) {
-                ImageRequest.Builder(platformContext)
-                    .data(imageUrl)
-                    .compatImageFallbackPolicy()
-                    .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
-                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
-                    .crossfade(false)
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .build()
-            },
-            imageLoader = imageLoader
-        )
-    }
-    val imageState by imagePainter.state.collectAsState()
-    val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
-    LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
-        if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
-            imageCandidateIndex < imageCandidates.lastIndex
-        ) {
-            imageCandidateIndex += 1
-        }
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("compat-catalog-item-${item.id}")
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            // The legacy GridView starts the image at the card edge and leaves
-            // a 5dp (about 13px on the reference device) top spacer.  A 1dp
-            // horizontal inset made every thumbnail visibly narrower than the
-            // APK, so keep the card edge flush and match the measured 216px
-            // media area at density 420.
-            .padding(
-                start = 0.dp,
-                end = 0.dp,
-                top = CompatCatalogVisualContract.itemTopSpacerDp.dp,
-                bottom = 0.dp
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                // CatalogAdapter assigns the thumbnail a square size of
-                // screenWidth / gridColumns.  A fixed height leaves the
-                // top/bottom crop different from sample/1.apk.
-                .aspectRatio(CompatCatalogVisualContract.thumbnailAspectRatio)
-                // CatalogFragment's ImageView explicitly uses white as its
-                // light-theme background and black only for the black theme.
-                .background(catalogCardBackground)
-        ) {
-            if (imageUrl != null && imageState !is coil3.compose.AsyncImagePainter.State.Error) {
-                Image(
-                    painter = imagePainter,
-                    contentDescription = item.title,
-                    contentScale = if (cropThumbnail) ContentScale.Crop else ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("compat-catalog-image-${item.id}")
-                        .compatPrivacyImageEffect(privacyAlpha)
-                )
-            } else {
-                // Keep a title-bearing accessibility node even when a cached
-                // catalog row has no OP image. This also makes placeholder
-                // cards behave like image cards for test/accessibility users.
-                Box(
-                    modifier = Modifier.fillMaxSize().semantics {
-                        contentDescription = item.title.orEmpty()
-                    }
-                )
-            }
-            if (replyCountPlacement == CompatCatalogReplyCountPlacement.ON_THUMBNAIL) {
-                Row(
-                    modifier = Modifier.align(Alignment.TopEnd).background(catalogCardBackground),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp)
-                    Text(item.replyCount.toString(), fontSize = 12.sp, color = palette.text)
-                    replyIndicator?.let { indicator ->
-                        Text(
-                            "+${indicator.count}",
-                            color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
-                                Color.Red
-                            } else palette.uiSecondaryText,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-            }
-            droppedClass?.let { classification ->
-                Text(
-                    text = classification.compatCatalogDroppedLabel,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(classification.compatCatalogDroppedColor)
-                        .padding(horizontal = 3.dp, vertical = 1.dp),
-                    color = Color.White,
-                    fontSize = 11.sp
-                )
-            }
-            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
-            if (matchedWatchWords.isNotEmpty()) {
-                Text(
-                    text = matchedWatchWords.joinToString("・"),
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .background(palette.searchResultBackground)
-                        .padding(horizontal = 3.dp, vertical = 1.dp),
-                    color = palette.text,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        Text(
-            item.title.orEmpty().take(titleLength),
-            maxLines = 1,
-            fontSize = fontSize.sp,
-            lineHeight = 18.sp,
-            color = palette.text,
-            // catalog_gridview_item.xml uses match_parent here.  Keeping the
-            // Text composable at intrinsic width leaves a gray strip beside
-            // short titles, so its white surface is shorter than the image.
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(catalogCardBackground)
-                .padding(horizontal = CompatCatalogVisualContract.titleHorizontalPaddingDp.dp)
-        )
-        if (replyCountPlacement == CompatCatalogReplyCountPlacement.BELOW_TITLE) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(catalogCardBackground)
-                    .padding(horizontal = CompatCatalogVisualContract.titleHorizontalPaddingDp.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp)
-                Text(item.replyCount.toString(), fontSize = 12.sp, color = palette.text)
-                replyIndicator?.let { indicator ->
-                    Text(
-                        "+${indicator.count}",
-                        color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) Color.Red else palette.uiSecondaryText,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompatCatalogListItem(
-    item: CatalogItem,
-    imageRetryGeneration: Int,
-    thumbnailRequestSizePx: Int,
-    lowQuality: Boolean,
-    replyIndicator: CompatCatalogReplyIndicator?,
-    isOld: Boolean,
-    droppedClass: CompatCatalogDroppedClass? = null,
-    titleLength: Int,
-    fontSize: Int,
-    cropThumbnail: Boolean,
-    rowHeight: Dp,
-    thumbnailSize: Dp,
-    privacyAlpha: Float = 1f,
-    matchedWatchWords: List<String> = emptyList(),
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    val palette = LocalCompatibilityPalette.current
-    // The old list item has a transparent row container.  Only its thumbnail
-    // is given the explicit light/black surface; the catalog gray remains
-    // visible around and between rows.
-    val catalogCardBackground = compatibilityCatalogSurface(palette)
-    val imageLoader = LocalFutachaImageLoader.current
-    val platformContext = LocalPlatformContext.current
-    val imageCandidates = remember(item.thumbnailUrl, item.fullImageUrl, lowQuality) {
-        compatCatalogPreviewCandidates(item, lowQuality)
-    }
-    var imageCandidateIndex by remember(imageCandidates, imageRetryGeneration) {
-        mutableIntStateOf(0)
-    }
-    val imageUrl = imageCandidates.getOrNull(imageCandidateIndex)
-    val imagePainter = key(imageRetryGeneration) {
-        rememberAsyncImagePainter(
-            model = remember(
-                platformContext,
-                imageUrl,
-                imageRetryGeneration,
-                thumbnailRequestSizePx
-            ) {
-                ImageRequest.Builder(platformContext)
-                    .data(imageUrl)
-                    .compatImageFallbackPolicy()
-                    .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
-                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
-                    .crossfade(false)
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .build()
-            },
-            imageLoader = imageLoader
-        )
-    }
-    val imageState by imagePainter.state.collectAsState()
-    val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
-    LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
-        if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
-            imageCandidateIndex < imageCandidates.lastIndex
-        ) {
-            imageCandidateIndex += 1
-        }
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().height(rowHeight)
-            .testTag("compat-catalog-item-${item.id}")
-            .background(if (matchedWatchWords.isNotEmpty()) palette.searchResultBackground else palette.background)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(thumbnailSize)
-                .background(catalogCardBackground)
-        ) {
-            if (imageUrl != null && imageState !is coil3.compose.AsyncImagePainter.State.Error) {
-                Image(
-                    painter = imagePainter,
-                    contentDescription = item.title,
-                    contentScale = if (cropThumbnail) ContentScale.Crop else ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("compat-catalog-image-${item.id}")
-                        .compatPrivacyImageEffect(privacyAlpha)
-                )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize().semantics {
-                        contentDescription = item.title.orEmpty()
-                    }
-                )
-            }
-            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
-        }
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
-            if (matchedWatchWords.isNotEmpty()) {
-                Text(
-                    matchedWatchWords.joinToString("・"),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontSize = (fontSize - 2).coerceAtLeast(8).sp,
-                    color = CompatTeal
-                )
-            }
-            Text(
-                item.title.orEmpty().take(titleLength),
-                maxLines = 2,
-                fontSize = fontSize.sp,
-                color = palette.text
-            )
-        }
-        droppedClass?.let { classification ->
-            Text(
-                classification.compatCatalogDroppedLabel,
-                color = classification.compatCatalogDroppedColor,
-                fontSize = fontSize.sp
-            )
-        }
-        if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = fontSize.sp)
-        Column(horizontalAlignment = Alignment.End) {
-            Text(item.replyCount.toString(), fontSize = fontSize.sp, color = palette.text)
-            replyIndicator?.let { indicator ->
-                Text(
-                    "+${indicator.count}",
-                    color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
-                        Color.Red
-                    } else palette.uiSecondaryText,
-                    fontSize = fontSize.sp
-                )
-            }
-        }
-    }
-    HorizontalDivider(color = CompatDivider)
-}
-
-private val CompatCatalogDroppedClass.compatCatalogDroppedLabel: String
-    get() = when (this) {
-        CompatCatalogDroppedClass.ISOLATED -> "隔離"
-        CompatCatalogDroppedClass.DELETED -> "削除"
-        CompatCatalogDroppedClass.DIE -> "落ち"
-    }
-
-private val CompatCatalogDroppedClass.compatCatalogDroppedColor: Color
-    get() = when (this) {
-        CompatCatalogDroppedClass.ISOLATED -> Color(0xFF1565C0)
-        CompatCatalogDroppedClass.DELETED -> Color(0xFFB71C1C)
-        CompatCatalogDroppedClass.DIE -> Color(0xFF558B2F)
-    }
-
-private val CompatCatalogSort.displayLabel: String
+internal val CompatCatalogSort.displayLabel: String
     get() = when (this) {
         CompatCatalogSort.CATALOG -> "カタログ"
         CompatCatalogSort.NEW -> "新しい順"
@@ -9833,488 +8996,6 @@ private fun CompatCatalogSort.toCatalogMode(): CatalogMode = when (this) {
     CompatCatalogSort.MANY -> CatalogMode.Many
     CompatCatalogSort.FEW -> CatalogMode.Few
     CompatCatalogSort.LIVELY -> CatalogMode.Momentum
-}
-
-internal fun Throwable.toCompatUserMessage(fallback: String): String {
-    val raw = message.orEmpty()
-    return when {
-        raw == JAPANESE_TTS_UNAVAILABLE_MESSAGE -> JAPANESE_TTS_UNAVAILABLE_MESSAGE
-        raw.contains(compatAppHttp404Regex) -> "ページは見つかりません（404）"
-        raw.contains(compatAppHttp410Regex) -> "ページは消えています（410）"
-        raw.contains("timeout", ignoreCase = true) -> "通信がタイムアウトしました"
-        raw.contains("Unable to resolve host", ignoreCase = true) ||
-            raw.contains("Network is unreachable", ignoreCase = true) -> "ネットワークに接続できません"
-        else -> fallback
-    }
-}
-
-@Composable
-private fun CompatSearchTopBar(
-    query: String,
-    matchIndex: Int,
-    matchCount: Int,
-    onQueryChanged: (String) -> Unit,
-    onFocusChanged: (Boolean) -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onClose: () -> Unit
-) {
-    val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    LaunchedEffect(focusRequester) {
-        delay(150)
-        focusRequester.requestFocus()
-        keyboardController?.show()
-    }
-    TopAppBar(
-        expandedHeight = 56.dp,
-        title = {
-            TextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onNext() }),
-                placeholder = { Text("検索文字", fontSize = 20.sp) },
-                trailingIcon = {
-                    Text(if (matchCount == 0) "" else "${matchIndex + 1}/${matchCount}件", fontSize = 14.sp)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 15.dp, end = 8.dp)
-                    .testTag("compat-thread-search-field")
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { onFocusChanged(it.isFocused) },
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    cursorColor = Color.White,
-                    focusedPlaceholderColor = Color(0xFF80CBC4),
-                    unfocusedPlaceholderColor = Color(0xFF80CBC4)
-                )
-            )
-        },
-        navigationIcon = {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.ArrowBack, contentDescription = "検索を閉じる") }
-        },
-        actions = {
-            IconButton(onClick = onPrevious, enabled = matchCount > 0) {
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "前の検索結果")
-            }
-            IconButton(onClick = onNext, enabled = matchCount > 0) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "次の検索結果")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = CompatTeal,
-            navigationIconContentColor = Color.White,
-            titleContentColor = Color.White,
-            actionIconContentColor = Color.White
-        )
-    )
-}
-
-@Composable
-private fun CompatTitleStrip(tabs: List<CompatTab>, current: CompatTab) {
-    val palette = LocalCompatibilityPalette.current
-    val index = tabs.indexOfFirst { it.key == current.key }
-    Row(
-        modifier = Modifier.fillMaxWidth().height(22.dp).background(palette.background),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            tabs.getOrNull(index - 1)?.title.orEmpty().take(4),
-            modifier = Modifier.weight(1f),
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            color = palette.text
-        )
-        Text(
-            current.title.take(4),
-            modifier = Modifier.weight(1f),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            color = palette.text
-        )
-        Text(
-            tabs.getOrNull(index + 1)?.title.orEmpty().take(4),
-            modifier = Modifier.weight(1f),
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            color = palette.text
-        )
-    }
-}
-
-/**
- * Adjacent-page surface used while the pager is being dragged.  It must use
- * the same post renderer as the active page: the old lightweight text-only
- * preview hid attachments and always started at No.0, which was exactly the
- * misleading intermediate screen reported for tab swipes.
- */
-@Composable
-private fun CompatThreadPagerNeighborPreview(
-    tab: CompatTab,
-    snapshot: CompatThreadSnapshot?,
-    fontSize: Int,
-    thumbnailSize: Int,
-    upsThumbnailSize: Int,
-    upsThumbnailMethod: String,
-    wifiConnected: Boolean,
-    privacyAlpha: Float,
-    hideDefaultNameAndSubject: Boolean,
-    simpleQuoteCount: Boolean,
-    saidaneDisplayMode: String,
-    saidaneThreshold: Int,
-    modifier: Modifier = Modifier
-) {
-    val palette = LocalCompatibilityPalette.current
-    val scrollPosition = snapshot?.let { resolveCompatScrollPosition(it, tab.scrollAnchor) }
-    val initialIndex = scrollPosition?.index ?: 0
-    val initialOffset = scrollPosition?.offsetPx ?: 0
-    // Key the list state by the loaded revision. If it was created while the
-    // snapshot was still null, Compose would otherwise retain (0, 0) even
-    // after the cached page arrived and expose the thread top during the swipe.
-    val listState = key(
-        tab.key,
-        snapshot?.revision,
-        tab.scrollAnchor.postNo,
-        tab.scrollAnchor.offsetPx,
-        tab.scrollAnchor.fallbackIndex
-    ) {
-        rememberLazyListState(
-            initialFirstVisibleItemIndex = initialIndex,
-            initialFirstVisibleItemScrollOffset = initialOffset
-        )
-    }
-    var neighborPosterIdentityProgress by remember(tab.key, snapshot?.revision) {
-        mutableStateOf<Map<String, List<CompatPosterIdentityProgress>>>(emptyMap())
-    }
-    LaunchedEffect(tab.key, snapshot?.revision) {
-        val posts = snapshot?.posts.orEmpty()
-        neighborPosterIdentityProgress = if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT * 4) {
-            compatPosterIdentityProgressByPost(posts)
-        } else {
-            withContext(AppDispatchers.parsing) { compatPosterIdentityProgressByPost(posts) }
-        }
-    }
-    Column(modifier = modifier.background(palette.background)) {
-        if (snapshot == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("読み込み中…", color = palette.uiPrimaryText)
-            }
-        } else {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                // Archive/cache merges and malformed live responses can carry
-                // duplicate or blank post numbers. A LazyColumn key made only
-                // from postNo crashes during the catalog -> thread transition
-                // (#29); position keeps each rendered row unique while the
-                // post number remains the semantic identity everywhere else.
-                items(snapshot.posts, key = { "${it.postNo}:${it.position}" }) { post ->
-                    CompatPostRow(
-                        post = post,
-                        fontSize = fontSize,
-                        thumbnailSize = thumbnailSize,
-                        upsThumbnailSize = upsThumbnailSize,
-                        upsThumbnailMethod = upsThumbnailMethod,
-                        wifiConnected = wifiConnected,
-                        privacyAlpha = privacyAlpha,
-                        hideDefaultNameAndSubject = hideDefaultNameAndSubject,
-                        simpleQuoteCount = simpleQuoteCount,
-                        saidaneDisplayMode = saidaneDisplayMode,
-                        saidaneThreshold = saidaneThreshold,
-                        posterIdentityProgress = neighborPosterIdentityProgress[post.postNo].orEmpty()
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun CompatTabSelector(
-    tabs: List<CompatTab>,
-    currentTabKey: String?,
-    threadContext: Boolean,
-    onSelect: (CompatTab) -> Unit,
-    onClose: (CompatTab) -> Unit,
-    onReply: () -> Unit = {},
-    onCheckUpdates: () -> Unit = {},
-    onReload: () -> Unit = {},
-    longTapAction: String = "選択メニュー",
-    modifier: Modifier = Modifier
-) {
-    // State can briefly contain a tab restored by Undo while a concurrent
-    // history/catalog open is being committed. LazyRow keys must still be
-    // unique for that frame; using the stable-key projection here prevents a
-    // crash without falling back to positional keys (which would break tab
-    // state retention and close animations).
-    val uniqueTabs = distinctCompatTabs(tabs)
-    var menuTab by remember { mutableStateOf<CompatTab?>(null) }
-    var dragState by remember { mutableStateOf<CompatSelectorDragState?>(null) }
-    var closingTabKey by remember { mutableStateOf<String?>(null) }
-    var selectorWidthPx by remember { mutableStateOf(0f) }
-    val closeTab by rememberUpdatedState(onClose)
-    val palette = LocalCompatibilityPalette.current
-    val windowSize = LocalWindowInfo.current.containerSize
-    val previewWidthPx = with(LocalDensity.current) { 60.dp.roundToPx() }
-    val previewHeightPx = with(LocalDensity.current) { 40.dp.roundToPx() }
-
-    fun dispatchSelectorEffect(effect: CompatSelectorActionEffect, tab: CompatTab) {
-        when (effect) {
-            CompatSelectorActionEffect.NONE -> Unit
-            CompatSelectorActionEffect.CHECK_UPDATES -> onCheckUpdates()
-            CompatSelectorActionEffect.RELOAD_CURRENT -> onReload()
-            CompatSelectorActionEffect.SELECT_TAB -> onSelect(tab)
-            CompatSelectorActionEffect.REPLY_CURRENT -> onReply()
-            CompatSelectorActionEffect.CLOSE_TAB -> onClose(tab)
-            CompatSelectorActionEffect.OPEN_MENU -> menuTab = tab
-        }
-    }
-
-    fun runLongTapAction(tab: CompatTab) = dispatchSelectorEffect(
-        effect = resolveCompatSelectorLongTapEffect(
-            configuredAction = longTapAction,
-            threadContext = threadContext,
-            isCurrentTab = tab.key == currentTabKey
-        ),
-        tab = tab
-    )
-
-    LazyRow(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .background(palette.chrome)
-            // OVER selectors sit on top of the thread's media. Keep the
-            // selector in the hit-test front as well as the draw front;
-            // otherwise a tap/swipe can be delivered to the image underneath.
-            .zIndex(20f)
-            .onGloballyPositioned { selectorWidthPx = it.size.width.toFloat() }
-            .testTag("compat-tab-selector")
-    ) {
-        items(uniqueTabs, key = { it.key }) { tab ->
-            var itemRootOffset by remember(tab.key) { mutableStateOf(Offset.Zero) }
-            val closing = closingTabKey == tab.key
-            val closeProgress by animateFloatAsState(
-                targetValue = if (closing) 1f else 0f,
-                animationSpec = tween(
-                    durationMillis = COMPAT_SELECTOR_CLOSE_DURATION_MILLIS,
-                    easing = CompatAccelerateDecelerateEasing
-                ),
-                finishedListener = { progress ->
-                    if (progress == 1f && closingTabKey == tab.key) {
-                        closingTabKey = null
-                        closeTab(tab)
-                    }
-                },
-                label = "compat selector close"
-            )
-            val transform = compatSelectorCloseTransform(closeProgress)
-            Box(
-                modifier = Modifier
-                    .width(60.dp)
-                    .height(40.dp)
-                    .zIndex(if (closing) 1f else 0f)
-                    .graphicsLayer {
-                        scaleX = if (closing) transform.scale else 1f
-                        scaleY = if (closing) transform.scale else 1f
-                        rotationZ = if (closing) transform.rotationDegrees else 0f
-                    }
-                    .onGloballyPositioned { itemRootOffset = it.positionInRoot() }
-                    // A regular horizontal drag belongs to LazyRow so an
-                    // overflowing selector can scroll (#60). Closing remains
-                    // available through the deliberate long-press drag below.
-                    .pointerInput(
-                        tab.key,
-                        longTapAction,
-                        currentTabKey,
-                        selectorWidthPx
-                    ) {
-                        var lastScreenX = 0f
-                        var lastScreenY = 0f
-                        var armed = false
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { local ->
-                                lastScreenX = itemRootOffset.x + local.x
-                                lastScreenY = itemRootOffset.y + local.y
-                                armed = false
-                                dragState = CompatSelectorDragState(
-                                    tab = tab,
-                                    itemLeft = itemRootOffset.x,
-                                    itemTop = itemRootOffset.y,
-                                    pointerX = lastScreenX,
-                                    pointerY = lastScreenY,
-                                    closeArmed = false,
-                                    shadowAlphaAdd = compatSelectorShadowAlphaAdd(lastScreenY, itemRootOffset.y),
-                                    holdLabel = longTapAction
-                                )
-                            },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                lastScreenX = itemRootOffset.x + change.position.x
-                                lastScreenY = itemRootOffset.y + change.position.y
-                                armed = isCompatSelectorCloseDrop(
-                                    screenX = lastScreenX,
-                                    screenY = lastScreenY,
-                                    itemTopOnScreen = itemRootOffset.y,
-                                    displayWidth = selectorWidthPx
-                                )
-                                dragState = CompatSelectorDragState(
-                                    tab = tab,
-                                    itemLeft = itemRootOffset.x,
-                                    itemTop = itemRootOffset.y,
-                                    pointerX = lastScreenX,
-                                    pointerY = lastScreenY,
-                                    closeArmed = armed,
-                                    shadowAlphaAdd = compatSelectorShadowAlphaAdd(lastScreenY, itemRootOffset.y),
-                                    holdLabel = if (armed) "スレを閉じる" else ""
-                                )
-                            },
-                            onDragEnd = {
-                                val endedInsideItem = lastScreenX in itemRootOffset.x..(itemRootOffset.x + size.width) &&
-                                    lastScreenY in itemRootOffset.y..(itemRootOffset.y + size.height)
-                                dragState = null
-                                when {
-                                    armed -> closingTabKey = tab.key
-                                    endedInsideItem -> runLongTapAction(tab)
-                                }
-                            },
-                            onDragCancel = { dragState = null }
-                        )
-                    }
-                    .clickable(enabled = !closing) { onSelect(tab) }
-                    .testTag("compat-selector-tab-${tab.key}")
-            ) {
-                CompatTabSelectorCell(tab, tab.key == currentTabKey, threadContext)
-            }
-        }
-    }
-    dragState?.let { drag ->
-        val previewOffset = compatSelectorPreviewOffset(
-            itemLeftInRoot = drag.itemLeft,
-            pointerYInRoot = drag.pointerY,
-            viewportWidth = windowSize.width,
-            viewportHeight = windowSize.height,
-            previewWidth = previewWidthPx,
-            previewHeight = previewHeightPx
-        )
-        Popup(
-            popupPositionProvider = CompatSelectorWindowPositionProvider,
-            properties = PopupProperties(
-                focusable = false,
-                dismissOnBackPress = false,
-                dismissOnClickOutside = false,
-                clippingEnabled = false
-            )
-        ) {
-            val blackAlpha = ((120f + (80f * drag.shadowAlphaAdd)) / 255f).coerceIn(0f, 1f)
-            Box(
-                Modifier.fillMaxSize()
-                    .background(Color.Black.copy(alpha = blackAlpha))
-                    .testTag("compat-selector-drag-shadow")
-            ) {
-                if (drag.holdLabel.isNotBlank()) {
-                    Text(
-                        drag.holdLabel,
-                        color = Color(0x80FFFFFF),
-                        fontSize = 42.sp,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                Box(
-                    Modifier.offset {
-                        IntOffset(previewOffset.x, previewOffset.y)
-                    }.size(60.dp, 40.dp).testTag("compat-selector-drag-preview")
-                ) {
-                    CompatTabSelectorCell(drag.tab, drag.tab.key == currentTabKey, threadContext)
-                }
-            }
-        }
-    }
-    menuTab?.let { selected ->
-        CompatLegacyChoiceDialog(
-            onDismiss = { menuTab = null },
-            choices = compatSelectorContextChoices(threadContext, selected.key == currentTabKey),
-            alignment = if (threadContext) Alignment.BottomCenter else Alignment.Center,
-            onChoice = { choice ->
-                dispatchSelectorEffect(resolveCompatSelectorMenuEffect(choice), selected)
-            }
-        )
-    }
-}
-
-private data class CompatSelectorDragState(
-    val tab: CompatTab,
-    val itemLeft: Float,
-    val itemTop: Float,
-    val pointerX: Float,
-    val pointerY: Float,
-    val closeArmed: Boolean,
-    val shadowAlphaAdd: Float,
-    val holdLabel: String
-)
-
-private val CompatAccelerateDecelerateEasing = Easing { fraction ->
-    ((cos((fraction + 1f) * PI) / 2.0) + 0.5).toFloat()
-}
-
-@Composable
-private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext: Boolean) {
-    val palette = LocalCompatibilityPalette.current
-    Box(Modifier.fillMaxSize()) {
-        AsyncImage(
-            model = tab.thumbnailUrl,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.align(Alignment.Center).width(58.dp).height(40.dp)
-                .graphicsLayer { alpha = if (tab.isDead) 0.5f else 1f }
-        )
-        Box(
-            Modifier.fillMaxWidth().height(16.dp).align(Alignment.BottomCenter)
-                .background(
-                    if (threadContext && active) palette.chrome.copy(alpha = 0.9f)
-                    else Color.Black.copy(alpha = 0.46f)
-                )
-                .testTag("compat-tab-title-scrim-${tab.key}"),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                tab.title.take(4),
-                color = Color.White,
-                fontSize = 12.sp,
-                // The selector label must not inherit the screen's 24sp body
-                // line height: that lifts its glyphs above the 16dp title band.
-                lineHeight = 16.sp,
-                maxLines = 1,
-                softWrap = false,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.testTag("compat-tab-title-${tab.key}")
-            )
-        }
-        if (tab.unreadCount > 0) {
-            Text(
-                "+${tab.unreadCount}",
-                color = Color.Red,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.TopEnd).padding(horizontal = 2.dp)
-            )
-        }
-    }
 }
 
 private data class CompatToolbarCommand(
@@ -10472,1547 +9153,11 @@ private fun CompatHierarchicalOtherMenuDialog(
         }
     }
 }
-
-@Composable
-internal fun CompatNgRuleManagementDialog(
-    title: String,
-    rules: List<CompatNgRule>,
-    imageReferenceBoardName: String? = null,
-    phashThreshold: Int? = null,
-    onPhashThresholdChange: ((Int) -> Unit)? = null,
-    onDelete: (CompatNgRule) -> Unit,
-    onDeleteAll: (List<CompatNgRule>) -> Unit,
-    addScopeLabel: String? = null,
-    referenceKind: CompatNgKind? = null,
-    onAdd: ((value: String, globalScope: Boolean) -> Unit)? = null,
-    onEdit: ((rule: CompatNgRule, value: String, globalScope: Boolean, memo: String) -> Unit)? = null,
-    onDismiss: () -> Unit
-) {
-    val isImageReference = imageReferenceBoardName != null
-    val isReference = referenceKind != null || isImageReference
-    val isCatalogWordReference = referenceKind == CompatNgKind.CATALOG_EXTRACT ||
-        referenceKind == CompatNgKind.CATALOG_IGNORE
-    val isCatalogRefuseReference = referenceKind == CompatNgKind.CATALOG_REFUSE
-    val isThreadWordReference = referenceKind == CompatNgKind.THREAD_REFUSE ||
-        referenceKind == CompatNgKind.THREAD_IGNORE
-    val isWordReference = isCatalogWordReference || isThreadWordReference
-    val referenceWordMaxLength = if (isThreadWordReference) 20 else 10
-    val referenceTag = when (referenceKind) {
-        CompatNgKind.CATALOG_EXTRACT -> "compat-catalog-extract"
-        CompatNgKind.CATALOG_IGNORE -> "compat-catalog-ignore"
-        CompatNgKind.CATALOG_REFUSE -> "compat-catalog-refuse"
-        CompatNgKind.THREAD_REFUSE -> "compat-thread-refuse"
-        CompatNgKind.THREAD_IGNORE -> "compat-thread-ignore"
-        else -> if (isImageReference) "compat-image-ng" else null
-    }
-    var confirmDeleteAll by remember { mutableStateOf(false) }
-    var newValue by remember { mutableStateOf("") }
-    var globalScope by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var searchOpen by remember { mutableStateOf(false) }
-    var moreOpen by remember { mutableStateOf(false) }
-    var thresholdOpen by remember { mutableStateOf(false) }
-    var thresholdDraft by remember(phashThreshold) {
-        mutableIntStateOf(phashThreshold ?: CompatImagePhash.DEFAULT_THRESHOLD)
-    }
-    var thresholdSavedMessage by remember { mutableStateOf(false) }
-    var addOpen by remember { mutableStateOf(false) }
-    var addValidationMessage by remember { mutableStateOf<String?>(null) }
-    var editingRule by remember { mutableStateOf<CompatNgRule?>(null) }
-    var pendingReferenceDeleteRule by remember { mutableStateOf<CompatNgRule?>(null) }
-    var editValue by remember { mutableStateOf("") }
-    var editMemo by remember { mutableStateOf("") }
-    var editGlobalScope by remember { mutableStateOf(false) }
-    var editValidationMessage by remember { mutableStateOf<String?>(null) }
-    val clipboard = LocalClipboardManager.current
-    val openUrl = rememberUrlLauncher()
-    val filteredRules = remember(rules, searchQuery, isImageReference) {
-        val query = normalizeCompatSearchText(searchQuery)
-        if (isImageReference) {
-            rules.filter { rule -> compatImageNgMatchesSearch(rule, searchQuery) }
-        } else if (query.isBlank()) rules else rules.filter { rule ->
-            normalizeCompatSearchText(rule.normalizedValue).contains(query) ||
-                normalizeCompatSearchText(rule.memo).contains(query) ||
-                normalizeCompatSearchText(
-                    if (isThreadWordReference) compatThreadReferenceDisplayValue(rule)
-                    else rule.normalizedValue
-                ).contains(query) ||
-                normalizeCompatSearchText(rule.imageUrl.orEmpty()).contains(query)
-        }
-    }
-    fun hasReferenceDuplicate(value: String, global: Boolean, editingId: String? = null): Boolean = when {
-        isCatalogWordReference -> hasCompatCatalogManagementDuplicate(rules, value, editingId)
-        isThreadWordReference -> hasCompatThreadReferenceDuplicate(
-            rules = rules,
-            kind = referenceKind,
-            value = value,
-            globalScope = global,
-            excludingRuleId = editingId,
-            editing = editingId != null
-        )
-        else -> false
-    }
-    fun submitReferenceAdd() {
-        val cleaned = if (isThreadWordReference) cleanCompatThreadReferenceWord(newValue) else newValue
-        when {
-            cleaned.isBlank() -> addValidationMessage = "単語を入力して下さい"
-            referenceKind == CompatNgKind.THREAD_REFUSE && isCompatThreadRefuseForbidden(cleaned) ->
-                addValidationMessage = "登録できない単語です"
-            hasReferenceDuplicate(cleaned, globalScope) -> {
-                addOpen = false
-                searchOpen = true
-                searchQuery = cleaned
-            }
-            else -> {
-                onAdd?.invoke(cleaned, globalScope)
-                newValue = ""
-                addValidationMessage = null
-                addOpen = false
-            }
-        }
-    }
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            if (searchOpen) {
-                                TextField(
-                                    value = searchQuery,
-                                    onValueChange = { searchQuery = it.take(200) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .then(
-                                            if (referenceTag != null) {
-                                                Modifier.testTag("$referenceTag-search")
-                                            } else Modifier
-                                        ),
-                                    singleLine = true,
-                                    placeholder = { Text("検索") },
-                                    colors = TextFieldDefaults.colors(
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent,
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedPlaceholderColor = Color.White,
-                                        unfocusedPlaceholderColor = Color.White,
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent
-                                    )
-                                )
-                            } else {
-                                Text(
-                                    when (referenceKind) {
-                                        CompatNgKind.CATALOG_EXTRACT -> "スレッド監視 ${rules.size}個"
-                                        CompatNgKind.CATALOG_IGNORE -> "ＮＧワード ${rules.size}個"
-                                        CompatNgKind.CATALOG_REFUSE -> "ＮＧスレッド ${rules.size}個"
-                                        CompatNgKind.THREAD_REFUSE -> "ＮＧヘッダー ${rules.size}個"
-                                        CompatNgKind.THREAD_IGNORE -> "ＮＧワード ${rules.size}個"
-                                        else -> if (isImageReference) "ＮＧ画像 ${rules.size}個" else title
-                                    }
-                                )
-                            }
-                        },
-                        navigationIcon = {
-                            IconButton(onClick = onDismiss) {
-                                Icon(Icons.Filled.ArrowBack, contentDescription = "戻る")
-                            }
-                        },
-                        actions = {
-                            IconButton(
-                                onClick = {
-                                    searchOpen = !searchOpen
-                                    if (!searchOpen) searchQuery = ""
-                                },
-                                modifier = Modifier.testTag("compat-rule-management-search")
-                            ) {
-                                Icon(Icons.Filled.Search, contentDescription = "検索")
-                            }
-                            if (onAdd != null) {
-                                IconButton(onClick = {
-                                    newValue = ""
-                                    globalScope = false
-                                    addValidationMessage = null
-                                    addOpen = true
-                                }) {
-                                    Icon(Icons.Filled.Add, contentDescription = "新規追加")
-                                }
-                            }
-                            Box {
-                                IconButton(
-                                    onClick = { moreOpen = true },
-                                    modifier = Modifier.testTag("compat-rule-management-overflow")
-                                ) {
-                                    Icon(Icons.Filled.MoreVert, contentDescription = "その他")
-                                }
-                                DropdownMenu(
-                                    expanded = moreOpen,
-                                    onDismissRequest = { moreOpen = false },
-                                    shape = RoundedCornerShape(2.dp),
-                                    containerColor = compatibilityPopupSurface(LocalCompatibilityPalette.current),
-                                    tonalElevation = 0.dp,
-                                    shadowElevation = 8.dp
-                                ) {
-                                    if (phashThreshold != null && onPhashThresholdChange != null) {
-                                        DropdownMenuItem(
-                                            text = { Text("類似判定のしきい値") },
-                                            colors = compatibilityMenuItemColors(),
-                                            onClick = {
-                                                moreOpen = false
-                                                thresholdDraft = phashThreshold
-                                                thresholdOpen = true
-                                            }
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        enabled = isReference || rules.isNotEmpty(),
-                                        text = { Text("全て削除") },
-                                        colors = compatibilityMenuItemColors(),
-                                        onClick = { moreOpen = false; confirmDeleteAll = true }
-                                    )
-                                }
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = LocalCompatibilityPalette.current.chrome,
-                            titleContentColor = Color.White,
-                            navigationIconContentColor = Color.White,
-                            actionIconContentColor = Color.White
-                        )
-                    )
-                }
-            ) { contentPadding ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(contentPadding)
-                ) {
-                    LaunchedEffect(thresholdSavedMessage) {
-                        if (thresholdSavedMessage) {
-                            delay(3_000)
-                            thresholdSavedMessage = false
-                        }
-                    }
-                    if (thresholdSavedMessage) {
-                        Text(
-                            "保存しました。次回リロードまたはNG on/off後に反映されます",
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            fontSize = 13.sp
-                        )
-                    }
-                    if (filteredRules.isEmpty() && !isReference) {
-                        Text(
-                            if (rules.isEmpty()) "登録はありません" else "一致するNGはありません",
-                            modifier = Modifier.padding(16.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(filteredRules, key = CompatNgRule::id) { rule ->
-                                val isImageRule = isImageReference || rule.imageUrl != null
-                                val openEditor = {
-                                    if (onEdit != null) {
-                                        editValue = when {
-                                            isCatalogWordReference -> compatCatalogManagementDisplayValue(rule)
-                                            isThreadWordReference -> compatThreadReferenceDisplayValue(rule)
-                                            else -> rule.normalizedValue
-                                        }
-                                        editMemo = rule.memo
-                                        editGlobalScope = rule.scopeKey == "*"
-                                        editValidationMessage = null
-                                        editingRule = rule
-                                    }
-                                }
-                                if (isCatalogRefuseReference) {
-                                    Text(
-                                        text = compatCatalogRefuseDisplayText(rule),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .defaultMinSize(minHeight = 60.dp)
-                                            .clickable { pendingReferenceDeleteRule = rule }
-                                            .then(
-                                                referenceTag?.let {
-                                                    Modifier.testTag("$it-row-${rule.id}")
-                                                } ?: Modifier
-                                            )
-                                            .padding(20.dp),
-                                        color = LocalCompatibilityPalette.current.text,
-                                        fontSize = 16.sp
-                                    )
-                                } else {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(if (isImageRule) 68.dp else 60.dp)
-                                            .then(
-                                                if (isWordReference) {
-                                                    Modifier.clickable(onClick = openEditor)
-                                                } else if (isImageReference) {
-                                                    Modifier.clickable(onClick = openEditor)
-                                                } else {
-                                                    Modifier.combinedClickable(
-                                                        onClick = openEditor,
-                                                        onLongClick = { onDelete(rule) }
-                                                    )
-                                                }
-                                            )
-                                            .then(
-                                                if (isWordReference && referenceTag != null) {
-                                                    Modifier.testTag("$referenceTag-row-${rule.id}")
-                                                } else {
-                                                    Modifier.padding(horizontal = if (isImageReference) 8.dp else 10.dp)
-                                                }
-                                            )
-                                            .then(
-                                                if (isImageReference && referenceTag != null) {
-                                                    Modifier.testTag("$referenceTag-row-${rule.id}")
-                                                } else Modifier
-                                            ),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                    if (isWordReference) {
-                                        Box(
-                                            modifier = Modifier.size(60.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            if (rule.scopeKey == "*") {
-                                                CompatAllBoardsReferenceIcon(
-                                                    tint = LocalCompatibilityPalette.current.text,
-                                                    contentDescription = if (isThreadWordReference) {
-                                                        "全てのスレッド"
-                                                    } else {
-                                                        "全ての板"
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                    if (isImageRule) {
-                                        AsyncImage(
-                                            model = compatImageNgFirstUrl(rule),
-                                            imageLoader = LocalFutachaImageLoader.current,
-                                            contentDescription = "NG画像",
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.size(56.dp)
-                                        )
-                                        Spacer(Modifier.width(10.dp))
-                                    }
-                                    Column(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .then(
-                                                if (isWordReference) Modifier.padding(start = 10.dp)
-                                                else Modifier
-                                            )
-                                    ) {
-                                        Text(
-                                            text = if (isImageRule) {
-                                                if (isImageReference) {
-                                                    compatImageNgDisplayTitle(rule)
-                                                } else {
-                                                    rule.memo.takeIf(String::isNotBlank)
-                                                        ?: compatImageNgFirstUrl(rule)
-                                                            .substringAfterLast('/')
-                                                            .substringBefore('?')
-                                                            .takeIf(String::isNotBlank)
-                                                        ?: rule.normalizedValue
-                                                }
-                                            } else if (isCatalogWordReference) {
-                                                compatCatalogManagementDisplayValue(rule)
-                                            } else if (isThreadWordReference) {
-                                                compatThreadReferenceDisplayValue(rule)
-                                            } else {
-                                                rule.normalizedValue
-                                            },
-                                            fontSize = if (isWordReference) 22.sp else if (isImageRule) 15.sp else 16.sp,
-                                            maxLines = if (isWordReference || isImageRule) 1 else 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = if (isWordReference || isImageReference) {
-                                                LocalCompatibilityPalette.current.text
-                                            } else {
-                                                Color.Unspecified
-                                            },
-                                            modifier = if (isWordReference && referenceTag != null) {
-                                                Modifier.testTag("$referenceTag-word-${rule.id}")
-                                            } else Modifier
-                                        )
-                                        if (!isWordReference) {
-                                            if (isImageReference) {
-                                                Text(
-                                                    text = compatImageNgBoardLabel(
-                                                        rule,
-                                                        imageReferenceBoardName.orEmpty()
-                                                    ),
-                                                    fontSize = 12.sp,
-                                                    color = LocalCompatibilityPalette.current.text,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = formatCompatImageNgCreatedAt(rule.createdAtEpochMillis),
-                                                    fontSize = 12.sp,
-                                                    color = LocalCompatibilityPalette.current.text,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            } else {
-                                                Text(
-                                                    text = buildString {
-                                                        append(if (rule.scopeKey == "*") "全ての板" else "この板のみ")
-                                                        append(" ・ ")
-                                                        append(formatCompatNgCreatedAt(rule.createdAtEpochMillis))
-                                                    },
-                                                    fontSize = 12.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                        }
-                                    }
-                                    }
-                                    if (!isWordReference && !isImageReference) HorizontalDivider()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (addOpen) {
-        AlertDialog(
-            onDismissRequest = { addOpen = false },
-            title = {
-                Text(
-                    when (referenceKind) {
-                        CompatNgKind.CATALOG_EXTRACT -> "監視ワード"
-                        CompatNgKind.CATALOG_IGNORE -> "ＮＧワード"
-                        CompatNgKind.THREAD_REFUSE -> "ＮＧヘッダー"
-                        CompatNgKind.THREAD_IGNORE -> "ＮＧワード"
-                        else -> "新規追加"
-                    }
-                )
-            },
-            text = {
-                Column {
-                    if (isWordReference) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("単語", fontSize = 18.sp, modifier = Modifier.padding(10.dp))
-                            TextField(
-                                value = newValue,
-                                onValueChange = {
-                                    newValue = it.take(referenceWordMaxLength)
-                                    addValidationMessage = null
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .then(
-                                        referenceTag?.let {
-                                            Modifier.testTag("$it-add-word")
-                                        } ?: Modifier
-                                    ),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = {
-                                    submitReferenceAdd()
-                                })
-                            )
-                        }
-                    } else {
-                        TextField(
-                            value = newValue,
-                            onValueChange = { newValue = it.take(200) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text("登録値") },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = {
-                                onAdd?.invoke(newValue, globalScope)
-                                newValue = ""
-                                addOpen = false
-                            })
-                        )
-                    }
-                    if (addScopeLabel != null) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(10.dp),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = if (isThreadWordReference) !globalScope else globalScope,
-                                onCheckedChange = {
-                                    globalScope = if (isThreadWordReference) !it else it
-                                }
-                            )
-                            Text(
-                                when {
-                                    isCatalogWordReference -> "全ての板"
-                                    isThreadWordReference -> "このスレッドのみ"
-                                    else -> addScopeLabel
-                                }.orEmpty()
-                            )
-                        }
-                    }
-                    if (isWordReference) {
-                        addValidationMessage?.let {
-                            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 10.dp))
-                        }
-                        Text(
-                            if (isThreadWordReference) {
-                                "・リロード後に反映されます\n" +
-                                    "・読み込みが長くなります\n" +
-                                    "・多いほど時間が掛かります\n" +
-                                    "・登録数に注意して下さい"
-                            } else {
-                                "・大文字と小文字を区別しません\n" +
-                                    "・全角と半角を区別しません\n" +
-                                    "・リロード後に反映されます\n" +
-                                    "・多いほど時間が掛かります\n" +
-                                    "・登録数に注意して下さい"
-                            },
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = isWordReference || newValue.isNotBlank(),
-                    onClick = {
-                        if (isWordReference) {
-                            submitReferenceAdd()
-                        } else {
-                            onAdd?.invoke(newValue, globalScope)
-                            newValue = ""
-                            addValidationMessage = null
-                            addOpen = false
-                        }
-                    }
-                ) { Text(if (isWordReference) "追加する" else "追加") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    newValue = ""
-                    globalScope = false
-                    addValidationMessage = null
-                    addOpen = false
-                }) { Text("キャンセル") }
-            }
-        )
-    }
-    if (confirmDeleteAll) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteAll = false },
-            title = { Text(if (isReference) "全て削除" else "NGを全削除") },
-            text = {
-                Text(
-                    if (isImageReference) "登録済みのNG画像を全て削除します。よろしいですか？"
-                    else if (isReference) "本当によろしいですか？"
-                    else "${rules.size}件のNGルールを削除します。元に戻せません。"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDeleteAll = false
-                    onDeleteAll(rules)
-                }) {
-                    Text(
-                        if (isReference) "削除する" else "削除",
-                        color = if (isReference) Color.Unspecified else Color.Red
-                    )
-                }
-            },
-            dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("キャンセル") } }
-        )
-    }
-    pendingReferenceDeleteRule?.let { rule ->
-        AlertDialog(
-            onDismissRequest = { pendingReferenceDeleteRule = null },
-            title = { Text("登録の削除") },
-            text = { Text("本当によろしいですか？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingReferenceDeleteRule = null
-                    onDelete(rule)
-                }) { Text("削除する") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingReferenceDeleteRule = null }) { Text("キャンセル") }
-            }
-        )
-    }
-    if (thresholdOpen && phashThreshold != null && onPhashThresholdChange != null) {
-        AlertDialog(
-            onDismissRequest = { thresholdOpen = false },
-            title = { Text("類似判定のしきい値") },
-            text = {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("しきい値", fontSize = 16.sp, modifier = Modifier.weight(1f))
-                        Text(
-                            thresholdDraft.toString(),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(end = 24.dp)
-                        )
-                    }
-                    Slider(
-                        value = thresholdDraft.toFloat(),
-                        onValueChange = {
-                            thresholdDraft = it.roundToInt().coerceIn(
-                                CompatImagePhash.MIN_THRESHOLD,
-                                CompatImagePhash.MAX_THRESHOLD
-                            )
-                        },
-                        valueRange = 0f..16f,
-                        steps = 15,
-                        modifier = Modifier.testTag("compat-image-ng-threshold-slider")
-                    )
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            Text("ⓘ 64bit pHashのハミング距離です。", fontSize = 13.sp)
-                            Text("小さいほど厳しく、大きいほど緩く判定します。", fontSize = 13.sp)
-                            CompatImagePhash.thresholdGuideRows.forEach { (range, description) ->
-                                Row(modifier = Modifier.fillMaxWidth()) {
-                                    Text(range, modifier = Modifier.width(58.dp), fontSize = 13.sp)
-                                    Text(description, fontSize = 13.sp)
-                                }
-                            }
-                            Text("※ 画像の種類によって目安は変わります。", fontSize = 12.sp)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onPhashThresholdChange(thresholdDraft)
-                    thresholdOpen = false
-                    thresholdSavedMessage = true
-                }) { Text("保存") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        thresholdDraft = CompatImagePhash.DEFAULT_THRESHOLD
-                    }) { Text("初期値に戻す") }
-                    TextButton(onClick = { thresholdOpen = false }) { Text("キャンセル") }
-                }
-            }
-        )
-    }
-    editingRule?.let { rule ->
-        AlertDialog(
-            onDismissRequest = { editingRule = null },
-            title = {
-                Text(
-                    when (referenceKind) {
-                        CompatNgKind.CATALOG_EXTRACT -> "監視ワード"
-                        CompatNgKind.CATALOG_IGNORE -> "ＮＧワード"
-                        CompatNgKind.THREAD_REFUSE -> "ＮＧヘッダー"
-                        CompatNgKind.THREAD_IGNORE -> "ＮＧワード"
-                        else -> if (isImageReference) "NG画像" else "NGを編集"
-                    }
-                )
-            },
-            text = {
-                Column {
-                    if (isImageReference) {
-                        AsyncImage(
-                            model = compatImageNgFirstUrl(rule),
-                            imageLoader = LocalFutachaImageLoader.current,
-                            contentDescription = "編集するNG画像",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(96.dp)
-                                .align(Alignment.CenterHorizontally)
-                                .testTag("compat-image-ng-edit-thumb")
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("メモ", fontSize = 16.sp, modifier = Modifier.width(48.dp))
-                            TextField(
-                                value = editMemo,
-                                onValueChange = { editMemo = it.take(MAX_COMPAT_NG_MEMO_CHARS) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("compat-image-ng-edit-memo"),
-                                minLines = 1,
-                                maxLines = 4,
-                                singleLine = false
-                            )
-                        }
-                    } else if (isWordReference) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("単語", fontSize = 18.sp, modifier = Modifier.padding(10.dp))
-                            TextField(
-                                value = editValue,
-                                onValueChange = {
-                                    editValue = it.take(referenceWordMaxLength)
-                                    editValidationMessage = null
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .then(
-                                        referenceTag?.let {
-                                            Modifier.testTag("$it-edit-word")
-                                        } ?: Modifier
-                                    ),
-                                singleLine = true
-                            )
-                        }
-                    } else {
-                        TextField(
-                            value = editValue,
-                            onValueChange = { editValue = it.take(200) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text("登録値") }
-                        )
-                    }
-                    if (isWordReference) {
-                        editValidationMessage?.let {
-                            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 10.dp))
-                        }
-                    }
-                    if (rule.imageUrl != null && !isImageReference) {
-                        TextField(
-                            value = editMemo,
-                            onValueChange = { editMemo = it.take(MAX_COMPAT_NG_MEMO_CHARS) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text("メモ") }
-                        )
-                    }
-                    Row(
-                        modifier = if (isWordReference) {
-                            Modifier.fillMaxWidth().padding(10.dp)
-                        } else if (isImageReference) {
-                            Modifier.fillMaxWidth()
-                        } else Modifier,
-                        horizontalArrangement = if (isWordReference) {
-                            Arrangement.End
-                        } else if (isImageReference) {
-                            Arrangement.End
-                        } else Arrangement.Start,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = if (isThreadWordReference || isImageReference) {
-                                !editGlobalScope
-                            } else {
-                                editGlobalScope
-                            },
-                            onCheckedChange = {
-                                editGlobalScope = if (isThreadWordReference || isImageReference) !it else it
-                            },
-                            modifier = if (isImageReference) {
-                                Modifier.testTag("compat-image-ng-edit-local-only")
-                            } else Modifier
-                        )
-                        Text(
-                            when {
-                                isCatalogWordReference -> "全ての板"
-                                isThreadWordReference -> "このスレッドのみ"
-                                isImageReference -> "この板のみ"
-                                else -> addScopeLabel ?: "全体に適用"
-                            }
-                        )
-                    }
-                    rule.imageUrl?.takeUnless { isImageReference }?.let { imageUrl ->
-                        Row {
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(imageUrl)) }) {
-                                Text("URLをコピー")
-                            }
-                            TextButton(onClick = { openUrl(imageUrl) }) {
-                                Text("ブラウザで開く")
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val normalizedEditValue = normalizeCompatSearchText(
-                        if (isThreadWordReference) cleanCompatThreadReferenceWord(editValue) else editValue
-                    )
-                    val originalDisplayValue = if (isThreadWordReference) {
-                        compatThreadReferenceDisplayValue(rule)
-                    } else {
-                        rule.normalizedValue
-                    }
-                    val unchanged = normalizedEditValue == normalizeCompatSearchText(originalDisplayValue) &&
-                        editGlobalScope == (rule.scopeKey == "*")
-                    if (isWordReference && editValue.isBlank()) {
-                        editValidationMessage = "単語を入力して下さい"
-                    } else if (
-                        referenceKind == CompatNgKind.THREAD_REFUSE &&
-                        isCompatThreadRefuseForbidden(editValue)
-                    ) {
-                        editValidationMessage = "登録できない単語です"
-                    } else if (
-                        isWordReference &&
-                        (unchanged || hasReferenceDuplicate(editValue, editGlobalScope, rule.id))
-                    ) {
-                        editValidationMessage = "既に登録されているか、または変更がありません"
-                    } else {
-                        onEdit?.invoke(rule, editValue, editGlobalScope, editMemo)
-                        editValidationMessage = null
-                        editingRule = null
-                    }
-                }) { Text(if (isWordReference || isImageReference) "更新する" else "保存") }
-            },
-            dismissButton = {
-                Row {
-                    if (isWordReference || isImageReference) {
-                        TextButton(onClick = {
-                            onDelete(rule)
-                            editValidationMessage = null
-                            editingRule = null
-                        }) { Text("削除") }
-                    }
-                    TextButton(onClick = {
-                        editValidationMessage = null
-                        editingRule = null
-                    }) { Text("キャンセル") }
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun CompatAllBoardsReferenceIcon(
-    tint: Color,
-    contentDescription: String = "全ての板"
-) {
-    Canvas(
-        modifier = Modifier
-            .size(40.dp)
-            .semantics { this.contentDescription = contentDescription }
-    ) {
-        val strokeWidth = size.minDimension * 0.055f
-        val corner = size.minDimension * 0.07f
-        drawRoundRect(
-            color = tint.copy(alpha = 0.45f),
-            topLeft = Offset(size.width * 0.05f, size.height * 0.03f),
-            size = Size(size.width * 0.72f, size.height * 0.76f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner),
-            style = Stroke(width = strokeWidth)
-        )
-        drawRoundRect(
-            color = tint.copy(alpha = 0.72f),
-            topLeft = Offset(size.width * 0.12f, size.height * 0.10f),
-            size = Size(size.width * 0.72f, size.height * 0.76f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner),
-            style = Stroke(width = strokeWidth)
-        )
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(size.width * 0.20f, size.height * 0.18f),
-            size = Size(size.width * 0.72f, size.height * 0.76f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner)
-        )
-        val bookmark = Path().apply {
-            moveTo(size.width * 0.58f, size.height * 0.18f)
-            lineTo(size.width * 0.78f, size.height * 0.18f)
-            lineTo(size.width * 0.78f, size.height * 0.57f)
-            lineTo(size.width * 0.68f, size.height * 0.49f)
-            lineTo(size.width * 0.58f, size.height * 0.57f)
-            close()
-        }
-        drawPath(bookmark, color = Color.White)
-    }
-}
-
-@Composable
-private fun CompatCatalogRuleScopeDialog(
-    kind: CompatNgKind,
-    onDismiss: () -> Unit,
-    onSelect: (allBoards: Boolean) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(kind.compatCatalogRuleLabel()) },
-        text = { Text("このルールを適用する範囲を選択してください。") },
-        confirmButton = {
-            Row {
-                TextButton(onClick = { onSelect(false) }) { Text("この板のみ") }
-                TextButton(onClick = { onSelect(true) }) { Text("全板") }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
-}
-
-private val compatHeaderIdentityTokenRegex = Regex("(?:ID|IP):[^\\s<]+", RegexOption.IGNORE_CASE)
 private val compatAppPostNumberRegex = Regex("[0-9]+")
 private val compatAppDefaultPostLabelRegex = Regex("No\\.\\d+", RegexOption.IGNORE_CASE)
 private val compatAppTrailingCountRegex = Regex("(\\d+)\\s*$")
-private val compatAppHttp404Regex = Regex("HTTP (error )?404", RegexOption.IGNORE_CASE)
-private val compatAppHttp410Regex = Regex("HTTP (error )?410", RegexOption.IGNORE_CASE)
-private val compatAppWhitespaceRegex = Regex("\\s+")
-private val compatAppIpTokenRegex = Regex("IP:[^\\s<]+", RegexOption.IGNORE_CASE)
-
-internal fun compatPostQuotesOwnPost(
-    post: CompatPostSnapshot,
-    ownPostNos: Set<String>
-): Boolean {
-    if (ownPostNos.isEmpty() || post.postNo in ownPostNos) return false
-    if (post.quoteReferences.any { reference ->
-            reference.targetPostIds.any(ownPostNos::contains)
-        }
-    ) return true
-    return post.messageHtml.toCompatPlainText().lineSequence().any { line ->
-        val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
-        query.startsWith("no:", ignoreCase = true) &&
-            query.substringAfter(':').trim() in ownPostNos
-    }
-}
-
-@Composable
-private fun CompatPostRow(
-    post: CompatPostSnapshot,
-    ownPostNos: Set<String> = emptySet(),
-    deletionSummary: String? = null,
-    fontSize: Int,
-    thumbnailSize: Int,
-    upsThumbnailSize: Int = thumbnailSize,
-    upsThumbnailMethod: String? = null,
-    wifiConnected: Boolean = false,
-    privacyAlpha: Float = 1f,
-    hideDefaultNameAndSubject: Boolean = false,
-    boardDefaultText: CompatBoardDefaultText = CompatBoardDefaultText(),
-    simpleQuoteCount: Boolean = false,
-    saidaneDisplayMode: String = "通常",
-    saidaneThreshold: Int = Int.MAX_VALUE,
-    posterIdentityProgress: List<CompatPosterIdentityProgress> = emptyList(),
-    searchHit: Boolean = false,
-    searchRanges: List<CompatSearchTextRange> = emptyList(),
-    newReplyCount: Int? = null,
-    onClick: () -> Unit = {},
-    onQuoteClick: (String) -> Unit = {},
-    onUrlClick: (String) -> Unit = {},
-    onMediaUrlClick: (String) -> Unit = onUrlClick,
-    onLongClick: () -> Unit = {},
-    onHeaderClick: () -> Unit = {},
-    onHeaderLongClick: () -> Unit = {},
-    thumbnailReloadToken: Long = 0L,
-    onMediaClick: () -> Unit = {},
-    onMediaLongClick: () -> Unit = {}
-) {
-    val palette = LocalCompatibilityPalette.current
-    val isOwnPost = post.postNo in ownPostNos
-    val quotesOwnPost = remember(post, ownPostNos) {
-        compatPostQuotesOwnPost(post, ownPostNos)
-    }
-    val inlineApuSmallMediaUrls = remember(
-        post.messageHtml,
-        post.imageUrl,
-        post.thumbnailUrl,
-        upsThumbnailMethod,
-        wifiConnected
-    ) {
-        compatVisibleInlineApuSmallMediaUrls(
-            messageHtml = post.messageHtml,
-            upsThumbnailMethod = upsThumbnailMethod,
-            wifiConnected = wifiConnected
-        )
-            // If the fu… file is already the post's main media, its normal
-            // media row is sufficient; otherwise it needs its own preview.
-            .filterNot { inlineUrl ->
-                val identity = compatMediaFileIdentity(inlineUrl)
-                identity == compatMediaFileIdentity(post.imageUrl) ||
-                    identity == compatMediaFileIdentity(post.thumbnailUrl)
-            }
-    }
-    val firstQuoteQuery = remember(post.messageHtml) {
-        post.messageHtml.toCompatPlainText()
-            .lineSequence()
-            .mapNotNull(::compatQuoteQueryForLine)
-            .firstOrNull()
-    }
-    val mediaAwareUrlClick: (String) -> Unit = remember(onUrlClick, onMediaUrlClick) {
-        { url ->
-            if (isCompatImageMediaUrl(url) || isCompatVideoMediaUrl(url)) {
-                onMediaUrlClick(url)
-            } else {
-                onUrlClick(url)
-            }
-        }
-    }
-    val subject = post.subject?.takeIf { value ->
-        value.isNotBlank() && !(hideDefaultNameAndSubject &&
-            shouldHideCompatDefaultSubject(value, boardDefaultText))
-    }
-    val author = post.author?.takeIf { value ->
-        value.isNotBlank() && !(hideDefaultNameAndSubject &&
-            shouldHideCompatDefaultName(value, boardDefaultText))
-    }
-    // The HTML uses a bare `+` anchor for a zero-count そうだね action.  The
-    // legacy APK keeps that action in the header hit target but does not draw
-    // the bare plus; only an actual count (e.g. `そうだねx1`) is visible.
-    val rawSaidane = post.saidaneLabel?.takeIf {
-        it.isNotBlank() && it.trim() != "+" && saidaneDisplayMode != "非表示"
-    }
-    val displayedSaidane = if (saidaneDisplayMode.startsWith("シンプル")) {
-        rawSaidane?.removePrefix("そうだね")
-    } else rawSaidane
-    val rightAlignedSaidane = saidaneDisplayMode.endsWith("(右寄せ)")
-    val saidaneColor = compatibilitySaidaneColor(palette, rawSaidane, saidaneThreshold)
-    // Legacy ThreadListItemHeaderText appends the uploaded file name on a
-    // second line for media posts.  Keeping it in the same annotated block
-    // preserves both the hit target and the row height used by the old APK.
-    val primaryMediaUrl = post.imageUrl ?: post.thumbnailUrl
-    val mediaFileName = primaryMediaUrl
-        ?.takeUnless { isCompatApuSmallMediaUrl(it) }
-        ?.substringAfterLast('/')
-        ?.substringBefore('?')
-        ?.takeIf { it.isNotBlank() }
-    val headerText = buildAnnotatedString {
-        withStyle(
-            SpanStyle(
-                color = when {
-                    isOwnPost -> palette.headerSelfPost
-                    quotesOwnPost -> palette.headerSelfQuote
-                    else -> palette.text
-                },
-                fontWeight = if (isOwnPost || quotesOwnPost) FontWeight.Bold else null
-            )
-        ) { append(post.position.toString()) }
-        append(" ")
-        subject?.let {
-            withStyle(SpanStyle(color = palette.headerSubject, fontWeight = FontWeight.Bold)) {
-                append(it); append(" ")
-            }
-        }
-        author?.let {
-            withStyle(SpanStyle(color = palette.headerAuthor, fontWeight = FontWeight.Bold)) {
-                append(it); append(" ")
-            }
-        }
-        post.mail?.trim()?.takeIf(String::isNotEmpty)?.let {
-            withStyle(SpanStyle(color = palette.headerEmail)) { append("["); append(it); append("] ") }
-        }
-        val timestampText = post.timestamp.replace(compatHeaderIdentityTokenRegex, " ")
-            .replace(compatAppWhitespaceRegex, " ")
-            .trim()
-        if (timestampText.isNotBlank()) {
-            withStyle(SpanStyle(color = palette.headerSubtext)) { append(timestampText) }
-        }
-        if (post.referencedCount > 0) {
-            withStyle(SpanStyle(color = palette.headerSubject)) {
-                if (simpleQuoteCount) {
-                    append(" ")
-                    appendInlineContent("compat-quote-count", "返信")
-                    append(post.referencedCount.toString())
-                } else {
-                    append(" ${post.referencedCount}レス")
-                }
-            }
-        }
-        if (!rightAlignedSaidane) {
-            displayedSaidane?.let {
-                withStyle(SpanStyle(color = saidaneColor)) { append(" "); append(it) }
-            }
-        }
-        posterIdentityProgress.forEach { progress ->
-            val color = if (progress.total > 4) palette.identityTotal else palette.text
-            withStyle(SpanStyle(color = color)) {
-                append(" ")
-                append(progress.identity.display)
-                append("(")
-                append(progress.label)
-                append(")")
-            }
-        }
-        if (!rightAlignedSaidane) {
-            withStyle(SpanStyle(color = palette.headerSubtext)) {
-                append(" No.")
-                append(post.postNo)
-            }
-        }
-        mediaFileName?.let {
-            append("\n")
-            withStyle(SpanStyle(color = palette.fileName)) { append(it) }
-        }
-    }
-    Column(
-        modifier = Modifier.fillMaxWidth()
-            .testTag("compat-thread-post-${post.postNo}")
-            .combinedClickable(
-                onClick = {
-                    firstQuoteQuery?.let(onQuoteClick) ?: onClick()
-                },
-                onLongClick = onLongClick
-            )
-            .background(if (searchHit) palette.searchResultBackground else Color.Transparent)
-    ) {
-        newReplyCount?.takeIf { it > 0 }?.let { count ->
-            CompatNewRepliesDivider(count, Modifier.testTag("compat-new-replies-divider"))
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().combinedClickable(
-                onClick = onHeaderClick,
-                onLongClick = onHeaderLongClick
-            ),
-            verticalAlignment = Alignment.Top
-        ) {
-            Text(
-                headerText,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                fontSize = 11.2f.sp,
-                lineHeight = 14.sp,
-                inlineContent = mapOf(
-                    "compat-quote-count" to InlineTextContent(
-                        Placeholder(
-                            width = 1.2.em,
-                            height = 0.96.em,
-                            placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
-                        )
-                    ) {
-                        Image(
-                            painter = painterResource(Res.drawable.thread_header_quote),
-                            contentDescription = "返信数",
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                ),
-                color = when {
-                    post.isContentRedacted -> Color.Red
-                    post.isDeleted -> Color.Red
-                    else -> palette.text
-                }
-            )
-            if (rightAlignedSaidane) {
-                Text(
-                    buildAnnotatedString {
-                        displayedSaidane?.let {
-                            withStyle(SpanStyle(color = saidaneColor)) { append(it) }
-                            append("\u00A0")
-                        }
-                        withStyle(SpanStyle(color = palette.headerSubtext)) {
-                            append("No.")
-                            append(post.postNo)
-                        }
-                    },
-                    modifier = Modifier
-                        .testTag("compat-thread-header-trailing-${post.postNo}")
-                        .padding(start = 2.dp, end = 10.dp, top = 2.dp, bottom = 2.dp),
-                    fontSize = 11.2f.sp,
-                    lineHeight = 14.sp,
-                    maxLines = 1
-                )
-            }
-        }
-        val requestedPreviewUrl = resolveCompatPostPreviewUrl(post, upsThumbnailMethod, wifiConnected)
-        val originalMediaUrl = resolveCompatViewerMediaUrl(post)
-        val isUpsMedia = isCompatApuSmallMediaUrl(post.imageUrl ?: post.thumbnailUrl ?: "")
-        val usesDirectApuSource = isUpsMedia && requestedPreviewUrl == originalMediaUrl
-        val effectiveThumbnailSize = if (isUpsMedia) upsThumbnailSize else thumbnailSize
-        val thumbnailRequestSizePx = compatThumbnailRequestSizePx(
-            displaySizeDp = effectiveThumbnailSize.toFloat(),
-            density = LocalDensity.current.density
-        )
-        var useOriginalAfterPreviewFailure by remember(post.postNo, requestedPreviewUrl) {
-            mutableStateOf(false)
-        }
-        var completedPreviewRetries by remember(
-            post.postNo,
-            requestedPreviewUrl,
-            thumbnailReloadToken
-        ) {
-            mutableIntStateOf(0)
-        }
-        val previewUrl = if (
-            useOriginalAfterPreviewFailure &&
-            requestedPreviewUrl != originalMediaUrl
-        ) originalMediaUrl else requestedPreviewUrl
-        if (previewUrl != null) {
-            val platformContext = LocalPlatformContext.current
-            val imageLoader = LocalFutachaImageLoader.current
-            val imageModel: Any = remember(
-                platformContext,
-                previewUrl,
-                completedPreviewRetries,
-                thumbnailReloadToken,
-                thumbnailRequestSizePx
-            ) {
-                ImageRequest.Builder(platformContext)
-                    .data(previewUrl)
-                    .compatImageFallbackPolicy()
-                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
-                    // Changing the memory key makes Coil create a fresh
-                    // request after a transient failure while retaining a
-                    // successful disk entry. Manual reload remains the only
-                    // path that deliberately bypasses both caches.
-                    .apply {
-                        // Direct あぷ小 sources use Coil's normal URL key so
-                        // the thread, gallery and viewer share one memory/disk
-                        // entry. Other thumbnails retain a distinct retry key.
-                        compatThumbnailMemoryCacheKey(
-                            previewUrl = previewUrl,
-                            usesDirectApuSource = usesDirectApuSource,
-                            completedRetries = completedPreviewRetries,
-                            reloadToken = thumbnailReloadToken
-                        )?.let(::memoryCacheKey)
-                        refreshImageOnce(thumbnailReloadToken)
-                    }
-                    .build()
-            }
-            val painter = rememberAsyncImagePainter(model = imageModel, imageLoader = imageLoader)
-            val painterState by painter.state.collectAsState()
-            val promptMetadata = rememberGenerationMetadata(originalMediaUrl, painterState, visible = privacyAlpha >= 1f)
-            val requestStartedAtEpochMillis = remember(
-                previewUrl,
-                completedPreviewRetries,
-                thumbnailReloadToken
-            ) { Clock.System.now().toEpochMilliseconds() }
-            var delayedLoadingVisible by remember(
-                post.postNo,
-                previewUrl,
-                completedPreviewRetries,
-                thumbnailReloadToken
-            ) { mutableStateOf(false) }
-            LaunchedEffect(
-                painterState,
-                previewUrl,
-                completedPreviewRetries,
-                thumbnailReloadToken
-            ) {
-                when (painterState) {
-                    is coil3.compose.AsyncImagePainter.State.Loading -> {
-                        delay(COMPAT_THUMBNAIL_LOADING_INDICATOR_DELAY_MILLIS)
-                        delayedLoadingVisible =
-                            painter.state.value is coil3.compose.AsyncImagePainter.State.Loading
-                    }
-                    is coil3.compose.AsyncImagePainter.State.Success -> {
-                        delayedLoadingVisible = false
-                        val elapsedMillis =
-                            Clock.System.now().toEpochMilliseconds() - requestStartedAtEpochMillis
-                        if (elapsedMillis >= COMPAT_THUMBNAIL_LOADING_INDICATOR_DELAY_MILLIS) {
-                            Logger.d(
-                                "CompatThumbnail",
-                                "Slow load post=${post.postNo} elapsedMs=$elapsedMillis url=$previewUrl"
-                            )
-                        }
-                    }
-                    is coil3.compose.AsyncImagePainter.State.Error -> {
-                        delayedLoadingVisible = false
-                        Logger.w(
-                            "CompatThumbnail",
-                            "Failed post=${post.postNo} attempt=$completedPreviewRetries elapsedMs=${Clock.System.now().toEpochMilliseconds() - requestStartedAtEpochMillis} url=$previewUrl"
-                        )
-                    }
-                    else -> delayedLoadingVisible = false
-                }
-            }
-            LaunchedEffect(
-                painterState,
-                previewUrl,
-                requestedPreviewUrl,
-                originalMediaUrl,
-                completedPreviewRetries
-            ) {
-                if (painterState is coil3.compose.AsyncImagePainter.State.Error) {
-                    val hasOriginalFallback =
-                        !useOriginalAfterPreviewFailure &&
-                            requestedPreviewUrl != null &&
-                            originalMediaUrl != null &&
-                            requestedPreviewUrl != originalMediaUrl
-                    when (
-                        if (usesDirectApuSource) {
-                            CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
-                        } else resolveCompatThumbnailFailureAction(
-                            completedRetries = completedPreviewRetries,
-                            hasOriginalFallback = hasOriginalFallback,
-                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
-                        )
-                    ) {
-                        CompatThumbnailFailureAction.RETRY_CURRENT -> {
-                            delay(compatThumbnailRetryDelayMillis(completedPreviewRetries))
-                            completedPreviewRetries += 1
-                        }
-                        CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL -> {
-                            // up/up2 thumbnails are derived files and can
-                            // disappear independently of the source upload.
-                            useOriginalAfterPreviewFailure = true
-                            completedPreviewRetries = 0
-                        }
-                        CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR -> Unit
-                    }
-                }
-            }
-            val intrinsicSize = painter.intrinsicSize
-            val bounds = remember(
-                effectiveThumbnailSize,
-                post.thumbnailWidth,
-                post.thumbnailHeight,
-                painterState
-            ) {
-                compatThreadThumbnailBounds(
-                    maxSize = effectiveThumbnailSize,
-                    sourceWidth = post.thumbnailWidth
-                        ?: intrinsicSize.width.toInt().takeIf { it > 0 },
-                    sourceHeight = post.thumbnailHeight
-                        ?: intrinsicSize.height.toInt().takeIf { it > 0 }
-                )
-            }
-            val hasOriginalFallback =
-                !useOriginalAfterPreviewFailure &&
-                    requestedPreviewUrl != null &&
-                    originalMediaUrl != null &&
-                    requestedPreviewUrl != originalMediaUrl
-            val terminalImageError =
-                painterState is coil3.compose.AsyncImagePainter.State.Error &&
-                    (
-                        usesDirectApuSource ||
-                            resolveCompatThumbnailFailureAction(
-                                completedRetries = completedPreviewRetries,
-                                hasOriginalFallback = hasOriginalFallback,
-                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
-                            ) == CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
-                        )
-            Box(
-                modifier = Modifier
-                    .padding(start = 10.dp, end = 10.dp, bottom = 5.dp)
-                    .width(bounds.first.dp)
-                    .height(bounds.second.dp)
-                    .background(
-                        if (delayedLoadingVisible || terminalImageError) {
-                            palette.divider.copy(alpha = 0.12f)
-                        } else {
-                            Color.Transparent
-                        }
-                    )
-                    .compatPrivacyImageEffect(privacyAlpha)
-                    .combinedClickable(
-                        onClick = onMediaClick,
-                        onLongClick = onMediaLongClick
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painter,
-                    contentDescription = "No.${post.postNo}の画像",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag(
-                            "compat-thread-thumbnail-${post.postNo}-${when (painterState) {
-                                is coil3.compose.AsyncImagePainter.State.Success -> "ready"
-                                is coil3.compose.AsyncImagePainter.State.Error -> "error"
-                                else -> "loading"
-                            }}"
-                        )
-                )
-                PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
-                if (delayedLoadingVisible) {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .testTag("compat-thread-thumbnail-${post.postNo}-placeholder"),
-                        color = palette.loadingProgress,
-                        strokeWidth = 2.dp
-                    )
-                } else if (terminalImageError) {
-                    Text(
-                        text = "画像読込エラー",
-                        modifier = Modifier.testTag("compat-thread-thumbnail-${post.postNo}-terminal-error"),
-                        color = palette.uiSecondaryText,
-                        fontSize = 10.sp
-                    )
-                }
-            }
-            InlinePrompt(promptMetadata)
-        }
-        // The reference client places generated あぷ小 previews above the
-        // body.  The body itself must stay byte-for-byte represented as text;
-        // no uploader filename is injected into it.
-        CompatInlineApuSmallPreviews(
-            urls = inlineApuSmallMediaUrls,
-            thumbnailSize = upsThumbnailSize,
-            privacyAlpha = privacyAlpha,
-            onUrlClick = mediaAwareUrlClick
-        )
-        CompatMessageText(
-            post = post,
-            fontSize = fontSize,
-            searchRanges = searchRanges,
-            onClick = onClick,
-            onLongClick = onLongClick,
-            onUrlClick = mediaAwareUrlClick,
-            onQuoteClick = onQuoteClick
-        )
-        deletionSummary?.let { summary ->
-            Text(
-                text = summary,
-                color = Color.Red,
-                fontSize = fontSize.sp,
-                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
-                    .testTag("compat-thread-deletion-summary")
-            )
-        }
-    }
-    HorizontalDivider(color = CompatDivider)
-}
-
-/**
- * A post may have a normal board attachment and also mention an あぷ小 file
- * in its body (for example `fu7099123.jpg`). The post model has one primary
- * media slot, so this separate preview keeps the inline uploader reference
- * visible without replacing the board attachment.
- */
-@Composable
-internal fun CompatInlineApuSmallPreviews(
-    urls: List<String>,
-    thumbnailSize: Int,
-    privacyAlpha: Float,
-    onUrlClick: (String) -> Unit
-) {
-    if (urls.isEmpty()) return
-    val imageLoader = LocalFutachaImageLoader.current
-    val platformContext = LocalPlatformContext.current
-    val thumbnailRequestSizePx = compatThumbnailRequestSizePx(
-        displaySizeDp = thumbnailSize.toFloat(),
-        density = LocalDensity.current.density
-    )
-    Column(modifier = Modifier.fillMaxWidth()) {
-        urls.forEach { sourceUrl ->
-            val previewUrl = if (classifyFutabaMedia(sourceUrl) == FutabaMediaKind.VIDEO) {
-                compatApuSmallThumbnailUrl(sourceUrl) ?: sourceUrl
-            } else {
-                sourceUrl
-            }
-            val painter = rememberAsyncImagePainter(
-                model = ImageRequest.Builder(platformContext)
-                    .data(previewUrl)
-                    .compatImageFallbackPolicy()
-                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
-                    .build(),
-                imageLoader = imageLoader
-            )
-            val painterState by painter.state.collectAsState()
-            val intrinsicSize = painter.intrinsicSize
-            val bounds = remember(thumbnailSize, painterState) {
-                compatThreadThumbnailBounds(
-                    maxSize = thumbnailSize,
-                    sourceWidth = intrinsicSize.width.toInt().takeIf { it > 0 },
-                    sourceHeight = intrinsicSize.height.toInt().takeIf { it > 0 }
-                )
-            }
-            Image(
-                painter = painter,
-                contentDescription = "あぷ小画像を開く",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .padding(start = 10.dp, end = 10.dp, bottom = 5.dp)
-                    .width(bounds.first.dp)
-                    .height(bounds.second.dp)
-                    .compatPrivacyImageEffect(privacyAlpha)
-                    .combinedClickable(
-                        onClick = { onUrlClick(sourceUrl) },
-                        onLongClick = { onUrlClick(sourceUrl) }
-                    )
-            )
-        }
-    }
-}
 
 private data class CompatQuoteFrame(val title: String, val query: String, val posts: List<CompatPostSnapshot>)
-
-@Composable
-internal fun CompatImageNgRegistrationDialog(
-    imageUrl: String,
-    initialMemo: String,
-    onDismiss: () -> Unit,
-    onRegister: (memo: String, localOnly: Boolean) -> Unit
-) {
-    var memo by remember(initialMemo) { mutableStateOf(initialMemo) }
-    var localOnly by remember { mutableStateOf(true) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("NG画像に登録") },
-        text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                AsyncImage(
-                    model = imageUrl,
-                    imageLoader = LocalFutachaImageLoader.current,
-                    contentDescription = "登録するNG画像",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(96.dp).background(Color.Black.copy(alpha = 0.13f))
-                )
-                Spacer(Modifier.height(12.dp))
-                TextField(
-                    value = memo,
-                    onValueChange = { memo = it.take(MAX_COMPAT_NG_MEMO_CHARS) },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 1,
-                    maxLines = 4,
-                    label = { Text("メモ") }
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(checked = localOnly, onCheckedChange = { localOnly = it })
-                    Text("この板のみ")
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onRegister(memo.trim(), localOnly) }) { Text("登録する") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
-}
-
-/** Positions a quote popup around the clicked response instead of pinning it below the toolbar. */
-internal class CompatReplyPopupPositionProvider(
-    private val anchorY: Int,
-    private val minimumTopY: Int
-) : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: androidx.compose.ui.unit.IntRect,
-        windowSize: IntSize,
-        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-        popupContentSize: IntSize
-    ): IntOffset {
-        val minTop = minimumTopY.coerceIn(0, windowSize.height)
-        val bottom = anchorY.coerceIn(minTop, windowSize.height)
-        val top = (bottom - popupContentSize.height).coerceAtLeast(minTop)
-        val maxTop = (windowSize.height - popupContentSize.height).coerceAtLeast(minTop)
-        return IntOffset(
-            ((windowSize.width - popupContentSize.width) / 2).coerceAtLeast(0),
-            top.coerceAtMost(maxTop)
-        )
-    }
-}
 
 /**
  * The legacy viewer keeps extraction results in a full-width PopupWindow below
@@ -12073,75 +9218,6 @@ private data class CompatPostSelectionState(
     val candidates: List<CompatPostActionCandidate>,
     val selected: Set<Int>
 )
-
-@Composable
-private fun CompatInlineMediaContextDialog(
-    onDismiss: () -> Unit,
-    onSave: () -> Unit,
-    onReloadThumbnail: () -> Unit,
-    onNgImage: () -> Unit,
-    onCopyUrl: () -> Unit,
-    onBrowser: () -> Unit,
-    onShareUrl: () -> Unit,
-    onShareImage: () -> Unit,
-    searchTargets: List<CompatImageSearchTarget> = CompatImageSearchTarget.entries,
-    onSearchTarget: (CompatImageSearchTarget) -> Unit = {}
-) {
-    val entries = buildList<Pair<String, () -> Unit>> {
-        val actions = listOf(onSave, onReloadThumbnail, onNgImage, onCopyUrl, onBrowser, onShareUrl, onShareImage)
-        compatThreadImageContextBaseLabels().zip(actions).forEach(::add)
-        searchTargets.forEach { target ->
-            add(target.label to { onSearchTarget(target) })
-        }
-    }
-    CompatLegacyChoiceDialog(
-        onDismiss = onDismiss,
-        choices = entries.map { it.first },
-        onChoice = { choice -> entries.first { it.first == choice }.second() },
-        testTag = "compat-thread-image-context-menu"
-    )
-}
-
-@Composable
-private fun CompatExtractionMenuDialog(
-    ngCount: Int,
-    onDismiss: () -> Unit,
-    onKeyword: () -> Unit,
-    onExtract: (CompatExtractionKind, String) -> Unit
-) {
-    val entries = listOf(
-        "自分の書き込み" to CompatExtractionKind.OWN,
-        "そうだねが多い" to CompatExtractionKind.MANY_SAIDANE,
-        "返信が多い" to CompatExtractionKind.MANY_REPLIES,
-        "削除されたレス" to CompatExtractionKind.DELETED,
-        "URLを含むレス" to CompatExtractionKind.CONTAINS_URL,
-        "画像レス" to CompatExtractionKind.HAS_IMAGE
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("抽出") },
-        text = {
-            Column {
-                entries.forEach { (label, kind) ->
-                    TextButton(onClick = { onExtract(kind, label) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(label, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-                TextButton(onClick = onKeyword, modifier = Modifier.fillMaxWidth()) {
-                    Text("キーワード", modifier = Modifier.fillMaxWidth())
-                }
-                TextButton(
-                    onClick = { onExtract(CompatExtractionKind.NG, "NG($ngCount)") },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("NG($ngCount)", modifier = Modifier.fillMaxWidth())
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
-}
 
 @Composable
 private fun CompatExtractionResultPopup(
@@ -12223,8 +9299,10 @@ private fun CompatExtractionResultPopup(
                         color = palette.text
                     )
                 } else {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        frame.posts.forEach { post ->
+                    // Lazy: an image-reply or common-word extraction on a 1000-reply
+                    // thread can match hundreds of posts; only visible rows are built.
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("compat-extraction-popup-list")) {
+                        items(frame.posts, key = { "${it.position}:${it.postNo}" }) { post ->
                             CompatPostRow(
                                 post = post,
                                 ownPostNos = ownPostNos,
@@ -12249,133 +9327,6 @@ private fun CompatExtractionResultPopup(
                                 onMediaClick = { onMediaClick(post) },
                                 onMediaLongClick = { onMediaLongClick(post) }
                             )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompatReplyPreviewPopup(
-    posts: List<CompatPostSnapshot>,
-    ownPostNos: Set<String>,
-    fontSize: Int,
-    thumbnailSize: Int,
-    upsThumbnailSize: Int = thumbnailSize,
-    upsThumbnailMethod: String? = null,
-    wifiConnected: Boolean = false,
-    anchorY: Int = 0,
-    minimumTopY: Int = 0,
-    hideDefaultNameAndSubject: Boolean,
-    simpleQuoteCount: Boolean,
-    saidaneDisplayMode: String,
-    saidaneThreshold: Int,
-    privacyAlpha: Float = 1f,
-    posterIdentityProgress: Map<String, List<CompatPosterIdentityProgress>> = emptyMap(),
-    onDismiss: () -> Unit,
-    onQuoteClick: (Int, String) -> Unit,
-    onUrlClick: (String) -> Unit,
-    onMediaUrlClick: (String, CompatPostSnapshot) -> Unit,
-    onLongClick: (CompatPostSnapshot) -> Unit,
-    onHeaderClick: (CompatPostSnapshot) -> Unit,
-    onHeaderLongClick: (CompatPostSnapshot) -> Unit,
-    onMediaClick: (CompatPostSnapshot) -> Unit,
-    onMediaLongClick: (CompatPostSnapshot) -> Unit
-) {
-    Popup(
-        popupPositionProvider = remember(anchorY, minimumTopY) {
-            CompatReplyPopupPositionProvider(anchorY, minimumTopY)
-        },
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true, dismissOnClickOutside = true, dismissOnBackPress = true)
-    ) {
-        Surface(
-            // Leave room for the status/action bar even on compact test
-            // windows and small phones; the list remains scrollable inside.
-            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).testTag("compat-quote-popup"),
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 8.dp
-        ) {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                posts.forEach { post ->
-                    CompatPostRow(
-                        post = post,
-                        ownPostNos = ownPostNos,
-                        fontSize = fontSize,
-                        thumbnailSize = thumbnailSize,
-                        upsThumbnailSize = upsThumbnailSize,
-                        upsThumbnailMethod = upsThumbnailMethod,
-                        wifiConnected = wifiConnected,
-                        privacyAlpha = privacyAlpha,
-                        hideDefaultNameAndSubject = hideDefaultNameAndSubject,
-                        simpleQuoteCount = simpleQuoteCount,
-                        saidaneDisplayMode = saidaneDisplayMode,
-                        saidaneThreshold = saidaneThreshold,
-                        posterIdentityProgress = posterIdentityProgress[post.postNo].orEmpty(),
-                        onQuoteClick = { query -> onQuoteClick(post.position, query) },
-                        onUrlClick = onUrlClick,
-                        onMediaUrlClick = { url -> onMediaUrlClick(url, post) },
-                        onLongClick = { onLongClick(post) },
-                        onHeaderClick = { onHeaderClick(post) },
-                        onHeaderLongClick = { onHeaderLongClick(post) },
-                        onMediaClick = { onMediaClick(post) },
-                        onMediaLongClick = { onMediaLongClick(post) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompatPostContextDialog(
-    post: CompatPostSnapshot,
-    onDismiss: () -> Unit,
-    onWeb: () -> Unit,
-    onExtract: () -> Unit,
-    onNg: () -> Unit,
-    onDel: () -> Unit,
-    onDelete: () -> Unit,
-    onSaidane: () -> Unit,
-    onQuick: () -> Unit,
-    onReply: () -> Unit,
-    onCopy: () -> Unit
-) {
-    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
-    val actions = listOf(onWeb, onExtract, onNg, onDel, onDelete, onSaidane, onQuick, onReply, onCopy)
-    val labels = compatReferencePostContextLabels().flatten().toMutableList().apply {
-        if (reviewComplianceEnabled) {
-            this[2] = "ブロック"
-            this[3] = "通報"
-        }
-    }
-    val rows = labels.zip(actions).chunked(3)
-    // ThreadContextDialogFragment is a borderless 3x3 custom Dialog (100dp x
-    // 50dp cells, no title or close button), not an AlertDialog.  Popup also
-    // gives it the APK's outside-tap dismissal semantics.
-    Popup(
-        alignment = Alignment.Center,
-        offset = IntOffset(0, with(LocalDensity.current) { 35.dp.roundToPx() }),
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true, dismissOnClickOutside = true, dismissOnBackPress = true)
-    ) {
-        Surface(
-            modifier = Modifier.width(300.dp),
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 8.dp
-        ) {
-            Column {
-                rows.forEach { row ->
-                    Row(Modifier.fillMaxWidth()) {
-                        row.forEach { (label, action) ->
-                            Box(
-                                modifier = Modifier.width(100.dp).height(50.dp)
-                                    .clickable(onClick = action)
-                                    .semantics { role = Role.Button },
-                                contentAlignment = Alignment.Center
-                            ) { Text(label, maxLines = 1, fontSize = 14.sp) }
                         }
                     }
                 }
@@ -12454,286 +9405,6 @@ private fun CompatPostSelectionDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     )
-}
-
-@Composable
-private fun CompatPostNgDialog(
-    post: CompatPostSnapshot,
-    onDismiss: () -> Unit,
-    onRegister: (CompatNgKind, String, Boolean) -> Unit
-) {
-    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
-    var onlyThisThread by remember(post.postNo, reviewComplianceEnabled) {
-        mutableStateOf(!reviewComplianceEnabled)
-    }
-    val candidates = if (reviewComplianceEnabled) {
-        buildList {
-            post.author?.takeIf { it.isNotBlank() && it !in setOf("としあき", "名無し") }
-                ?.let { add(CompatNgKind.THREAD_REFUSE to ("名前: $it" to it)) }
-            parseCompatPosterIdentity(post.posterId)?.let { identity ->
-                add(CompatNgKind.THREAD_POSTER_ID to ("${identity.kind.name}: ${identity.value}" to identity.display))
-            }
-            compatAppIpTokenRegex.find(post.timestamp)?.value
-                ?.let(::parseCompatPosterIdentity)
-                ?.takeUnless { parseCompatPosterIdentity(post.posterId)?.kind == CompatHeaderExtractionKind.IP }
-                ?.let { identity -> add(CompatNgKind.THREAD_REFUSE to (identity.display to identity.display)) }
-        }
-    } else {
-        compatReferenceThreadNgCandidates(post).map { candidate ->
-            candidate.kind to (candidate.value to candidate.value)
-        }
-    }.ifEmpty {
-        // Anonymous posts without a stable ID/IP/name can still be hidden.
-        listOf(CompatNgKind.THREAD_POST_NO to ("この投稿 No.${post.postNo}" to post.postNo))
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = if (reviewComplianceEnabled) {
-            { Text("この利用者をブロック") }
-        } else null,
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = onlyThisThread, onCheckedChange = { onlyThisThread = it })
-                    Text(
-                        if (reviewComplianceEnabled) "このスレッド内だけブロック"
-                        else "このスレッドのみ"
-                    )
-                }
-                if (reviewComplianceEnabled) {
-                    Text(
-                        "ブロックするID・IP・名前を選んでください。以後、一致する投稿を端末内で非表示にします。",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                candidates.forEach { (kind, item) ->
-                    TextButton(
-                        onClick = { onRegister(kind, item.second, onlyThisThread) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(item.first, modifier = Modifier.fillMaxWidth()) }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = if (reviewComplianceEnabled) {
-            { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-        } else {
-            {}
-        }
-    )
-}
-
-@Composable
-private fun CompatMessageText(
-    post: CompatPostSnapshot,
-    fontSize: Int,
-    searchRanges: List<CompatSearchTextRange>,
-    onClick: () -> Unit = {},
-    onLongClick: () -> Unit = {},
-    onUrlClick: (String) -> Unit = {},
-    onQuoteClick: (String) -> Unit
-) {
-    val message = remember(post.messageHtml) { post.messageHtml.toCompatPlainText() }
-    val inlineLinks = remember(post.messageHtml) { compatInlineLinks(post.messageHtml) }
-    val palette = LocalCompatibilityPalette.current
-    val searchTextHighlight = palette.searchTextHighlight
-    val deletedNoticeRanges = remember(post, message) {
-        compatDeletedNoticeRanges(post, message)
-    }
-    val annotated = remember(
-        message,
-        inlineLinks,
-        searchRanges,
-        deletedNoticeRanges,
-        searchTextHighlight,
-        palette.bodyLink,
-        palette.bodyQuote
-    ) {
-        buildAnnotatedString {
-            append(message)
-            deletedNoticeRanges.forEach { range ->
-                addStyle(
-                    SpanStyle(color = Color.Red),
-                    range.start.coerceIn(0, length),
-                    range.endExclusive.coerceIn(0, length)
-                )
-            }
-            message.lineSequence().fold(0) { offset, line ->
-                val trimmed = line.trimStart()
-                if (trimmed.startsWith(">") || trimmed.startsWith("＞")) {
-                    val markerIndex = line.indexOfFirst { it == '>' || it == '＞' }
-                    val start = offset + markerIndex
-                    val end = offset + line.length
-                    val quoteQuery = compatQuoteQueryForLine(trimmed)
-                    if (quoteQuery == null) return@fold offset + line.length + 1
-                    addStringAnnotation(
-                        tag = "compat_quote",
-                        annotation = quoteQuery,
-                        start = start,
-                        end = end.coerceAtLeast(start + 1)
-                    )
-                    addStyle(
-                        // Reply references in the APK use the legacy green quote
-                        // color (#789922) and explicitly disable underlining.
-                        SpanStyle(color = palette.bodyQuote),
-                        start,
-                        end.coerceAtLeast(start + 1)
-                    )
-                }
-                offset + line.length + 1
-            }
-            inlineLinks.forEach { link ->
-                val start = link.start.coerceIn(0, length)
-                val end = link.endExclusive.coerceIn(start, length)
-                val lineStart = message.lastIndexOf('\n', (start - 1).coerceAtLeast(0)) + 1
-                val isQuotedLine = message.substring(lineStart, start.coerceAtMost(message.length))
-                    .trimStart()
-                    .let { it.startsWith(">") || it.startsWith("＞") }
-                // A filename/URL inside a Futaba quote is the quote source,
-                // not a browser link.  The reference APK colors the complete
-                // line as a quote and opens the referenced response popup.
-                if (isQuotedLine) return@forEach
-                if (end > start) {
-                    addStringAnnotation("compat_url", link.url, start, end)
-                    addStyle(
-                        SpanStyle(
-                            color = palette.bodyLink,
-                            textDecoration = TextDecoration.Underline
-                        ),
-                        start,
-                        end
-                    )
-                }
-            }
-            searchRanges.forEach { range ->
-                val start = range.start.coerceIn(0, length)
-                val end = range.endExclusive.coerceIn(start, length)
-                if (end > start) {
-                    addStyle(SpanStyle(background = searchTextHighlight), start, end)
-                }
-            }
-        }
-    }
-    var textLayoutResult by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
-    BasicText(
-        text = annotated,
-        style = TextStyle(
-            fontSize = fontSize.sp,
-            // BasicText does not consume MaterialTheme.typography by itself.
-            // Supplying a complete TextStyle here used to replace the custom
-            // font selected in compatibility settings with the platform font
-            // for every thread body.
-            fontFamily = MaterialTheme.typography.bodyMedium.fontFamily,
-            color = if (compatPostBodyUsesAlertColor(post)) {
-                Color.Red
-            } else {
-                LocalCompatibilityPalette.current.text
-            }
-        ),
-        onTextLayout = { textLayoutResult = it },
-        modifier = Modifier
-            .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
-            .clickable(
-                onClickLabel = "引用を表示",
-                onClick = {
-                    message.lineSequence()
-                        .mapNotNull(::compatQuoteQueryForLine)
-                        .firstOrNull()
-                        ?.let(onQuoteClick)
-                        ?: inlineLinks.firstOrNull()?.url?.let(onUrlClick)
-                        ?: onClick()
-                }
-            )
-            // `clickable` supplies an explicit accessibility/test action. The
-            // pointer detector below remains responsible for choosing the
-            // exact annotated URL/quote under a real finger tap.
-            .pointerInput(annotated) {
-            detectTapGestures(
-                onLongPress = { onLongClick() },
-                onTap = { position ->
-                    val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
-                    annotated.getStringAnnotations("compat_quote", offset, offset)
-                        .firstOrNull()
-                        ?.let { onQuoteClick(it.item) }
-                        ?: annotated.getStringAnnotations("compat_url", offset, offset)
-                            .firstOrNull()
-                            ?.let { onUrlClick(it.item) }
-                        ?: run {
-                            // BasicText can report the caret at the end of a
-                            // glyph on some Android text engines. Recover the
-                            // complete line so a >>No link remains tappable
-                            // even when its annotation range misses that edge.
-                            val lineStart = message.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)) + 1
-                            val lineEnd = message.indexOf('\n', offset).takeIf { it >= 0 } ?: message.length
-                            compatQuoteQueryForLine(message.substring(lineStart, lineEnd))
-                                ?.let(onQuoteClick)
-                                ?: onClick()
-                        }
-                }
-            )
-        }
-    )
-}
-
-@Composable
-private fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val palette = LocalCompatibilityPalette.current
-    val live = !tab.isDead
-    val titleColor = when {
-        tab.favorite -> Color(0xFF00897B)
-        !live -> Color(0xFFCCCCCC)
-        else -> palette.text
-    }
-    val secondaryColor = if (live) palette.uiSecondaryText else Color(0xFFCCCCCC)
-    val reply = compatDrawerReplyPresentation(tab.checkedReplyCount, tab.replyCount)
-    val noThumb = painterResource(Res.drawable.cmn_no_thumb)
-    Row(
-        modifier = Modifier.fillMaxWidth().height(COMPAT_REFERENCE_DRAWER_THREAD_ROW_DP.dp)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics(mergeDescendants = true) { role = Role.Button }
-            .testTag("compat-drawer-tab-row-${tab.key}")
-            .padding(horizontal = 5.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AsyncImage(
-            model = tab.thumbnailUrl,
-            contentDescription = null,
-            fallback = noThumb,
-            error = noThumb,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(COMPAT_REFERENCE_DRAWER_THREAD_THUMBNAIL_DP.dp)
-                .testTag("compat-drawer-tab-thumb-${tab.key}")
-                .graphicsLayer { alpha = if (live) 1f else 0.33f }
-        )
-        Spacer(Modifier.width(5.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                tab.title.lineSequence().firstOrNull().orEmpty(),
-                maxLines = 1,
-                fontSize = 16.sp,
-                color = titleColor,
-                modifier = Modifier.testTag("compat-drawer-tab-title-${tab.key}")
-            )
-            Text(
-                compatDrawerThreadSubtitle(tab.contentUpdatedAtEpochMillis, tab.boardName),
-                maxLines = 1,
-                fontSize = 12.sp,
-                color = secondaryColor,
-                modifier = Modifier.testTag("compat-drawer-tab-subtitle-${tab.key}")
-            )
-        }
-        if (tab.isDeleted) Text("消", color = Color(0xFFB71C1C), fontSize = 13.sp)
-        else if (tab.isIsolated) Text("隔", color = Color(0xFFE65100), fontSize = 13.sp)
-        else if (tab.isExploded) Text("爆", color = Color.Red, fontSize = 13.sp)
-        else if (tab.isDead) Text("落", color = Color.Red, fontSize = 13.sp)
-        else if (tab.isOld) Text("古", color = Color(0xFFE65100), fontSize = 13.sp)
-        Column(Modifier.width(50.dp).testTag("compat-drawer-tab-replies-${tab.key}"), horizontalAlignment = Alignment.End) {
-            Text(reply.readCount, maxLines = 1, fontSize = 16.sp, color = if (live) Color(0xFF00897B) else Color(0xFFCCCCCC))
-            Text(reply.increase, maxLines = 1, fontSize = 12.sp, color = if (live) Color.Red else Color(0xFFCCCCCC))
-        }
-    }
-    HorizontalDivider()
 }
 
 @Composable
@@ -13140,6 +9811,3 @@ private fun CompatExternalWatcherMetadataRow(
     }
     HorizontalDivider()
 }
-
-private fun closedThreadUndoMessage(batch: ClosedTabBatch): String =
-    if (batch.tabs.size == 1) "スレッドを閉じました" else "${batch.tabs.size}件のスレッドを閉じました"

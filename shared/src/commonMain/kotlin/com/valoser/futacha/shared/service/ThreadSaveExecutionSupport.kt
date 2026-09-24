@@ -13,6 +13,16 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 import kotlin.coroutines.coroutineContext
 
+/** Written while an overwriting save downloads media; removed once its metadata is saved. */
+internal const val THREAD_SAVE_PARTIAL_MEDIA_FILE = "media-reuse.partial.json"
+
+@kotlinx.serialization.Serializable
+internal data class ThreadSavePartialMediaEntry(
+    val relativePath: String,
+    val fileType: String,
+    val byteSize: Long
+)
+
 internal data class ThreadSaveLocalFileInfo(
     val relativePath: String,
     val fileType: FileType,
@@ -132,7 +142,9 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
     initialSeed: ThreadSaveMediaDownloadSeed = ThreadSaveMediaDownloadSeed(),
     updateProgress: (current: Int, total: Int) -> Unit,
     downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>,
-    enforceBudget: (Long) -> Unit
+    enforceBudget: (Long) -> Unit,
+    /** Called after every chunk with all media stored so far (seeded and downloaded). */
+    onChunkApplied: suspend (Map<String, ThreadSaveLocalFileInfo>) -> Unit = {}
 ): ThreadSaveMediaDownloadBatchResult {
     val accumulator = ThreadSaveMediaDownloadAccumulator(
         urlToPathMap = createUrlToPathMap().also { it.putAll(initialSeed.urlToPathMap) },
@@ -178,6 +190,7 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
                 logTag = logTag
             )
         }
+        onChunkApplied(accumulator.mediaKeyToFileInfoMap.toMap())
     }
 
     return ThreadSaveMediaDownloadBatchResult(

@@ -23,9 +23,11 @@ internal val mediaHelpSections = listOf(
 )
 
 internal fun mediaHelpHtmlSection(): String = buildString {
-    append("<section id=\"media-help\" style=\"background:#fff;color:#222;padding:12px;line-height:1.6;overflow-wrap:anywhere\"><h2>プロンプト・画像編集・動画編集</h2>")
-    for ((title, body) in mediaHelpSections) append("<h3>$title</h3><p>$body</p>")
-    append("</section>")
+    append("<label for=\"media-help\" class=\"index\">プロンプト・画像編集・動画編集</label>")
+    append("<input type=\"checkbox\" id=\"media-help\" class=\"on-off\" />")
+    append("<div class=\"explain\">")
+    for ((title, body) in mediaHelpSections) append("<p class=\"title\">$title</p><p class=\"explain\">$body</p>")
+    append("</div>")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

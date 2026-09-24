@@ -14,7 +14,51 @@ static void finish(NSString *identifier, NSDictionary *result) {
     if (operations[identifier]) operations[identifier] = result;
     [owners removeObjectForKey:identifier];
 }
-static BOOL bundled(void) { return [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.valoser.futacha.desktop"]; }
+static BOOL storeBundled(void) { return [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.valoser.futacha"]; }
+static BOOL bundled(void) { return storeBundled() || [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.valoser.futacha.desktop"]; }
+
+// Keep the user-selected save folders accessible after a sandboxed app restarts.
+static NSMutableDictionary<NSString *, NSURL *> *folderAccess;
+static NSString *const folderBookmarkKey = @"FutachaSaveFolderBookmarks";
+static void restoreFolderAccess(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        folderAccess = [NSMutableDictionary new];
+        if (!storeBundled()) return;
+        NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:folderBookmarkKey] ?: @{};
+        NSMutableDictionary *updated = [saved mutableCopy];
+        for (NSString *path in saved) {
+            if (![saved[path] isKindOfClass:NSData.class]) continue;
+            BOOL stale = NO;
+            NSURL *url = [NSURL URLByResolvingBookmarkData:saved[path]
+                options:NSURLBookmarkResolutionWithSecurityScope | NSURLBookmarkResolutionWithoutUI
+                relativeToURL:nil bookmarkDataIsStale:&stale error:nil];
+            if (!url || ![url startAccessingSecurityScopedResource]) continue;
+            folderAccess[path] = url;
+            if (stale) {
+                NSData *renewed = [url bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope
+                    includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
+                if (renewed) updated[path] = renewed;
+            }
+        }
+        [NSUserDefaults.standardUserDefaults setObject:updated forKey:folderBookmarkKey];
+    });
+}
+
+static NSDictionary *selectedDirectory(NSURL *url) {
+    if (storeBundled()) {
+        restoreFolderAccess();
+        NSError *error = nil;
+        NSData *bookmark = [url bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope
+            includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
+        if (!bookmark) return failure(error.localizedDescription ?: @"保存先へのアクセスを保持できませんでした");
+        NSMutableDictionary *saved = [[NSUserDefaults.standardUserDefaults dictionaryForKey:folderBookmarkKey] mutableCopy] ?: [NSMutableDictionary new];
+        saved[url.path] = bookmark;
+        [NSUserDefaults.standardUserDefaults setObject:saved forKey:folderBookmarkKey];
+        if (!folderAccess[url.path] && [url startAccessingSecurityScopedResource]) folderAccess[url.path] = url;
+    }
+    return @{ @"status": @"done", @"path": url.path };
+}
 
 // Closing an AppKit sheet can briefly leave Java's window neither key nor main.
 static NSWindow *hostWindow(void) {
@@ -182,7 +226,7 @@ static NSDictionary *perform(NSDictionary *request) {
         return ok();
     }
     if ([op isEqual:@"notificationSettings"]) {
-        NSString *value = @"x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.valoser.futacha.desktop";
+        NSString *value = [@"x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=" stringByAppendingString:NSBundle.mainBundle.bundleIdentifier ?: @"com.valoser.futacha.desktop"];
         BOOL opened = [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:value]];
         return opened ? ok() : failure(@"通知設定を開けませんでした");
     }
@@ -224,7 +268,7 @@ static NSDictionary *perform(NSDictionary *request) {
         NSOpenPanel *panel = [NSOpenPanel openPanel]; panel.canChooseFiles = NO; panel.canChooseDirectories = YES;
         panel.canCreateDirectories = YES; panel.allowsMultipleSelection = NO; panel.message = @"保存先フォルダを選択してください";
         owners[identifier] = panel;
-        void (^completion)(NSModalResponse) = ^(NSModalResponse result) { finish(identifier, result == NSModalResponseOK ? @{ @"status": @"done", @"path": panel.URL.path } : @{ @"status": @"cancelled" }); };
+        void (^completion)(NSModalResponse) = ^(NSModalResponse result) { finish(identifier, result == NSModalResponseOK ? selectedDirectory(panel.URL) : @{ @"status": @"cancelled" }); };
         NSWindow *window = hostWindow();
         if (window) [panel beginSheetModalForWindow:window completionHandler:completion]; else [panel beginWithCompletionHandler:completion];
     } else if ([op isEqual:@"speech"]) {
@@ -260,3 +304,12 @@ __attribute__((visibility("default"))) char *futacha_mac_call(const char *json) 
     }
 }
 __attribute__((visibility("default"))) void futacha_mac_free(char *value) { free(value); }
+
+// Foundation returns the sandbox container; Java's user.home can be the account home.
+// This entry point runs before AWT starts and must not dispatch to the AppKit thread.
+__attribute__((visibility("default"))) char *futacha_mac_home(void) {
+    @autoreleasepool {
+        restoreFolderAccess();
+        return strdup(NSHomeDirectory().UTF8String);
+    }
+}

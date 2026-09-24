@@ -25,7 +25,11 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
     val gate = LocalMediaFeatureGate.current ?: return
     val permit = remember(store, gate, feature) { gate.permit(feature) } ?: return
     val scope = rememberCoroutineScope()
+    // Verified this session (downloaded or imported, both hash the file).
     var installed by remember { mutableStateOf<Set<AnalysisModel>>(emptySet()) }
+    // Right size on disk; the content is verified when a session uses it. Opening
+    // the dialog used to hash every installed model (about 69 MB in total).
+    var present by remember { mutableStateOf<Set<AnalysisModel>>(emptySet()) }
     var checking by remember { mutableStateOf(true) }
     var running by remember { mutableStateOf<AnalysisModel?>(null) }
     var importing by remember { mutableStateOf(false) }
@@ -40,7 +44,7 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
     val busy = running != null || importing || checking
     LaunchedEffect(store, permit) {
         try {
-            for (spec in AnalysisModels.all) if (store.verified(spec.id, permit) != null) installed = installed + spec.id
+            for (spec in AnalysisModels.all) if (store.present(spec.id, permit)) present = present + spec.id
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message ?: "導入済みモデルを確認できませんでした" }
         finally { checking = false }
@@ -58,7 +62,14 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
                         Text(spec.title, style = MaterialTheme.typography.titleSmall)
                         Text("${spec.license}・約${(spec.distribution.bytes / 1_000_000f).roundToInt()}MB", style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { openUrl(spec.page) }, enabled = !busy) { Text("配布元・ライセンスを確認") }
-                        Text(if (spec.id in installed) "導入済み（検証済み）" else "未導入", modifier = Modifier.testTag("analysis-model-state-${spec.id.name}"))
+                        Text(
+                            when (spec.id) {
+                                in installed -> "導入済み（検証済み）"
+                                in present -> "導入済み（使用時に内容を検証）"
+                                else -> "未導入"
+                            },
+                            modifier = Modifier.testTag("analysis-model-state-${spec.id.name}")
+                        )
                         if (running == spec.id) {
                             Text(if (cancelling) "取り消しています…" else when (progress?.stage) {
                                 ModelInstallStage.VERIFYING -> "内容を検証しています…"

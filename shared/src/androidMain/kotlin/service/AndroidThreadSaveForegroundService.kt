@@ -18,12 +18,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class AndroidThreadSaveForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var progressJob: Job? = null
+    private var sessionWatchJob: Job? = null
     private var activeSessionId: String? = null
+    private var lastStartId = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var lastNotificationAt = 0L
@@ -32,33 +35,56 @@ class AndroidThreadSaveForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createChannel()
+        lastStartId = startId
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
         when (intent?.action) {
             ACTION_CANCEL -> {
+                // Cancel requests come from the notification through startService,
+                // so no foreground promise is pending. The save's finally removes
+                // the session and the removal watcher stops the service.
                 AndroidProtectedThreadSaveRegistry.cancel(sessionId)
-                stopCurrentSession()
+                stopIfIdle()
                 return START_NOT_STICKY
             }
-            ACTION_FINISH -> {
-                if (activeSessionId == sessionId) {
-                    notifyDone()
-                    stopCurrentSession()
-                }
-                return START_NOT_STICKY
-            }
-            ACTION_STOP -> {
-                if (activeSessionId == sessionId) stopCurrentSession()
+            ACTION_FINISH, ACTION_STOP -> {
+                stopIfIdle()
                 return START_NOT_STICKY
             }
         }
 
+        // Every start request comes from startForegroundService. Android crashes
+        // the app when such a service stops before calling startForeground, so go
+        // foreground first, even when the save already finished and removed its
+        // session before this command was delivered.
         val save = AndroidProtectedThreadSaveRegistry.get(sessionId)
-        if (save == null) {
-            stopSelf(startId)
-            return START_NOT_STICKY
+        val currentId = activeSessionId
+        val current = currentId?.let(AndroidProtectedThreadSaveRegistry::get)
+        startForeground(
+            NOTIFICATION_ID,
+            when {
+                save != null -> buildProgressNotification(sessionId, save.title, save.progress.value)
+                current != null -> buildProgressNotification(currentId, current.title, current.progress.value)
+                else -> buildFinishingNotification()
+            }
+        )
+        when {
+            save != null -> activate(sessionId, save)
+            current != null -> Unit
+            else -> stopIfIdle()
         }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        progressJob?.cancel()
+        sessionWatchJob?.cancel()
+        releaseLocks()
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private fun activate(sessionId: String, save: AndroidProtectedThreadSave) {
         activeSessionId = sessionId
-        startForeground(NOTIFICATION_ID, buildProgressNotification(sessionId, save.title, save.progress.value))
         acquireLocks()
         progressJob?.cancel()
         progressJob = scope.launch {
@@ -72,22 +98,30 @@ class AndroidThreadSaveForegroundService : Service() {
                 )
             }
         }
-        return START_NOT_STICKY
+        sessionWatchJob?.cancel()
+        sessionWatchJob = scope.launch {
+            AndroidProtectedThreadSaveRegistry.sessions.first { sessionId !in it }
+            if (activeSessionId == sessionId) activeSessionId = null
+            stopIfIdle()
+        }
     }
 
-    override fun onDestroy() {
-        progressJob?.cancel()
-        releaseLocks()
-        scope.cancel()
-        super.onDestroy()
-    }
-
-    private fun stopCurrentSession() {
+    /**
+     * Stops only when no save is active. stopSelfResult with the latest start id
+     * keeps the service alive when a newer start request is still queued; that
+     * request will call startForeground again before anything can stop it.
+     */
+    private fun stopIfIdle() {
+        val currentId = activeSessionId
+        if (currentId != null && AndroidProtectedThreadSaveRegistry.get(currentId) != null) return
+        activeSessionId = null
         progressJob?.cancel()
         progressJob = null
+        sessionWatchJob?.cancel()
+        sessionWatchJob = null
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        stopSelfResult(lastStartId)
     }
 
     private fun createChannel() {
@@ -124,9 +158,12 @@ class AndroidThreadSaveForegroundService : Service() {
             .build()
     }
 
-    private fun notifyDone() {
-        notifySaveDone(this)
-    }
+    private fun buildFinishingNotification(): Notification =
+        Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("スレ保存を終了しています")
+            .setOnlyAlertOnce(true)
+            .build()
 
     private fun acquireLocks() {
         runCatching {

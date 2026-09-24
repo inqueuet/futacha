@@ -14,7 +14,9 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
     } else {
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
-    return html.replace("<body>", "<body>" + watcherHelpHtmlSection() + com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection())
+    return html
+        .replace("<label for=\"drawer\"", com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection() + "<label for=\"drawer\"")
+        .replace("<label for=\"background\"", watcherHelpHtmlSection() + "<label for=\"background\"")
 }
 
 // Reference help with current history/patrol guidance and inlined images.
@@ -29,6 +31,7 @@ internal val COMPAT_REFERENCE_HELP_HTML: String = listOf(
 <style type="text/css">
 <!--
 body { margin: 0px; padding: 0px; background-color: #009688; }
+mark { color: #222222; background-color: #ffe082; font-weight: bold; }
 img { border: none; }
 a { text-decoration: none; }
 a:link		{ color: #009688; }
@@ -73,10 +76,12 @@ input[type="checkbox"].on-off{
 input[type="checkbox"].on-off + div{
 	height: 0;
 	overflow: hidden;
+	visibility: hidden;
 }
 
 input[type="checkbox"].on-off:checked + div{
 	height: auto;
+	visibility: visible;
 }
 
 /* デザイン */
@@ -209,7 +214,7 @@ hr { width: 100%; height: 1px; border: none; background-color: #eeeeee; }
 		<p class="explain">単語にマッチしたスレを表示しません</p>
 
 		<p class="title">巡回検索</p>
-		<p class="explain">アプリ内でカタログのタイトルを検索します。設定の「巡回管理」でキーワードを登録してください。標準機能ににじろぐは不要です。詳しくは上の「履歴・巡回の使い方」を参照してください。</p>
+		<p class="explain">アプリ内でカタログのタイトルを検索します。設定の「巡回管理」でキーワードを登録してください。標準機能ににじろぐは不要です。詳しくは「履歴・巡回の使い方」を参照してください。</p>
 
 		<p class="title">過去スレ検索</p>
 		<p class="explain">キャッシュサーバーに残っている落ちたスレッドを検索します<br />見そびれた前スレや特定の日時に立てられたスレを探し出せます</p>

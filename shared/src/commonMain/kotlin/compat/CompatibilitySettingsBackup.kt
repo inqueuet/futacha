@@ -80,7 +80,11 @@ fun decodeCompatSettingsBackup(raw: String): CompatSettingsBackup {
     require(raw.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES) {
         "バックアップファイルが大きすぎます"
     }
+    // Backups written by older versions carry the image hash cache as
+    // preferences, often thousands of them; drop it before the size check so
+    // such files can still be restored.
     val decoded = compatSettingsBackupJson.decodeFromString(CompatSettingsBackup.serializer(), raw)
+        .let { backup -> backup.copy(preferences = backup.preferences.filterKeys { !isCompatImagePhashCacheKey(it) }) }
     validateCompatSettingsBackup(decoded)
     return decoded
 }
@@ -152,7 +156,10 @@ fun decodeCompatWatchNgBackup(raw: String): CompatSettingsBackup {
  * replacing a hand-maintained keyword list.
  */
 fun CompatSettingsBackup.settingsOnly(): CompatSettingsBackup = copy(
-    preferences = preferences.filterKeys { it != COMPAT_WATCH_WORDS_PREFERENCE_KEY && it != COMPAT_WATCH_RULES_KEY && !it.startsWith("compat.watcher.result.") },
+    preferences = preferences.filterKeys {
+        it != COMPAT_WATCH_WORDS_PREFERENCE_KEY && it != COMPAT_WATCH_RULES_KEY &&
+            !it.startsWith("compat.watcher.result.") && !isCompatImagePhashCacheKey(it)
+    },
     ngRules = emptyList()
 )
 

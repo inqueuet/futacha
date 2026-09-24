@@ -86,6 +86,7 @@ import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchSnapshotBuilder
 import com.valoser.futacha.shared.watch.WatchThreadKey
 import platform.Foundation.NSLock
+import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSUserDefaults
 import platform.UIKit.UIViewController
 import platform.UserNotifications.UNAuthorizationOptionAlert
@@ -760,16 +761,16 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 // NSUserDefaults. Migrate it once into the namespaced KMP
                 // compatibility store; the argument domain also lets iOS UI
                 // tests start from an explicit already-read version.
-                if (compatibilityStore.loadPreference("compat.commonUsedVersion") == null) {
-                    NSUserDefaults.standardUserDefaults()
-                        .stringForKey("commonUsedVersion")
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { usedVersion ->
-                            compatibilityStore.savePreference(
-                                "compat.commonUsedVersion",
-                                usedVersion
-                            )
-                        }
+                val launchArguments = NSProcessInfo.processInfo.arguments.filterIsInstance<String>()
+                val explicitUsedVersion = launchArguments.indexOf("-commonUsedVersion")
+                    .takeIf { it >= 0 }
+                    ?.let { launchArguments.getOrNull(it + 1) }
+                resolveCommonUsedVersionToStore(
+                    stored = compatibilityStore.loadPreference("compat.commonUsedVersion"),
+                    defaultsValue = NSUserDefaults.standardUserDefaults().stringForKey("commonUsedVersion"),
+                    explicitArgument = explicitUsedVersion
+                )?.let { usedVersion ->
+                    compatibilityStore.savePreference("compat.commonUsedVersion", usedVersion)
                 }
                 modeSwitchCoordinator.recoverIfNeeded().getOrThrow()
                 val boards = stateStore.boards.first()
@@ -1291,7 +1292,9 @@ private suspend fun runIosBackgroundRefresh(
                         if (fresh.isNotEmpty()) { notifyIosWatchAlertMatches(fresh); markIosWatchAlertMatchesNotified(fresh) }
                     }, commitGate = { commit ->
                         profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
-                    })
+                    },
+                    // Leave most of the short iOS window for the history refresh below.
+                    budgetMillis = refreshTimeoutMillis / 3)
             }
             if (backgroundEnabled) {
                 refresher.refresh(

@@ -20,7 +20,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okio.BufferedSink
@@ -92,7 +94,21 @@ interface OriginalMediaSource {
     suspend fun sizeBytes(): Long
 }
 
+/** Leases still open while a store waits to shut down. */
+data class OriginalMediaShutdownReport(
+    val liveEntries: Int,
+    val playbackEntries: Int,
+    val oldestAgeMillis: Long
+)
+
 class OriginalMediaCacheUnavailable(cause: Throwable) : IOException("Original media cache is unavailable", cause)
+
+/**
+ * A cache-only request (allowNetwork = false) found nothing. This is a normal
+ * answer, not a transient network failure: it must never be retried or waited
+ * on, and must not create a network client.
+ */
+class OriginalMediaNotCached : IOException("Original media is not cached")
 
 /**
  * One owner for original downloads and files. Consumers share an in-flight job and obtain
@@ -126,9 +142,12 @@ class OriginalMediaStore(
     private val json = Json { ignoreUnknownKeys = true }
 
     private class Entry(val key: String, val diskKey: String, val request: OriginalMediaRequest, val generation: Long) {
+        val createdAt = kotlin.time.TimeSource.Monotonic.markNow()
         lateinit var job: Deferred<Asset>
         var users = 0
         var retired = false
+        /** Retired because a reload with another token replaced it (not clear/close). */
+        var superseded = false
         var finished = false
         var asset: Asset? = null
         val progress = MutableStateFlow(OriginalMediaReadState())
@@ -221,6 +240,7 @@ class OriginalMediaStore(
             check(!closed.value) { "Original media store is closed" }
             var current = active[key]
             if (current != null && frozen.reloadToken != 0L && current.request.reloadToken != frozen.reloadToken) {
+                current.superseded = true
                 retireLocked(current)
                 current = null
             }
@@ -262,6 +282,20 @@ class OriginalMediaStore(
     }
 
     override suspend fun acquire(request: OriginalMediaRequest): Lease {
+        var attempt = request
+        repeat(MAX_SUPERSEDED_REJOINS + 1) {
+            acquireOnce(attempt)?.let { return it }
+            // Another screen reloaded the same original while this caller waited.
+            // Wait for that newer download instead of failing with its
+            // cancellation, which Coil would leave as a permanent loading state.
+            // Token 0 joins the running entry without retiring it again.
+            attempt = attempt.copy(reloadToken = 0L)
+        }
+        throw IOException("Original media reload was superseded repeatedly")
+    }
+
+    /** Returns null when the joined entry was superseded by another reload. */
+    private suspend fun acquireOnce(request: OriginalMediaRequest): Lease? {
         val entry = join(request, playback = false)
         try {
             val asset = entry.job.await()
@@ -276,6 +310,9 @@ class OriginalMediaStore(
             })
         } catch (failure: Throwable) {
             withContext(NonCancellable + dispatcher) { release(entry) }
+            if (failure is CancellationException && currentCoroutineContext().isActive && entry.superseded && !closed.value) {
+                return null
+            }
             throw failure
         }
     }
@@ -312,7 +349,7 @@ class OriginalMediaStore(
                         }
                         val downloaded = streamingSink.buffer().use {
                             (downloader.downloadCached(entry.request, it)?.also { fromLegacyCache = true } ?: run {
-                                if (!entry.request.allowNetwork) throw IOException("Original media is not cached")
+                                if (!entry.request.allowNetwork) throw OriginalMediaNotCached()
                                 downloader.download(entry.request, it) { info -> entry.progress.update { state -> state.copy(info = info) } }
                             }).also { downloading = false }
                         }
@@ -355,7 +392,9 @@ class OriginalMediaStore(
                         }
                         val discarded = cleanupIo("remove failed original media") { disk.remove(revision) }
                         // Keep the original failure and do not retry if its file could not be discarded.
-                        if (!discarded || !downloading || failure is CancellationException || entry.playbackRequested.value || retries >= 2 || !downloader.retryAfter(retries++, failure)) {
+                        if (!discarded || !downloading || failure is CancellationException || failure is OriginalMediaNotCached ||
+                            entry.playbackRequested.value || retries >= 2 || !downloader.retryAfter(retries++, failure)
+                        ) {
                             throw failure
                         }
                         mutex.withLock {
@@ -489,9 +528,28 @@ class OriginalMediaStore(
         }
     }
 
-    suspend fun closeAndAwait() {
+    /**
+     * Closes and waits until every lease is returned. The wait is required: a
+     * decoder may still read the files. [onStillWaiting] runs every
+     * [reportIntervalMillis] so a long playback or export can be told apart
+     * from a lease that is never returned.
+     */
+    suspend fun closeAndAwait(
+        reportIntervalMillis: Long = DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS,
+        onStillWaiting: suspend (OriginalMediaShutdownReport) -> Unit = {}
+    ) {
         close()
-        shutdown.await()
+        while (withTimeoutOrNull(reportIntervalMillis) { shutdown.await() } == null) {
+            onStillWaiting(pendingShutdownReport())
+        }
+    }
+
+    internal suspend fun pendingShutdownReport(): OriginalMediaShutdownReport = mutex.withLock {
+        OriginalMediaShutdownReport(
+            liveEntries = live.size,
+            playbackEntries = live.count { it.playbackRequested.value },
+            oldestAgeMillis = live.maxOfOrNull { it.createdAt.elapsedNow().inWholeMilliseconds } ?: 0L
+        )
     }
 
     private fun finishShutdownLocked() {
@@ -510,6 +568,8 @@ class OriginalMediaStore(
     private fun pointerKey(key: String) = "original-media-v1-$cacheIdentity-$key"
 
     companion object {
+        internal const val DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS = 30_000L
+        private const val MAX_SUPERSEDED_REJOINS = 3
         private const val MAX_INDEX_BYTES = 32 * 1024
         private const val MAX_READ_BYTES = 2 * 1024 * 1024
     }

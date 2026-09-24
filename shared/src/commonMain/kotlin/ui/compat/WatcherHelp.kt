@@ -10,7 +10,9 @@ internal val watcherHelpSections = listOf(
 )
 
 internal fun watcherHelpHtmlSection() = buildString {
-    append("<section id=\"watcher-help\" style=\"background:#fff;color:#222;padding:12px;line-height:1.6\"><h2>履歴・巡回の使い方</h2>")
-    watcherHelpSections.forEach { (title, body) -> append("<h3>$title</h3><p>$body</p>") }
-    append("</section>")
+    append("<label for=\"watcher-help\" class=\"index\">履歴・巡回の使い方</label>")
+    append("<input type=\"checkbox\" id=\"watcher-help\" class=\"on-off\" />")
+    append("<div class=\"explain\">")
+    watcherHelpSections.forEach { (title, body) -> append("<p class=\"title\">$title</p><p class=\"explain\">$body</p>") }
+    append("</div>")
 }

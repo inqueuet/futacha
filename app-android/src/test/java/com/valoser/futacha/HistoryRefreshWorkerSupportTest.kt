@@ -2,8 +2,11 @@ package com.valoser.futacha
 
 import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -138,5 +141,32 @@ class HistoryRefreshWorkerSupportTest {
         assertTrue(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 1)))
         assertFalse(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 0)))
         assertFalse(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("thread_refresh" to 3)))
+    }
+
+    @Test
+    fun awaitBackgroundNetworkServices_reportsReadyFailedAndTimeout() = runBlocking {
+        assertEquals(
+            NetworkServicesReadiness.READY,
+            awaitBackgroundNetworkServices(MutableStateFlow(true), MutableStateFlow(null), 1_000L)
+        )
+
+        val lateReady = MutableStateFlow(false)
+        launch {
+            delay(50L)
+            lateReady.value = true
+        }
+        assertEquals(
+            NetworkServicesReadiness.READY,
+            awaitBackgroundNetworkServices(lateReady, MutableStateFlow(null), 5_000L)
+        )
+
+        assertEquals(
+            NetworkServicesReadiness.FAILED,
+            awaitBackgroundNetworkServices(MutableStateFlow(false), MutableStateFlow("init failed"), 1_000L)
+        )
+        assertEquals(
+            NetworkServicesReadiness.TIMED_OUT,
+            awaitBackgroundNetworkServices(MutableStateFlow(false), MutableStateFlow(null), 50L)
+        )
     }
 }

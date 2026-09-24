@@ -213,9 +213,12 @@ x64 Windows 上の PowerShell で実行します。
 .\gradlew.bat :app-desktop:run
 .\gradlew.bat :app-desktop:packageWindowsZip
 .\gradlew.bat :app-desktop:packageReleaseMsi
+.\gradlew.bat :app-desktop:packageWindowsStoreMsix
 ```
 
 ZIP は `app-desktop/release/`、MSI は `app-desktop/build/compose/binaries/main-release/msi/` に出力します。ZIP を展開したフォルダー全体に Java ランタイムとネイティブ依存を同梱するため、`Futacha.exe` だけを取り出さずに使用します。MSI 用の WiX は Compose の配布タスクが取得します。詳しくは [Windows 版の説明](docs/windows-port-2026-09-20.md) を参照してください。
+
+Microsoft Store 提出用の未署名 MSIX は `app-desktop/build/compose/binaries/main-release/msix/` に出力します。Windows SDK の `MakeAppx.exe` が必要です。製品ID、ローカル確認、Partner Centerでの提出手順は [Microsoft Store公開手順](docs/windows-store-2026-09-22.md) を参照してください。
 
 両デスクトップ版とも初回は `prepareDesktopResources` が依存ライブラリを準備し、OpenCV の追尾ブリッジをビルドします。Android・iOS / watchOS・Wear OS・デスクトップの版数は各ビルド設定で個別に管理しています。
 

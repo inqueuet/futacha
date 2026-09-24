@@ -29,10 +29,17 @@ import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 
-/** Shared services for the additional controls in the existing Futacha screens. */
-internal data class FutachaSharedFeatures(
+/**
+ * Shared services for the additional controls in the existing Futacha screens.
+ *
+ * Provided through a static composition local, so the instance must stay the
+ * same while preferences change: a new instance per preference save made every
+ * consumer recompose, even for unrelated keys such as cache check times.
+ * [preferences] reads the underlying state, so only readers recompose.
+ */
+internal class FutachaSharedFeatures(
     val store: CompatibilityStore,
-    val preferences: Map<String, String>,
+    private val preferencesState: State<Map<String, String>>,
     val httpClient: HttpClient?,
     val repository: BoardRepository?,
     val fileSystem: FileSystem?,
@@ -41,6 +48,8 @@ internal data class FutachaSharedFeatures(
     val openSettings: (String) -> Unit,
     val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {}
 ) {
+    val preferences: Map<String, String> get() = preferencesState.value
+
     fun value(path: String, key: String, vararg legacyTitles: String): String? =
         preferences.compatPreferenceValue(path, key, *legacyTitles)
 
@@ -68,7 +77,8 @@ internal fun ProvideFutachaSharedFeatures(
         content()
         return
     }
-    val preferences by store.preferences.collectAsState(emptyMap())
+    val preferencesState = store.preferences.collectAsState(emptyMap())
+    val preferences by preferencesState
     // Use the existing shared destination for every modern save action as well.
     // Migrate the modern destination only when the shared setting has never been saved.
     LaunchedEffect(store, appStateStore) {
@@ -98,8 +108,10 @@ internal fun ProvideFutachaSharedFeatures(
     var closedBatch by remember { mutableStateOf<com.valoser.futacha.shared.compat.ClosedTabBatch?>(null) }
     var notification by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val features = FutachaSharedFeatures(store, preferences, httpClient, activeRepository, fileSystem,
-        cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it })
+    val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion) {
+        FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
+            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it })
+    }
     LaunchedEffect(closedBatch, notification) {
         if (closedBatch != null || notification != null) {
             delay(features.intValue("control", "controlCloseToastDuration", 1000..30000)?.toLong() ?: 7000L)

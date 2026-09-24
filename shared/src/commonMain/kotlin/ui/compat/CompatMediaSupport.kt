@@ -18,6 +18,7 @@ import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.request
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -541,18 +542,42 @@ internal suspend fun compatImagePhashHiddenPostNos(
             .distinctBy { it.second }
             .take(256)
     }
-    val hidden = mutableSetOf<String>()
-    withTimeoutOrNull(COMPAT_PHASH_BATCH_TIMEOUT_MILLIS) {
-        candidates.forEach { (postNo, url) ->
-            val phash = withTimeoutOrNull(COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS) {
-                fetchCompatImagePhash(client, url).getOrNull()
+    return collectCompatImagePhashes(client, candidates).filterValues { phash ->
+        rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
+    }.keys
+}
+
+/**
+ * Fetches image hashes for (id, url) candidates in order, bounded per request
+ * and for the whole batch. [onPartial] receives the hashes found so far every
+ * [publishEvery] results and at the end, so callers can hide matches before the
+ * batch finishes. Returns what was found before the batch budget ran out;
+ * unchecked images stay visible, as before.
+ */
+internal suspend fun collectCompatImagePhashes(
+    httpClient: HttpClient,
+    candidates: List<Pair<String, String>>,
+    batchTimeoutMillis: Long = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
+    requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
+    publishEvery: Int = 16,
+    onPartial: (Map<String, String>) -> Unit = {}
+): Map<String, String> {
+    val found = linkedMapOf<String, String>()
+    var sincePublish = 0
+    withTimeoutOrNull(batchTimeoutMillis) {
+        candidates.forEach { (id, url) ->
+            val phash = withTimeoutOrNull(requestTimeoutMillis) {
+                fetchCompatImagePhash(httpClient, url).getOrNull()
             } ?: return@forEach
-            if (rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }) {
-                hidden += postNo
+            found[id] = phash
+            if (++sincePublish >= publishEvery) {
+                sincePublish = 0
+                onPartial(found.toMap())
             }
         }
     }
-    return hidden
+    if (sincePublish > 0) onPartial(found.toMap())
+    return found
 }
 
 /** Resolve a viewer launch by post identity before falling back to its old index. */
@@ -873,15 +898,17 @@ internal suspend fun fetchCompatApngMarker(
     compatApngScanSemaphore.withPermit {
         val bytes = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
             withContext(AppDispatchers.io) {
-                val response = httpClient.get(url) {
+                // Streamed: a server that ignores Range must not make us buffer the whole image.
+                httpClient.prepareGet(url) {
                     headers.append(HttpHeaders.Range, "bytes=0-${COMPAT_APNG_SCAN_LIMIT_BYTES - 1}")
+                }.execute { response ->
+                    check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+                    readBoundedHttpResponseBytes(
+                        response = response,
+                        maxBytes = COMPAT_APNG_SCAN_LIMIT_BYTES,
+                        totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
+                    )
                 }
-                check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-                readBoundedHttpResponseBytes(
-                    response = response,
-                    maxBytes = COMPAT_APNG_SCAN_LIMIT_BYTES,
-                    totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
-                )
             }
         }
         withContext(AppDispatchers.parsing) { isCompatApngHeader(bytes) }
@@ -899,19 +926,20 @@ internal suspend fun fetchCompatExifSummary(
 ): Result<String> = runSuspendCatchingPreservingCancellation {
     val responseBytes = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
         withContext(AppDispatchers.io) {
-            val response = httpClient.get(url) {
+            httpClient.prepareGet(url) {
                 headers.append(HttpHeaders.Range, "bytes=0-${COMPAT_EXIF_HEADER_LIMIT_BYTES - 1}")
+            }.execute { response ->
+                check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                require(contentLength == null || contentLength <= COMPAT_EXIF_HEADER_LIMIT_BYTES) {
+                    "画像ヘッダーが大きすぎます"
+                }
+                readBoundedHttpResponseBytes(
+                    response = response,
+                    maxBytes = COMPAT_EXIF_HEADER_LIMIT_BYTES,
+                    totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
+                )
             }
-            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            require(contentLength == null || contentLength <= COMPAT_EXIF_HEADER_LIMIT_BYTES) {
-                "画像ヘッダーが大きすぎます"
-            }
-            readBoundedHttpResponseBytes(
-                response = response,
-                maxBytes = COMPAT_EXIF_HEADER_LIMIT_BYTES,
-                totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
-            )
         }
     }
     require(responseBytes.size <= COMPAT_EXIF_HEADER_LIMIT_BYTES) { "画像ヘッダーが大きすぎます" }
@@ -1144,17 +1172,19 @@ internal suspend fun fetchCompatImagePhash(
             } else {
                 val bytes = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
                     withContext(AppDispatchers.io) {
-                        val response = httpClient.get(url)
-                        check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-                        val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                        require(contentLength == null || contentLength <= COMPAT_PHASH_MAX_IMAGE_BYTES) {
-                            "画像が大きすぎます"
+                        // Streamed so the 16 MB limit applies while receiving.
+                        httpClient.prepareGet(url).execute { response ->
+                            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+                            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                            require(contentLength == null || contentLength <= COMPAT_PHASH_MAX_IMAGE_BYTES) {
+                                "画像が大きすぎます"
+                            }
+                            readBoundedHttpResponseBytes(
+                                response = response,
+                                maxBytes = COMPAT_PHASH_MAX_IMAGE_BYTES.toInt(),
+                                totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
+                            )
                         }
-                        readBoundedHttpResponseBytes(
-                            response = response,
-                            maxBytes = COMPAT_PHASH_MAX_IMAGE_BYTES.toInt(),
-                            totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
-                        )
                     }
                 }
                 require(bytes.size.toLong() <= COMPAT_PHASH_MAX_IMAGE_BYTES) { "画像が大きすぎます" }

@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -13,6 +14,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okio.Path
+
+sealed interface OriginalMediaTransitionState {
+    data object Idle : OriginalMediaTransitionState
+    data class WaitingForLeases(val openLeases: Int) : OriginalMediaTransitionState
+}
 
 data class OriginalMediaCacheConfiguration(val directory: Path, val maxBytes: Long) {
     init { require(maxBytes > 0) }
@@ -31,13 +37,22 @@ class OriginalMediaSession internal constructor(
     private val createCache: suspend (OriginalMediaCacheConfiguration) -> DiskCache = {
         DiskCache.Builder().directory(it.directory).maxSizeBytes(it.maxBytes).build()
     },
-    private val dispatcher: CoroutineDispatcher = AppDispatchers.io
+    private val dispatcher: CoroutineDispatcher = AppDispatchers.io,
+    private val shutdownReportIntervalMillis: Long = OriginalMediaStore.DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS
 ) : OriginalMediaSource, AutoCloseable {
     private data class Ready(val configuration: OriginalMediaCacheConfiguration, val store: OriginalMediaStore)
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val requested = MutableStateFlow<OriginalMediaCacheConfiguration?>(null)
     private val ready = MutableStateFlow<Ready?>(null)
     private val closed = MutableStateFlow(false)
+    private val transitionStateValue = MutableStateFlow<OriginalMediaTransitionState>(OriginalMediaTransitionState.Idle)
+
+    /**
+     * Whether a cache change is waiting for open leases (a playing video or an
+     * export) before it can reopen the cache. Settings can show this instead of
+     * appearing stuck.
+     */
+    val transitionState: StateFlow<OriginalMediaTransitionState> = transitionStateValue
     private val shutdown = CompletableDeferred<Unit>()
     internal val shutdownSignal: Deferred<Unit> get() = shutdown
     private val transition = Mutex()
@@ -68,7 +83,20 @@ class OriginalMediaSession internal constructor(
                                     Logger.e("OriginalMediaSession", "Failed to clear the previous original cache", it)
                                 }
                             }
-                        } finally { old.store.closeAndAwait() }
+                        } finally {
+                            try {
+                                old.store.closeAndAwait(shutdownReportIntervalMillis) { report ->
+                                    transitionStateValue.value = OriginalMediaTransitionState.WaitingForLeases(report.liveEntries)
+                                    Logger.w(
+                                        "OriginalMediaSession",
+                                        "Cache change waits for ${report.liveEntries} open original(s), " +
+                                            "${report.playbackEntries} in playback, oldest ${report.oldestAgeMillis} ms"
+                                    )
+                                }
+                            } finally {
+                                transitionStateValue.value = OriginalMediaTransitionState.Idle
+                            }
+                        }
                     }
                 }
                 currentCoroutineContext().ensureActive()
@@ -147,8 +175,15 @@ class OriginalMediaSession internal constructor(
         transition.withLock { ready.value?.store?.clear(); Unit }
     }
 
+    // Does not take the transition lock: a cache change may wait minutes for a
+    // playing video, and the settings screen must not wait with it.
     override suspend fun sizeBytes(): Long = withContext(dispatcher) {
-        transition.withLock { ready.value?.store?.sizeBytes() ?: 0L }
+        val store = ready.value?.store ?: return@withContext 0L
+        try {
+            store.sizeBytes()
+        } catch (closedDuringRead: IllegalStateException) {
+            0L
+        }
     }
 
     override fun close() {

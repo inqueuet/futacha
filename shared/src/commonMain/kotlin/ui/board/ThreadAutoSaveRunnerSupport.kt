@@ -10,6 +10,8 @@ import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.service.buildThreadStorageLockKey
+import com.valoser.futacha.shared.service.withSeedStorageLock
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import kotlinx.coroutines.CancellationException
 
 private const val THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS = 1_200
@@ -71,45 +73,57 @@ internal data class ThreadAutoSaveRunnerCallbacks(
 )
 
 internal fun buildThreadAutoSaveRunnerCallbacks(
-    saveService: ThreadSaveService
+    saveService: ThreadSaveService,
+    /**
+     * The indexed auto-save of the thread. When a background run replaced the
+     * stable folder with a newer generation, that generation seeds this save
+     * instead of every file being downloaded again.
+     */
+    resolveIndexedStorageId: suspend (threadId: String, boardId: String) -> String? = { _, _ -> null }
 ): ThreadAutoSaveRunnerCallbacks {
     return ThreadAutoSaveRunnerCallbacks(
         saveThread = { config, onInitialSavedThread ->
             val stableStorageId = buildThreadStorageId(config.boardId, config.threadId)
+            val seedStorageId = runSuspendCatchingPreservingCancellation {
+                resolveIndexedStorageId(config.threadId, config.boardId)
+            }.getOrNull()
             ThreadStorageLockRegistry.withStorageLock(
                 buildThreadStorageLockKey(
                     storageId = stableStorageId,
                     baseDirectory = AUTO_SAVE_DIRECTORY
                 )
             ) {
-                saveService.saveThread(
-                    threadId = config.threadId,
-                    boardId = config.boardId,
-                    boardName = config.boardName,
-                    boardUrl = config.boardUrl,
-                    title = config.title,
-                    expiresAtLabel = config.expiresAtLabel,
-                    posts = config.posts,
-                    isTruncated = config.isTruncated,
-                    truncationReason = config.truncationReason,
-                    baseDirectory = AUTO_SAVE_DIRECTORY,
-                    writeMetadata = true,
-                    rawHtmlOptions = RawHtmlSaveOptions(enable = false),
-                    limits = ThreadSaveLimits(
-                        maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
-                        maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS,
-                        maxParallelDownloads = THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS,
-                        mediaDownloadStartDelayMs = THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS
-                    ),
-                    storageOptions = ThreadSaveStorageOptions(
-                        storageIdOverride = stableStorageId,
-                        clearExistingOutput = false,
-                        reuseExistingMedia = true,
-                        pruneUnreferencedExistingMedia = true
-                    ),
-                    writeInitialMetadataBeforeMedia = false,
-                    onInitialSavedThread = onInitialSavedThread
-                )
+                withSeedStorageLock(seedStorageId, stableStorageId) {
+                    saveService.saveThread(
+                        threadId = config.threadId,
+                        boardId = config.boardId,
+                        boardName = config.boardName,
+                        boardUrl = config.boardUrl,
+                        title = config.title,
+                        expiresAtLabel = config.expiresAtLabel,
+                        posts = config.posts,
+                        isTruncated = config.isTruncated,
+                        truncationReason = config.truncationReason,
+                        baseDirectory = AUTO_SAVE_DIRECTORY,
+                        writeMetadata = true,
+                        rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+                        limits = ThreadSaveLimits(
+                            maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
+                            maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS,
+                            maxParallelDownloads = THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS,
+                            mediaDownloadStartDelayMs = THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS
+                        ),
+                        storageOptions = ThreadSaveStorageOptions(
+                            storageIdOverride = stableStorageId,
+                            clearExistingOutput = false,
+                            reuseExistingMedia = true,
+                            pruneUnreferencedExistingMedia = true,
+                            seedFromStorageId = seedStorageId
+                        ),
+                        writeInitialMetadataBeforeMedia = false,
+                        onInitialSavedThread = onInitialSavedThread
+                    )
+                }
             }
         }
     )

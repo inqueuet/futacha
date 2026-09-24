@@ -41,9 +41,17 @@ internal class FutachaSharedBoardRepository(
                 store.loadCatalogSnapshot(compatBoardKey(board), sort)?.let { return CatalogPageContent(it.items) }
             }
         }
-        val count = preferences.compatPreferenceValue("catalog", "catalogThreadSize")?.filter(Char::isDigit)?.toIntOrNull()
-        if (count == null || canonicalizeBoardUrl(board) == null) return delegate.getCatalogPage(board, mode)
-        return delegate.getCatalogPageWithSettings(board, mode, compatCatalogFetchSettings(count.coerceIn(100, 3000)))
+        val settings = compatCatalogFetchSettingsFromPreferences(preferences)
+        if (settings == null || canonicalizeBoardUrl(board) == null) return delegate.getCatalogPage(board, mode)
+        return delegate.getCatalogPageWithSettings(board, mode, settings)
+    }
+
+    // getCatalog (watcher, update checks) must use the same layout as the
+    // catalog screen, or each call switches the board's catalog setup.
+    override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
+        val settings = compatCatalogFetchSettingsFromPreferences(store.preferences.first())
+        if (settings == null || canonicalizeBoardUrl(board) == null) return delegate.getCatalog(board, mode)
+        return delegate.getCatalogWithSettings(board, mode, settings)
     }
 
     override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {

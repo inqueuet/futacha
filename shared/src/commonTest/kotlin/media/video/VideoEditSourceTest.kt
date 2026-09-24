@@ -31,6 +31,40 @@ class VideoEditSourceTest {
         assertEquals(setOf("my-video.mp4", "device-video-not-a-session"), fs.listFiles(root).toSet())
     }
 
+    @Test fun closeSurvivesDeletionFailureAndStillRejectsUse(): Unit = runBlocking {
+        val fs = DeleteFailingFileSystem()
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val root = "/virtual/editor-delete-${kotlin.random.Random.nextLong()}"
+        val source = VideoEditSource.import(fs, root, "v", Reader(header), gate, gate.permit(MediaFeature.VIDEO_EDITOR)!!)
+        fs.failDeletes = true
+
+        // Used to throw from the picker's finally block and crash the app.
+        source.close()
+
+        assertFailsWith<IllegalStateException> { source.useFile { } }
+    }
+
+    @Test fun firstImportContinuesWhenAnAbandonedSessionCannotBeDeleted(): Unit = runBlocking {
+        val fs = DeleteFailingFileSystem()
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val root = "/virtual/editor-stuck-${kotlin.random.Random.nextLong()}"
+        fs.writeBytes("$root/device-video-123-abc/input.mp4", header).getOrThrow()
+        fs.failDeletes = true
+
+        val source = VideoEditSource.import(fs, root, "v", Reader(header), gate, gate.permit(MediaFeature.VIDEO_EDITOR)!!)
+
+        assertContentEquals(header, fs.readBytes(source.path).getOrThrow())
+        source.close()
+    }
+
+    private class DeleteFailingFileSystem(
+        private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+    ) : com.valoser.futacha.shared.util.FileSystem by delegate {
+        var failDeletes = false
+        override suspend fun deleteRecursively(path: String): Result<Unit> =
+            if (failDeletes) Result.failure(IllegalStateException("EIO")) else delegate.deleteRecursively(path)
+    }
+
     private val enabled = MediaFeatureSettings(videoEditorEnabled = true)
     private val header = byteArrayOf(0, 0, 0, 24) + "ftypisom".encodeToByteArray()
     private class Reader(val bytes: ByteArray, val chunk: Int = Int.MAX_VALUE, val afterRead: (Int) -> Unit = {}) : FileReadSource {

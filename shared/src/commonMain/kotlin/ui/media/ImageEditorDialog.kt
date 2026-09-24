@@ -96,12 +96,18 @@ internal fun ImageEditorDialog(
         catch (failure: Exception) { error = failure.message ?: "画像を読み込めませんでした"; loading = false }
         finally { opened?.close() }
     }
-    LaunchedEffect(session, document) {
+    // One collector renders each state to completion and then the newest one:
+    // StateFlow conflates the edits made meanwhile. Restarting on every document
+    // change cancelled the render after it had already allocated the full-size
+    // buffers, so a fast drag kept restarting and the preview lagged behind.
+    LaunchedEffect(session, history) {
         val active = session ?: return@LaunchedEffect
-        try {
-            preview = withContext(Dispatchers.Default) { imageEditBitmap(renderImageEdit(active.original, document)) }
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { error = failure.message ?: "プレビューを作れませんでした" }
+        history.document.collect { snapshot ->
+            try {
+                preview = withContext(Dispatchers.Default) { imageEditBitmap(renderImageEdit(active.original, snapshot)) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { error = failure.message ?: "プレビューを作れませんでした" }
+        }
     }
     fun close() {
         if (document.strokes.isNotEmpty() || document.regions.isNotEmpty() || document.analysed || busy) discard = true

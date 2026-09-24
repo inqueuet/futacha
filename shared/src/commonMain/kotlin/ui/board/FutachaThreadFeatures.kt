@@ -1,13 +1,21 @@
 package com.valoser.futacha.shared.ui.board
 
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -26,7 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 
-internal data class FutachaThreadTool(val label: String, val enabled: Boolean = true, val action: () -> Unit)
+internal data class FutachaThreadTool(val label: String, val icon: ImageVector, val enabled: Boolean = true, val action: () -> Unit)
 internal val LocalFutachaThreadTools = staticCompositionLocalOf<List<FutachaThreadTool>> { emptyList() }
 
 internal fun CompatTab.toFutachaHistoryEntry(): ThreadHistoryEntry = ThreadHistoryEntry(
@@ -101,10 +109,12 @@ internal fun FutachaThreadFeatureHost(
             val now = Clock.System.now().toEpochMilliseconds()
             features.store.importModernBoards(listOf(board))
             // Also supports fixture/locally restored responses whose cache was not written by HTTP loading.
-            val snapshot = next.page.toCompatThreadSnapshot(tabKey, now)
+            // Converting and comparing every post is too much for the main thread on large threads.
+            val snapshot = withContext(AppDispatchers.parsing) { next.page.toCompatThreadSnapshot(tabKey, now) }
             val storedSnapshot = features.store.loadThreadSnapshot(tabKey)
-            val snapshotChanged = storedSnapshot?.copy(revision = snapshot.revision,
-                fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis) != snapshot
+            val snapshotChanged = withContext(AppDispatchers.parsing) {
+                storedSnapshot?.copy(revision = snapshot.revision, fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis) != snapshot
+            }
             if (snapshotChanged) {
                 features.store.saveSharedThreadSnapshot(sourceUrl, sourceUrl, board.name, threadTitle,
                     next.page.posts.firstOrNull()?.thumbnailUrl, snapshot)
@@ -170,30 +180,30 @@ internal fun FutachaThreadFeatureHost(
         }
     }
     val tools = listOf(
-        FutachaThreadTool("タブ一覧") { tabsOpen = true },
-        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示") { stripVisible = !stripVisible },
-        FutachaThreadTool("前のスレッド", tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) },
-        FutachaThreadTool("次のスレッド", tabs.indexOfFirst { it.key == tabKey } in 0 until tabs.lastIndex) { moveThread(1) },
-        FutachaThreadTool("更新前に戻す", previous != null) { previous?.let { restoring = true; previous = null; onRestore(it) } },
-        FutachaThreadTool("1ページ上へ") { scrollPage(-1) },
-        FutachaThreadTool("1ページ下へ") { scrollPage(1) },
-        FutachaThreadTool(if (automatic) "自動スクロールを停止" else "自動スクロール", !tab.isDead) { automatic = !automatic },
-        FutachaThreadTool("画像一覧・選択保存", page != null) { mediaOpen = true },
-        FutachaThreadTool("形式を選んでスレッド保存", page != null && features.fileSystem != null && features.httpClient != null) { pageSaveOpen = true },
-        FutachaThreadTool("NGの詳細管理") { ngOpen = true },
-        FutachaThreadTool(if (extraction == CompatExtractionKind.NG) "NG抽出を解除" else "NGレスを抽出") {
+        FutachaThreadTool("タブ一覧", Icons.Rounded.Tab) { tabsOpen = true },
+        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
+        FutachaThreadTool("前のスレッド", Icons.AutoMirrored.Rounded.ArrowBack, tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) },
+        FutachaThreadTool("次のスレッド", Icons.AutoMirrored.Rounded.ArrowForward, tabs.indexOfFirst { it.key == tabKey } in 0 until tabs.lastIndex) { moveThread(1) },
+        FutachaThreadTool("更新前に戻す", Icons.AutoMirrored.Rounded.Undo, previous != null) { previous?.let { restoring = true; previous = null; onRestore(it) } },
+        FutachaThreadTool("1ページ上へ", Icons.Rounded.ArrowUpward) { scrollPage(-1) },
+        FutachaThreadTool("1ページ下へ", Icons.Rounded.ArrowDownward) { scrollPage(1) },
+        FutachaThreadTool(if (automatic) "自動スクロールを停止" else "自動スクロール", if (automatic) Icons.Rounded.Stop else Icons.Rounded.SwapVert, !tab.isDead) { automatic = !automatic },
+        FutachaThreadTool("画像一覧・選択保存", Icons.Rounded.PhotoLibrary, page != null) { mediaOpen = true },
+        FutachaThreadTool("形式を選んでスレッド保存", Icons.Rounded.Archive, page != null && features.fileSystem != null && features.httpClient != null) { pageSaveOpen = true },
+        FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
+        FutachaThreadTool(if (extraction == CompatExtractionKind.NG) "NG抽出を解除" else "NGレスを抽出", Icons.Rounded.FilterList) {
             extraction = if (extraction == CompatExtractionKind.NG) null else CompatExtractionKind.NG
         },
-        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_SAIDANE) "そうだね抽出を解除" else "しきい値で抽出：そうだね") {
+        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_SAIDANE) "そうだね抽出を解除" else "しきい値で抽出：そうだね", Icons.Rounded.ThumbUp) {
             extraction = if (extraction == CompatExtractionKind.MANY_SAIDANE) null else CompatExtractionKind.MANY_SAIDANE
         },
-        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_REPLIES) "返信抽出を解除" else "しきい値で抽出：返信") {
+        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_REPLIES) "返信抽出を解除" else "しきい値で抽出：返信", Icons.Rounded.Forum) {
             extraction = if (extraction == CompatExtractionKind.MANY_REPLIES) null else CompatExtractionKind.MANY_REPLIES
         },
-        FutachaThreadTool("キャッシュ検索") { cacheSearchOpen = true },
-        FutachaThreadTool("URL・アーカイブ") { urlsOpen = true },
-        FutachaThreadTool("表示・抽出の詳細設定") { features.openSettings("thread") },
-        FutachaThreadTool("スレッドを閉じる") { closeTab(tabKey) }
+        FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { cacheSearchOpen = true },
+        FutachaThreadTool("URL・アーカイブ", Icons.Rounded.Link) { urlsOpen = true },
+        FutachaThreadTool("表示・抽出の詳細設定", Icons.Rounded.Settings) { features.openSettings("thread") },
+        FutachaThreadTool("スレッドを閉じる", Icons.Rounded.Close) { closeTab(tabKey) }
     )
     val fontSize = features.intValue("thread", "threadFontSize", 10..30)
     val baseTypography = MaterialTheme.typography

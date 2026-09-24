@@ -456,6 +456,17 @@ class SavedThreadRepository(
         )
     }
 
+    /** Storage id of the newest indexed save of this thread, or null when none is indexed. */
+    suspend fun resolveIndexedStorageId(threadId: String, boardId: String? = null): String? = withIndexLock {
+        readSavedThreadIndexUnlocked()
+            .threads
+            .asSequence()
+            .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
+            .sortedByDescending { it.savedAt }
+            .map { resolveSavedThreadStorageId(it) }
+            .firstOrNull()
+    }
+
     /**
      * スレッドHTMLパスを取得
      */
@@ -574,27 +585,31 @@ class SavedThreadRepository(
         boardId: String?
     ): Set<String> {
         val targetIdentity = purgeIdentityKey(threadId, boardId)
-        return listFilesAt("")
-            .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
-            .mapNotNullTo(linkedSetOf()) { childName ->
-            val storageId = childName.trim().trim('/')
-            if (storageId.isBlank()) return@mapNotNullTo null
-            val metadata = readStringAtWithLimit(
-                "$storageId/metadata.json",
-                MAX_SAVED_THREAD_METADATA_BYTES
-            )
-                .getOrNull()
-                ?.let { encoded ->
-                    runCatching {
-                        requireSavedThreadMetadataWithinLimits(
-                            json.decodeFromString(SavedThreadMetadata.serializer(), encoded)
-                        )
-                    }.getOrNull()
+        // Callers run on the UI scope when a history entry is swiped away, and
+        // this may read thousands of metadata files. Only the identity is needed,
+        // so skip decoding every post of every saved thread.
+        return withContext(AppDispatchers.io) {
+            listFilesAt("")
+                .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
+                .mapNotNullTo(linkedSetOf()) { childName ->
+                    val storageId = childName.trim().trim('/')
+                    if (storageId.isBlank()) return@mapNotNullTo null
+                    val identity = readStringAtWithLimit(
+                        "$storageId/metadata.json",
+                        MAX_SAVED_THREAD_METADATA_BYTES
+                    )
+                        .getOrNull()
+                        ?.let { encoded ->
+                            runCatching {
+                                json.decodeFromString(SavedThreadIdentityProbe.serializer(), encoded)
+                            }.getOrNull()
+                        }
+                        ?.takeIf { it.threadId.isNotBlank() }
+                        ?: return@mapNotNullTo null
+                    storageId.takeIf {
+                        purgeIdentityKey(identity.threadId, identity.boardId) == targetIdentity
+                    }
                 }
-                ?: return@mapNotNullTo null
-            storageId.takeIf {
-                purgeIdentityKey(metadata.threadId, metadata.boardId) == targetIdentity
-            }
         }
     }
 
@@ -631,3 +646,10 @@ class SavedThreadRepository(
         Logger.w("SavedThreadRepository", "Total size overflow detected, capping at Long.MAX_VALUE")
     }
 }
+
+/** The two metadata fields the orphan scan compares; the rest is ignored. */
+@kotlinx.serialization.Serializable
+private data class SavedThreadIdentityProbe(
+    val threadId: String = "",
+    val boardId: String? = null
+)

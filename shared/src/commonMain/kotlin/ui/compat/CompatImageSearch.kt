@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -312,25 +313,41 @@ private data class CompatSearchUploadImage(
     val fileName: String
 )
 
+private class CompatStreamedSearchImage(val bytes: ByteArray, val contentType: String?)
+
+/**
+ * Downloads an image to upload to a search service, applying [maxBytes] while
+ * the body streams in; a plain get() buffered the whole body first.
+ */
+private suspend fun fetchCompatSearchImageBytes(
+    httpClient: HttpClient,
+    imageUrl: String,
+    maxBytes: Int,
+    timeoutMillis: Long,
+    tooLargeMessage: String
+): CompatStreamedSearchImage = httpClient.prepareGet(imageUrl).execute { response ->
+    require(response.status.isSuccess()) { "画像取得 HTTP ${response.status.value}" }
+    val declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    require(declaredSize == null || declaredSize in 1L..maxBytes.toLong()) { tooLargeMessage }
+    CompatStreamedSearchImage(
+        bytes = readBoundedHttpResponseBytes(response, maxBytes, timeoutMillis),
+        contentType = response.headers[HttpHeaders.ContentType]
+    )
+}
+
 private suspend fun downloadCompatSearchImage(
     httpClient: HttpClient,
     imageUrl: String
 ): CompatSearchUploadImage {
     require(isCompatImageSearchableMediaUrl(imageUrl)) { "検索する画像URLが不正です" }
-    val response = httpClient.get(imageUrl)
-    require(response.status.isSuccess()) { "画像取得 HTTP ${response.status.value}" }
-    val declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-    require(declaredSize == null || declaredSize in 1..COMPAT_FILE_SEARCH_MAX_UPLOAD_BYTES) {
+    val image = fetchCompatSearchImageBytes(
+        httpClient, imageUrl, COMPAT_FILE_SEARCH_MAX_UPLOAD_BYTES, COMPAT_FILE_SEARCH_TIMEOUT_MILLIS,
         "画像が大きすぎます（上限20MB）"
-    }
-    val bytes = readBoundedHttpResponseBytes(
-        response,
-        COMPAT_FILE_SEARCH_MAX_UPLOAD_BYTES,
-        COMPAT_FILE_SEARCH_TIMEOUT_MILLIS
     )
+    val bytes = image.bytes
     require(bytes.isNotEmpty()) { "画像が空です" }
     val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
-    val responseMime = response.headers[HttpHeaders.ContentType]
+    val responseMime = image.contentType
         ?.substringBefore(';')
         ?.trim()
         ?.takeIf { it.startsWith("image/", ignoreCase = true) }
@@ -537,19 +554,9 @@ internal suspend fun searchCompatGoogleLensFile(
     return try {
         Result.success(withTimeout(30_000L) {
             require(isCompatImageSearchableMediaUrl(imageUrl)) { "検索する画像URLが不正です" }
-            val imageResponse = httpClient.get(imageUrl)
-            if (!imageResponse.status.isSuccess()) {
-                error("画像取得 HTTP ${imageResponse.status.value}")
-            }
-            val declaredSize = imageResponse.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            require(declaredSize == null || declaredSize in 1..GOOGLE_LENS_MAX_UPLOAD_BYTES) {
-                "画像サイズが大きすぎます（20MBまで）"
-            }
-            val imageBytes = readBoundedHttpResponseBytes(
-                imageResponse,
-                GOOGLE_LENS_MAX_UPLOAD_BYTES,
-                30_000L
-            )
+            val imageBytes = fetchCompatSearchImageBytes(
+                httpClient, imageUrl, GOOGLE_LENS_MAX_UPLOAD_BYTES, 30_000L, "画像サイズが大きすぎます（20MBまで）"
+            ).bytes
             require(imageBytes.isNotEmpty()) { "画像が空です" }
             require(imageBytes.size <= GOOGLE_LENS_MAX_UPLOAD_BYTES) {
                 "画像サイズが大きすぎます（20MBまで）"
@@ -616,13 +623,9 @@ private suspend fun searchCompatGoogleFileUpload(
     return try {
         Result.success(withTimeout(30_000L) {
             require(isCompatImageSearchableMediaUrl(imageUrl)) { "検索する画像URLが不正です" }
-            val imageResponse = httpClient.get(imageUrl)
-            require(imageResponse.status.isSuccess()) { "画像取得 HTTP ${imageResponse.status.value}" }
-            val imageBytes = readBoundedHttpResponseBytes(
-                imageResponse,
-                GOOGLE_LENS_MAX_UPLOAD_BYTES,
-                30_000L
-            )
+            val imageBytes = fetchCompatSearchImageBytes(
+                httpClient, imageUrl, GOOGLE_LENS_MAX_UPLOAD_BYTES, 30_000L, "画像サイズが大きすぎます（20MBまで）"
+            ).bytes
             require(imageBytes.isNotEmpty()) { "画像が空です" }
             val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
             val response = httpClient.submitFormWithBinaryData(

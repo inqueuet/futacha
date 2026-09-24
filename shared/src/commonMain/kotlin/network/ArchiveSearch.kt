@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
@@ -448,15 +449,19 @@ private suspend fun fetchArchiveThreadProbe(
     if (threadUrl.isBlank()) return ArchiveThreadProbe(statusCode = null, thumbnailUrl = null)
     var response: HttpResponse? = null
     return try {
-        response = httpClient.get(threadUrl) {
+        // Streamed and ranged: only the first lines are needed for the thumbnail,
+        // and a plain get() received the whole thread for every search result.
+        httpClient.prepareGet(threadUrl) {
             headers[HttpHeaders.Referrer] = threadUrl.substringBeforeLast('/', threadUrl)
-        }
-        val statusCode = response.status.value
-        if (!response.status.isSuccess()) {
-            return ArchiveThreadProbe(statusCode = statusCode, thumbnailUrl = null)
+            headers[HttpHeaders.Range] = "bytes=0-${ARCHIVE_THUMBNAIL_HEAD_MAX_BYTES - 1}"
+        }.execute { streamed ->
+        response = streamed
+        val statusCode = streamed.status.value
+        if (!streamed.status.isSuccess()) {
+            return@execute ArchiveThreadProbe(statusCode = statusCode, thumbnailUrl = null)
         }
         val headHtml = readHttpBoardApiResponseHeadAsString(
-            response = response,
+            response = streamed,
             maxLines = ARCHIVE_THUMBNAIL_HEAD_MAX_LINES,
             maxBytes = ARCHIVE_THUMBNAIL_HEAD_MAX_BYTES,
             responseReadBufferBytes = ARCHIVE_THUMBNAIL_READ_BUFFER_BYTES,
@@ -469,6 +474,7 @@ private suspend fun fetchArchiveThreadProbe(
             ?.getOrNull(1)
             ?.let { normalizeArchiveResourceUrl(it, threadUrl) }
         ArchiveThreadProbe(statusCode = statusCode, thumbnailUrl = thumbnailUrl)
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: ResponseException) {

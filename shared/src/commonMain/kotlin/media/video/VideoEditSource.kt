@@ -59,11 +59,20 @@ internal class VideoEditSource private constructor(
         }
     }
 
+    /**
+     * Never throws: pickers call this from finally blocks of scopes without an
+     * exception handler, where a failed delete used to crash the app. A work
+     * directory that cannot be removed now is collected by the next process's
+     * first import.
+     */
     suspend fun close() = withContext(NonCancellable) {
         mutex.withLock {
             closed.value = true
-            fileSystem.deleteRecursively(directory).getOrThrow()
+            fileSystem.deleteRecursively(directory).onFailure {
+                Logger.w("VideoEditSource", "Failed to delete video work directory $directory: ${it.message}")
+            }
         }
+        Unit
     }
 
     companion object {
@@ -75,8 +84,13 @@ internal class VideoEditSource private constructor(
         private suspend fun prepareDirectory(fileSystem: FileSystem, root: String) = cleanupMutex.withLock {
             val key = fileSystem.resolveAbsolutePath(root).trimEnd('/')
             if (key !in preparedDirectories) {
+                // An undeletable leftover must not block every later import in this process.
                 fileSystem.listFiles(root).filter { it.matches(Regex("device-video-[0-9]+-[0-9a-z]+")) }
-                    .forEach { fileSystem.deleteRecursively("${root.trimEnd('/')}/$it").getOrThrow() }
+                    .forEach { name ->
+                        fileSystem.deleteRecursively("${root.trimEnd('/')}/$name").onFailure {
+                            Logger.w("VideoEditSource", "Failed to delete abandoned video session $name: ${it.message}")
+                        }
+                    }
                 preparedDirectories.add(key)
             }
         }
@@ -136,7 +150,12 @@ internal class VideoEditSource private constructor(
                         VideoEditSource(fileSystem.resolveAbsolutePath(path), displayName.take(255), total,
                             container, directory, fileSystem, gate, permit).also { transferred = it; published = true }
                     } finally {
-                        if (!published) withContext(NonCancellable) { fileSystem.deleteRecursively(directory).getOrThrow() }
+                        // Keep the original failure; a cleanup error must not replace it.
+                        if (!published) withContext(NonCancellable) {
+                            fileSystem.deleteRecursively(directory).onFailure {
+                                Logger.w("VideoEditSource", "Failed to delete unpublished video session: ${it.message}")
+                            }
+                        }
                     }
                 }
             } catch (failure: Throwable) {

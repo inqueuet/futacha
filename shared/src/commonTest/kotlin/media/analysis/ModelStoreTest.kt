@@ -143,6 +143,22 @@ class ModelStoreTest {
         }
     }
 
+    @Test fun presenceCheckUsesSizeOnlyAndNeverVouchesForContent() = runBlocking {
+        using { f ->
+            assertFalse(f.store.present(id, f.permit()))
+            val result = f.store.download(id, f.permit())
+            assertTrue(f.store.present(id, f.permit()))
+
+            // Same size, wrong bytes: listed as present, but sessions still refuse it.
+            FileSystem.SYSTEM.write(result.path) { write(ByteArray(payload.size) { 7 }) }
+            assertTrue(f.store.present(id, f.permit()))
+            assertNull(f.store.verified(id, f.permit()))
+
+            FileSystem.SYSTEM.write(result.path) { write(ByteArray(payload.size - 1) { 7 }) }
+            assertFalse(f.store.present(id, f.permit()))
+        }
+    }
+
     @Test fun offThenOnCancelsOldDownloadAndRequiresANewPermit() = runBlocking {
         val started = CompletableDeferred<Unit>()
         using(Fixture(download = { sink ->

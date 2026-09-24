@@ -341,6 +341,7 @@ internal fun ThreadScrollPersistenceEffect(
     scrollPersistenceReady: Boolean
 ) {
     val latestImmediatePersist = rememberUpdatedState(onScrollPositionPersistImmediately)
+    val latestPersist = rememberUpdatedState(onScrollPositionPersist)
     val latestPersistenceReady = rememberUpdatedState(scrollPersistenceReady)
     val latestDisplayedPostsLayout = rememberUpdatedState(displayedPostsLayout)
     DisposableEffect(threadId, lazyListState) {
@@ -363,17 +364,18 @@ internal fun ThreadScrollPersistenceEffect(
     }
     LaunchedEffect(threadId, lazyListState, scrollPersistenceReady) {
         if (!scrollPersistenceReady) return@LaunchedEffect
+        // The collector outlives recompositions: filter, tree or summary-row
+        // changes replace the layout without restarting it, so resolve the post
+        // id against the latest layout rather than the one captured at start.
         collectThreadScrollPositionPersistence(
             listState = lazyListState,
             threadId = threadId,
-            onScrollPositionPersist = { persistedThreadId, index, offset ->
-                onScrollPositionPersist(
-                    persistedThreadId,
-                    index,
-                    offset,
-                    resolveVisibleThreadPostId(index, displayedPostsLayout)
-                )
-            }
+            onScrollPositionPersist = createThreadScrollPersistHandler(
+                layoutProvider = { latestDisplayedPostsLayout.value },
+                persist = { persistedThreadId, index, offset, postId ->
+                    latestPersist.value(persistedThreadId, index, offset, postId)
+                }
+            )
         )
     }
 }

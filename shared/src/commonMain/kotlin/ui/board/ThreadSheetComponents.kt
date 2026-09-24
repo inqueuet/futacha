@@ -96,6 +96,7 @@ internal fun ThreadSettingsSheet(
                 HorizontalDivider()
                 extraTools.forEach { tool ->
                     ListItem(headlineContent = { Text(tool.label) },
+                        leadingContent = { Icon(tool.icon, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().clickable(enabled = tool.enabled) {
                             onDismiss()
                             tool.action()

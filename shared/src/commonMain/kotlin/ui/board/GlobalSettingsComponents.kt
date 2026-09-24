@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Image
@@ -337,7 +338,11 @@ internal fun SharedSettingsLink(path: String, title: String, description: String
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
-        leadingContent = if (path == "watcher") ({ Icon(Icons.Rounded.Settings, contentDescription = null) }) else null,
+        leadingContent = when (path) {
+            "watcher" -> ({ Icon(Icons.Rounded.Settings, contentDescription = null) })
+            "help" -> ({ Icon(Icons.Rounded.HelpOutline, contentDescription = null) })
+            else -> null
+        },
         modifier = Modifier.fillMaxWidth().clickable { features.openSettings(path) }
     )
 }

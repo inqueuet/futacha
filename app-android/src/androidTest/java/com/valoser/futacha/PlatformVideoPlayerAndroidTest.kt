@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import android.net.Uri
+import android.system.Os
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
@@ -21,7 +23,14 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.VideoPlayerState
+import androidx.lifecycle.Lifecycle
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -30,10 +39,12 @@ class PlatformVideoPlayerAndroidTest {
     val rule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun platformVideoPlayer_usesSymmetricTenSecondTransportControls() {
+    fun platformVideoPlayer_usesSymmetricTenSecondTransportControls() = withBlockingVideoSource { videoUrl ->
+        // A missing file errors at once and the wrapper then removes the native
+        // player before this test can find it; a FIFO keeps it buffering.
         rule.setContent {
             PlatformVideoPlayer(
-                videoUrl = "file:///does/not/exist-seek-contract.mp4",
+                videoUrl = videoUrl,
                 modifier = Modifier.size(100.dp),
                 onStateChanged = {}
             )
@@ -53,6 +64,66 @@ class PlatformVideoPlayerAndroidTest {
             assertEquals(10_000L, player.javaClass.getMethod("getSeekBackIncrement").invoke(player))
             assertEquals(10_000L, player.javaClass.getMethod("getSeekForwardIncrement").invoke(player))
         }
+    }
+
+    @Test
+    fun platformVideoPlayer_pausesWhenActivityStopsAndDoesNotResume() =
+        withBlockingVideoSource(::assertPlayerPausesOnStop)
+
+    /**
+     * A missing file errors at once and the wrapper then drops the native
+     * player. Opening a FIFO for reading blocks instead, so the player stays
+     * alive in the buffering state for the whole test.
+     */
+    private fun withBlockingVideoSource(block: (String) -> Unit) {
+        val fifo = File(
+            InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
+            "player-${System.nanoTime()}.mp4"
+        )
+        Os.mkfifo(fifo.path, "600".toInt(8))
+        try {
+            block(Uri.fromFile(fifo).toString())
+        } finally {
+            // Unblock the player's pending open with an immediate EOF. Delete the
+            // pipe only after the writer opened it: deleting first would leave the
+            // player's reader blocked forever and hang the instrumentation.
+            thread(isDaemon = true) { runCatching { FileOutputStream(fifo).close() } }
+                .join(5_000L)
+            fifo.delete()
+        }
+    }
+
+    private fun assertPlayerPausesOnStop(videoUrl: String) {
+        rule.setContent {
+            PlatformVideoPlayer(
+                videoUrl = videoUrl,
+                modifier = Modifier.size(100.dp),
+                onStateChanged = {}
+            )
+        }
+        rule.waitUntil(5_000) {
+            rule.activity.findViewById<ViewGroup>(android.R.id.content)
+                .findMedia3PlayerView()
+                ?.let(::media3PlayerFromView) != null
+        }
+        val player = rule.runOnIdle {
+            requireNotNull(
+                media3PlayerFromView(
+                    requireNotNull(rule.activity.findViewById<ViewGroup>(android.R.id.content).findMedia3PlayerView())
+                )
+            ).also { it.javaClass.getMethod("setPlayWhenReady", Boolean::class.javaPrimitiveType).invoke(it, true) }
+        }
+        fun playWhenReady(): Boolean = rule.runOnIdle {
+            player.javaClass.getMethod("getPlayWhenReady").invoke(player) as Boolean
+        }
+        assertTrue(playWhenReady())
+
+        // Home button: the activity stops while the player stays composed.
+        rule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        assertFalse(playWhenReady())
+
+        rule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        assertFalse(playWhenReady())
     }
 
     @Test

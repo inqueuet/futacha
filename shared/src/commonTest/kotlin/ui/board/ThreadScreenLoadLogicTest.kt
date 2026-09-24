@@ -791,6 +791,41 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun threadScrollPersistHandler_resolvesPostIdAgainstTheLatestLayout() {
+        fun post(id: String, order: Int) = com.valoser.futacha.shared.model.Post(
+            id = id,
+            order = order,
+            author = null,
+            subject = null,
+            timestamp = "",
+            messageHtml = "",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
+        var layout = ThreadDisplayedPostsLayout(
+            posts = listOf(post("100", 0), post("101", 1), post("102", 2)),
+            itemsBeforePosts = 1
+        )
+        val persisted = mutableListOf<String?>()
+        val handler = createThreadScrollPersistHandler(
+            layoutProvider = { layout },
+            persist = { _, _, _, postId -> persisted += postId }
+        )
+
+        handler("t", 2, 0)
+        // A summary row appears and a reply is inserted by a tree refresh while
+        // the collector keeps running; the same list index is another post now.
+        layout = ThreadDisplayedPostsLayout(
+            posts = listOf(post("100", 0), post("150", 1), post("101", 2), post("102", 3)),
+            itemsBeforePosts = 2
+        )
+        handler("t", 2, 0)
+        handler("t", 4, 0)
+
+        assertEquals(listOf<String?>("101", "100", "101"), persisted)
+    }
+
+    @Test
     fun shouldUseOfflineMetadataCandidate_allowsExplicitBoardId_andValidFallbackBoardKeyOnly() {
         val metadata = SavedThreadMetadata(
             threadId = "123",

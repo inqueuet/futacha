@@ -665,6 +665,32 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun purgeThreadStorage_scansOrphanMetadataOffTheCallersDispatcherAndKeepsOtherThreads() = runBlocking {
+        val fileSystem = DispatcherRecordingFileSystem("generation_orphan")
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        val orphanGeneration = "b_123_generation_orphan"
+        val otherThread = "b_999_generation_other"
+        fileSystem.writeString(
+            "autosaved_threads/$orphanGeneration/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", orphanGeneration))
+        ).getOrThrow()
+        fileSystem.writeString(
+            "autosaved_threads/$otherThread/metadata.json",
+            json.encodeToString(savedMetadata("999", "b", otherThread))
+        ).getOrThrow()
+        fileSystem.writeString("autosaved_threads/broken/metadata.json", "{not json").getOrThrow()
+        val caller = coroutineContext[kotlin.coroutines.ContinuationInterceptor]
+
+        repository.purgeThreadStorage("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists("autosaved_threads/$orphanGeneration"))
+        assertTrue(fileSystem.exists("autosaved_threads/$otherThread/metadata.json"))
+        assertTrue(fileSystem.exists("autosaved_threads/broken/metadata.json"))
+        assertTrue(fileSystem.recordedInterceptors.isNotEmpty())
+        assertTrue(fileSystem.recordedInterceptors.none { it === caller })
+    }
+
+    @Test
     fun purgeAllStorage_rejectsSaveThatStartedBeforePurge() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
@@ -1000,6 +1026,18 @@ internal class InMemoryFileSystem : FileSystem {
         return deleteRecursively(resolvePath(base, relativePath))
     }
 
+    override fun supportsAtomicReplace(base: SaveLocation): Boolean = true
+
+    override suspend fun replaceAtomically(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<Unit> = runCatching {
+        val from = normalize(resolvePath(base, fromRelative))
+        val bytes = files.remove(from) ?: error("Missing file: $fromRelative")
+        files[normalize(resolvePath(base, toRelative))] = bytes
+    }
+
     private fun resolvePath(base: SaveLocation, relativePath: String): String {
         val root = when (base) {
             is SaveLocation.Path -> base.path
@@ -1075,5 +1113,20 @@ private class CountingIndexWriteFileSystem(
 
     private fun normalizeKey(path: String): String {
         return path.trim().replace('\\', '/').trim('/')
+    }
+}
+
+/** Records the dispatcher of reads whose path contains [marker]. */
+private class DispatcherRecordingFileSystem(
+    private val marker: String,
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    val recordedInterceptors = mutableListOf<kotlin.coroutines.ContinuationInterceptor?>()
+
+    override suspend fun readString(path: String): Result<String> {
+        if (marker in path) {
+            recordedInterceptors += kotlinx.coroutines.currentCoroutineContext()[kotlin.coroutines.ContinuationInterceptor]
+        }
+        return delegate.readString(path)
     }
 }

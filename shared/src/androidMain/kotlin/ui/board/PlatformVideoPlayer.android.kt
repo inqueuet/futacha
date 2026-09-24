@@ -136,6 +136,14 @@ internal actual fun NativePlatformVideoPlayer(
         player?.volume = normalizeVideoPlayerVolume(volume, isMuted)
     }
 
+    // Leaving the app must not keep the video and its sound running, as iOS
+    // already pauses on didEnterBackground. ON_STOP (not ON_PAUSE) keeps
+    // multi-window playback; returning does not resume automatically.
+    PlatformBackgroundLifecycleEffect {
+        val activePlayer = player ?: return@PlatformBackgroundLifecycleEffect
+        editing?.pausePlayer?.invoke() ?: activePlayer.pause()
+    }
+
     AndroidView(
         factory = {
             lateinit var targetView: PlayerView

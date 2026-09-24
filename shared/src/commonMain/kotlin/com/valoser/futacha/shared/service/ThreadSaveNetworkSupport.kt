@@ -16,6 +16,7 @@ import com.valoser.futacha.shared.util.describeFailureForLog
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
@@ -82,10 +83,10 @@ internal suspend fun fetchThreadSaveHtml(
     try {
         val html = withTimeoutOrNull(request.threadHtmlFetchTimeoutMillis) {
             val threadUrl = BoardUrlResolver.resolveThreadUrl(request.boardUrl, request.threadId)
-            val response: HttpResponse = httpClient.get(threadUrl) {
+            // Streamed so the size limit applies while the page is received.
+            httpClient.prepareGet(threadUrl) {
                 headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(request.boardUrl)
-            }
-            try {
+            }.execute { response ->
                 if (!response.status.isSuccess()) {
                     throw Exception("Fetch thread HTML failed: ${response.status}")
                 }
@@ -102,8 +103,6 @@ internal suspend fun fetchThreadSaveHtml(
                     readIdleTimeoutMillis = request.readIdleTimeoutMillis
                 )
                 TextEncoding.decodeToString(bodyBytes, response.headers[HttpHeaders.ContentType])
-            } finally {
-                runCatching { response.bodyAsChannel().cancel() }
             }
         } ?: throw IllegalStateException(
             "Fetch thread HTML timed out after ${request.threadHtmlFetchTimeoutMillis}ms"
@@ -313,26 +312,31 @@ private suspend fun <T> withThreadSaveMediaSource(
     originalMediaSource: OriginalMediaSource?,
     block: suspend (MediaSaveSource) -> T
 ): T = withOriginalMediaSaveSourceOrElse(originalMediaSource, request.url, block) {
-    val response = withTimeoutOrNull(request.mediaRequestTimeoutMillis) {
-        httpClient.get(request.url) {
-            headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
-            timeout { requestTimeoutMillis = request.maxSaveDurationMs }
-        }
-    } ?: throw IllegalStateException("Download request timed out after ${request.mediaRequestTimeoutMillis}ms")
+    // Streamed: the file goes to disk as it arrives instead of being buffered
+    // whole first. A stalled connection fails after the former request timeout
+    // without data; the overall limit stays the save's duration budget.
     try {
-        if (!response.status.isSuccess()) {
-            throw ThreadSaveMediaDownloadFailure(
-                message = "Download failed: ${response.status}",
-                retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
-            )
+        httpClient.prepareGet(request.url) {
+            headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+            timeout {
+                requestTimeoutMillis = request.maxSaveDurationMs
+                socketTimeoutMillis = request.mediaRequestTimeoutMillis
+            }
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                throw ThreadSaveMediaDownloadFailure(
+                    message = "Download failed: ${response.status}",
+                    retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
+                )
+            }
+            val channel = response.bodyAsChannel()
+            block(MediaSaveSource(
+                contentType = response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) },
+                declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
+                read = { channel.readAvailable(it, 0, it.size) }
+            ))
         }
-        val channel = response.bodyAsChannel()
-        block(MediaSaveSource(
-            contentType = response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) },
-            declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
-            read = { channel.readAvailable(it, 0, it.size) }
-        ))
-    } finally {
-        runCatching { response.bodyAsChannel().cancel() }
+    } catch (timeout: io.ktor.client.plugins.HttpRequestTimeoutException) {
+        throw IllegalStateException("Download request timed out after ${request.mediaRequestTimeoutMillis}ms", timeout)
     }
 }

@@ -45,6 +45,7 @@ internal fun CatalogScreenScaffold(
         drawerContent = {
             HistoryDrawerContent(
                 history = bindings.history,
+                isVisible = bindings.isDrawerOpen,
                 onHistoryEntryDismissed = bindings.onHistoryEntryDismissed,
                 onHistoryEntrySelected = bindings.historyDrawerCallbacks.onHistoryEntrySelected,
                 isHistoryRefreshing = bindings.isHistoryRefreshing,

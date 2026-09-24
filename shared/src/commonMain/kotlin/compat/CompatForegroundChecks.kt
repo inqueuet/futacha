@@ -12,6 +12,9 @@ const val COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE =
     "compat.background.backgroundThreadUpdateCheckTime"
 const val COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE =
     "compat.background.backgroundThreadExistCheckTime"
+/** Keyword watching fetches two catalogs per board; run it at most this often. */
+const val COMPAT_WATCH_INTERVAL_MILLIS = COMPAT_THREAD_UPDATE_INTERVAL_MILLIS
+const val COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE = "compat.background.watcherCheckTime"
 /**
  * The target's BackgroundThreadExistCheckAsyncTask skips tabs whose last
  * successful thread-body update is newer than 1,800 seconds.

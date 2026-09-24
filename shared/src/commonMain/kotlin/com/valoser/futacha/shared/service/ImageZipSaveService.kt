@@ -9,7 +9,6 @@ import com.valoser.futacha.shared.media.source.OriginalMediaSource
 import com.valoser.futacha.shared.media.source.originalMediaSourceOrNull
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -44,7 +43,6 @@ class ImageZipSaveService(
             currentItemTotalBytes: Long
         ) -> Unit = { _, _, _, _, _ -> }
     ): Result<ImageZipSaveResult> = withContext(AppDispatchers.io) {
-        var pendingOutputFileName: String? = null
         try {
             val urls = mediaUrls.map(String::trim)
                 .filter(::isSupportedMediaSaveSource)
@@ -60,7 +58,6 @@ class ImageZipSaveService(
             require(urls.none { com.valoser.futacha.shared.util.localMediaSavePath(it) == destination }) {
                 "元のファイルとZIP保存先が同じです"
             }
-            pendingOutputFileName = fileName
             val relativePath = fileName
             var savedItems = 0
             var failedItems = 0
@@ -107,31 +104,14 @@ class ImageZipSaveService(
                 require(savedItems > 0) { "メディアを保存できませんでした" }
                 byteSize = zip.finish()
             }
-            val writeResult = if (baseSaveLocation != null) {
-                fileSystem.writeByteStream(baseSaveLocation, relativePath, writer)
-            } else {
+            val location = baseSaveLocation ?: SaveLocation.Path(baseDirectory).also {
                 fileSystem.createDirectory(baseDirectory).getOrThrow()
-                fileSystem.writeByteStream("$baseDirectory/$relativePath", writer)
             }
-            writeResult.onFailure {
-                if (baseSaveLocation != null) {
-                    fileSystem.delete(baseSaveLocation, relativePath)
-                } else {
-                    fileSystem.delete("$baseDirectory/$relativePath")
-                }
-            }
-            writeResult.getOrThrow()
-            Result.success(ImageZipSaveResult(fileName, savedItems, failedItems, byteSize, failedUrls))
+            // The file name is fixed per thread, so a re-save must not destroy the
+            // previous archive when this one fails or is cancelled midway.
+            val savedPath = fileSystem.writeByteStreamReplacing(location, relativePath, writer).getOrThrow()
+            Result.success(ImageZipSaveResult(savedPath, savedItems, failedItems, byteSize, failedUrls))
         } catch (cancelled: CancellationException) {
-            pendingOutputFileName?.let { fileName ->
-                withContext(NonCancellable) {
-                    if (baseSaveLocation != null) {
-                        fileSystem.delete(baseSaveLocation, fileName)
-                    } else {
-                        fileSystem.delete("$baseDirectory/$fileName")
-                    }
-                }
-            }
             throw cancelled
         } catch (failure: Throwable) {
             Result.failure(failure)
