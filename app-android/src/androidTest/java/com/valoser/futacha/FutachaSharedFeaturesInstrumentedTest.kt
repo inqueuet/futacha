@@ -252,6 +252,9 @@ class FutachaSharedFeaturesInstrumentedTest {
         helpDocumentScript("document.querySelector('mark').scrollIntoView({block:'center'})")
         saveScreenshot("v11.4-help-search.png")
         rule.onNodeWithTag("help-search-field").performTextReplacement("no-such-help-word-114")
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("一致する項目がありません").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
         rule.onNodeWithText("クリア").performClick()
         rule.onNodeWithTag("compat-help-content").assertIsDisplayed()

@@ -107,6 +107,36 @@ class HistoryScrollSupportTest {
     }
 
     @Test
+    fun shouldSkipHistoryScrollUpdate_throttlesFromTheLastPersistedScrollNotTheVisit() {
+        val existing = historyEntry(
+            lastVisitedEpochMillis = 10_000L,
+            lastReadItemIndex = 5,
+            lastReadItemOffset = 100
+        )
+
+        // 30 s after opening but 1 s after the last written scroll position.
+        assertTrue(
+            shouldSkipHistoryScrollUpdate(
+                existingEntry = existing,
+                index = 6,
+                offset = 150,
+                nowMillis = 40_000L,
+                lastPersistedAtMillis = 39_000L
+            )
+        )
+        // 15 s after the last written position the nearby move is saved.
+        assertFalse(
+            shouldSkipHistoryScrollUpdate(
+                existingEntry = existing,
+                index = 6,
+                offset = 150,
+                nowMillis = 54_000L,
+                lastPersistedAtMillis = 39_000L
+            )
+        )
+    }
+
+    @Test
     fun applyHistoryScrollUpdate_preservesVisitTimeWhenSavingPosition() {
         val existing = historyEntry(
             lastVisitedEpochMillis = 10_000L,

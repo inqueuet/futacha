@@ -133,6 +133,14 @@ class PersistentCookieStorage(
                     }.toMap(),
                     createdAtMillis = now
                 )
+                val existing = targetCookies[key]
+                if (existing != null && isRepeatedPersistentCookie(existing, stored)) {
+                    // Still retry a snapshot an earlier write failed to persist.
+                    if (hasUnpersistedSnapshotLocked()) {
+                        saveSnapshot = snapshotIfPersistingLocked(transactionId, targetCookies)
+                    }
+                    return@withLock
+                }
                 targetCookies[key] = stored
                 enforceCookieCapacityLocked(targetCookies, now)
                 saveSnapshot = snapshotIfPersistingLocked(transactionId, targetCookies)
@@ -345,7 +353,7 @@ class PersistentCookieStorage(
                     )
                 },
                 createSnapshot = { createSnapshotLocked(cookies) }
-            )
+            ) ?: if (hasUnpersistedSnapshotLocked()) createSnapshotLocked(cookies) else null
         }
         saveSnapshot?.let { persistSnapshot(it) }
     }
@@ -430,6 +438,9 @@ class PersistentCookieStorage(
         }
         enforceCookieCapacityLocked(cookies, currentTimeMillis())
     }
+
+    /** A snapshot was created but its write failed (the in-memory state is kept for a retry). */
+    private fun hasUnpersistedSnapshotLocked(): Boolean = nextSnapshotRevision > persistedSnapshotRevision
 
     private fun createSnapshotLocked(sourceCookies: Map<CookieKey, StoredCookie>): StoredCookieFile {
         nextSnapshotRevision += 1L

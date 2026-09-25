@@ -1,7 +1,11 @@
 package com.valoser.futacha.shared.ui
 
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+
 import com.valoser.futacha.shared.ui.compat.compatManualSaveLocation
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -104,6 +108,7 @@ private const val TAG = "FutachaApp"
 private const val APP_LOCK_HASH_LOADING = "__futacha_app_lock_loading__"
 private const val AI_COMMAND_ID_MAX_BYTES = 128
 private const val AI_HANDLED_COMMAND_ID_MAX_COUNT = 128
+private const val LIGHTWEIGHT_SHARED_IMAGE_CACHE_BYTES = 128L * 1024 * 1024
 
 private data class FutachaStartupTheme(
     val mode: ThemeMode,
@@ -186,8 +191,8 @@ fun FutachaApp(
             FutachaStartupTheme(mode, palette)
         }.first()
     }
-    if (startupTheme == null) return
-    val resolvedStartupTheme = startupTheme ?: return
+    // Read the app-lock state concurrently with the theme; reading it only after
+    // the theme arrived added a frame (and a spinner) to every cold start.
     val startupAppLockHash by produceState<String?>(
         initialValue = APP_LOCK_HASH_LOADING,
         key1 = stateStore
@@ -208,6 +213,8 @@ fun FutachaApp(
             isUnlockedForSession = true
         }
     }
+    if (startupTheme == null) return
+    val resolvedStartupTheme = startupTheme ?: return
     if (startupAppLockHash == APP_LOCK_HASH_LOADING) {
         // Compatibility owns a separate persisted palette. Painting the
         // modern loading surface before that palette is available produces a
@@ -296,7 +303,15 @@ fun FutachaApp(
         // The compatibility thread menu saves into the manual-save location,
         // so its saved-thread index must not point at the background auto-save
         // directory used by the modern history refresher.
-        val compatibilityPreferences by compatibilityStore.preferences.collectAsState(emptyMap())
+        // Build the image loaders from the stored settings, not from the
+        // placeholder shown before the store has loaded (they were rebuilt).
+        val loadedCompatibilityPreferences by remember(compatibilityStore) {
+            kotlinx.coroutines.flow.flow {
+                compatibilityStore.isLoaded.first { it }
+                compatibilityStore.preferences.collect { emit(it) }
+            }
+        }.collectAsState<Map<String, String>, Map<String, String>?>(null)
+        val compatibilityPreferences = loadedCompatibilityPreferences ?: return
         val compatibilitySaveLocation = compatibilityPreferences.compatManualSaveLocation()
         val compatibilitySavedThreadRepository = remember(fileSystem, compatibilitySaveLocation) {
             fileSystem?.let {
@@ -454,7 +469,26 @@ fun FutachaApp(
                     value = enabled
                 }
         }
-        if (persistedLightweightMode == null) {
+        // Wait for the stored image settings as well: loaders built from the
+        // placeholder before the store has loaded were rebuilt right after.
+        val imagePreferences = remember(compatibilityStore) {
+            (compatibilityStore?.let { store ->
+                kotlinx.coroutines.flow.flow {
+                    store.isLoaded.first { it }
+                    store.preferences.collect { emit(it) }
+                }
+            } ?: kotlinx.coroutines.flow.flowOf(emptyMap<String, String>()))
+                .map { preferences -> preferences.filterKeys { it in setOf(
+                    COMPAT_IMAGE_CACHE_PREFERENCE_KEY, COMPAT_IMAGE_CACHE_LOCATION_PREFERENCE_KEY,
+                    COMPAT_IMAGE_PARALLEL_PREFERENCE_KEY, COMPAT_CATALOG_IMAGE_CACHE_PREFERENCE_KEY,
+                    COMPAT_CATALOG_IMAGE_CACHE_LOCATION_PREFERENCE_KEY
+                ) } }.distinctUntilChanged()
+        }
+        val loadedSharedFeaturePreferences by imagePreferences.collectAsState<Map<String, String>, Map<String, String>?>(
+            if (compatibilityStore == null) emptyMap() else null
+        )
+        val sharedFeaturePreferences = loadedSharedFeaturePreferences
+        if (persistedLightweightMode == null || sharedFeaturePreferences == null) {
             LaunchedEffect(Unit) {
                 AnalyticsTracker.screen("app_loading")
             }
@@ -464,9 +498,10 @@ fun FutachaApp(
             return@FutachaTheme
         }
         val shouldUseLightweightMode = persistedLightweightMode == true || devicePerformanceProfile.isLowSpec
-        val sharedFeaturePreferences by (compatibilityStore?.preferences ?: kotlinx.coroutines.flow.flowOf(emptyMap<String, String>())).collectAsState(emptyMap())
-        val sharedImageCacheBytes = sharedFeaturePreferences[COMPAT_IMAGE_CACHE_PREFERENCE_KEY]?.let(::parseCompatImageCacheQuotaBytes)
-            ?: (if (shouldUseLightweightMode) 128L else 256L) * 1024 * 1024
+        // An explicit quota wins; otherwise Lightweight mode keeps its smaller budget.
+        val sharedImageCacheBytes = sharedFeaturePreferences[COMPAT_IMAGE_CACHE_PREFERENCE_KEY]
+            ?.let(::parseCompatImageCacheQuotaBytes)
+            ?: if (shouldUseLightweightMode) LIGHTWEIGHT_SHARED_IMAGE_CACHE_BYTES else parseCompatImageCacheQuotaBytes(null)
         val sharedCacheLocation = parseCompatCacheLocation(sharedFeaturePreferences[COMPAT_IMAGE_CACHE_LOCATION_PREFERENCE_KEY])
         val sharedImageParallelism = parseCompatImageParallelism(sharedFeaturePreferences[COMPAT_IMAGE_PARALLEL_PREFERENCE_KEY])
         val diskBudget = splitImageDiskBudget(sharedImageCacheBytes)
@@ -488,7 +523,12 @@ fun FutachaApp(
             cacheLocation = parseCompatCacheLocation(sharedFeaturePreferences[COMPAT_CATALOG_IMAGE_CACHE_LOCATION_PREFERENCE_KEY]),
             parallelismOverride = sharedImageParallelism, diskCacheDirectoryName = CATALOG_IMAGE_DISK_CACHE_DIR
         )
-        DisposableEffect(catalogImageLoader) { onDispose { catalogImageLoader.shutdown() } }
+        // Key only on the catalog loader: replacing the thread loader alone must
+        // not shut down the catalog loader that is still in use.
+        val latestImageLoader = androidx.compose.runtime.rememberUpdatedState(imageLoader)
+        DisposableEffect(catalogImageLoader) {
+            onDispose { if (catalogImageLoader !== latestImageLoader.value) catalogImageLoader.shutdown() }
+        }
         DisposableEffect(imageLoader) {
             onDispose {
                 runCatching {
@@ -561,6 +601,7 @@ fun FutachaApp(
 
                 val persistedBoards = observedRuntimeState.persistedBoards
                 val persistedHistory = observedRuntimeState.persistedHistory
+                val arePersistedListsLoaded = observedRuntimeState.arePersistedListsLoaded
                 LaunchedEffect(
                     navigationState.selectedBoardId,
                     navigationState.selectedThreadId,
@@ -582,10 +623,14 @@ fun FutachaApp(
                 var pendingCompatThreadDeepLink by remember { mutableStateOf<String?>(null) }
                 var threadDeepLinkError by remember { mutableStateOf<String?>(null) }
                 val profileController = LocalExperienceProfileUiController.current
-                LaunchedEffect(platformThreadDeepLink, persistedBoards, persistedHistory) {
+                // Resolve only against the stored boards: the seed defaults would report a
+                // registered board as unregistered at startup.
+                LaunchedEffect(platformThreadDeepLink, persistedBoards, persistedHistory, arePersistedListsLoaded) {
+                    if (!arePersistedListsLoaded) return@LaunchedEffect
                     val raw = platformThreadDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     when (val resolution = resolveFutachaThreadDeepLink(raw, persistedBoards, persistedHistory)) {
                         is FutachaThreadDeepLinkResolution.Open -> {
+                            pendingCompatThreadDeepLink = null
                             navigationState = applyFutachaThreadSelection(navigationState, resolution.selection)
                             onPlatformThreadDeepLinkConsumed(raw)
                         }
@@ -598,7 +643,8 @@ fun FutachaApp(
                         }
                     }
                 }
-                LaunchedEffect(platformBoardDeepLink, persistedBoards) {
+                LaunchedEffect(platformBoardDeepLink, persistedBoards, arePersistedListsLoaded) {
+                    if (!arePersistedListsLoaded) return@LaunchedEffect
                     val raw = platformBoardDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     val board = persistedBoards.firstOrNull { candidate ->
                         candidate.url.trimEnd('/').equals(raw.trimEnd('/'), ignoreCase = true)
@@ -652,7 +698,8 @@ fun FutachaApp(
                 val destination = remember(navigationState, persistedBoards) {
                     resolveFutachaDestination(navigationState, persistedBoards)
                 }
-                LaunchedEffect(destination, persistedBoards.size, persistedHistory.size, shouldUseLightweightMode) {
+                LaunchedEffect(destination, persistedBoards.size, persistedHistory.size, shouldUseLightweightMode, arePersistedListsLoaded) {
+                    if (!arePersistedListsLoaded) return@LaunchedEffect
                     recordFutachaDestinationScreenView(
                         destination = destination,
                         boardCount = persistedBoards.size,
@@ -839,7 +886,11 @@ fun FutachaApp(
                     }
                 }
 
-                when (val content = resolvedDestinationContent) {
+                // Until the store emits, persistedBoards/history are the mock seed lists;
+                // rendering them would flash fixture boards and history for a frame.
+                if (!arePersistedListsLoaded) {
+                    Box(modifier = Modifier.fillMaxSize())
+                } else when (val content = resolvedDestinationContent) {
                     is FutachaResolvedDestinationContent.SavedThreads -> {
                         FutachaSavedThreadsDestination(
                             props = content.props,

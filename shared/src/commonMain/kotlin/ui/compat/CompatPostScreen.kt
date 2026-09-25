@@ -163,6 +163,7 @@ import coil3.request.ImageRequest
 import coil3.size.Size
 import coil3.request.crossfade
 import com.valoser.futacha.shared.compat.CompatBoard
+import com.valoser.futacha.shared.compat.compatOwnPostMarkerSave
 import com.valoser.futacha.shared.compat.CompatCatalogPreference
 import com.valoser.futacha.shared.compat.CompatBuildDraft
 import com.valoser.futacha.shared.compat.CompatNgKind
@@ -377,7 +378,11 @@ fun CompatPostAttachmentPreview(
             CompatPostAttachmentKind.IMAGE -> {
                 // The reference fixes the width at 150dp. Landscape previews
                 // preserve their ratio; portrait previews remain a 150dp square.
-                val ratio = compatPostImageAspectRatio(attachment.bytes)?.coerceIn(1f, 20f) ?: 1f
+                // Decoding the header copies the bytes on iOS (up to 32 MB into
+                // NSData); do it once per attachment, not per recomposition.
+                val ratio = remember(attachment.bytes) {
+                    compatPostImageAspectRatio(attachment.bytes)?.coerceIn(1f, 20f) ?: 1f
+                }
                 AsyncImage(
                     model = attachment.bytes,
                     contentDescription = "添付画像をプレビュー",
@@ -832,7 +837,9 @@ internal fun CompatPostScreen(
                         if (!isBuild) {
                             responseId?.let { raw ->
                                 compatSecondaryPostNumberRegex.find(raw)?.value?.let { postNo ->
-                                    finishLocalStep { store.savePreference("compat.ownpost.${tab.key}.$postNo", "1") }
+                                    finishLocalStep {
+                                        store.savePreferences(compatOwnPostMarkerSave(preferences, tab.key, postNo))
+                                    }
                                 }
                             }
                         }

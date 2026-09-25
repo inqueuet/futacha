@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.IMPORTED_HISTORY_DIRECTORY
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.repository.MAX_HISTORY_ARCHIVE_ENTRIES
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -37,6 +38,38 @@ class HistoryArchiveAppOperationsTest {
 
         assertEquals(listOf("222"), result.manifest.entries.map { it.historyEntry.threadId })
         assertEquals(1, result.historyOnlyCount)
+    }
+
+    @Test
+    fun exportAppHistoryArchive_keepsTheMostRecentEntriesWhenHistoryExceedsTheArchiveLimit() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        // Oldest visits sit in the middle so the kept order must follow the list.
+        val history = List(MAX_HISTORY_ARCHIVE_ENTRIES + 2) { index ->
+            val visited = if (index == 5 || index == 6) index.toLong() else 10_000L + index
+            historyEntry("t$index", visited = visited)
+        }
+        store.setHistory(history)
+
+        val result = exportAppHistoryArchive(
+            stateStore = store,
+            fileSystem = InMemoryFileSystem(),
+            sourceRepositories = emptyList(),
+            archiveId = "limited",
+            exportedAtEpochMillis = 1_000L
+        ).getOrThrow()
+
+        assertEquals(2, result.omittedEntryCount)
+        assertEquals(
+            store.history.first().map { it.threadId }.filterNot { it == "t5" || it == "t6" },
+            result.manifest.entries.map { it.historyEntry.threadId }
+        )
+    }
+
+    @Test
+    fun limitHistoryArchiveExportEntries_returnsTheListUnchangedWithinTheLimit() {
+        val entries = listOf(historyEntry("1", visited = 1L), historyEntry("2", visited = 2L))
+        assertTrue(limitHistoryArchiveExportEntries(entries, limit = 2) === entries)
+        assertEquals(listOf("2"), limitHistoryArchiveExportEntries(entries, limit = 1).map { it.threadId })
     }
 
     @Test

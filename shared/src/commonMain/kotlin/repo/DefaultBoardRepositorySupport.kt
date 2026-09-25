@@ -296,12 +296,10 @@ internal suspend fun resolveDefaultBoardRepositoryCatalogThreadTitle(
     extractTitle: suspend (String) -> String?
 ): String? {
     return try {
-        val initialSnippet = fetchInitialThreadHead()
-        extractTitle(initialSnippet) ?: if (allowFallbackHeadScan) {
-            extractTitle(fetchFallbackThreadHead())
-        } else {
-            null
-        }
+        // With the fallback allowed, read the larger head once: a miss in the
+        // small head used to refetch the same lines from the start.
+        val snippet = if (allowFallbackHeadScan) fetchFallbackThreadHead() else fetchInitialThreadHead()
+        extractTitle(snippet)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Throwable) {

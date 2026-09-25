@@ -7,6 +7,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.model.Post
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -15,7 +16,13 @@ private const val THREAD_SEARCH_SCROLL_LAYOUT_TIMEOUT_MS = 2_000L
 internal data class ThreadPostScrollRequest(
     val post: Post,
     val requestId: Long
-)
+) {
+    // Set once the jump has been carried out. The request stays in state after
+    // use, and the effect restarts whenever the target index moves (notices or
+    // summary cards appearing, NG removing earlier posts, switching to the tree
+    // view), which would otherwise replay a jump the user has scrolled away from.
+    internal var isConsumed: Boolean = false
+}
 
 internal fun resolveThreadPostScrollTargetIndex(
     request: ThreadPostScrollRequest,
@@ -58,36 +65,46 @@ internal fun ThreadPostScrollEffect(
         )
     }
     LaunchedEffect(request?.requestId, targetIndex, listState) {
-        if (targetIndex == null) return@LaunchedEffect
-
-        val isTargetIndexAvailable = withTimeoutOrNull(THREAD_SEARCH_SCROLL_LAYOUT_TIMEOUT_MS) {
-            snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .first { totalItemsCount -> targetIndex in 0 until totalItemsCount }
-        } != null
-        if (!isTargetIndexAvailable) return@LaunchedEffect
-
-        var itemInfo = listState.layoutInfo.visibleItemsInfo
-            .firstOrNull { it.index == targetIndex }
-        if (itemInfo == null) {
-            listState.animateScrollToItem(targetIndex)
-            itemInfo = withTimeoutOrNull(THREAD_SEARCH_SCROLL_LAYOUT_TIMEOUT_MS) {
-                snapshotFlow {
-                    listState.layoutInfo.visibleItemsInfo
-                        .firstOrNull { it.index == targetIndex }
-                }.first { it != null }
-            }
+        if (request == null || request.isConsumed || targetIndex == null) return@LaunchedEffect
+        try {
+            scrollThreadPostIntoCenter(targetIndex, listState)
+        } finally {
+            // Still active after a normal finish or a user touch interrupting
+            // the animation; inactive only when the effect restarts for a moved
+            // target, which then finishes the jump itself.
+            if (isActive) request.isConsumed = true
         }
+    }
+}
 
-        val resolvedItemInfo = itemInfo ?: return@LaunchedEffect
-        val layoutInfo = listState.layoutInfo
-        val centeredScrollDelta = calculateThreadCenteredScrollDelta(
-            viewportStartOffset = layoutInfo.viewportStartOffset,
-            viewportEndOffset = layoutInfo.viewportEndOffset,
-            itemOffset = resolvedItemInfo.offset,
-            itemSize = resolvedItemInfo.size
-        )
-        if (abs(centeredScrollDelta) >= 1f) {
-            listState.animateScrollBy(centeredScrollDelta)
+private suspend fun scrollThreadPostIntoCenter(targetIndex: Int, listState: LazyListState) {
+    val isTargetIndexAvailable = withTimeoutOrNull(THREAD_SEARCH_SCROLL_LAYOUT_TIMEOUT_MS) {
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { totalItemsCount -> targetIndex in 0 until totalItemsCount }
+    } != null
+    if (!isTargetIndexAvailable) return
+
+    var itemInfo = listState.layoutInfo.visibleItemsInfo
+        .firstOrNull { it.index == targetIndex }
+    if (itemInfo == null) {
+        listState.animateScrollToItem(targetIndex)
+        itemInfo = withTimeoutOrNull(THREAD_SEARCH_SCROLL_LAYOUT_TIMEOUT_MS) {
+            snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo
+                    .firstOrNull { it.index == targetIndex }
+            }.first { it != null }
         }
+    }
+
+    val resolvedItemInfo = itemInfo ?: return
+    val layoutInfo = listState.layoutInfo
+    val centeredScrollDelta = calculateThreadCenteredScrollDelta(
+        viewportStartOffset = layoutInfo.viewportStartOffset,
+        viewportEndOffset = layoutInfo.viewportEndOffset,
+        itemOffset = resolvedItemInfo.offset,
+        itemSize = resolvedItemInfo.size
+    )
+    if (abs(centeredScrollDelta) >= 1f) {
+        listState.animateScrollBy(centeredScrollDelta)
     }
 }

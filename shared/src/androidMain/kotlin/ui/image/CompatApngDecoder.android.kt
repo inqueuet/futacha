@@ -20,6 +20,7 @@ import java.nio.ByteBuffer
  */
 internal class CompatApngDecoder(
     private val source: ImageSource,
+    private val options: Options,
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
         val bytes = source.source().use { it.readBoundedCompatAnimatedImageBytes() }
@@ -31,7 +32,8 @@ internal class CompatApngDecoder(
             // when the viewer requests it.
             setAutoPlay(false)
         }
-        return DecodeResult(drawable.asImage(), isSampled = false)
+        val isSampled = drawable.applyCompatRequestedSize(options)
+        return DecodeResult(drawable.asImage(), isSampled = isSampled)
     }
 
     internal class Factory : Decoder.Factory {
@@ -41,7 +43,7 @@ internal class CompatApngDecoder(
             imageLoader: ImageLoader,
         ): Decoder? {
             val isApng = result.source.source().peek().use { hasCompatAnimatedPngHeader(it) }
-            return CompatApngDecoder(result.source).takeIf { isApng }
+            return CompatApngDecoder(result.source, options).takeIf { isApng }
         }
     }
 }

@@ -39,7 +39,9 @@ internal class HistoryRefreshAutoSaveLauncher(
     private val autoSaveDeadline: Long?,
     private val maxAutoSavesPerRefresh: Int,
     private val stats: HistoryRefreshRunStats,
-    private val tag: String
+    private val tag: String,
+    /** Originals and videos only on an unmetered network; thumbnails always. */
+    private val allowsFullMediaDownloads: () -> Boolean = AutoSaveNetworkPolicy::allowsFullMediaDownloads
 ) {
     fun launch(plan: HistoryRefreshAutoSavePlan) {
         val autoSaveService = autoSaveService ?: return
@@ -91,34 +93,40 @@ internal class HistoryRefreshAutoSaveLauncher(
                     val seedStorageId = runSuspendCatchingPreservingCancellation {
                         autoSavedThreadRepository.resolveIndexedStorageId(entry.threadId, resolvedBoardId)
                     }.getOrNull()
-                    withTimeoutOrNull(autoSaveThreadTimeoutMillis) {
-                        ThreadStorageLockRegistry.withStorageLock(
-                            buildThreadStorageLockKey(
-                                storageId = stableStorageId,
-                                baseDirectory = AUTO_SAVE_DIRECTORY
-                            )
-                        ) {
-                            withSeedStorageLock(seedStorageId, stableStorageId) {
-                                autoSaveService.saveThread(
-                                    threadId = entry.threadId,
-                                    boardId = resolvedBoardId,
-                                    boardName = plan.boardName,
-                                    boardUrl = baseUrl,
-                                    title = plan.resolvedTitle,
-                                    expiresAtLabel = plan.expiresAtLabel,
-                                    posts = plan.posts,
-                                    isTruncated = plan.isTruncated,
-                                    truncationReason = plan.truncationReason,
-                                    baseDirectory = AUTO_SAVE_DIRECTORY,
-                                    writeMetadata = true,
-                                    storageOptions = ThreadSaveStorageOptions(
-                                        storageIdOverride = stagingStorageId,
-                                        clearExistingOutput = true,
-                                        reuseExistingMedia = false,
-                                        pruneUnreferencedExistingMedia = false,
-                                        seedFromStorageId = seedStorageId
-                                    )
-                                ).getOrThrow()
+                    // Keeps the size cap from evicting this thread's seed while it is saved.
+                    AutoSaveRetentionRegistry.retain(entry.threadId, resolvedBoardId) {
+                        withTimeoutOrNull(autoSaveThreadTimeoutMillis) {
+                            ThreadStorageLockRegistry.withStorageLock(
+                                buildThreadStorageLockKey(
+                                    storageId = stableStorageId,
+                                    baseDirectory = AUTO_SAVE_DIRECTORY
+                                )
+                            ) {
+                                withSeedStorageLock(seedStorageId, stableStorageId) {
+                                    autoSaveService.saveThread(
+                                        threadId = entry.threadId,
+                                        boardId = resolvedBoardId,
+                                        boardName = plan.boardName,
+                                        boardUrl = baseUrl,
+                                        title = plan.resolvedTitle,
+                                        expiresAtLabel = plan.expiresAtLabel,
+                                        posts = plan.posts,
+                                        isTruncated = plan.isTruncated,
+                                        truncationReason = plan.truncationReason,
+                                        baseDirectory = AUTO_SAVE_DIRECTORY,
+                                        writeMetadata = true,
+                                        limits = ThreadSaveLimits(
+                                            downloadFullMedia = allowsFullMediaDownloads()
+                                        ),
+                                        storageOptions = ThreadSaveStorageOptions(
+                                            storageIdOverride = stagingStorageId,
+                                            clearExistingOutput = true,
+                                            reuseExistingMedia = false,
+                                            pruneUnreferencedExistingMedia = false,
+                                            seedFromStorageId = seedStorageId
+                                        )
+                                    ).getOrThrow()
+                                }
                             }
                         }
                     }

@@ -39,6 +39,8 @@ internal fun CatalogGrid(
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val currentSelection = androidx.compose.runtime.rememberUpdatedState(onThreadSelected)
+    val stableSelection = remember { { item: CatalogItem -> currentSelection.value(item) } }
     val lazyItemKeys = remember(board?.id, board?.url, items) {
         buildCatalogItemLazyKeys(
             boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
@@ -88,8 +90,8 @@ internal fun CatalogGrid(
                 boardUrl = board?.url,
                 resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
-                matchedWatchWords = catalogItem.matchedWatchWords(watchWords),
-                onClick = { onThreadSelected(catalogItem) }
+                matchedWatchWords = remember(catalogItem.title, watchWords) { catalogItem.matchedWatchWords(watchWords) },
+                onClick = { stableSelection(catalogItem) }
             )
         }
         if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
@@ -122,6 +124,8 @@ internal fun CatalogList(
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val currentSelection = androidx.compose.runtime.rememberUpdatedState(onThreadSelected)
+    val stableSelection = remember { { item: CatalogItem -> currentSelection.value(item) } }
     val lazyItemKeys = remember(board?.id, board?.url, items) {
         buildCatalogItemLazyKeys(
             boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
@@ -165,8 +169,8 @@ internal fun CatalogList(
                 boardUrl = board?.url,
                 resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
-                matchedWatchWords = catalogItem.matchedWatchWords(watchWords),
-                onClick = { onThreadSelected(catalogItem) }
+                matchedWatchWords = remember(catalogItem.title, watchWords) { catalogItem.matchedWatchWords(watchWords) },
+                onClick = { stableSelection(catalogItem) }
             )
         }
         if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {

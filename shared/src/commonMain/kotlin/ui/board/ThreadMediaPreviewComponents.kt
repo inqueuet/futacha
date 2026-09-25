@@ -129,7 +129,8 @@ internal fun ThreadMediaPreviewDialogFrame(
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
-    var previewSize by remember { mutableStateOf(IntSize.Zero) }
+    val windowSize = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+    var previewSize by remember(windowSize) { mutableStateOf(windowSize) }
     val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current

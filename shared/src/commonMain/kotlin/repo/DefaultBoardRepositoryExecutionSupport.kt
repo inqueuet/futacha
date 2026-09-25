@@ -11,6 +11,8 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.isWithinEpochInterval
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import io.ktor.http.Url
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -123,12 +125,14 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             }
         }
     } finally {
-        boardInitMutex.withLock {
-            val current = boardInitializationMutexes[board]
-            if (current === boardInitializationLock) {
-                current.holders -= 1
-                if (current.holders <= 0) {
-                    boardInitializationMutexes.remove(board)
+        withContext(NonCancellable) {
+            boardInitMutex.withLock {
+                val current = boardInitializationMutexes[board]
+                if (current === boardInitializationLock) {
+                    current.holders -= 1
+                    if (current.holders <= 0) {
+                        boardInitializationMutexes.remove(board)
+                    }
                 }
             }
         }
@@ -294,11 +298,18 @@ internal suspend fun <T> runDefaultBoardRepositoryHelperWithPermit(
     // missing network attempt and causes unstable retry/cache behavior. Keep
     // the caller's timeout semantics while allowing a small scheduling window.
     val effectiveFetchTimeoutMillis = fetchTimeoutMillis.coerceAtLeast(25L)
+    // The timeout can fire after acquire() has returned but before the block completes;
+    // track the permit separately so it is released instead of shrinking the semaphore.
+    var permitHeld = false
     val acquired = withTimeoutOrNull(semaphoreTimeoutMillis.coerceAtLeast(1L)) {
         semaphore.acquire()
+        permitHeld = true
         true
-    } ?: false
+    } == true
     if (!acquired) {
+        if (permitHeld) {
+            semaphore.release()
+        }
         return DefaultBoardRepositoryHelperFetchResult(value = null, timedOut = true)
     }
 

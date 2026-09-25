@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.ensureActive
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 internal data class ThreadReplyParsingConfig(
@@ -37,6 +38,8 @@ internal suspend fun parseThreadReplyBlocks(
     repliesHtml: String,
     initialSearchStart: Int,
     config: ThreadReplyParsingConfig,
+    /** Start of the whole parse; [ThreadReplyParsingConfig.maxParseTimeMs] is measured from it. */
+    parseStartedAt: TimeMark = TimeSource.Monotonic.markNow(),
     parsePostBlock: suspend (String) -> Post?
 ): ThreadReplyParsingResult {
     val posts = mutableListOf<Post>()
@@ -45,7 +48,6 @@ internal suspend fun parseThreadReplyBlocks(
     var searchStart = initialSearchStart
     var iterationCount = 0
     var lastSearchStart = -1
-    val parseStartTime = TimeSource.Monotonic.markNow()
 
     while (searchStart < repliesHtml.length &&
         iterationCount < config.maxIterations &&
@@ -54,7 +56,7 @@ internal suspend fun parseThreadReplyBlocks(
         iterationCount++
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
 
-        val elapsed = parseStartTime.elapsedNow().inWholeMilliseconds
+        val elapsed = parseStartedAt.elapsedNow().inWholeMilliseconds
         if (elapsed > config.maxParseTimeMs) {
             Logger.e(config.tag, "Parse timeout exceeded ($elapsed ms), stopping parse")
             isTruncated = true

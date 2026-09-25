@@ -157,11 +157,13 @@ internal fun rememberCatalogHeadMetadataTitles(
                         }
                     }.awaitAll()
                 }
+                androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                 resolvedTitles.forEach { result ->
                     if (activeCacheKeysByItemId[result.itemId] == result.cacheKey) {
                         resolvedTitlesByItemId[result.itemId] = result.title
                         resolvedCacheKeysByItemId[result.itemId] = result.cacheKey
                     }
+                }
                 }
             }
     }

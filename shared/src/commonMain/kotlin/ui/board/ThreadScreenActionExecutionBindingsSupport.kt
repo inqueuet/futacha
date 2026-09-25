@@ -181,7 +181,8 @@ internal fun buildThreadScreenHistoryRefreshBindings(
             AnalyticsTracker.event("history_refresh_started", mapOf("source" to "thread"))
             stateBindings.setIsHistoryRefreshing(true)
             coroutineScope.launch {
-                try {
+                // Cleared before showing: the snackbar suspends until dismissed.
+                val message = try {
                     PerformanceTracker.measureSuspend(
                         traceName = "history_refresh_thread",
                         attributes = mapOf("feature" to "history", "source" to "thread")
@@ -189,10 +190,10 @@ internal fun buildThreadScreenHistoryRefreshBindings(
                         onHistoryRefresh()
                     }
                     AnalyticsTracker.event("history_refresh_result", mapOf("source" to "thread", "result" to "success"))
-                    showMessage(buildThreadHistoryRefreshSuccessMessage())
+                    buildThreadHistoryRefreshSuccessMessage()
                 } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
                     AnalyticsTracker.event("history_refresh_result", mapOf("source" to "thread", "result" to "busy"))
-                    showMessage(buildThreadHistoryRefreshAlreadyRunningMessage())
+                    buildThreadHistoryRefreshAlreadyRunningMessage()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -204,10 +205,11 @@ internal fun buildThreadScreenHistoryRefreshBindings(
                             "error_type" to (e::class.simpleName ?: "unknown")
                         )
                     )
-                    showMessage(buildThreadHistoryRefreshFailureMessage(e))
+                    buildThreadHistoryRefreshFailureMessage(e)
                 } finally {
                     stateBindings.setIsHistoryRefreshing(false)
                 }
+                showMessage(message)
             }
         }
     )

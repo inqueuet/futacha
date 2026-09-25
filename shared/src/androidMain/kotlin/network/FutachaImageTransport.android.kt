@@ -15,6 +15,10 @@ fun createAndroidImageTransport(cookieStorage: CookiesStorage): FutachaImageTran
         configureImageRequests()
         install(HttpCookies) { storage = cookieStorage }
         engine { config {
+            dispatcher(okhttp3.Dispatcher().apply {
+                maxRequests = 16
+                maxRequestsPerHost = 8
+            })
             retryOnConnectionFailure(true)
             // Ktor must process each hop's cookies and image URL policy.
             followRedirects(false)

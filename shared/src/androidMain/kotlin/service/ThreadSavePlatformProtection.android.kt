@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import com.valoser.futacha.shared.model.SaveProgress
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +39,13 @@ internal object AndroidProtectedThreadSaveRegistry {
 
     fun cancel(id: String) {
         saves.value[id]?.job?.cancel()
+    }
+
+    /** Cancels every protected save; returns how many were running. */
+    fun cancelAll(reason: String): Int {
+        val running = saves.value.values.toList()
+        running.forEach { it.job.cancel(CancellationException(reason)) }
+        return running.size
     }
 
     fun remove(id: String) {

@@ -34,8 +34,9 @@ import platform.CoreGraphics.CGColorSpaceCreateDeviceRGB
 import platform.CoreGraphics.CGColorSpaceRelease
 import platform.CoreGraphics.CGContextDrawImage
 import platform.CoreGraphics.CGContextRelease
-import platform.CoreGraphics.CGImageGetHeight
-import platform.CoreGraphics.CGImageGetWidth
+import platform.CoreGraphics.CGImageAlphaInfo
+import platform.CoreGraphics.CGImageRelease
+import platform.CoreGraphics.kCGBitmapByteOrder32Little
 import platform.Foundation.*
 import platform.UIKit.UIDevice
 import platform.UIKit.UIBezierPath
@@ -139,10 +140,13 @@ internal actual suspend fun compressCompatPostImage(
             } else if (quality > 0.58) {
                 quality = (quality - 0.08).coerceAtLeast(0.5)
             } else {
-                image = image.scaled(
-                    max(1, image.size.useContents { (width * 0.82).roundToInt() }),
-                    max(1, image.size.useContents { (height * 0.82).roundToInt() })
-                )
+                // Drain the previous bitmap and UIKit's autoreleased context per step.
+                image = autoreleasepool {
+                    image.scaled(
+                        max(1, image.size.useContents { (width * 0.82).roundToInt() }),
+                        max(1, image.size.useContents { (height * 0.82).roundToInt() })
+                    )
+                }
                 quality = 0.86
             }
         }
@@ -155,46 +159,53 @@ internal actual suspend fun compressCompatPostImage(
 
 internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? {
     if (bytes.isEmpty() || bytes.size > COMPAT_IOS_ENCODED_IMAGE_MAX_BYTES) return null
-    val image = UIImage.imageWithData(bytes.toNSData()) ?: return null
-    return image.size.useContents {
-        if (width > 0.0 && height > 0.0) {
-            (width / height).toFloat().takeIf { it.isFinite() && it > 0f }
-        } else {
-            null
-        }
-    }
+    // Header only: no NSData copy of up to 32 MB and no UIImage.
+    val size = readIosEncodedImageSize(bytes) ?: return null
+    return (size.displayWidth / size.displayHeight).toFloat().takeIf { it.isFinite() && it > 0f }
 }
 
 internal actual suspend fun computeCompatImagePhashFromBytes(bytes: ByteArray): String? =
     withContext(AppDispatchers.io) {
         if (bytes.isEmpty() || bytes.size > COMPAT_IOS_PHASH_INPUT_MAX_BYTES) return@withContext null
-        val image = UIImage.imageWithData(bytes.toNSData()) ?: return@withContext null
-        val cgImage = image.CGImage ?: return@withContext null
-        if (CGImageGetWidth(cgImage).toLong() * CGImageGetHeight(cgImage).toLong() > COMPAT_PHASH_MAX_SOURCE_PIXELS) {
+        val sourceSize = readIosEncodedImageSize(bytes) ?: return@withContext null
+        if (sourceSize.width * sourceSize.height > COMPAT_PHASH_MAX_SOURCE_PIXELS.toDouble()) {
             return@withContext null
         }
+        // Let ImageIO decode a bounded thumbnail (like Android's inSampleSize)
+        // instead of drawing up to 16 MP (64 MB) into the 32x32 context. The
+        // raw pixel grid is kept, as UIImage.CGImage and BitmapFactory do.
+        val cgImage = createIosImageThumbnail(bytes, COMPAT_PHASH_DECODE_MAX_SIDE, applyOrientation = false)
+            ?: return@withContext null
         val size = CompatImagePhash.SIZE
         val raw = ByteArray(size * size * 4)
-        val colorSpace = CGColorSpaceCreateDeviceRGB()
         try {
-        raw.usePinned { pinned ->
-            val context = CGBitmapContextCreate(
-                data = pinned.addressOf(0),
-                width = size.toULong(),
-                height = size.toULong(),
-                bitsPerComponent = 8u,
-                bytesPerRow = (size * 4).toULong(),
-                space = colorSpace,
-                bitmapInfo = 0u
-            ) ?: return@withContext null
+            val colorSpace = CGColorSpaceCreateDeviceRGB()
             try {
-                CGContextDrawImage(context, CGRectMake(0.0, 0.0, size.toDouble(), size.toDouble()), cgImage)
+                raw.usePinned { pinned ->
+                    val context = CGBitmapContextCreate(
+                        data = pinned.addressOf(0),
+                        width = size.toULong(),
+                        height = size.toULong(),
+                        bitsPerComponent = 8u,
+                        bytesPerRow = (size * 4).toULong(),
+                        space = colorSpace,
+                        // 32-bit little-endian premultiplied-first = BGRA in
+                        // memory. The former bitmapInfo 0 (24-bit RGB without
+                        // alpha) is not a supported context format, so
+                        // CGBitmapContextCreate returned null and every hash failed.
+                        bitmapInfo = CGImageAlphaInfo.kCGImageAlphaPremultipliedFirst.value or kCGBitmapByteOrder32Little
+                    ) ?: return@withContext null
+                    try {
+                        CGContextDrawImage(context, CGRectMake(0.0, 0.0, size.toDouble(), size.toDouble()), cgImage)
+                    } finally {
+                        CGContextRelease(context)
+                    }
+                }
             } finally {
-                CGContextRelease(context)
+                CGColorSpaceRelease(colorSpace)
             }
-        }
         } finally {
-            CGColorSpaceRelease(colorSpace)
+            CGImageRelease(cgImage)
         }
         // A bitmap context with the default iOS little-endian layout yields
         // BGRA bytes.  Convert to Android's ARGB before applying the shared
@@ -212,6 +223,7 @@ internal actual suspend fun computeCompatImagePhashFromBytes(bytes: ByteArray): 
 
 private const val COMPAT_POST_IMAGE_MAX_DECODE_PIXELS = 8_000_000.0
 private const val COMPAT_PHASH_MAX_SOURCE_PIXELS = 16_000_000L
+private const val COMPAT_PHASH_DECODE_MAX_SIDE = 512
 
 internal actual suspend fun renderCompatDrawingPng(
     strokes: List<CompatDrawingStroke>,

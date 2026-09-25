@@ -47,6 +47,58 @@ class HttpBoardApiTest {
     }
 
     @Test
+    fun fetchThreadIfModified_sendsValidatorsAndReportsNotModified() = runBlocking {
+        val requests = mutableListOf<HttpRequestData>()
+        val api = createApi { request ->
+            requests += request
+            if (request.headers[HttpHeaders.IfNoneMatch] == "\"v1\"") {
+                respond("", HttpStatusCode.NotModified)
+            } else {
+                respond(
+                    content = "<html><body>page</body></html>",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(
+                        HttpHeaders.ContentType to listOf("text/html; charset=UTF-8"),
+                        HttpHeaders.ETag to listOf("\"v1\""),
+                        HttpHeaders.LastModified to listOf("Wed, 23 Sep 2026 10:00:00 GMT")
+                    )
+                )
+            }
+        }
+
+        try {
+            val first = api.fetchThreadIfModified("https://may.2chan.net/b/", "123", validators = null)
+            first as ConditionalTextFetchResult.Modified
+            assertTrue(first.body.contains("page"))
+            assertEquals(
+                HttpConditionalValidators(etag = "\"v1\"", lastModified = "Wed, 23 Sep 2026 10:00:00 GMT"),
+                first.validators
+            )
+            assertEquals(null, requests.single().headers[HttpHeaders.IfNoneMatch])
+
+            val second = api.fetchThreadIfModified("https://may.2chan.net/b/", "123", first.validators)
+
+            assertEquals(ConditionalTextFetchResult.NotModified, second)
+            // An ETag wins; the second-granular date is not sent alongside it.
+            assertEquals(null, requests.last().headers[HttpHeaders.IfModifiedSince])
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun fetchThreadIfModified_treatsUnrequested304AsAnError(): Unit = runBlocking {
+        val api = createApi { respond("", HttpStatusCode.NotModified) }
+        try {
+            assertFailsWith<NetworkException> {
+                api.fetchThreadIfModified("https://may.2chan.net/b/", "123", validators = null)
+            }
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
     fun fetchThread_acceptsImageHeavyResponseBeyondLegacyFiveMiBLimit() = runBlocking {
         val prefix = "<html><body>"
         val suffix = "</body></html>"

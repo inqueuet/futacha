@@ -46,12 +46,20 @@ internal class FutachaSharedFeatures(
     val cookieRepository: CookieRepository?,
     val appVersion: String,
     val openSettings: (String) -> Unit,
-    val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {}
+    val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {},
+    val ngRulesState: State<List<com.valoser.futacha.shared.compat.CompatNgRule>?>? = null
 ) {
+    val catalogCache = FutachaCatalogMemoryCache()
     val preferences: Map<String, String> get() = preferencesState.value
 
+    private val preferenceReads = mutableMapOf<String, State<String?>>()
+
     fun value(path: String, key: String, vararg legacyTitles: String): String? =
-        preferences.compatPreferenceValue(path, key, *legacyTitles)
+        preferenceReads.getOrPut(if (legacyTitles.isEmpty()) "$path/$key" else "$path/$key/${legacyTitles.joinToString("\u0000")}") {
+            derivedStateOf(structuralEqualityPolicy()) {
+                preferencesState.value.compatPreferenceValue(path, key, *legacyTitles)
+            }
+        }.value
 
     fun displayValue(path: String, key: String, vararg legacyTitles: String): String? =
         value(path, key, *legacyTitles)?.let {
@@ -78,11 +86,18 @@ internal fun ProvideFutachaSharedFeatures(
         return
     }
     val preferencesState = store.preferences.collectAsState(emptyMap())
-    val preferences by preferencesState
+    // null until the store has loaded: an empty placeholder list would show
+    // posts that shared NG rules hide.
+    val ngRulesState = remember(store) {
+        kotlinx.coroutines.flow.combine(store.isLoaded, store.ngRules) { loaded, rules -> rules.takeIf { loaded } }
+    }.collectAsState(initial = null)
     // Use the existing shared destination for every modern save action as well.
     // Migrate the modern destination only when the shared setting has never been saved.
     LaunchedEffect(store, appStateStore) {
         if (appStateStore == null) return@LaunchedEffect
+        // Placeholder preferences lack the stored location; writing the modern
+        // one then would replace the location chosen in compatibility mode.
+        store.isLoaded.first { it }
         store.preferences.collect { values ->
             try {
             val raw = values.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
@@ -110,7 +125,7 @@ internal fun ProvideFutachaSharedFeatures(
     val scope = rememberCoroutineScope()
     val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion) {
         FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
-            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it })
+            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState)
     }
     LaunchedEffect(closedBatch, notification) {
         if (closedBatch != null || notification != null) {
@@ -120,9 +135,17 @@ internal fun ProvideFutachaSharedFeatures(
     }
     var foreground by remember { mutableStateOf(true) }
     CompatForegroundLifecycleEffect { foreground = it }
-    val refreshEnabled = com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(preferences)
+    val refreshEnabled by remember(preferencesState) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(preferencesState.value)
+        }
+    }
+    val cacheEnabled by remember(preferencesState) {
+        derivedStateOf(structuralEqualityPolicy()) { preferencesState.value[COMPAT_CACHE_ENABLED_KEY] }
+    }
     val context = coil3.compose.LocalPlatformContext.current
-    LaunchedEffect(httpClient, preferences[COMPAT_CACHE_ENABLED_KEY], foreground) {
+    LaunchedEffect(httpClient, cacheEnabled, foreground) {
+        val preferences = preferencesState.value
         val client = httpClient ?: return@LaunchedEffect
         if (!foreground || preferences[COMPAT_CACHE_ENABLED_KEY] != "ON") return@LaunchedEffect
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
@@ -131,10 +154,12 @@ internal fun ProvideFutachaSharedFeatures(
             try {
                 val result = probeCompatCacheServer(client, effectiveCompatCacheBaseUrl(preferences[COMPAT_CACHE_BASE_URL_KEY]), now)
                 val date = formatCompatCacheStatusDate(result.checkedAtEpochMillis)
-                store.savePreference(COMPAT_CACHE_AVAILABLE_KEY, if (result.available) "ON" else "OFF")
-                store.savePreference(COMPAT_CACHE_CHECK_TIME_KEY, result.checkedAtEpochMillis.toString())
-                store.savePreference(COMPAT_CACHE_STATUS_DATE_KEY, date)
-                store.savePreference(COMPAT_CACHE_STATUS_KEY, formatCompatCacheStatusSummary(date, result.message))
+                store.savePreferences(mapOf(
+                    COMPAT_CACHE_AVAILABLE_KEY to if (result.available) "ON" else "OFF",
+                    COMPAT_CACHE_CHECK_TIME_KEY to result.checkedAtEpochMillis.toString(),
+                    COMPAT_CACHE_STATUS_DATE_KEY to date,
+                    COMPAT_CACHE_STATUS_KEY to formatCompatCacheStatusSummary(date, result.message)
+                ))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { com.valoser.futacha.shared.util.Logger.e("FutachaSharedFeatures", "Cache status check failed", failure) }
         }
@@ -205,7 +230,7 @@ internal fun ProvideFutachaSharedFeatures(
                     else if (path == "changelog") CompatChangeLogScreen(appVersion = appVersion, store = store,
                         onOpenHelp = { settingsPaths = settingsPaths + "help" }, onBack = close)
                     else CompatSettingsScreen(
-                        path = path, store = store, preferences = preferences,
+                        path = path, store = store, preferences = preferencesState.value,
                         fileSystem = fileSystem, httpClient = httpClient,
                         cookieRepository = cookieRepository, appVersion = appVersion,
                         modernPresentation = true,

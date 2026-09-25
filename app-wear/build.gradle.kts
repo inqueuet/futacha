@@ -47,8 +47,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100_000_009
-        versionName = "1.3"
+        versionCode = 100_000_010
+        versionName = "1.4"
     }
 
     signingConfigs {
@@ -117,6 +117,8 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+
+    testImplementation(libs.junit)
 
     debugImplementation(libs.androidx.wear.compose.ui.tooling)
     debugImplementation(libs.androidx.wear.tiles.renderer)

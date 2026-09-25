@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.model.BoardSummary
@@ -52,6 +53,7 @@ internal data class ThreadScreenAsyncBindingsInputs(
     val manualSaveCoroutineScope: CoroutineScope = coroutineScope,
     val repository: BoardRepository,
     val history: List<ThreadHistoryEntry>,
+    val currentHistory: () -> List<ThreadHistoryEntry> = { history },
     val threadId: String,
     val threadTitle: String?,
     val board: BoardSummary,
@@ -135,7 +137,8 @@ internal fun buildThreadScreenLoadUiCallbacks(
             val historyEntry = outcome.historyEntry
             if (successUiState != null && historyEntry != null) {
                 onUiStateChanged(successUiState)
-                onRestoreManualRefreshScroll(successUiState, savedIndex, savedOffset)
+                // LazyColumn retains the visible post by its stable key. Restoring
+                // the position captured before the request would undo user scrolling.
                 onHistoryEntryUpdated(historyEntry)
                 onShowOptionalMessage(outcome.snackbarMessage)
             }
@@ -274,7 +277,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
             setIsRefreshing = setIsRefreshing,
             setUiState = setUiState,
             setResolvedThreadUrlOverride = setResolvedThreadUrlOverride,
-            setIsShowingOfflineCopy = setIsShowingOfflineCopy
+            setIsShowingOfflineCopy = setIsShowingOfflineCopy,
+            currentUiState = currentUiState
         ),
         loadUiCallbacks = buildThreadScreenLoadUiCallbacks(
             onUiStateChanged = setUiState,
@@ -293,6 +297,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
         manualSaveCoroutineScope = inputs.manualSaveCoroutineScope,
         repository = inputs.repository,
         history = inputs.history,
+        currentHistory = inputs.currentHistory,
         threadId = inputs.threadId,
         threadTitle = inputs.threadTitle,
         board = inputs.board,
@@ -331,6 +336,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
     manualSaveCoroutineScope: CoroutineScope = coroutineScope,
     repository: BoardRepository,
     history: List<ThreadHistoryEntry>,
+    currentHistory: () -> List<ThreadHistoryEntry> = { history },
     threadId: String,
     threadTitle: String?,
     board: BoardSummary,
@@ -432,6 +438,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
             loadRunnerConfig = runnerBindings.loadRunnerConfig,
             loadRunnerCallbacks = runnerBindings.loadRunnerCallbacks,
             history = history,
+            currentHistory = currentHistory,
             threadId = threadId,
             threadTitle = threadTitle,
             board = board,
@@ -464,6 +471,7 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
     preferencesState: ScreenPreferencesState,
     isAndroidPlatform: Boolean
 ): ThreadScreenAsyncBindingsBundle {
+    val latestHistory = rememberUpdatedState(history)
     return remember(
         activeRepository,
         manualSaveCoroutineScope,
@@ -480,7 +488,6 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
         archiveSearchJson,
         offlineLookupContext,
         offlineSources,
-        history,
         preferencesState.manualSaveDirectory,
         preferencesState.manualSaveLocation,
         preferencesState.resolvedManualSaveDirectory
@@ -491,6 +498,7 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
                 manualSaveCoroutineScope = manualSaveCoroutineScope,
                 repository = activeRepository,
                 history = history,
+                currentHistory = { latestHistory.value },
                 threadId = threadId,
                 threadTitle = threadTitle,
                 board = board,

@@ -27,6 +27,7 @@ import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
 import com.valoser.futacha.shared.model.CatalogItem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import java.lang.ref.WeakReference
 import org.junit.After
@@ -787,6 +788,118 @@ class CompatibilitySnapshotCacheInstrumentedTest {
         val key = compatImagePhashCachePreferenceKey("https://img/7.jpg")
         assertEquals(mapOf(key to "0123456789abcdef"), reopened.loadImagePhashes(listOf(key)))
     }
+
+    @Test
+    fun observableStateEmitsNothingUntilTheStoredDataIsLoaded() = runBlocking {
+        val first = newStore()
+        first.savePreference("compat.thread.threadExtractSoudaneNum", "5")
+        closeStore()
+
+        val store = AndroidCompatibilityStore(context = context, databaseName = databaseName)
+        openStore = store
+        assertFalse(store.isLoaded.value)
+        // The empty placeholders used to be emitted here and taken as the
+        // user's settings, NG rules and boards.
+        assertNull(withTimeoutOrNull(300L) { store.preferences.first() })
+        assertNull(withTimeoutOrNull(100L) { store.ngRules.first() })
+        assertNull(withTimeoutOrNull(100L) { store.boards.first() })
+
+        store.ensureInitialized()
+        assertTrue(store.isLoaded.value)
+        assertEquals("5", store.preferences.first()["compat.thread.threadExtractSoudaneNum"])
+        assertEquals(emptyList<CompatBoard>(), store.boards.first())
+    }
+
+    @Test
+    fun accumulatedOwnPostMarkersNeitherHideSettingsNorGrowWithoutBound() = runBlocking {
+        newStore()
+        closeStore()
+        writableDatabase().use { db ->
+            db.beginTransaction()
+            try {
+                repeat(5_000) { index ->
+                    db.execSQL(
+                        "INSERT INTO compat_preference(key, value_json) VALUES(?, '1')",
+                        arrayOf<Any>("compat.ownpost.tab.$index")
+                    )
+                }
+                // Sorts after every marker, so a shared `key ASC LIMIT 4096` dropped it.
+                db.execSQL(
+                    "INSERT INTO compat_preference(key, value_json) VALUES('compat.thread.threadExtractSoudaneNum', '5')"
+                )
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+
+        val store = newStore()
+        val preferences = store.preferences.first()
+        assertEquals("5", preferences["compat.thread.threadExtractSoudaneNum"])
+        // The oldest markers were trimmed; the newest are kept.
+        assertTrue("compat.ownpost.tab.4999" in preferences)
+        assertFalse("compat.ownpost.tab.0" in preferences)
+        closeStore()
+        writableDatabase(readOnly = true).use { db ->
+            assertTrue(
+                db.scalarInt("SELECT COUNT(*) FROM compat_preference WHERE key GLOB 'compat.ownpost.*'") <= 2_048
+            )
+        }
+    }
+
+    @Test
+    fun reopeningTheMostRecentSnapshotDoesNotRewriteItsAccessTime() = runBlocking {
+        var clock = 1_000L
+        val store = newStore(currentTimeMillis = { clock })
+        val first = createBoardAndTab(store, 21)
+        val second = createBoardAndTab(store, 22)
+        assertTrue(store.saveThreadSnapshot(snapshot(first, revision = 1L, postCount = 1)))
+        clock = 2_000L
+        assertTrue(store.saveThreadSnapshot(snapshot(second, revision = 2L, postCount = 1)))
+
+        clock = 3_000L
+        assertNotNull(store.loadThreadSnapshot(second.key))
+        assertEquals(2_000L, store.snapshotAccessTime(second.key))
+
+        // Another body was accessed later, so this load moves it to the front.
+        assertNotNull(store.loadThreadSnapshot(first.key))
+        assertEquals(3_000L, store.snapshotAccessTime(first.key))
+    }
+
+    @Test
+    fun historyTombstonesKeepOnlyTheNewestThousand() = runBlocking {
+        var clock = 1L
+        val store = newStore(currentTimeMillis = { clock++ })
+        repeat(1_010) { index ->
+            store.deleteHistory("https://may.2chan.net/b/res/${index + 1}.htm")
+        }
+        closeStore()
+        writableDatabase(readOnly = true).use { db ->
+            assertEquals(1_000, db.scalarInt("SELECT COUNT(*) FROM compat_history_tombstone"))
+            assertEquals(
+                0,
+                db.scalarInt(
+                    "SELECT COUNT(*) FROM compat_history_tombstone WHERE canonical_url=?",
+                    arrayOf("https://may.2chan.net/b/res/1.htm")
+                )
+            )
+            assertEquals(
+                1,
+                db.scalarInt(
+                    "SELECT COUNT(*) FROM compat_history_tombstone WHERE canonical_url=?",
+                    arrayOf("https://may.2chan.net/b/res/1010.htm")
+                )
+            )
+        }
+    }
+
+    private fun AndroidCompatibilityStore.snapshotAccessTime(tabKey: String): Long? =
+        writableDatabase(readOnly = true).use { db ->
+            db.rawQuery(
+                "SELECT value FROM compat_metadata WHERE key=?",
+                arrayOf("thread_snapshot_access:$tabKey")
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0).toLongOrNull() else null }
+        }
 
     private suspend fun newStore(
         currentTimeMillis: () -> Long = System::currentTimeMillis,

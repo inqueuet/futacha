@@ -16,8 +16,8 @@ import kotlinx.coroutines.launch
 import com.valoser.futacha.shared.ui.compat.*
 
 internal val LocalFutachaScrollRefreshEnabled = staticCompositionLocalOf { true }
-internal val LocalFutachaPostTap = staticCompositionLocalOf<(() -> Unit)?> { null }
-internal val LocalFutachaTabStrip = staticCompositionLocalOf<(@Composable () -> Unit)?> { null }
+internal val LocalFutachaPostTap = compositionLocalOf<(() -> Unit)?> { null }
+internal val LocalFutachaTabStrip = compositionLocalOf<(@Composable () -> Unit)?> { null }
 
 @Composable
 internal fun FutachaBottomBar(content: @Composable () -> Unit) {

@@ -22,6 +22,8 @@ internal fun buildThreadScreenLifecycleBindings(
     onCancelAllJobs: () -> Unit,
     isDrawerOpen: () -> Boolean,
     onCloseDrawer: suspend () -> Unit,
+    isSearchActive: () -> Boolean = { false },
+    onExitSearch: () -> Unit = {},
     onBack: () -> Unit,
     onRefreshThread: () -> Unit
 ): ThreadScreenLifecycleBindings {
@@ -42,8 +44,9 @@ internal fun buildThreadScreenLifecycleBindings(
             onCancelAllJobs()
         },
         onBackPressed = {
-            when (resolveThreadBackAction(isDrawerOpen())) {
+            when (resolveThreadBackAction(isDrawerOpen(), isSearchActive())) {
                 ThreadBackAction.CloseDrawer -> coroutineScope.launch { onCloseDrawer() }
+                ThreadBackAction.ExitSearch -> onExitSearch()
                 ThreadBackAction.NavigateBack -> {
                     onBack()
                 }

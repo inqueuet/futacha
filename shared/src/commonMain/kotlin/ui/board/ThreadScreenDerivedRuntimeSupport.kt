@@ -80,7 +80,11 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     isSearchActive: Boolean,
     searchQuery: String,
     searchPosts: List<Post>? = null,
-    postTextCache: ThreadPostTextCache? = null
+    postTextCache: ThreadPostTextCache? = null,
+    // What the list actually shows (NG removed, tree order, leading cards
+    // counted). Read-aloud follows it so it skips hidden posts and scrolls to
+    // the right row; the raw page is only used before the list reports.
+    displayedPostsLayout: ThreadDisplayedPostsLayout? = null
 ): ThreadScreenDerivedRuntimeState {
     val derivedUiState = remember(
         currentState,
@@ -126,26 +130,31 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             value = emptyList()
             return@produceState
         }
-        delay(THREAD_SEARCH_DEBOUNCE_MILLIS)
         value = withContext(AppDispatchers.parsing) {
             buildThreadSearchMatches(searchTargets, normalizedSearchQuery)
         }
     }
+    val reportedLayout = displayedPostsLayout?.takeIf { it.posts.isNotEmpty() }
+    val readAloudPosts = reportedLayout?.posts ?: currentPosts
+    val readAloudItemsBeforePosts = reportedLayout?.itemsBeforePosts ?: 0
+    val readAloudSkippedPostIds = reportedLayout?.collapsedPostIds.orEmpty()
     val readAloudSegments by produceState<List<ReadAloudSegment>>(
         initialValue = emptyList(),
-        key1 = currentPosts,
-        key2 = derivedUiState.shouldPrepareReadAloudSegments
+        key1 = readAloudPosts,
+        key2 = derivedUiState.shouldPrepareReadAloudSegments,
+        key3 = readAloudSkippedPostIds
     ) {
-        if (!derivedUiState.shouldPrepareReadAloudSegments || currentPosts.isEmpty()) {
+        if (!derivedUiState.shouldPrepareReadAloudSegments || readAloudPosts.isEmpty()) {
             value = emptyList()
             return@produceState
         }
         value = withContext(AppDispatchers.parsing) {
-            buildReadAloudSegments(currentPosts, postTextCache)
+            buildReadAloudSegments(readAloudPosts, postTextCache, readAloudSkippedPostIds)
         }
     }
     val firstVisibleSegmentIndexState = remember(
         readAloudSegments,
+        readAloudItemsBeforePosts,
         lazyListState,
         derivedUiState.shouldPrepareReadAloudSegments
     ) {
@@ -155,7 +164,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
                 isSearchActive = isSearchActive,
                 searchMatches = searchMatches,
                 readAloudSegments = readAloudSegments,
-                firstVisibleItemIndex = lazyListState.firstVisibleItemIndex
+                // Segment indices count displayed posts, not list rows.
+                firstVisibleItemIndex = lazyListState.firstVisibleItemIndex - readAloudItemsBeforePosts
             ).firstVisibleSegmentIndex
         }
     }

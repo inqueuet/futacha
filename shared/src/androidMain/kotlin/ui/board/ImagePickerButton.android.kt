@@ -41,6 +41,7 @@ import com.valoser.futacha.shared.ui.compat.compressCompatPostImage
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -392,44 +393,45 @@ actual fun rememberDirectoryPickerLauncher(
             return@rememberExperienceProfileActivityResultLauncher
         }
         coroutineScope.launch {
-            if (isActivityUnavailable(context)) {
-                Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
-                withContext(Dispatchers.IO) {
-                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+            // A persisted grant counts against the per-app cap. Release it on
+            // every path that does not hand the folder to the caller, including
+            // the screen being disposed while the write probe runs.
+            var selectionAccepted = false
+            try {
+                if (isActivityUnavailable(context)) {
+                    Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
+                    return@launch
                 }
-                return@launch
-            }
-            val canWrite = withContext(Dispatchers.IO) {
-                canWriteToDocumentTree(context, uri)
-            }
-            if (!canWrite) {
-                Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
-                withContext(Dispatchers.IO) {
-                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                val canWrite = withContext(Dispatchers.IO) {
+                    canWriteToDocumentTree(context, uri)
                 }
-                android.widget.Toast.makeText(
-                    context,
-                    "選択したフォルダに書き込み権限がありません",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-                return@launch
-            }
-            if (isActivityUnavailable(context)) {
-                Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
-                withContext(Dispatchers.IO) {
-                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                if (!canWrite) {
+                    Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                    android.widget.Toast.makeText(
+                        context,
+                        "選択したフォルダに書き込み権限がありません",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
                 }
-                return@launch
-            }
-            if (!isExperienceProfileSessionCurrent(session, profileController)) {
-                Logger.w("DirectoryPicker", "Dropping directory result because the experience profile session changed")
-                withContext(Dispatchers.IO) {
-                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                if (isActivityUnavailable(context)) {
+                    Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
+                    return@launch
                 }
-                return@launch
+                if (!isExperienceProfileSessionCurrent(session, profileController)) {
+                    Logger.w("DirectoryPicker", "Dropping directory result because the experience profile session changed")
+                    return@launch
+                }
+                val treeUri = SaveLocation.TreeUri(uri.toString())
+                selectionAccepted = true
+                onDirectorySelected(treeUri)
+            } finally {
+                if (!selectionAccepted && !hadPermission) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        releasePersistedUriPermission(context, uri, permissionFlags)
+                    }
+                }
             }
-            val treeUri = SaveLocation.TreeUri(uri.toString())
-            onDirectorySelected(treeUri)
         }
     }
 
@@ -453,40 +455,41 @@ actual fun rememberDirectoryPickerLauncher(
                 return@rememberExperienceProfileActivityResultLauncher
             }
             coroutineScope.launch {
-                if (isActivityUnavailable(context)) {
-                    Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
-                    withContext(Dispatchers.IO) {
-                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                // A persisted grant counts against the per-app cap. Release it on
+                // every path that does not hand the folder to the caller, including
+                // the screen being disposed while the write probe runs.
+                var selectionAccepted = false
+                try {
+                    if (isActivityUnavailable(context)) {
+                        Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
+                        return@launch
                     }
-                    return@launch
-                }
-                val canWrite = withContext(Dispatchers.IO) {
-                    canWriteToDocumentTree(context, uri)
-                }
-                if (!canWrite) {
-                    Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
-                    android.widget.Toast.makeText(context, "選択したフォルダに書き込みできません。別のフォルダを選択してください。", android.widget.Toast.LENGTH_LONG).show()
-                    withContext(Dispatchers.IO) {
-                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                    val canWrite = withContext(Dispatchers.IO) {
+                        canWriteToDocumentTree(context, uri)
                     }
-                    return@launch
-                }
-                if (isActivityUnavailable(context)) {
-                    Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
-                    withContext(Dispatchers.IO) {
-                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (!canWrite) {
+                        Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                        android.widget.Toast.makeText(context, "選択したフォルダに書き込みできません。別のフォルダを選択してください。", android.widget.Toast.LENGTH_LONG).show()
+                        return@launch
                     }
-                    return@launch
-                }
-                if (!isExperienceProfileSessionCurrent(session, profileController)) {
-                    Logger.w("DirectoryPicker", "Dropping default directory result because the experience profile session changed")
-                    withContext(Dispatchers.IO) {
-                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (isActivityUnavailable(context)) {
+                        Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
+                        return@launch
                     }
-                    return@launch
+                    if (!isExperienceProfileSessionCurrent(session, profileController)) {
+                        Logger.w("DirectoryPicker", "Dropping default directory result because the experience profile session changed")
+                        return@launch
+                    }
+                    val treeUri = SaveLocation.TreeUri(uri.toString())
+                    selectionAccepted = true
+                    onDirectorySelected(treeUri)
+                } finally {
+                    if (!selectionAccepted && !hadPermission) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            releasePersistedUriPermission(context, uri, permissionFlags)
+                        }
+                    }
                 }
-                val treeUri = SaveLocation.TreeUri(uri.toString())
-                onDirectorySelected(treeUri)
             }
         }
     }
@@ -553,12 +556,12 @@ private fun isActivityUnavailable(activity: Activity): Boolean {
  * DocumentTree URI に書き込み可能かテスト
  */
 private fun canWriteToDocumentTree(context: android.content.Context, treeUri: android.net.Uri): Boolean {
+    var probe: DocumentFile? = null
     return try {
         val docFile = DocumentFile.fromTreeUri(context, treeUri) ?: return false
-        val probe = docFile.createFile("text/plain", ".futacha_write_probe") ?: return false
+        probe = docFile.createFile("text/plain", ".futacha_write_probe") ?: return false
         val output = context.contentResolver.openOutputStream(probe.uri)
         if (output == null) {
-            probe.delete()
             Logger.w("DirectoryPicker", "Failed to open output stream for DocumentTree probe: $treeUri")
             return false
         }
@@ -566,15 +569,19 @@ private fun canWriteToDocumentTree(context: android.content.Context, treeUri: an
             it.write("ok".toByteArray())
             it.flush()
         }
-        // FIX: テストファイル削除の結果を確認してログに記録
-        val deleted = probe.delete()
-        if (!deleted) {
-            Logger.w("DirectoryPicker", "Failed to delete test file from DocumentTree $treeUri")
-        }
         true
     } catch (e: Exception) {
         Logger.e("DirectoryPicker", "Failed to write test file to DocumentTree $treeUri", e)
         false
+    } finally {
+        // Delete the probe on every path, including a failed write, so a
+        // rejected folder is not left with a stray file.
+        probe?.let { created ->
+            val deleted = runCatching { created.delete() }.getOrDefault(false)
+            if (!deleted) {
+                Logger.w("DirectoryPicker", "Failed to delete test file from DocumentTree $treeUri")
+            }
+        }
     }
 }
 

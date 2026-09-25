@@ -41,6 +41,9 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
     var selectedId by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<VideoEditInfo?>(null) }
     var time by remember { mutableLongStateOf(0L) }
+    // Playback reports its position ~30 Hz. Only the time label and slider read it, so the
+    // dialog root does not recompose per frame; stopping copies it back into [time].
+    val playbackTime = remember { mutableLongStateOf(0L) }
     var preview by remember { mutableStateOf<ImageBitmap?>(null) }
     var previewReady by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -79,7 +82,11 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
     })
     val share = rememberCompatShareLauncher()
     fun commit(value: MosaicDocument) { history.commit(value); document = history.current }
-    fun stopPreview() { editingPlayback?.pause(); editingPlayback?.close(); editingPlayback = null }
+    // Editing resumes at the frame playback reached.
+    fun stopPreview() {
+        editingPlayback?.let { time = playbackTime.longValue; it.pause(); it.close() }
+        editingPlayback = null
+    }
     fun close() { stopPreview(); if (document.regions.isNotEmpty() || working) discard = true else onDismiss() }
     fun analyse(operation: suspend (VideoEditInfo, MosaicDocument, (String, Float?) -> Unit) -> MosaicDocument) {
         val video = info ?: return
@@ -110,14 +117,21 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
         catch (failure: Exception) { error = failure.message ?: "動画を読み取れません" }
         finally { loading = false }
     }
+    val previewFrames = remember(source) { VideoPreviewFrameCache() }
+    DisposableEffect(previewFrames) { onDispose { previewFrames.close() } }
     LaunchedEffect(info, time, document, output, working, editingPlayback) {
         val video = info ?: return@LaunchedEffect
         if (output != null || working || editingPlayback != null) return@LaunchedEffect
-        previewReady = false
+        val at = time; val masks = document
+        // A mask/box edit keeps the decoded frame: no native decode, no spinner flicker.
+        val decoded = previewFrames.has(at)
+        if (!decoded) previewReady = false
         try {
             // Native frame reads cannot always interrupt immediately; serialize them through the source.
-            delay(50)
-            preview = source.useFile { previewDeviceVideo(it, video, time, document) }
+            delay(if (decoded) 16 else 50)
+            preview = previewFrames.render(at, masks) { adopt ->
+                source.useFile { decodeDeviceVideoPreviewFrame(it, video, at, adopt) }
+            }
             previewReady = true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message ?: "プレビューを作れません" }
@@ -181,21 +195,22 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                             }, modifier = Modifier.testTag("video-editor-save")) { Text("動画を保存") }
                         }
                     } else info?.let { video ->
-                        Text("${videoTime(time - video.frames.timeAt(0))} / ${videoTime(video.frames.durationUs - video.frames.timeAt(0))}", modifier = Modifier.testTag("video-editor-time"))
+                        val position = { if (editingPlayback != null) playbackTime.longValue else time }
+                        VideoTimeLabel(video, position)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             TextButton(enabled = !working, modifier = Modifier.testTag("video-editor-play-pause"), onClick = {
                                 if (editingPlayback != null) stopPreview() else {
                                     error = null; playbackState = VideoPlayerState.Buffering
                                     val start = if (time >= video.frames.timeAt(video.frames.size - 1)) video.frames.timeAt(0) else time
-                                    editingPlayback = VideoEditPlayback(video, document, start, onPosition = { time = it }, onEnded = ::stopPreview)
+                                    playbackTime.longValue = start
+                                    editingPlayback = VideoEditPlayback(video, document, start,
+                                        onPosition = { playbackTime.longValue = it }, onEnded = ::stopPreview)
                                 }
                             }) { Text(if (editingPlayback == null) "編集内容を再生" else "止めて編集") }
                             if (editingPlayback != null) Text(if (playbackState == VideoPlayerState.Ready) "再生中" else "再生を準備中…",
                                 modifier = Modifier.testTag("video-editor-preview-state"), style = MaterialTheme.typography.bodySmall)
                         }
-                        Slider(time.toFloat(), { stopPreview(); time = video.frames.atOrBefore(it.toLong()) },
-                            valueRange = 0f..video.frames.timeAt(video.frames.size - 1).toFloat().coerceAtLeast(1f), enabled = !working,
-                            modifier = Modifier.testTag("video-editor-timeline"))
+                        VideoTimeSlider(video, position, enabled = !working) { stopPreview(); time = it }
                         Row(Modifier.horizontalScroll(rememberScrollState())) {
                             TextButton(enabled = editable, onClick = { time = video.frames.step(time, false) }) { Text("前のコマ") }
                             TextButton(enabled = editable, onClick = { time = video.frames.step(time, true) }) { Text("次のコマ") }
@@ -263,6 +278,19 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { error = failure.message ?: "共有できません" }
         } }) { Text("共有") } }) }
+}
+
+@Composable
+private fun VideoTimeLabel(info: VideoEditInfo, position: () -> Long) {
+    Text("${videoTime(position() - info.frames.timeAt(0))} / ${videoTime(info.frames.durationUs - info.frames.timeAt(0))}",
+        modifier = Modifier.testTag("video-editor-time"))
+}
+
+@Composable
+private fun VideoTimeSlider(info: VideoEditInfo, position: () -> Long, enabled: Boolean, onSeek: (Long) -> Unit) {
+    Slider(position().toFloat(), { onSeek(info.frames.atOrBefore(it.toLong())) },
+        valueRange = 0f..info.frames.timeAt(info.frames.size - 1).toFloat().coerceAtLeast(1f), enabled = enabled,
+        modifier = Modifier.testTag("video-editor-timeline"))
 }
 
 @Composable

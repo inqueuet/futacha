@@ -47,6 +47,7 @@ import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.size.Size
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
@@ -76,6 +77,10 @@ internal fun ImagePreviewDialog(
     } else 0.dp
     var isZoomed by remember { mutableStateOf(false) }
     LaunchedEffect(entry.url) { isZoomed = false }
+    // The first request is decoded at screen size. Zooming past
+    // IMAGE_PREVIEW_ORIGINAL_REQUEST_ZOOM also loads the original (Coil caps it at
+    // its max bitmap size) and swaps it in once decoded, so deep zoom is not blurry.
+    var wantsOriginalResolution by remember(entry.url) { mutableStateOf(false) }
 
     ThreadMediaPreviewDialogFrame(
         navigationKey = entry.url,
@@ -116,8 +121,23 @@ internal fun ImagePreviewDialog(
                     .build()
             }
         }
+        val originalRequest = remember(platformContext, entry.url, wantsOriginalResolution) {
+            if (!wantsOriginalResolution) {
+                null
+            } else {
+                ImageRequest.Builder(platformContext)
+                    .data(entry.url)
+                    .crossfade(false)
+                    .size(Size.ORIGINAL)
+                    .build()
+            }
+        }
         val image = rememberViewerImagePainter(
             request = previewRequest,
+            imageLoader = imageLoader
+        )
+        val original = rememberViewerImagePainter(
+            request = originalRequest,
             imageLoader = imageLoader
         )
         val thumbnail = rememberViewerImagePainter(
@@ -161,14 +181,16 @@ internal fun ImagePreviewDialog(
             ImagePreviewTransformSurface(
                 resetKey = entry.url,
                 viewportSize = previewSize,
-                painter = painter,
+                // Keep the screen-size frame until the original is ready.
+                painter = if (original.state is AsyncImagePainter.State.Success) original.painter else painter,
                 thumbnailPainter = thumbnailPainter,
                 showThumbnail = thumbnailRequest != null &&
                     thumbnailPainterState !is AsyncImagePainter.State.Error &&
                     thumbnailPainterState !is AsyncImagePainter.State.Empty,
                 contentScale = targetContentScale,
                 isTargetError = isErrorState,
-                onZoomedChanged = { isZoomed = it }
+                onZoomedChanged = { isZoomed = it },
+                onOriginalResolutionNeeded = { wantsOriginalResolution = true }
             )
             if (isLoadingState) {
                 CircularProgressIndicator(
@@ -270,7 +292,8 @@ private fun ImagePreviewTransformSurface(
     showThumbnail: Boolean,
     contentScale: ContentScale,
     isTargetError: Boolean,
-    onZoomedChanged: (Boolean) -> Unit
+    onZoomedChanged: (Boolean) -> Unit,
+    onOriginalResolutionNeeded: () -> Unit = {}
 ) {
     var scale by remember(resetKey) { mutableStateOf(1f) }
     var translation by remember(resetKey) { mutableStateOf(Offset.Zero) }
@@ -315,6 +338,9 @@ private fun ImagePreviewTransformSurface(
                                         updatedScale
                                     )
                                 )
+                            }
+                            if (updatedScale > IMAGE_PREVIEW_ORIGINAL_REQUEST_ZOOM) {
+                                onOriginalResolutionNeeded()
                             }
                             val nowZoomed = updatedScale > IMAGE_PREVIEW_ZOOM_THRESHOLD
                             if (nowZoomed != lastWasZoomed) {
@@ -361,6 +387,7 @@ private fun ImagePreviewTransformSurface(
 
 private const val IMAGE_PREVIEW_ZOOM_THRESHOLD = 1.05f
 private const val IMAGE_PREVIEW_MAX_ZOOM = 6f
+private const val IMAGE_PREVIEW_ORIGINAL_REQUEST_ZOOM = 1.5f
 
 private fun clampImagePreviewZoomOffset(
     offset: Float,

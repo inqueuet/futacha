@@ -26,6 +26,59 @@ import kotlin.test.assertTrue
 
 class IosExperienceProfileStoreTest {
     @Test
+    fun legacyEnvelopeMigratesAndSmallWritesLeaveCachedBodiesSeparate() = runBlocking {
+        val fs = createFileSystem()
+        fs.deleteRecursively("compatibility").getOrThrow()
+        try {
+            fs.createDirectory("compatibility").getOrThrow()
+            val url = "https://may.2chan.net/b/res/123.htm"
+            val snapshot = CompatThreadSnapshot(compatTabKey(url), 42, 1000,
+                posts = listOf(CompatPostSnapshot(0, "123", timestamp = "", messageHtml = "移行する本文".repeat(1000))))
+            val json = kotlinx.serialization.json.Json { encodeDefaults = true }
+            val database = IosCompatibilityDatabase(fs)
+            database.writePayload("""{"snapshots":[${json.encodeToString(CompatThreadSnapshot.serializer(), snapshot)}]}""", 1000)
+            val store = IosCompatibilityStore(fs)
+            store.initialize()
+            assertEquals(snapshot, store.loadThreadSnapshotByCanonicalUrl(url))
+            val records = database.readCacheRecords().records
+            assertEquals(1, records.size)
+            assertFalse(database.readPayload().orEmpty().contains("移行する本文"))
+            store.savePreference("compat.catalog.catalogEco", "ON")
+            assertEquals(records, database.readCacheRecords().records)
+            val reopened = IosCompatibilityStore(fs)
+            reopened.initialize()
+            assertEquals(snapshot, reopened.loadThreadSnapshotByCanonicalUrl(url))
+            assertEquals("ON", reopened.preferences.first()["compat.catalog.catalogEco"])
+            reopened.clearThreadSnapshotCache()
+            assertTrue(database.readCacheRecords().records.isEmpty())
+            val cleared = IosCompatibilityStore(fs)
+            cleared.initialize()
+            assertNull(cleared.loadThreadSnapshotByCanonicalUrl(url))
+            database.close()
+        } finally { fs.deleteRecursively("compatibility").getOrThrow() }
+    }
+
+    @Test
+    fun partitionedCacheAndMetadataRollbackTogetherOnWriteFailure() = runBlocking {
+        val fs = createFileSystem()
+        fs.deleteRecursively("compatibility").getOrThrow()
+        try {
+            fs.createDirectory("compatibility").getOrThrow()
+            val database = IosCompatibilityDatabase(fs)
+            database.writePayload("before", 1, mapOf("thread:one" to "original"))
+            assertFailsWith<IllegalArgumentException> {
+                database.writePayload("after", 2, linkedMapOf(
+                    "thread:one" to "replacement",
+                    "invalid".repeat(1000) to "too long key"
+                ))
+            }
+            assertEquals("before", database.readPayload())
+            assertEquals(mapOf("thread:one" to "original"), database.readCacheRecords().records)
+            database.close()
+        } finally { fs.deleteRecursively("compatibility").getOrThrow() }
+    }
+
+    @Test
     fun historyVisitsSurviveLateRefreshQuickRevisitAndReopen() = runBlocking {
         val fs = createFileSystem()
         fs.deleteRecursively("compatibility").getOrThrow()

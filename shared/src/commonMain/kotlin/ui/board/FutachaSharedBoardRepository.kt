@@ -10,6 +10,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.sync.Mutex
@@ -19,7 +21,7 @@ import kotlinx.coroutines.sync.withLock
 internal fun rememberFutachaSharedRepository(repository: BoardRepository): BoardRepository {
     val features = LocalFutachaSharedFeatures.current
     return remember(repository, features?.store, features?.httpClient) {
-        if (features == null) repository else FutachaSharedBoardRepository(repository, features.store, features.httpClient)
+        if (features == null) repository else FutachaSharedBoardRepository(repository, features.store, features.httpClient, features.catalogCache)
     }
 }
 
@@ -27,7 +29,8 @@ internal fun rememberFutachaSharedRepository(repository: BoardRepository): Board
 internal class FutachaSharedBoardRepository(
     private val delegate: BoardRepository,
     private val store: CompatibilityStore,
-    private val httpClient: HttpClient?
+    private val httpClient: HttpClient?,
+    private val catalogCache: FutachaCatalogMemoryCache = FutachaCatalogMemoryCache()
 ) : BoardRepository by delegate {
     private val catalogMutex = Mutex()
     private val openedCatalogs = mutableSetOf<String>()
@@ -35,15 +38,27 @@ internal class FutachaSharedBoardRepository(
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage = getThreadContentByUrl(threadUrl).page
     override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
         val preferences = store.preferences.first()
-        val firstOpen = catalogMutex.withLock { openedCatalogs.add("$board|$mode") }
-        if (firstOpen && preferences.compatPreferenceValue("catalog", "catalogOpenWithReload") == "OFF") {
+        val cacheKey = "$board|$mode"
+        val firstOpen = catalogMutex.withLock { openedCatalogs.add(cacheKey) }
+        val reloadSetting = preferences.compatPreferenceValue("catalog", "catalogOpenWithReload")
+        if (firstOpen && reloadSetting != "ON") {
+            // Returning within this session reuses the list the user just saw.
+            catalogCache.get(cacheKey)?.let { return it }
+        }
+        // A disk snapshot can be days old (e.g. after a restart); only an explicit
+        // "OFF" opts into showing it without fetching.
+        if (firstOpen && reloadSetting == "OFF") {
             mode.sharedCatalogSort()?.let { sort ->
-                store.loadCatalogSnapshot(compatBoardKey(board), sort)?.let { return CatalogPageContent(it.items) }
+                store.loadCatalogSnapshot(compatBoardKey(board), sort)?.let { snapshot ->
+                    return CatalogPageContent(snapshot.items).also { catalogCache.put(cacheKey, it) }
+                }
             }
         }
         val settings = compatCatalogFetchSettingsFromPreferences(preferences)
-        if (settings == null || canonicalizeBoardUrl(board) == null) return delegate.getCatalogPage(board, mode)
-        return delegate.getCatalogPageWithSettings(board, mode, settings)
+        val page = if (settings == null || canonicalizeBoardUrl(board) == null) delegate.getCatalogPage(board, mode)
+            else delegate.getCatalogPageWithSettings(board, mode, settings)
+        catalogCache.put(cacheKey, page)
+        return page
     }
 
     // getCatalog (watcher, update checks) must use the same layout as the
@@ -76,17 +91,50 @@ internal class FutachaSharedBoardRepository(
             catch (_: Exception) { null }
         } else null
         val content = cached ?: primary()
+        return content
+    }
+
+    suspend fun supplement(source: String, content: ThreadPageContent): ThreadPageContent {
+        val expected = store.tabs.first().firstOrNull { it.key == compatTabKey(source) }?.replyCount
         val needsSupplement = content.page.isTruncated || expected?.let { content.page.posts.size < it + 1 } == true
         val client = httpClient
         if (!needsSupplement || client == null) return content
-        val pages = buildList {
-            buildCompatArchiveThreadCandidates(source).forEach { url ->
-                try { withTimeoutOrNull(4_000) { fetchCompatArchiveThreadPage(client, url) }?.let(::add) }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { /* Another source can still fill the missing replies. */ }
+        val candidates = buildCompatArchiveThreadCandidates(source)
+        val completed = arrayOfNulls<ThreadPage>(candidates.size)
+        // At most two requests at once and four seconds for the entire
+        // supplement. Keep successful results even if the remaining work times out.
+        withTimeoutOrNull(4_000) {
+            for (batch in candidates.withIndex().chunked(2)) {
+                coroutineScope {
+                    batch.map { (index, url) -> async {
+                        try { completed[index] = fetchCompatArchiveThreadPage(client, url) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { /* Another source can still fill the gap. */ }
+                    } }.forEach { it.await() }
+                }
+                val merged = withContext(AppDispatchers.parsing) {
+                    mergeCompatThreadPages(content.page, completed.filterNotNull())
+                }
+                if (!merged.isTruncated && merged.posts.size >= (expected ?: content.page.posts.lastIndex) + 1) break
             }
         }
+        val pages = completed.filterNotNull()
+        if (pages.isEmpty()) return content
         val merged = withContext(AppDispatchers.parsing) { mergeCompatThreadPages(content.page, pages) }
         return content.copy(page = merged)
+    }
+}
+
+/** A small session cache also covers navigation before the disk snapshot effect completes. */
+internal class FutachaCatalogMemoryCache {
+    private val mutex = Mutex()
+    private val entries = linkedMapOf<String, CatalogPageContent>()
+    suspend fun get(key: String): CatalogPageContent? = mutex.withLock {
+        entries.remove(key)?.also { entries[key] = it }
+    }
+    suspend fun put(key: String, page: CatalogPageContent) = mutex.withLock {
+        entries.remove(key)
+        entries[key] = page
+        while (entries.size > 4) entries.remove(entries.keys.first())
     }
 }

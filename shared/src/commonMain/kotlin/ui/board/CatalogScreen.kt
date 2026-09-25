@@ -160,9 +160,9 @@ private fun CatalogScreenContent(
     val contextHandles = setupHandles.contextHandles
     val board = contextHandles.board
     val history = contextHandles.history
-    val onBack = contextHandles.onBack
-    val onThreadSelected = contextHandles.onThreadSelected
-    val onHistoryEntrySelected = contextHandles.onHistoryEntrySelected
+    val requestedOnBack = contextHandles.onBack
+    val requestedOnThreadSelected = contextHandles.onThreadSelected
+    val requestedOnHistoryEntrySelected = contextHandles.onHistoryEntrySelected
     val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
     val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
     val onHistoryRefresh = contextHandles.onHistoryRefresh
@@ -207,6 +207,19 @@ private fun CatalogScreenContent(
     var createThreadDraft by draftDisplayStateRefs.createThreadDraft
     var createThreadImage by draftDisplayStateRefs.createThreadImage
     var isCreateThreadSubmitting by remember(board?.id) { mutableStateOf(false) }
+    // Leaving the catalog while a thread is being created cancels the request.
+    val notifyCreateThreadSending: () -> Unit = {
+        coroutineScope.launch { snackbarHostState.showSnackbar(CATALOG_CREATE_THREAD_SENDING_MESSAGE) }
+    }
+    val onBack: () -> Unit = {
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnBack() }
+    }
+    val onThreadSelected: (CatalogItem) -> Unit = { item ->
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnThreadSelected(item) }
+    }
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = { entry ->
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnHistoryEntrySelected(entry) }
+    }
     var archiveSearchQuery by searchOverlayStateRefs.archiveSearchQuery
     var catalogNgFilteringEnabled by searchOverlayStateRefs.catalogNgFilteringEnabled
     val catalogNgWords = persistentBindings.catalogNgWords
@@ -227,7 +240,8 @@ private fun CatalogScreenContent(
             snackbarHostState.showSnackbar(warning.reason)
         }
     }
-    LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes) {
+    LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes, persistentBindings.isCatalogModeLoaded) {
+        if (!persistentBindings.isCatalogModeLoaded) return@LaunchedEffect
         resolveCatalogModeSyncValue(
             boardId = board?.id,
             persistedCatalogModes = persistentBindings.persistedCatalogModes
@@ -543,9 +557,11 @@ private fun CatalogScreenContent(
         lifecycleBindings.onNavigateBack()
     }
 
-    LaunchedEffect(board?.url, catalogMode, hasSyncedCatalogMode) {
-        if (!hasSyncedCatalogMode) return@LaunchedEffect
-        lifecycleBindings.onInitialLoad()
+    if (hasSyncedCatalogMode) {
+        // Re-run when the real repository replaces Android's startup placeholder.
+        LaunchedEffect(board?.url, catalogMode, activeRepository) {
+            lifecycleBindings.onInitialLoad()
+        }
     }
     val overlayBindings = interactionHandles.overlayBindings
     val (scaffoldBindings, overlayHostBindings) = buildCatalogScreenHostBindings(

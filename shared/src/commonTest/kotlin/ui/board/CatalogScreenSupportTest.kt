@@ -748,6 +748,54 @@ class CatalogScreenSupportTest {
     }
 
     @Test
+    fun catalogDerivedRuntimeSupport_showsNothingUntilItemsForThisBoardAreComputed() {
+        val loaded = listOf(testCatalogItem("1"), testCatalogItem("2"))
+        val refreshed = listOf(testCatalogItem("3"))
+
+        // Nothing computed yet: loading, not "no threads".
+        assertEquals(null, resolveDisplayedCatalogVisibleItems(null, "board", loaded))
+        // Computed for the empty list before the first load finished.
+        assertEquals(
+            null,
+            resolveDisplayedCatalogVisibleItems(CatalogVisibleItemsResult("board", emptyList(), emptyList()), "board", loaded)
+        )
+        // Another board's result.
+        assertEquals(
+            null,
+            resolveDisplayedCatalogVisibleItems(CatalogVisibleItemsResult("other", loaded, loaded), "board", loaded)
+        )
+        // A refresh keeps the previous result while the new one computes.
+        assertEquals(
+            loaded,
+            resolveDisplayedCatalogVisibleItems(CatalogVisibleItemsResult("board", loaded, loaded), "board", refreshed)
+        )
+        // An empty board is shown as empty once computed.
+        val empty = emptyList<CatalogItem>()
+        assertEquals(
+            empty,
+            resolveDisplayedCatalogVisibleItems(CatalogVisibleItemsResult("board", empty, empty), "board", empty)
+        )
+    }
+
+    @Test
+    fun futachaCatalogProjection_waitsForAProjectionOfLoadedItems() {
+        val loaded = listOf(testCatalogItem("1"))
+        assertEquals(null, resolveFutachaCatalogProjectedItems(null, loaded))
+        assertEquals(null, resolveFutachaCatalogProjectedItems(FutachaCatalogProjection(emptyList(), emptyList()), loaded))
+        assertEquals(emptyList(), resolveFutachaCatalogProjectedItems(FutachaCatalogProjection(loaded, emptyList()), loaded))
+        assertEquals(loaded, resolveFutachaCatalogProjectedItems(FutachaCatalogProjection(loaded, loaded), listOf(testCatalogItem("2"))))
+    }
+
+    private fun testCatalogItem(id: String) = CatalogItem(
+        id = id,
+        threadUrl = "https://may.2chan.net/b/res/$id.htm",
+        title = "thread $id",
+        thumbnailUrl = null,
+        fullImageUrl = null,
+        replyCount = 1
+    )
+
+    @Test
     fun catalogDerivedRuntimeSupport_resetsVisibleItemsOnlyWhenSourceChanges() {
         assertFalse(
             shouldResetCatalogVisibleItemsForSourceChange(

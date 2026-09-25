@@ -761,6 +761,9 @@ class CompatibilityCoreTest {
         )
 
         assertEquals(listOf(entry), distinctCompatHistory(listOf(entry, entry)))
+        // An already distinct list keeps its instance so Compose can skip.
+        val distinct = listOf(entry, entry.copy(canonicalUrl = "https://may.2chan.net/b/res/124.htm"))
+        assertTrue(distinctCompatHistory(distinct) === distinct)
     }
 
     @Test

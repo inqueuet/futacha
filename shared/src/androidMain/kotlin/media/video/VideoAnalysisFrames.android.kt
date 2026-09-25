@@ -16,7 +16,16 @@ import kotlinx.coroutines.*
 /** One sequential decoder, with bounded output; no per-frame thumbnail seeking. */
 internal actual suspend fun decodeDeviceVideoFrames(
     path: String, info: VideoEditInfo, request: VideoAnalysisRequest, consume: suspend (AnalysisFrame) -> Unit
+): Unit = decodeDeviceVideoFrameChunks(path, info, listOf(request)) { _, frame -> consume(frame) }
+
+/**
+ * Indexing the sample table reads every sample header (the whole file for WebM), so it and
+ * the decoder are set up once per call; each further request only seeks and flushes.
+ */
+internal actual suspend fun decodeDeviceVideoFrameChunks(
+    path: String, info: VideoEditInfo, requests: List<VideoAnalysisRequest>, consume: suspend (Int, AnalysisFrame) -> Unit
 ): Unit = withContext(AppDispatchers.io) {
+    if (requests.isEmpty()) return@withContext
     val probe = MediaExtractor()
     val mime = try {
         probe.setDataSource(path)
@@ -35,8 +44,8 @@ internal actual suspend fun decodeDeviceVideoFrames(
         currentCoroutineContext().ensureActive()
         var delivered = false
         try {
-            decodeAndroidAnalysisFrames(path, info, request, candidate.name) {
-                delivered = true; consume(it)
+            decodeAndroidAnalysisFrames(path, info, requests, candidate.name) { chunk, frame ->
+                delivered = true; consume(chunk, frame)
             }
             check(delivered) { "デコーダーから解析用画像を読み取れません" }
             return@withContext
@@ -52,8 +61,8 @@ internal actual suspend fun decodeDeviceVideoFrames(
 }
 
 private suspend fun decodeAndroidAnalysisFrames(
-    path: String, info: VideoEditInfo, request: VideoAnalysisRequest, codecName: String,
-    consume: suspend (AnalysisFrame) -> Unit
+    path: String, info: VideoEditInfo, requests: List<VideoAnalysisRequest>, codecName: String,
+    consume: suspend (Int, AnalysisFrame) -> Unit
 ) {
     val coroutine = currentCoroutineContext()
     val extractor = MediaExtractor()
@@ -79,9 +88,6 @@ private suspend fun decodeAndroidAnalysisFrames(
             if (!extractor.advance()) break
         }
         val timeline = VideoDecodeTimeline(timestamps, info.frames)
-        val first = timeline.decodedTime(request.firstIndex)
-        val end = if (request.endIndex < info.frames.size) timeline.decodedTime(request.endIndex) else Long.MAX_VALUE
-        extractor.seekTo(first, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
         format.setInteger(MediaFormat.KEY_ROTATION, 0)
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
         val decoder = MediaCodec.createByCodecName(codecName)
@@ -89,53 +95,64 @@ private suspend fun decodeAndroidAnalysisFrames(
         decoder.configure(format, null, null, 0)
         decoder.start(); started = true
         val output = MediaCodec.BufferInfo()
-        var inputEnded = false
-        var lastActivity = SystemClock.elapsedRealtime()
-        while (true) {
-            coroutine.ensureActive()
-            if (!inputEnded) {
-                val index = decoder.dequeueInputBuffer(10_000)
-                if (index >= 0) {
-                    val buffer = requireNotNull(decoder.getInputBuffer(index)) { "動画の入力バッファを取得できません" }
-                    buffer.clear()
-                    val count = extractor.readSampleData(buffer, 0)
-                    if (count < 0) {
-                        decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        inputEnded = true
-                    } else {
-                        require(count <= buffer.capacity()) { "動画のフレームが大きすぎます" }
-                        require(extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_ENCRYPTED == 0) { "暗号化された動画は解析できません" }
-                        val flags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0)
-                            MediaCodec.BUFFER_FLAG_PARTIAL_FRAME else 0
-                        decoder.queueInputBuffer(index, 0, count, extractor.sampleTime, flags)
-                        extractor.advance()
+        for ((chunk, request) in requests.withIndex()) {
+            val first = timeline.decodedTime(request.firstIndex)
+            val end = if (request.endIndex < info.frames.size) timeline.decodedTime(request.endIndex) else Long.MAX_VALUE
+            // Synchronous mode: flush() also leaves End-of-Stream and dequeuing resumes directly.
+            // The previous request already produced output, so the configured CSD stays valid.
+            if (chunk > 0) decoder.flush()
+            extractor.seekTo(first, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            var delivered = false
+            var inputEnded = false
+            var lastActivity = SystemClock.elapsedRealtime()
+            while (true) {
+                coroutine.ensureActive()
+                if (!inputEnded) {
+                    val index = decoder.dequeueInputBuffer(10_000)
+                    if (index >= 0) {
+                        val buffer = requireNotNull(decoder.getInputBuffer(index)) { "動画の入力バッファを取得できません" }
+                        buffer.clear()
+                        val count = extractor.readSampleData(buffer, 0)
+                        if (count < 0) {
+                            decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputEnded = true
+                        } else {
+                            require(count <= buffer.capacity()) { "動画のフレームが大きすぎます" }
+                            require(extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_ENCRYPTED == 0) { "暗号化された動画は解析できません" }
+                            val flags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0)
+                                MediaCodec.BUFFER_FLAG_PARTIAL_FRAME else 0
+                            decoder.queueInputBuffer(index, 0, count, extractor.sampleTime, flags)
+                            extractor.advance()
+                        }
+                        lastActivity = SystemClock.elapsedRealtime()
                     }
-                    lastActivity = SystemClock.elapsedRealtime()
                 }
-            }
-            val index = decoder.dequeueOutputBuffer(output, 10_000)
-            var frame: AnalysisFrame? = null
-            var done = false
-            if (index >= 0) {
-                lastActivity = SystemClock.elapsedRealtime()
-                try {
-                    if (output.size > 0 && output.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                        val time = output.presentationTimeUs
-                        if (time >= end) done = true
-                        else if (time >= first) {
-                            val image = requireNotNull(decoder.getOutputImage(index)) { "このデコーダーは解析用画像を出力できません" }
-                            frame = image.use {
-                                sampleAndroidAnalysisImage(it, timeline.originalTime(time), info, request, decoder.outputFormat) { coroutine.ensureActive() }
+                val index = decoder.dequeueOutputBuffer(output, 10_000)
+                var frame: AnalysisFrame? = null
+                var done = false
+                if (index >= 0) {
+                    lastActivity = SystemClock.elapsedRealtime()
+                    try {
+                        if (output.size > 0 && output.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                            val time = output.presentationTimeUs
+                            if (time >= end) done = true
+                            else if (time >= first) {
+                                val image = requireNotNull(decoder.getOutputImage(index)) { "このデコーダーは解析用画像を出力できません" }
+                                frame = image.use {
+                                    sampleAndroidAnalysisImage(it, timeline.originalTime(time), info, request, decoder.outputFormat) { coroutine.ensureActive() }
+                                }
                             }
                         }
-                    }
-                    if (output.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) done = true
-                } finally { decoder.releaseOutputBuffer(index, false) }
+                        if (output.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) done = true
+                    } finally { decoder.releaseOutputBuffer(index, false) }
+                }
+                // Native buffers are released before inference, which can legitimately take seconds.
+                frame?.let { delivered = true; consume(chunk, it); lastActivity = SystemClock.elapsedRealtime() }
+                if (done) break
+                check(SystemClock.elapsedRealtime() - lastActivity < 15_000) { "動画のデコードが停止しました" }
             }
-            // Native buffers are released before inference, which can legitimately take seconds.
-            frame?.let { consume(it); lastActivity = SystemClock.elapsedRealtime() }
-            if (done) break
-            check(SystemClock.elapsedRealtime() - lastActivity < 15_000) { "動画のデコードが停止しました" }
+            // An empty request would also make the next flush precede any output.
+            check(delivered) { "デコーダーから解析用画像を読み取れません" }
         }
     } finally {
         try { codec?.let { if (started) runCatching { it.stop() }; it.release() } }

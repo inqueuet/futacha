@@ -15,6 +15,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.text.concatToString
 import kotlin.time.ExperimentalTime
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /**
  * Minimal-yet-robust parser that understands Futaba thread markup.
@@ -58,6 +60,10 @@ internal object ThreadHtmlParserCore {
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
     private const val MAX_PARSE_TIME_MS = 15_000L
     private const val MAX_REFERENCE_BUILD_TIME_MS = 5_000L
+    // Reply scanning must stop before the hard MAX_PARSE_TIME_MS limit, measured from the
+    // same start, so an oversized thread returns truncated posts instead of failing.
+    // The remainder covers the reference rebuild budget plus a scheduling margin.
+    private const val MAX_REPLY_PARSE_TIME_MS = MAX_PARSE_TIME_MS - MAX_REFERENCE_BUILD_TIME_MS - 1_000L
     private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
     private const val MAX_PARTIAL_MATCH_SCAN_LINES = 300
     private val TRUSTED_CANONICAL_HOST_SUFFIXES = setOf("2chan.net", "inqueuet.com")
@@ -199,12 +205,17 @@ internal object ThreadHtmlParserCore {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
+        val parseStartedAt = TimeSource.Monotonic.markNow()
         withTimeoutOrNull(MAX_PARSE_TIME_MS) {
-            parseThreadWithinBudget(html, baseUrl)
+            parseThreadWithinBudget(html, baseUrl, parseStartedAt)
         } ?: throw ParserException("Thread parse timed out after ${MAX_PARSE_TIME_MS}ms")
     }
 
-    private suspend fun parseThreadWithinBudget(html: String, fallbackBaseUrl: String?): ThreadPage {
+    private suspend fun parseThreadWithinBudget(
+        html: String,
+        fallbackBaseUrl: String?,
+        parseStartedAt: TimeMark
+    ): ThreadPage {
         return try {
             val normalized = normalizeLineBreaksIfNeeded(html)
             val canonical = sanitizeCanonicalUrl(
@@ -246,10 +257,11 @@ internal object ThreadHtmlParserCore {
                 val replyResult = parseThreadReplyBlocks(
                     repliesHtml = normalized,
                     initialSearchStart = firstReplyIndex,
+                    parseStartedAt = parseStartedAt,
                     config = ThreadReplyParsingConfig(
                         tag = TAG,
                         maxChunkSize = MAX_CHUNK_SIZE,
-                        maxParseTimeMs = MAX_PARSE_TIME_MS,
+                        maxParseTimeMs = MAX_REPLY_PARSE_TIME_MS,
                         maxSingleBlockSize = MAX_SINGLE_BLOCK_SIZE,
                         maxIterations = 2000,
                         maxPosts = 3000,

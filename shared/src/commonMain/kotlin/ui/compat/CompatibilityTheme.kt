@@ -82,12 +82,14 @@ internal fun compatibilityLoadingUsesIcon(style: String?): Boolean =
 internal fun compatibilityLoadingColor(palette: CompatibilityPalette, style: String?): Color =
     if (compatibilityLoadingUsesIcon(style)) palette.loadingIcon else palette.loadingProgress
 
+private val compatSaidaneCountRegex = Regex("[0-9]+")
+
 internal fun compatibilitySaidaneColor(
     palette: CompatibilityPalette,
     label: String?,
     threshold: Int
 ): Color {
-    val count = label?.let { Regex("[0-9]+").find(it)?.value?.toIntOrNull() }
+    val count = label?.let { compatSaidaneCountRegex.find(it)?.value?.toIntOrNull() }
     return if (count != null && count >= threshold.coerceAtLeast(1)) palette.saidaneMax else palette.saidane
 }
 

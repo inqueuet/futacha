@@ -15,6 +15,13 @@ import platform.Foundation.NSURL
 import kotlin.math.*
 import kotlin.time.TimeSource
 
+/** AVAssetReader decodes only each request's timeRange, so separate readers cost no rescans. */
+internal actual suspend fun decodeDeviceVideoFrameChunks(
+    path: String, info: VideoEditInfo, requests: List<VideoAnalysisRequest>, consume: suspend (Int, AnalysisFrame) -> Unit
+) {
+    requests.forEachIndexed { chunk, request -> decodeDeviceVideoFrames(path, info, request) { consume(chunk, it) } }
+}
+
 internal actual suspend fun decodeDeviceVideoFrames(
     path: String, info: VideoEditInfo, request: VideoAnalysisRequest, consume: suspend (AnalysisFrame) -> Unit
 ): Unit = withContext(AppDispatchers.io) {

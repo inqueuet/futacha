@@ -8,7 +8,6 @@ import android.media.metrics.LogSessionId
 import android.net.Uri
 import android.os.Build
 import android.view.Surface
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
@@ -23,7 +22,9 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
-internal actual suspend fun previewDeviceVideo(path: String, info: VideoEditInfo, timeUs: Long, document: MosaicDocument): ImageBitmap = withContext(AppDispatchers.io) {
+internal actual suspend fun decodeDeviceVideoPreviewFrame(
+    path: String, info: VideoEditInfo, timeUs: Long, adopt: (VideoPreviewFrame) -> Unit
+): Unit = withContext(AppDispatchers.io) {
     val reader = MediaMetadataRetriever()
     var bitmap: Bitmap? = null
     try {
@@ -37,7 +38,7 @@ internal actual suspend fun previewDeviceVideo(path: String, info: VideoEditInfo
         val frame = requireNotNull(bitmap)
         val pixels = IntArray(frame.width * frame.height)
         frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
-        imageEditBitmap(renderVideoPreview(EditRaster(frame.width, frame.height, pixels), document, timeUs))
+        adopt(RasterVideoPreviewFrame(timeUs, EditRaster(frame.width, frame.height, pixels)))
     } finally { bitmap?.recycle(); reader.release() }
 }
 

@@ -1,14 +1,87 @@
 package com.valoser.futacha.shared.media.video
 
 import androidx.compose.ui.graphics.ImageBitmap
+import com.valoser.futacha.shared.media.edit.EditRaster
+import com.valoser.futacha.shared.media.edit.imageEditBitmap
 import com.valoser.futacha.shared.media.video.model.*
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
 import kotlin.time.Clock
 
-internal expect suspend fun previewDeviceVideo(path: String, info: VideoEditInfo, timeUs: Long, document: MosaicDocument): ImageBitmap
+/** One decoded editor frame. Masks render onto it repeatedly; only a new time decodes again. */
+internal interface VideoPreviewFrame {
+    val timeUs: Long
+    suspend fun render(document: MosaicDocument): ImageBitmap
+    fun close()
+}
+
+/** Android/desktop keep the decoded ARGB pixels and apply the shared shader-equivalent renderer. */
+internal class RasterVideoPreviewFrame(
+    override val timeUs: Long, private val raster: EditRaster, private val renderTimeUs: Long = timeUs
+) : VideoPreviewFrame {
+    override suspend fun render(document: MosaicDocument): ImageBitmap =
+        imageEditBitmap(renderVideoPreview(raster, document, renderTimeUs))
+    override fun close() {}
+}
+
+/**
+ * Decodes [timeUs] and hands the frame to [adopt] before returning, so a cancellation that
+ * lands after the native decode can never drop (and leak) a frame that needs [close].
+ */
+internal expect suspend fun decodeDeviceVideoPreviewFrame(
+    path: String, info: VideoEditInfo, timeUs: Long, adopt: (VideoPreviewFrame) -> Unit
+)
+
+internal suspend fun previewDeviceVideo(path: String, info: VideoEditInfo, timeUs: Long, document: MosaicDocument): ImageBitmap {
+    var frame: VideoPreviewFrame? = null
+    try {
+        decodeDeviceVideoPreviewFrame(path, info, timeUs) { frame = it }
+        return checkNotNull(frame) { "動画のコマを読み取れません" }.render(document)
+    } finally { frame?.close() }
+}
+
+/**
+ * The editor's last decoded frame. A mask/box change re-renders it without decoding again
+ * (or taking the source file); only a new time decodes. Frames are used and released under
+ * one lock, so a cancelled render still inside native code never loses its frame.
+ */
+internal class VideoPreviewFrameCache {
+    private val mutex = Mutex()
+    private var frame: VideoPreviewFrame? = null
+    private var closed = false
+    @kotlin.concurrent.Volatile private var decodedTimeUs: Long? = null
+
+    /** Whether [render] at [timeUs] can skip decoding; a hint for the spinner only. */
+    fun has(timeUs: Long): Boolean = decodedTimeUs == timeUs
+
+    suspend fun render(
+        timeUs: Long, document: MosaicDocument, decode: suspend (adopt: (VideoPreviewFrame) -> Unit) -> Unit
+    ): ImageBitmap = mutex.withLock {
+        check(!closed) { "プレビューは終了しました" }
+        if (frame?.timeUs != timeUs) {
+            decodedTimeUs = null
+            frame?.close(); frame = null
+            decode { adopted -> frame?.close(); frame = adopted }
+        }
+        val current = checkNotNull(frame?.takeIf { it.timeUs == timeUs }) { "動画のコマを読み取れません" }
+        decodedTimeUs = timeUs
+        withContext(Dispatchers.Default) { current.render(document) }
+    }
+
+    /** Safe from composition disposal: an in-flight render finishes before its frame is released. */
+    fun close() {
+        videoPreviewCleanup.launch {
+            mutex.withLock { closed = true; decodedTimeUs = null; frame?.close(); frame = null }
+        }
+    }
+}
+
+private val videoPreviewCleanup = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
 internal expect suspend fun exportDeviceVideo(context: Any?, path: String, info: VideoEditInfo,
     document: MosaicDocument, output: String, onProgress: (Float) -> Unit)
 

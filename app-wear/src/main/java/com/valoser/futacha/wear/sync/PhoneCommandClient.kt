@@ -45,9 +45,16 @@ class PhoneCommandClient(
         sendCommand(WatchCommand(type = WatchCommandType.Refresh))
     }
 
+    /**
+     * [onNotConnected] runs (on the main thread) when no phone is connected.
+     * Open and read-aloud commands are then dropped instead of being queued
+     * as a DataItem, which the Data Layer would deliver whenever the devices
+     * reconnect, possibly hours later.
+     */
     fun openBoardOnPhone(
         boardId: String,
-        boardUrl: String
+        boardUrl: String,
+        onNotConnected: () -> Unit = {}
     ) {
         val commandId = nextCommandId()
         val command = WatchCommand(
@@ -65,14 +72,15 @@ class PhoneCommandClient(
                     "commandId" to commandId
                 )
             ),
-            fallback = { sendCommand(command) }
+            fallback = { sendCommand(command, onNotConnected) }
         )
     }
 
     fun openThreadOnPhone(
         boardId: String,
         boardUrl: String,
-        threadId: String
+        threadId: String,
+        onNotConnected: () -> Unit = {}
     ) {
         val commandId = nextCommandId()
         val command = WatchCommand(
@@ -92,33 +100,34 @@ class PhoneCommandClient(
                     "commandId" to commandId
                 )
             ),
-            fallback = { sendCommand(command) }
+            fallback = { sendCommand(command, onNotConnected) }
         )
     }
 
-    fun startReadAloudOnPhone(thread: WatchThreadSummary) {
-        sendThreadCommand(WatchCommandType.StartReadAloudOnPhone, thread)
+    fun startReadAloudOnPhone(thread: WatchThreadSummary, onNotConnected: () -> Unit = {}) {
+        sendThreadCommand(WatchCommandType.StartReadAloudOnPhone, thread, onNotConnected)
     }
 
-    fun pauseReadAloudOnPhone(thread: WatchThreadSummary) {
-        sendThreadCommand(WatchCommandType.PauseReadAloudOnPhone, thread)
+    fun pauseReadAloudOnPhone(thread: WatchThreadSummary, onNotConnected: () -> Unit = {}) {
+        sendThreadCommand(WatchCommandType.PauseReadAloudOnPhone, thread, onNotConnected)
     }
 
-    fun stopReadAloudOnPhone(thread: WatchThreadSummary) {
-        sendThreadCommand(WatchCommandType.StopReadAloudOnPhone, thread)
+    fun stopReadAloudOnPhone(thread: WatchThreadSummary, onNotConnected: () -> Unit = {}) {
+        sendThreadCommand(WatchCommandType.StopReadAloudOnPhone, thread, onNotConnected)
     }
 
-    fun nextReadAloudOnPhone(thread: WatchThreadSummary) {
-        sendThreadCommand(WatchCommandType.NextReadAloudOnPhone, thread)
+    fun nextReadAloudOnPhone(thread: WatchThreadSummary, onNotConnected: () -> Unit = {}) {
+        sendThreadCommand(WatchCommandType.NextReadAloudOnPhone, thread, onNotConnected)
     }
 
-    fun previousReadAloudOnPhone(thread: WatchThreadSummary) {
-        sendThreadCommand(WatchCommandType.PreviousReadAloudOnPhone, thread)
+    fun previousReadAloudOnPhone(thread: WatchThreadSummary, onNotConnected: () -> Unit = {}) {
+        sendThreadCommand(WatchCommandType.PreviousReadAloudOnPhone, thread, onNotConnected)
     }
 
     private fun sendThreadCommand(
         type: WatchCommandType,
-        thread: WatchThreadSummary
+        thread: WatchThreadSummary,
+        onNotConnected: () -> Unit
     ) {
         sendCommand(
             WatchCommand(
@@ -126,11 +135,13 @@ class PhoneCommandClient(
                 boardId = thread.boardId,
                 boardUrl = thread.boardUrl,
                 threadId = thread.threadId
-            )
+            ),
+            onNotConnected
         )
     }
 
-    private fun sendCommand(command: WatchCommand) {
+    /** A null [onNotConnected] queues the command as a DataItem while disconnected. */
+    private fun sendCommand(command: WatchCommand, onNotConnected: (() -> Unit)? = null) {
         val commandWithId = command.takeIf { !it.commandId.isNullOrBlank() }
             ?: command.copy(commandId = nextCommandId())
         val encoded = json.encodeToString(WatchCommand.serializer(), commandWithId)
@@ -142,7 +153,8 @@ class PhoneCommandClient(
         sendMessageOrFallback(
             path = WATCH_COMMAND_PATH,
             payload = payload,
-            fallback = { putCommandDataItem(encoded) }
+            fallback = { putCommandDataItem(encoded) },
+            onNotConnected = onNotConnected
         )
     }
 
@@ -199,13 +211,19 @@ class PhoneCommandClient(
     private fun sendMessageOrFallback(
         path: String,
         payload: ByteArray,
-        fallback: () -> Unit
+        fallback: () -> Unit,
+        onNotConnected: (() -> Unit)? = null
     ) {
         Wearable.getNodeClient(context.applicationContext).connectedNodes
             .addOnSuccessListener { nodes ->
                 val targetNodes = nodes.filter { it.isNearby }.ifEmpty { nodes }
                 if (targetNodes.isEmpty()) {
-                    fallback()
+                    if (onNotConnected != null) {
+                        Log.i(TAG, "No connected phone; dropped $path instead of queueing it")
+                        onNotConnected()
+                    } else {
+                        fallback()
+                    }
                     return@addOnSuccessListener
                 }
                 val remaining = AtomicInteger(targetNodes.size)
@@ -241,8 +259,13 @@ class PhoneCommandClient(
                 }
             }
             .addOnFailureListener {
-                Log.w(TAG, "Failed to resolve connected nodes for $path; falling back to DataItem", it)
-                fallback()
+                if (onNotConnected != null) {
+                    Log.w(TAG, "Failed to resolve connected nodes for $path; dropped", it)
+                    onNotConnected()
+                } else {
+                    Log.w(TAG, "Failed to resolve connected nodes for $path; falling back to DataItem", it)
+                    fallback()
+                }
             }
     }
 

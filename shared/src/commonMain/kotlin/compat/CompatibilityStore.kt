@@ -2,6 +2,9 @@ package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.BoardSummary
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 
 const val MAX_COMPAT_PREFERENCE_KEY_CHARS = 300
@@ -16,6 +19,8 @@ fun requireValidCompatPreference(key: String, value: String) {
     require(isValidCompatPreference(key, value)) { "Compatibility preference is invalid or too large" }
 }
 
+private val ALWAYS_LOADED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
+
 interface CompatibilityStore {
     val boards: Flow<List<CompatBoard>>
     val tabs: Flow<List<CompatTab>>
@@ -23,6 +28,15 @@ interface CompatibilityStore {
     val workspace: Flow<CompatWorkspaceRecord>
     val preferences: Flow<Map<String, String>>
     val ngRules: Flow<List<CompatNgRule>>
+
+    /**
+     * True once the observable values above reflect persisted data. A store
+     * that loads asynchronously starts with empty placeholders; callers must
+     * not treat those as the user's settings (theme, NG rules, save location)
+     * or write defaults over them. Stores that load synchronously keep this
+     * default.
+     */
+    val isLoaded: StateFlow<Boolean> get() = ALWAYS_LOADED_COMPAT_STORE
 
     suspend fun bootstrapBoardsIfNeeded(modernBoards: List<BoardSummary>): Boolean
     suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int

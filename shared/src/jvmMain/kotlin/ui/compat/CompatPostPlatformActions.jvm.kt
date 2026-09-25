@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.valoser.futacha.shared.ui.board.DesktopVideoFiles
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.VideoPlayerState
 import java.io.File
@@ -173,7 +174,8 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                 awaitCancellation()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { errorCallback(failure.message ?: "動画を読み込めません"); attachment = null }
-            finally { withContext(NonCancellable + Dispatchers.IO) { owned?.delete() } }
+            // The player below may still be releasing VLC; delete once it let go (Windows cannot delete open files).
+            finally { withContext(NonCancellable + Dispatchers.IO) { owned?.let(DesktopVideoFiles::delete) } }
         }
         Dialog(onDismissRequest = { attachment = null }) {
             Surface {

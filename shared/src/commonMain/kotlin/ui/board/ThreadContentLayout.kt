@@ -106,8 +106,12 @@ internal fun ThreadContent(
     val postLazyListKeys = remember(page.posts) {
         buildThreadPostLazyListKeys(page.posts)
     }
-    var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
-    val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
+    // Keyed by thread only: a refresh must not close an open quote preview,
+    // and a growing AI-hidden set must not re-hide posts the user chose to show.
+    var quotePreviewState by remember(page.threadId) { mutableStateOf<QuotePreviewState?>(null) }
+    val currentUrlClick = androidx.compose.runtime.rememberUpdatedState(onUrlClick)
+    val stableUrlClick = remember { { url: String -> currentUrlClick.value(url) } }
+    val revealedAiHiddenPostIds = remember(page.threadId) { mutableStateListOf<String>() }
     val hasAiHiddenPostsSummary = aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }
     val firstNewPostIndex = remember(page.posts, newPostIds) {
         page.posts.indexOfFirst { it.id in newPostIds }
@@ -122,8 +126,9 @@ internal fun ThreadContent(
         hasAiPostModeration = aiPostModerationUiState.isEnabled,
         hasAiHiddenPostsSummary = hasAiHiddenPostsSummary
     )
-    LaunchedEffect(page.posts, itemsBeforePosts) {
-        onDisplayedPostsChanged(ThreadDisplayedPostsLayout(page.posts, itemsBeforePosts))
+    val collapsedAiPostIds = aiHiddenPostIds.filterTo(HashSet()) { it !in revealedAiHiddenPostIds }
+    LaunchedEffect(page.posts, itemsBeforePosts, collapsedAiPostIds) {
+        onDisplayedPostsChanged(ThreadDisplayedPostsLayout(page.posts, itemsBeforePosts, collapsedAiPostIds))
     }
     ThreadPostScrollEffect(
         request = searchScrollRequest,
@@ -210,6 +215,7 @@ internal fun ThreadContent(
                 }
                 itemsIndexed(
                     items = page.posts,
+                    contentType = { _, _ -> "post" },
                     key = { index, post ->
                         postLazyListKeys.getOrNull(index) ?: buildThreadPostLazyListKey(index, post)
                     }
@@ -217,13 +223,13 @@ internal fun ThreadContent(
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
                     val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds
                     val normalizedPosterId = normalizePosterIdValue(post.posterId)
-                    val postCardCallbacks = buildThreadScreenPostCardCallbacks(
+                    val postCardCallbacks = rememberThreadScreenPostCardCallbacks(
                         post = post,
                         normalizedPosterId = normalizedPosterId,
                         postIndex = postIndex,
                         referencedByMap = referencedByMap,
                         postsByPosterId = postsByPosterId,
-                        quotePreviewState = quotePreviewState,
+                        quotePreviewState = { quotePreviewState },
                         onShowQuotePreview = showQuotePreview,
                         onQuoteRequestedForPost = onQuoteRequestedForPost,
                         onSaidaneClick = onSaidaneClick,
@@ -252,7 +258,7 @@ internal fun ThreadContent(
                             saidaneLabelOverride = saidaneOverrides[post.id],
                             highlightRanges = searchHighlightRanges[post] ?: emptyList(),
                             onQuoteClick = postCardCallbacks.onQuoteClick,
-                            onUrlClick = onUrlClick,
+                            onUrlClick = stableUrlClick,
                             onQuoteRequested = postCardCallbacks.onQuoteRequested,
                             onPosterIdClick = postCardCallbacks.onPosterIdClick,
                             onReferencedByClick = postCardCallbacks.onReferencedByClick,
@@ -326,7 +332,7 @@ internal fun ThreadContent(
             state = state,
             onDismiss = quotePreviewCallbacks.onDismiss,
             onMediaClick = onMediaClick,
-            onUrlClick = onUrlClick,
+            onUrlClick = stableUrlClick,
             onQuoteClick = quotePreviewCallbacks.onQuoteClick,
             bodyTextSize = bodyTextSize,
             postImageSize = postImageSize,

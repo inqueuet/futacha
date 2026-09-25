@@ -114,7 +114,8 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
         )
     }
     val plan = planState.plan ?: return planState.currentIndex
-    writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
+    // index.json keeps listing every target until its folder is gone, so the
+    // pre-delete copy only has to reach disk when the operation fails and is kept.
 
     var keepBackup = false
     var deletionResult: SavedThreadStorageDeletionResult? = null
@@ -134,7 +135,7 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
                     )
                 }
                 try {
-                    saveSavedThreadIndexUnlocked(updatedIndex)
+                    saveSavedThreadIndexUnlocked(updatedIndex, forceBackup = true)
                     latestIndex = updatedIndex
                 } catch (e: Throwable) {
                     if (e is CancellationException) throw e
@@ -154,6 +155,7 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
         }
         finalizeDeleteBackup(
             backupPath = plan.backupIndexPath,
+            backupIndexJson = plan.backupIndexJson,
             keepBackup = keepBackup
         )
     }
@@ -167,33 +169,25 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
 
 internal suspend fun SavedThreadRepository.finalizeDeleteBackup(
     backupPath: String,
+    backupIndexJson: String,
     keepBackup: Boolean
 ) {
     if (keepBackup) {
         Logger.w("SavedThreadRepository", "Keeping backup index for recovery: $backupPath")
+        writeStringAt(backupPath, backupIndexJson).onFailure { writeError ->
+            Logger.w(
+                "SavedThreadRepository",
+                "Failed to write delete backup $backupPath: ${writeError.message}"
+            )
+        }
         val canonicalBackupPath = "$indexRelativePath.backup"
-        readStringAt(backupPath)
-            .onSuccess { backupJson ->
-                writeStringAt(canonicalBackupPath, backupJson).onFailure { copyError ->
-                    Logger.w(
-                        "SavedThreadRepository",
-                        "Failed to promote delete backup to $canonicalBackupPath: ${copyError.message}"
-                    )
-                }
-            }
-            .onFailure { readError ->
-                Logger.w(
-                    "SavedThreadRepository",
-                    "Failed to read delete backup $backupPath for promotion: ${readError.message}"
-                )
-            }
+        writeStringAt(canonicalBackupPath, backupIndexJson).onFailure { copyError ->
+            Logger.w(
+                "SavedThreadRepository",
+                "Failed to promote delete backup to $canonicalBackupPath: ${copyError.message}"
+            )
+        }
         return
-    }
-    deletePath(backupPath).onFailure { error ->
-        Logger.w(
-            "SavedThreadRepository",
-            "Failed to delete temporary backup index $backupPath: ${error.message}"
-        )
     }
     cleanupStaleOperationBackups()
 }

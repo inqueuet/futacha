@@ -22,6 +22,7 @@ import com.valoser.futacha.wear.WearMainActivity
 object ReadAloudLiveUpdateNotifier {
     private const val CHANNEL_ID = "read_aloud_live_update"
     private const val NOTIFICATION_ID = 37_001
+    private const val MIN_TIMEOUT_MILLIS = 1_000L
 
     // canPostNotifications() performs the runtime permission check before this
     // call. Keep the suppression local because lint cannot follow that helper
@@ -33,7 +34,7 @@ object ReadAloudLiveUpdateNotifier {
             it.freshReadAloudStatus() != null
         }
         if (activeThread == null) {
-            NotificationManagerCompat.from(appContext).cancel(NOTIFICATION_ID)
+            cancel(appContext)
             return
         }
         if (!canPostNotifications(appContext)) {
@@ -47,6 +48,21 @@ object ReadAloudLiveUpdateNotifier {
         )
     }
 
+    fun cancel(context: Context) {
+        NotificationManagerCompat.from(context.applicationContext).cancel(NOTIFICATION_ID)
+    }
+
+    /**
+     * The ongoing notification is only refreshed by status updates from the
+     * phone. Without a timeout it stayed forever once they stopped (phone out
+     * of range, app killed); expire it when the status is no longer fresh.
+     */
+    internal fun readAloudNotificationTimeoutMillis(
+        status: WatchReadAloudStatus,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Long = (status.updatedAtMillis + WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS - nowMillis)
+        .coerceIn(MIN_TIMEOUT_MILLIS, WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS)
+
     private fun buildNotification(
         context: Context,
         thread: WatchThreadSummary
@@ -58,6 +74,11 @@ object ReadAloudLiveUpdateNotifier {
             .setContentIntent(buildContentIntent(context))
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
+            .apply {
+                thread.freshReadAloudStatus()?.let { status ->
+                    setTimeoutAfter(readAloudNotificationTimeoutMillis(status))
+                }
+            }
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setLocalOnly(true)

@@ -24,6 +24,42 @@ private val ALLOWED_SHARED_COOKIE_PARENT_DOMAINS = setOf(
     "yandex.com"
 )
 
+/**
+ * Max-Age expiries slide with every response; differences below this are not
+ * worth rewriting the cookie file for.
+ */
+internal const val PERSISTENT_COOKIE_EXPIRY_REWRITE_TOLERANCE_MILLIS = 60_000L
+
+/**
+ * Whether [received] only repeats [existing] (same value, scope, flags and, within
+ * [PERSISTENT_COOKIE_EXPIRY_REWRITE_TOLERANCE_MILLIS], expiry). Servers resend the
+ * same Set-Cookie on most responses; storing it again only changed createdAt and
+ * rewrote the cookie file and its backup each time.
+ */
+internal fun isRepeatedPersistentCookie(existing: StoredCookie, received: StoredCookie): Boolean {
+    if (existing.name != received.name ||
+        existing.value != received.value ||
+        existing.domain != received.domain ||
+        existing.path != received.path ||
+        existing.hostOnly != received.hostOnly ||
+        existing.secure != received.secure ||
+        existing.httpOnly != received.httpOnly ||
+        existing.extensions != received.extensions
+    ) {
+        return false
+    }
+    val existingExpiry = existing.expiresAtMillis
+    val receivedExpiry = received.expiresAtMillis
+    if (existingExpiry == null || receivedExpiry == null) return existingExpiry == receivedExpiry
+    val difference = if (receivedExpiry >= existingExpiry) {
+        receivedExpiry - existingExpiry
+    } else {
+        existingExpiry - receivedExpiry
+    }
+    // A negative result means the subtraction overflowed: treat as different.
+    return difference in 0L..PERSISTENT_COOKIE_EXPIRY_REWRITE_TOLERANCE_MILLIS
+}
+
 internal fun shouldDeletePersistentCookie(cookie: Cookie, now: Long): Boolean {
     val maxAgeSeconds = cookie.maxAge
     if (maxAgeSeconds == 0) return true

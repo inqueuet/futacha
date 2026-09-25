@@ -158,6 +158,16 @@ fun compatCatalogMatchedWords(
     item: CatalogItem,
     watchWords: List<String>,
     rules: List<CompatNgRule>
+): List<String> {
+    if (watchWords.isEmpty() && rules.none { it.kind == CompatNgKind.CATALOG_EXTRACT }) return emptyList()
+    val matches = compatCatalogMatchedWordsUnchecked(item, watchWords, rules)
+    return if (matches.isEmpty()) emptyList() else matches
+}
+
+private fun compatCatalogMatchedWordsUnchecked(
+    item: CatalogItem,
+    watchWords: List<String>,
+    rules: List<CompatNgRule>
 ): List<String> = buildList {
     val title = item.title.orEmpty().normalizeCompatCatalogValue()
     watchWords.map(String::trim).filter(String::isNotBlank).forEach { word ->

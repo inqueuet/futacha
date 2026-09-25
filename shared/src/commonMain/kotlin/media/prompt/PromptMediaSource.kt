@@ -21,8 +21,9 @@ class PromptMediaSource(
     private val budgetRetryAfterMillis: Long = 30_000L,
     private val nowMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
     // Last so callers can pass it as a trailing lambda.
-    private val readMetadata: suspend (OriginalMediaStore.Lease) -> GenerationMetadata = {
-        MediaGenerationMetadataReader().read(it.info.sizeBytes, it::readAt)
+    private val readMetadata: suspend (OriginalMediaStore.Lease) -> GenerationMetadata = { lease ->
+        // One file handle for the whole parse, not one per positional read.
+        lease.withReader { readAt -> MediaGenerationMetadataReader().read(lease.info.sizeBytes, readAt) }
     }
 ) : OriginalMediaSource by source, AutoCloseable {
     private data class Known(val request: OriginalMediaRequest, val identity: String)

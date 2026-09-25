@@ -41,10 +41,12 @@ internal actual suspend fun inspectDeviceVideo(path: String): VideoEditInfo = wi
     try {
         while (true) {
             currentCoroutineContext().ensureActive()
-            val sample = output.copyNextSampleBuffer() ?: break
-            try {
+            // Scan every sample of a clip up to 1GB: drain AVFoundation's
+            // autoreleased objects per sample, as VideoAnalysisFrames does.
+            val sample = autoreleasepool { output.copyNextSampleBuffer() } ?: break
+            try { autoreleasepool {
                 val count = CMSampleBufferGetNumSamples(sample)
-                if (count == 0L) continue // AVFoundation may emit marker-only buffers.
+                if (count == 0L) return@autoreleasepool // AVFoundation may emit marker-only buffers.
                 require(timestamps.size.toLong() + count <= VideoFrameIndex.MAX_FRAMES) { "この動画は長すぎるため編集できません" }
                 CMFormatDescriptionGetExtension(CMSampleBufferGetFormatDescription(sample), kCMFormatDescriptionExtension_TransferFunction)?.let {
                     hdr = hdr || CFStringCompare(it.reinterpret(), kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ, 0u) == kCFCompareEqualTo ||
@@ -63,7 +65,7 @@ internal actual suspend fun inspectDeviceVideo(path: String): VideoEditInfo = wi
                         }
                     }
                 }
-            } finally { CFRelease(sample) }
+            } } finally { CFRelease(sample) }
         }
         check(reader.status == AVAssetReaderStatusCompleted) { reader.error?.localizedDescription ?: "動画の読み取りが完了しませんでした" }
         val rangeEnd = track.timeRange.useContents { CMTimeAdd(start.readValue(), duration.readValue()) }

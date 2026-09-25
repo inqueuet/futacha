@@ -91,6 +91,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -114,9 +119,20 @@ class AndroidCompatibilityStore(
     private val mutex = Mutex()
     private val lifecycleJob = SupervisorJob()
     private val lifecycleScope = CoroutineScope(lifecycleJob + Dispatchers.IO)
+    // The expiry job is scheduled from IO callers and UI callers alike. Each
+    // schedule carries the sequence number of the DB observation it is based
+    // on (taken under [mutex]); a stale observation that finishes later must
+    // not cancel the job scheduled for a newer closed batch.
+    private val closedBatchExpiryLock = Any()
     private var closedBatchExpiryJob: Job? = null
+    private var appliedClosedBatchObservation = 0L
+    /** Written only while holding [mutex]. */
+    private var closedBatchObservationSequence = 0L
     @Volatile
     private var closed = false
+    private val initializationMutex = Mutex()
+    @Volatile
+    private var initialized = false
     private val json = Json { ignoreUnknownKeys = true }
     private val anchorSerializer = ScrollAnchor.serializer()
     private val closedBatchSerializer = ClosedTabBatch.serializer()
@@ -130,18 +146,66 @@ class AndroidCompatibilityStore(
     private val preferencesState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val ngRulesState = MutableStateFlow<List<CompatNgRule>>(emptyList())
 
-    override val boards: Flow<List<CompatBoard>> = boardsState
-    override val tabs: Flow<List<CompatTab>> = tabsState
-    override val history: Flow<List<CompatHistoryEntry>> = historyState
-    override val workspace: Flow<CompatWorkspaceRecord> = workspaceState
-    override val preferences: Flow<Map<String, String>> = preferencesState
-    override val ngRules: Flow<List<CompatNgRule>> = ngRulesState
+    private val loadedState = MutableStateFlow(false)
+
+    /**
+     * The states above start as empty placeholders and receive the stored
+     * data from [initialize]'s full refresh. Until then the public flows
+     * emit nothing: an empty list or map read too early was taken as the
+     * user's data (theme flicker, shared NG rules missing for a frame, a
+     * default save location written over the stored one, the background
+     * scheduler cancelling its work).
+     */
+    override val isLoaded: StateFlow<Boolean> = loadedState.asStateFlow()
+    override val boards: Flow<List<CompatBoard>> = boardsState.afterLoaded()
+    override val tabs: Flow<List<CompatTab>> = tabsState.afterLoaded()
+    override val history: Flow<List<CompatHistoryEntry>> = historyState.afterLoaded()
+    override val workspace: Flow<CompatWorkspaceRecord> = workspaceState.afterLoaded()
+    override val preferences: Flow<Map<String, String>> = preferencesState.afterLoaded()
+    override val ngRules: Flow<List<CompatNgRule>> = ngRulesState.afterLoaded()
+
+    private fun <T> StateFlow<T>.afterLoaded(): Flow<T> {
+        val source = this
+        return flow {
+            loadedState.first { it }
+            emitAll(source)
+        }
+    }
 
     suspend fun initialize() {
+        try {
+            initializeOnce()
+        } catch (error: Throwable) {
+            if (error !is CancellationException) publishStatesAfterFailedInitialization()
+            throw error
+        }
+    }
+
+    /**
+     * A failed repair/migration must not leave every observer waiting for
+     * [isLoaded] forever. Publish whatever can still be read; if the database
+     * cannot be read at all, observers get the empty placeholders as before.
+     */
+    private suspend fun publishStatesAfterFailedInitialization() {
+        if (loadedState.value) return
+        try {
+            read { db -> refreshStates(db, ALL_COMPAT_OBSERVABLE_STATES) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Logger.e("AndroidCompatibilityStore", "Compatibility state could not be read after a failed initialization", failure)
+        }
+        loadedState.value = true
+    }
+
+    private suspend fun initializeOnce() {
+        var observation = 0L
         val cleanup = mutate(refreshOnly = true) { db ->
             // Before anything reads preferences: the old per-image rows could
             // push real settings past the 4096-row read limit.
             db.migrateImagePhashPreferences()
+            db.trimTransientPreferences()
+            db.trimHistoryTombstones()
             db.repairCanonicalBoards()
             db.repairThreadSnapshotCache()
             db.enforceThreadSnapshotQuota()
@@ -151,6 +215,7 @@ class AndroidCompatibilityStore(
             }
             val pending = db.readClosedBatches { it.expiresAtEpochMillis > currentTimeMillis() }
                 .maxByOrNull { it.expiresAtEpochMillis }
+            observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 value = pending,
                 candidates = expired.attachmentLocators(),
@@ -158,7 +223,22 @@ class AndroidCompatibilityStore(
             )
         }
         cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(cleanup.value)
+        scheduleClosedBatchExpiry(cleanup.value, observation)
+        initialized = true
+    }
+
+    /**
+     * Runs [initialize] once per store instance and lets every other caller
+     * (the Application's startup job, a cold-start WorkManager run) wait for
+     * it.  Reading [preferences] before this completes observes the empty
+     * placeholder state instead of the stored settings.  A failed attempt is
+     * retried by the next caller.
+     */
+    suspend fun ensureInitialized() {
+        if (initialized) return
+        initializationMutex.withLock {
+            if (!initialized) initialize()
+        }
     }
 
     /** Test-only lifecycle shutdown. Production code never closes this store synchronously. */
@@ -168,7 +248,7 @@ class AndroidCompatibilityStore(
         // queued behind this point fail as coroutine cancellation instead of
         // reopening the helper while teardown is in progress.
         closed = true
-        closedBatchExpiryJob?.cancel()
+        synchronized(closedBatchExpiryLock) { closedBatchExpiryJob?.cancel() }
         lifecycleScope.cancel()
         // An expiry job may already be inside mutate(). Waiting only for the
         // mutex is not sufficient when cancellation is propagating: a canceled
@@ -381,6 +461,7 @@ class AndroidCompatibilityStore(
         nowEpochMillis: Long,
         finalScrollAnchors: Map<String, ScrollAnchor>
     ): ClosedTabBatch? {
+        var observation = 0L
         val cleanup = mutate(
             refresh = setOf(
                 CompatObservableState.TABS,
@@ -406,6 +487,7 @@ class AndroidCompatibilityStore(
             if (closed.isEmpty()) {
                 return@mutate AttachmentCleanupMutation<ClosedTabBatch?>(null)
             }
+            observation = nextClosedBatchObservation()
             val supersededAttachments = db.readClosedBatches().attachmentLocators()
             val closedDraftAttachments = closed.mapNotNullTo(mutableSetOf()) { db.readDraft(it.tab.key)?.attachmentUri }
             closed.forEach { db.deleteTabAndRetainSnapshot(it.tab.key) }
@@ -425,11 +507,12 @@ class AndroidCompatibilityStore(
             AttachmentCleanupMutation(batch, supersededAttachments + closedDraftAttachments, db.readRetainedAttachmentLocators())
         }
         cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(cleanup.value)
+        if (observation != 0L) scheduleClosedBatchExpiry(cleanup.value, observation)
         return cleanup.value
     }
 
     override suspend fun restoreClosedTabs(batch: ClosedTabBatch) {
+        var observation = 0L
         val cleanup = mutate(
             refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE)
         ) { db ->
@@ -446,6 +529,7 @@ class AndroidCompatibilityStore(
             val selected = durableBatch.selectedTabKey?.takeIf { db.readTab(it) != null } ?: current.activeTabKey
             db.updateWorkspace(current.copy(activeTabKey = selected, generation = current.generation + 1))
             db.delete("compat_closed_batch", "batch_id=?", arrayOf(durableBatch.id))
+            observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 Unit,
                 durableBatch.tabs.mapNotNullTo(mutableSetOf()) { it.draft?.attachmentUri },
@@ -453,11 +537,11 @@ class AndroidCompatibilityStore(
             )
         }
         cleanupAttachments(cleanup)
-        closedBatchExpiryJob?.cancel()
-        closedBatchExpiryJob = null
+        scheduleClosedBatchExpiry(null, observation)
     }
 
     override suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch? {
+        var observation = 0L
         val cleanup = mutate(
             refreshOnly = true,
             refresh = NO_COMPAT_OBSERVABLE_STATES
@@ -468,6 +552,7 @@ class AndroidCompatibilityStore(
             }
             val pending = db.readClosedBatches { it.expiresAtEpochMillis > nowEpochMillis }
                 .maxByOrNull { it.expiresAtEpochMillis }
+            observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 pending,
                 expired.attachmentLocators(),
@@ -475,7 +560,7 @@ class AndroidCompatibilityStore(
             )
         }
         cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(cleanup.value)
+        scheduleClosedBatchExpiry(cleanup.value, observation)
         return cleanup.value
     }
 
@@ -513,7 +598,7 @@ class AndroidCompatibilityStore(
     ) { db ->
         db.putHistoryTombstone(canonicalUrl)
         db.delete("compat_history", "canonical_url=?", arrayOf(canonicalUrl))
-        Unit
+        db.trimHistoryTombstones()
     }
 
     override suspend fun clearHistory() = mutate(
@@ -523,7 +608,7 @@ class AndroidCompatibilityStore(
             .distinct()
             .forEach { canonicalUrl -> db.putHistoryTombstone(canonicalUrl) }
         db.delete("compat_history", null, null)
-        Unit
+        db.trimHistoryTombstones()
     }
 
     override suspend fun saveDraft(draft: CompatReplyDraft) = mutate(
@@ -557,20 +642,73 @@ class AndroidCompatibilityStore(
         saved
     }
 
-    override suspend fun loadThreadSnapshot(tabKey: String): CompatThreadSnapshot? = mutate(
-        refresh = NO_COMPAT_OBSERVABLE_STATES
-    ) { db ->
-        db.readThreadSnapshot(tabKey, touch = true)
-    }
+    // Loading a body is a read; every thread open used to hold a write
+    // transaction for the whole decode. The access time used by the cache
+    // quota only orders bodies, so it is written afterwards and only when
+    // another body was accessed later (reopening or reloading the most
+    // recent thread writes nothing).
+    override suspend fun loadThreadSnapshot(tabKey: String): CompatThreadSnapshot? =
+        finishThreadSnapshotReads(read { db -> listOf(db.readThreadSnapshot(tabKey)) })
 
     override suspend fun loadThreadSnapshotByCanonicalUrl(
         canonicalUrl: String
-    ): CompatThreadSnapshot? = mutate(refresh = NO_COMPAT_OBSERVABLE_STATES) { db ->
-        val parsed = canonicalizeThreadUrl(canonicalUrl) ?: return@mutate null
+    ): CompatThreadSnapshot? {
+        val parsed = canonicalizeThreadUrl(canonicalUrl) ?: return null
         val tabKey = compatTabKey(parsed.canonicalUrl)
-        db.readThreadSnapshot(tabKey, touch = true)
-            ?: db.readTabs().firstOrNull { it.canonicalUrl == parsed.canonicalUrl }
-                ?.let { tab -> db.readThreadSnapshot(tab.key, touch = true) }
+        val reads = read { db ->
+            val direct = db.readThreadSnapshot(tabKey)
+            if (direct.snapshot != null) return@read listOf(direct)
+            val byTab = db.readTabs().firstOrNull { it.canonicalUrl == parsed.canonicalUrl }
+                ?.let { tab -> db.readThreadSnapshot(tab.key) }
+            listOfNotNull(direct, byTab)
+        }
+        return finishThreadSnapshotReads(reads)
+    }
+
+    private suspend fun finishThreadSnapshotReads(reads: List<ThreadSnapshotRead>): CompatThreadSnapshot? {
+        val now = currentTimeMillis()
+        val pending = reads.filter { it.needsWrite(now) }
+        if (pending.isNotEmpty()) {
+            try {
+                mutate(refresh = NO_COMPAT_OBSERVABLE_STATES) { db ->
+                    pending.forEach { db.applyThreadSnapshotRead(it, now) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // Bookkeeping only: the body was read successfully.
+                Logger.e("AndroidCompatibilityStore", "Failed to record a compatibility thread cache access", failure)
+            }
+        }
+        return reads.firstNotNullOfOrNull { it.snapshot }
+    }
+
+    private fun ThreadSnapshotRead.needsWrite(now: Long): Boolean = when {
+        corruptPositions.isNotEmpty() -> true
+        snapshot == null -> accessedAt != null
+        accessedAt == null -> true
+        else -> !isMostRecentlyAccessed || now < accessedAt
+    }
+
+    private fun SQLiteDatabase.applyThreadSnapshotRead(read: ThreadSnapshotRead, now: Long) {
+        read.corruptPositions.forEach { position ->
+            delete(
+                "compat_post",
+                "tab_key=? AND revision=? AND position=?",
+                arrayOf(read.tabKey, read.revision.toString(), position.toString())
+            )
+        }
+        // The body may have been saved or evicted since the read.
+        val exists = DatabaseUtils.longForQuery(
+            this,
+            "SELECT EXISTS(SELECT 1 FROM compat_thread_snapshot WHERE tab_key=?)",
+            arrayOf(read.tabKey)
+        ) != 0L
+        if (!exists) {
+            removeThreadSnapshotAccess(read.tabKey)
+        } else if (read.snapshot != null) {
+            putThreadSnapshotAccess(read.tabKey, now)
+        }
     }
 
     override suspend fun saveSharedThreadSnapshot(
@@ -592,7 +730,14 @@ class AndroidCompatibilityStore(
             rejectStale = true,
             allowMissingTab = true
         )
-        if (saved) db.enforceThreadSnapshotQuota()
+        if (saved) {
+            db.enforceThreadSnapshotQuota()
+            // An already open compatibility tab gets its reply count and
+            // snapshot revision updated (and the quota may clear others'
+            // revisions). Scroll-anchor writes no longer re-read every tab,
+            // so publish the change here; StateFlow drops an equal list.
+            tabsState.value = db.readTabs()
+        }
         saved
     }
 
@@ -615,11 +760,15 @@ class AndroidCompatibilityStore(
         removedBytes
     }
 
+    // Runs on every scroll stop. Re-reading every tab and the whole history
+    // from SQLite and re-emitting fresh copies replaced the compatibility
+    // UI's top-level state and recomposed everything. Patch only the affected
+    // tab and history entry in memory; every other element keeps its identity.
     override suspend fun updateScrollAnchor(tabKey: String, anchor: ScrollAnchor) = mutate(
-        refresh = setOf(CompatObservableState.TABS, CompatObservableState.HISTORY)
+        refresh = NO_COMPAT_OBSERVABLE_STATES
     ) { db ->
         val encodedAnchor = json.encodeToString(anchorSerializer, anchor)
-        db.update(
+        val updatedTabs = db.update(
             "compat_tab",
             ContentValues().apply { put("scroll_anchor_json", encodedAnchor) },
             "tab_key=?",
@@ -638,13 +787,20 @@ class AndroidCompatibilityStore(
             null
         ).use { cursor ->
             if (cursor.moveToFirst()) {
-                db.update(
+                val canonicalUrl = cursor.getString(0)
+                val updatedHistory = db.update(
                     "compat_history",
                     ContentValues().apply { put("scroll_anchor_json", encodedAnchor) },
                     "canonical_url=?",
-                    arrayOf(cursor.getString(0))
+                    arrayOf(canonicalUrl)
                 )
+                if (updatedHistory > 0) {
+                    historyState.value = historyState.value.withCompatHistoryScrollAnchor(canonicalUrl, anchor)
+                }
             }
+        }
+        if (updatedTabs > 0) {
+            tabsState.value = tabsState.value.withCompatTabScrollAnchor(tabKey, anchor)
         }
         Unit
     }
@@ -1003,6 +1159,7 @@ class AndroidCompatibilityStore(
             SQLiteDatabase.CONFLICT_REPLACE
         )
         if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) db.enforceThreadSnapshotQuota()
+        if (isTransientPreferenceKey(key)) db.trimTransientPreferences()
         Unit
     }
 
@@ -1030,21 +1187,32 @@ class AndroidCompatibilityStore(
                 }
             }
             if (touchesCacheSize) db.enforceThreadSnapshotQuota()
+            if (values.keys.any(::isTransientPreferenceKey)) db.trimTransientPreferences()
         }
     }
 
     override suspend fun loadImagePhashes(keys: Collection<String>): Map<String, String> {
         if (keys.isEmpty()) return emptyMap()
-        // A write because hits are re-inserted to mark them recently used.
-        return mutate(refresh = emptySet()) { db ->
-            buildMap {
-                keys.distinct().forEach { key ->
-                    val value = db.metadataValue(IMAGE_PHASH_METADATA_PREFIX + key) ?: return@forEach
-                    db.putImagePhash(key, value)
-                    put(key, value)
-                }
+        var newestRowId = 0L
+        val hits = read { db ->
+            newestRowId = DatabaseUtils.longForQuery(db, "SELECT COALESCE(MAX(rowid),0) FROM compat_metadata", null)
+            db.readImagePhashRows(keys.distinct())
+        }
+        // Hits are re-inserted to mark them recently used (rowid order is the
+        // LRU order). Re-inserting every hit rewrote each row under
+        // secure_delete on every catalog load; only rows old enough to be near
+        // the trimmed end are refreshed, in one statement per chunk.
+        val stale = hits.filter { it.rowId <= newestRowId - IMAGE_PHASH_TOUCH_WINDOW_ROWS }.map { it.key }
+        if (stale.isNotEmpty()) {
+            try {
+                mutate(refresh = emptySet()) { db -> db.touchImagePhashes(stale) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Logger.e("AndroidCompatibilityStore", "Failed to refresh cached image hashes", failure)
             }
         }
+        return hits.associate { it.key to it.value }
     }
 
     override suspend fun saveImagePhashes(entries: Map<String, String>) {
@@ -1080,7 +1248,7 @@ class AndroidCompatibilityStore(
                 tabs = tabs.filter { it.boardKey in boardKeys },
                 history = db.readHistory().filter { it.boardKey in boardKeys },
                 catalogPreferences = catalogPreferences,
-                preferences = db.readPreferences(),
+                preferences = db.readPreferences(totalLimit = MAX_COMPAT_PREFERENCES),
                 ngRules = db.readNgRules().filter { rule ->
                     com.valoser.futacha.shared.compat.isCompatNgScopeValid(
                         rule.kind,
@@ -1652,6 +1820,7 @@ class AndroidCompatibilityStore(
         if (CompatObservableState.WORKSPACE in refresh) workspaceState.value = db.readWorkspace()
         if (CompatObservableState.PREFERENCES in refresh) preferencesState.value = db.readPreferences()
         if (CompatObservableState.NG_RULES in refresh) ngRulesState.value = db.readNgRules()
+        if (refresh.containsAll(ALL_COMPAT_OBSERVABLE_STATES)) loadedState.value = true
     }
 
     private suspend fun <T> cleanupAttachments(mutation: AttachmentCleanupMutation<T>) {
@@ -1769,74 +1938,93 @@ class AndroidCompatibilityStore(
         )
     }
 
+    /** Keeps the newest [MAX_HISTORY_TOMBSTONES] deletions, like the iOS and desktop stores. */
+    private fun SQLiteDatabase.trimHistoryTombstones() {
+        execSQL(
+            "DELETE FROM compat_history_tombstone WHERE canonical_url IN (" +
+                "SELECT canonical_url FROM compat_history_tombstone " +
+                "ORDER BY deleted_at DESC, canonical_url DESC LIMIT -1 OFFSET ?)",
+            arrayOf<Any>(MAX_HISTORY_TOMBSTONES)
+        )
+    }
+
     private fun SQLiteDatabase.deleteHistoryTombstone(canonicalUrl: String) {
         delete("compat_history_tombstone", "canonical_url=?", arrayOf(canonicalUrl))
     }
 
-    private fun SQLiteDatabase.readThreadSnapshot(
-        tabKey: String,
-        touch: Boolean
-    ): CompatThreadSnapshot? = query(
-        "compat_thread_snapshot",
-        arrayOf("revision", "fetched_at", "board_title", "expires_label", "deleted_notice"),
-        "tab_key=?",
-        arrayOf(tabKey),
-        null,
-        null,
-        null,
-        "1"
-    ).use { cursor ->
-        if (!cursor.moveToFirst()) {
-            removeThreadSnapshotAccess(tabKey)
-            return@use null
-        }
-        val revision = cursor.getLong(0)
-        val corruptPositions = mutableListOf<Int>()
-        val posts = query(
-            "compat_post",
-            arrayOf("position", "post_json"),
-            "tab_key=? AND revision=? AND length(post_json)<=?",
-            arrayOf(tabKey, revision.toString(), MAX_COMPAT_POST_JSON_CHARS.toString()),
+    /** Reads without writing; [finishThreadSnapshotReads] applies the bookkeeping. */
+    private fun SQLiteDatabase.readThreadSnapshot(tabKey: String): ThreadSnapshotRead {
+        val accessedAt = threadSnapshotAccess(tabKey)
+        return query(
+            "compat_thread_snapshot",
+            arrayOf("revision", "fetched_at", "board_title", "expires_label", "deleted_notice"),
+            "tab_key=?",
+            arrayOf(tabKey),
             null,
             null,
-            "position ASC",
-            MAX_COMPAT_THREAD_SNAPSHOT_POSTS.toString()
-        ).use { postCursor ->
-            buildList {
-                while (postCursor.moveToNext()) {
-                    val position = postCursor.getInt(0)
-                    runCatching {
-                        json.decodeFromString(CompatPostSnapshot.serializer(), postCursor.getString(1))
-                    }.onSuccess { decoded ->
-                        add(if (decoded.position == position) decoded else decoded.copy(position = position))
-                    }.onFailure {
-                        corruptPositions += position
-                        Logger.w(
-                            "AndroidCompatibilityStore",
-                            "Skipping one corrupt cached post for a compatibility thread"
-                        )
+            null,
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                return@use ThreadSnapshotRead(tabKey, snapshot = null, accessedAt = accessedAt)
+            }
+            val revision = cursor.getLong(0)
+            val corruptPositions = mutableListOf<Int>()
+            val posts = query(
+                "compat_post",
+                arrayOf("position", "post_json"),
+                "tab_key=? AND revision=? AND length(post_json)<=?",
+                arrayOf(tabKey, revision.toString(), MAX_COMPAT_POST_JSON_CHARS.toString()),
+                null,
+                null,
+                "position ASC",
+                MAX_COMPAT_THREAD_SNAPSHOT_POSTS.toString()
+            ).use { postCursor ->
+                buildList {
+                    while (postCursor.moveToNext()) {
+                        val position = postCursor.getInt(0)
+                        runCatching {
+                            json.decodeFromString(CompatPostSnapshot.serializer(), postCursor.getString(1))
+                        }.onSuccess { decoded ->
+                            add(if (decoded.position == position) decoded else decoded.copy(position = position))
+                        }.onFailure {
+                            corruptPositions += position
+                            Logger.w(
+                                "AndroidCompatibilityStore",
+                                "Skipping one corrupt cached post for a compatibility thread"
+                            )
+                        }
                     }
                 }
             }
-        }
-        corruptPositions.forEach { position ->
-            delete(
-                "compat_post",
-                "tab_key=? AND revision=? AND position=?",
-                arrayOf(tabKey, revision.toString(), position.toString())
+            ThreadSnapshotRead(
+                tabKey = tabKey,
+                snapshot = CompatThreadSnapshot(
+                    tabKey = tabKey,
+                    revision = revision,
+                    fetchedAtEpochMillis = cursor.getLong(1),
+                    boardTitle = cursor.getNullableString(2),
+                    expiresAtLabel = cursor.getNullableString(3),
+                    deletedNotice = cursor.getNullableString(4),
+                    posts = posts
+                ),
+                accessedAt = accessedAt,
+                isMostRecentlyAccessed = accessedAt != null && !hasThreadSnapshotAccessedSince(tabKey, accessedAt),
+                revision = revision,
+                corruptPositions = corruptPositions
             )
         }
-        if (touch) putThreadSnapshotAccess(tabKey, currentTimeMillis())
-        CompatThreadSnapshot(
-            tabKey = tabKey,
-            revision = revision,
-            fetchedAtEpochMillis = cursor.getLong(1),
-            boardTitle = cursor.getNullableString(2),
-            expiresAtLabel = cursor.getNullableString(3),
-            deletedNotice = cursor.getNullableString(4),
-            posts = posts
-        )
     }
+
+    /** Same effective access time as [readThreadSnapshotCacheRows]. */
+    private fun SQLiteDatabase.hasThreadSnapshotAccessedSince(tabKey: String, accessedAt: Long): Boolean =
+        DatabaseUtils.longForQuery(
+            this,
+            """SELECT EXISTS(SELECT 1 FROM compat_thread_snapshot s
+                LEFT JOIN compat_metadata m ON m.key = ? || s.tab_key
+                WHERE s.tab_key <> ? AND COALESCE(CAST(m.value AS INTEGER), s.fetched_at) >= CAST(? AS INTEGER))""".trimIndent(),
+            arrayOf(THREAD_SNAPSHOT_ACCESS_PREFIX, tabKey, accessedAt.toString())
+        ) != 0L
 
     private fun SQLiteDatabase.enforceThreadSnapshotQuota() {
         val quota = threadSnapshotQuotaOverrideBytes?.invoke()
@@ -1965,11 +2153,23 @@ class AndroidCompatibilityStore(
         "1"
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 
-    private fun scheduleClosedBatchExpiry(batch: ClosedTabBatch?) {
-        closedBatchExpiryJob?.cancel()
-        closedBatchExpiryJob = null
-        if (batch == null) return
-        closedBatchExpiryJob = lifecycleScope.launch {
+    /** Must be called inside a [mutate] block so the order matches the DB. */
+    private fun nextClosedBatchObservation(): Long = ++closedBatchObservationSequence
+
+    private fun scheduleClosedBatchExpiry(batch: ClosedTabBatch?, observation: Long) =
+        synchronized(closedBatchExpiryLock) {
+            if (!shouldApplyClosedBatchObservation(observation, appliedClosedBatchObservation)) {
+                return@synchronized
+            }
+            appliedClosedBatchObservation = observation
+            closedBatchExpiryJob?.cancel()
+            closedBatchExpiryJob = null
+            if (batch == null) return@synchronized
+            closedBatchExpiryJob = launchClosedBatchExpiry(batch)
+        }
+
+    private fun launchClosedBatchExpiry(batch: ClosedTabBatch): Job =
+        lifecycleScope.launch {
             while (true) {
                 val nowMillis = System.currentTimeMillis()
                 val remaining = when {
@@ -1996,7 +2196,6 @@ class AndroidCompatibilityStore(
                 )
             }
         }
-    }
 
     private fun SQLiteDatabase.readClosedBatches(
         predicate: (ClosedTabBatch) -> Boolean = { true }
@@ -2201,19 +2400,66 @@ class AndroidCompatibilityStore(
         }
     }
 
-    private fun SQLiteDatabase.readPreferences(): Map<String, String> = query(
+    /**
+     * Settings are read before the per-thread/per-board markers
+     * ([TRANSIENT_PREFERENCE_SQL]). Sharing one `key ASC` limit let
+     * accumulated markers push real settings out of the result silently.
+     * [totalLimit] keeps a backup within its 4096-entry import limit.
+     */
+    private fun SQLiteDatabase.readPreferences(
+        totalLimit: Int = MAX_COMPAT_PREFERENCES + MAX_COMPAT_TRANSIENT_PREFERENCES
+    ): Map<String, String> {
+        val settings = readPreferenceRows(
+            filter = "NOT $TRANSIENT_PREFERENCE_SQL",
+            orderBy = "key ASC",
+            limit = minOf(MAX_COMPAT_PREFERENCES, totalLimit)
+        )
+        if (settings.size >= MAX_COMPAT_PREFERENCES) {
+            Logger.w("AndroidCompatibilityStore", "More than $MAX_COMPAT_PREFERENCES compatibility settings; the rest are not read")
+        }
+        val transientLimit = minOf(MAX_COMPAT_TRANSIENT_PREFERENCES, totalLimit - settings.size)
+        if (transientLimit <= 0) return settings
+        // Newest first: a full budget leaves out the oldest markers.
+        return settings + readPreferenceRows(
+            filter = TRANSIENT_PREFERENCE_SQL,
+            orderBy = "rowid DESC",
+            limit = transientLimit
+        )
+    }
+
+    private fun SQLiteDatabase.readPreferenceRows(filter: String, orderBy: String, limit: Int): Map<String, String> = query(
         "compat_preference",
         arrayOf("key", "value_json"),
-        "key GLOB 'compat.*' AND length(key) BETWEEN 1 AND ? AND length(value_json) <= ?",
+        "key GLOB 'compat.*' AND length(key) BETWEEN 1 AND ? AND length(value_json) <= ? AND $filter",
         arrayOf(MAX_COMPAT_PREFERENCE_KEY_CHARS.toString(), MAX_COMPAT_PREFERENCE_VALUE_CHARS.toString()),
         null,
         null,
-        "key ASC",
-        MAX_COMPAT_PREFERENCES.toString()
+        orderBy,
+        limit.toString()
     ).use { cursor ->
         buildMap {
             while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1))
         }
+    }
+
+    /**
+     * Own-post markers and last catalog fetch counts accumulate per thread and
+     * board. REPLACE re-inserts a written key, so rowid order is least
+     * recently written first; drop the oldest markers beyond the cap.
+     */
+    private fun SQLiteDatabase.trimTransientPreferences() {
+        val count = rawQuery(
+            "SELECT COUNT(*) FROM compat_preference WHERE $TRANSIENT_PREFERENCE_SQL",
+            null
+        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        if (count <= MAX_COMPAT_TRANSIENT_PREFERENCES) return
+        val removed = count - TRANSIENT_PREFERENCE_TRIM_TO
+        execSQL(
+            "DELETE FROM compat_preference WHERE rowid IN (" +
+                "SELECT rowid FROM compat_preference WHERE $TRANSIENT_PREFERENCE_SQL ORDER BY rowid ASC LIMIT ?)",
+            arrayOf<Any>(removed)
+        )
+        Logger.i("AndroidCompatibilityStore", "Trimmed $removed old own-post/catalog-count preference(s)")
     }
 
     private fun SQLiteDatabase.readNgRules(): List<CompatNgRule> = query(
@@ -2512,6 +2758,36 @@ class AndroidCompatibilityStore(
         )
     }
 
+    private fun SQLiteDatabase.readImagePhashRows(keys: List<String>): List<ImagePhashRow> = buildList {
+        keys.chunked(SQLITE_BIND_CHUNK).forEach { chunk ->
+            rawQuery(
+                "SELECT key, value, rowid FROM compat_metadata WHERE key IN (${chunk.joinToString(",") { "?" }})",
+                chunk.map { IMAGE_PHASH_METADATA_PREFIX + it }.toTypedArray()
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    add(
+                        ImagePhashRow(
+                            key = cursor.getString(0).removePrefix(IMAGE_PHASH_METADATA_PREFIX),
+                            value = cursor.getString(1),
+                            rowId = cursor.getLong(2)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** Re-inserts the current value so the row moves to the recently used end. */
+    private fun SQLiteDatabase.touchImagePhashes(keys: List<String>) {
+        keys.chunked(SQLITE_BIND_CHUNK).forEach { chunk ->
+            execSQL(
+                "INSERT OR REPLACE INTO compat_metadata(key, value) " +
+                    "SELECT key, value FROM compat_metadata WHERE key IN (${chunk.joinToString(",") { "?" }})",
+                chunk.map<String, Any> { IMAGE_PHASH_METADATA_PREFIX + it }.toTypedArray()
+            )
+        }
+    }
+
     private fun SQLiteDatabase.trimImagePhashes() {
         val count = rawQuery(
             "SELECT COUNT(*) FROM compat_metadata WHERE key GLOB ?",
@@ -2569,8 +2845,13 @@ class AndroidCompatibilityStore(
         const val TAB_LIMIT_AFTER_TRIM = 90
         const val HISTORY_LIMIT_TRIGGER = 200
         const val HISTORY_LIMIT_AFTER_TRIM = 190
+        const val MAX_HISTORY_TOMBSTONES = 1_000
         const val MAX_COMPAT_BOARDS = 100
         const val MAX_COMPAT_PREFERENCES = 4_096
+        const val MAX_COMPAT_TRANSIENT_PREFERENCES = 2_048
+        const val TRANSIENT_PREFERENCE_TRIM_TO = 1_536L
+        const val TRANSIENT_PREFERENCE_SQL =
+            "(key GLOB 'compat.ownpost.*' OR key GLOB 'compat.catalog.lastFetchThreadCount.*')"
         const val MAX_COMPAT_TAB_READ_ROWS = 1_000
         const val MAX_COMPAT_CATALOG_SNAPSHOT_ITEMS = 3_000
         const val MAX_COMPAT_CATALOG_SNAPSHOT_GENERATIONS = 6
@@ -2585,6 +2866,9 @@ class AndroidCompatibilityStore(
         const val IMAGE_PHASH_METADATA_PREFIX = "image_phash:"
         const val IMAGE_PHASH_CACHE_MAX_ENTRIES = 8_192L
         const val IMAGE_PHASH_CACHE_TRIM_TO = 6_144L
+        /** Hits within this many of the newest rowids survive the next trims untouched. */
+        const val IMAGE_PHASH_TOUCH_WINDOW_ROWS = 2_048L
+        const val SQLITE_BIND_CHUNK = 900
         val TAB_COLUMNS = arrayOf(
             "tab_key", "canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url",
             "reply_count", "checked_reply_count", "is_dead", "is_isolated", "is_exploded", "is_old", "favorite", "inserted_at",
@@ -2597,6 +2881,17 @@ private data class AttachmentCleanupMutation<T>(
     val value: T,
     val candidates: Set<String> = emptySet(),
     val retained: Set<String> = emptySet()
+)
+
+private class ImagePhashRow(val key: String, val value: String, val rowId: Long)
+
+private class ThreadSnapshotRead(
+    val tabKey: String,
+    val snapshot: CompatThreadSnapshot?,
+    val accessedAt: Long?,
+    val isMostRecentlyAccessed: Boolean = false,
+    val revision: Long = 0L,
+    val corruptPositions: List<Int> = emptyList()
 )
 
 private data class ThreadSnapshotCacheRow(

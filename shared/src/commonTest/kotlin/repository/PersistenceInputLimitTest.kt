@@ -50,11 +50,12 @@ class PersistenceInputLimitTest {
         runBlocking {
             val fileSystem = InMemoryFileSystem()
             val baseDirectory = "saved_threads_limit"
+            val repository = SavedThreadRepository(fileSystem, baseDirectory = baseDirectory)
+            repository.indexByteLimit = 4L * 1024L
             fileSystem.writeString(
                 "$baseDirectory/index.json",
-                "x".repeat(4 * 1024 * 1024 + 1)
+                "x".repeat(4 * 1024 + 1)
             ).getOrThrow()
-            val repository = SavedThreadRepository(fileSystem, baseDirectory = baseDirectory)
 
             assertFailsWith<IllegalStateException> {
                 repository.loadIndex()

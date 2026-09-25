@@ -26,7 +26,9 @@ internal data class ThreadScreenReplySubmitDependencies(
     val refreshThread: () -> Unit,
     val snackbarHostState: SnackbarHostState,
     val onOpenCookieManager: (() -> Unit)?,
-    val showMessage: suspend (String) -> Unit
+    val showMessage: suspend (String) -> Unit,
+    /** True while the post request runs; the screen holds navigation meanwhile. */
+    val onSendingChanged: (Boolean) -> Unit = {}
 )
 
 internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependencies) {
@@ -62,7 +64,7 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
         if (!checkPostingNoticeIfNeeded(deps.stateStore)) return@launch
         deps.replyDialogBinding.setState(dismissedState)
         submitOutcome.normalizedPassword?.let { deps.updateLastUsedDeleteKey(it) }
-        deps.actionBindings.launch(
+        val sendJob = deps.actionBindings.launch(
             successMessage = "返信を送信しました",
             failurePrefix = "返信の送信に失敗しました",
             onFailure = { error ->
@@ -93,6 +95,12 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
                 config = replyActionConfig,
                 callbacks = deps.threadReplyActionCallbacks
             )
+        } ?: return@launch
+        deps.onSendingChanged(true)
+        try {
+            sendJob.join()
+        } finally {
+            deps.onSendingChanged(false)
         }
     }
 }

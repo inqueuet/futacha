@@ -16,16 +16,19 @@ import javax.swing.JOptionPane
 /** OS services used by the shared desktop host. Windows never loads the AppKit bridge. */
 object DesktopOsIntegration {
     private var tray: TrayIcon? = null // confined to the AWT event thread
-    private var notificationUrl: String? = null
+    private val balloonLink = DesktopTrayBalloonLink() // confined to the AWT event thread
     private val links = ConcurrentLinkedQueue<String>()
 
+    /** Created by the first notification only, so the icon never appears with notifications off. */
     private fun ensureTray(): TrayIcon {
         check(SystemTray.isSupported()) { "Windowsの通知領域を利用できません" }
         return tray ?: TrayIcon(ImageIO.read(desktopResource("icons/Current.png")), "ふたちゃ").also { icon ->
             icon.isImageAutoSize = true
+            // AWT reports a balloon click and an icon double-click as the same action.
             icon.addActionListener {
-                notificationUrl?.let(links::add)
+                balloonLink.consume(System.currentTimeMillis())?.let(links::add)
                 DesktopLifecycle.activationRequests.value += 1
+                DesktopLifecycle.appActivations.value += 1
             }
             SystemTray.getSystemTray().add(icon)
             tray = icon
@@ -36,7 +39,7 @@ object DesktopOsIntegration {
         else MacOsIntegration.notificationPermission()
 
     suspend fun notificationAllowed(): Boolean = if (DesktopPlatform.isWindows) withContext(Dispatchers.Main) {
-        if (SystemTray.isSupported()) { ensureTray(); true } else false
+        SystemTray.isSupported()
     } else MacOsIntegration.notificationAllowed()
 
     fun openNotificationSettings() {
@@ -50,7 +53,7 @@ object DesktopOsIntegration {
         require(canonicalizeThreadUrl(threadUrl) != null)
         if (!DesktopPlatform.isWindows) return MacOsIntegration.notify(identifier, title, body, threadUrl)
         withContext(Dispatchers.Main) {
-            notificationUrl = threadUrl
+            balloonLink.show(threadUrl, System.currentTimeMillis())
             ensureTray().displayMessage(title.take(120), body.take(256), TrayIcon.MessageType.INFO)
         }
     }
@@ -99,6 +102,27 @@ object DesktopOsIntegration {
 
     suspend fun close() = withContext(Dispatchers.Main) {
         tray?.let { SystemTray.getSystemTray().remove(it) }
-        tray = null; notificationUrl = null; links.clear()
+        tray = null; balloonLink.clear(); links.clear()
     }
+}
+
+/**
+ * The thread of the latest tray balloon. A click opens it once; a later click
+ * (an icon double-click, an expired balloon) only brings the window forward.
+ * AWT gives one tray icon a single action for every balloon, so an older
+ * balloon still clicked opens the latest thread.
+ */
+internal class DesktopTrayBalloonLink(private val lifetimeMillis: Long = 5 * 60_000L) {
+    private var url: String? = null
+    private var shownAtMillis = 0L
+
+    fun show(threadUrl: String, nowMillis: Long) { url = threadUrl; shownAtMillis = nowMillis }
+
+    fun consume(nowMillis: Long): String? {
+        val pending = url ?: return null
+        clear()
+        return pending.takeIf { nowMillis - shownAtMillis in 0..lifetimeMillis }
+    }
+
+    fun clear() { url = null }
 }

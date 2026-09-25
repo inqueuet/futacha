@@ -40,6 +40,11 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
         createSnapshot: () -> S
     ): S? {
         val activeTransaction = transactions[transactionId] ?: return null
+        if (activeTransaction.baseSnapshot == activeTransaction.stagedSnapshot) {
+            // Nothing staged: committing would only rewrite the unchanged file.
+            transactions.remove(transactionId)
+            return null
+        }
         applyChanges(activeTransaction.baseSnapshot, activeTransaction.stagedSnapshot)
         val savePayload = createSnapshot()
         transactions.remove(transactionId)

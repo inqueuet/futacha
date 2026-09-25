@@ -7,6 +7,8 @@ import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.network.ConditionalTextFetchResult
+import com.valoser.futacha.shared.network.HttpConditionalValidators
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.BoardPostingCapabilities
@@ -29,6 +31,18 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+
+/** [BoardRepository.getThreadIfModified]'s outcome. */
+sealed interface ConditionalThreadFetchResult {
+    data class Modified(
+        val page: ThreadPage,
+        /** Validators to send next time; null when the server sent none. */
+        val validators: HttpConditionalValidators?
+    ) : ConditionalThreadFetchResult
+
+    /** The server confirmed the page is unchanged (HTTP 304); nothing was parsed. */
+    data object NotModified : ConditionalThreadFetchResult
+}
 
 interface BoardRepository {
     suspend fun getPostingCapabilities(board: String): BoardPostingCapabilities =
@@ -69,6 +83,15 @@ interface BoardRepository {
     suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(
         page = getThread(board, threadId)
     )
+    /**
+     * [getThread] as a conditional GET: [ConditionalThreadFetchResult.NotModified]
+     * means the page is unchanged since the fetch that returned [validators].
+     */
+    suspend fun getThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalThreadFetchResult = ConditionalThreadFetchResult.Modified(getThread(board, threadId), null)
     suspend fun getThreadByUrl(threadUrl: String): ThreadPage
     suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent = ThreadPageContent(
         page = getThreadByUrl(threadUrl)
@@ -322,22 +345,24 @@ class DefaultBoardRepository(
         // under one per-board lock: otherwise a concurrent request with other
         // settings can switch the cookie between them and this GET returns the
         // other caller's layout.
-        return catalogLayoutLock(board).withLock {
+        // Only the cookie setup and the GET need the lock: parsing a large
+        // catalog under it made every other request for the board wait.
+        val html = catalogLayoutLock(board).withLock {
             withRetryOnAuthFailure(board, settingsOverride = settings, layoutSensitive = true) {
-                val html = withContext(AppDispatchers.io) {
+                withContext(AppDispatchers.io) {
                     api.fetchCatalog(board, mode)
                 }
-                val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-                withContext(AppDispatchers.parsing) {
-                    attachCatalogDiagnostics(
-                        html = html,
-                        parsed = parser.parseCatalogPage(html, baseUrl).copy(
-                        embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
-                        ),
-                        fileSystem = diagnosticFileSystem
-                    )
-                }
             }
+        }
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return withContext(AppDispatchers.parsing) {
+            attachCatalogDiagnostics(
+                html = html,
+                parsed = parser.parseCatalogPage(html, baseUrl).copy(
+                    embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
+                ),
+                fileSystem = diagnosticFileSystem
+            )
         }
     }
 
@@ -406,6 +431,25 @@ class DefaultBoardRepository(
                         html = html,
                         baseUrl = threadUrl
                     )
+                )
+            }
+        }
+    }
+
+    override suspend fun getThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalThreadFetchResult {
+        return withRetryOnAuthFailure(board) {
+            val threadUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
+            when (val fetched = withContext(AppDispatchers.io) {
+                api.fetchThreadIfModified(board, threadId, validators)
+            }) {
+                ConditionalTextFetchResult.NotModified -> ConditionalThreadFetchResult.NotModified
+                is ConditionalTextFetchResult.Modified -> ConditionalThreadFetchResult.Modified(
+                    page = withContext(AppDispatchers.parsing) { parser.parseThread(fetched.body, threadUrl) },
+                    validators = fetched.validators
                 )
             }
         }

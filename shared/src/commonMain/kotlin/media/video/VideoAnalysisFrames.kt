@@ -105,3 +105,62 @@ internal suspend fun readVideoAnalysisFrames(
 internal expect suspend fun decodeDeviceVideoFrames(
     path: String, info: VideoEditInfo, request: VideoAnalysisRequest, consume: suspend (AnalysisFrame) -> Unit
 )
+
+/**
+ * Reverse tracking reads many short intervals. One platform reader serves all of them, so
+ * Android indexes the sample table and configures its decoder once per run instead of once
+ * per chunk. [consumeChunk] receives each interval's frames, in presentation order, only
+ * after that interval was verified complete.
+ */
+internal suspend fun VideoEditSource.analysisFrameChunks(
+    info: VideoEditInfo,
+    ranges: List<Pair<Long, Long>>,
+    maximumEdge: Int = 640,
+    includeRgb: Boolean = true,
+    consumeChunk: suspend (List<AnalysisFrame>) -> Unit
+) = useFile { path -> readVideoAnalysisFrameChunks(path, info, ranges, maximumEdge, includeRgb, consumeChunk) }
+
+internal suspend fun readVideoAnalysisFrameChunks(
+    path: String,
+    info: VideoEditInfo,
+    ranges: List<Pair<Long, Long>>,
+    maximumEdge: Int = 640,
+    includeRgb: Boolean = true,
+    consumeChunk: suspend (List<AnalysisFrame>) -> Unit,
+    decode: suspend (String, VideoEditInfo, List<VideoAnalysisRequest>, suspend (Int, AnalysisFrame) -> Unit) -> Unit =
+        ::decodeDeviceVideoFrameChunks
+) {
+    require(com.valoser.futacha.shared.util.isAbsoluteLocalMediaPath(path)) { "端末内の動画を選択してください" }
+    require(!info.hdr) { "HDR動画の自動解析にはSDR変換が必要です" }
+    val requests = ranges.map { (start, end) -> VideoAnalysisRequest(info.frames, start, end, maximumEdge, includeRgb) }
+        .filterNot { it.isEmpty }
+    currentCoroutineContext().ensureActive()
+    if (requests.isEmpty()) return
+    var current = 0
+    var cursor = VideoAnalysisCursor(requests[0])
+    var frames = ArrayList<AnalysisFrame>()
+    suspend fun completeBefore(chunk: Int) {
+        while (current < chunk) {
+            cursor.finish()
+            val completed = frames
+            frames = ArrayList()
+            consumeChunk(completed)
+            currentCoroutineContext().ensureActive()
+            if (++current < requests.size) cursor = VideoAnalysisCursor(requests[current])
+        }
+    }
+    decode(path, info, requests) { chunk, frame ->
+        currentCoroutineContext().ensureActive()
+        check(chunk in current until requests.size) { "解析中にフレームが欠落しました。結果は反映していません。" }
+        completeBefore(chunk)
+        cursor.accept(frame)
+        frames += frame
+    }
+    currentCoroutineContext().ensureActive()
+    completeBefore(requests.size)
+}
+
+/** Deliver every request's frames in request order, tagged with that request's index. */
+internal expect suspend fun decodeDeviceVideoFrameChunks(
+    path: String, info: VideoEditInfo, requests: List<VideoAnalysisRequest>, consume: suspend (Int, AnalysisFrame) -> Unit
+)

@@ -346,3 +346,25 @@ internal suspend fun performThreadReplyAction(
         callbacks.replyToThread(config)
     }
 }
+
+internal const val THREAD_REPLY_SENDING_MESSAGE = "返信を送信中です…"
+internal const val CATALOG_CREATE_THREAD_SENDING_MESSAGE = "スレ立て処理中です…"
+
+/**
+ * Leaving a screen disposes its composition scope, which cancels an in-flight
+ * post: the request is abandoned, no result is shown and the self-post id is
+ * never recorded. Like the non-cancelable waiting dialog of the reference APKs,
+ * navigation away is held (with a notice) until the post finishes.
+ */
+internal inline fun <T> runUnlessPosting(
+    isPosting: Boolean,
+    onBlocked: () -> Unit,
+    blockedResult: T,
+    navigate: () -> T
+): T {
+    if (isPosting) {
+        onBlocked()
+        return blockedResult
+    }
+    return navigate()
+}

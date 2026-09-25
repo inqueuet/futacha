@@ -95,6 +95,15 @@ interface BoardApi {
     ): String
     suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int = 65): String
     suspend fun fetchThread(board: String, threadId: String): String
+    /**
+     * [fetchThread] as a conditional GET with [validators] from an earlier fetch.
+     * Implementations without conditional support always return the body.
+     */
+    suspend fun fetchThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalTextFetchResult = ConditionalTextFetchResult.Modified(fetchThread(board, threadId), null)
     suspend fun fetchThreadByUrl(threadUrl: String): String
     suspend fun probeThreadExists(threadUrl: String): Boolean {
         fetchThreadByUrl(threadUrl)

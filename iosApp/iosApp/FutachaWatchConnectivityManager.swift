@@ -109,14 +109,19 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
                 replyHandler?(["accepted": false, "message": "iPhoneアプリを開いてから再実行してください。"])
                 return
             }
-            let accepted = MainViewControllerKt.handleIosWatchCommandJson(commandJson: commandJson)
+            let outcome = MainViewControllerKt.handleIosWatchCommandJsonOutcome(commandJson: commandJson)
+            let accepted = outcome != "rejected"
             replyHandler?(
                 accepted
                     ? ["accepted": true]
                     : ["accepted": false, "message": "iPhone側でコマンドを処理できませんでした。"]
             )
             if accepted {
-                if commandType == "Refresh" {
+                if outcome == "refreshThrottled" {
+                    // Within the minimum refresh interval nothing new is
+                    // fetched; answer once with the current snapshot.
+                    sendSnapshotIfAvailable()
+                } else if commandType == "Refresh" {
                     scheduleRefreshSnapshotRetries()
                 } else {
                     sendSnapshotIfAvailable()

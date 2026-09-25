@@ -133,27 +133,25 @@ internal object HtmlEntityDecoder {
         "iquest" to "¿"
     )
 
-    private val namedEntityRegex = Regex("&([a-zA-Z]+);")
-    private val numericEntityRegex = Regex("&#(\\d+);")
-    private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
+    // Named, decimal, and hex references are matched in one left-to-right pass so the
+    // output of one replacement (e.g. "&amp;" -> "&") is never re-read as a new entity.
+    private val entityRegex = Regex("&(?:#[xX]([0-9a-fA-F]+)|#(\\d+)|([a-zA-Z][a-zA-Z0-9]*));")
 
     fun decode(value: String): String {
-        var result = value
-        result = namedEntityRegex.replace(result) { match ->
-            val entityName = match.groupValues[1]
-            namedEntityMap[entityName] ?: namedEntityMap[entityName.lowercase()] ?: match.value
+        if ('&' !in value) return value
+        return entityRegex.replace(value) { match ->
+            val hexDigits = match.groupValues[1]
+            val decimalDigits = match.groupValues[2]
+            val entityName = match.groupValues[3]
+            when {
+                hexDigits.isNotEmpty() -> decodeCodePoint(match, hexDigits, radix = 16)
+                decimalDigits.isNotEmpty() -> decodeCodePoint(match, decimalDigits, radix = 10)
+                else -> namedEntityMap[entityName] ?: namedEntityMap[entityName.lowercase()] ?: match.value
+            }
         }
-        result = hexEntityRegex.replace(result) { match ->
-            decodeCodePoint(match, radix = 16)
-        }
-        result = numericEntityRegex.replace(result) { match ->
-            decodeCodePoint(match, radix = 10)
-        }
-        return result
     }
 
-    private fun decodeCodePoint(match: MatchResult, radix: Int): String {
-        val digits = match.groupValues.getOrNull(1) ?: return match.value
+    private fun decodeCodePoint(match: MatchResult, digits: String, radix: Int): String {
         val codePoint = runCatching { digits.toInt(radix) }.getOrNull() ?: return match.value
         if (!isAllowedCodePoint(codePoint)) return match.value
         return codePointToString(codePoint)

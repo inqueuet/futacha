@@ -783,7 +783,7 @@ private fun sanitizeName(raw: String, fallback: String, maxLength: Int): String 
             }
         }
         .joinToString("")
-        .replace(Regex("_+"), "_")
+        .replace(ANALYTICS_UNDERSCORES, "_")
         .trim('_')
         .let { if (it.firstOrNull()?.isLetter() == true) it else "${fallback}_$it" }
         .trimEnd('_')
@@ -795,6 +795,9 @@ private fun sanitizeValue(raw: String): String {
     return raw
         .take(MAX_ANALYTICS_SOURCE_CHARS)
         .trim()
-        .replace(Regex("\\s+"), "_")
+        .replace(ANALYTICS_WHITESPACE, "_")
         .take(MAX_PARAMETER_VALUE_LENGTH)
 }
+
+private val ANALYTICS_UNDERSCORES = Regex("_+")
+private val ANALYTICS_WHITESPACE = Regex("\\s+")

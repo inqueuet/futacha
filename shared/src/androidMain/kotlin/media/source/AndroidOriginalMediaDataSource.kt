@@ -50,16 +50,16 @@ internal class AndroidOriginalMediaDataSource(private val original: OriginalMedi
         if (length == 0) return@io 0
         if (remaining == 0L) return@io C.RESULT_END_OF_INPUT
         val count = minOf(length.toLong(), 64 * 1024L, if (remaining >= 0) remaining else Long.MAX_VALUE).toInt()
-        val bytes = runBlocking { lease.readAt(position, count) }
-        if (bytes.isEmpty()) {
+        // Read straight into Media3's buffer; a per-read array was garbage at the loader's read rate.
+        val read = runBlocking { lease.readAt(position, buffer, offset, count) }
+        if (read == 0) {
             if (remaining > 0) throw IOException("Original media ended before the requested range")
             return@io C.RESULT_END_OF_INPUT
         }
-        bytes.copyInto(buffer, offset)
-        position += bytes.size
-        if (remaining >= 0) remaining -= bytes.size
-        bytesTransferred(bytes.size)
-        bytes.size
+        position += read
+        if (remaining >= 0) remaining -= read
+        bytesTransferred(read)
+        read
     }
 
     override fun getUri(): Uri? = uri

@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 
 private val FUTACHA_NAVIGATION_THREAD_URL_REGEX = Regex("""/res/\d+\.html?""", RegexOption.IGNORE_CASE)
@@ -11,15 +12,10 @@ internal fun resolveHistoryEntrySelection(
     entry: ThreadHistoryEntry,
     boards: List<BoardSummary>
 ): FutachaThreadSelection? {
-    val entryBoardUrlKey = (com.valoser.futacha.shared.compat.canonicalizeThreadUrl(entry.boardUrl)?.canonicalBoardUrl
-        ?: entry.boardUrl)
-        .trim()
-        .substringBefore('?')
-        .trimEnd('/')
-        .lowercase()
+    val entryBoardUrlKey = historyBoardLookupKey(entry.boardUrl)
     val targetBoard = boards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
-        ?: boards.firstOrNull {
-            it.url.trim().substringBefore('?').trimEnd('/').lowercase() == entryBoardUrlKey
+        ?: entryBoardUrlKey?.let { key ->
+            boards.firstOrNull { historyBoardLookupKey(it.url) == key }
         }
         ?: boards.firstOrNull { it.name == entry.boardName }
 
@@ -36,6 +32,23 @@ internal fun resolveHistoryEntrySelection(
             }
         )
     }
+}
+
+/**
+ * Board identity used to match a history entry with a registered board. Both sides go
+ * through the same normalization: thread URLs (`/b/res/1.htm`) and board pages
+ * (`/b/futaba.php`) reduce to the board directory, and http/https are treated alike.
+ */
+internal fun historyBoardLookupKey(url: String): String? {
+    val trimmed = url.trim().substringBefore('#').substringBefore('?')
+    if (trimmed.isBlank()) return null
+    val boardBase = runCatching { BoardUrlResolver.resolveBoardBaseUrl(trimmed) }.getOrNull()
+        ?: return null
+    return boardBase
+        .lowercase()
+        .substringAfter("://")
+        .trimEnd('/')
+        .takeIf { it.isNotBlank() }
 }
 
 internal fun resolveSavedThreadSelection(

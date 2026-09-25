@@ -54,10 +54,10 @@ internal data class ThreadScreenScaffoldBindings(
     val topBarCallbacks: ThreadTopBarCallbacks,
     val threadMenuEntries: List<ThreadMenuEntryConfig>,
     val actionBarCallbacks: ThreadActionBarCallbacks,
-    val isDrawerOpen: Boolean,
+    val isDrawerOpen: () -> Boolean,
     val onDismissDrawerTap: () -> Unit,
     val actionInProgress: Boolean,
-    val readAloudIndicatorSegment: ReadAloudSegment?,
+    val readAloudIndicatorSegment: () -> ReadAloudSegment?,
     val appColorScheme: ColorScheme
 )
 
@@ -67,17 +67,17 @@ internal fun ThreadScreenScaffoldHost(
     content: @Composable BoxScope.() -> Unit
 ) {
     ThreadDrawerBackGestureHandler(
-        enabled = !bindings.isDrawerOpen && !bindings.isSearchActive,
+        enabled = !bindings.isDrawerOpen() && !bindings.isSearchActive,
         onOpenDrawer = bindings.topBarCallbacks.onOpenHistory
     )
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = bindings.drawerState,
-            gesturesEnabled = !bindings.isSearchActive || bindings.isDrawerOpen,
+            gesturesEnabled = !bindings.isSearchActive || bindings.isDrawerOpen(),
             drawerContent = {
                 HistoryDrawerContent(
                     history = bindings.history,
-                    isVisible = bindings.isDrawerOpen,
+                    isVisible = bindings.isDrawerOpen(),
                     onHistoryEntryDismissed = bindings.historyDrawerCallbacks.onHistoryEntryDismissed,
                     onHistoryEntrySelected = bindings.historyDrawerCallbacks.onHistoryEntrySelected,
                     isHistoryRefreshing = bindings.isHistoryRefreshing,
@@ -152,8 +152,8 @@ internal fun ThreadScreenScaffoldHost(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .testTag("futacha-thread-content")
-                    .pointerInput(bindings.isDrawerOpen) {
-                        if (!bindings.isDrawerOpen) return@pointerInput
+                    .pointerInput(bindings.isDrawerOpen()) {
+                        if (!bindings.isDrawerOpen()) return@pointerInput
                         awaitPointerEventScope {
                             awaitFirstDown()
                             bindings.onDismissDrawerTap()
@@ -170,7 +170,7 @@ internal fun ThreadScreenScaffoldHost(
                                 .fillMaxWidth()
                         )
                     }
-                    bindings.readAloudIndicatorSegment?.let { segment ->
+                    bindings.readAloudIndicatorSegment()?.let { segment ->
                         ReadAloudIndicator(
                             segment = segment,
                             modifier = Modifier
@@ -185,7 +185,7 @@ internal fun ThreadScreenScaffoldHost(
         // The drawer and Android's system Back gesture both start at the physical left edge.
         // Reserve only the drawer's narrow start strip so a slow drawer drag cannot be delivered
         // as Back while the sheet is partially visible (issue #36). This is a no-op off Android.
-        if (!bindings.isSearchActive || bindings.isDrawerOpen) Box(
+        if (!bindings.isSearchActive || bindings.isDrawerOpen()) Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .width(THREAD_DRAWER_GESTURE_EXCLUSION_WIDTH)

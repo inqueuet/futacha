@@ -53,6 +53,7 @@ internal fun resolveInitialCatalogMode(
 
 internal data class CatalogScreenPersistentBindings(
     val persistedCatalogModes: Map<String, CatalogMode>,
+    val isCatalogModeLoaded: Boolean,
     val catalogNgWords: List<String>,
     val watchWords: List<String>,
     val globalWatchWords: List<String>,
@@ -77,23 +78,23 @@ internal fun rememberCatalogScreenPersistentBindings(
     boardUrl: String?,
     saveableKey: String
 ): CatalogScreenPersistentBindings {
-    val catalogModeMapState = stateStore?.catalogModes?.collectAsState(initial = emptyMap())
+    val catalogModeMapState = stateStore?.observedCatalogModes?.collectPreferenceAsState(initial = null)
     val persistedCatalogModes = catalogModeMapState?.value ?: emptyMap()
     val fallbackCatalogNgWordsState = rememberSaveable(saveableKey) { mutableStateOf<List<String>>(emptyList()) }
-    val catalogNgWordsState = stateStore?.catalogNgWords?.collectAsState(initial = fallbackCatalogNgWordsState.value)
+    val catalogNgWordsState = stateStore?.observedCatalogNgWords?.collectPreferenceAsState(initial = fallbackCatalogNgWordsState.value)
     val fallbackWatchWordsState = rememberSaveable(saveableKey) { mutableStateOf<List<String>>(emptyList()) }
-    val watchWordsState = stateStore?.watchWords?.collectAsState(initial = fallbackWatchWordsState.value)
-    val boardWatchWordsState = stateStore?.boardWatchWords?.collectAsState(initial = null)
-    val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
+    val watchWordsState = stateStore?.observedWatchWords?.collectPreferenceAsState(initial = fallbackWatchWordsState.value)
+    val boardWatchWordsState = stateStore?.observedBoardWatchWords?.collectPreferenceAsState(initial = null)
+    val lastUsedDeleteKeyState = stateStore?.observedLastUsedDeleteKey?.collectPreferenceAsState(initial = "")
     var fallbackDeleteKey by rememberSaveable(saveableKey) { mutableStateOf("") }
-    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
+    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectPreferenceAsState(initial = false)
         ?: remember { mutableStateOf(false) }
-    val isPastThreadSearchNoticeHidden by stateStore?.isPastThreadSearchNoticeHidden?.collectAsState(initial = false)
+    val isPastThreadSearchNoticeHidden by stateStore?.isPastThreadSearchNoticeHidden?.collectPreferenceAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val persistentDisplayStyleState =
-        stateStore?.catalogDisplayStyle?.collectAsState(initial = CatalogDisplayStyle.Grid)
+        stateStore?.observedCatalogDisplayStyle?.collectPreferenceAsState(initial = CatalogDisplayStyle.Grid)
     val persistentGridColumnsState =
-        stateStore?.catalogGridColumns?.collectAsState(initial = DEFAULT_CATALOG_SCREEN_GRID_COLUMNS)
+        stateStore?.observedCatalogGridColumns?.collectPreferenceAsState(initial = DEFAULT_CATALOG_SCREEN_GRID_COLUMNS)
 
     val boardWatchWordKey = resolveCatalogScreenBoardWatchWordKey(boardId, boardUrl)
     val boardWatchWordMap = boardWatchWordsState?.value
@@ -119,6 +120,7 @@ internal fun rememberCatalogScreenPersistentBindings(
 
     return CatalogScreenPersistentBindings(
         persistedCatalogModes = persistedCatalogModes,
+        isCatalogModeLoaded = stateStore == null || catalogModeMapState?.value != null,
         catalogNgWords = catalogNgWordsState?.value ?: fallbackCatalogNgWordsState.value,
         watchWords = effectiveWatchWords,
         globalWatchWords = globalWatchWords,

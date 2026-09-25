@@ -680,7 +680,7 @@ class ThreadScreenBindingsLogicTest {
         assertEquals(successState, uiState)
         assertEquals(historyEntry, updatedHistory)
         assertEquals("updated", shownMessage)
-        assertEquals(Triple(successState, 4, 8), restoredScroll)
+        assertNull(restoredScroll, "Refresh must preserve scrolling performed while the request was running")
 
         shownMessage = null
         callbacks.onInitialLoadFailure(
@@ -802,7 +802,9 @@ class ThreadScreenBindingsLogicTest {
     }
 
     @Test
-    fun threadScreenLoadBindingsSupport_displaysLocalStaleBeforeRemoteInitialLoad() = runBlocking {
+    fun threadScreenLoadBindingsSupport_showsCacheThenFetchesAndSupplementsVisibleRemote() = runBlocking {
+        val supplementStarted = CompletableDeferred<Unit>()
+        val finishSupplement = CompletableDeferred<Unit>()
         var refreshThreadJob: Job? = null
         var uiState: ThreadUiState = ThreadUiState.Error("initial")
         var resolvedThreadUrlOverride: String? = null
@@ -858,7 +860,12 @@ class ThreadScreenBindingsLogicTest {
                 },
                 loadArchiveFallback = { error("unexpected archive fallback") },
                 loadOfflineFallback = { error("unexpected offline fallback") },
-                loadLocalStalePage = { localPage }
+                loadLocalStalePage = { localPage },
+                supplementRemote = { result ->
+                    supplementStarted.complete(Unit)
+                    finishSupplement.await()
+                    result.copy(page = remotePage.copy(posts = remotePage.posts.map { it.copy(subject = "archive") }))
+                }
             ),
             history = emptyList(),
             threadId = "123",
@@ -878,7 +885,8 @@ class ThreadScreenBindingsLogicTest {
                 setIsRefreshing = {},
                 setUiState = { uiState = it },
                 setResolvedThreadUrlOverride = { resolvedThreadUrlOverride = it },
-                setIsShowingOfflineCopy = { isShowingOfflineCopy = it }
+                setIsShowingOfflineCopy = { isShowingOfflineCopy = it },
+                currentUiState = { uiState }
             ),
             uiCallbacks = ThreadScreenLoadUiCallbacks(
                 onManualRefreshSuccess = { _, _, _ -> error("unexpected manual refresh") },
@@ -898,16 +906,91 @@ class ThreadScreenBindingsLogicTest {
             )
         )
 
+        // The local copy is shown first, but opening a thread must still fetch
+        // it: a local copy alone would hide new replies and dead threads.
         bindings.refreshThread()
+        supplementStarted.await()
+        assertEquals(listOf("local", "remote"), uiPages, "Remote text must be visible while the archive is waiting")
+        assertFalse(isShowingOfflineCopy)
+        finishSupplement.complete(Unit)
         refreshThreadJob?.join()
 
         assertTrue(uiState is ThreadUiState.Success)
-        assertEquals(listOf("local", "remote"), uiPages)
+        assertEquals(listOf("local", "remote", "archive"), uiPages)
         assertFalse(isShowingOfflineCopy)
         assertNull(resolvedThreadUrlOverride)
-        assertEquals(2, historyUpdates.size)
+        assertEquals(3, historyUpdates.size)
         assertTrue(shownMessages.isEmpty())
         assertNull(refreshThreadJob)
+    }
+
+    @Test
+    fun threadScreenLoadBindingsSupport_manualRefreshSupplementsBeforeDroppingVisiblePosts() = runBlocking {
+        fun post(id: String) = Post(id = id, author = null, subject = id, timestamp = "now",
+            messageHtml = "body $id", imageUrl = null, thumbnailUrl = null)
+        fun page(vararg ids: String) = ThreadPage(threadId = "123", boardTitle = "board",
+            expiresAtLabel = null, deletedNotice = null, posts = ids.map(::post))
+        // "2" came from an archive supplement; the fresh server page lacks it.
+        var uiState: ThreadUiState = ThreadUiState.Success(page("1", "2", "3"))
+        var refreshThreadJob: Job? = null
+        val shownPostIds = mutableListOf<List<String>>()
+        var supplementCalls = 0
+        val bindings = buildThreadScreenLoadBindings(
+            coroutineScope = this,
+            loadRunnerConfig = buildThreadLoadRunnerConfig(
+                threadId = "123", effectiveBoardUrl = "https://example.com/test", threadUrlOverride = null,
+                allowOfflineFallback = true, archiveFallbackTimeoutMillis = 1L, offlineFallbackTimeoutMillis = 1L
+            ),
+            loadRunnerCallbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unexpected by-url load") },
+                loadRemoteByBoard = { _, _ -> ThreadPageContent(page = page("1", "3", "4")) },
+                loadArchiveFallback = { error("unexpected archive fallback") },
+                loadOfflineFallback = { error("unexpected offline fallback") },
+                supplementRemote = { result ->
+                    supplementCalls++
+                    result.copy(page = page("1", "2", "3", "4"))
+                }
+            ),
+            history = emptyList(),
+            threadId = "123",
+            threadTitle = "title",
+            board = BoardSummary(id = "test", name = "Test", category = "cat",
+                url = "https://example.com/test", description = "desc"),
+            stateBindings = ThreadScreenLoadStateBindings(
+                currentRefreshThreadJob = { refreshThreadJob },
+                setRefreshThreadJob = { refreshThreadJob = it },
+                currentManualRefreshGeneration = { 0L },
+                setManualRefreshGeneration = {},
+                setIsRefreshing = {},
+                setUiState = { uiState = it },
+                setResolvedThreadUrlOverride = {},
+                setIsShowingOfflineCopy = {},
+                currentUiState = { uiState }
+            ),
+            uiCallbacks = ThreadScreenLoadUiCallbacks(
+                onManualRefreshSuccess = { outcome, _, _ ->
+                    (outcome.uiState as? ThreadUiState.Success)?.let {
+                        uiState = it
+                        shownPostIds += it.page.posts.map(Post::id)
+                    }
+                },
+                onManualRefreshFailure = { error("unexpected manual refresh failure") },
+                onInitialLoadSuccess = { outcome ->
+                    (outcome.uiState as? ThreadUiState.Success)?.let {
+                        uiState = it
+                        shownPostIds += it.page.posts.map(Post::id)
+                    }
+                },
+                onInitialLoadFailure = { error("unexpected initial load failure") }
+            )
+        )
+
+        bindings.startManualRefresh(0, 0)
+        refreshThreadJob?.join()
+
+        assertEquals(listOf(listOf("1", "2", "3", "4")), shownPostIds,
+            "The visible archive reply must not disappear and reappear")
+        assertEquals(1, supplementCalls)
     }
 
     @Test
@@ -1437,6 +1520,7 @@ class ThreadScreenBindingsLogicTest {
         var isHistoryRefreshing = false
         val shownMessages = mutableListOf<String>()
         var refreshCount = 0
+        val refreshingWhileShown = mutableListOf<Boolean>()
         val bindings = buildThreadScreenHistoryRefreshBindings(
             coroutineScope = this,
             stateBindings = ThreadScreenHistoryRefreshStateBindings(
@@ -1444,7 +1528,11 @@ class ThreadScreenBindingsLogicTest {
                 setIsHistoryRefreshing = { isHistoryRefreshing = it }
             ),
             onHistoryRefresh = { refreshCount += 1 },
-            showMessage = { shownMessages += it }
+            showMessage = {
+                // The snackbar suspends until dismissed; refreshing must end first.
+                refreshingWhileShown += isHistoryRefreshing
+                shownMessages += it
+            }
         )
 
         bindings.handleHistoryRefresh()
@@ -1452,6 +1540,7 @@ class ThreadScreenBindingsLogicTest {
 
         assertEquals(1, refreshCount)
         assertFalse(isHistoryRefreshing)
+        assertEquals(listOf(false), refreshingWhileShown)
         assertEquals(listOf(buildThreadHistoryRefreshSuccessMessage()), shownMessages)
     }
 

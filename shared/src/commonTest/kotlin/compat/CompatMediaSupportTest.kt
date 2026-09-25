@@ -10,6 +10,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -959,5 +960,90 @@ class CompatMediaSupportTest {
         val webm = "https://may.2chan.net/b/src/123.webm?x=1"
         assertEquals(listOf(webm), compatVideoPlaybackCandidates(webm, switchWebmToMp4 = true))
         assertEquals(listOf(webm), compatVideoPlaybackCandidates(webm, false))
+    }
+
+    @Test
+    fun viewerPagerKeysStayUniqueForDuplicateOrBlankPostNumbers() {
+        fun media(no: String, position: Int, key: String? = null) = CompatPostSnapshot(
+            position = position,
+            postNo = no,
+            timestamp = "",
+            messageHtml = "",
+            imageUrl = "https://may.2chan.net/b/src/$position.jpg",
+            mediaKey = key
+        )
+        val posts = listOf(
+            media("10", 1),
+            media("10", 2),
+            media("", 3),
+            media("", 4),
+            media("10", 5),
+            media("11", 6, key = "10#dup1")
+        )
+        val keys = compatUniqueMediaKeys(posts)
+        assertEquals(posts.size, keys.toSet().size)
+        // The first occurrence keeps its identity so pages are retained.
+        assertEquals("10", keys[0])
+        assertEquals("", keys[2])
+        assertEquals(listOf("a", "b"), compatUniqueMediaKeys(listOf(media("a", 1), media("b", 2))))
+    }
+
+    @Test
+    fun cancelledImageHashRequestsReleaseTheirPerUrlLocks() = runBlocking {
+        val client = HttpClient(MockEngine {
+            kotlinx.coroutines.delay(10_000)
+            respond("", HttpStatusCode.OK)
+        })
+        val url = "https://may.2chan.net/b/src/phash-cancel-test.jpg"
+        val before = compatPhashRequestLockCountForTest()
+        // Several concurrent callers contend for the same per-URL lock and are
+        // all cancelled by their own (shorter) timeouts.
+        List(3) {
+            async { kotlinx.coroutines.withTimeoutOrNull(100) { fetchCompatImagePhash(client, url) } }
+        }.forEach { it.await() }
+        assertEquals(before, compatPhashRequestLockCountForTest())
+        client.close()
+    }
+
+    @Test
+    fun viewerImageHashHidingPublishesKnownHashesBeforeSlowFetches() = runBlocking {
+        val client = HttpClient(MockEngine {
+            kotlinx.coroutines.delay(10_000)
+            respond("", HttpStatusCode.OK)
+        })
+        val posts = listOf(
+            CompatPostSnapshot(
+                position = 1,
+                postNo = "1",
+                timestamp = "",
+                messageHtml = "",
+                imageUrl = "https://may.2chan.net/b/src/phash-progressive-1.jpg"
+            )
+        )
+        val rule = com.valoser.futacha.shared.compat.CompatNgRule(
+            id = "r",
+            kind = com.valoser.futacha.shared.compat.CompatNgKind.THREAD_IMAGE_PHASH,
+            scopeKey = "",
+            normalizedValue = "0123456789abcdef",
+            createdAtEpochMillis = 0L
+        )
+        val updates = mutableListOf<Set<String>>()
+        collectCompatImagePhashHiddenPostNos(
+            httpClient = client,
+            store = null,
+            posts = posts,
+            rules = listOf(rule),
+            threshold = 10,
+            batchTimeoutMillis = 200,
+            requestTimeoutMillis = 100
+        ) { updates += it }
+        // The list is released immediately with no hidden posts; the slow
+        // original never blocks it.
+        assertEquals(listOf(emptySet<String>()), updates)
+
+        val noRules = mutableListOf<Set<String>>()
+        collectCompatImagePhashHiddenPostNos(client, null, posts, emptyList(), 10) { noRules += it }
+        assertEquals(listOf(emptySet<String>()), noRules)
+        client.close()
     }
 }

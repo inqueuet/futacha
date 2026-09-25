@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -334,6 +335,14 @@ internal fun BoardManagementBoardList(
 ) {
     val listState = rememberLazyListState()
     var draggedBoardId by remember { mutableStateOf<String?>(null) }
+    // Order shown while dragging, persisted once on drop. Each step used to be
+    // persisted and computed from the not-yet-updated list, dropping steps.
+    // Kept after the drop until the persisted list arrives, so it doesn't flash back.
+    var dragOrder by remember { mutableStateOf<List<BoardSummary>?>(null) }
+    LaunchedEffect(boards, isReorderMode) {
+        if (draggedBoardId == null) dragOrder = null
+    }
+    val displayedBoards = dragOrder ?: boards
     var renamingBoardId by rememberSaveable { mutableStateOf<String?>(null) }
     var renamedBoardName by rememberSaveable { mutableStateOf("") }
     val currentBoards = rememberUpdatedState(boards)
@@ -352,16 +361,30 @@ internal fun BoardManagementBoardList(
         contentPadding = contentPadding
     ) {
         itemsIndexed(
-            items = boards,
+            items = displayedBoards,
             key = { _, board -> board.id }
         ) { index, board ->
             val reorderDragModifier = if (isReorderMode) {
                 Modifier.pointerInput(isReorderMode, board.id) {
                     var accumulatedDrag = 0f
                     detectDragGesturesAfterLongPress(
-                        onDragStart = { draggedBoardId = board.id },
-                        onDragCancel = { draggedBoardId = null },
-                        onDragEnd = { draggedBoardId = null },
+                        onDragStart = {
+                            draggedBoardId = board.id
+                            dragOrder = dragOrder ?: currentBoards.value
+                        },
+                        onDragCancel = {
+                            draggedBoardId = null
+                            dragOrder = null
+                        },
+                        onDragEnd = {
+                            draggedBoardId = null
+                            val finalOrder = dragOrder
+                            if (finalOrder == null || finalOrder == currentBoards.value) {
+                                dragOrder = null
+                            } else {
+                                currentBoardListCallbacks.value.onReorder(finalOrder)
+                            }
+                        },
                         onDrag = { change, dragAmount ->
                             change.consume()
                             if (draggedBoardId != board.id) return@detectDragGesturesAfterLongPress
@@ -374,17 +397,13 @@ internal fun BoardManagementBoardList(
                                 item.key != board.id &&
                                     center >= item.offset && center <= item.offset + item.size
                             } ?: return@detectDragGesturesAfterLongPress
-                            val latestBoards = currentBoards.value
+                            val latestBoards = dragOrder ?: currentBoards.value
                             val currentIndex = latestBoards.indexOfFirst { it.id == board.id }
                             val targetIndex = latestBoards.indexOfFirst { it.id == targetItem.key }
                             if (currentIndex < 0 || targetIndex < 0 || currentIndex == targetIndex) {
                                 return@detectDragGesturesAfterLongPress
                             }
-                            if (targetIndex < currentIndex) {
-                                currentBoardListCallbacks.value.onMoveUp(latestBoards, currentIndex)
-                            } else {
-                                currentBoardListCallbacks.value.onMoveDown(latestBoards, currentIndex)
-                            }
+                            dragOrder = moveBoardSummary(latestBoards, currentIndex, moveUp = targetIndex < currentIndex)
                             accumulatedDrag = 0f
                         }
                     )
@@ -403,18 +422,18 @@ internal fun BoardManagementBoardList(
                     isReorderMode -> {
                         BoardSummaryCardWithReorder(
                             board = board,
-                            onMoveUp = { boardListCallbacks.onMoveUp(boards, index) },
-                            onMoveDown = { boardListCallbacks.onMoveDown(boards, index) },
-                            onPinToggle = { boardListCallbacks.onPinClick(boards, index) },
+                            onMoveUp = { boardListCallbacks.onMoveUp(displayedBoards, index) },
+                            onMoveDown = { boardListCallbacks.onMoveDown(displayedBoards, index) },
+                            onPinToggle = { boardListCallbacks.onPinClick(displayedBoards, index) },
                             canMoveUp = index > 0,
-                            canMoveDown = index < boards.size - 1
+                            canMoveDown = index < displayedBoards.size - 1
                         )
                     }
                     else -> {
                         BoardSummaryCard(
                             board = board,
                             onClick = { boardListCallbacks.onBoardClick(board) },
-                            onPinToggle = { boardListCallbacks.onPinClick(boards, index) },
+                            onPinToggle = { boardListCallbacks.onPinClick(displayedBoards, index) },
                             onRename = { renamedBoardName = board.name; renamingBoardId = board.id }
                         )
                     }

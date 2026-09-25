@@ -24,6 +24,27 @@ internal fun List<SavedThread>.safeSavedThreadTotalSize(
     return total
 }
 
+/**
+ * The saves to remove so the rest fit in [maxTotalBytes]: least recently saved first,
+ * skipping [isProtected] ones. Uses the sizes recorded in the index; no folder walk.
+ */
+internal fun selectSavedThreadsOverSizeLimit(
+    threads: List<SavedThread>,
+    maxTotalBytes: Long,
+    isProtected: (SavedThread) -> Boolean
+): Set<SavedThread> {
+    var total = threads.safeSavedThreadTotalSize()
+    if (total <= maxTotalBytes) return emptySet()
+    val evicted = linkedSetOf<SavedThread>()
+    for (candidate in threads.sortedBy { it.savedAt }) {
+        if (total <= maxTotalBytes) break
+        if (isProtected(candidate)) continue
+        evicted += candidate
+        total -= candidate.totalSize.coerceAtLeast(0L)
+    }
+    return evicted
+}
+
 internal fun buildSavedThreadIndex(
     threads: List<SavedThread>,
     nowMillis: Long,
@@ -185,24 +206,68 @@ internal suspend fun SavedThreadRepository.buildUpdatedIndexUnlocked(
 internal suspend fun SavedThreadRepository.mutateIndexThreadsUnlocked(
     transform: (List<SavedThread>) -> List<SavedThread>
 ) {
+    mutateIndexThreadsReturningEvictedUnlocked(transform)
+}
+
+/**
+ * Applies [transform] and writes the index within its read limits. The auto-save
+ * index drops its oldest entries to fit and returns them (the caller removes their
+ * storage); any other index refuses the write with [SavedThreadIndexLimitException].
+ */
+internal suspend fun SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked(
+    transform: (List<SavedThread>) -> List<SavedThread>
+): List<SavedThread> {
     val currentIndex = readSavedThreadIndexUnlocked()
     val updatedThreads = transform(currentIndex.threads)
     val updatedTotalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow)
     if (updatedThreads == currentIndex.threads && updatedTotalSize == currentIndex.totalSize) {
+        // Known to match disk (written or verified earlier in this process): skip
+        // re-reading and decoding both copies just to find nothing to repair.
+        val cached = cachedIndexEntry?.takeIf { it.index === currentIndex }
+        if (cached?.persistedVerified == true) return emptyList()
         if (!isPersistedSavedThreadIndexAlreadyNormalizedUnlocked(currentIndex)) {
             saveSavedThreadIndexUnlocked(
                 currentIndex.copy(lastUpdated = Clock.System.now().toEpochMilliseconds())
             )
+        } else {
+            cached?.persistedVerified = true
         }
-        return
+        return emptyList()
     }
-    saveSavedThreadIndexUnlocked(
-        SavedThreadIndex(
-            threads = updatedThreads,
-            totalSize = updatedTotalSize,
-            lastUpdated = Clock.System.now().toEpochMilliseconds()
-        )
-    )
+    return saveSavedThreadIndexWithinLimitsUnlocked(updatedThreads)
+}
+
+private suspend fun SavedThreadRepository.saveSavedThreadIndexWithinLimitsUnlocked(
+    threads: List<SavedThread>
+): List<SavedThread> {
+    var kept = threads
+    val evicted = mutableListOf<SavedThread>()
+    fun evictOldest(count: Int) {
+        val oldestIndexes = kept.withIndex()
+            .sortedBy { it.value.savedAt }
+            .take(count)
+            .mapTo(HashSet()) { it.index }
+        kept.filterIndexedTo(evicted) { index, _ -> index in oldestIndexes }
+        kept = kept.filterIndexed { index, _ -> index !in oldestIndexes }
+    }
+    if (kept.size > indexEntryLimit && isAutoSaveRepository) {
+        evictOldest(kept.size - indexEntryLimit)
+    }
+    while (true) {
+        try {
+            saveSavedThreadIndexUnlocked(
+                SavedThreadIndex(
+                    threads = kept,
+                    totalSize = kept.safeSavedThreadTotalSize(::logTotalSizeOverflow),
+                    lastUpdated = Clock.System.now().toEpochMilliseconds()
+                )
+            )
+            return evicted
+        } catch (error: SavedThreadIndexLimitException) {
+            if (!isAutoSaveRepository || kept.size <= 1) throw error
+            evictOldest(maxOf(1, kept.size / 10))
+        }
+    }
 }
 
 private suspend fun SavedThreadRepository.isPersistedSavedThreadIndexAlreadyNormalizedUnlocked(

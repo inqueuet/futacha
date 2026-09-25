@@ -262,6 +262,7 @@ internal fun CompatViewerScreen(
     tab: CompatTab,
     initialIndex: Int,
     initialPostNo: String? = null,
+    preparedSnapshot: com.valoser.futacha.shared.compat.CompatThreadSnapshot? = null,
     directMediaUrl: String? = null,
     directSourcePosition: Int? = null,
     store: CompatibilityStore,
@@ -289,6 +290,7 @@ internal fun CompatViewerScreen(
         mutableStateOf<List<CompatPostSnapshot>?>(null)
     }
     val posts = loadedPosts.orEmpty()
+    val pagerKeys = remember(posts) { compatUniqueMediaKeys(posts) }
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var chromeVisible by remember { mutableStateOf(true) }
     var quickMenu by remember { mutableStateOf(false) }
@@ -378,6 +380,7 @@ internal fun CompatViewerScreen(
     }
     LaunchedEffect(
         tabKey,
+        preparedSnapshot,
         ngRules,
         upsThumbnailMethod,
         wifiConnected,
@@ -394,16 +397,17 @@ internal fun CompatViewerScreen(
             val hiddenImages = ngRules.asSequence()
                 .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
                 .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
-            val snapshot = store.loadThreadSnapshot(tabKey)
+            val snapshot = preparedSnapshot ?: store.loadThreadSnapshot(tabKey)
             snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
             val rawPosts = snapshot
                 ?.let { loadedSnapshot ->
-                    withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(loadedSnapshot) }
+                    if (preparedSnapshot != null) loadedSnapshot
+                    else withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(loadedSnapshot) }
                 }
                 ?.posts
                 .orEmpty()
                 .let { posts ->
-                    presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
+                    presentCompatPostsForDeletedVisibilityOffMain(posts, showDeletedContent)
                 }
             if (directMediaUrl != null) {
                 val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
@@ -421,20 +425,25 @@ internal fun CompatViewerScreen(
                 )
                 return@LaunchedEffect
             }
-            val hiddenPostNos = compatImagePhashHiddenPostNos(
+            // Open with the hashes that are already known and hide further
+            // pHash matches as their originals are hashed, instead of keeping
+            // the spinner up until up to 256 originals have been fetched.
+            collectCompatImagePhashHiddenPostNos(
                 httpClient = httpClient,
+                store = store,
                 posts = rawPosts,
                 rules = imageNgPhashRules,
                 threshold = imageNgPhashThreshold
-            )
-            loadedPosts = withContext(AppDispatchers.parsing) {
-                compatViewerMediaPosts(
-                    posts = rawPosts,
-                    hiddenImages = hiddenImages,
-                    hiddenPostNos = hiddenPostNos,
-                    upsThumbnailMethod = upsThumbnailMethod,
-                    wifiConnected = wifiConnected
-                )
+            ) { hiddenPostNos ->
+                loadedPosts = withContext(AppDispatchers.parsing) {
+                    compatViewerMediaPosts(
+                        posts = rawPosts,
+                        hiddenImages = hiddenImages,
+                        hiddenPostNos = hiddenPostNos,
+                        upsThumbnailMethod = upsThumbnailMethod,
+                        wifiConnected = wifiConnected
+                    )
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -474,10 +483,6 @@ internal fun CompatViewerScreen(
         initialPage = compatViewerInitialPage(posts, initialPostNo, initialIndex)
     ) { posts.size }
     val canDismissVertically = verticalSwipeCloseEnabled && !isZoomed
-    val renderedVerticalOffset = renderCompatViewerVerticalOffset(
-        rawOffsetPx = verticalRawOffset,
-        dismissalAnimating = verticalDismissAnimating
-    )
     ApplyCompatViewerSystemBars(hidden = !chromeVisible)
     PlatformBackHandler(enabled = !chromeVisible) { chromeVisible = true }
     LaunchedEffect(pagerState.currentPage) {
@@ -496,13 +501,19 @@ internal fun CompatViewerScreen(
             listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
                 .mapNotNull(posts::getOrNull)
                 .mapNotNull { post ->
-                    val url = resolveCompatPostPreviewUrl(post, upsThumbnailMethod, wifiConnected)
+                    // Respect the preview setting, but warm exactly the source
+                    // request the page decodes (same URL, Size.ORIGINAL). A
+                    // 1024px decode of the preview URL never produced a memory
+                    // cache hit for the viewer page.
+                    resolveCompatPostPreviewUrl(post, upsThumbnailMethod, wifiConnected)
                         ?: return@mapNotNull null
+                    val url = resolveCompatViewerMediaUrl(post) ?: return@mapNotNull null
                     if (isCompatVideoMediaUrl(url)) return@mapNotNull null
                     ImageRequest.Builder(platformContext)
                         .data(url)
                         .compatImageFallbackPolicy()
-                        .size(1024, 1024)
+                        .crossfade(false)
+                        .size(Size.ORIGINAL)
                         .build()
                 }
         }
@@ -900,7 +911,7 @@ internal fun CompatViewerScreen(
     ) { padding ->
         HorizontalPager(
             state = pagerState,
-            key = { page -> compatMediaIdentity(posts[page]) },
+            key = { page -> pagerKeys.getOrNull(page) ?: page },
             // Horizontal navigation is owned by the viewer surface below.
             // The stock pager recognizer can lose the reverse (right) swipe
             // when the current page replaces its thumbnail with the full
@@ -908,6 +919,13 @@ internal fun CompatViewerScreen(
             // directions deterministic while retaining pager animation.
             userScrollEnabled = false,
             modifier = Modifier.fillMaxSize().padding(padding).graphicsLayer {
+                // Read the drag offset only in the layer block: reading it in
+                // the screen body recomposed the whole viewer on every frame
+                // of a vertical swipe-to-close.
+                val renderedVerticalOffset = renderCompatViewerVerticalOffset(
+                    rawOffsetPx = verticalRawOffset,
+                    dismissalAnimating = verticalDismissAnimating
+                )
                 translationY = renderedVerticalOffset
                 alpha = (1f - abs(renderedVerticalOffset) / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f)
             }.pointerInput(posts, canDismissVertically) {

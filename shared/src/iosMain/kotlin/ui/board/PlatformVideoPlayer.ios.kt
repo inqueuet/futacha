@@ -25,6 +25,7 @@ import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
@@ -34,6 +35,8 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CancellationException
 import kotlin.time.TimeSource
 import com.valoser.futacha.shared.media.source.OriginalMediaPlayback
+import com.valoser.futacha.shared.media.source.OriginalMediaDownloadStalled
+import com.valoser.futacha.shared.media.source.withDownloadStallTimeout
 import com.valoser.futacha.shared.media.source.IosOriginalMediaAsset
 import com.valoser.futacha.shared.media.source.IosLocalVideoDocument
 import com.valoser.futacha.shared.media.video.VideoEditPlayback
@@ -64,6 +67,8 @@ import platform.darwin.NSObject
 
 private const val VIDEO_STATE_MESSAGE_HANDLER = "futachaVideoState"
 private const val WEB_VIDEO_SYNC_APPLIED_RESULT = "applied"
+/** A remote original that delivers no verified bytes for this long is treated as stalled. */
+private const val ORIGINAL_DOWNLOAD_STALL_MS = 20_000L
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
@@ -259,6 +264,19 @@ private fun NativeAvVideoPlayer(
         var lastState: VideoPlayerState? = VideoPlayerState.Buffering
         var reportedMediaInfo: VideoMediaInfo? = null
         var bufferingSince = TimeSource.Monotonic.markNow()
+        // A moov-at-end MP4 stays unready until the whole original arrives. While the shared
+        // download still delivers bytes the player is waiting, not stalled; the limit below
+        // then counts from the last byte instead of from the start.
+        val downloadWatch = playback?.let { original ->
+            launch {
+                try {
+                    original.downloadProgress().collect {
+                        if (lastState == VideoPlayerState.Buffering) bufferingSince = TimeSource.Monotonic.markNow()
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { } // VideoPlayerContent reports a failed download.
+            }
+        }
         while (isActive) {
             val item = player.currentItem
             if (item?.status == AVPlayerItemStatusFailed) {
@@ -324,6 +342,7 @@ private fun NativeAvVideoPlayer(
                 delay(wait)
             }
         }
+        downloadWatch?.cancel()
     }
     UIKitView(
         factory = {
@@ -399,10 +418,13 @@ private fun WebVideoPlayer(
         var owned: IosLocalVideoDocument? = null
         try {
             val extension = videoUrl.substringBefore('#').substringBefore('?').substringAfterLast('.').lowercase()
-            withTimeout(30_000) {
-                owned = if (playback != null) IosLocalVideoDocument.create(playback, extension)
-                else IosLocalVideoDocument.createLocal(requireNotNull(localUrl?.path), extension)
-            }
+            // WebKit needs the whole original. Judge a remote one by download stalls, not total
+            // time, so a large WebM on a slow link can finish; the store keeps the transfer
+            // running briefly after a failure so a retry continues it.
+            // Assign inside each block: a document created as the limit fires is still closed below.
+            if (playback != null) playback.withDownloadStallTimeout(ORIGINAL_DOWNLOAD_STALL_MS) {
+                owned = IosLocalVideoDocument.create(playback, extension)
+            } else withTimeout(30_000) { owned = IosLocalVideoDocument.createLocal(requireNotNull(localUrl?.path), extension) }
             logVideoPlaybackDiagnostic("source", "transport=${if (playback != null) "shared-original" else "local-file"} contentType=${playback?.info()?.mimeType} tracks=${owned?.webmInfo}")
             owned?.webmInfo?.let { onMediaInfoKnown(it.mediaInfo()) }
             document = owned
@@ -410,6 +432,10 @@ private fun WebVideoPlayer(
         } catch (_: TimeoutCancellationException) {
             currentCoroutineContext().ensureActive()
             onPlaybackError(VideoPlaybackError("original_timeout", "動画の読み込みが時間内に完了しませんでした"))
+            onStateChanged(VideoPlayerState.Error)
+        } catch (_: OriginalMediaDownloadStalled) {
+            currentCoroutineContext().ensureActive()
+            onPlaybackError(VideoPlaybackError("original_timeout", "動画のダウンロードが停止しました"))
             onStateChanged(VideoPlayerState.Error)
         } catch (_: Exception) {
             currentCoroutineContext().ensureActive()

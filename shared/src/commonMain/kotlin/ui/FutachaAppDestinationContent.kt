@@ -6,6 +6,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -138,19 +139,26 @@ internal fun FutachaThreadDestination(
         )
     }
 
-    ThreadScreen(
-        board = props.board,
-        screenContract = props.screenContract,
-        threadId = props.threadId,
-        threadTitle = props.threadTitle,
-        initialReplyCount = props.initialReplyCount,
-        onBack = props.onBack,
-        onScrollPositionPersist = props.onScrollPositionPersist,
-        onScrollPositionPersistImmediately = props.onScrollPositionPersistImmediately,
-        threadUrlOverride = props.threadUrlOverride,
-        dependencies = props.dependencies,
-        onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick,
-        aiCommand = aiCommand,
-        onAiCommandConsumed = onAiCommandConsumed
-    )
+    // One composition per thread. Switching threads in place (history drawer,
+    // in-body thread links) otherwise kept the previous thread's reply image,
+    // open reply dialog, filters and in-flight jobs, so thread A's attachment
+    // could be posted to thread B and A's reply success could cancel B's load.
+    // Manual page saves run in the app-scoped longRunningScope and survive this.
+    key(props.board.id, props.threadId) {
+        ThreadScreen(
+            board = props.board,
+            screenContract = props.screenContract,
+            threadId = props.threadId,
+            threadTitle = props.threadTitle,
+            initialReplyCount = props.initialReplyCount,
+            onBack = props.onBack,
+            onScrollPositionPersist = props.onScrollPositionPersist,
+            onScrollPositionPersistImmediately = props.onScrollPositionPersistImmediately,
+            threadUrlOverride = props.threadUrlOverride,
+            dependencies = props.dependencies,
+            onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick,
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed
+        )
+    }
 }

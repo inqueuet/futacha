@@ -54,6 +54,9 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         private set
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
+        // Atomic writes leave tmp_*.tmp files behind only after a crash mid-write.
+        runCatching { (fileSystem as? JvmFileSystem)?.cleanupTempFiles() }
+            .onFailure { Logger.w("DesktopFileSystem", "Temp file cleanup failed: ${it.message}") }
         stateStore.seedIfEmpty(AppStateSeedDefaults(boards = mockBoardSummaries, history = mockThreadHistory,
             selfPostIdentifierMap = emptyMap(), catalogModeMap = emptyMap(), lastUsedDeleteKey = ""))
         compatibility.initialize()
@@ -111,15 +114,17 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
     internal suspend fun refreshCompatibility(manual: Boolean = false): String {
         val token = generation
         val preferences = compatibility.preferences.first()
+        // The periodic probe slows down while minimized; background work needs a fresh value.
+        DesktopNetworkState.refreshIfStale(maxAgeMillis = 60_000)
         fun allowed(key: String): Boolean = when (parseCompatForegroundNetworkPolicy(preferences[key])) {
             CompatForegroundNetworkPolicy.ALWAYS -> true
-            CompatForegroundNetworkPolicy.WIFI_ONLY -> DesktopNetworkState.wifi
+            CompatForegroundNetworkPolicy.WIFI_ONLY -> DesktopNetworkState.unmetered
             CompatForegroundNetworkPolicy.NONE -> false
         }
         val result = withTimeout(5 * 60_000L) { refreshCompatTabsInBackground(compatibility, repository,
             checkUpdates = manual || allowed("compat.background.backgroundThreadUpdateCheck"),
             checkExistence = manual || allowed("compat.background.backgroundThreadExistCheck"),
-            checkWatchWords = compatWatchAllowed(preferences, DesktopNetworkState.wifi),
+            checkWatchWords = compatWatchAllowed(preferences, DesktopNetworkState.unmetered),
             commitGate = { commit -> profileMutex.withLock {
                 if (switching || profile != ExperienceProfile.TOSHIAKI_COMPAT || generation != token) false
                 else { commit(); true }
@@ -153,14 +158,28 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         }
     }
 
+    /**
+     * Each step is bounded and runs even if an earlier one fails or times out:
+     * a video VLC never released must not keep the HTTP client, cookies, the
+     * database and the single-instance lock open (the host's overall limit would
+     * otherwise cut all of them off).
+     */
     suspend fun close() = withContext(Dispatchers.IO) {
-        refresher.close()
-        repository.closeAsync().join()
-        originals.closeAndAwait()
-        httpClient.close()
-        cookies.close()
-        compatibility.close()
-        environment.closeAndAwait()
+        closeStep("history refresher", 2_000) { refresher.close() }
+        closeStep("board repository", 2_000) { repository.closeAsync().join() }
+        closeStep("original media", 3_000) { originals.closeAndAwait() }
+        closeStep("HTTP client", 1_000) { httpClient.close() }
+        closeStep("cookies", 1_000) { cookies.close() }
+        closeStep("compatibility database", 1_000) { compatibility.close() }
+        closeStep("video runtime", 1_000) { com.valoser.futacha.shared.ui.board.DesktopVlc.release() }
+        closeStep("environment", 1_000) { environment.closeAndAwait() }
+    }
+
+    private suspend fun closeStep(name: String, timeoutMillis: Long, step: suspend () -> Unit) {
+        try {
+            if (withTimeoutOrNull(timeoutMillis) { step() } == null) Logger.w("DesktopShutdown", "$name did not close within ${timeoutMillis}ms")
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { Logger.e("DesktopShutdown", "Failed to close $name", failure) }
     }
 }
 
@@ -181,7 +200,13 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
         return
     }
     LaunchedEffect(Unit) {
-        while (isActive) { DesktopNetworkState.refresh(); delay(60_000) }
+        while (isActive) {
+            DesktopNetworkState.refresh()
+            // Probe once a minute while shown, rarely while minimized or hidden (App Nap);
+            // background refreshes probe on demand and showing the window probes at once.
+            val shown = DesktopLifecycle.foreground.value
+            withTimeoutOrNull(if (shown) 60_000L else 10 * 60_000L) { DesktopLifecycle.foreground.first { it != shown } }
+        }
     }
     LaunchedEffect(graph.profile, graph.switching) {
         if (graph.switching) return@LaunchedEffect
@@ -246,7 +271,7 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { Logger.w("DesktopNotifications", failure.message.orEmpty()); delay(5000) }
             }
-            delay(500)
+            awaitNextNotificationPoll()
         }
     }
     var notificationRequestPending by remember { mutableStateOf(false) }
@@ -298,5 +323,17 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
                 },
                 onExitApplication = onExit)
         }
+    }
+}
+
+/**
+ * Polls quickly only while a window has focus. Otherwise a notification click
+ * activates the app first, which wakes the poll, so a slow fallback suffices
+ * and a hidden or minimized app is not woken twice a second.
+ */
+private suspend fun awaitNextNotificationPoll() {
+    val interval = if (DesktopLifecycle.focused.value) 500L else 5_000L
+    withTimeoutOrNull(interval) {
+        merge(DesktopLifecycle.focused.drop(1), DesktopLifecycle.appActivations.drop(1)).first()
     }
 }

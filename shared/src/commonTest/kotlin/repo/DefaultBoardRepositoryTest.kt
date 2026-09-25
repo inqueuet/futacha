@@ -161,6 +161,38 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
+    fun catalogParsingDoesNotHoldTheBoardLayoutLock() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi()
+        // The first parse waits until the second catalog GET was sent; with the
+        // parse under the layout lock that GET could never start.
+        val parser = object : HtmlParser by FakeHtmlParser() {
+            var parses = 0
+            override suspend fun parseCatalogPage(
+                html: String,
+                baseUrl: String?
+            ): com.valoser.futacha.shared.model.CatalogPageContent {
+                if (++parses == 1) {
+                    kotlinx.coroutines.withTimeout(5_000L) {
+                        while (api.fetchCatalogCalls < 2) delay(5L)
+                    }
+                }
+                return com.valoser.futacha.shared.model.CatalogPageContent(items = emptyList())
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = parser)
+
+        coroutineScope {
+            val first = async { repository.getCatalogPage(boardUrl, CatalogMode.Catalog) }
+            while (api.fetchCatalogCalls < 1) delay(5L)
+            val second = async { repository.getCatalogPage(boardUrl, CatalogMode.Catalog) }
+            listOf(first, second).awaitAll()
+        }
+
+        assertEquals(2, api.fetchCatalogCalls)
+    }
+
+    @Test
     fun concurrentCatalogsWithDifferentSettingsNeverInterleaveSetupAndGet() = runBlocking {
         val boardUrl = "https://dec.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
@@ -390,7 +422,7 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
-    fun resolveCatalogDisplayTitle_usesSmallThreadHeadFirst() = runBlocking {
+    fun resolveCatalogDisplayTitle_readsTheLargerThreadHeadInOneRequest() = runBlocking {
         val boardUrl = "https://img.2chan.net/b/"
         val api = FakeBoardApi(
             threadHeadHtmlByMaxLines = { maxLines ->
@@ -413,12 +445,12 @@ class DefaultBoardRepositoryTest {
 
         val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
 
-        assertEquals("補完タイトル", title)
-        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
+        assertEquals("大きい取得", title)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
     }
 
     @Test
-    fun resolveCatalogDisplayTitle_fetchesLargerThreadHeadOnlyWhenInitialHeadHasNoTitle() = runBlocking {
+    fun resolveCatalogDisplayTitle_findsTitleBeyondTheSmallHeadWithoutASecondRequest() = runBlocking {
         val boardUrl = "https://img.2chan.net/b/"
         val api = FakeBoardApi(
             threadHeadHtmlByMaxLines = { maxLines ->
@@ -442,7 +474,7 @@ class DefaultBoardRepositoryTest {
         val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
 
         assertEquals("フォールバックタイトル", title)
-        assertEquals(listOf(16, 65), api.fetchThreadHeadMaxLines)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
     }
 
     @Test
@@ -527,7 +559,7 @@ class DefaultBoardRepositoryTest {
 
         assertEquals("20", first)
         assertEquals("20", second)
-        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
     }
 
     @Test

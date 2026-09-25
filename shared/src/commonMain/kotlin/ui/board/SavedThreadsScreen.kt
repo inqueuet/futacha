@@ -35,6 +35,7 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlinx.datetime.TimeZone
@@ -92,6 +93,10 @@ fun SavedThreadsScreen(
             }
         }
     }
+
+    // System Back / the iOS edge swipe return to the caller like the toolbar button;
+    // without this Android Back finished the Activity from the saved-thread list.
+    PlatformBackHandler(onBack = onBack)
 
     // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
     LaunchedEffect(repository) {

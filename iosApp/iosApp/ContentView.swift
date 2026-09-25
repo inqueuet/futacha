@@ -19,7 +19,9 @@ final class SavedHtmlDocumentStore: ObservableObject {
         guard url.isFileURL, ["htm", "html"].contains(url.pathExtension.lowercased()) else {
             return false
         }
-        close()
+        // Replacing an open document only releases the previous URL here; its
+        // sheet's onDismiss runs later and must not touch the new document.
+        releaseSecurityScopedAccess()
         if url.startAccessingSecurityScopedResource() {
             securityScopedURL = url
         }
@@ -27,10 +29,17 @@ final class SavedHtmlDocumentStore: ObservableObject {
         return true
     }
 
-    func close() {
+    /// onDismiss of the sheet. SwiftUI clears the binding before calling it when
+    /// the user closes the sheet; when the document was replaced, the old sheet
+    /// is dismissed while `document` already holds the new one, which stays open.
+    func sheetDismissed() {
+        guard document == nil else { return }
+        releaseSecurityScopedAccess()
+    }
+
+    private func releaseSecurityScopedAccess() {
         securityScopedURL?.stopAccessingSecurityScopedResource()
         securityScopedURL = nil
-        document = nil
     }
 }
 
@@ -279,7 +288,7 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(item: $savedHtmlStore.document, onDismiss: savedHtmlStore.close) { document in
+        .sheet(item: $savedHtmlStore.document, onDismiss: savedHtmlStore.sheetDismissed) { document in
             SavedHtmlDocumentView(document: document)
         }
         .onAppear {

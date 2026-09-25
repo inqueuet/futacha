@@ -22,4 +22,14 @@ class HtmlEntityDecoderTest {
         val value = "&unknown; &#xZZ; &#1; &#xD800; &#x110000;"
         assertEquals(value, HtmlEntityDecoder.decode(value))
     }
+
+    @Test
+    fun decodedAmpersandIsNotReadAsAnotherEntity() {
+        assertEquals("&#60; &lt; &amp;", HtmlEntityDecoder.decode("&amp;#60; &amp;lt; &amp;amp;"))
+    }
+
+    @Test
+    fun namedEntitiesContainingDigitsAreDecoded() {
+        assertEquals("² ½ ¾", HtmlEntityDecoder.decode("&sup2; &frac12; &frac34;"))
+    }
 }

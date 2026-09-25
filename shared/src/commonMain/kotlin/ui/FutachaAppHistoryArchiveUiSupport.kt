@@ -53,12 +53,30 @@ internal fun buildFutachaHistoryArchiveMissingMessage(): String {
     return "インポートできる履歴アーカイブがありません"
 }
 
-internal fun buildFutachaHistoryArchiveExportMessage(entryCount: Int, archiveDirectory: String): String {
-    return "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)"
+internal fun buildFutachaHistoryArchiveExportMessage(
+    entryCount: Int,
+    archiveDirectory: String,
+    omittedEntryCount: Int = 0
+): String {
+    val base = "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)"
+    return if (omittedEntryCount > 0) {
+        "$base。1回に保存できるのは${MAX_HISTORY_ARCHIVE_ENTRIES}件までのため、閲覧が古い${omittedEntryCount}件は含まれていません"
+    } else {
+        base
+    }
 }
 
 internal fun buildFutachaHistoryArchiveExportThenClearMessage(entryCount: Int, archiveDirectory: String): String {
     return "履歴アーカイブを作成し、履歴を一括削除しました: ${entryCount}件 ($archiveDirectory)"
+}
+
+internal fun buildFutachaHistoryArchiveExportKeptHistoryMessage(
+    entryCount: Int,
+    archiveDirectory: String,
+    omittedEntryCount: Int
+): String {
+    return "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)。" +
+        "1回に保存できるのは${MAX_HISTORY_ARCHIVE_ENTRIES}件までで、閲覧が古い${omittedEntryCount}件が含まれないため、履歴は削除していません"
 }
 
 internal fun buildFutachaHistoryArchiveImportMessage(result: AppHistoryArchiveImportResult): String {
@@ -85,7 +103,8 @@ internal suspend fun exportAllFutachaHistoryArchive(
     ).getOrThrow()
     return buildFutachaHistoryArchiveExportMessage(
         entryCount = result.manifest.entryCount,
-        archiveDirectory = result.archiveDirectory
+        archiveDirectory = result.archiveDirectory,
+        omittedEntryCount = result.omittedEntryCount
     )
 }
 
@@ -106,6 +125,14 @@ internal suspend fun exportAllFutachaHistoryArchiveThenClear(
         exportedAtEpochMillis = now,
         appVersion = appVersion
     ).getOrThrow()
+    if (result.omittedEntryCount > 0) {
+        // Clearing now would lose the entries the archive could not hold.
+        return buildFutachaHistoryArchiveExportKeptHistoryMessage(
+            entryCount = result.manifest.entryCount,
+            archiveDirectory = result.archiveDirectory,
+            omittedEntryCount = result.omittedEntryCount
+        )
+    }
     clearHistory()
     return buildFutachaHistoryArchiveExportThenClearMessage(
         entryCount = result.manifest.entryCount,
@@ -136,7 +163,8 @@ internal suspend fun exportSelectedFutachaHistoryArchive(
     ).getOrThrow()
     return buildFutachaHistoryArchiveExportMessage(
         entryCount = result.manifest.entryCount,
-        archiveDirectory = result.archiveDirectory
+        archiveDirectory = result.archiveDirectory,
+        omittedEntryCount = result.omittedEntryCount
     )
 }
 
@@ -163,8 +191,8 @@ internal suspend fun importLatestFutachaHistoryArchive(
 internal suspend fun findLatestFutachaHistoryArchiveDirectory(
     fileSystem: FileSystem,
     json: Json = Json { ignoreUnknownKeys = true }
-): String? {
-    return boundedHistoryArchiveCandidateNames(fileSystem)
+): String? = withContext(AppDispatchers.io) {
+    boundedHistoryArchiveCandidateNames(fileSystem)
         .mapNotNull { fileName ->
             val archiveName = fileName.trim().trim('/')
             if (archiveName.isBlank()) {
@@ -185,6 +213,16 @@ internal suspend fun loadLatestFutachaHistoryArchivePreview(
     json: Json = Json { ignoreUnknownKeys = true }
 ): FutachaHistoryArchivePreview? {
     val fs = fileSystem ?: return null
+    // Up to 500 manifests are validated and compared against 20,000 history
+    // entries; callers launch from the UI scope.
+    return withContext(AppDispatchers.io) { loadFutachaHistoryArchivePreview(stateStore, fs, json) }
+}
+
+private suspend fun loadFutachaHistoryArchivePreview(
+    stateStore: AppStateStore,
+    fs: FileSystem,
+    json: Json
+): FutachaHistoryArchivePreview? {
     val archiveDirectory = findNextFutachaHistoryArchiveDirectory(stateStore, fs, json) ?: return null
     val manifest = loadBoundedHistoryArchiveManifest(fs, archiveDirectory, json) ?: return null
     val currentKeys = stateStore.historyValueKeys()
@@ -210,9 +248,9 @@ internal suspend fun findNextFutachaHistoryArchiveDirectory(
     stateStore: AppStateStore,
     fileSystem: FileSystem,
     json: Json = Json { ignoreUnknownKeys = true }
-): String? {
+): String? = withContext(AppDispatchers.io) {
     val currentKeys = stateStore.historyValueKeys()
-    return loadFutachaHistoryArchiveManifestCandidates(fileSystem, json)
+    loadFutachaHistoryArchiveManifestCandidates(fileSystem, json)
         .maxWithOrNull(
             compareBy<Pair<String, HistoryArchiveManifest>> {
                 it.second.entries.count { entry ->

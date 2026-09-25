@@ -35,9 +35,13 @@ class OriginalMediaPlaybackTest {
         }
         override suspend fun retryAfter(retry: Int, failure: Throwable): Boolean { retries.update { it + 1 }; return true }
     }
-    private suspend fun using(transfer: Transfer = Transfer(), block: suspend (OriginalMediaStore, Transfer) -> Unit) {
+    private suspend fun using(
+        transfer: Transfer = Transfer(), lingerMillis: Long = 0,
+        block: suspend (OriginalMediaStore, Transfer) -> Unit
+    ) {
         val dir = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("futacha-stream-test-${Random.nextLong()}")
-        val store = OriginalMediaStore("stream-test", { DiskCache.Builder().directory(dir).maxSizeBytes(1024 * 1024).build() }, transfer)
+        val store = OriginalMediaStore("stream-test", { DiskCache.Builder().directory(dir).maxSizeBytes(1024 * 1024).build() },
+            transfer, playbackLingerMillis = lingerMillis)
         try { withTimeout(10_000) { block(store, transfer) } }
         finally { withTimeout(5_000) { store.closeAndAwait() }; FileSystem.SYSTEM.deleteRecursively(dir, mustExist = false) }
     }
@@ -66,6 +70,54 @@ class OriginalMediaPlaybackTest {
                 assertEquals("prefixsuffix", other.readAt(0, 64).decodeToString(), "Read handle survives cache commit/rename")
                 assertEquals(1, transfer.calls.value)
             } finally { player.close(); other.close() }
+        }
+    }
+
+    @Test fun playbackReadsIntoACallerBufferWithoutReturningNewArrays(): Unit = runBlocking {
+        using { store, transfer ->
+            store.acquireForPlayback(request).use { player ->
+                transfer.prefixReady.await()
+                val buffer = ByteArray(10) { '.'.code.toByte() }
+                assertEquals(6, player.readAt(0, buffer, 2, 8))
+                assertEquals("..prefix..", buffer.decodeToString())
+                transfer.finish.complete(Unit)
+                player.complete().use { }
+                assertEquals(3, player.readAt(9, buffer, 0, 3))
+                assertEquals("fix", buffer.decodeToString(0, 3))
+                assertEquals(0, player.readAt(12, buffer, 0, 1))
+            }
+        }
+    }
+
+    @Test fun leaseReaderSessionKeepsOneFileHandleForManyReads(): Unit = runBlocking {
+        val dir = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("futacha-reader-test-${Random.nextLong()}")
+        var opens = 0
+        val counting = object : okio.ForwardingFileSystem(FileSystem.SYSTEM) {
+            override fun openReadOnly(file: okio.Path): okio.FileHandle {
+                opens += 1
+                return super.openReadOnly(file)
+            }
+        }
+        val transfer = Transfer().apply { finish.complete(Unit) }
+        val store = OriginalMediaStore(
+            "reader-test",
+            { DiskCache.Builder().directory(dir).fileSystem(counting).maxSizeBytes(1024 * 1024).build() },
+            transfer
+        )
+        try {
+            withTimeout(10_000) {
+                store.acquire(request).use { lease ->
+                    val opensBefore = opens
+                    val text = lease.withReader { readAt ->
+                        buildString { for (offset in 0 until 12) append(readAt(offset.toLong(), 1).decodeToString()) }
+                    }
+                    assertEquals("prefixsuffix", text)
+                    assertEquals(opensBefore + 1, opens)
+                }
+            }
+        } finally {
+            withTimeout(5_000) { store.closeAndAwait() }
+            FileSystem.SYSTEM.deleteRecursively(dir, mustExist = false)
         }
     }
 
@@ -114,6 +166,63 @@ class OriginalMediaPlaybackTest {
             transfer.finish.complete(Unit)
             store.acquire(request).use { assertEquals("prefixsuffix", it.readAt(0, 12).decodeToString()) }
             assertEquals(2, transfer.calls.value)
+        }
+    }
+
+    @Test fun abandonedPlaybackDownloadLingersSoARetryJoinsTheSameTransfer(): Unit = runBlocking {
+        using(lingerMillis = 60_000) { store, transfer ->
+            val player = store.acquireForPlayback(request)
+            transfer.prefixReady.await()
+            player.close()
+            delay(50)
+            assertFalse(transfer.stopped.isCompleted, "a player that gave up must not discard the partial download")
+            // The retry sees the bytes already downloaded and no second request is made.
+            store.acquireForPlayback(request).use { retry ->
+                assertEquals("prefix", retry.readAt(0, 6).decodeToString())
+                transfer.finish.complete(Unit)
+                retry.complete().use { assertEquals("prefixsuffix", it.readAt(0, 12).decodeToString()) }
+            }
+            assertEquals(1, transfer.calls.value)
+        }
+    }
+
+    @Test fun lingeringPlaybackDownloadIsCancelledWhenNobodyReturns(): Unit = runBlocking {
+        using(lingerMillis = 100) { store, transfer ->
+            store.acquireForPlayback(request).close()
+            transfer.prefixReady.await()
+            transfer.stopped.await()
+            assertFailsWith<IOException> { store.acquire(request.copy(allowNetwork = false)) }
+            transfer.finish.complete(Unit)
+            store.acquire(request).close()
+            assertEquals(2, transfer.calls.value)
+        }
+    }
+
+    @Test fun lingeringPlaybackDownloadThatCompletesIsCachedForTheNextRequest(): Unit = runBlocking {
+        using(lingerMillis = 60_000) { store, transfer ->
+            store.acquireForPlayback(request).close()
+            transfer.prefixReady.await()
+            transfer.finish.complete(Unit)
+            transfer.stopped.await()
+            withTimeout(5_000) {
+                while (runCatching { store.acquire(request.copy(allowNetwork = false)).close() }.isFailure) delay(10)
+            }
+            assertEquals(1, transfer.calls.value)
+        }
+    }
+
+    @Test fun stallTimeoutFailsOnlyWithoutProgressAndNotAfterCompletion(): Unit = runBlocking {
+        using { store, transfer ->
+            store.acquireForPlayback(request).use { player ->
+                transfer.prefixReady.await()
+                assertFailsWith<OriginalMediaDownloadStalled> {
+                    player.withDownloadStallTimeout(100) { player.complete().close() }
+                }
+                transfer.finish.complete(Unit)
+                player.complete().close()
+                // Complete originals are never cut off, however long the local work takes.
+                assertEquals("ok", player.withDownloadStallTimeout(50) { delay(200); "ok" })
+            }
         }
     }
 

@@ -17,6 +17,7 @@ import com.valoser.futacha.shared.ai.normalizeThreadSummary
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -510,11 +511,22 @@ private suspend fun <T> runThreadAiInferenceWithTimeout(
     aiService: OnDeviceAiService,
     block: suspend () -> T
 ): T? {
-    val didLock = withTimeoutOrNull(timeoutMillis) {
-        aiInferenceMutex.lock()
-        true
-    } ?: false
+    // Tracked outside the timeout: it can fire after lock() returned, making
+    // withTimeoutOrNull return null while this coroutine holds the mutex,
+    // which would block every later AI request on this screen.
+    var locked = false
+    val didLock = try {
+        withTimeoutOrNull(timeoutMillis) {
+            aiInferenceMutex.lock()
+            locked = true
+            true
+        } ?: false
+    } catch (e: CancellationException) {
+        if (locked) aiInferenceMutex.unlock()
+        throw e
+    }
     if (!didLock) {
+        if (locked) aiInferenceMutex.unlock()
         return null
     }
     return try {

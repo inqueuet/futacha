@@ -96,16 +96,19 @@ internal fun resolveThreadMenuActionState(
 
 internal enum class ThreadBackAction {
     CloseDrawer,
+    ExitSearch,
     NavigateBack
 }
 
+/** Same order as the catalog: drawer, then in-thread search, then leave the thread. */
 internal fun resolveThreadBackAction(
-    isDrawerOpen: Boolean
+    isDrawerOpen: Boolean,
+    isSearchActive: Boolean = false
 ): ThreadBackAction {
-    return if (isDrawerOpen) {
-        ThreadBackAction.CloseDrawer
-    } else {
-        ThreadBackAction.NavigateBack
+    return when {
+        isDrawerOpen -> ThreadBackAction.CloseDrawer
+        isSearchActive -> ThreadBackAction.ExitSearch
+        else -> ThreadBackAction.NavigateBack
     }
 }
 

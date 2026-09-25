@@ -7,6 +7,8 @@ import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -377,12 +379,14 @@ internal suspend fun <T> withThreadSaveMediaWriteLock(
             block()
         }
     } finally {
-        mediaWriteLocksGuard.withLock {
-            val current = mediaWriteLocks[relativePath]
-            if (current === lockEntry) {
-                current.holders -= 1
-                if (current.holders <= 0 && !current.mutex.isLocked) {
-                    mediaWriteLocks.remove(relativePath)
+        withContext(NonCancellable) {
+            mediaWriteLocksGuard.withLock {
+                val current = mediaWriteLocks[relativePath]
+                if (current === lockEntry) {
+                    current.holders -= 1
+                    if (current.holders <= 0 && !current.mutex.isLocked) {
+                        mediaWriteLocks.remove(relativePath)
+                    }
                 }
             }
         }

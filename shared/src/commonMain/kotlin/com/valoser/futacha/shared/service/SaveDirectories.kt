@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.SaveLocation
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,12 +45,14 @@ object ThreadStorageLockRegistry {
                 block()
             }
         } finally {
-            guard.withLock {
-                val current = locks[key]
-                if (current === entry) {
-                    current.holders -= 1
-                    if (current.holders <= 0 && !current.mutex.isLocked) {
-                        locks.remove(key)
+            withContext(NonCancellable) {
+                guard.withLock {
+                    val current = locks[key]
+                    if (current === entry) {
+                        current.holders -= 1
+                        if (current.holders <= 0 && !current.mutex.isLocked) {
+                            locks.remove(key)
+                        }
                     }
                 }
             }
@@ -82,12 +86,14 @@ object ThreadStorageLockRegistry {
             if (locked) {
                 entry.mutex.unlock()
             }
-            guard.withLock {
-                val current = locks[key]
-                if (current === entry) {
-                    current.holders -= 1
-                    if (current.holders <= 0 && !current.mutex.isLocked) {
-                        locks.remove(key)
+            withContext(NonCancellable) {
+                guard.withLock {
+                    val current = locks[key]
+                    if (current === entry) {
+                        current.holders -= 1
+                        if (current.holders <= 0 && !current.mutex.isLocked) {
+                            locks.remove(key)
+                        }
                     }
                 }
             }

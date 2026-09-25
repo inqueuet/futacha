@@ -3,9 +3,13 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.CompatImagePhash
+import com.valoser.futacha.shared.compat.compatImagePhashCachePreferenceKey
+import com.valoser.futacha.shared.compat.isValidCompatImagePhash
 import com.valoser.futacha.shared.compat.ScrollAnchor
 import com.valoser.futacha.shared.compat.compatInlineLinks
 import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.compat.toCompatPlainTextCached
+import com.valoser.futacha.shared.compat.compatInlineLinksCached
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.media.FutabaMediaKind
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
@@ -15,6 +19,7 @@ import com.valoser.futacha.shared.media.classifyFutabaMedia
 import com.valoser.futacha.shared.media.mediaFileExtension
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -179,7 +184,7 @@ internal fun compatApuSmallSourceUrlFromMessage(messageHtml: String): String? =
 private fun compatApuFileAppearsOnlyInQuote(messageHtml: String, fileName: String): Boolean {
     if (fileName.isBlank()) return false
     val normalizedFileName = fileName.lowercase()
-    val lines = messageHtml.toCompatPlainText().lineSequence().map(String::lowercase).toList()
+    val lines = messageHtml.toCompatPlainTextCached().lineSequence().map(String::lowercase).toList()
     val quoted = lines.any { it.trimStart().startsWith(">") && normalizedFileName in it }
     val unquoted = lines.any { !it.trimStart().startsWith(">") && normalizedFileName in it }
     return quoted && !unquoted
@@ -188,8 +193,8 @@ private fun compatApuFileAppearsOnlyInQuote(messageHtml: String, fileName: Strin
 /** Return all visible あぷ小 links, including bare `fu123.jpg` filenames. */
 internal fun compatInlineApuSmallMediaUrls(messageHtml: String): List<String> =
     buildList {
-        val plainMessage = messageHtml.toCompatPlainText()
-        compatInlineLinks(messageHtml)
+        val plainMessage = messageHtml.toCompatPlainTextCached()
+        compatInlineLinksCached(messageHtml)
             .asSequence()
             // A quoted `>fu123.jpg` is part of the referenced post, not an
             // attachment belonging to the current post.  compatInlineLinks
@@ -221,9 +226,8 @@ internal fun compatVisibleInlineApuSmallMediaUrls(
     messageHtml: String,
     upsThumbnailMethod: String?,
     wifiConnected: Boolean
-): List<String> = compatInlineApuSmallMediaUrls(messageHtml)
-    .takeIf { compatApuSmallThumbEnabled(upsThumbnailMethod, wifiConnected) }
-    .orEmpty()
+): List<String> = if (compatApuSmallThumbEnabled(upsThumbnailMethod, wifiConnected))
+    compatInlineApuSmallMediaUrls(messageHtml) else emptyList()
 
 internal fun normalizeCompatPostMedia(post: CompatPostSnapshot): CompatPostSnapshot {
     // #78: snapshots written by builds before the archive-label fix can
@@ -309,6 +313,27 @@ internal fun normalizeCompatThreadSnapshot(snapshot: CompatThreadSnapshot): Comp
 
 internal fun compatMediaIdentity(post: CompatPostSnapshot): String =
     post.mediaKey ?: post.postNo
+
+/**
+ * Unique layout keys for a media list. [compatMediaIdentity] can repeat when a
+ * cache/archive merge carries duplicate or blank post numbers (#29), and a
+ * repeated pager key is a fatal Compose exception. The first occurrence keeps
+ * the plain identity so that page retention across list changes is unchanged;
+ * only later repeats receive an occurrence suffix.
+ */
+internal fun compatUniqueMediaKeys(posts: List<CompatPostSnapshot>): List<String> {
+    val used = HashSet<String>(posts.size * 2)
+    return posts.map { post ->
+        val identity = compatMediaIdentity(post)
+        var key = identity
+        var occurrence = 0
+        while (!used.add(key)) {
+            occurrence += 1
+            key = "$identity#dup$occurrence"
+        }
+        key
+    }
+}
 
 internal enum class CompatGalleryTapAction {
     OPEN_VIEWER,
@@ -545,6 +570,88 @@ internal suspend fun compatImagePhashHiddenPostNos(
     return collectCompatImagePhashes(client, candidates).filterValues { phash ->
         rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
     }.keys
+}
+
+/**
+ * Progressive variant of [compatImagePhashHiddenPostNos] for the viewer and the
+ * gallery, which must not keep a spinner up while up to 256 originals are
+ * fetched one by one. [onUpdate] first receives the posts hidden by hashes that
+ * are already known (the in-memory hash cache and the persisted image-hash
+ * cache shared with the catalog), then growing sets while the remaining hashes
+ * are fetched. Newly computed hashes are persisted best-effort.
+ */
+internal suspend fun collectCompatImagePhashHiddenPostNos(
+    httpClient: HttpClient?,
+    store: com.valoser.futacha.shared.compat.CompatibilityStore?,
+    posts: List<CompatPostSnapshot>,
+    rules: List<com.valoser.futacha.shared.compat.CompatNgRule>,
+    threshold: Int,
+    batchTimeoutMillis: Long = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
+    requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
+    publishEvery: Int = 16,
+    onUpdate: suspend (Set<String>) -> Unit
+) {
+    val client = httpClient
+    if (client == null || rules.isEmpty()) {
+        onUpdate(emptySet())
+        return
+    }
+    val candidates = withContext(AppDispatchers.parsing) {
+        posts
+            .map(::normalizeCompatPostMedia)
+            .mapNotNull { post ->
+                (post.imageUrl ?: post.thumbnailUrl)?.let { url -> post.postNo to url }
+            }
+            .distinctBy { it.second }
+            .take(256)
+    }
+    fun hiddenBy(hashes: Map<String, String>): Set<String> = hashes.filterValues { phash ->
+        rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
+    }.keys
+    val memoryHashes = compatPhashCacheMutex.withLock {
+        candidates.mapNotNull { (postNo, url) -> compatPhashCache[url]?.let { postNo to it } }.toMap()
+    }
+    val storedHashes = if (store == null) emptyMap() else {
+        val remaining = candidates.filterNot { it.first in memoryHashes }
+        val stored = runSuspendCatchingPreservingCancellation {
+            store.loadImagePhashes(remaining.map { compatImagePhashCachePreferenceKey(it.second) })
+        }.onFailure { Logger.e("CompatMedia", "Failed to load image hashes", it) }
+            .getOrDefault(emptyMap())
+        remaining.mapNotNull { (postNo, url) ->
+            stored[compatImagePhashCachePreferenceKey(url)]
+                ?.takeIf(::isValidCompatImagePhash)
+                ?.let { postNo to it }
+        }.toMap()
+    }
+    val known = memoryHashes + storedHashes
+    onUpdate(hiddenBy(known))
+    val missing = candidates.filterNot { it.first in known }
+    if (missing.isEmpty()) return
+    val computed = linkedMapOf<String, String>()
+    var sincePublish = 0
+    withTimeoutOrNull(batchTimeoutMillis) {
+        missing.forEach { (postNo, url) ->
+            val phash = withTimeoutOrNull(requestTimeoutMillis) {
+                fetchCompatImagePhash(client, url).getOrNull()
+            } ?: return@forEach
+            computed[postNo] = phash
+            if (++sincePublish >= publishEvery) {
+                sincePublish = 0
+                onUpdate(hiddenBy(known + computed))
+            }
+        }
+    }
+    if (sincePublish > 0) onUpdate(hiddenBy(known + computed))
+    if (store != null && computed.isNotEmpty()) {
+        val urlByPostNo = missing.toMap()
+        val entries = computed.mapNotNull { (postNo, phash) ->
+            urlByPostNo[postNo]?.let { compatImagePhashCachePreferenceKey(it) to phash }
+        }.toMap()
+        withContext(NonCancellable) {
+            runSuspendCatchingPreservingCancellation { store.saveImagePhashes(entries) }
+                .onFailure { Logger.e("CompatMedia", "Failed to save image hashes", it) }
+        }
+    }
 }
 
 /**
@@ -1203,14 +1310,22 @@ internal suspend fun fetchCompatImagePhash(
             }
         }
     } finally {
-        compatPhashCacheMutex.withLock {
-            requestLock.holders -= 1
-            if (requestLock.holders <= 0 && compatPhashRequestLocks[url] === requestLock) {
-                compatPhashRequestLocks.remove(url)
+        // Callers commonly time out (3 s) before the request itself (8 s).
+        // A cancelled withLock would skip this bookkeeping and leak the entry.
+        withContext(NonCancellable) {
+            compatPhashCacheMutex.withLock {
+                requestLock.holders -= 1
+                if (requestLock.holders <= 0 && compatPhashRequestLocks[url] === requestLock) {
+                    compatPhashRequestLocks.remove(url)
+                }
             }
         }
     }
 }
+
+/** Number of in-flight per-URL hash request locks, for tests. */
+internal suspend fun compatPhashRequestLockCountForTest(): Int =
+    compatPhashCacheMutex.withLock { compatPhashRequestLocks.size }
 
 internal fun formatCompatMediaByteSize(bytes: Long?): String = when {
     bytes == null -> "不明"

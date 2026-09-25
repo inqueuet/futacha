@@ -159,6 +159,9 @@ fun buildArchiveReportPayload(
     )
 }
 
+/** Shortest wait after a server-requested retry (429/5xx with Retry-After). */
+internal const val ARCHIVE_REPORT_MIN_RETRY_AFTER_MILLIS = 60_000L
+
 fun archiveReportRetryDelayMillis(attemptCountAfterFailure: Int, jitterFactor: Double): Long {
     val base = when (attemptCountAfterFailure.coerceAtLeast(1)) {
         1 -> 60_000L
@@ -180,11 +183,17 @@ fun classifyArchiveReportResponse(
 ): ArchiveReportDisposition {
     val reason = response?.reason.archiveReportSafeReason()
     val errorCode = "http_$status:$reason"
-    fun retry(): ArchiveReportDisposition.Retry = ArchiveReportDisposition.Retry(
-        delayMillis = retryAfterMillis?.coerceAtLeast(0L)
-            ?: archiveReportRetryDelayMillis(nextArchiveReportAttempt(previousAttemptCount), jitterFactor),
-        errorCode = errorCode
-    )
+    fun retry(): ArchiveReportDisposition.Retry {
+        val backoff = archiveReportRetryDelayMillis(nextArchiveReportAttempt(previousAttemptCount), jitterFactor)
+        // Retry-After can only lengthen the wait: "0" (or a short value) on a
+        // 429/5xx would otherwise resend immediately, attempt after attempt.
+        val delayMillis = if (retryAfterMillis == null) {
+            backoff
+        } else {
+            maxOf(retryAfterMillis, backoff, ARCHIVE_REPORT_MIN_RETRY_AFTER_MILLIS)
+        }
+        return ArchiveReportDisposition.Retry(delayMillis = delayMillis, errorCode = errorCode)
+    }
     return when {
         status == 200 || status == 202 -> when {
             response?.accepted == true -> ArchiveReportDisposition.Accepted

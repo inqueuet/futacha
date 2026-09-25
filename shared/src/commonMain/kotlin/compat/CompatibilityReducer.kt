@@ -129,7 +129,21 @@ data class CompatibilityReduction(
  * and an in-flight reorder can still briefly hand Compose a repeated key.
  */
 internal fun distinctCompatBoards(boards: List<CompatBoard>): List<CompatBoard> =
-    boards.distinctBy(CompatBoard::key)
+    boards.distinctByKeepingInstance(CompatBoard::key)
+
+/**
+ * [distinctBy] that returns the receiver itself when it is already distinct.
+ * These helpers run on every recomposition and store emission; keeping the
+ * instance lets Compose skip children that receive the list.
+ */
+internal inline fun <T, K> List<T>.distinctByKeepingInstance(selector: (T) -> K): List<T> {
+    if (size < 2) return this
+    val seen = HashSet<K>(size * 2)
+    for (item in this) {
+        if (!seen.add(selector(item))) return distinctBy(selector)
+    }
+    return this
+}
 
 /**
  * A thread is represented by one stable tab key throughout compatibility mode.
@@ -137,7 +151,7 @@ internal fun distinctCompatBoards(boards: List<CompatBoard>): List<CompatBoard> 
  * redundant, it is an unrecoverable Compose LazyLayout exception.
  */
 internal fun distinctCompatTabs(tabs: List<CompatTab>): List<CompatTab> =
-    tabs.distinctBy(CompatTab::key)
+    tabs.distinctByKeepingInstance(CompatTab::key)
 
 internal fun List<CompatTab>.prependCompatTab(tab: CompatTab): List<CompatTab> =
     distinctCompatTabs(listOf(tab) + filterNot { it.key == tab.key })
@@ -174,7 +188,7 @@ internal fun mergeCompatCatalogTab(
 
 /** Keep history keys unique at the UI boundary as well as in SQLite. */
 internal fun distinctCompatHistory(history: List<CompatHistoryEntry>): List<CompatHistoryEntry> =
-    history.distinctBy(CompatHistoryEntry::canonicalUrl)
+    history.distinctByKeepingInstance(CompatHistoryEntry::canonicalUrl)
 
 private fun CompatibilityWorkspaceState.hostAfterClosingLastTab(
     remaining: List<CompatTab>,

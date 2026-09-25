@@ -33,7 +33,8 @@ internal fun buildThreadScreenEnvironmentBundle(
     history: List<ThreadHistoryEntry>,
     threadId: String,
     board: BoardSummary,
-    resolvedThreadUrlOverride: String?
+    resolvedThreadUrlOverride: String?,
+    repositories: ThreadScreenEnvironmentBundle? = null
 ): ThreadScreenEnvironmentBundle {
     val activeRepository = repository ?: FakeBoardRepository()
     val effectiveBoardUrl = resolveEffectiveBoardUrl(resolvedThreadUrlOverride, board.url)
@@ -53,20 +54,20 @@ internal fun buildThreadScreenEnvironmentBundle(
             normalizeHistoryBoardUrl(entry.boardUrl) == normalizedBoardUrlForHistory
         }
     }
-    val manualSaveRepository = fileSystem?.let { fs ->
+    val manualSaveRepository = repositories?.manualSaveRepository ?: fileSystem?.let { fs ->
         SavedThreadRepository(
             fs,
             baseDirectory = manualSaveDirectory,
             baseSaveLocation = manualSaveLocation
         )
     }
-    val importedHistoryRepository = fileSystem?.let { fs ->
+    val importedHistoryRepository = repositories?.importedHistoryRepository ?: fileSystem?.let { fs ->
         SavedThreadRepository(
             fs,
             baseDirectory = IMPORTED_HISTORY_DIRECTORY
         )
     }
-    val legacyManualSaveRepository = fileSystem?.let { fs ->
+    val legacyManualSaveRepository = repositories?.legacyManualSaveRepository ?: fileSystem?.let { fs ->
         val isCurrentDefaultPath = manualSaveLocation is SaveLocation.Path &&
             isDefaultManualSaveRoot(manualSaveDirectory)
         if (isCurrentDefaultPath) {

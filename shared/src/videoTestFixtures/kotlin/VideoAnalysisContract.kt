@@ -44,6 +44,19 @@ object VideoAnalysisContract {
                 slice += it.timeUs
             } }
             check(slice == (first until last).map { info.frames.timeAt(it) }) { "$name half-open interval $slice" }
+            // Reverse tracking reads descending chunks through one reader (Android: seek + flush).
+            val standalone = ArrayList<AnalysisFrame>()
+            readVideoAnalysisFrames(input, info, maximumEdge = 80, includeRgb = false) { standalone += it }
+            val bounds = listOf(info.frames.size, info.frames.size * 2 / 3, info.frames.size / 3, 0)
+            val ranges = bounds.zipWithNext { end, start ->
+                info.frames.timeAt(start) to (info.frames.timestampsUs.getOrNull(end) ?: info.frames.durationUs)
+            }
+            val chunks = ArrayList<List<AnalysisFrame>>()
+            diagnoseTimes("$name chunks") { readVideoAnalysisFrameChunks(input, info, ranges, 80, false, { chunks += it }) }
+            check(chunks.size == 3) { "$name chunk count ${chunks.size}" }
+            val joined = chunks.asReversed().flatten()
+            check(joined.map { it.timeUs } == standalone.map { it.timeUs }) { "$name chunk PTS ${joined.map { it.timeUs }}" }
+            check(joined.indices.all { joined[it].gray.contentEquals(standalone[it].gray) }) { "$name chunk pixels differ" }
             var count = 0
             readVideoAnalysisFrames(input, info, info.frames.timeAt(0) + 1, info.frames.timeAt(1)) { count++ }
             check(count == 0)

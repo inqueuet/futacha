@@ -76,7 +76,9 @@ internal data class BoardManagementBoardListCallbacks(
     val onPinClick: (boards: List<BoardSummary>, index: Int) -> Unit,
     val onMoveUp: (boards: List<BoardSummary>, index: Int) -> Unit,
     val onMoveDown: (boards: List<BoardSummary>, index: Int) -> Unit,
-    val onRename: (boards: List<BoardSummary>, boardId: String, name: String) -> Unit = { _, _, _ -> }
+    val onRename: (boards: List<BoardSummary>, boardId: String, name: String) -> Unit = { _, _, _ -> },
+    // Persists a whole new order at once (the end of a drag).
+    val onReorder: (boards: List<BoardSummary>) -> Unit = {}
 )
 
 internal fun mutateBoardManagementOverlayState(
@@ -186,7 +188,8 @@ internal fun buildBoardManagementInteractionBindingsBundle(
         },
         onRename = { boards, boardId, name ->
             boardInputs.onBoardsReordered(renameBoardSummary(boards, boardId, name))
-        }
+        },
+        onReorder = boardInputs.onBoardsReordered
     )
     return BoardManagementInteractionBindingsBundle(
         historyDrawerCallbacks = historyDrawerCallbacks,

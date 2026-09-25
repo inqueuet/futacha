@@ -14,6 +14,7 @@ import java.nio.ByteBuffer
 /** Animated WebP fallback for API 26/27, where Android ImageDecoder is absent. */
 internal class CompatAwebpDecoder(
     private val source: ImageSource,
+    private val options: Options,
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
         val bytes = source.source().use { it.readBoundedCompatAnimatedImageBytes() }
@@ -23,7 +24,8 @@ internal class CompatAwebpDecoder(
         }).apply {
             setAutoPlay(false)
         }
-        return DecodeResult(drawable.asImage(), isSampled = false)
+        val isSampled = drawable.applyCompatRequestedSize(options)
+        return DecodeResult(drawable.asImage(), isSampled = isSampled)
     }
 
     internal class Factory : Decoder.Factory {
@@ -33,7 +35,7 @@ internal class CompatAwebpDecoder(
             imageLoader: ImageLoader,
         ): Decoder? {
             val isAnimatedWebp = result.source.source().peek().use { hasCompatAnimatedWebpHeader(it) }
-            return CompatAwebpDecoder(result.source).takeIf { isAnimatedWebp }
+            return CompatAwebpDecoder(result.source, options).takeIf { isAnimatedWebp }
         }
     }
 }

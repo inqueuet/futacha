@@ -22,11 +22,14 @@ private val compatMediaUrlFileName = Regex(
     RegexOption.IGNORE_CASE
 )
 
+private val compatPlainBreak = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+private val compatPlainTag = Regex("<[^>]+>")
+
 /** Converts the small HTML subset retained by the compatibility snapshot into tappable text. */
 fun String.toCompatPlainText(): String = HtmlEntityDecoder.decode(
     normalizeFutabaArchiveApuViewLabelHtml(this)
-        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
-        .replace(Regex("<[^>]+>"), "")
+        .replace(compatPlainBreak, "\n")
+        .replace(compatPlainTag, "")
 ).let(::normalizeFutabaArchiveApuViewLabelText)
 
 fun String.normalizeCompatQuoteText(): String = trim().replace(Regex("\\s+"), " ")

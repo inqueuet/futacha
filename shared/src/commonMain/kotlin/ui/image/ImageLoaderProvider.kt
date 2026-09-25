@@ -209,7 +209,8 @@ internal class StableImageLoader(
     }
     private val delegates = StableImageLoaderDelegateState(
         initialDelegate = initialDelegate,
-        shutdownDelegate = ImageLoader::shutdown
+        // ImageLoader.shutdown() leaves the DiskCache open; release it explicitly.
+        shutdownDelegate = ::shutdownImageLoaderAndReleaseDiskCache
     )
 
     override val defaults: ImageRequest.Defaults
@@ -433,6 +434,11 @@ fun rememberFutachaImageLoader(
         stableImageLoader.registerOriginalCacheImporter(platformContext)
         onDispose { stableImageLoader.unregisterOriginalCacheImporter() }
     }
+    DisposableEffect(platformContext) {
+        // Lets auto-saves tell Wi-Fi from mobile data while a UI context exists.
+        val networkProbe = com.valoser.futacha.shared.service.AutoSaveNetworkPolicy.installForUi(platformContext)
+        onDispose { networkProbe.close() }
+    }
     // Resolving Context.cacheDir/getExternalFilesDirs and opening Coil's DiskCache can
     // touch the filesystem.  Do not perform either operation from composition: on a
     // cold Android process cacheDir initialization has been observed to block the main
@@ -471,7 +477,7 @@ fun rememberFutachaImageLoader(
         } finally {
             stableImageLoader.finishDiskCacheInitialization()
             if (!handedOffToLoader) {
-                createdDiskCache?.shutdown()
+                createdDiskCache?.let(SharedImageDiskCaches::release)
             }
         }
     }
@@ -496,6 +502,11 @@ internal fun buildFutachaImageLoader(
         add(FutabaExtensionFallbackInterceptor())
         add(VisibleImageRequestInterceptor())
         originalMediaStore?.let { addOriginalMediaSupport(it) }
+        // Fetchers are tried in registration order and the Ktor factory accepts
+        // every http(s) URL, so platform fetchers must come first: on iOS the
+        // video-frame fetcher for remote MP4/WebM thumbnails was never reached.
+        // They only claim their own URLs (videos, local files, fixtures).
+        addPlatformImageComponents()
         // A manually registered factory takes precedence over Coil's service-loaded
         // default. Reusing the app client also applies Android's main-thread-safe
         // response cleanup to image requests cancelled by Compose.
@@ -508,7 +519,6 @@ internal fun buildFutachaImageLoader(
                 )
             )
         }
-        addPlatformImageComponents()
     }
     .fetcherCoroutineContext(fetcherDispatcher)
     .decoderCoroutineContext(decoderDispatcher)
@@ -807,11 +817,17 @@ private fun createImageDiskCache(
         directoryName = directoryName,
         reportFailure = ::reportImageDiskCacheFailure
     ) {
-        DiskCache.Builder()
-            .directory(directory)
-            .maxSizeBytes(maxBytes)
-            .build()
+        // Shared per directory: see SharedImageDiskCacheRegistry. Release it with
+        // releaseImageLoaderDiskCache, never DiskCache.shutdown().
+        SharedImageDiskCaches.acquire(directory, maxBytes)
     }
+}
+
+/** Shuts a loader down and releases its lease on the shared disk cache. */
+internal fun shutdownImageLoaderAndReleaseDiskCache(loader: ImageLoader) {
+    val diskCache = loader.diskCache
+    loader.shutdown()
+    diskCache?.let(SharedImageDiskCaches::release)
 }
 
 private fun ensureCacheDirectory(

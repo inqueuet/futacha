@@ -310,9 +310,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         values: Map<String, String?>,
         state: MutableStateFlow<String?>
     ) {
-        if (!isLocallyUpdated(key)) {
-            state.value = values[key]
-        }
+        applyUnlessLocallyUpdated(key) { state.value = values[key] }
     }
 
     private fun applyDeferredStringState(
@@ -321,9 +319,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<String>,
         transform: (String?) -> String
     ) {
-        if (!isLocallyUpdated(key)) {
-            state.value = transform(values[key])
-        }
+        val loaded = transform(values[key])
+        applyUnlessLocallyUpdated(key) { state.value = loaded }
     }
 
     private fun applyDeferredBooleanState(
@@ -331,8 +328,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         values: Map<String, Boolean>,
         state: MutableStateFlow<Boolean>
     ) {
-        if (!isLocallyUpdated(key)) {
-            state.value = values[key] ?: state.value
+        applyUnlessLocallyUpdated(key) { state.value = values[key] ?: state.value }
+    }
+
+    /**
+     * Publishes a deferred initial value only if no local write happened.
+     * The check and the set share cacheLock with markLocallyUpdated. Writers
+     * mark before they publish, so a write can no longer land between the
+     * check and the set and be overwritten by the older loaded value.
+     */
+    private inline fun applyUnlessLocallyUpdated(key: String, apply: () -> Unit) {
+        withCacheLock {
+            if (key !in locallyUpdatedKeys) apply()
         }
     }
 
@@ -372,12 +379,6 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private fun markLocallyUpdated(key: String) {
         withCacheLock {
             locallyUpdatedKeys += key
-        }
-    }
-
-    private fun isLocallyUpdated(key: String): Boolean {
-        return withCacheLock {
-            key in locallyUpdatedKeys
         }
     }
 

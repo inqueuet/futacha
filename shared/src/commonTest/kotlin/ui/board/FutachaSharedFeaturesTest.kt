@@ -14,6 +14,13 @@ class FutachaSharedFeaturesTest {
     private fun rule(kind: CompatNgKind, scope: String, value: String) =
         CompatNgRule(compatNgRuleId(kind, scope, value), kind, scope, value, 1L)
 
+    @Test fun noSharedFilteringRetainsTheExistingPageAndPostList() {
+        val original = page(post("1"), post("2"))
+        val result = projectFutachaThread(original, original, context, emptyList(), emptyMap())
+        assertSame(original, result)
+        assertSame(original.posts, result.posts)
+    }
+
     @Test fun sharedNgScopesApplyInFutachaAndCanBeExtractedWithoutDestroyingTheOriginalPage() {
         val original = page(post("1", "通常"), post("2", "秘密"), post("3", "別スレだけ"), post("4", image = "https://a/src/4.jpg"))
         val rules = listOf(rule(CompatNgKind.THREAD_IGNORE, "tab-a", "秘密"),

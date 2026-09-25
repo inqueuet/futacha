@@ -48,7 +48,12 @@ data class ThreadSaveLimits(
     val maxMediaItems: Int = ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS,
     val maxSaveDurationMs: Long = ThreadSaveService.DEFAULT_MAX_SAVE_DURATION_MS,
     val maxParallelDownloads: Int = ThreadSaveService.DEFAULT_MAX_PARALLEL_DOWNLOADS,
-    val mediaDownloadStartDelayMs: Long = 0L
+    val mediaDownloadStartDelayMs: Long = 0L,
+    /**
+     * False stores thumbnails only: originals and videos are not downloaded, but
+     * those an earlier save (or its seed generation) already holds are kept.
+     */
+    val downloadFullMedia: Boolean = true
 )
 
 data class ThreadSaveStorageOptions(
@@ -282,15 +287,19 @@ class ThreadSaveService(
                 } else {
                     ThreadSaveMediaDownloadSeed()
                 }
-                val remainingMediaPlan = if (reusableMediaSeed.mediaKeyToFileInfoMap.isEmpty()) {
+                val remainingMediaPlan = if (
+                    reusableMediaSeed.mediaKeyToFileInfoMap.isEmpty() && effectiveLimits.downloadFullMedia
+                ) {
                     mediaPlan
                 } else {
                     mediaPlan.copy(
                         scheduledItems = mediaPlan.scheduledItems.filterNot { mediaItem ->
-                            buildThreadSaveMediaDownloadKey(
-                                mediaItem.url,
-                                mediaItem.requestType
-                            ) in reusableMediaSeed.mediaKeyToFileInfoMap
+                            (!effectiveLimits.downloadFullMedia &&
+                                mediaItem.requestType == ThreadSaveMediaRequestType.FULL_IMAGE) ||
+                                buildThreadSaveMediaDownloadKey(
+                                    mediaItem.url,
+                                    mediaItem.requestType
+                                ) in reusableMediaSeed.mediaKeyToFileInfoMap
                         }
                     )
                 }

@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.util.MediaSaveSource
 import com.valoser.futacha.shared.util.OriginalMediaSaveFailure
 import com.valoser.futacha.shared.util.withOriginalMediaSaveSourceOrElse
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.network.HigherLayerRetryManaged
 import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -317,6 +318,9 @@ private suspend fun <T> withThreadSaveMediaSource(
     // without data; the overall limit stays the save's duration budget.
     try {
         httpClient.prepareGet(request.url) {
+            // The saver retries each item itself (MAX_RETRIES); letting the
+            // client's HttpRequestRetry retry too multiplied the attempts.
+            attributes.put(HigherLayerRetryManaged, true)
             headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
             timeout {
                 requestTimeoutMillis = request.maxSaveDurationMs

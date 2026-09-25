@@ -3,10 +3,13 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.model.PostDeletionKind
 import com.valoser.futacha.shared.model.postDeletionKind
 import com.valoser.futacha.shared.model.postDeletionNoticeRanges
 import com.valoser.futacha.shared.model.threadDeletionSummary
 import com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
 
 internal const val COMPAT_ISOLATED_POST_NOTICE = "削除依頼によって隔離されました"
 internal const val COMPAT_ADMIN_DELETED_POST_NOTICE = "スレッドを立てた人によって削除されました"
@@ -21,10 +24,19 @@ internal fun compatThreadNoticeForDisplay(notice: String?): String? = threadNoti
 
 internal fun compatThreadDeletionSummary(snapshot: CompatThreadSnapshot): String? = threadDeletionSummary(
     snapshot.deletedNotice,
-    snapshot.posts.drop(1).mapNotNull { post ->
-        postDeletionKind(post.messageHtml.toCompatPlainText(), post.isDeleted, post.isIsolated)
-    }
+    snapshot.posts.drop(1).mapNotNull(::compatPostDeletionKind)
 )
+
+/**
+ * Same result as [postDeletionKind], but the body is converted to plain text
+ * only for a deleted, non-isolated row. [postDeletionKind] ignores the text for
+ * every other row, and the HTML conversion runs several regular expressions.
+ */
+internal fun compatPostDeletionKind(post: CompatPostSnapshot): PostDeletionKind? = when {
+    post.isIsolated -> PostDeletionKind.ISOLATED
+    !post.isDeleted -> null
+    else -> postDeletionKind(post.messageHtml.toCompatPlainText(), isDeleted = true, isIsolated = false)
+}
 
 /**
  * The reference keeps deleted/isolation rows in their original position.
@@ -36,10 +48,11 @@ internal fun presentCompatPostsForDeletedVisibility(
     showDeletedContent: Boolean
 ): List<CompatPostSnapshot> {
     if (showDeletedContent) return posts
+    // Keep the input instance when nothing is redacted so that callers keyed on
+    // the list (and Compose skipping) see an unchanged value.
+    if (posts.none { it.isDeleted || it.isIsolated }) return posts
     return posts.map { post ->
-        val notice = postDeletionKind(
-            post.messageHtml.toCompatPlainText(), post.isDeleted, post.isIsolated
-        )?.notice
+        val notice = compatPostDeletionKind(post)?.notice
         if (notice == null) post else post.copy(
             messageHtml = notice,
             imageUrl = null,
@@ -47,6 +60,24 @@ internal fun presentCompatPostsForDeletedVisibility(
             mediaKey = null,
             isContentRedacted = true
         )
+    }
+}
+
+/**
+ * [presentCompatPostsForDeletedVisibility] for effects: a list that needs no
+ * redaction returns without a dispatcher hop, and a large list is redacted on
+ * the parsing dispatcher instead of the Compose main thread.
+ */
+internal suspend fun presentCompatPostsForDeletedVisibilityOffMain(
+    posts: List<CompatPostSnapshot>,
+    showDeletedContent: Boolean
+): List<CompatPostSnapshot> {
+    if (showDeletedContent || posts.none { it.isDeleted || it.isIsolated }) return posts
+    if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+        return presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
+    }
+    return withContext(AppDispatchers.parsing) {
+        presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
     }
 }
 

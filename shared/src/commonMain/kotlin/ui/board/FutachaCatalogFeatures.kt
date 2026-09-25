@@ -23,8 +23,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
-internal val LocalFutachaCatalogTools = staticCompositionLocalOf<List<FutachaThreadTool>> { emptyList() }
-internal val LocalFutachaCatalogLongPress = staticCompositionLocalOf<((CatalogItem) -> Unit)?> { null }
+internal val LocalFutachaCatalogTools = compositionLocalOf<List<FutachaThreadTool>> { emptyList() }
+internal val LocalFutachaCatalogLongPress = compositionLocalOf<((CatalogItem) -> Unit)?> { null }
 
 internal fun CatalogMode.sharedCatalogSort(): CompatCatalogSort? = when (this) {
     CatalogMode.Catalog -> CompatCatalogSort.CATALOG
@@ -52,8 +52,9 @@ internal fun FutachaCatalogFeatureHost(
     if (features == null || board == null || boardUrl == null) { content(state); return }
     val boardKey = compatBoardKey(boardUrl)
     val scope = rememberCoroutineScope()
-    val rules by features.store.ngRules.collectAsState(emptyList())
-    val history by features.store.history.collectAsState(emptyList())
+    // null until the store delivered its rules (the app-wide state usually has
+    // them already); an empty initial list let NG'd threads flash first.
+    val rules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(features.ngRulesState?.value)
     val tabs by features.store.tabs.collectAsState(emptyList())
     var stripVisible by remember(boardKey) { mutableStateOf(features.value("design", "designTabSelectorOpened") == "ON") }
     LaunchedEffect(features.value("design", "designTabSelectorOpened")) {
@@ -80,16 +81,31 @@ internal fun FutachaCatalogFeatureHost(
             features.store.importModernBoards(listOf(board))
             preference = features.store.loadCatalogPreference(boardKey)
             dropped = features.store.loadDroppedCatalogItems(boardKey)
-            mode.sharedCatalogSort()?.let { sort ->
-                previous = (1..4).mapNotNull { generation -> features.store.loadCatalogSnapshot(boardKey, sort, generation)
-                    ?.let { CatalogUiState.Success(CatalogPageContent(it.items)) } }
-            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { message = "カタログ設定を読み込めませんでした" }
     }
+    LaunchedEffect(undoOpen, boardKey, mode) {
+        if (!undoOpen) return@LaunchedEffect
+        try {
+            mode.sharedCatalogSort()?.let { sort ->
+                val stored = (1..4).mapNotNull { generation ->
+                    features.store.loadCatalogSnapshot(boardKey, sort, generation)
+                        ?.let { CatalogUiState.Success(CatalogPageContent(it.items)) }
+                }
+                // Generations seen in this session come first; the disk copy may
+                // not yet contain the newest one while its save is still running.
+                val latestItems = latest?.content?.items
+                previous = (previous + stored)
+                    .filter { it.content.items != latestItems }
+                    .distinctBy { it.content.items }
+                    .take(4)
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { message = "カタログ履歴を読み込めませんでした" }
+    }
     LaunchedEffect(state, boardKey, mode) {
         val success = state as? CatalogUiState.Success ?: return@LaunchedEffect
-        if (success.content.items == latest?.content?.items) return@LaunchedEffect
+        if (withContext(AppDispatchers.parsing) { success.content.items == latest?.content?.items }) return@LaunchedEffect
         val wasRestoring = restoring
         restoring = false
         if (!wasRestoring) latest?.let { previous = (listOf(it) + previous).take(4) }
@@ -108,7 +124,7 @@ internal fun FutachaCatalogFeatureHost(
                             candidates.forEach { if (repository.probeThreadExists(it.threadUrl)) add(it.id) }
                         } }.orEmpty()
                     } else emptySet()
-                    if (stored?.items != success.content.items) features.store.saveCatalogSnapshot(
+                    if (withContext(AppDispatchers.parsing) { stored?.items != success.content.items }) features.store.saveCatalogSnapshot(
                         CompatCatalogSnapshot(boardKey, sort, now, now, success.content.items),
                         trackDropped = trackDropped, requestedThreadCount = requestedCount, activeDroppedThreadIds = activeDropped)
                     dropped = features.store.loadDroppedCatalogItems(boardKey)
@@ -141,7 +157,7 @@ internal fun FutachaCatalogFeatureHost(
     } }
     val tools = listOf(
         FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
-        FutachaThreadTool("更新前のカタログ", Icons.Rounded.History, previous.isNotEmpty()) { undoOpen = true },
+        FutachaThreadTool("更新前のカタログ", Icons.Rounded.History, mode.sharedCatalogSort() != null) { undoOpen = true },
         FutachaThreadTool("消えたスレ・隔離", Icons.Rounded.Inventory2) { droppedOpen = true },
         FutachaThreadTool(if (preference.replyPriorityEnabled) "レス数による優先表示を解除" else "レス数による優先表示", Icons.Rounded.Sort) {
             savePreference(preference.copy(replyPriorityEnabled = !preference.replyPriorityEnabled))
@@ -164,8 +180,9 @@ internal fun FutachaCatalogFeatureHost(
     }
     val items = (state as? CatalogUiState.Success)?.content?.items.orEmpty()
     val scopedRules = remember(rules, boardKey, ngFilteringEnabled) {
-        if (ngFilteringEnabled) compatCatalogRulesForBoard(rules, boardKey) else emptyList()
+        if (ngFilteringEnabled) compatCatalogRulesForBoard(rules.orEmpty(), boardKey) else emptyList()
     }
+    val rulesReady = rules != null || !ngFilteringEnabled
     val phashRules = remember(scopedRules) { scopedRules.filter { it.kind == CompatNgKind.CATALOG_IMAGE_PHASH } }
     val threshold = features.value("thread", "threadImageNgPhashThreshold")?.toIntOrNull() ?: CompatImagePhash.DEFAULT_THRESHOLD
     // Bounded like the compatibility catalog (per image and 15 s overall) and
@@ -177,15 +194,45 @@ internal fun FutachaCatalogFeatureHost(
             return@produceState
         }
         val candidates = items.take(256).mapNotNull { item -> (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it } }
-        value = collectCompatImagePhashes(client, candidates, onPartial = { value = it })
+        val stored = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+            features.store.loadImagePhashes(candidates.map { compatImagePhashCachePreferenceKey(it.second) })
+        }.getOrDefault(emptyMap())
+        val cached = candidates.mapNotNull { (id, url) ->
+            stored[compatImagePhashCachePreferenceKey(url)]?.takeIf(::isValidCompatImagePhash)?.let { id to it }
+        }.toMap()
+        value = cached
+        val missing = candidates.filterNot { it.first in cached }
+        if (missing.isEmpty()) return@produceState
+        val computed = mutableMapOf<String, String>()
+        try {
+            // Publish each batch so matching threads disappear while the rest load.
+            computed.putAll(collectCompatImagePhashes(client, missing, onPartial = { partial ->
+                computed.putAll(partial)
+                value = cached + partial
+            }))
+            value = cached + computed
+        } finally {
+            // Keep hashes already computed even when a refresh supersedes this run.
+            withContext(kotlinx.coroutines.NonCancellable) {
+                com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+                    val toSave = missing.mapNotNull { (id, url) ->
+                        computed[id]?.let { compatImagePhashCachePreferenceKey(url) to it }
+                    }.toMap()
+                    if (toSave.isNotEmpty()) features.store.saveImagePhashes(toSave)
+                }.onFailure { error ->
+                    com.valoser.futacha.shared.util.Logger.w("FutachaCatalog", "画像NGハッシュを保存できませんでした: ${error.message}")
+                }
+            }
+        }
     }
     // Only the preferences this projection uses are keys; others must not restart it.
     val titleLimit = features.intValue("catalog", "catalogTitleLength", 10..30)
     val delayFewReplies = features.intValue("catalog", "delayFewReplies", 0..30)
     val appendDropped = features.value("catalog", "catalogAppendDropped") == "ON"
-    val projected by produceState(items, items, scopedRules, preference, titleLimit, delayFewReplies, appendDropped,
-        threshold, phashes, dropped) {
-        value = withContext(AppDispatchers.parsing) {
+    val projection by produceState<FutachaCatalogProjection?>(null, items, scopedRules, rulesReady, preference, titleLimit,
+        delayFewReplies, appendDropped, threshold, phashes, dropped) {
+        if (!rulesReady) return@produceState
+        value = FutachaCatalogProjection(items, withContext(AppDispatchers.parsing) {
             val index = buildCompatCatalogRuleIndex(scopedRules)
             val filtered = items.filterNot { item -> index.hides(item) || phashes[item.id]?.let { phash ->
                 phashRules.any { CompatImagePhash.isSimilar(phash, it.normalizedValue, threshold) }
@@ -196,18 +243,16 @@ internal fun FutachaCatalogFeatureHost(
             val combined = appendCompatDroppedCatalogItems(prioritized, dropped.filterNot { index.hides(it.item) },
                 appendDropped)
             if (titleLimit == null) combined else combined.map { it.copy(title = it.title?.take(titleLimit)) }
-        }
+        })
     }
+    val projected = resolveFutachaCatalogProjectedItems(projection, items)
     val strip: (@Composable () -> Unit)? = if (!stripVisible) null else ({
         CompatTabSelector(tabs, null, false, { tab -> onOpenHistoryThread(tab.toFutachaHistoryEntry()) },
             { tab -> action { features.store.closeTabs(setOf(tab.key), Clock.System.now().toEpochMilliseconds())?.let(features.onTabsClosed) } },
             onCheckUpdates = { action { refreshCompatTabsInBackground(features.store, repository, maxTabs = 100) } }, onReload = onRefresh,
             longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
     })
-    CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
-        LocalFutachaTabStrip provides strip,
-        LocalFutachaScrollRefreshEnabled provides (features.value("catalog", "catalogPullToRefresh") != "OFF"),
-        LocalFutachaCatalogLongPress provides { item ->
+    val longPressHandler: (CatalogItem) -> Unit = { item ->
             when (features.value("control", "controlCatalogLongTap") ?: "menu") {
                 "none", "何もしない" -> Unit
                 "ng", "NGスレッドに登録" -> register(item)
@@ -215,8 +260,19 @@ internal fun FutachaCatalogFeatureHost(
                 "del", "delを送信する" -> requestDeletion(item)
                 else -> selected = item
             }
-        }) {
-        content(if (state is CatalogUiState.Success) state.copy(content = state.content.copy(items = projected)) else state)
+    }
+    val currentLongPress = rememberUpdatedState(longPressHandler)
+    val stableLongPress = remember { { item: CatalogItem -> currentLongPress.value(item) } }
+    CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
+        LocalFutachaTabStrip provides strip,
+        LocalFutachaScrollRefreshEnabled provides (features.value("catalog", "catalogPullToRefresh") != "OFF"),
+        LocalFutachaCatalogLongPress provides stableLongPress) {
+        content(when {
+            state !is CatalogUiState.Success -> state
+            // Not projected yet: showing the raw items would flash NG'd threads.
+            projected == null -> CatalogUiState.Loading
+            else -> state.copy(content = state.content.copy(items = projected))
+        })
     }
     if (undoOpen) AlertDialog(onDismissRequest = { undoOpen = false }, title = { Text("更新前のカタログ") }, text = {
         Column { previous.forEachIndexed { index, snapshot -> TextButton(onClick = {
@@ -225,7 +281,7 @@ internal fun FutachaCatalogFeatureHost(
     }, confirmButton = { TextButton(onClick = { undoOpen = false }) { Text("閉じる") } })
     if (ngOpen) FutachaNgManagementDialog(features, boardKey, null, board.name, onDismiss = { ngOpen = false })
     if (searchOpen) CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, boardUrl,
-        localHistory = history, onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) })
+        localHistory = features.store.history.collectAsState(emptyList()).value, onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) })
     if (droppedOpen) Dialog(onDismissRequest = { droppedOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         CompatDroppedCatalogScreen(board.name, dropped, { droppedOpen = false }, { droppedOpen = false; onOpenThread(it) }, {
             features.store.deleteDroppedCatalogItems(boardKey, CompatCatalogDroppedClass.DIE)
@@ -245,4 +301,23 @@ internal fun FutachaCatalogFeatureHost(
         item.fullImageUrl ?: item.thumbnailUrl.orEmpty(), item.title.orEmpty(), { imageNg = null }) }
     message?.let { text -> AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) }
+}
+
+internal class FutachaCatalogProjection(
+    val source: List<CatalogItem>,
+    val items: List<CatalogItem>
+)
+
+/**
+ * The projected catalog to show, or null while none exists for these items.
+ * A projection of earlier items is kept while the new one computes (refresh or
+ * setting change), except the empty one made before the first load finished.
+ */
+internal fun resolveFutachaCatalogProjectedItems(
+    projection: FutachaCatalogProjection?,
+    items: List<CatalogItem>
+): List<CatalogItem>? {
+    if (projection == null) return null
+    if (projection.source !== items && projection.source.isEmpty() && items.isNotEmpty()) return null
+    return projection.items
 }

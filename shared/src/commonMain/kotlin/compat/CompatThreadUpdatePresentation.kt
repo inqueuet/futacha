@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.compat
 
+import kotlinx.coroutines.delay
+
 internal const val DEFAULT_COMPAT_CLOSE_TOAST_DURATION_MILLIS = 7_000L
 internal const val COMPAT_AUTO_SCROLL_TOUCH_PAUSE_MILLIS = 5_000L
 internal const val COMPAT_AUTO_SCROLL_RELOAD_WAIT_MILLIS = 12_000L
@@ -13,6 +15,40 @@ internal fun resolveCompatAutoScrollAction(
     isDead && !canScrollForward -> CompatAutoScrollAction.STOP_DEAD
     !canScrollForward -> CompatAutoScrollAction.WAIT_FOR_RELOAD
     else -> CompatAutoScrollAction.SCROLL
+}
+
+/**
+ * Drives the thread auto-scroll.  [awaitForeground] suspends while the host is
+ * paused/backgrounded, so neither the per-step scroll nor the bottom reload
+ * keeps waking the app (and hitting the server) while it is not visible.
+ */
+internal suspend fun runCompatAutoScroll(
+    isAutoScrolling: () -> Boolean,
+    awaitForeground: suspend () -> Unit,
+    canScrollForward: () -> Boolean,
+    isDead: () -> Boolean,
+    stepDelayMillis: Long,
+    scrollStep: suspend () -> Unit,
+    reload: suspend () -> Unit,
+    stopDead: () -> Unit,
+    reloadWaitMillis: Long = COMPAT_AUTO_SCROLL_RELOAD_WAIT_MILLIS
+) {
+    while (isAutoScrolling()) {
+        awaitForeground()
+        if (!isAutoScrolling()) break
+        when (resolveCompatAutoScrollAction(canScrollForward(), isDead())) {
+            CompatAutoScrollAction.SCROLL -> {
+                scrollStep()
+                delay(stepDelayMillis)
+            }
+            CompatAutoScrollAction.WAIT_FOR_RELOAD -> {
+                delay(reloadWaitMillis)
+                awaitForeground()
+                if (isAutoScrolling() && !canScrollForward()) reload()
+            }
+            CompatAutoScrollAction.STOP_DEAD -> stopDead()
+        }
+    }
 }
 
 internal fun resolveCompatCloseToastDurationMillis(rawValue: String?): Long {

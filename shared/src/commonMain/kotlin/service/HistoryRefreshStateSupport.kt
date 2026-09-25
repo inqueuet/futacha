@@ -15,6 +15,33 @@ internal data class HistoryRefreshAbortThreshold(
     val failureRateThreshold: Float
 )
 
+/**
+ * An abort threshold that can trigger within a run of [runSize] threads: fixed
+ * minimums of 25+ attempts never fired for the background worker's 20-thread
+ * windows, so an offline run kept trying every thread until its timeout.
+ * Minimum attempts are half the run (at least 5, at most [maxMinAttempts]);
+ * minimum failures are [failureRateThreshold] of those.
+ */
+internal fun scaledHistoryRefreshAbortThreshold(
+    label: String,
+    runSize: Int,
+    maxMinAttempts: Int,
+    maxMinFailures: Int,
+    failureRateThreshold: Float
+): HistoryRefreshAbortThreshold {
+    val minAttempts = minOf(maxMinAttempts, maxOf(5, runSize / 2))
+    val minFailures = minOf(
+        maxMinFailures,
+        kotlin.math.ceil(minAttempts * failureRateThreshold.toDouble()).toInt().coerceAtLeast(1)
+    )
+    return HistoryRefreshAbortThreshold(
+        label = label,
+        minAttempts = minAttempts,
+        minFailures = minFailures,
+        failureRateThreshold = failureRateThreshold
+    )
+}
+
 internal data class HistoryRefreshCountersSnapshot(
     val attemptedCount: Int,
     val successfulCount: Int,

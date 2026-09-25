@@ -130,13 +130,8 @@ internal fun applyHistoryViewSettings(
     history: List<ThreadHistoryEntry>,
     settings: HistoryViewSettings
 ): List<ThreadHistoryEntry> {
-    val normalizedQuery = settings.titleQuery.trim().lowercase()
-    val filtered = history.filter { entry ->
-        (!settings.selfPostsOnly || entry.hasSelfPost) &&
-            matchesHistoryLifeFilter(entry, settings.lifeFilter) &&
-            (settings.boardKey == null || historyBoardFilterKey(entry) == settings.boardKey) &&
-            (normalizedQuery.isEmpty() || entry.title.lowercase().contains(normalizedQuery))
-    }
+    val matches = historyViewSettingsMatcher(settings)
+    val filtered = history.filter(matches)
     return filtered.sortedWith { first, second ->
         val firstMissing = isHistorySortValueMissing(first, settings.sortOption)
         val secondMissing = isHistorySortValueMissing(second, settings.sortOption)
@@ -150,6 +145,24 @@ internal fun applyHistoryViewSettings(
             primary
         }
         if (directed != 0) directed else second.lastVisitedEpochMillis.compareTo(first.lastVisitedEpochMillis)
+    }
+}
+
+/** How many entries [applyHistoryViewSettings] keeps, without sorting them. */
+internal fun countHistoryViewSettingsMatches(
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings
+): Int {
+    return history.count(historyViewSettingsMatcher(settings))
+}
+
+private fun historyViewSettingsMatcher(settings: HistoryViewSettings): (ThreadHistoryEntry) -> Boolean {
+    val normalizedQuery = settings.titleQuery.trim().lowercase()
+    return { entry ->
+        (!settings.selfPostsOnly || entry.hasSelfPost) &&
+            matchesHistoryLifeFilter(entry, settings.lifeFilter) &&
+            (settings.boardKey == null || historyBoardFilterKey(entry) == settings.boardKey) &&
+            (normalizedQuery.isEmpty() || entry.title.lowercase().contains(normalizedQuery))
     }
 }
 

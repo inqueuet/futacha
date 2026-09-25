@@ -51,6 +51,7 @@ internal fun buildThreadReferenceData(
     val references = mutableMapOf<String, MutableList<QuoteReference>>()
     val startedAt = TimeSource.Monotonic.markNow()
     var timedOut = false
+    val knownPostIds = posts.mapTo(HashSet(posts.size)) { it.id }
 
     for ((index, post) in posts.withIndex()) {
         if (index % 32 == 0) {
@@ -114,6 +115,7 @@ internal fun buildThreadReferenceData(
                 posterIdIndex = posterIdIndex,
                 messageLineIndex = messageLineIndex,
                 mediaFileIndex = mediaFileIndex,
+                knownPostIds = knownPostIds,
                 config = config
             )
             if (resolution.isExplicit) {
@@ -233,6 +235,7 @@ private fun resolveThreadQuoteTargets(
     posterIdIndex: Map<String, Set<String>>,
     messageLineIndex: Map<String, ThreadLineTargets>,
     mediaFileIndex: Map<String, MutableSet<String>>,
+    knownPostIds: Set<String>,
     config: ThreadReferenceBuildConfig
 ): ThreadQuoteLineResolution {
     val trimmed = quoteLine.trim()
@@ -243,8 +246,11 @@ private fun resolveThreadQuoteTargets(
     if (mediaTargets.isNotEmpty()) {
         return ThreadQuoteLineResolution(mediaTargets, isExplicit = true)
     }
+    // A bare leading number (">100円ショップ", ">3枚目") is only a post reference when
+    // that post exists; otherwise the line is quoted text and falls through to text matching.
     val explicitNumber = config.noReferenceRegex.find(content)?.groupValues?.getOrNull(1)
         ?: config.leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
+            ?.takeIf { it in knownPostIds }
     if (explicitNumber != null) {
         return ThreadQuoteLineResolution(setOf(explicitNumber), isExplicit = true)
     }

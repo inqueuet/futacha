@@ -12,10 +12,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 
 private const val MAX_COMPAT_LEGACY_STATE_BYTES = 32L * 1024L * 1024L
+private const val CLOSED_BATCH_CACHE_KEY = "closedBatch"
+private const val DEFAULT_MAX_THREAD_SNAPSHOTS = 512
+private const val PREFERENCE_STATE_RECORD = "pref"
+private const val ARCHIVE_STATE_RECORD = "archive"
+private const val DROPPED_STATE_RECORD = "dropped"
 
 /**
  * iOS persistence for the compatibility profile.
@@ -28,10 +34,12 @@ private const val MAX_COMPAT_LEGACY_STATE_BYTES = 32L * 1024L * 1024L
  */
 internal class IosCompatibilityStore(
     private val fileSystem: FileSystem,
-    private val nowMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() }
+    private val nowMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    private val maxThreadSnapshots: Int = DEFAULT_MAX_THREAD_SNAPSHOTS
 ) : CompatibilityStore {
     private val mutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val droppedListSerializer = ListSerializer(DroppedCatalogRecord.serializer())
     private val database = IosCompatibilityDatabase(fileSystem)
     // Only read during the one-time migration from builds which stored this
     // profile as JSON.  New writes are committed exclusively through SQLite.
@@ -40,6 +48,21 @@ internal class IosCompatibilityStore(
 
     private var initialized = false
     private var state = PersistedCompatibilityState()
+    private var persistedCaches: Map<String, Any> = emptyMap()
+    private var persistedCacheBytes: Map<String, Long> = emptyMap()
+
+    // Preferences, the archive outbox and dropped catalog items live in
+    // compat_state_record rows so a small change rewrites only its rows
+    // rather than the whole metadata JSON. These mirror what is on disk.
+    private var persistedMetadata: PersistedCompatibilityState? = null
+    private var persistedMetadataBytes = 0L
+    private var stateRecordsInSync = false
+    private var persistedPreferences: Map<String, String> = emptyMap()
+    private var persistedArchiveRows: List<ArchiveRow> = emptyList()
+    private var persistedArchiveById: Map<String, ArchiveRow> = emptyMap()
+    private var persistedDroppedItems: List<DroppedCatalogRecord> = emptyList()
+    private var persistedDroppedByBoard: Map<String, List<DroppedCatalogRecord>> = emptyMap()
+    private var persistedStateRecordBytes: Map<CompatibilityStateRecordKey, Long> = emptyMap()
 
     private val boardsState = MutableStateFlow<List<CompatBoard>>(emptyList())
     private val tabsState = MutableStateFlow<List<CompatTab>>(emptyList())
@@ -73,11 +96,12 @@ internal class IosCompatibilityStore(
             if (legacyImagePhashes.isNotEmpty()) {
                 database.writeImagePhashes(legacyImagePhashes.filterValues(::isValidCompatImagePhash), nowMillis())
             }
-            val repairedPreferences = state.preferences.asSequence()
-                .filterNot { (key, _) -> isCompatImagePhashCacheKey(key) }
-                .filter { (key, value) -> isValidCompatPreference(key, value) }
-                .take(MAX_PREFERENCES)
-                .associate { it.toPair() }
+            val repairedPreferences = boundCompatPreferences(
+                state.preferences.asSequence()
+                    .filterNot { (key, _) -> isCompatImagePhashCacheKey(key) }
+                    .filter { (key, value) -> isValidCompatPreference(key, value) }
+                    .associate { it.toPair() }
+            )
             val validTabKeys = repairedTabs.mapTo(mutableSetOf(), CompatTab::key)
             val repairedRules = state.ngRules.asSequence()
                 .filter {
@@ -117,17 +141,33 @@ internal class IosCompatibilityStore(
                 .distinctBy(CompatBuildDraft::boardKey)
                 .take(MAX_BOARDS)
                 .toList()
-            val repairedSnapshots = state.snapshots
+            val validSnapshots = state.snapshots
                 .asSequence()
                 .filter { snapshot ->
                     (snapshot.tabKey in validTabKeys || COMPAT_SHARED_SNAPSHOT_KEY_REGEX.matches(snapshot.tabKey)) &&
                         snapshot.posts.size <= MAX_COMPAT_THREAD_SNAPSHOT_POSTS
                 }
                 .distinctBy(CompatThreadSnapshot::tabKey)
-                .take(MAX_THREAD_SNAPSHOTS)
                 .toList()
+            // Keep the most recently used snapshots. The rows come back in
+            // arbitrary database order, so a plain take() dropped new threads.
+            val repairedSnapshots = if (validSnapshots.size <= maxThreadSnapshots) validSnapshots else {
+                val kept = validSnapshots.sortedByDescending(::snapshotLastUsed)
+                    .take(maxThreadSnapshots)
+                    .mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
+                Logger.w(
+                    "IosCompatibilityStore",
+                    "Trimming ${validSnapshots.size - kept.size} least recently used thread snapshots"
+                )
+                validSnapshots.filter { snapshot -> snapshot.tabKey in kept }
+            }
             val repairedSnapshotKeys = repairedSnapshots.mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
             val repairedSnapshotAccess = state.snapshotAccess.filterKeys { it in repairedSnapshotKeys }
+            // A tab whose snapshot is gone (dropped here or by an older build)
+            // must not keep claiming that revision.
+            val revisedTabs = repairedTabs.map { tab ->
+                if (tab.snapshotRevision != 0L && tab.key !in repairedSnapshotKeys) tab.copy(snapshotRevision = 0L) else tab
+            }
             val repairedCatalogPreferences = state.catalogPreferences
                 .asSequence()
                 .filter { it.boardKey in validBoardKeys }
@@ -170,7 +210,7 @@ internal class IosCompatibilityStore(
                 .map { row -> row.copy(attemptCount = row.attemptCount.coerceAtLeast(0)) }
                 .toList()
             if (
-                repairedBoards != state.boards || repairedTabs != state.tabs || repairedHistory != state.history ||
+                repairedBoards != state.boards || revisedTabs != state.tabs || repairedHistory != state.history ||
                 repairedRules.size != state.ngRules.size ||
                 repairedPreferences.size != state.preferences.size || pending != state.closedBatch ||
                 repairedReplyDrafts != state.replyDrafts || repairedBuildDrafts != state.buildDrafts ||
@@ -182,7 +222,7 @@ internal class IosCompatibilityStore(
             ) {
                 state = state.copy(
                     boards = repairedBoards,
-                    tabs = repairedTabs,
+                    tabs = revisedTabs,
                     history = repairedHistory,
                     preferences = repairedPreferences,
                     ngRules = repairedRules,
@@ -224,23 +264,33 @@ internal class IosCompatibilityStore(
         modernHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>
     ): Int = mutate {
         val boardKeys = it.boards.mapTo(mutableSetOf(), CompatBoard::key)
-        val existing = it.history.associateBy(CompatHistoryEntry::canonicalUrl)
-        var changed = 0
-        val next = it.history.toMutableList()
-        modernHistory.mapNotNull { entry -> entry.toCompatHistoryEntry() }
-            .filter { entry -> entry.boardKey in boardKeys }
-            .forEach { entry ->
-                val tombstone = it.historyTombstones[entry.canonicalUrl]
-                if (tombstone != null && entry.lastVisitedEpochMillis <= tombstone) return@forEach
-                val old = existing[entry.canonicalUrl]
-                val durable = mergeCompatHistoryEntry(entry, old, recordVisit = true)
-                if (old != durable) {
-                    next.removeAll { candidate -> candidate.canonicalUrl == entry.canonicalUrl }
-                    next += durable
-                    changed++
-                }
+        // Compat keeps at most HISTORY_LIMIT_TRIGGER entries while the modern
+        // history can hold ~20,000. Any entry beyond the newest
+        // HISTORY_LIMIT_TRIGGER imports has that many newer entries and is
+        // trimmed anyway, so only those are converted and merged, and they
+        // are keyed by URL instead of removeAll() over the list per entry.
+        val next = LinkedHashMap<String, CompatHistoryEntry>()
+        it.history.forEach { entry -> next[entry.canonicalUrl] = entry }
+        val imported = mutableSetOf<String>()
+        val seen = mutableSetOf<String>()
+        for (modern in modernHistory.sortedByDescending { entry -> entry.lastVisitedEpochMillis }) {
+            if (seen.size >= HISTORY_LIMIT_TRIGGER) break
+            val entry = modern.toCompatHistoryEntry()?.takeIf { entry -> entry.boardKey in boardKeys } ?: continue
+            if (!seen.add(entry.canonicalUrl)) continue
+            val tombstone = it.historyTombstones[entry.canonicalUrl]
+            if (tombstone != null && entry.lastVisitedEpochMillis <= tombstone) continue
+            val old = next[entry.canonicalUrl]
+            val durable = mergeCompatHistoryEntry(entry, old, recordVisit = true)
+            if (old != durable) {
+                next[entry.canonicalUrl] = durable
+                imported += entry.canonicalUrl
             }
-        if (changed > 0) state = it.copy(history = trimHistory(next), historyTombstones = it.historyTombstones - next.map { entry -> entry.canonicalUrl }.toSet())
+        }
+        if (imported.isEmpty()) return@mutate 0
+        val trimmed = trimHistory(next.values.toList())
+        val kept = trimmed.mapTo(mutableSetOf(), CompatHistoryEntry::canonicalUrl)
+        val changed = imported.count { url -> url in kept }
+        if (changed > 0) state = it.copy(history = trimmed, historyTombstones = it.historyTombstones - kept)
         changed
     }
 
@@ -478,6 +528,7 @@ internal class IosCompatibilityStore(
             snapshotAccess = it.snapshotAccess + (snapshot.tabKey to nowMillis())
         )
         enforceSnapshotQuotaLocked()
+        enforceSnapshotCountLocked()
         true
     }
 
@@ -515,6 +566,7 @@ internal class IosCompatibilityStore(
             snapshotAccess = it.snapshotAccess + (shared.tabKey to nowMillis())
         )
         enforceSnapshotQuotaLocked()
+        enforceSnapshotCountLocked()
         true
     }
 
@@ -536,13 +588,19 @@ internal class IosCompatibilityStore(
         withContext(AppDispatchers.io) {
             mutex.withLock {
                 ensureInitializedLocked()
-                val tab = state.tabs.firstOrNull { current -> current.key == tabKey }
-                    ?: return@withLock
-                val nextTabs = replaceTab(state.tabs, tab.copy(scrollAnchor = anchor))
-                val nextHistory = state.history.map { entry ->
+                val tabIndex = state.tabs.indexOfFirst { current -> current.key == tabKey }
+                if (tabIndex < 0) return@withLock
+                val tab = state.tabs[tabIndex]
+                val historyChanged = state.history.any { entry ->
+                    entry.canonicalUrl == tab.canonicalUrl && entry.scrollAnchor != anchor
+                }
+                if (tab.scrollAnchor == anchor && !historyChanged) return@withLock
+                val updatedTab = tab.copy(scrollAnchor = anchor)
+                // Replace in place: re-appending would reorder the stored tabs.
+                val nextTabs = state.tabs.toMutableList().also { it[tabIndex] = updatedTab }
+                val nextHistory = if (!historyChanged) state.history else state.history.map { entry ->
                     if (entry.canonicalUrl == tab.canonicalUrl) entry.copy(scrollAnchor = anchor) else entry
                 }
-                if (nextTabs == state.tabs && nextHistory == state.history) return@withLock
                 // A scroll event must not serialize snapshots/catalogs/history
                 // into one huge JSON blob. Persist just this small anchor; the
                 // next ordinary full commit absorbs and clears the overlay.
@@ -552,8 +610,15 @@ internal class IosCompatibilityStore(
                     updatedAtMillis = nowMillis()
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
-                tabsState.value = state.tabs.sortedByDescending(CompatTab::insertedAtEpochMillis)
-                historyState.value = state.history.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
+                // Every scroll stop lands here. Patch only the affected tab of
+                // the published (already sorted) list and do not re-emit the
+                // history list: the durable history anchor is kept in `state`
+                // and published with the next ordinary mutation, which always
+                // happens (tab close) before a closed tab can be reopened
+                // from history; an open tab is reopened with the tab anchor.
+                tabsState.value = tabsState.value.map { current ->
+                    if (current.key == tabKey) updatedTab else current
+                }
             }
         }
 
@@ -685,7 +750,7 @@ internal class IosCompatibilityStore(
 
     override suspend fun savePreference(key: String, value: String) = mutate {
         requireValidCompatPreference(key, value)
-        state = it.copy(preferences = it.preferences + (key to value))
+        state = it.copy(preferences = boundCompatPreferences(it.preferences + (key to value)))
         // Only the cache-size setting changes the snapshot quota. Checking it for
         // every preference encoded all cached snapshots on each save.
         if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) enforceSnapshotQuotaLocked()
@@ -719,7 +784,7 @@ internal class IosCompatibilityStore(
             values.forEach { (key, value) -> if (value != null) requireValidCompatPreference(key, value) }
             val updated = it.preferences.toMutableMap()
             values.forEach { (key, value) -> if (value == null) updated.remove(key) else updated[key] = value }
-            state = it.copy(preferences = updated)
+            state = it.copy(preferences = boundCompatPreferences(updated))
             if (COMPAT_THREAD_CACHE_PREFERENCE_KEY in values) enforceSnapshotQuotaLocked()
         }
     }
@@ -793,7 +858,7 @@ internal class IosCompatibilityStore(
             boards = nextBoards,
             tabs = trimTabs(nextTabs),
             history = trimHistory(nextHistory),
-            preferences = nextPreferences,
+            preferences = boundCompatPreferences(nextPreferences),
             catalogPreferences = nextCatalogPrefs,
             ngRules = nextRules,
             toolbars = nextToolbars,
@@ -1060,8 +1125,10 @@ internal class IosCompatibilityStore(
         if (initialized) return
         fileSystem.createDirectory("compatibility").getOrThrow()
         migrateLegacyDocumentsDatabaseIfNeeded()
-        val databaseRead = runSuspendCatchingPreservingCancellation { database.readPayload() }
-        val databasePayload = databaseRead.getOrElse { error ->
+        val databaseRead = runSuspendCatchingPreservingCancellation {
+            database.readPayload()?.let { payload -> payload to database.readStateRecords() }
+        }
+        val databaseRecords = databaseRead.getOrElse { error ->
             if (error.isRecoverableIosCompatibilityDatabaseCorruption() || error is IllegalArgumentException) {
                 Logger.e(
                     "IosCompatibilityStore",
@@ -1076,6 +1143,7 @@ internal class IosCompatibilityStore(
                 throw error
             }
         }
+        val databasePayload = databaseRecords?.first
         var databaseState = databasePayload?.let { raw ->
             runCatching { json.decodeFromString(PersistedCompatibilityState.serializer(), raw) }
                 .onFailure { error ->
@@ -1104,6 +1172,18 @@ internal class IosCompatibilityStore(
             readLegacyState(path)
         }
         state = databaseState ?: legacyState ?: PersistedCompatibilityState()
+        resetStateRecordTrackingLocked()
+        val loadedState = databaseState
+        if (loadedState != null && loadedState.stateRecordsPartitioned && databaseRecords != null) {
+            persistedMetadata = metadataOf(loadedState)
+            persistedMetadataBytes = databaseRecords.first.encodeToByteArray().size.toLong()
+            loadStateRecordsLocked(databaseRecords.second)
+        }
+        var cacheStorageReset = false
+        if (state.partitionedCaches) {
+            cacheStorageReset = loadPartitionedCachesLocked()
+        }
+        if (cacheStorageReset) resetStateRecordTrackingLocked()
         val pendingAnchors = runSuspendCatchingPreservingCancellation {
             database.readPendingScrollAnchors()
         }.getOrDefault(emptyMap())
@@ -1148,6 +1228,9 @@ internal class IosCompatibilityStore(
         if (databaseState != null) {
             cleanupLegacyDocumentsCompatibilityArtifacts()
         }
+        // Atomically migrate the old envelope before publishing any state.
+        // After a cache-only reset the profile metadata is rewritten as well.
+        if (!state.partitionedCaches || !state.stateRecordsPartitioned || cacheStorageReset) persistLocked()
         initialized = true
         publishLocked()
     }
@@ -1180,12 +1263,23 @@ internal class IosCompatibilityStore(
             val pendingSnapshotAccess = runSuspendCatchingPreservingCancellation {
                 oldDatabase.readPendingSnapshotAccess()
             }.getOrDefault(emptyMap())
+            // Without its state records a partitioned payload has no settings;
+            // leave the old database in place rather than migrate half of it.
+            val stateRecords = if (!decoded.stateRecordsPartitioned) emptyMap() else {
+                runSuspendCatchingPreservingCancellation { oldDatabase.readStateRecords() }
+                    .getOrNull()
+                    ?.records
+                    ?.associate { record -> CompatibilityStateRecordKey(record.kind, record.key) to record.payload }
+                    ?: return
+            }
 
             // Commit the validated payload first; overlays are replayed only
             // after that transaction so their newer values remain visible.
             database.writePayload(
                 json.encodeToString(PersistedCompatibilityState.serializer(), decoded),
-                nowMillis()
+                nowMillis(),
+                stateRecordUpdates = stateRecords,
+                replaceStateRecords = true
             )
             pendingAnchors.forEach { (tabKey, anchorPayload) ->
                 database.writeScrollAnchor(tabKey, anchorPayload, nowMillis())
@@ -1224,26 +1318,291 @@ internal class IosCompatibilityStore(
             }
     }
 
-    private suspend fun persistLocked() {
-        var encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
-        val encodedBytes = encoded.encodeToByteArray().size
-        if (encodedBytes > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
-            // The user's cache quota may exceed the SQLite envelope limit (or
-            // be unlimited). Evict refetchable bodies before they prevent even
-            // a small setting/draft mutation from committing. Keep headroom for
-            // subsequent writes and preserve all user-owned records.
-            trimRefetchableCachesLocked(
-                encodedBytes.toLong() - MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES + 1024L * 1024L
-            )
-            encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
+    /**
+     * Loads the partitioned thread/catalog/closed-tab caches. The rows are
+     * refetchable, so an unreadable, undecodable or misfiled row is logged and
+     * deleted instead of failing initialization on every launch.
+     *
+     * @return true when the database had to be recreated and the profile
+     *   metadata must be written again.
+     */
+    private suspend fun loadPartitionedCachesLocked(): Boolean {
+        var storageReset = false
+        val read = runSuspendCatchingPreservingCancellation { database.readCacheRecords() }
+            .getOrElse { error ->
+                if (!error.isRecoverableIosCompatibilityDatabaseCorruption()) throw error
+                Logger.e("IosCompatibilityStore", "Dropping unreadable compatibility cache records", error)
+                runSuspendCatchingPreservingCancellation { database.clearCacheRecords() }
+                    .onFailure { clearError ->
+                        Logger.e(
+                            "IosCompatibilityStore",
+                            "Recreating compatibility database after cache corruption",
+                            clearError
+                        )
+                        database.deleteStorage()
+                        storageReset = true
+                    }
+                CompatibilityCacheRecordsRead(emptyMap(), emptyList())
+            }
+        val snapshots = mutableListOf<CompatThreadSnapshot>()
+        val catalogs = mutableListOf<CatalogSnapshotRecord>()
+        var closedBatch: ClosedTabBatch? = null
+        val acceptedBytes = mutableMapOf<String, Long>()
+        val rejectedKeys = mutableListOf<String>()
+        read.records.forEach { (key, payload) ->
+            val accepted = runCatching {
+                when {
+                    key.startsWith("thread:") ->
+                        json.decodeFromString(CompatThreadSnapshot.serializer(), payload)
+                            .takeIf { threadCacheKey(it) == key }
+                            ?.also(snapshots::add)
+                    key.startsWith("catalog:") ->
+                        json.decodeFromString(CatalogSnapshotRecord.serializer(), payload)
+                            .takeIf { catalogCacheKey(it) == key }
+                            ?.also(catalogs::add)
+                    key == CLOSED_BATCH_CACHE_KEY ->
+                        json.decodeFromString(ClosedTabBatch.serializer(), payload)
+                            .also { closedBatch = it }
+                    // Rows of an unknown kind (e.g. written by a newer build)
+                    // are left untouched, as before.
+                    else -> return@forEach
+                }
+            }.onFailure { error ->
+                Logger.w("IosCompatibilityStore", "Dropping undecodable compatibility cache record: ${error.message}")
+            }.getOrNull()
+            if (accepted == null) {
+                rejectedKeys += key
+            } else {
+                acceptedBytes[key] = payload.encodeToByteArray().size.toLong()
+            }
         }
-        database.writePayload(encoded, nowMillis())
+        if (rejectedKeys.isNotEmpty() || read.rejectedRowIds.isNotEmpty()) {
+            Logger.w(
+                "IosCompatibilityStore",
+                "Deleting ${rejectedKeys.size + read.rejectedRowIds.size} invalid compatibility cache records"
+            )
+            runSuspendCatchingPreservingCancellation {
+                database.deleteCacheRecords(rejectedKeys, read.rejectedRowIds)
+            }.onFailure { error ->
+                // They are skipped again on the next launch.
+                Logger.e("IosCompatibilityStore", "Failed to delete invalid compatibility cache records", error)
+            }
+        }
+        state = state.copy(
+            snapshots = snapshots,
+            catalogSnapshots = catalogs,
+            closedBatch = closedBatch ?: state.closedBatch
+        )
+        persistedCaches = cacheRecords()
+        persistedCacheBytes = acceptedBytes
+        return storageReset
+    }
+
+    private fun threadCacheKey(snapshot: CompatThreadSnapshot): String = "thread:${snapshot.tabKey}"
+
+    private fun catalogCacheKey(record: CatalogSnapshotRecord): String =
+        "catalog:${record.boardKey}:${record.sort}:${record.revision}"
+
+    private fun cacheRecords(): Map<String, Any> = buildMap {
+        state.closedBatch?.let { put(CLOSED_BATCH_CACHE_KEY, it) }
+        state.snapshots.forEach { put(threadCacheKey(it), it) }
+        state.catalogSnapshots.forEach { put(catalogCacheKey(it), it) }
+    }
+
+    private fun encodeCacheRecord(record: Any): String = when (record) {
+        is CompatThreadSnapshot -> json.encodeToString(CompatThreadSnapshot.serializer(), record)
+        is CatalogSnapshotRecord -> json.encodeToString(CatalogSnapshotRecord.serializer(), record)
+        is ClosedTabBatch -> json.encodeToString(ClosedTabBatch.serializer(), record)
+        else -> error("Unknown compatibility cache record")
+    }
+
+    private suspend fun persistLocked() {
+        state = state.copy(partitionedCaches = true, stateRecordsPartitioned = true)
+        val stateRecords = diffStateRecordsLocked()
+        val stateRecordBytes = stateRecords.sizes.values.sum()
+        var records = cacheRecords()
+        val updates = mutableMapOf<String, String?>()
+        val sizes = persistedCacheBytes.toMutableMap()
+        records.forEach { (key, record) ->
+            if (persistedCaches[key] !== record) {
+                val encoded = encodeCacheRecord(record)
+                updates[key] = encoded
+                sizes[key] = encoded.encodeToByteArray().size.toLong()
+            }
+        }
+        var metadata = metadataOf(state)
+        // An unchanged metadata row (e.g. only a preference or an outbox row
+        // changed) is not serialized or written at all.
+        fun encodeIfChanged(value: PersistedCompatibilityState): String? =
+            if (value == persistedMetadata) null else json.encodeToString(PersistedCompatibilityState.serializer(), value)
+        var encoded = encodeIfChanged(metadata)
+        fun metadataBytes(): Long = encoded?.encodeToByteArray()?.size?.toLong() ?: persistedMetadataBytes
+        val totalBytes = metadataBytes() + stateRecordBytes + records.keys.sumOf { sizes[it] ?: 0L }
+        if (totalBytes > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
+            trimRefetchableCachesLocked(totalBytes - MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES + 1024L * 1024L)
+            records = cacheRecords()
+            metadata = metadataOf(state)
+            encoded = encodeIfChanged(metadata)
+        }
+        (persistedCaches.keys + updates.keys).filter { it !in records }.forEach {
+            updates[it] = null
+            sizes.remove(it)
+        }
+        require(metadataBytes() + stateRecordBytes + records.keys.sumOf { sizes[it] ?: 0L } <=
+            MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) { "Compatibility state exceeds its permitted size" }
+        database.writePayload(
+            payload = encoded,
+            updatedAtMillis = nowMillis(),
+            cacheUpdates = updates,
+            stateRecordUpdates = stateRecords.updates,
+            replaceStateRecords = !stateRecordsInSync
+        )
+        persistedCaches = records
+        persistedCacheBytes = sizes.filterKeys { it in records }
+        encoded?.let { payload ->
+            persistedMetadata = metadata
+            persistedMetadataBytes = payload.encodeToByteArray().size.toLong()
+        }
+        stateRecordsInSync = true
+        persistedPreferences = state.preferences
+        persistedArchiveRows = state.archiveRows
+        persistedArchiveById = stateRecords.archiveById
+        persistedDroppedItems = state.droppedItems
+        persistedDroppedByBoard = stateRecords.droppedByBoard
+        persistedStateRecordBytes = stateRecords.sizes
+    }
+
+    private fun metadataOf(value: PersistedCompatibilityState) = value.copy(
+        snapshots = emptyList(),
+        catalogSnapshots = emptyList(),
+        closedBatch = null,
+        preferences = emptyMap(),
+        archiveRows = emptyList(),
+        droppedItems = emptyList()
+    )
+
+    private class StateRecordDiff(
+        val updates: Map<CompatibilityStateRecordKey, String?>,
+        val sizes: Map<CompatibilityStateRecordKey, Long>,
+        val archiveById: Map<String, ArchiveRow>,
+        val droppedByBoard: Map<String, List<DroppedCatalogRecord>>
+    )
+
+    /**
+     * Computes the state record rows that differ from disk. Unchanged
+     * collections are detected by identity, so an ordinary mutation that
+     * touches none of them costs nothing here.
+     */
+    private fun diffStateRecordsLocked(): StateRecordDiff {
+        val inSync = stateRecordsInSync
+        val updates = LinkedHashMap<CompatibilityStateRecordKey, String?>()
+        val sizes = if (inSync) persistedStateRecordBytes.toMutableMap() else mutableMapOf()
+        fun put(kind: String, key: String, payload: String?) {
+            val recordKey = CompatibilityStateRecordKey(kind, key)
+            updates[recordKey] = payload
+            if (payload == null) sizes.remove(recordKey) else sizes[recordKey] = payload.encodeToByteArray().size.toLong()
+        }
+
+        if (!inSync || state.preferences !== persistedPreferences) {
+            val before = if (inSync) persistedPreferences else emptyMap()
+            state.preferences.forEach { (key, value) -> if (before[key] != value) put(PREFERENCE_STATE_RECORD, key, value) }
+            before.keys.forEach { key -> if (key !in state.preferences) put(PREFERENCE_STATE_RECORD, key, null) }
+        }
+
+        val archiveById = if (inSync && state.archiveRows === persistedArchiveRows) persistedArchiveById else {
+            val before = if (inSync) persistedArchiveById else emptyMap()
+            state.archiveRows.associateBy(ArchiveRow::threadId).also { current ->
+                current.forEach { (threadId, row) ->
+                    if (before[threadId] != row) {
+                        put(ARCHIVE_STATE_RECORD, threadId, json.encodeToString(ArchiveRow.serializer(), row))
+                    }
+                }
+                before.keys.forEach { threadId -> if (threadId !in current) put(ARCHIVE_STATE_RECORD, threadId, null) }
+            }
+        }
+
+        val droppedByBoard = if (inSync && state.droppedItems === persistedDroppedItems) persistedDroppedByBoard else {
+            val before = if (inSync) persistedDroppedByBoard else emptyMap()
+            state.droppedItems.groupBy(DroppedCatalogRecord::boardKey).also { current ->
+                current.forEach { (boardKey, rows) ->
+                    if (before[boardKey] != rows) {
+                        put(DROPPED_STATE_RECORD, boardKey, json.encodeToString(droppedListSerializer, rows))
+                    }
+                }
+                before.keys.forEach { boardKey -> if (boardKey !in current) put(DROPPED_STATE_RECORD, boardKey, null) }
+            }
+        }
+        return StateRecordDiff(updates, sizes, archiveById, droppedByBoard)
+    }
+
+    private fun resetStateRecordTrackingLocked() {
+        persistedMetadata = null
+        persistedMetadataBytes = 0L
+        stateRecordsInSync = false
+        persistedPreferences = emptyMap()
+        persistedArchiveRows = emptyList()
+        persistedArchiveById = emptyMap()
+        persistedDroppedItems = emptyList()
+        persistedDroppedByBoard = emptyMap()
+        persistedStateRecordBytes = emptyMap()
+    }
+
+    /**
+     * Replaces the (empty) collections of a partitioned metadata payload with
+     * its state records. Undecodable or misfiled rows are logged and deleted.
+     */
+    private fun loadStateRecordsLocked(read: CompatibilityStateRecordsRead) {
+        val preferences = LinkedHashMap<String, String>()
+        val archiveRows = mutableListOf<ArchiveRow>()
+        val droppedByBoard = LinkedHashMap<String, List<DroppedCatalogRecord>>()
+        val sizes = mutableMapOf<CompatibilityStateRecordKey, Long>()
+        val rejected = mutableListOf<CompatibilityStateRecordKey>()
+        read.records.forEach { record ->
+            val recordKey = CompatibilityStateRecordKey(record.kind, record.key)
+            val accepted = runCatching {
+                when (record.kind) {
+                    PREFERENCE_STATE_RECORD -> record.payload.also { value -> preferences[record.key] = value }
+                    ARCHIVE_STATE_RECORD -> json.decodeFromString(ArchiveRow.serializer(), record.payload)
+                        .takeIf { row -> row.threadId == record.key }
+                        ?.also(archiveRows::add)
+                    DROPPED_STATE_RECORD -> json.decodeFromString(droppedListSerializer, record.payload)
+                        .takeIf { rows -> rows.all { row -> row.boardKey == record.key } }
+                        ?.also { rows -> droppedByBoard[record.key] = rows }
+                    // Kinds written by a newer build are left untouched.
+                    else -> return@forEach
+                }
+            }.onFailure { error ->
+                Logger.w("IosCompatibilityStore", "Dropping undecodable compatibility state record: ${error.message}")
+            }.getOrNull()
+            if (accepted == null) rejected += recordKey else sizes[recordKey] = record.payload.encodeToByteArray().size.toLong()
+        }
+        if (rejected.isNotEmpty() || read.rejectedRowIds.isNotEmpty()) {
+            Logger.w(
+                "IosCompatibilityStore",
+                "Deleting ${rejected.size + read.rejectedRowIds.size} invalid compatibility state records"
+            )
+            runCatching { database.deleteStateRecords(rejected, read.rejectedRowIds) }.onFailure { error ->
+                Logger.e("IosCompatibilityStore", "Failed to delete invalid compatibility state records", error)
+            }
+        }
+        state = state.copy(
+            preferences = preferences,
+            archiveRows = archiveRows,
+            droppedItems = droppedByBoard.values.flatten()
+        )
+        stateRecordsInSync = true
+        persistedPreferences = state.preferences
+        persistedArchiveRows = state.archiveRows
+        persistedArchiveById = archiveRows.associateBy(ArchiveRow::threadId)
+        persistedDroppedItems = state.droppedItems
+        persistedDroppedByBoard = droppedByBoard
+        persistedStateRecordBytes = sizes
     }
 
     private fun trimRefetchableCachesLocked(bytesToRelease: Long) {
         var remaining = bytesToRelease
         val removedSnapshots = mutableSetOf<String>()
-        state.snapshots.sortedBy { state.snapshotAccess[it.tabKey] ?: it.fetchedAtEpochMillis }
+        state.snapshots.sortedBy(::snapshotLastUsed)
             .forEach { snapshot ->
                 if (remaining > 0L) {
                     remaining -= encodedSnapshotBytes(snapshot)
@@ -1287,9 +1646,7 @@ internal class IosCompatibilityStore(
             if (size > Long.MAX_VALUE - total) Long.MAX_VALUE else total + size
         }
         if (usage <= quota) return false
-        val ordered = snapshotsWithSizes.sortedBy { (snapshot, _) ->
-            state.snapshotAccess[snapshot.tabKey] ?: snapshot.fetchedAtEpochMillis
-        }
+        val ordered = snapshotsWithSizes.sortedBy { (snapshot, _) -> snapshotLastUsed(snapshot) }
         val remove = mutableSetOf<String>()
         ordered.forEach { (snapshot, size) ->
             if (usage > quota) {
@@ -1298,16 +1655,35 @@ internal class IosCompatibilityStore(
             }
         }
         if (remove.isEmpty()) return false
+        dropSnapshotsLocked(remove)
+        return true
+    }
+
+    /** Evicts least recently used snapshots beyond the count cap at runtime, not only at launch. */
+    private fun enforceSnapshotCountLocked() {
+        val excess = state.snapshots.size - maxThreadSnapshots
+        if (excess <= 0) return
+        dropSnapshotsLocked(
+            state.snapshots.sortedBy(::snapshotLastUsed).take(excess).mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
+        )
+    }
+
+    private fun snapshotLastUsed(snapshot: CompatThreadSnapshot): Long =
+        state.snapshotAccess[snapshot.tabKey] ?: snapshot.fetchedAtEpochMillis
+
+    private fun dropSnapshotsLocked(remove: Set<String>) {
         state = state.copy(
             snapshots = state.snapshots.filterNot { snapshot -> snapshot.tabKey in remove },
             snapshotAccess = state.snapshotAccess - remove,
             tabs = state.tabs.map { tab -> if (tab.key in remove) tab.copy(snapshotRevision = 0L) else tab }
         )
-        return true
     }
 
-    private fun encodedSnapshotBytes(snapshot: CompatThreadSnapshot): Long =
-        json.encodeToString(CompatThreadSnapshot.serializer(), snapshot).encodeToByteArray().size.toLong()
+    private fun encodedSnapshotBytes(snapshot: CompatThreadSnapshot): Long {
+        val key = "thread:${snapshot.tabKey}"
+        if (persistedCaches[key] === snapshot) persistedCacheBytes[key]?.let { return it }
+        return json.encodeToString(CompatThreadSnapshot.serializer(), snapshot).encodeToByteArray().size.toLong()
+    }
 
     private fun sumEncodedSnapshotBytes(snapshots: List<CompatThreadSnapshot>): Long =
         snapshots.fold(0L) { total, snapshot ->
@@ -1420,9 +1796,7 @@ internal class IosCompatibilityStore(
         const val MAX_TABS = TAB_LIMIT_TRIGGER
         const val MAX_HISTORY = HISTORY_LIMIT_TRIGGER
         const val MAX_BOARDS = 100
-        const val MAX_THREAD_SNAPSHOTS = 512
         const val MAX_HISTORY_TOMBSTONES = 1_000
-        const val MAX_PREFERENCES = 4_096
         const val MAX_TOOLBAR_ITEMS = 64
         const val MAX_COMPAT_BOARD_FIELD_CHARS = 200
         const val MAX_COMPAT_URL_CHARS = 500
@@ -1434,9 +1808,55 @@ internal class IosCompatibilityStore(
     }
 }
 
+internal const val IOS_COMPAT_MAX_PREFERENCES = 16_384
+internal const val IOS_COMPAT_PREFERENCES_TRIM_TO = 14_336
+
+/**
+ * Per-thread/per-board markers the UI writes as preferences. They accumulate
+ * without bound and can be recomputed or safely forgotten, unlike settings.
+ */
+private val TRANSIENT_COMPAT_PREFERENCE_PREFIXES = listOf(
+    "compat.ownpost.",
+    "compat.catalog.lastFetchThreadCount."
+)
+
+internal fun isTransientCompatPreferenceKey(key: String): Boolean =
+    TRANSIENT_COMPAT_PREFERENCE_PREFIXES.any(key::startsWith)
+
+/**
+ * Bounds the preference map without ever dropping a real setting.
+ *
+ * Only transient markers are pruned, oldest insertion first, down to
+ * [IOS_COMPAT_PREFERENCES_TRIM_TO] so the next saves do not prune again. The
+ * former load-time `take(4096)` kept map order and so permanently lost the
+ * settings added after enough markers had accumulated.
+ */
+internal fun boundCompatPreferences(preferences: Map<String, String>): Map<String, String> {
+    if (preferences.size <= IOS_COMPAT_MAX_PREFERENCES) return preferences
+    val excess = preferences.size - IOS_COMPAT_PREFERENCES_TRIM_TO
+    val drop = preferences.keys.asSequence()
+        .filter(::isTransientCompatPreferenceKey)
+        .take(excess)
+        .toSet()
+    Logger.w(
+        "IosCompatibilityStore",
+        "Pruned ${drop.size} transient compatibility preferences (${preferences.size} stored)"
+    )
+    if (preferences.size - drop.size > IOS_COMPAT_MAX_PREFERENCES) {
+        Logger.w(
+            "IosCompatibilityStore",
+            "Keeping ${preferences.size - drop.size} compatibility preferences above the soft cap"
+        )
+    }
+    return if (drop.isEmpty()) preferences else preferences.filterKeys { key -> key !in drop }
+}
+
 @Serializable
 private data class PersistedCompatibilityState(
     val version: Int = 1,
+    val partitionedCaches: Boolean = false,
+    /** Preferences, archiveRows and droppedItems are kept in compat_state_record rows. */
+    val stateRecordsPartitioned: Boolean = false,
     val boardBootstrapComplete: Boolean = false,
     val boards: List<CompatBoard> = emptyList(),
     val tabs: List<CompatTab> = emptyList(),

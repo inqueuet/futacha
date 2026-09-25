@@ -1,7 +1,28 @@
 package com.valoser.futacha.shared
 
 import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.CompositionLocalProvider
@@ -121,6 +142,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
@@ -209,6 +232,7 @@ private const val IOS_COMPAT_MANUAL_HISTORY_REFRESH_MAX_TABS = 40
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val IOS_WATCH_ALERT_KEY = "watch_alert_enabled"
 private const val IOS_ACTIVE_PROFILE_KEY = "experience.active_profile"
+private const val IOS_BACKGROUND_TASK_ENABLED_DECISION_KEY = "background_task_enabled_last_decision"
 private const val IOS_WATCH_PREVIEW_THREAD_LIMIT = 8
 private const val IOS_WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
 private const val IOS_WATCH_COMMAND_ID_MAX_BYTES = 128
@@ -327,6 +351,7 @@ private object IosWatchSnapshotBridge {
     private val handledCommandIds = LinkedHashSet<String>()
     private val refreshJobLock = NSLock()
     private var refreshJob: Job? = null
+    private var lastRefreshStartedAt: TimeMark? = null
 
     fun requestSnapshotJson(completion: (String?) -> Unit) {
         scope.launch {
@@ -376,21 +401,32 @@ private object IosWatchSnapshotBridge {
         }
     }
 
-    fun handleCommandJson(commandJson: String): Boolean {
+    fun handleCommandJson(commandJson: String): Boolean =
+        handleCommandJsonOutcome(commandJson) != IosWatchCommandOutcome.Rejected
+
+    fun handleCommandJsonOutcome(commandJson: String): IosWatchCommandOutcome {
         if (commandJson.isBlank() || commandJson.encodeToByteArray().size > IOS_WATCH_COMMAND_PAYLOAD_MAX_BYTES) {
-            return false
+            return IosWatchCommandOutcome.Rejected
         }
         val command = runCatching {
             json.decodeFromString(WatchCommand.serializer(), commandJson)
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return IosWatchCommandOutcome.Rejected
         if (isDuplicateCommand(command)) {
-            return true
+            return IosWatchCommandOutcome.Accepted
         }
-        when (command.type) {
-            WatchCommandType.Refresh -> {
-                startWatchRefreshIfIdle()
-                return true
+        if (command.type == WatchCommandType.Refresh) {
+            return when (startWatchRefreshIfAllowed()) {
+                IosWatchRefreshDecision.Throttled -> IosWatchCommandOutcome.RefreshThrottled
+                IosWatchRefreshDecision.Start, IosWatchRefreshDecision.CoalesceIntoRunning ->
+                    IosWatchCommandOutcome.Accepted
             }
+        }
+        return if (handleNonRefreshCommand(command)) IosWatchCommandOutcome.Accepted else IosWatchCommandOutcome.Rejected
+    }
+
+    private fun handleNonRefreshCommand(command: WatchCommand): Boolean {
+        when (command.type) {
+            WatchCommandType.Refresh -> return false
             WatchCommandType.OpenThreadOnPhone -> {
                 val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() } ?: return false
                 val threadId = command.threadId?.takeIf { it.isNotBlank() } ?: return false
@@ -418,10 +454,21 @@ private object IosWatchSnapshotBridge {
         }
     }
 
-    private fun startWatchRefreshIfIdle() {
+    /**
+     * Starts a Watch-requested refresh at most once per
+     * [IOS_WATCH_REFRESH_MIN_INTERVAL], like Android's WatchSyncManager, so a
+     * repeatedly tapped "更新" cannot hammer the boards.
+     */
+    private fun startWatchRefreshIfAllowed(): IosWatchRefreshDecision {
         refreshJobLock.lock()
         try {
-            if (refreshJob?.isActive == true) return
+            val decision = resolveIosWatchRefreshDecision(
+                isRefreshRunning = refreshJob?.isActive == true,
+                elapsedSinceLastStart = lastRefreshStartedAt?.elapsedNow(),
+                minInterval = IOS_WATCH_REFRESH_MIN_INTERVAL
+            )
+            if (decision != IosWatchRefreshDecision.Start) return decision
+            lastRefreshStartedAt = TimeSource.Monotonic.markNow()
             val nextJob = scope.launch(start = CoroutineStart.LAZY) {
                 val httpClient = IosAppGraph.acquireHttpClient()
                 try {
@@ -446,6 +493,7 @@ private object IosWatchSnapshotBridge {
             }
             refreshJob = nextJob
             nextJob.start()
+            return decision
         } finally {
             refreshJobLock.unlock()
         }
@@ -565,6 +613,35 @@ fun handleIosWatchCommandJson(commandJson: String): Boolean {
     return IosWatchSnapshotBridge.handleCommandJson(commandJson)
 }
 
+/**
+ * Like [handleIosWatchCommandJson] but tells Swift how to answer: "rejected",
+ * "accepted", or "refreshThrottled" when a Refresh arrived within the minimum
+ * interval and only the current snapshot should be sent back.
+ */
+fun handleIosWatchCommandJsonOutcome(commandJson: String): String =
+    IosWatchSnapshotBridge.handleCommandJsonOutcome(commandJson).wireValue
+
+internal enum class IosWatchCommandOutcome(val wireValue: String) {
+    Rejected("rejected"),
+    Accepted("accepted"),
+    RefreshThrottled("refreshThrottled")
+}
+
+internal enum class IosWatchRefreshDecision { Start, CoalesceIntoRunning, Throttled }
+
+internal val IOS_WATCH_REFRESH_MIN_INTERVAL: Duration = 2.minutes
+
+internal fun resolveIosWatchRefreshDecision(
+    isRefreshRunning: Boolean,
+    elapsedSinceLastStart: Duration?,
+    minInterval: Duration
+): IosWatchRefreshDecision = when {
+    isRefreshRunning -> IosWatchRefreshDecision.CoalesceIntoRunning
+    elapsedSinceLastStart == null -> IosWatchRefreshDecision.Start
+    elapsedSinceLastStart < minInterval -> IosWatchRefreshDecision.Throttled
+    else -> IosWatchRefreshDecision.Start
+}
+
 /** Called by the Swift Network.framework monitor. */
 fun updateIosWifiConnected(connected: Boolean) {
     IosCompatNetworkStateBridge.updateWifiConnected(connected)
@@ -579,14 +656,22 @@ fun registerIosBackgroundRefreshTask() {
     BackgroundRefreshManager.registerAtLaunch()
     val defaults = NSUserDefaults.standardUserDefaults()
     // Compatibility preferences live in the profile store and cannot be
-    // synchronously loaded during didFinishLaunching.  Keep the task alive
-    // for a compatibility cold launch; runIosBackgroundRefresh re-checks the
+    // synchronously loaded during didFinishLaunching.  They also enable the
+    // ふたちゃ task (archive reports default ON, shared-feature patrol), so
+    // reuse the last decision of the screen-side collector and keep the task
+    // alive until it has made one; runIosBackgroundRefresh re-checks the
     // actual policy before doing network work.
+    val lastScreenDecision = if (defaults.objectForKey(IOS_BACKGROUND_TASK_ENABLED_DECISION_KEY) != null) {
+        defaults.boolForKey(IOS_BACKGROUND_TASK_ENABLED_DECISION_KEY)
+    } else {
+        null
+    }
     val enabledAtLaunch =
         defaults.boolForKey(IOS_BACKGROUND_REFRESH_KEY) ||
             defaults.boolForKey(IOS_WATCH_ALERT_KEY) ||
             ExperienceProfile.fromPersistedValue(defaults.stringForKey(IOS_ACTIVE_PROFILE_KEY)) ==
-            ExperienceProfile.TOSHIAKI_COMPAT
+            ExperienceProfile.TOSHIAKI_COMPAT ||
+            (lastScreenDecision ?: true)
     Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabledAtLaunch=$enabledAtLaunch)")
     BackgroundRefreshManager.configure(enabledAtLaunch) {
         val httpClient = IosAppGraph.acquireHttpClient()
@@ -702,6 +787,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         )
         var initializationComplete by remember { mutableStateOf(false) }
         var initializationError by remember { mutableStateOf<String?>(null) }
+        var initializationAttempt by remember { mutableIntStateOf(0) }
         var profileSwitchInProgress by remember { mutableStateOf(false) }
         var profileSessionActive by remember { mutableStateOf(true) }
         var profileSwitchError by remember { mutableStateOf<String?>(null) }
@@ -742,7 +828,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         DisposableEffect(sharedRepository) {
             onDispose { sharedRepository.closeAsync() }
         }
-        LaunchedEffect(stateStore, compatibilityStore, profileStore, modeSwitchCoordinator) {
+        LaunchedEffect(stateStore, compatibilityStore, profileStore, modeSwitchCoordinator, initializationAttempt) {
             runSuspendCatchingPreservingCancellation {
                 stateStore.seedIfEmpty(
                     AppStateSeedDefaults(
@@ -888,6 +974,12 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     .distinctUntilChanged()
                     .onEach { schedule ->
                         Logger.d("MainViewController", "Background refresh state changed: $schedule")
+                        // Read by registerIosBackgroundRefreshTask on the next
+                        // (possibly background-only) launch.
+                        NSUserDefaults.standardUserDefaults().setBool(
+                            schedule.enabled,
+                            forKey = IOS_BACKGROUND_TASK_ENABLED_DECISION_KEY
+                        )
                         configureIosBackgroundRefresh(
                             enabled = schedule.enabled,
                             stateStore = stateStore,
@@ -1095,7 +1187,45 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 }
             }
         } else if (initializationError != null) {
-            Logger.w("MainViewController", initializationError.orEmpty())
+            // Every step above is idempotent, so a retry simply runs them again
+            // instead of leaving the launch on a blank screen.
+            IosInitializationErrorScreen(
+                message = initializationError.orEmpty(),
+                onRetry = {
+                    initializationError = null
+                    initializationAttempt += 1
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun IosInitializationErrorScreen(message: String, onRetry: () -> Unit) {
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "アプリを起動できませんでした",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+            Button(onClick = onRetry) {
+                Text("再試行")
+            }
         }
     }
 }
@@ -1126,6 +1256,13 @@ private fun configureIosBackgroundRefresh(
     }
 }
 
+/**
+ * Serializes the BGTask and the Watch-triggered runs of [runIosBackgroundRefresh].
+ * Their compatibility refresh and shared-feature patrol have no lock of their
+ * own, so overlapping runs reported the same watch matches twice.
+ */
+private val iosBackgroundRefreshRunMutex = Mutex()
+
 private suspend fun runIosBackgroundRefresh(
     stateStore: com.valoser.futacha.shared.state.AppStateStore,
     httpClient: io.ktor.client.HttpClient,
@@ -1136,6 +1273,38 @@ private suspend fun runIosBackgroundRefresh(
     autoSaveBudgetMillis: Long = IOS_BG_AUTO_SAVE_BUDGET_MILLIS,
     maxAutoSavesPerRun: Int = IOS_BG_MAX_AUTO_SAVES_PER_RUN,
     refreshTimeoutMillis: Long = IOS_BG_REFRESH_TIMEOUT_MILLIS
+) {
+    if (!iosBackgroundRefreshRunMutex.tryLock()) {
+        Logger.d("BackgroundRefresh", "iOS background refresh already running; skipping duplicate run")
+        return
+    }
+    try {
+        runIosBackgroundRefreshLocked(
+            stateStore = stateStore,
+            httpClient = httpClient,
+            fileSystem = fileSystem,
+            autoSaveRepo = autoSaveRepo,
+            cookieRepository = cookieRepository,
+            maxThreadsPerRun = maxThreadsPerRun,
+            autoSaveBudgetMillis = autoSaveBudgetMillis,
+            maxAutoSavesPerRun = maxAutoSavesPerRun,
+            refreshTimeoutMillis = refreshTimeoutMillis
+        )
+    } finally {
+        iosBackgroundRefreshRunMutex.unlock()
+    }
+}
+
+private suspend fun runIosBackgroundRefreshLocked(
+    stateStore: com.valoser.futacha.shared.state.AppStateStore,
+    httpClient: io.ktor.client.HttpClient,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem?,
+    autoSaveRepo: SavedThreadRepository?,
+    cookieRepository: CookieRepository?,
+    maxThreadsPerRun: Int,
+    autoSaveBudgetMillis: Long,
+    maxAutoSavesPerRun: Int,
+    refreshTimeoutMillis: Long
 ) {
     val profileStore = IosAppGraph.experienceProfileStore
     val activeProfile = profileStore.readActiveProfile()
@@ -1223,11 +1392,7 @@ private suspend fun runIosBackgroundRefresh(
                                 detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis
                             )
                         }
-                        val fresh = filterNewIosWatchAlertMatches(matches)
-                        if (fresh.isNotEmpty()) {
-                            notifyIosWatchAlertMatches(fresh)
-                            markIosWatchAlertMatchesNotified(fresh)
-                        }
+                        notifyNewIosWatchAlertMatches(matches)
                     }
                     if (updateAllowed || existenceAllowed) {
                         val completedAt = compatForegroundLastCheckStoredValue(
@@ -1288,8 +1453,7 @@ private suspend fun runIosBackgroundRefresh(
                             boardName = match.history.boardName, boardUrl = match.history.originalUrl.substringBefore("/res/"),
                             title = match.history.title, titleImageUrl = match.history.thumbnailUrl.orEmpty(),
                             replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
-                        val fresh = filterNewIosWatchAlertMatches(alerts)
-                        if (fresh.isNotEmpty()) { notifyIosWatchAlertMatches(fresh); markIosWatchAlertMatchesNotified(fresh) }
+                        notifyNewIosWatchAlertMatches(alerts)
                     }, commitGate = { commit ->
                         profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
                     },
@@ -1297,40 +1461,49 @@ private suspend fun runIosBackgroundRefresh(
                     budgetMillis = refreshTimeoutMillis / 3)
             }
             if (backgroundEnabled) {
-                refresher.refresh(
-                    autoSaveBudgetMillis = autoSaveBudgetMillis,
-                    maxThreadsPerRun = maxThreadsPerRun,
-                    maxAutoSavesPerRun = maxAutoSavesPerRun,
-                    historyCommitGate = { commit ->
-                        profileStore.runIfGenerationCurrent(
-                            ExperienceProfile.FUTACHA,
-                            expectedGeneration,
-                            commit
-                        )
-                    },
-                    autoSaveCommitGate = { commit ->
-                        profileStore.runIfGenerationCurrent(
-                            ExperienceProfile.FUTACHA,
-                            expectedGeneration,
-                            commit
-                        )
-                    }
-                )
+                // A foreground history refresh may hold HistoryRefresher's
+                // process lock. Skip only this step: the watch alert and
+                // archive report steps below are independent of it.
+                try {
+                    refresher.refresh(
+                        autoSaveBudgetMillis = autoSaveBudgetMillis,
+                        maxThreadsPerRun = maxThreadsPerRun,
+                        maxAutoSavesPerRun = maxAutoSavesPerRun,
+                        historyCommitGate = { commit ->
+                            profileStore.runIfGenerationCurrent(
+                                ExperienceProfile.FUTACHA,
+                                expectedGeneration,
+                                commit
+                            )
+                        },
+                        autoSaveCommitGate = { commit ->
+                            profileStore.runIfGenerationCurrent(
+                                ExperienceProfile.FUTACHA,
+                                expectedGeneration,
+                                commit
+                            )
+                        }
+                    )
+                } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+                    Logger.d("BackgroundRefresh", "History refresh already running; skipping only the history step")
+                }
             }
             if (watchAlertEnabled && profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)) {
-                val result = CatalogWatchAlertRefresher(
-                    stateStore = stateStore,
-                    repository = repo,
-                    dispatcher = AppDispatchers.io
-                ).refresh()
-                val newMatches = filterNewIosWatchAlertMatches(result.matches)
-                if (newMatches.isNotEmpty()) {
-                    Logger.d("BackgroundRefresh", "Detected ${newMatches.size} iOS watch alert match(es)")
-                    markIosWatchAlertMatchesNotified(newMatches)
-                    notifyIosWatchAlertMatches(newMatches)
-                }
-                if (result.failureCount > 0) {
-                    Logger.w("BackgroundRefresh", "iOS watch alert partial failures: ${result.failureCount}")
+                try {
+                    val result = CatalogWatchAlertRefresher(
+                        stateStore = stateStore,
+                        repository = repo,
+                        dispatcher = AppDispatchers.io
+                    ).refresh()
+                    val newMatches = notifyNewIosWatchAlertMatches(result.matches)
+                    if (newMatches.isNotEmpty()) {
+                        Logger.d("BackgroundRefresh", "Detected ${newMatches.size} iOS watch alert match(es)")
+                    }
+                    if (result.failureCount > 0) {
+                        Logger.w("BackgroundRefresh", "iOS watch alert partial failures: ${result.failureCount}")
+                    }
+                } catch (e: CatalogWatchAlertRefresher.RefreshAlreadyRunningException) {
+                    Logger.d("BackgroundRefresh", "Catalog watch alert refresh already running; skipping only that step")
                 }
             }
             if (archiveReportEnabled && profileStore.isGenerationCommitAllowed(
@@ -1344,10 +1517,6 @@ private suspend fun runIosBackgroundRefresh(
             }
         }
         Logger.d("BackgroundRefresh", "Completed iOS background refresh run successfully")
-    } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
-        Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
-    } catch (e: CatalogWatchAlertRefresher.RefreshAlreadyRunningException) {
-        Logger.d("BackgroundRefresh", "Catalog watch alert refresh already running; skipping duplicate iOS background run")
     } catch (e: TimeoutCancellationException) {
         Logger.w("BackgroundRefresh", "iOS background refresh timed out after ${refreshTimeoutMillis}ms")
         throw e
@@ -1413,6 +1582,32 @@ private suspend fun notifyIosWatchAlertMatches(matches: List<CatalogWatchAlertMa
                 continuation.resume(Unit)
             }
         }
+    }
+}
+
+/**
+ * Guards the read → record → notify update of the single NSUserDefaults
+ * ledger shared by every watch notification path (ふたちゃ catalog alerts,
+ * shared-feature patrol and the compatibility refresh).
+ */
+private val iosWatchAlertNotificationMutex = Mutex()
+
+/**
+ * Notifies only the matches not yet in the ledger and returns them. The
+ * ledger is written before the notification is posted, so an expired task
+ * can lose one notification but never repeat it.
+ */
+private suspend fun notifyNewIosWatchAlertMatches(
+    matches: List<CatalogWatchAlertMatch>
+): List<CatalogWatchAlertMatch> {
+    if (matches.isEmpty()) return emptyList()
+    return iosWatchAlertNotificationMutex.withLock {
+        val fresh = filterNewIosWatchAlertMatches(matches)
+        if (fresh.isNotEmpty()) {
+            markIosWatchAlertMatchesNotified(fresh)
+            notifyIosWatchAlertMatches(fresh)
+        }
+        fresh
     }
 }
 

@@ -48,7 +48,7 @@ fun CompatHistoryEntry.toModernThreadHistoryEntry(): ThreadHistoryEntry? {
 }
 
 fun ThreadHistoryEntry.toCompatHistoryEntry(): CompatHistoryEntry? {
-    if (!threadId.matches(Regex("[0-9]+"))) return null
+    if (!threadId.matches(SHARED_HISTORY_THREAD_NUMBER)) return null
     val parsedThreadUrl = canonicalizeThreadUrl(boardUrl)
     val normalizedBoardUrl = parsedThreadUrl?.canonicalBoardUrl
         ?: canonicalizeBoardUrl(boardUrl)
@@ -183,7 +183,7 @@ private fun historyIdentity(entry: ThreadHistoryEntry): String {
     val parsedThreadUrl = canonicalizeThreadUrl(entry.boardUrl)
     val board = parsedThreadUrl?.canonicalBoardUrl ?: canonicalizeBoardUrl(entry.boardUrl)
     val threadId = parsedThreadUrl?.threadNo ?: entry.threadId
-    return if (board != null && threadId.matches(Regex("[0-9]+"))) {
+    return if (board != null && threadId.matches(SHARED_HISTORY_THREAD_NUMBER)) {
         "${board}res/$threadId"
     } else {
         "${entry.boardId}::${entry.threadId}"
@@ -192,3 +192,5 @@ private fun historyIdentity(entry: ThreadHistoryEntry): String {
 
 private fun boardIdentity(url: String): String =
     canonicalizeBoardUrl(url) ?: url.trim().trimEnd('/').lowercase()
+
+private val SHARED_HISTORY_THREAD_NUMBER = Regex("[0-9]+")

@@ -103,6 +103,25 @@ class ArchiveReportProtocolTest {
     }
 
     @Test
+    fun retryAfterCannotShortenTheBackoff() {
+        // Retry-After: 0 on a 503 must not resend immediately.
+        assertEquals(
+            ArchiveReportDisposition.Retry(60_000L, "http_503:unknown"),
+            classifyArchiveReportResponse(503, null, 0L, 0)
+        )
+        // Nor may a short value undercut the attempt's backoff.
+        assertEquals(
+            ArchiveReportDisposition.Retry(300_000L, "http_429:rate_limited"),
+            classifyArchiveReportResponse(429, ArchiveReportResponse(reason = "rate_limited"), 5_000L, 1)
+        )
+        // A longer server value still wins.
+        assertEquals(
+            ArchiveReportDisposition.Retry(3_600_000L, "http_503:unknown"),
+            classifyArchiveReportResponse(503, null, 3_600_000L, 1)
+        )
+    }
+
+    @Test
     fun untrustedReasonCannotEnterPersistedErrorCode() {
         assertEquals(
             ArchiveReportDisposition.Hold(ARCHIVE_REPORT_CONFIG_HOLD_MILLIS, "http_400:unknown"),

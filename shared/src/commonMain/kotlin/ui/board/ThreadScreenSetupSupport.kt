@@ -275,13 +275,24 @@ internal fun rememberThreadScreenCoreSetupBundle(
     resolvedThreadUrlOverride: String?,
     onRegisteredThreadUrlClick: (String) -> Boolean
 ): ThreadScreenCoreSetupBundle {
+    val repositories = remember(repository, autoSavedThreadRepository, fileSystem,
+        manualSaveDirectory, manualSaveLocation) {
+        buildThreadScreenEnvironmentBundle(repository, autoSavedThreadRepository, fileSystem,
+            manualSaveDirectory, manualSaveLocation, emptyList(), threadId, board, resolvedThreadUrlOverride)
+    }
+    // Only the active thread's entry affects restoration; unrelated history
+    // writes must not invalidate its environment or its repository locks.
+    val activeHistory = remember(history, threadId, board.id) {
+        history.filter { it.threadId == threadId && (it.boardId == board.id || it.boardId.isBlank()) }
+    }
     val environmentBundle = remember(
+        repositories,
+        activeHistory,
         repository,
         autoSavedThreadRepository,
         fileSystem,
         manualSaveDirectory,
         manualSaveLocation,
-        history,
         threadId,
         board,
         resolvedThreadUrlOverride
@@ -292,10 +303,11 @@ internal fun rememberThreadScreenCoreSetupBundle(
             fileSystem = fileSystem,
             manualSaveDirectory = manualSaveDirectory,
             manualSaveLocation = manualSaveLocation,
-            history = history,
+            history = activeHistory,
             threadId = threadId,
             board = board,
-            resolvedThreadUrlOverride = resolvedThreadUrlOverride
+            resolvedThreadUrlOverride = resolvedThreadUrlOverride,
+            repositories = repositories
         )
     }
     val runtimeObjectBundle = rememberThreadScreenRuntimeObjectBundle(

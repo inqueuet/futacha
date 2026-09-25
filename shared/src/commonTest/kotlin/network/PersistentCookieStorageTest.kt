@@ -99,6 +99,43 @@ class PersistentCookieStorageTest {
     }
 
     @Test
+    fun repeatedSetCookieDoesNotRewriteTheCookieFile() = runBlocking {
+        val fileSystem = CountingCookieWriteFileSystem(InMemoryFileSystem())
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+        val url = Url("https://dec.2chan.net/b/")
+        storage.addCookie(url, Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/", maxAge = 3_600))
+        val writesAfterFirst = fileSystem.cookieWrites
+
+        storage.addCookie(url, Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/", maxAge = 3_600))
+        storage.commitOnSuccess {
+            storage.addCookie(url, Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/", maxAge = 3_600))
+        }
+        assertEquals(writesAfterFirst, fileSystem.cookieWrites)
+
+        storage.addCookie(url, Cookie(name = "cxyl", value = "changed", domain = ".2chan.net", path = "/", maxAge = 3_600))
+        assertTrue(fileSystem.cookieWrites > writesAfterFirst)
+        assertEquals("changed", storage.listCookies().single { it.name == "cxyl" }.value)
+    }
+
+    @Test
+    fun repeatedSetCookieRetriesAnEarlierFailedWrite() = runBlocking {
+        val delegate = InMemoryFileSystem()
+        val fileSystem = ToggleFailingWriteFileSystem(delegate)
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+        val url = Url("https://dec.2chan.net/b/")
+        fileSystem.failWrites = true
+        runCatching {
+            storage.addCookie(url, Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/"))
+        }
+        fileSystem.failWrites = false
+
+        storage.addCookie(url, Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/"))
+
+        val persisted = decodePersistedCookieFile(delegate.readString(STORAGE_PATH).getOrThrow())
+        assertEquals(listOf("cxyl"), persisted.cookies.map { it.name })
+    }
+
+    @Test
     fun commitEvenOnFailure_persistsFailedMutationsAndRethrows() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
@@ -414,5 +451,16 @@ private class ToggleFailingWriteFileSystem(
     ): Result<Unit> {
         return if (failWrites) Result.failure(IllegalStateException("disk full"))
         else delegate.writeString(base, relativePath, content)
+    }
+}
+
+private class CountingCookieWriteFileSystem(
+    private val delegate: FileSystem
+) : FileSystem by delegate {
+    var cookieWrites = 0
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        if ("cookies" in path) cookieWrites += 1
+        return delegate.writeString(path, content)
     }
 }

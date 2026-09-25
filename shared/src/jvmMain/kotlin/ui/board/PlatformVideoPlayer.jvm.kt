@@ -32,9 +32,39 @@ private val DESKTOP_VLC_ACTIVE_STATES = setOf(VlcState.OPENING, VlcState.BUFFERI
 private const val DESKTOP_VLC_PAUSE_WAIT_NANOS = 1_000_000_000L
 private const val DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS = 3_000L
 
+/**
+ * One libVLC instance per process: creating and releasing an instance per video
+ * reloaded all ~337 plugins (libvlccore keeps its module bank only while an
+ * instance lives, and `--no-plugins-cache` leaves no cache to read).
+ */
 internal object DesktopVlc {
     private var configured = false
+    private var shared: MediaPlayerFactory? = null
+
     @Synchronized fun factory(): MediaPlayerFactory {
+        configure()
+        return shared ?: MediaPlayerFactory("--intf=dummy", "--quiet", "--avcodec-hw=none", "--no-video-title-show",
+            "--no-plugins-cache", "--no-lua", "--no-metadata-network-access", "--ignore-config").also { shared = it }
+    }
+
+    /**
+     * A player VLC never stopped may hold locks of its instance, so later videos
+     * get a fresh one and the old instance is left to the stuck player.
+     */
+    @Synchronized fun abandon(factory: MediaPlayerFactory) {
+        if (shared === factory) shared = null
+    }
+
+    /** At app shutdown. Each player keeps its own reference, so this only frees the instance once they are gone. */
+    fun release() {
+        val factory = synchronized(this) { shared.also { shared = null } } ?: return
+        val released = java.util.concurrent.CountDownLatch(1)
+        Thread({ try { factory.release() } finally { released.countDown() } }, "futacha-vlc-shutdown")
+            .apply { isDaemon = true }.start()
+        released.await(DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    private fun configure() {
         if (!configured) {
             val root = desktopResource("vlc")
             DesktopPlatform.setEnvironment("VLC_PLUGIN_PATH", File(root, "plugins").absolutePath)
@@ -48,7 +78,33 @@ internal object DesktopVlc {
             // libVLC finds its plugins relative to libvlccore in the bundled tree.
             configured = true
         }
-        return MediaPlayerFactory("--intf=dummy", "--quiet", "--avcodec-hw=none", "--no-video-title-show", "--no-plugins-cache", "--no-lua", "--no-metadata-network-access", "--ignore-config")
+    }
+}
+
+/**
+ * Files a player has open. Deleting one of them (an attachment preview, an
+ * edit preview) waits until VLC released it: Windows cannot delete open files.
+ */
+internal object DesktopVideoFiles {
+    private val openCounts = HashMap<String, Int>()
+    private val deleteWhenClosed = HashSet<String>()
+
+    @Synchronized fun opened(path: String) { openCounts[path] = (openCounts[path] ?: 0) + 1 }
+
+    @Synchronized fun closed(path: String) {
+        val remaining = (openCounts[path] ?: return) - 1
+        if (remaining > 0) { openCounts[path] = remaining; return }
+        openCounts.remove(path)
+        if (deleteWhenClosed.remove(path)) deleteOrDeferToExit(File(path))
+    }
+
+    @Synchronized fun delete(file: File) {
+        val path = file.absolutePath
+        if (path in openCounts) deleteWhenClosed += path else deleteOrDeferToExit(file)
+    }
+
+    private fun deleteOrDeferToExit(file: File) {
+        if (file.exists() && !file.delete()) file.deleteOnExit()
     }
 }
 
@@ -96,8 +152,9 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
     /**
      * [afterRelease] runs once VLC has released the player, so files VLC may
      * still have open (the source lease, a preview file) are not deleted under
-     * it. If VLC stays stuck past the timeout it runs when the release finally
-     * finishes, or never for an abandoned player.
+     * it. If VLC stays stuck past the timeout it runs then instead, exactly once:
+     * an unreturned lease would keep the original media store from shutting down.
+     * Files deleted through [DesktopVideoFiles] fall back to deletion at exit.
      */
     fun close(afterRelease: () -> Unit) {
         // Marking closed under the lock waits for in-flight controls; later ones see closed and skip the player.
@@ -111,6 +168,13 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
         // itself parked in the drain loop, so release on a daemon thread and abandon a player that stays stuck
         // instead of hanging the viewer, the IO pool or app shutdown.
         val released = java.util.concurrent.CountDownLatch(1)
+        val cleanedUp = AtomicBoolean(false)
+        fun cleanUp() {
+            if (!cleanedUp.compareAndSet(false, true)) return
+            try { afterRelease() } catch (failure: Throwable) {
+                com.valoser.futacha.shared.util.Logger.e("DesktopVideoSession", "Cleanup after VLC release failed", failure)
+            }
+        }
         Thread({
             try {
                 if (player.status().state() in DESKTOP_VLC_ACTIVE_STATES) {
@@ -124,12 +188,9 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
             } catch (failure: Throwable) {
                 com.valoser.futacha.shared.util.Logger.e("DesktopVideoSession", "Failed to release the VLC player", failure)
             } finally {
-                try { factory.release() } finally {
-                    released.countDown()
-                    try { afterRelease() } catch (failure: Throwable) {
-                        com.valoser.futacha.shared.util.Logger.e("DesktopVideoSession", "Cleanup after VLC release failed", failure)
-                    }
-                }
+                // The shared instance stays alive for the next video (released at app shutdown).
+                released.countDown()
+                cleanUp()
             }
         }, "futacha-vlc-release").apply { isDaemon = true }.start()
         if (!released.await(DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
@@ -137,6 +198,8 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
                 "DesktopVideoSession",
                 "VLC did not stop within ${DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS}ms; abandoning the native player"
             )
+            DesktopVlc.abandon(factory)
+            cleanUp()
         }
     }
 }
@@ -152,6 +215,8 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     var position by remember { mutableStateOf(0L) }
     var duration by remember { mutableStateOf(0L) }
     var playing by remember { mutableStateOf(true) }
+    // While the thumb is dragged only the label follows; one seek runs on release.
+    var dragFraction by remember { mutableStateOf<Float?>(null) }
     val scope = rememberCoroutineScope()
     val state by rememberUpdatedState(onStateChanged)
     val error by rememberUpdatedState(onPlaybackError)
@@ -166,6 +231,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
         var editPin: AutoCloseable? = null
         var owned: DesktopVideoSession? = null
         var preview: File? = null
+        var openedPath: String? = null
         state(VideoPlayerState.Buffering)
         try {
             withContext(Dispatchers.IO) {
@@ -183,6 +249,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                     path = preview!!.absolutePath
                 }
                 ensureActive()
+                openedPath = File(path).absolutePath.also(DesktopVideoFiles::opened)
                 owned = DesktopVideoSession { image, w, h -> frameFlow.value = Triple(image, w, h) }
                 owned!!.play(path)
                 session = owned
@@ -219,7 +286,10 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
         } finally {
             session = null; editing?.pausePlayer = null; frameFlow.value = null
             withContext(NonCancellable + Dispatchers.IO) {
-                val releasedFiles = { lease?.close(); pin?.close(); editPin?.close(); preview?.delete(); Unit }
+                val releasedFiles = {
+                    openedPath?.let(DesktopVideoFiles::closed)
+                    lease?.close(); pin?.close(); editPin?.close(); preview?.let(DesktopVideoFiles::delete); Unit
+                }
                 // Release the source and delete the preview only after VLC let go of them.
                 owned?.close(afterRelease = releasedFiles) ?: releasedFiles()
             }
@@ -236,9 +306,18 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                     else player.controls().setPause(playing)
                 }
             } } }) { Text(if (playing) "一時停止" else "再生") }
-            Slider(value = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f,
-                onValueChange = { value -> session?.let { active -> scope.launch(Dispatchers.IO) { active.withPlayer { it.controls().setTime((duration * value).toLong()) } } } }, modifier = Modifier.weight(1f))
-            Text("${position / 1000}/${duration / 1000}秒")
+            Slider(value = dragFraction ?: if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f,
+                onValueChange = { dragFraction = it },
+                onValueChangeFinished = {
+                    val target = dragFraction?.let { (duration * it).toLong() }
+                    dragFraction = null
+                    val active = session
+                    if (target != null && active != null) {
+                        position = target
+                        scope.launch(Dispatchers.IO) { active.withPlayer { it.controls().setTime(target) } }
+                    }
+                }, modifier = Modifier.weight(1f))
+            Text("${(dragFraction?.let { (duration * it).toLong() } ?: position) / 1000}/${duration / 1000}秒")
         }
     }
 }

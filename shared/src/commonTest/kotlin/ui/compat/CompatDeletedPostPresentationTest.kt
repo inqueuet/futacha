@@ -1,6 +1,9 @@
 package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
+import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.model.postDeletionKind
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -50,6 +53,37 @@ class CompatDeletedPostPresentationTest {
             assertEquals(listOf(CompatDeletedNoticeRange(0, notice.length)), compatDeletedNoticeRanges(original, original.messageHtml))
             assertEquals(notice, presentCompatPostsForDeletedVisibility(listOf(original), false).single().messageHtml)
             assertFalse(compatPostBodyUsesAlertColor(original))
+        }
+    }
+
+    @Test
+    fun deletionKindMatchesModelAndUnchangedListsKeepTheirInstance() {
+        val notice = "管理者によって削除されました"
+        val rows = listOf(
+            post("1"),
+            post("2", isIsolated = true),
+            post("3", isDeleted = true).copy(messageHtml = "$notice<br>元の本文"),
+            post("4", isDeleted = true, isIsolated = true),
+            post("5").copy(messageHtml = notice)
+        )
+        rows.forEach { row ->
+            assertEquals(
+                postDeletionKind(
+                    row.messageHtml.toCompatPlainText(),
+                    row.isDeleted,
+                    row.isIsolated
+                ),
+                compatPostDeletionKind(row)
+            )
+        }
+        val plain = listOf(post("1"), post("2"))
+        assertTrue(presentCompatPostsForDeletedVisibility(plain, showDeletedContent = false) === plain)
+        runBlocking {
+            assertTrue(presentCompatPostsForDeletedVisibilityOffMain(plain, false) === plain)
+            assertEquals(
+                presentCompatPostsForDeletedVisibility(rows, false),
+                presentCompatPostsForDeletedVisibilityOffMain(rows, false)
+            )
         }
     }
 

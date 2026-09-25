@@ -275,6 +275,30 @@ class ThreadScreenRuntimeLogicTest {
         )
         backBindings.onBackPressed()
         assertTrue(navigatedBack)
+
+        var searchActive = true
+        var searchNavigatedBack = false
+        val searchBindings = buildThreadScreenLifecycleBindings(
+            coroutineScope = this,
+            resolvePauseMessage = { null },
+            onShowPauseMessage = {},
+            onStopReadAloud = {},
+            onCloseTextSpeaker = {},
+            onResetJobsForThreadChange = {},
+            onCancelAllJobs = {},
+            isDrawerOpen = { false },
+            onCloseDrawer = {},
+            isSearchActive = { searchActive },
+            onExitSearch = { searchActive = false },
+            onBack = { searchNavigatedBack = true },
+            onRefreshThread = {}
+        )
+        // Back first leaves the in-thread search, then the thread.
+        searchBindings.onBackPressed()
+        assertFalse(searchActive)
+        assertFalse(searchNavigatedBack)
+        searchBindings.onBackPressed()
+        assertTrue(searchNavigatedBack)
     }
 
     @Test

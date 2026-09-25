@@ -25,10 +25,15 @@ internal fun splitImageDiskBudget(total: Long): ImageDiskBudget {
 suspend fun initializeOriginalMediaCache(
     session: OriginalMediaSession,
     platformContext: Any?,
-    lightweightMode: Boolean
+    lightweightMode: Boolean,
+    /**
+     * The persisted cache location. The default matches what the screens use when no
+     * location was saved, so a cold start and the first screen share one directory.
+     */
+    location: CompatibilityCacheLocation = parseCompatCacheLocation(null)
 ) {
     val directory = withContext(AppDispatchers.io) {
-        resolveImageCacheDirectory(platformContext, CompatibilityCacheLocation.INTERNAL, ORIGINAL_MEDIA_CACHE_DIR)
+        resolveImageCacheDirectory(platformContext, location, ORIGINAL_MEDIA_CACHE_DIR)
             ?: okio.FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(ORIGINAL_MEDIA_CACHE_DIR)
     }
     val total = (if (lightweightMode) 128L else 256L) * 1024 * 1024

@@ -325,6 +325,49 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun dropSupersededSaidaneOverrides_showsTheServerValueOnceItChanges() {
+        val overrides = mutableMapOf("1" to "そうだねx2", "2" to "そうだねx5")
+        val baseLabels = mutableMapOf<String, String?>("1" to "そうだねx1", "2" to "+")
+        val posts = listOf(
+            post("1").copy(saidaneLabel = "そうだねx1"),
+            post("2").copy(saidaneLabel = "そうだねx6")
+        )
+
+        dropSupersededSaidaneOverrides(posts, overrides, baseLabels)
+
+        // Post 1 still carries the label the vote replaced; post 2 was refreshed.
+        assertEquals(mapOf("1" to "そうだねx2"), overrides)
+        assertEquals(mapOf<String, String?>("1" to "そうだねx1"), baseLabels)
+    }
+
+    @Test
+    fun runThreadReadAloudSession_keepsReadingWhenTheScrollIsInterrupted() = runBlocking {
+        val segments = listOf(
+            ReadAloudSegment(postIndex = 1, postId = "10", body = "a"),
+            ReadAloudSegment(postIndex = 2, postId = "20", body = "b")
+        )
+        val spoken = mutableListOf<String>()
+
+        // Compose throws MutationInterruptedException (a CancellationException)
+        // from animateScrollToItem when the user touches the list.
+        val result = runThreadReadAloudSession(
+            startIndex = 0,
+            segments = segments,
+            isRunnerActive = { true },
+            wasCancelledByUser = { false },
+            callbacks = ThreadReadAloudRunnerCallbacks(
+                scrollToSegment = {
+                    throw kotlinx.coroutines.CancellationException("Mutation interrupted")
+                },
+                speakSegment = { segment -> spoken += segment.postId }
+            )
+        )
+
+        assertEquals(listOf("10", "20"), spoken)
+        assertEquals(ThreadReadAloudRunResult(completedNormally = true, nextIndex = 0), result)
+    }
+
+    @Test
     fun runThreadReadAloudSession_reportsTimeoutCancellationAsFailure() = runBlocking {
         val segments = listOf(
             ReadAloudSegment(postIndex = 1, postId = "10", body = "long")
@@ -498,6 +541,21 @@ class ThreadScreenLoadLogicTest {
         assertEquals("通常文", segments[0].body)
         assertEquals("2", segments[1].postId)
         assertEquals("引用のみ", segments[1].body)
+    }
+
+    @Test
+    fun buildReadAloudSegments_skipsPostsCollapsedByTheAiFilter() {
+        val posts = listOf(
+            post(id = "1", messageHtml = "一つ目"),
+            post(id = "2", messageHtml = "AIで非表示"),
+            post(id = "3", messageHtml = "三つ目")
+        )
+
+        val segments = runBlocking { buildReadAloudSegments(posts, skippedPostIds = setOf("2")) }
+
+        assertEquals(listOf("1", "3"), segments.map { it.postId })
+        // Indices still count displayed posts so seeking and highlighting stay aligned.
+        assertEquals(listOf(0, 2), segments.map { it.postIndex })
     }
 
     @Test
@@ -1336,6 +1394,14 @@ class ThreadScreenLoadLogicTest {
         assertEquals(
             ThreadBackAction.NavigateBack,
             resolveThreadBackAction(isDrawerOpen = false)
+        )
+        assertEquals(
+            ThreadBackAction.ExitSearch,
+            resolveThreadBackAction(isDrawerOpen = false, isSearchActive = true)
+        )
+        assertEquals(
+            ThreadBackAction.CloseDrawer,
+            resolveThreadBackAction(isDrawerOpen = true, isSearchActive = true)
         )
         assertEquals("更新中です…", buildThreadRefreshBusyMessage())
         assertEquals(

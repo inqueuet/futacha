@@ -103,7 +103,7 @@ internal fun CatalogScreenScaffold(
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
                 is CatalogUiState.Success -> {
-                    val visibleItems by rememberCatalogVisibleItemsState(
+                    val computedVisibleItems = rememberCatalogVisibleItems(
                         buildCatalogVisibleItemsRequest(
                             sourceKey = bindings.board?.id ?: bindings.board?.url,
                             items = state.content.items,
@@ -118,7 +118,10 @@ internal fun CatalogScreenScaffold(
                         inferCatalogTitleCompletionPolicy(state.content.items)
                             ?: resolveCatalogTitleCompletionPolicy(bindings.board?.url)
                     }
-                    Box(contentModifier) {
+                    val visibleItems = computedVisibleItems
+                    if (visibleItems == null) {
+                        LoadingCatalog(modifier = contentModifier)
+                    } else Box(contentModifier) {
                     CatalogSuccessContent(
                         items = visibleItems,
                         embeddedHtml = state.content.embeddedHtml,

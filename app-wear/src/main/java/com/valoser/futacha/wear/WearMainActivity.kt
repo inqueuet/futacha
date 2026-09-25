@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -55,12 +56,14 @@ import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchThreadSummary
 import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_STALE_AGE_MILLIS
+import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
 import com.valoser.futacha.wear.sync.PhoneCommandClient
 import com.valoser.futacha.wear.sync.WatchSnapshotStore
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.wear.compose.foundation.BasicSwipeToDismissBox
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
@@ -130,6 +133,8 @@ private fun FutachaWearApp() {
                     .connectedNodes
                     .addOnSuccessListener { nodes ->
                         isPhoneReachable = nodes.isNotEmpty()
+                        // The phone can no longer be controlled from here.
+                        if (nodes.isEmpty()) ReadAloudLiveUpdateNotifier.cancel(context.applicationContext)
                     }
                     .addOnFailureListener {
                         isPhoneReachable = false
@@ -137,6 +142,13 @@ private fun FutachaWearApp() {
                 delay(WATCH_NOW_TICK_MILLIS)
             }
         }
+    }
+
+    // Open and read-aloud commands are not queued while disconnected; a
+    // command delivered on reconnection could start reading hours later.
+    val onNotConnected = {
+        isPhoneReachable = false
+        statusMessage = "未接続: スマホに送信できません"
     }
 
     MaterialTheme {
@@ -154,31 +166,31 @@ private fun FutachaWearApp() {
             },
             onOpenBoardOnPhone = { board ->
                 statusMessage = "スマホで板を開きます"
-                commandClient.openBoardOnPhone(board.id, board.url)
+                commandClient.openBoardOnPhone(board.id, board.url, onNotConnected)
             },
             onOpenThreadOnPhone = { thread ->
                 statusMessage = "スマホでスレを開きます"
-                commandClient.openThreadOnPhone(thread.boardId, thread.boardUrl, thread.threadId)
+                commandClient.openThreadOnPhone(thread.boardId, thread.boardUrl, thread.threadId, onNotConnected)
             },
             onStartReadAloudOnPhone = { thread ->
                 statusMessage = "読み上げ開始を要求しました"
-                commandClient.startReadAloudOnPhone(thread)
+                commandClient.startReadAloudOnPhone(thread, onNotConnected)
             },
             onPauseReadAloudOnPhone = { thread ->
                 statusMessage = "一時停止を要求しました"
-                commandClient.pauseReadAloudOnPhone(thread)
+                commandClient.pauseReadAloudOnPhone(thread, onNotConnected)
             },
             onStopReadAloudOnPhone = { thread ->
                 statusMessage = "停止を要求しました"
-                commandClient.stopReadAloudOnPhone(thread)
+                commandClient.stopReadAloudOnPhone(thread, onNotConnected)
             },
             onNextReadAloudOnPhone = { thread ->
                 statusMessage = "次へ移動を要求しました"
-                commandClient.nextReadAloudOnPhone(thread)
+                commandClient.nextReadAloudOnPhone(thread, onNotConnected)
             },
             onPreviousReadAloudOnPhone = { thread ->
                 statusMessage = "前へ移動を要求しました"
-                commandClient.previousReadAloudOnPhone(thread)
+                commandClient.previousReadAloudOnPhone(thread, onNotConnected)
             }
         )
     }
@@ -218,19 +230,103 @@ private fun FutachaWearContent(
         }
     }
 
+    val screen = when {
+        snapshot == null -> WearScreen.Empty
+        selectedThread != null -> WearScreen.Thread
+        selectedBoard != null -> WearScreen.Board
+        else -> WearScreen.Home
+    }
+    // Thread detail returns to the board it was opened from, if any.
+    val parentScreen = when (screen) {
+        WearScreen.Thread -> if (selectedBoard != null) WearScreen.Board else WearScreen.Home
+        WearScreen.Board -> WearScreen.Home
+        WearScreen.Home, WearScreen.Empty, WearScreen.None -> null
+    }
+    fun navigateBack() {
+        when (screen) {
+            WearScreen.Thread -> selectedThreadKey = null
+            WearScreen.Board -> selectedBoardId = null
+            WearScreen.Home, WearScreen.Empty, WearScreen.None -> Unit
+        }
+    }
+    val onBoardSelected: (WatchBoard) -> Unit = { selectedBoardId = it.id }
+    val onThreadSelected: (WatchThreadSummary) -> Unit = { selectedThreadKey = it.toWearThreadKey() }
+    // Without these, a swipe or back press on a board or thread closed the
+    // app. At the top level both stay disabled so the system dismisses it.
+    BackHandler(enabled = parentScreen != null, onBack = ::navigateBack)
+
+    BasicSwipeToDismissBox(
+        onDismissed = ::navigateBack,
+        backgroundKey = parentScreen ?: WearScreen.None,
+        contentKey = screen,
+        userSwipeEnabled = parentScreen != null
+    ) { isBackground ->
+        val shown = if (isBackground) parentScreen else screen
+        if (shown != null) {
+            WearScreenContent(
+                screen = shown,
+                snapshot = snapshot,
+                selectedBoard = selectedBoard,
+                selectedThread = selectedThread,
+                nowMillis = nowMillis,
+                isPhoneReachable = isPhoneReachable,
+                statusMessage = statusMessage,
+                onBackFromBoard = { selectedBoardId = null },
+                onBackFromThread = { selectedThreadKey = null },
+                onBoardSelected = onBoardSelected,
+                onThreadSelected = onThreadSelected,
+                onRefresh = onRefresh,
+                onRequestSync = onRequestSync,
+                onOpenBoardOnPhone = onOpenBoardOnPhone,
+                onOpenThreadOnPhone = onOpenThreadOnPhone,
+                onStartReadAloudOnPhone = onStartReadAloudOnPhone,
+                onPauseReadAloudOnPhone = onPauseReadAloudOnPhone,
+                onStopReadAloudOnPhone = onStopReadAloudOnPhone,
+                onNextReadAloudOnPhone = onNextReadAloudOnPhone,
+                onPreviousReadAloudOnPhone = onPreviousReadAloudOnPhone
+            )
+        }
+    }
+}
+
+private enum class WearScreen { Empty, Home, Board, Thread, None }
+
+@Composable
+private fun WearScreenContent(
+    screen: WearScreen,
+    snapshot: WatchSnapshot?,
+    selectedBoard: WatchBoard?,
+    selectedThread: WatchThreadSummary?,
+    nowMillis: Long,
+    isPhoneReachable: Boolean?,
+    statusMessage: String?,
+    onBackFromBoard: () -> Unit,
+    onBackFromThread: () -> Unit,
+    onBoardSelected: (WatchBoard) -> Unit,
+    onThreadSelected: (WatchThreadSummary) -> Unit,
+    onRefresh: () -> Unit,
+    onRequestSync: () -> Unit,
+    onOpenBoardOnPhone: (WatchBoard) -> Unit,
+    onOpenThreadOnPhone: (WatchThreadSummary) -> Unit,
+    onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onNextReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onPreviousReadAloudOnPhone: (WatchThreadSummary) -> Unit
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
         when {
-            snapshot == null -> EmptySnapshotView(onRequestSync = onRequestSync)
-            selectedThread != null -> ThreadDetailView(
+            snapshot == null || screen == WearScreen.Empty -> EmptySnapshotView(onRequestSync = onRequestSync)
+            screen == WearScreen.Thread && selectedThread != null -> ThreadDetailView(
                 thread = selectedThread,
                 nowMillis = nowMillis,
                 isPhoneReachable = isPhoneReachable,
                 statusMessage = statusMessage,
-                onBack = { selectedThreadKey = null },
+                onBack = onBackFromThread,
                 onRequestSync = onRequestSync,
                 onOpenThreadOnPhone = onOpenThreadOnPhone,
                 onStartReadAloudOnPhone = onStartReadAloudOnPhone,
@@ -239,24 +335,24 @@ private fun FutachaWearContent(
                 onNextReadAloudOnPhone = onNextReadAloudOnPhone,
                 onPreviousReadAloudOnPhone = onPreviousReadAloudOnPhone
             )
-            selectedBoard != null -> BoardThreadsView(
+            screen == WearScreen.Board && selectedBoard != null -> BoardThreadsView(
                 board = selectedBoard,
                 snapshot = snapshot,
                 nowMillis = nowMillis,
                 isPhoneReachable = isPhoneReachable,
                 statusMessage = statusMessage,
-                onBack = { selectedBoardId = null },
+                onBack = onBackFromBoard,
                 onRequestSync = onRequestSync,
                 onOpenBoardOnPhone = onOpenBoardOnPhone,
-                onThreadSelected = { selectedThreadKey = it.toWearThreadKey() }
+                onThreadSelected = onThreadSelected
             )
             else -> HomeView(
                 snapshot = snapshot,
                 nowMillis = nowMillis,
                 isPhoneReachable = isPhoneReachable,
                 statusMessage = statusMessage,
-                onBoardSelected = { selectedBoardId = it.id },
-                onThreadSelected = { selectedThreadKey = it.toWearThreadKey() },
+                onBoardSelected = onBoardSelected,
+                onThreadSelected = onThreadSelected,
                 onRefresh = onRefresh,
                 onRequestSync = onRequestSync
             )

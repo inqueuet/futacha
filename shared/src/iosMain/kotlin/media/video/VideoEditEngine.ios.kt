@@ -17,32 +17,98 @@ import platform.CoreVideo.*
 import platform.VideoToolbox.*
 import kotlin.concurrent.AtomicReference
 import platform.Foundation.*
-import platform.UIKit.UIImage
-import platform.UIKit.UIImagePNGRepresentation
-import platform.posix.memcpy
 import kotlin.math.roundToLong
 import kotlin.time.TimeSource
 
-internal actual suspend fun previewDeviceVideo(path: String, info: VideoEditInfo, timeUs: Long, document: MosaicDocument): ImageBitmap = withContext(AppDispatchers.io) {
+internal actual suspend fun decodeDeviceVideoPreviewFrame(
+    path: String, info: VideoEditInfo, timeUs: Long, adopt: (VideoPreviewFrame) -> Unit
+): Unit = withContext(AppDispatchers.io) {
     val asset = AVURLAsset.URLAssetWithURL(NSURL.fileURLWithPath(path), null)
     val generator = AVAssetImageGenerator(asset)
     generator.appliesPreferredTrackTransform = true
     generator.maximumSize = CGSizeMake(960.0, 960.0)
     generator.requestedTimeToleranceBefore = CMTimeMake(1, 1_000_000); generator.requestedTimeToleranceAfter = CMTimeMake(1, 1_000_000)
-    val image = requireNotNull(generator.copyCGImageAtTime(CMTimeMake(timeUs, 1_000_000), null, null)) { "動画のコマを読み取れません" }
     try {
-        currentCoroutineContext().ensureActive()
-        val input = CIImage.imageWithCGImage(image)
-        val rendered = VideoMosaicKernel().apply(input, document, timeUs)
-        val context = videoRenderingContext()
-        val cg = requireNotNull(context.createCGImage(rendered, rendered.extent)) { "プレビューを描画できません" }
+        val image = requireNotNull(generator.copyCGImageAtTime(CMTimeMake(timeUs, 1_000_000), null, null)) { "動画のコマを読み取れません" }
+        // The frame owns the +1 reference from copyCGImageAtTime from here on.
+        adopt(IosVideoPreviewFrame(timeUs, image))
+    } finally { generator.cancelAllCGImageGeneration() }
+}
+
+/** Keeps the decoded CGImage so mask edits only re-run the Core Image kernel. */
+private class IosVideoPreviewFrame(override val timeUs: Long, private val image: CGImageRef) : VideoPreviewFrame {
+    // Owners (VideoPreviewFrameCache's lock, previewDeviceVideo) never render and close concurrently.
+    private var released = false
+    override suspend fun render(document: MosaicDocument): ImageBitmap {
+        check(!released) { "プレビューは終了しました" }
+        return VideoPreviewRenderer.render(image, document, timeUs)
+    }
+    override fun close() { if (!released) { released = true; CGImageRelease(image) } }
+}
+
+/**
+ * The editor asks for a preview 50 ms after every change. Creating a CIContext
+ * and compiling the mosaic kernel per request dominated that cost, so both are
+ * reused while previews keep coming and released after a minute without one
+ * (roughly the editor dialog's lifetime). The kernel also keeps its mask atlas
+ * while the masks do not change. Access is serialized because the kernel is
+ * stateful.
+ */
+private object VideoPreviewRenderer {
+    private const val IDLE_RELEASE_MILLIS = 60_000L
+    private val lock = NSLock()
+    private val cleanupScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private var context: CIContext? = null
+    private var kernel: VideoMosaicKernel? = null
+    private var generation = 0L
+    private var releaseJob: Job? = null
+
+    fun render(image: CGImageRef?, document: MosaicDocument, timeUs: Long): ImageBitmap {
+        lock.lock()
         try {
-            val data = requireNotNull(UIImagePNGRepresentation(UIImage.imageWithCGImage(cg)))
-            val bytes = ByteArray(data.length.toInt()).also { b -> b.usePinned { memcpy(it.addressOf(0), data.bytes, data.length) } }
-            val skia = org.jetbrains.skia.Image.makeFromEncoded(bytes)
-            try { skia.toComposeImageBitmap() } finally { skia.close() }
-        } finally { CGImageRelease(cg) }
-    } finally { CGImageRelease(image); generator.cancelAllCGImageGeneration() }
+            val ci = context ?: videoRenderingContext().also { context = it }
+            val mosaic = kernel ?: VideoMosaicKernel().also { kernel = it }
+            return autoreleasepool {
+                val rendered = mosaic.apply(CIImage.imageWithCGImage(image), document, timeUs)
+                val cg = requireNotNull(ci.createCGImage(rendered, rendered.extent)) { "プレビューを描画できません" }
+                try { rasterPreview(cg) } finally { CGImageRelease(cg) }
+            }
+        } finally {
+            generation += 1
+            val current = generation
+            releaseJob?.cancel()
+            releaseJob = cleanupScope.launch {
+                delay(IDLE_RELEASE_MILLIS)
+                lock.lock()
+                try {
+                    if (generation == current) { context = null; kernel = null }
+                } finally { lock.unlock() }
+            }
+            lock.unlock()
+        }
+    }
+
+    /** Draws the frame straight into RGBA pixels for Skia, without a PNG encode/decode round trip. */
+    private fun rasterPreview(image: CGImageRef): ImageBitmap {
+        val width = CGImageGetWidth(image).toInt(); val height = CGImageGetHeight(image).toInt()
+        require(width > 0 && height > 0) { "プレビューを描画できません" }
+        val rowBytes = width * 4
+        val pixels = ByteArray(rowBytes * height)
+        val colorSpace = requireNotNull(CGColorSpaceCreateWithName(kCGColorSpaceSRGB))
+        try {
+            pixels.usePinned { pinned ->
+                val bitmap = requireNotNull(CGBitmapContextCreate(pinned.addressOf(0), width.toULong(), height.toULong(), 8u,
+                    rowBytes.toULong(), colorSpace, CGImageAlphaInfo.kCGImageAlphaPremultipliedLast.value)) { "プレビューを描画できません" }
+                try { CGContextDrawImage(bitmap, CGRectMake(0.0, 0.0, width.toDouble(), height.toDouble()), image) }
+                finally { CGContextRelease(bitmap) }
+            }
+        } finally { CGColorSpaceRelease(colorSpace) }
+        val skia = org.jetbrains.skia.Image.makeRaster(
+            org.jetbrains.skia.ImageInfo(width, height, org.jetbrains.skia.ColorType.RGBA_8888, org.jetbrains.skia.ColorAlphaType.PREMUL),
+            pixels, rowBytes
+        )
+        return try { skia.toComposeImageBitmap() } finally { skia.close() }
+    }
 }
 
 internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info: VideoEditInfo,
@@ -105,7 +171,7 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
                     videoWrite.markAsFinished(); videoDone = true
                 } else {
                     try {
-                        check(videoWrite.appendSampleBuffer(sample)) { writer.error?.localizedDescription ?: "映像を書き出せません" }
+                        autoreleasepool { check(videoWrite.appendSampleBuffer(sample)) { writer.error?.localizedDescription ?: "映像を書き出せません" } }
                         if (progressTime.elapsedNow().inWholeMilliseconds >= 100) {
                             val time = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1_000_000
                             onProgress((time / info.frames.durationUs).toFloat().coerceIn(0f, 1f)); progressTime = TimeSource.Monotonic.markNow()
@@ -120,9 +186,11 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
                 val sample = pendingAudio
                 if (sample == null) { audioWrite.markAsFinished(); audioDone = true }
                 else {
-                    try { if (CMSampleBufferGetNumSamples(sample) > 0) check(audioWrite.appendSampleBuffer(sample)) { writer.error?.localizedDescription ?: "音声を書き出せません" } }
-                    finally { CFRelease(sample); pendingAudio = null }
-                    pendingAudio = audioRead?.copyNextSampleBuffer()
+                    autoreleasepool {
+                        try { if (CMSampleBufferGetNumSamples(sample) > 0) check(audioWrite.appendSampleBuffer(sample)) { writer.error?.localizedDescription ?: "音声を書き出せません" } }
+                        finally { CFRelease(sample); pendingAudio = null }
+                        pendingAudio = audioRead?.copyNextSampleBuffer()
+                    }
                 }
                 advanced = true
             }

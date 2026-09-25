@@ -6,7 +6,9 @@ import kotlinx.coroutines.CancellationException
 
 internal data class ThreadDisplayedPostsLayout(
     val posts: List<Post> = emptyList(),
-    val itemsBeforePosts: Int = 0
+    val itemsBeforePosts: Int = 0,
+    /** Posts currently collapsed by the AI post filter (not revealed by the user). */
+    val collapsedPostIds: Set<String> = emptySet()
 )
 
 internal data class ThreadScrollRestoreTarget(

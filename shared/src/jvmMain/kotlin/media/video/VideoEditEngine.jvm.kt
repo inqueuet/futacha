@@ -1,20 +1,20 @@
 package com.valoser.futacha.shared.media.video
 
-import androidx.compose.ui.graphics.ImageBitmap
 import com.valoser.futacha.shared.media.video.model.MosaicDocument
-import com.valoser.futacha.shared.media.edit.imageEditBitmap
 import org.bytedeco.javacv.*
 import org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264
 import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P
 import java.io.File
 import kotlinx.coroutines.*
 
-internal actual suspend fun previewDeviceVideo(path: String, info: VideoEditInfo, timeUs: Long, document: MosaicDocument): ImageBitmap = withContext(Dispatchers.IO) {
+internal actual suspend fun decodeDeviceVideoPreviewFrame(
+    path: String, info: VideoEditInfo, timeUs: Long, adopt: (VideoPreviewFrame) -> Unit
+): Unit = withContext(Dispatchers.IO) {
     desktopGrabber(path).use { grabber -> Java2DFrameConverter().use { converter ->
         val wanted = info.frames.atOrBefore(timeUs)
         grabber.setVideoTimestamp(wanted)
         val frame = grabber.grabImage() ?: error("動画のフレームを読み取れません")
-        imageEditBitmap(renderVideoPreview(desktopRaster(frame, converter, info.rotationDegrees), document, wanted))
+        adopt(RasterVideoPreviewFrame(timeUs, desktopRaster(frame, converter, info.rotationDegrees), wanted))
     } }
 }
 

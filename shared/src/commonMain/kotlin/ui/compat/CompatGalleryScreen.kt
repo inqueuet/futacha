@@ -204,6 +204,7 @@ import com.valoser.futacha.shared.compat.settingsOnly
 import com.valoser.futacha.shared.compat.watchAndNgOnly
 import com.valoser.futacha.shared.compat.ScrollAnchor
 import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.compat.toCompatPlainTextCached
 import com.valoser.futacha.shared.compat.formatCompatCacheUsage
 import com.valoser.futacha.shared.compat.CompatImageCacheUsage
 import com.valoser.futacha.shared.compat.formatCompatImageCacheUsage
@@ -262,6 +263,9 @@ internal fun CompatGalleryScreen(
     tab: CompatTab,
     initialIndex: Int = 0,
     initialPostNo: String? = null,
+    preparedSnapshot: com.valoser.futacha.shared.compat.CompatThreadSnapshot? = null,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
+    restoreInitialPosition: Boolean = true,
     store: CompatibilityStore,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
@@ -282,7 +286,6 @@ internal fun CompatGalleryScreen(
     val share = rememberCompatShareLauncher()
     val clipboard = LocalClipboardManager.current
     val imageLoader = LocalFutachaImageLoader.current
-    val gridState = rememberLazyGridState()
     var posts by remember(tabKey) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var saveMode by remember { mutableStateOf(false) }
@@ -358,6 +361,7 @@ internal fun CompatGalleryScreen(
     }
     LaunchedEffect(
         tabKey,
+        preparedSnapshot,
         ngRules,
         upsThumbnailMethod,
         wifiConnected,
@@ -370,28 +374,33 @@ internal fun CompatGalleryScreen(
             val hiddenImages = ngRules.asSequence()
                 .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
                 .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
-            val snapshot = store.loadThreadSnapshot(tabKey)?.let {
+            val snapshot = preparedSnapshot ?: store.loadThreadSnapshot(tabKey)?.let {
                 withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
             }
             snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
-            val rawPosts = presentCompatPostsForDeletedVisibility(
+            val rawPosts = presentCompatPostsForDeletedVisibilityOffMain(
                 posts = snapshot?.posts.orEmpty(),
                 showDeletedContent = showDeletedContent
             )
-            val hiddenPostNos = compatImagePhashHiddenPostNos(
+            // Open with the hashes that are already known and hide further
+            // pHash matches as their originals are hashed, instead of keeping
+            // the spinner up until up to 256 originals have been fetched.
+            collectCompatImagePhashHiddenPostNos(
                 httpClient = httpClient,
+                store = store,
                 posts = rawPosts,
                 rules = imageNgPhashRules,
                 threshold = imageNgPhashThreshold
-            )
-            posts = withContext(AppDispatchers.parsing) {
-                compatViewerMediaPosts(
-                    posts = rawPosts,
-                    hiddenImages = hiddenImages,
-                    hiddenPostNos = hiddenPostNos,
-                    upsThumbnailMethod = upsThumbnailMethod,
-                    wifiConnected = wifiConnected
-                )
+            ) { hiddenPostNos ->
+                posts = withContext(AppDispatchers.parsing) {
+                    compatViewerMediaPosts(
+                        posts = rawPosts,
+                        hiddenImages = hiddenImages,
+                        hiddenPostNos = hiddenPostNos,
+                        upsThumbnailMethod = upsThumbnailMethod,
+                        wifiConnected = wifiConnected
+                    )
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -400,11 +409,16 @@ internal fun CompatGalleryScreen(
             message = "画像一覧を読み込めませんでした"
         }
     }
+    // pHash matches are hidden progressively after the list first appears;
+    // restore the launch position once instead of jumping back on each update.
+    var initialPositionRestored by remember(tabKey, initialIndex, initialPostNo) { mutableStateOf(false) }
     LaunchedEffect(posts.size, initialIndex, initialPostNo) {
+        if (!restoreInitialPosition || initialPositionRestored) return@LaunchedEffect
         if (posts.isNotEmpty()) {
             val target = compatViewerInitialPage(posts, initialPostNo, initialIndex)
             withFrameNanos { }
             gridState.scrollToItem(target)
+            initialPositionRestored = true
         }
     }
     LaunchedEffect(posts) {
@@ -840,131 +854,40 @@ internal fun CompatGalleryScreen(
                 // malformed/duplicated fixture cannot crash LazyGrid.
                 itemsIndexed(posts, key = { index, post -> "${compatMediaIdentity(post)}:$index" }) { index, post ->
                     val mediaIdentity = compatMediaIdentity(post)
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 1.dp, vertical = 2.dp).combinedClickable(
-                            onClick = {
-                                when (compatGalleryTapAction(saveMode)) {
-                                    CompatGalleryTapAction.SELECT_MEDIA -> {
-                                        selectedMediaKeys = if (mediaIdentity in selectedMediaKeys) {
-                                            selectedMediaKeys - mediaIdentity
-                                        } else {
-                                            selectedMediaKeys + mediaIdentity
-                                        }
+                    // Per-item values only: the cell skips unless its own
+                    // marker, selection, fallback or reload token changes.
+                    CompatGalleryCell(
+                        post = post,
+                        mediaIdentity = mediaIdentity,
+                        saveMode = saveMode,
+                        selected = mediaIdentity in selectedMediaKeys,
+                        apngMarker = apngMarkers[mediaIdentity],
+                        useOriginalPreview = mediaIdentity in thumbnailFallbackPostNos,
+                        reloadToken = thumbnailReloadTokens[mediaIdentity],
+                        saving = savingMediaKey == mediaIdentity,
+                        httpClient = httpClient,
+                        apngMarkerCache = apngMarkerCache,
+                        imageLoader = imageLoader,
+                        privacyEnabled = threadPrivacyEnabled,
+                        privacyAlpha = threadPrivacyAlpha,
+                        onClick = {
+                            when (compatGalleryTapAction(saveMode)) {
+                                CompatGalleryTapAction.SELECT_MEDIA -> {
+                                    selectedMediaKeys = if (mediaIdentity in selectedMediaKeys) {
+                                        selectedMediaKeys - mediaIdentity
+                                    } else {
+                                        selectedMediaKeys + mediaIdentity
                                     }
-                                    CompatGalleryTapAction.OPEN_VIEWER -> onOpenViewer(index, mediaIdentity)
                                 }
-                            },
-                            onLongClick = {
-                                contextPost = post
+                                CompatGalleryTapAction.OPEN_VIEWER -> onOpenViewer(index, mediaIdentity)
                             }
-                        ).testTag("compat-gallery-item-${post.postNo}")
-                    ) {
-                        val requestedPreviewUrl = resolveCompatPostPreviewUrl(post)
-                        val originalMediaUrl = resolveCompatViewerMediaUrl(post)
-                        val isPng = originalMediaUrl
-                            ?.substringBefore('?')
-                            ?.substringBefore('#')
-                            ?.endsWith(".png", ignoreCase = true) == true
-                        LaunchedEffect(mediaIdentity, originalMediaUrl, httpClient, apngMarkerCache) {
-                            if (isPng && mediaIdentity !in apngMarkers) {
-                                apngMarkers[mediaIdentity] = httpClient
-                                    ?.let { client ->
-                                        apngMarkerCache.getOrLoad(originalMediaUrl) {
-                                            fetchCompatApngMarker(client, originalMediaUrl)
-                                        }.getOrDefault(false)
-                                    }
-                                    ?: false
-                            }
+                        },
+                        onLongClick = { contextPost = post },
+                        onApngResolved = { apngMarkers[mediaIdentity] = it },
+                        onPreviewFailed = {
+                            thumbnailFallbackPostNos = thumbnailFallbackPostNos + mediaIdentity
                         }
-                        val previewUrl = if (
-                            mediaIdentity in thumbnailFallbackPostNos &&
-                            requestedPreviewUrl != originalMediaUrl
-                        ) originalMediaUrl else requestedPreviewUrl
-                        val reloadToken = thumbnailReloadTokens[mediaIdentity]
-                        var promptImageState by remember(previewUrl, reloadToken) {
-                            mutableStateOf<coil3.compose.AsyncImagePainter.State?>(null)
-                        }
-                        val promptMetadata = rememberGenerationMetadata(originalMediaUrl, promptImageState, visible = !threadPrivacyEnabled)
-                        Box(
-                            Modifier.fillMaxWidth()
-                                .aspectRatio(1f)
-                                .background(palette.background)
-                                .testTag("compat-gallery-image-${post.postNo}")
-                        ) {
-                            AsyncImage(
-                                model = if (reloadToken == null) previewUrl else "$previewUrl#compat-reload=$reloadToken",
-                                imageLoader = imageLoader,
-                                contentDescription = "No.${post.postNo}",
-                                onSuccess = { promptImageState = it },
-                                onError = {
-                                    if (requestedPreviewUrl != originalMediaUrl) {
-                                        thumbnailFallbackPostNos = thumbnailFallbackPostNos + mediaIdentity
-                                    }
-                                },
-                                // sample/1.apk fixes the image itself to a
-                                // column-width square and uses fitCenter.
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize().compatPrivacyImageEffect(
-                                    if (threadPrivacyEnabled) compatPrivacyContentAlpha(threadPrivacyAlpha) else 1f
-                                )
-                            )
-                            Text(
-                                post.position.toString(),
-                                color = palette.text,
-                                fontSize = 14.sp,
-                                modifier = Modifier.align(Alignment.TopEnd)
-                                    .background(palette.background).padding(horizontal = 2.dp)
-                            )
-                            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
-                            val mediaUrl = resolveCompatViewerMediaUrl(post)
-                            val mediaBadge = when {
-                                apngMarkers[mediaIdentity] == true -> "APNG"
-                                mediaUrl != null && isCompatVideoMediaUrl(mediaUrl) ->
-                                    compatMediaExtension(mediaUrl).uppercase()
-                                mediaUrl?.substringBefore('?')?.substringBefore('#')
-                                    ?.endsWith(".gif", ignoreCase = true) == true -> "GIF"
-                                else -> null
-                            }
-                            if (mediaBadge != null) {
-                                Text(
-                                    mediaBadge,
-                                    color = palette.chromeContent,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.align(Alignment.BottomStart)
-                                        .background(palette.chrome).padding(horizontal = 2.dp)
-                                )
-                            }
-                            if (saveMode) {
-                                Checkbox(
-                                    checked = mediaIdentity in selectedMediaKeys,
-                                    onCheckedChange = null,
-                                    modifier = Modifier.align(Alignment.TopStart)
-                                        .testTag("compat-gallery-selection-${post.postNo}"),
-                                    colors = CheckboxDefaults.colors(
-                                        checkedColor = palette.chrome,
-                                        checkmarkColor = palette.chromeContent,
-                                        uncheckedColor = Color.White
-                                    )
-                                )
-                            }
-                            if (savingMediaKey == mediaIdentity) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                                    color = palette.loadingProgress,
-                                    strokeWidth = 3.dp
-                                )
-                            }
-                        }
-                        Text(
-                            post.messageHtml.toCompatPlainText().lineSequence().firstOrNull().orEmpty(),
-                            color = palette.text,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth().background(palette.background)
-                                .padding(horizontal = 2.dp)
-                        )
-                    }
+                    )
                 }
                 }
             }
@@ -1129,6 +1052,146 @@ internal fun CompatGalleryScreen(
             cookieRepository = cookieRepository,
             onClose = { reverseSearchResult = null },
             onOpenExternal = openUrl
+        )
+    }
+}
+
+@Composable
+private fun CompatGalleryCell(
+    post: CompatPostSnapshot,
+    mediaIdentity: String,
+    saveMode: Boolean,
+    selected: Boolean,
+    apngMarker: Boolean?,
+    useOriginalPreview: Boolean,
+    reloadToken: Long?,
+    saving: Boolean,
+    httpClient: HttpClient?,
+    apngMarkerCache: CompatApngMarkerCache,
+    imageLoader: coil3.ImageLoader,
+    privacyEnabled: Boolean,
+    privacyAlpha: Float,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onApngResolved: (Boolean) -> Unit,
+    onPreviewFailed: () -> Unit
+) {
+    val palette = LocalCompatibilityPalette.current
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 1.dp, vertical = 2.dp).combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick
+        ).testTag("compat-gallery-item-${post.postNo}")
+    ) {
+        val requestedPreviewUrl = resolveCompatPostPreviewUrl(post)
+        val originalMediaUrl = resolveCompatViewerMediaUrl(post)
+        val isPng = originalMediaUrl
+            ?.substringBefore('?')
+            ?.substringBefore('#')
+            ?.endsWith(".png", ignoreCase = true) == true
+        val apngMarkerKnown = apngMarker != null
+        LaunchedEffect(mediaIdentity, originalMediaUrl, httpClient, apngMarkerCache) {
+            if (isPng && !apngMarkerKnown) {
+                onApngResolved(
+                    httpClient
+                        ?.let { client ->
+                            apngMarkerCache.getOrLoad(originalMediaUrl) {
+                                fetchCompatApngMarker(client, originalMediaUrl)
+                            }.getOrDefault(false)
+                        }
+                        ?: false
+                )
+            }
+        }
+        val previewUrl = if (
+            useOriginalPreview &&
+            requestedPreviewUrl != originalMediaUrl
+        ) originalMediaUrl else requestedPreviewUrl
+        var promptImageState by remember(previewUrl, reloadToken) {
+            mutableStateOf<coil3.compose.AsyncImagePainter.State?>(null)
+        }
+        val promptMetadata = rememberGenerationMetadata(originalMediaUrl, promptImageState, visible = !privacyEnabled)
+        Box(
+            Modifier.fillMaxWidth()
+                .aspectRatio(1f)
+                .background(palette.background)
+                .testTag("compat-gallery-image-${post.postNo}")
+        ) {
+            AsyncImage(
+                model = if (reloadToken == null) previewUrl else "$previewUrl#compat-reload=$reloadToken",
+                imageLoader = imageLoader,
+                contentDescription = "No.${post.postNo}",
+                onSuccess = { promptImageState = it },
+                onError = {
+                    if (requestedPreviewUrl != originalMediaUrl) {
+                        onPreviewFailed()
+                    }
+                },
+                // sample/1.apk fixes the image itself to a
+                // column-width square and uses fitCenter.
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().compatPrivacyImageEffect(
+                    if (privacyEnabled) compatPrivacyContentAlpha(privacyAlpha) else 1f
+                )
+            )
+            Text(
+                post.position.toString(),
+                color = palette.text,
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.TopEnd)
+                    .background(palette.background).padding(horizontal = 2.dp)
+            )
+            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
+            val mediaUrl = originalMediaUrl
+            val mediaBadge = when {
+                apngMarker == true -> "APNG"
+                mediaUrl != null && isCompatVideoMediaUrl(mediaUrl) ->
+                    compatMediaExtension(mediaUrl).uppercase()
+                mediaUrl?.substringBefore('?')?.substringBefore('#')
+                    ?.endsWith(".gif", ignoreCase = true) == true -> "GIF"
+                else -> null
+            }
+            if (mediaBadge != null) {
+                Text(
+                    mediaBadge,
+                    color = palette.chromeContent,
+                    fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.BottomStart)
+                        .background(palette.chrome).padding(horizontal = 2.dp)
+                )
+            }
+            if (saveMode) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = null,
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .testTag("compat-gallery-selection-${post.postNo}"),
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = palette.chrome,
+                        checkmarkColor = palette.chromeContent,
+                        uncheckedColor = Color.White
+                    )
+                )
+            }
+            if (saving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(28.dp),
+                    color = palette.loadingProgress,
+                    strokeWidth = 3.dp
+                )
+            }
+        }
+        val firstLine = remember(post.messageHtml) {
+            post.messageHtml.toCompatPlainTextCached().lineSequence().firstOrNull().orEmpty()
+        }
+        Text(
+            firstLine,
+            color = palette.text,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().background(palette.background)
+                .padding(horizontal = 2.dp)
         )
     }
 }

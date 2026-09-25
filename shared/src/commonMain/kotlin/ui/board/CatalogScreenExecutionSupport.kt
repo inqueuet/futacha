@@ -164,6 +164,9 @@ internal fun buildCatalogInitialLoadBindings(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
                     var hasAppliedCatalog = false
+                    // Shown after the refreshing state is cleared: showSnackbar
+                    // suspends until the snackbar is dismissed.
+                    var resultMessage: String? = null
                     suspend fun applyCatalog(catalog: CatalogPageContent) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return
@@ -234,7 +237,7 @@ internal fun buildCatalogCreateThreadBindings(
         submitCreateThread = submit@{
             if (currentIsSubmitting()) {
                 coroutineScope.launch {
-                    showSnackbar("スレ立て処理中です…")
+                    showSnackbar(CATALOG_CREATE_THREAD_SENDING_MESSAGE)
                 }
                 return@submit
             }
@@ -356,7 +359,9 @@ internal fun buildCatalogExecutionBindings(
             AnalyticsTracker.event("history_refresh_started", mapOf("source" to "catalog"))
             setIsHistoryRefreshing(true)
             coroutineScope.launch {
-                try {
+                // showSnackbar suspends until the snackbar is dismissed, so the
+                // refreshing state is cleared before it is shown.
+                val message = try {
                     PerformanceTracker.measureSuspend(
                         traceName = "history_refresh_catalog",
                         attributes = mapOf("feature" to "history", "source" to "catalog")
@@ -364,10 +369,10 @@ internal fun buildCatalogExecutionBindings(
                         onHistoryRefresh()
                     }
                     AnalyticsTracker.event("history_refresh_result", mapOf("source" to "catalog", "result" to "success"))
-                    showSnackbar(buildCatalogHistoryRefreshSuccessMessage())
+                    buildCatalogHistoryRefreshSuccessMessage()
                 } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
                     AnalyticsTracker.event("history_refresh_result", mapOf("source" to "catalog", "result" to "busy"))
-                    showSnackbar(buildCatalogHistoryRefreshBusyMessage())
+                    buildCatalogHistoryRefreshBusyMessage()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -379,10 +384,11 @@ internal fun buildCatalogExecutionBindings(
                             "error_type" to (e::class.simpleName ?: "unknown")
                         )
                     )
-                    showSnackbar(buildCatalogHistoryRefreshFailureMessage(e))
+                    buildCatalogHistoryRefreshFailureMessage(e)
                 } finally {
                     setIsHistoryRefreshing(false)
                 }
+                showSnackbar(message)
             }
         },
         performRefresh = refresh@{
@@ -406,6 +412,9 @@ internal fun buildCatalogExecutionBindings(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
                     var hasAppliedCatalog = false
+                    // Shown after the refreshing state is cleared: showSnackbar
+                    // suspends until the snackbar is dismissed.
+                    var resultMessage: String? = null
                     suspend fun applyCatalog(catalog: CatalogPageContent) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return
@@ -438,7 +447,7 @@ internal fun buildCatalogExecutionBindings(
                                 "item_count_bucket" to analyticsCountBucket(catalog.items.size)
                             )
                         )
-                        showSnackbar(buildCatalogRefreshSuccessMessage())
+                        resultMessage = buildCatalogRefreshSuccessMessage()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
@@ -454,7 +463,7 @@ internal fun buildCatalogExecutionBindings(
                                     "mode" to currentCatalogMode().name.lowercase()
                                 )
                             )
-                            showSnackbar(buildCatalogRefreshFailureMessage())
+                            resultMessage = buildCatalogRefreshFailureMessage()
                         }
                     } finally {
                         if (
@@ -468,6 +477,7 @@ internal fun buildCatalogExecutionBindings(
                             setCatalogLoadJob(null)
                         }
                     }
+                    resultMessage?.let { showSnackbar(it) }
                 }
             )
         },

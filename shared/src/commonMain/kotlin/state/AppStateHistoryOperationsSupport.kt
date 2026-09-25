@@ -28,6 +28,11 @@ internal class AppStateHistoryOperations(
     private var lastClearSequence: Long = 0L
     private val activeImports = mutableSetOf<HistoryImportTicket>()
 
+    // When each thread's scroll position was last written. The throttle cannot use
+    // lastVisitedEpochMillis because scrolling no longer updates it.
+    private val scrollPersistGate = Mutex()
+    private val lastScrollPersistAtByKey = LinkedHashMap<String, Long>()
+
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         deletionGate.withLock {
             history.mapTo(mutableSetOf(), ::historyEntryIdentity)
@@ -233,8 +238,13 @@ internal class AppStateHistoryOperations(
     suspend fun persistHistoryScrollPosition(
         request: AppStateHistoryScrollUpdateRequest
     ) {
+        val persistKey = buildHistoryScrollJobKey(request.threadId, request.boardId, request.boardUrl)
+        val lastPersistedAtMillis = scrollPersistGate.withLock { lastScrollPersistAtByKey[persistKey] }
+        val nowMillis = Clock.System.now().toEpochMilliseconds()
+        var committed = false
         runMutation(
             missingSnapshotMessage = "Skipping history scroll persistence due to missing snapshot",
+            onCommitted = { committed = true },
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryScrollUpdatePlan(
                     currentHistory = currentHistory,
@@ -248,12 +258,22 @@ internal class AppStateHistoryOperations(
                     boardName = request.boardName,
                     boardUrl = request.boardUrl,
                     replyCount = request.replyCount,
-                    nowMillis = Clock.System.now().toEpochMilliseconds(),
-                    forcePersist = request.forcePersist
+                    nowMillis = nowMillis,
+                    forcePersist = request.forcePersist,
+                    lastPersistedAtMillis = lastPersistedAtMillis
                 )
             }
         ) { targetThreadId ->
             "Failed to persist updated history for thread $targetThreadId"
+        }
+        if (committed) {
+            scrollPersistGate.withLock {
+                lastScrollPersistAtByKey.remove(persistKey)
+                lastScrollPersistAtByKey[persistKey] = nowMillis
+                while (lastScrollPersistAtByKey.size > MAX_SCROLL_PERSIST_TIMESTAMPS) {
+                    lastScrollPersistAtByKey.remove(lastScrollPersistAtByKey.keys.first())
+                }
+            }
         }
     }
 
@@ -335,6 +355,7 @@ internal class AppStateHistoryOperations(
 
     private companion object {
         const val MAX_DELETED_HISTORY_TOMBSTONES = 1_024
+        const val MAX_SCROLL_PERSIST_TIMESTAMPS = 256
     }
 }
 

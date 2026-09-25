@@ -43,14 +43,16 @@ internal suspend fun trackVideoRegion(
         if (forward) source.analysisFrames(info, start, end, includeRgb = false, consume = ::consume)
         else {
             // Native readers run forward; only one small grayscale chunk is retained for reverse flow.
+            // All chunks share one reader, so its timeline and decoder are set up once per run.
+            val ranges = ArrayList<Pair<Long, Long>>()
             var chunkEnd = request.endIndex
             while (chunkEnd > request.firstIndex) {
                 val chunkStart = maxOf(request.firstIndex, chunkEnd - 32)
-                val frames = ArrayList<AnalysisFrame>(32)
-                source.analysisFrames(info, times[chunkStart], times.getOrNull(chunkEnd) ?: info.frames.durationUs,
-                    includeRgb = false) { frames += it }
-                for (frame in frames.asReversed()) consume(frame)
+                ranges += times[chunkStart] to (times.getOrNull(chunkEnd) ?: info.frames.durationUs)
                 chunkEnd = chunkStart
+            }
+            source.analysisFrameChunks(info, ranges, includeRgb = false) { frames ->
+                for (frame in frames.asReversed()) consume(frame)
             }
         }
     }

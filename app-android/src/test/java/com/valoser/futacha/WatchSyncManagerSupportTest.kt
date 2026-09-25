@@ -7,6 +7,32 @@ import org.junit.Test
 
 class WatchSyncManagerSupportTest {
     @Test
+    fun isStaleWatchCommandDataItem_dropsCommandsQueuedWhileDisconnected() {
+        val now = 1_800_000_000_000L
+        assertEquals(false, isStaleWatchCommandDataItem(updatedAtMillis = now - 30_000L, nowMillis = now))
+        assertEquals(
+            false,
+            isStaleWatchCommandDataItem(updatedAtMillis = now - WATCH_COMMAND_DATA_ITEM_MAX_AGE_MILLIS, nowMillis = now)
+        )
+        assertEquals(true, isStaleWatchCommandDataItem(updatedAtMillis = now - 3 * 60 * 60_000L, nowMillis = now))
+        // Older watch builds without a timestamp and a watch clock ahead of the phone.
+        assertEquals(false, isStaleWatchCommandDataItem(updatedAtMillis = 0L, nowMillis = now))
+        assertEquals(false, isStaleWatchCommandDataItem(updatedAtMillis = now + 60_000L, nowMillis = now))
+    }
+
+    @Test
+    fun resolveWatchRefreshCommandAction_coalescesIntoRunningRefreshInsteadOfCancelling() {
+        assertEquals(
+            WatchRefreshCommandAction.CoalesceIntoRunningRefresh,
+            resolveWatchRefreshCommandAction(isRefreshJobActive = true)
+        )
+        assertEquals(
+            WatchRefreshCommandAction.LaunchRefresh,
+            resolveWatchRefreshCommandAction(isRefreshJobActive = false)
+        )
+    }
+
+    @Test
     fun resolveWatchRefreshRequestDecision_startsWhenNoPriorRefreshExists() {
         assertEquals(
             WatchRefreshRequestDecision.StartRefresh,

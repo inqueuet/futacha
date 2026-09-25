@@ -128,6 +128,27 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun updateBoards_keepsAnUnreadableStoredBoardListInsteadOfOverwritingIt() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val truncated = """[{"id":"b","name":"Board""""
+        storage.updateBoardsJson(truncated)
+
+        store.updateBoards { boards ->
+            boards + BoardSummary(
+                id = "c",
+                name = "Board C",
+                category = "cat",
+                url = "https://may.2chan.net/c/",
+                description = "desc"
+            )
+        }
+
+        assertEquals(truncated, storage.boardsJson.first())
+        assertEquals("updateBoards", store.lastStorageError.value?.operation)
+    }
+
+    @Test
     fun updateBoards_recordsStorageErrorWhenPersistenceFails() = runBlocking {
         val storage = FakePlatformStateStorage()
         val store = AppStateStore(storage)
@@ -194,6 +215,81 @@ class AppStateStoreTest {
 
         storage.updateHistoryJson(encodeAppStateHistory(emptyList(), json))
         assertEquals(legacyHistory, store.history.first())
+    }
+
+    @Test
+    fun historyFileStore_clearsLegacyJsonAfterVerifiedMigration() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val legacyHistory = listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222"))
+        storage.updateHistoryJson(encodeAppStateHistory(legacyHistory, json))
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(legacyHistory, store.history.first())
+
+        // The migrated copy is replaced with the explicit empty value, so losing
+        // both manifests later cannot resurrect it.
+        assertEquals("[]", storage.historyState.value)
+        fileSystem.delete("private/history_store/manifest.json").getOrThrow()
+        fileSystem.delete("private/history_store/manifest.json.backup").getOrThrow()
+        val restarted = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        assertEquals(emptyList(), restarted.history.first())
+    }
+
+    @Test
+    fun historyFileStore_clearsLegacyJsonLeftByEarlierMigration() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val writer = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        writer.setHistory(listOf(historyEntry(threadId = "111")))
+        // Builds before this fix left the migrated blob in place.
+        storage.historyState.value = encodeAppStateHistory(listOf(historyEntry("stale")), json)
+
+        val reader = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(listOf("111"), reader.history.first().map { it.threadId })
+        assertEquals("[]", storage.historyState.value)
+    }
+
+    @Test
+    fun historyFileStore_keepsLegacyJsonWhenSplitEntriesAreUnreadable() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val writer = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        writer.setHistory(listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222")))
+        val legacy = encodeAppStateHistory(listOf(historyEntry("legacy")), json)
+        storage.historyState.value = legacy
+        val entryFile = fileSystem.listFiles("private/history_store/entries").first()
+        fileSystem.writeString("private/history_store/entries/$entryFile", "{broken").getOrThrow()
+
+        val reader = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(1, reader.history.first().size)
+        assertEquals(legacy, storage.historyState.value)
     }
 
     @Test
@@ -322,6 +418,46 @@ class AppStateStoreTest {
         assertEquals(listOf("222", "111"), store.history.first().map { it.threadId })
         assertEquals(1, fileSystem.entryWriteCount)
         assertEquals(1, fileSystem.manifestWriteCount)
+    }
+
+    @Test
+    fun historyReorderReusesManifestAndBackupButDeletionRemainsDurable() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        files.readCount = 0
+        files.backupWriteCount = 0
+        store.prependOrReplaceHistoryEntry(second.copy(lastVisitedEpochMillis = 5000L))
+        assertEquals(0, files.backupWriteCount)
+        assertEquals(0, files.readCount, "Unchanged manifest and known entry hashes stay in memory")
+        val restarted = AppStateStore(storage, AppStateHistoryFileStore(files, json, "restart"), json)
+        assertEquals(listOf("222", "111"), restarted.history.first().map { it.threadId })
+        store.removeHistoryEntry(first)
+        assertEquals(1, files.backupWriteCount)
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("222"), recovered.history.first().map { it.threadId })
+        store.close(); restarted.close(); recovered.close()
+    }
+
+    @Test
+    fun failedMembershipBackupIsRetriedOnTheNextReorder() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        files.failNextBackupWrite = true
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "333"))
+        store.prependOrReplaceHistoryEntry(second.copy(lastVisitedEpochMillis = 5000L))
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("222", "333", "111"), recovered.history.first().map { it.threadId })
+        store.close(); recovered.close()
     }
 
     @Test
@@ -755,6 +891,22 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun nearbyScrollRightAfterAPersistedScrollIsThrottledLongAfterOpening() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        // Opened long ago: the visit time must not be the throttle base once a
+        // scroll position has been written in this session.
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40))
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 41))
+
+        val saved = store.history.first().single()
+        assertEquals(40, saved.lastReadItemIndex)
+        assertEquals(100L, saved.lastVisitedEpochMillis)
+    }
+
+    @Test
     fun exitSave_waitsForADebouncedWriteThatAlreadyStarted() = runBlocking {
         val storage = FakePlatformStateStorage()
         val fileSystem = GatedHistoryEntryFileSystem()
@@ -1027,6 +1179,8 @@ private class CountingHistoryFileSystem(
 ) : FileSystem by delegate {
     var entryWriteCount = 0
     var manifestWriteCount = 0
+    var backupWriteCount = 0
+    var failNextBackupWrite = false
     var readCount = 0
 
     override suspend fun readString(path: String): Result<String> {
@@ -1038,6 +1192,11 @@ private class CountingHistoryFileSystem(
         when {
             path.startsWith("private/history_store/entries/") -> entryWriteCount += 1
             path == "private/history_store/manifest.json" -> manifestWriteCount += 1
+            path == "private/history_store/manifest.json.backup" -> backupWriteCount += 1
+        }
+        if (failNextBackupWrite && path == "private/history_store/manifest.json.backup") {
+            failNextBackupWrite = false
+            return Result.failure(IllegalStateException("backup write failed"))
         }
         return delegate.writeString(path, content)
     }

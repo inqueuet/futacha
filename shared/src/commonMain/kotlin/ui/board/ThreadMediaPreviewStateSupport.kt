@@ -96,6 +96,23 @@ internal fun resolveThreadMediaClickState(
     return nextState.takeIf { it != currentState }
 }
 
+/**
+ * Keeps the open viewer on the same media after the post list is replaced (a refresh
+ * right after the local copy was shown). The shown entry is found again by URL and type;
+ * the viewer closes only when that media is gone from the refreshed thread.
+ */
+internal fun relocateThreadMediaPreviewState(
+    currentState: ThreadMediaPreviewState,
+    previousEntries: List<MediaPreviewEntry>,
+    nextCollection: MediaPreviewCollection
+): ThreadMediaPreviewState {
+    val shownEntry = currentThreadMediaPreviewEntry(currentState, previousEntries)
+        ?: return dismissThreadMediaPreview(currentState)
+    val nextIndex = nextCollection.indexByKey[MediaPreviewKey(shownEntry.url, shownEntry.mediaType)]
+        ?.takeIf { it in nextCollection.entries.indices }
+    return currentState.withPreviewMediaIndex(nextIndex)
+}
+
 internal fun dismissThreadMediaPreview(currentState: ThreadMediaPreviewState): ThreadMediaPreviewState {
     return currentState.withPreviewMediaIndex(null)
 }

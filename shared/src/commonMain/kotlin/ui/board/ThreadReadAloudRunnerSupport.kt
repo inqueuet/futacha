@@ -66,7 +66,15 @@ internal suspend fun runThreadReadAloudSession(
         while (index < segments.size && isRunnerActive()) {
             val segment = segments[index]
             callbacks.onSegmentStart(segment, index)
-            callbacks.scrollToSegment(segment)
+            try {
+                callbacks.scrollToSegment(segment)
+            } catch (error: CancellationException) {
+                // A touch on the list interrupts the scroll animation with a
+                // CancellationException while this coroutine stays active;
+                // keep reading instead of ending the session silently.
+                currentCoroutineContext().ensureActive()
+                if (error is TimeoutCancellationException) throw error
+            }
             callbacks.speakSegment(segment)
             index += 1
         }

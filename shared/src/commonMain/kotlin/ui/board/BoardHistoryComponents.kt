@@ -33,9 +33,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -66,7 +68,12 @@ import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreviewEntry
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
+
+private const val HISTORY_FILTER_COUNT_DEBOUNCE_MS = 150L
 
 internal const val HISTORY_DRAWER_WARNING_ENTRY_COUNT = 100
 internal const val HISTORY_DISMISS_THRESHOLD_FRACTION = 0.72f
@@ -111,6 +118,10 @@ internal fun HistoryDrawerContent(
      */
     isVisible: Boolean = true
 ) {
+    val currentSelection = rememberUpdatedState(onHistoryEntrySelected)
+    val currentDismissal = rememberUpdatedState(onHistoryEntryDismissed)
+    val stableSelection = remember { { entry: ThreadHistoryEntry -> currentSelection.value(entry) } }
+    val stableDismissal = remember { { entry: ThreadHistoryEntry -> currentDismissal.value(entry) } }
     val historySnapshot = remember { HistoryDrawerSnapshotHolder() }
     val shownHistory = historySnapshot.resolve(history, isVisible)
     val content: @Composable () -> Unit = {
@@ -207,8 +218,8 @@ internal fun HistoryDrawerContent(
                 ) { entry ->
                     DismissibleHistoryEntry(
                         entry = entry,
-                        onDismissed = onHistoryEntryDismissed,
-                        onClicked = { onHistoryEntrySelected(entry) }
+                        onDismissed = stableDismissal,
+                        onClicked = { stableSelection(entry) }
                     )
                 }
             }
@@ -311,9 +322,17 @@ internal fun HistoryDrawerContent(
         }
     }
     if (isFilterSheetVisible) {
+        // Counted off the main thread and after typing pauses: history holds up
+        // to 20,000 entries and the title query changes on every keystroke.
+        val filteredCount by produceState<Int?>(null, history, draftViewSettings) {
+            delay(HISTORY_FILTER_COUNT_DEBOUNCE_MS)
+            value = withContext(AppDispatchers.parsing) {
+                countHistoryViewSettingsMatches(history, draftViewSettings)
+            }
+        }
         HistoryFilterSheet(
             totalCount = history.size,
-            filteredCount = applyHistoryViewSettings(history, draftViewSettings).size,
+            filteredCount = filteredCount,
             settings = draftViewSettings,
             boardOptions = boardFilterOptions,
             onSettingsChanged = { draftViewSettings = it },
@@ -603,10 +622,10 @@ private fun HistoryExportSelectionDialog(
     onDismiss: () -> Unit,
     onExport: (List<ThreadHistoryEntry>) -> Unit
 ) {
-    var selectedKeys by remember(history) {
-        mutableStateOf(history.mapIndexedTo(linkedSetOf()) { index, entry ->
-            buildHistorySelectionKey(index, entry)
-        })
+    // Keyed by thread identity and kept while the dialog is open: history
+    // changes (visits, refreshes) shift indices and used to reset the choice.
+    var selectedKeys by remember {
+        mutableStateOf(history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey))
     }
     AlertDialog(
         onDismissRequest = {
@@ -618,9 +637,7 @@ private fun HistoryExportSelectionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
-                        selectedKeys = history.mapIndexedTo(linkedSetOf()) { index, entry ->
-                            buildHistorySelectionKey(index, entry)
-                        }
+                        selectedKeys = history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey)
                         AnalyticsTracker.uiControl(
                             "history_export_selection",
                             "履歴エクスポート対象を全選択",
@@ -643,8 +660,8 @@ private fun HistoryExportSelectionDialog(
                     itemsIndexed(
                         items = history,
                         key = { index, entry -> buildHistorySelectionKey(index, entry) }
-                    ) { index, entry ->
-                        val key = buildHistorySelectionKey(index, entry)
+                    ) { _, entry ->
+                        val key = buildHistoryExportSelectionKey(entry)
                         HistoryEntrySelectionRow(
                             entry = entry,
                             checked = key in selectedKeys,
@@ -665,10 +682,10 @@ private fun HistoryExportSelectionDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = selectedKeys.isNotEmpty(),
+                enabled = history.any { buildHistoryExportSelectionKey(it) in selectedKeys },
                 onClick = {
-                    val selectedEntries = history.filterIndexed { index, entry ->
-                        buildHistorySelectionKey(index, entry) in selectedKeys
+                    val selectedEntries = history.filter { entry ->
+                        buildHistoryExportSelectionKey(entry) in selectedKeys
                     }
                     AnalyticsTracker.uiControl(
                         "history_export_selection",
@@ -932,7 +949,11 @@ private fun HistoryArchiveEntrySelectionRow(
 }
 
 private fun buildHistorySelectionKey(index: Int, entry: ThreadHistoryEntry): String {
-    return "$index|${entry.boardId}|${entry.threadId}|${entry.boardUrl}"
+    return "$index|${buildHistoryExportSelectionKey(entry)}"
+}
+
+private fun buildHistoryExportSelectionKey(entry: ThreadHistoryEntry): String {
+    return "${entry.boardId}|${entry.threadId}|${entry.boardUrl}"
 }
 
 internal fun buildHistoryArchivePayloadLabel(status: HistoryArchivePayloadStatus): String {
@@ -1010,9 +1031,13 @@ private fun HistoryEntryCard(
     val titleImageSizePx = remember(density) {
         with(density) { 48.dp.roundToPx() }
     }
-    val titleImageRequest = remember(platformContext, entry.titleImageUrl, titleImageSizePx) {
+    val isTitleImageKnownMissing = remember(entry.titleImageUrl) {
+        historyThumbnailFailureCache.isKnownMissing(entry.titleImageUrl)
+    }
+    val titleImageRequest = remember(platformContext, entry.titleImageUrl, titleImageSizePx, isTitleImageKnownMissing) {
         ImageRequest.Builder(platformContext)
-            .data(entry.titleImageUrl)
+            // A null model settles immediately as an error and shows the fallback icon.
+            .data(entry.titleImageUrl.takeUnless { isTitleImageKnownMissing })
             .crossfade(false)
             .size(titleImageSizePx, titleImageSizePx)
             .build()
@@ -1022,6 +1047,12 @@ private fun HistoryEntryCard(
         imageLoader = imageLoader
     )
     val titlePainterState by titlePainter.state.collectAsState()
+    LaunchedEffect(titlePainterState) {
+        val failure = (titlePainterState as? AsyncImagePainter.State.Error)?.result?.throwable
+        if (entry.titleImageUrl.isNotBlank() && com.valoser.futacha.shared.ui.image.isMissingImage(failure)) {
+            historyThumbnailFailureCache.recordMissing(entry.titleImageUrl)
+        }
+    }
     val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
         formatLastVisited(entry.lastVisitedEpochMillis)
     }

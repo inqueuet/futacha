@@ -24,6 +24,9 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.ai.AiAvailability
 import kotlinx.coroutines.CoroutineScope
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 
 internal data class FutachaScreenPreferencesStateInputs(
     val appVersion: String,
@@ -260,4 +263,88 @@ internal fun buildFutachaScreenBindingsBundle(
             preferencesCallbacks = screenPreferencesCallbacks
         )
     )
+}
+
+/** Callback identities survive reading-position updates; actions use the latest inputs. */
+@Composable
+internal fun rememberFutachaScreenBindingsBundle(
+    coroutineScope: CoroutineScope,
+    inputs: FutachaScreenBindingsInputs
+): FutachaScreenBindingsBundle {
+    val fresh = buildFutachaScreenBindingsBundle(coroutineScope, inputs)
+    val latest = rememberUpdatedState(fresh)
+    val navigationCallbacks = remember(coroutineScope) {
+        FutachaNavigationCallbacks(
+            onHistoryEntrySelected = { arg0 -> latest.value.navigationCallbacks.onHistoryEntrySelected(arg0) },
+            onSavedThreadSelected = { arg0 -> latest.value.navigationCallbacks.onSavedThreadSelected(arg0) },
+            onCatalogThreadSelected = { arg0, arg1, arg2, arg3, arg4 -> latest.value.navigationCallbacks.onCatalogThreadSelected(arg0, arg1, arg2, arg3, arg4) },
+            onSavedThreadsDismissed = { latest.value.navigationCallbacks.onSavedThreadsDismissed() },
+            onBoardSelectionCleared = { latest.value.navigationCallbacks.onBoardSelectionCleared() },
+            onThreadDismissed = { latest.value.navigationCallbacks.onThreadDismissed() },
+            onRegisteredThreadUrlClick = { arg0 -> latest.value.navigationCallbacks.onRegisteredThreadUrlClick(arg0) }
+        )
+    }
+    val boardScreenCallbacks = remember(coroutineScope) {
+        FutachaBoardScreenCallbacks(
+            onBoardSelected = { arg0 -> latest.value.boardScreenCallbacks.onBoardSelected(arg0) },
+            onAddBoard = { arg0, arg1 -> latest.value.boardScreenCallbacks.onAddBoard(arg0, arg1) },
+            onMenuAction = { arg0 -> latest.value.boardScreenCallbacks.onMenuAction(arg0) },
+            onBoardDeleted = { arg0 -> latest.value.boardScreenCallbacks.onBoardDeleted(arg0) },
+            onBoardsReordered = { arg0 -> latest.value.boardScreenCallbacks.onBoardsReordered(arg0) }
+        )
+    }
+    val screenPreferencesCallbacks = remember(coroutineScope, fresh.screenPreferencesCallbacks.onOpenSaveDirectoryPicker != null, fresh.screenPreferencesCallbacks.onFileManagerSelected != null, fresh.screenPreferencesCallbacks.onClearPreferredFileManager != null) {
+        ScreenPreferencesCallbacks(
+            onUpdateCheckChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onUpdateCheckChanged(arg0) },
+            onBackgroundRefreshChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onBackgroundRefreshChanged(arg0) },
+            onWatchAlertChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onWatchAlertChanged(arg0) },
+            onLightweightModeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onLightweightModeChanged(arg0) },
+            onThreadSummaryModeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadSummaryModeChanged(arg0) },
+            onAiPostFilterChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onAiPostFilterChanged(arg0) },
+            onAiCommandChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onAiCommandChanged(arg0) },
+            onTelemetryCollectionChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onTelemetryCollectionChanged(arg0) },
+            onAppLockPasswordChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onAppLockPasswordChanged(arg0) },
+            onAppLockCleared = { latest.value.screenPreferencesCallbacks.onAppLockCleared() },
+            onManualSaveDirectoryChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onManualSaveDirectoryChanged(arg0) },
+            onAttachmentPickerPreferenceChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onAttachmentPickerPreferenceChanged(arg0) },
+            onSaveDirectorySelectionChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onSaveDirectorySelectionChanged(arg0) },
+            onThreadGalleryTapActionChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadGalleryTapActionChanged(arg0) },
+            onThreadGalleryThumbnailModeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadGalleryThumbnailModeChanged(arg0) },
+            onThemeModeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThemeModeChanged(arg0) },
+            onThemePaletteChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThemePaletteChanged(arg0) },
+            onAppIconVariantChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onAppIconVariantChanged(arg0) },
+            onThreadDisplayModeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadDisplayModeChanged(arg0) },
+            onThreadBodyTextSizeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadBodyTextSizeChanged(arg0) },
+            onThreadPostImageSizeChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadPostImageSizeChanged(arg0) },
+            onCompactThreadHeaderChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onCompactThreadHeaderChanged(arg0) },
+            onCatalogFetchRowsChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onCatalogFetchRowsChanged(arg0) },
+            onOpenSaveDirectoryPicker = if (fresh.screenPreferencesCallbacks.onOpenSaveDirectoryPicker == null) null else ({ latest.value.screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke(); Unit }),
+            onFileManagerSelected = if (fresh.screenPreferencesCallbacks.onFileManagerSelected == null) null else ({ arg0, arg1 -> latest.value.screenPreferencesCallbacks.onFileManagerSelected?.invoke(arg0, arg1); Unit }),
+            onClearPreferredFileManager = if (fresh.screenPreferencesCallbacks.onClearPreferredFileManager == null) null else ({ latest.value.screenPreferencesCallbacks.onClearPreferredFileManager?.invoke(); Unit }),
+            onThreadMenuEntriesChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onThreadMenuEntriesChanged(arg0) },
+            onCatalogNavEntriesChanged = { arg0 -> latest.value.screenPreferencesCallbacks.onCatalogNavEntriesChanged(arg0) }
+        )
+    }
+    val screenHistoryCallbacks = remember(coroutineScope) {
+        ScreenHistoryCallbacks(
+            onHistoryEntrySelected = { arg0 -> latest.value.screenHistoryCallbacks.onHistoryEntrySelected(arg0) },
+            onHistoryEntryDismissed = { arg0 -> latest.value.screenHistoryCallbacks.onHistoryEntryDismissed(arg0) },
+            onHistoryEntryUpdated = { arg0 -> latest.value.screenHistoryCallbacks.onHistoryEntryUpdated(arg0) },
+            onHistoryRefresh = { latest.value.screenHistoryCallbacks.onHistoryRefresh() },
+            onHistoryExport = { latest.value.screenHistoryCallbacks.onHistoryExport() },
+            onHistoryExportThenClear = { latest.value.screenHistoryCallbacks.onHistoryExportThenClear() },
+            onHistoryExportSelected = { arg0 -> latest.value.screenHistoryCallbacks.onHistoryExportSelected(arg0) },
+            onHistoryLoadImportPreview = { latest.value.screenHistoryCallbacks.onHistoryLoadImportPreview() },
+            onHistoryImport = { latest.value.screenHistoryCallbacks.onHistoryImport() },
+            onHistoryImportSelected = { arg0 -> latest.value.screenHistoryCallbacks.onHistoryImportSelected(arg0) },
+            onHistoryCleared = { latest.value.screenHistoryCallbacks.onHistoryCleared() }
+        )
+    }
+    return remember(inputs.history, fresh.screenPreferencesState, navigationCallbacks,
+        boardScreenCallbacks, screenPreferencesCallbacks, screenHistoryCallbacks) {
+        FutachaScreenBindingsBundle(navigationCallbacks, boardScreenCallbacks,
+            fresh.screenPreferencesState, screenPreferencesCallbacks, screenHistoryCallbacks,
+            buildFutachaScreenContractContext(inputs.history, screenHistoryCallbacks,
+                fresh.screenPreferencesState, screenPreferencesCallbacks))
+    }
 }

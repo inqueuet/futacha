@@ -12,15 +12,12 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,11 +33,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,10 +114,12 @@ internal fun ThreadPostCard(
         mutableStateOf(sharedShowDeleted)
     }
     val onPostTap = LocalFutachaPostTap.current
+    val latestLongPress = androidx.compose.runtime.rememberUpdatedState(onLongPress)
+    val latestPostTap = androidx.compose.runtime.rememberUpdatedState(onPostTap)
     val cardModifier = if (onLongPress != null || onPostTap != null) {
-        modifier.pointerInput(onLongPress, onPostTap) {
-            detectTapGestures(onLongPress = onLongPress?.let { { _: androidx.compose.ui.geometry.Offset -> it() } },
-                onTap = onPostTap?.let { { _: androidx.compose.ui.geometry.Offset -> it() } })
+        modifier.pointerInput(post.id, onLongPress != null, onPostTap != null) {
+            detectTapGestures(onLongPress = onLongPress?.let { { _: androidx.compose.ui.geometry.Offset -> latestLongPress.value?.invoke() } },
+                onTap = onPostTap?.let { { _: androidx.compose.ui.geometry.Offset -> latestPostTap.value?.invoke() } })
         }
     } else {
         modifier
@@ -183,7 +185,7 @@ internal fun ThreadPostCard(
             ) {
                 ImageRequest.Builder(platformContext)
                     .data(displayUrl)
-                    .crossfade(true)
+                    .crossfade(false)
                     .size(thumbnailTargetWidthPx, thumbnailTargetHeightPx)
                     .build()
             }
@@ -194,7 +196,17 @@ internal fun ThreadPostCard(
             val thumbnailPainterState by thumbnailPainter.state.collectAsState()
             val promptMetadata = rememberGenerationMetadata(resolvePostTargetMediaUrl(post), thumbnailPainterState)
             val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
-            BoxWithConstraints(
+            // Measured with layout modifiers instead of BoxWithConstraints: that is a
+            // SubcomposeLayout per image post, only to read the available width.
+            val thumbnailBoundsFor: Density.(Int) -> ThreadPostThumbnailDisplayBounds = { maxWidthPx ->
+                resolveThreadPostThumbnailDisplayBounds(
+                    intrinsicWidth = post.thumbnailWidth?.takeIf { it > 0 }?.toFloat() ?: thumbnailPainter.intrinsicSize.width,
+                    intrinsicHeight = post.thumbnailHeight?.takeIf { it > 0 }?.toFloat() ?: thumbnailPainter.intrinsicSize.height,
+                    maxWidth = if (maxWidthPx == Constraints.Infinity) Dp.Infinity else maxWidthPx.toDp(),
+                    maxHeight = thumbnailMaxHeight
+                )
+            }
+            Box(
                 modifier = run {
                     val baseModifier = Modifier
                         .fillMaxWidth()
@@ -214,23 +226,17 @@ internal fun ThreadPostCard(
                             onMediaClick?.invoke(targetUrl, targetMediaType)
                         }
                     }
+                }.layout { measurable, constraints ->
+                    val bounds = thumbnailBoundsFor(constraints.maxWidth)
+                    val widthPx = if (constraints.hasBoundedWidth) constraints.maxWidth
+                        else bounds.width.roundToPx().coerceAtLeast(constraints.minWidth)
+                    val heightPx = bounds.height.roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight)
+                    val placeable = measurable.measure(Constraints.fixed(widthPx, heightPx))
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                 }
             ) {
-                val thumbnailDisplayBounds = remember(
-                    thumbnailPainter.intrinsicSize,
-                    maxWidth,
-                    thumbnailMaxHeight
-                ) {
-                    resolveThreadPostThumbnailDisplayBounds(
-                        intrinsicWidth = thumbnailPainter.intrinsicSize.width,
-                        intrinsicHeight = thumbnailPainter.intrinsicSize.height,
-                        maxWidth = maxWidth,
-                        maxHeight = thumbnailMaxHeight
-                    )
-                }
                 val imageContainerModifier = Modifier
-                    .fillMaxWidth()
-                    .height(thumbnailDisplayBounds.height)
+                    .fillMaxSize()
                     .clip(MaterialTheme.shapes.small)
                     .background(backgroundColor)
                 Box(modifier = imageContainerModifier) {
@@ -241,8 +247,16 @@ internal fun ThreadPostCard(
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
-                        Box(Modifier.align(Alignment.CenterStart)
-                            .width(thumbnailDisplayBounds.width).height(thumbnailDisplayBounds.height)) {
+                        Box(Modifier.align(Alignment.CenterStart).layout { measurable, constraints ->
+                            val bounds = thumbnailBoundsFor(constraints.maxWidth)
+                            val placeable = measurable.measure(
+                                Constraints.fixed(
+                                    bounds.width.roundToPx().coerceIn(constraints.minWidth, constraints.maxWidth),
+                                    bounds.height.roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight)
+                                )
+                            )
+                            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                        }) {
                             Image(
                                 painter = thumbnailPainter,
                                 contentDescription = "添付画像",
@@ -269,10 +283,23 @@ internal fun ThreadPostCard(
         } else {
             if (features != null) {
                 val method = features.value("thread", "threadUpsThumbMethod") ?: com.valoser.futacha.shared.ui.compat.COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
-                val wifi = com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
-                val urls = remember(post.messageHtml, method, wifi) {
-                    com.valoser.futacha.shared.ui.compat.compatVisibleInlineApuSmallMediaUrls(post.messageHtml, method, wifi)
-                        .filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                val wifi = !com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, false) &&
+                    com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, true) && com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
+                // Start from the cached result so a post scrolled back into view
+                // keeps its height instead of growing a frame later.
+                val cachedUrls = remember(post.messageHtml, post.imageUrl, post.thumbnailUrl, method, wifi) {
+                    peekThreadInlineMediaUrls(post.messageHtml, method, wifi)
+                        ?.filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                }
+                val urls by androidx.compose.runtime.produceState(cachedUrls ?: emptyList(), post, method, wifi) {
+                    if (cachedUrls != null) {
+                        value = cachedUrls
+                        return@produceState
+                    }
+                    value = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                        cachedThreadInlineMediaUrls(post.messageHtml, method, wifi)
+                            .filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                    }
                 }
                 com.valoser.futacha.shared.ui.compat.CompatInlineApuSmallPreviews(urls,
                     features.intValue("thread", "threadUpsThumbSize", 150..1200) ?: 250, 1f,
@@ -285,7 +312,9 @@ internal fun ThreadPostCard(
                 onQuoteClick = onQuoteClick,
                 onUrlClick = onUrlClick,
                 highlightRanges = highlightRanges,
-                bodyTextSize = bodyTextSize
+                bodyTextSize = bodyTextSize,
+                onPlainLongPress = onLongPress?.let { { latestLongPress.value?.invoke() } },
+                onPlainTap = onPostTap?.let { { latestPostTap.value?.invoke() } }
             )
         }
         deletionSummary?.let { summary ->
@@ -728,4 +757,40 @@ private fun ThreadPostCompactMetadata(
             overflow = TextOverflow.Clip
         )
     }
+}
+
+private val threadInlineMediaCache = LinkedHashMap<String, List<String>>()
+private val threadInlineMediaMutex = kotlinx.coroutines.sync.Mutex()
+private var threadInlineMediaBytes = 0
+
+/** Non-blocking cache lookup for composition; null when not yet extracted. */
+private fun peekThreadInlineMediaUrls(html: String, method: String, wifi: Boolean): List<String>? {
+    if (!com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, wifi)) return emptyList()
+    if (!threadInlineMediaMutex.tryLock()) return null
+    return try { threadInlineMediaCache[html] } finally { threadInlineMediaMutex.unlock() }
+}
+
+private suspend fun cachedThreadInlineMediaUrls(html: String, method: String, wifi: Boolean): List<String> {
+    if (!com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, wifi)) return emptyList()
+    threadInlineMediaMutex.lock()
+    try {
+        threadInlineMediaCache.remove(html)?.let {
+            threadInlineMediaCache[html] = it
+            return it
+        }
+    } finally { threadInlineMediaMutex.unlock() }
+    val urls = com.valoser.futacha.shared.ui.compat.compatInlineApuSmallMediaUrls(html)
+    threadInlineMediaMutex.lock()
+    try {
+        if (html !in threadInlineMediaCache) {
+            threadInlineMediaCache[html] = urls
+            threadInlineMediaBytes += (html.length + urls.sumOf { it.length }) * 2
+            while (threadInlineMediaCache.size > 512 || threadInlineMediaBytes > 2 * 1024 * 1024) {
+                val oldest = threadInlineMediaCache.entries.first()
+                threadInlineMediaBytes -= (oldest.key.length + oldest.value.sumOf { it.length }) * 2
+                threadInlineMediaCache.remove(oldest.key)
+            }
+        }
+    } finally { threadInlineMediaMutex.unlock() }
+    return urls
 }

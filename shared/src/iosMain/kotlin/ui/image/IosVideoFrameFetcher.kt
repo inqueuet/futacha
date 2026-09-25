@@ -43,8 +43,11 @@ import platform.WebKit.WKWebViewConfiguration
 import platform.darwin.NSObject
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_after
+import platform.darwin.dispatch_get_global_queue
 import platform.darwin.dispatch_get_main_queue
 import platform.darwin.dispatch_time
+import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
+import kotlinx.cinterop.autoreleasepool
 import platform.darwin.DISPATCH_TIME_NOW
 import platform.posix.memcpy
 import kotlin.coroutines.resume
@@ -570,12 +573,24 @@ private class WebmThumbnailNavigationDelegate(
                 finish(Result.failure(IllegalStateException(error.localizedDescription)))
                 return@takeSnapshotWithConfiguration
             }
-            val data = image?.let { uiImage -> UIImagePNGRepresentation(uiImage) }
-            if (data == null) {
-                finish(Result.failure(IllegalStateException("Failed to encode WebM thumbnail as PNG")))
+            if (image == null) {
+                finish(Result.failure(IllegalStateException("Failed to capture WebM thumbnail")))
                 return@takeSnapshotWithConfiguration
             }
-            finish(Result.success<NSData>(data))
+            // PNG encoding must not block the main queue (it runs for every
+            // WebM thumbnail on screen). Release the WebView now, encode on a
+            // background queue and deliver the result back on main as before.
+            completionDelivered = true
+            cleanup()
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                val data = autoreleasepool { UIImagePNGRepresentation(image) }
+                dispatch_async(dispatch_get_main_queue()) {
+                    onComplete(
+                        if (data != null) Result.success(data)
+                        else Result.failure(IllegalStateException("Failed to encode WebM thumbnail as PNG"))
+                    )
+                }
+            }
         }
     }
 

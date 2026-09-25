@@ -48,21 +48,17 @@ internal fun CatalogPreviewImage(
     val lowQuality = features?.value("catalog", "catalogEco") == "ON" ||
         (features?.value("catalog", "catalogMobileEco") == "ON" && !com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext))
     val crop = features?.value("catalog", "catalogThumbCrop")?.let { it == "ON" } ?: true
+    // Eco OFF means normal thumbnails, not original-resolution downloads.
     val candidates = remember(thumbnailUrl, fullImageUrl, lowQuality) {
-        buildList {
-            if (!lowQuality) fullImageUrl?.takeIf { it.isNotBlank() }?.let(::add)
-            thumbnailUrl?.takeIf { it.isNotBlank() }?.let(::add)
-            fullImageUrl
-                ?.takeIf { it.isNotBlank() && it != thumbnailUrl }
-                ?.let(::add)
-        }.distinct()
+        listOfNotNull(thumbnailUrl?.takeIf { lowQuality }?.replace("/thumb/", "/cat/"),
+            thumbnailUrl, fullImageUrl).filter(String::isNotBlank).distinct()
     }
     var candidateIndex by remember(candidates) { mutableIntStateOf(0) }
     val activeUrl = candidates.getOrNull(candidateIndex)
     val imageRequest = remember(activeUrl, targetSizePx) {
         ImageRequest.Builder(platformContext)
             .data(activeUrl)
-            .crossfade(true)
+            .crossfade(false)
             .size(targetSizePx, targetSizePx)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
@@ -85,15 +81,18 @@ internal fun CatalogPreviewImage(
     )
     val imageState by imagePainter.state.collectAsState()
 
+    val failure = (imageState as? AsyncImagePainter.State.Error)?.result?.throwable
+    val canAdvance = imageState is AsyncImagePainter.State.Error &&
+        shouldAdvanceCatalogPreviewCandidate(candidateIndex, candidates, fullImageUrl, failure)
     LaunchedEffect(imageState, activeUrl, candidateIndex, candidates.size) {
         if (activeUrl.isNullOrBlank()) return@LaunchedEffect
-        if (imageState is AsyncImagePainter.State.Error && candidateIndex < candidates.lastIndex) {
+        if (canAdvance) {
             candidateIndex += 1
         }
     }
 
     val shouldShowFallback = activeUrl.isNullOrBlank() ||
-        (imageState is AsyncImagePainter.State.Error && candidateIndex >= candidates.lastIndex)
+        (imageState is AsyncImagePainter.State.Error && !canAdvance)
 
     val promptMetadata = rememberGenerationMetadata(fullImageUrl, imageState)
     Box(modifier) {
@@ -118,3 +117,19 @@ internal fun CatalogPreviewImage(
 
 private const val CATALOG_VIDEO_FALLBACK_TIMEOUT_MILLIS = 2_500L
 private const val CATALOG_FALLBACK_NEGATIVE_CACHE_TTL_MILLIS = 60_000L
+
+/**
+ * The next catalog preview candidate after a failed one. Stepping between thumbnail
+ * variants (eco /cat/ -> /thumb/) is always allowed, but the original is a full-size
+ * download: like the thread thumbnails it is tried only when the thumbnail is really
+ * gone (404/410), not after a timeout or another transient failure.
+ */
+internal fun shouldAdvanceCatalogPreviewCandidate(
+    candidateIndex: Int,
+    candidates: List<String>,
+    fullImageUrl: String?,
+    failure: Throwable?
+): Boolean {
+    val next = candidates.getOrNull(candidateIndex + 1) ?: return false
+    return next != fullImageUrl || com.valoser.futacha.shared.ui.image.isMissingImage(failure)
+}

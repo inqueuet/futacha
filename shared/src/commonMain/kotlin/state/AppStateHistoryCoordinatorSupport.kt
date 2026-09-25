@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -13,7 +15,12 @@ internal class AppStateHistoryCoordinator(
     private val json: Json,
     private val tag: String,
     private val rethrowIfCancellation: (Throwable) -> Unit,
-    private val maxEntries: Int = historyFileStore?.maxEntries ?: APP_STATE_HISTORY_MAX_ENTRIES
+    private val maxEntries: Int = historyFileStore?.maxEntries ?: APP_STATE_HISTORY_MAX_ENTRIES,
+    /**
+     * Receives entries the size limit dropped, after the history without them was
+     * written. It must not block: storage cleanup runs elsewhere.
+     */
+    private val onEntriesTrimmed: (List<ThreadHistoryEntry>) -> Unit = {}
 ) {
     private val historyMutex = Mutex()
     private val historyPersistMutex = Mutex()
@@ -22,7 +29,8 @@ internal class AppStateHistoryCoordinator(
     private var persistedHistoryRevision: Long = 0L
 
     suspend fun setHistory(requestedHistory: List<ThreadHistoryEntry>) {
-        val history = boundToLimit(requestedHistory, emptySet())
+        val trimmed = mutableListOf<ThreadHistoryEntry>()
+        val history = withContext(AppDispatchers.io) { boundToLimit(requestedHistory, emptySet(), trimmed) }
         val (revision, previousRevision, previousHistory) = historyMutex.withLock {
             val beforeRevision = historyRevision
             val beforeHistory = cachedHistory
@@ -41,6 +49,7 @@ internal class AppStateHistoryCoordinator(
             )
             throw error
         }
+        reportTrimmed(trimmed)
     }
 
     suspend fun <T> runMutation(
@@ -49,15 +58,23 @@ internal class AppStateHistoryCoordinator(
         onCommitted: (T) -> Unit = {},
         buildFailureMessage: (T) -> String
     ) {
-        val mutation = prepareHistoryMutation(
-            missingSnapshotMessage = missingSnapshotMessage,
-            buildPlan = buildPlan
-        ) ?: return
+        val trimmed = mutableListOf<ThreadHistoryEntry>()
+        val mutation = withContext(AppDispatchers.io) {
+            prepareHistoryMutation(missingSnapshotMessage, buildPlan, trimmed)
+        } ?: return
         persistHistoryMutation(
             mutation = mutation,
             onCommitted = onCommitted,
             buildFailureMessage = buildFailureMessage
         )
+        reportTrimmed(trimmed)
+    }
+
+    private fun reportTrimmed(trimmed: List<ThreadHistoryEntry>) {
+        if (trimmed.isEmpty()) return
+        runCatching { onEntriesTrimmed(trimmed.toList()) }.onFailure { error ->
+            Logger.w(tag, "Failed to schedule cleanup of trimmed history entries: ${error.message}")
+        }
     }
 
     private suspend fun readHistorySnapshot(): List<ThreadHistoryEntry>? {
@@ -66,7 +83,9 @@ internal class AppStateHistoryCoordinator(
             currentCachedHistory = { cachedHistory },
             readStorageHistory = {
                 if (historyFileStore != null) {
-                    historyFileStore.readHistorySnapshot {
+                    historyFileStore.readHistorySnapshot(
+                        clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+                    ) {
                         storage.historyJson.first()
                     }
                 } else {
@@ -110,7 +129,8 @@ internal class AppStateHistoryCoordinator(
 
     private suspend fun <T> prepareHistoryMutation(
         missingSnapshotMessage: String,
-        buildPlan: (List<ThreadHistoryEntry>) -> AppStateHistoryMutationPlan<T>?
+        buildPlan: (List<ThreadHistoryEntry>) -> AppStateHistoryMutationPlan<T>?,
+        trimmed: MutableList<ThreadHistoryEntry>
     ): HistoryMutation<T>? {
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(tag, missingSnapshotMessage)
@@ -131,16 +151,25 @@ internal class AppStateHistoryCoordinator(
                     val currentKeys = current.mapTo(HashSet(), ::historyEntryIdentity)
                     val addedKeys = plan.updatedHistory.map(::historyEntryIdentity)
                         .filterTo(HashSet()) { it !in currentKeys }
-                    plan.copy(updatedHistory = boundToLimit(plan.updatedHistory, addedKeys))
+                    trimmed.clear()
+                    plan.copy(updatedHistory = boundToLimit(plan.updatedHistory, addedKeys, trimmed))
                 }
             }
         )
     }
 
-    private fun boundToLimit(history: List<ThreadHistoryEntry>, protectedKeys: Set<String>): List<ThreadHistoryEntry> {
+    private fun boundToLimit(
+        history: List<ThreadHistoryEntry>,
+        protectedKeys: Set<String>,
+        trimmed: MutableList<ThreadHistoryEntry>
+    ): List<ThreadHistoryEntry> {
         val bounded = trimAppStateHistoryToLimit(history, maxEntries, protectedKeys)
         if (bounded.size < history.size) {
             Logger.i(tag, "Dropped ${history.size - bounded.size} oldest history entries beyond the $maxEntries limit")
+            val keptKeys = bounded.mapTo(HashSet(), ::historyEntryIdentity)
+            history.filterTo(trimmed) { entry ->
+                historyEntryIdentity(entry).let { key -> key.isNotBlank() && key !in keptKeys }
+            }
         }
         return bounded
     }

@@ -63,6 +63,11 @@ class CompatImagePhashCollectionTest {
     fun slowImagesAreSkippedByTheRequestLimit() = runBlocking {
         val http = client(slowPaths = setOf("2.png"))
         try {
+            // Initialize the HTTP/decoder/hash path before measuring the mock
+            // response delay. Use a different URL so the measured images still
+            // go through fetching and decoding instead of the process-wide cache.
+            assertEquals(1, collectCompatImagePhashes(http, candidates(1),
+                requestTimeoutMillis = 10_000).size)
             val result = collectCompatImagePhashes(http, candidates(3), batchTimeoutMillis = 10_000, requestTimeoutMillis = 300)
 
             assertEquals(setOf("1", "3"), result.keys)

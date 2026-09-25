@@ -209,12 +209,23 @@ internal fun resolveAppStateHistoryScrollUpdatePlan(
     boardUrl: String,
     replyCount: Int,
     nowMillis: Long,
-    forcePersist: Boolean = false
+    forcePersist: Boolean = false,
+    lastPersistedAtMillis: Long? = null
 ): AppStateHistoryMutationPlan<String>? {
     val existingEntry = currentHistory.firstOrNull {
         matchesHistoryEntryIdentity(it, threadId, boardId, boardUrl)
     } ?: return null
-    if (shouldSkipHistoryScrollUpdate(existingEntry, index, offset, nowMillis, forcePersist, postId)) {
+    if (
+        shouldSkipHistoryScrollUpdate(
+            existingEntry = existingEntry,
+            index = index,
+            offset = offset,
+            nowMillis = nowMillis,
+            forcePersist = forcePersist,
+            postId = postId,
+            lastPersistedAtMillis = lastPersistedAtMillis
+        )
+    ) {
         return null
     }
     val updatedHistory = currentHistory.map { entry ->

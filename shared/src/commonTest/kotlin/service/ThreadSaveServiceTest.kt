@@ -9,6 +9,9 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpRequestRetry
+import com.valoser.futacha.shared.network.HigherLayerRetryManaged
+import com.valoser.futacha.shared.network.shouldUseClientAutomaticRetry
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
 import io.ktor.http.Headers
@@ -77,6 +80,124 @@ class ThreadSaveServiceTest {
         assertTrue(rawHtml.contains("""charset="UTF-8""""))
         assertTrue(rawHtml.contains("""src="b/thumb/1s.jpg""""))
         assertTrue(rawHtml.contains("""href="b/src/1.jpg""""))
+    }
+
+    @Test
+    fun saveThread_thumbnailsOnlyKeepsEarlierOriginalsWithoutDownloadingNewOnes() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val requestedPaths = mutableListOf<String>()
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                addHandler { request ->
+                    requestedPaths += request.url.encodedPath
+                    val path = request.url.encodedPath
+                    when {
+                        path.endsWith("/thumb/1s.jpg") || path.endsWith("/thumb/2s.jpg") -> binaryResponse(
+                            body = "thumb".encodeToByteArray(),
+                            contentType = "image/jpeg"
+                        )
+                        path.endsWith("/src/1.jpg") || path.endsWith("/src/2.jpg") -> binaryResponse(
+                            body = "image".encodeToByteArray(),
+                            contentType = "image/jpeg"
+                        )
+                        else -> error("Unexpected request: ${request.url}")
+                    }
+                }
+            }
+        )
+        val service = ThreadSaveService(httpClient = HttpClient(engine), fileSystem = fileSystem)
+        suspend fun save(posts: List<Post>, downloadFullMedia: Boolean) = service.saveThread(
+            threadId = "555",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = posts,
+            baseDirectory = "auto",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+            limits = ThreadSaveLimits(downloadFullMedia = downloadFullMedia),
+            storageOptions = ThreadSaveStorageOptions(
+                storageIdOverride = buildThreadStorageId("b", "555"),
+                clearExistingOutput = false,
+                reuseExistingMedia = true,
+                pruneUnreferencedExistingMedia = true
+            )
+        ).getOrThrow()
+        val first = samplePost()
+        save(listOf(first), downloadFullMedia = true)
+        requestedPaths.clear()
+
+        val second = samplePost(
+            postId = "2",
+            imageUrl = "https://may.2chan.net/b/src/2.jpg",
+            thumbnailUrl = "https://may.2chan.net/b/thumb/2s.jpg"
+        )
+        save(listOf(first, second), downloadFullMedia = false)
+
+        assertEquals(listOf("/b/thumb/2s.jpg"), requestedPaths)
+        val storageId = buildThreadStorageId("b", "555")
+        val metadata = readMetadata(fileSystem, "auto/$storageId/metadata.json")
+        assertEquals("b/src/1.jpg", metadata.posts[0].localImagePath)
+        assertNull(metadata.posts[1].localImagePath)
+        assertEquals("b/thumb/2s.jpg", metadata.posts[1].localThumbnailPath)
+        assertTrue(fileSystem.exists("auto/$storageId/b/src/1.jpg"))
+    }
+
+    @Test
+    fun saveThread_mediaRetriesAreOwnedBySaverNotTheClient() = runBlocking {
+        var thumbnailRequests = 0
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                addHandler { request ->
+                    when {
+                        request.url.encodedPath.endsWith("/thumb/1s.jpg") -> {
+                            thumbnailRequests += 1
+                            respond("busy", HttpStatusCode.ServiceUnavailable)
+                        }
+                        request.url.encodedPath.endsWith("/src/1.jpg") -> binaryResponse(
+                            body = "image-bytes".encodeToByteArray(),
+                            contentType = "image/jpeg"
+                        )
+                        request.url.encodedPath.endsWith("/res/321.htm") -> textResponse(
+                            body = "<html><body></body></html>",
+                            contentType = "text/html; charset=UTF-8"
+                        )
+                        else -> error("Unexpected request: ${request.url}")
+                    }
+                }
+            }
+        )
+        // Same automatic retry policy as the Android/iOS/JVM clients.
+        val client = HttpClient(engine) {
+            install(HttpRequestRetry) {
+                maxRetries = 2
+                delayMillis { 1L }
+                retryIf(maxRetries) { request, response ->
+                    shouldUseClientAutomaticRetry(
+                        method = request.method,
+                        higherLayerRetryManaged = request.attributes.getOrNull(HigherLayerRetryManaged) == true
+                    ) && response.status.value in 500..599
+                }
+            }
+        }
+        val service = ThreadSaveService(httpClient = client, fileSystem = InMemoryFileSystem())
+
+        service.saveThread(
+            threadId = "321",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = listOf(samplePost()),
+            baseDirectory = "manual",
+            writeMetadata = true
+        )
+
+        // The saver's own 3 attempts, not 3 x 3 with the client retrying each.
+        assertEquals(3, thumbnailRequests)
     }
 
     @Test

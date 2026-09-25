@@ -38,8 +38,21 @@ class OriginalMediaSession internal constructor(
         DiskCache.Builder().directory(it.directory).maxSizeBytes(it.maxBytes).build()
     },
     private val dispatcher: CoroutineDispatcher = AppDispatchers.io,
-    private val shutdownReportIntervalMillis: Long = OriginalMediaStore.DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS
+    private val shutdownReportIntervalMillis: Long = OriginalMediaStore.DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS,
+    /**
+     * How long a change of an open cache waits for the next published value. A new
+     * composition first publishes defaults and then the saved setting; without this,
+     * that brief default relocated (and cleared) the live cache.
+     */
+    private val configurationSettleMillis: Long = DEFAULT_CONFIGURATION_SETTLE_MILLIS,
+    /** Bound for acquire while the cache is (re)configured, e.g. behind a playing video. */
+    private val readyWaitTimeoutMillis: Long = DEFAULT_READY_WAIT_TIMEOUT_MILLIS
 ) : OriginalMediaSource, AutoCloseable {
+    companion object {
+        internal const val DEFAULT_CONFIGURATION_SETTLE_MILLIS = 500L
+        internal const val DEFAULT_READY_WAIT_TIMEOUT_MILLIS = 30_000L
+    }
+
     private data class Ready(val configuration: OriginalMediaCacheConfiguration, val store: OriginalMediaStore)
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val requested = MutableStateFlow<OriginalMediaCacheConfiguration?>(null)
@@ -69,9 +82,15 @@ class OriginalMediaSession internal constructor(
         }
     }
     private val worker = scope.launch {
-        requested.filterNotNull().collect { configuration ->
+        requested.filterNotNull().collect { published ->
             transition.withLock {
+                var configuration = published
                 if (closed.value || ready.value?.configuration == configuration) return@withLock
+                if (ready.value != null) {
+                    delay(configurationSettleMillis)
+                    configuration = requested.value ?: configuration
+                    if (closed.value || ready.value?.configuration == configuration) return@withLock
+                }
                 val old = ready.value
                 ready.value = null
                 if (old != null) {
@@ -131,12 +150,20 @@ class OriginalMediaSession internal constructor(
         requested.compareAndSet(null, configuration)
     }
 
-    override suspend fun acquire(request: OriginalMediaRequest): OriginalMediaStore.Lease {
-        while (true) {
-            val snapshot = combine(requested, ready, closed) { desired, current, stopped ->
+    private suspend fun awaitReady(): Ready =
+        withTimeoutOrNull(readyWaitTimeoutMillis.coerceAtLeast(1L)) {
+            combine(requested, ready, closed) { desired, current, stopped ->
                 check(!stopped) { "Original media session is closed" }
                 current?.takeIf { it.configuration == desired }
             }.filterNotNull().first()
+        } ?: throw IllegalStateException(
+            "Original media cache was not ready within ${readyWaitTimeoutMillis}ms " +
+                "(${transitionStateValue.value})"
+        )
+
+    override suspend fun acquire(request: OriginalMediaRequest): OriginalMediaStore.Lease {
+        while (true) {
+            val snapshot = awaitReady()
             try {
                 val lease = snapshot.store.acquire(request)
                 if (ready.value === snapshot && requested.value == snapshot.configuration && !closed.value) return lease
@@ -154,10 +181,7 @@ class OriginalMediaSession internal constructor(
 
     override suspend fun acquireForPlayback(request: OriginalMediaRequest): OriginalMediaPlayback {
         while (true) {
-            val snapshot = combine(requested, ready, closed) { desired, current, stopped ->
-                check(!stopped) { "Original media session is closed" }
-                current?.takeIf { it.configuration == desired }
-            }.filterNotNull().first()
+            val snapshot = awaitReady()
             try {
                 val playback = snapshot.store.acquireForPlayback(request)
                 if (ready.value === snapshot && requested.value == snapshot.configuration && !closed.value) return playback

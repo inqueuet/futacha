@@ -37,13 +37,6 @@ class HistoryRefreshWorkerSupportTest {
     }
 
     @Test
-    fun shouldRetryBackgroundRefreshTimeout_retriesOnlyBeforeLimit() {
-        assertTrue(shouldRetryBackgroundRefreshTimeout(runAttemptCount = 0, maxTimeoutRetries = 2))
-        assertTrue(shouldRetryBackgroundRefreshTimeout(runAttemptCount = 1, maxTimeoutRetries = 2))
-        assertFalse(shouldRetryBackgroundRefreshTimeout(runAttemptCount = 2, maxTimeoutRetries = 2))
-    }
-
-    @Test
     fun shouldRetryBackgroundRefreshFailure_requiresRetriableErrorAndRemainingAttempts() {
         assertTrue(
             shouldRetryBackgroundRefreshFailure(

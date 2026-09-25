@@ -565,6 +565,92 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun indexReads_reuseParsedIndexUntilItIsRewritten() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        repository.addThreadToIndex(first).getOrThrow()
+        val readsAfterWrite = fileSystem.readCount("saved_threads/index.json")
+
+        repeat(3) { assertEquals(listOf(first), repository.getAllThreads()) }
+        repository.getStats()
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(readsAfterWrite, fileSystem.readCount("saved_threads/index.json"))
+        assertEquals(0, fileSystem.readCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
+    fun indexCache_seesWritesFromAnotherInstanceOfTheSameFolder() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val reader = SavedThreadRepository(fileSystem, baseDirectory = "shared_threads")
+        val writer = SavedThreadRepository(fileSystem, baseDirectory = "shared_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        writer.addThreadToIndex(first).getOrThrow()
+        assertEquals(listOf(first), reader.getAllThreads())
+
+        // Same length as the first title, so only the revision reveals the change.
+        val renamed = first.copy(title = "title-xyz")
+        writer.updateThread(renamed).getOrThrow()
+
+        assertEquals(listOf(renamed), reader.getAllThreads())
+    }
+
+    @Test
+    fun indexCache_rereadsWhenTheFileChangesOutsideTheProcess() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        val other = savedThread("456", "b", buildThreadStorageId("b", "456"), savedAt = 90L, totalSize = 20L)
+        repository.addThreadToIndex(first).getOrThrow()
+
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(SavedThreadIndex(threads = listOf(first, other), totalSize = 30L, lastUpdated = 1L))
+        ).getOrThrow()
+
+        assertEquals(listOf(first, other), repository.getAllThreads())
+    }
+
+    @Test
+    fun pathIndexWrites_refreshBackupPeriodicallyButAlwaysForDeletion() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        val second = savedThread("456", "b", buildThreadStorageId("b", "456"), savedAt = 90L, totalSize = 20L)
+        repository.addThreadToIndex(first).getOrThrow()
+        repository.addThreadToIndex(second).getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json.backup"))
+
+        repository.deleteThread("456", "b").getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("saved_threads/index.json.backup"))
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(first), backup.threads)
+        // The pre-delete copy is only written when a delete fails.
+        assertTrue(fileSystem.listFiles("saved_threads").none { it.endsWith(".thread_delete.backup") })
+    }
+
+    @Test
+    fun locationIndexWrites_keepWritingBackupFirst() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(
+            fileSystem,
+            baseDirectory = "content://tree/threads",
+            baseSaveLocation = SaveLocation.TreeUri("content://tree/threads")
+        )
+        repository.addThreadToIndex(savedThread("123", "b", buildThreadStorageId("b", "123"), 100L, 10L)).getOrThrow()
+        repository.addThreadToIndex(savedThread("456", "b", buildThreadStorageId("b", "456"), 90L, 20L)).getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("content://tree/threads/index.json"))
+        assertEquals(2, fileSystem.writeCount("content://tree/threads/index.json.backup"))
+    }
+
+    @Test
     fun deleteThread_removesStoredDirectoryAndIndexEntry() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
@@ -1077,9 +1163,20 @@ private class CountingIndexWriteFileSystem(
     private val delegate: InMemoryFileSystem = InMemoryFileSystem()
 ) : FileSystem by delegate {
     private val writeCounts = linkedMapOf<String, Int>()
+    private val readCounts = linkedMapOf<String, Int>()
 
     fun writeCount(path: String): Int {
         return writeCounts[normalizeKey(path)] ?: 0
+    }
+
+    fun readCount(path: String): Int {
+        return readCounts[normalizeKey(path)] ?: 0
+    }
+
+    override suspend fun readString(path: String): Result<String> {
+        val key = normalizeKey(path)
+        readCounts[key] = (readCounts[key] ?: 0) + 1
+        return delegate.readString(path)
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> {

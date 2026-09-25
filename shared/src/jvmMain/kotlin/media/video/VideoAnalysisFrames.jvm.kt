@@ -30,3 +30,9 @@ internal actual suspend fun decodeDeviceVideoFrames(path: String, info: VideoEdi
         }
     } }
 }
+
+internal actual suspend fun decodeDeviceVideoFrameChunks(
+    path: String, info: VideoEditInfo, requests: List<VideoAnalysisRequest>, consume: suspend (Int, AnalysisFrame) -> Unit
+) {
+    requests.forEachIndexed { chunk, request -> decodeDeviceVideoFrames(path, info, request) { consume(chunk, it) } }
+}

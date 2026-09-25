@@ -86,6 +86,7 @@ class FutachaTileService : TileService() {
 
         return Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
+            .setFreshnessIntervalMillis(tileFreshnessIntervalMillis(snapshot, System.currentTimeMillis()))
             .setTileTimeline(TimelineBuilders.Timeline.fromLayoutElement(layout))
             .build()
     }

@@ -26,13 +26,6 @@ internal fun shouldRetryBackgroundSettingRead(
     return runAttemptCount < maxSettingReadRetries
 }
 
-internal fun shouldRetryBackgroundRefreshTimeout(
-    runAttemptCount: Int,
-    maxTimeoutRetries: Int = 2
-): Boolean {
-    return runAttemptCount < maxTimeoutRetries
-}
-
 internal fun shouldRetryBackgroundRefreshFailure(
     error: Throwable,
     runAttemptCount: Int,

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui
 
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -54,6 +55,12 @@ internal fun shouldContinuouslyRefreshFutachaAiAvailability(
 internal data class FutachaObservedRuntimeState(
     val persistedBoards: List<BoardSummary>,
     val persistedHistory: List<ThreadHistoryEntry>,
+    /**
+     * False until the store has emitted boards and history. Until then the two lists
+     * above are the seed defaults (mock boards), which must not be used to resolve
+     * deep links or render/record the first screen.
+     */
+    val arePersistedListsLoaded: Boolean = true,
     val threadMenuEntries: List<com.valoser.futacha.shared.model.ThreadMenuEntryConfig>,
     val catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>,
     val isUpdateCheckEnabled: Boolean,
@@ -97,8 +104,21 @@ internal fun rememberFutachaObservedRuntimeState(
     initialThemeMode: ThemeMode,
     initialThemePalette: ThemePalette
 ): FutachaObservedRuntimeState {
-    val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
-    val persistedHistory by stateStore.history.collectAsState(initial = history)
+    androidx.compose.runtime.LaunchedEffect(stateStore) {
+        kotlinx.coroutines.coroutineScope {
+            listOf(stateStore.observedCatalogModes, stateStore.observedCatalogNgWords, stateStore.observedNgHeaders,
+                stateStore.observedNgWords, stateStore.observedWatchWords, stateStore.observedBoardWatchWords,
+                stateStore.observedLastUsedDeleteKey, stateStore.observedSelfPostIdentifiersByThread,
+                stateStore.observedCatalogDisplayStyle, stateStore.observedCatalogGridColumns).forEach { preference ->
+                launch { preference.collect { } }
+            }
+        }
+    }
+    val observedBoards by stateStore.observedBoards.collectAsState<List<BoardSummary>, List<BoardSummary>?>(initial = null)
+    val observedHistory by stateStore.observedHistory.collectAsState<List<ThreadHistoryEntry>, List<ThreadHistoryEntry>?>(initial = null)
+    val persistedBoards = observedBoards ?: boardList
+    val persistedHistory = observedHistory ?: history
+    val arePersistedListsLoaded = observedBoards != null && observedHistory != null
     val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
     val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
     val isUpdateCheckEnabled by stateStore.isUpdateCheckEnabled.collectAsState(initial = true)
@@ -248,6 +268,7 @@ internal fun rememberFutachaObservedRuntimeState(
     return remember(
         persistedBoards,
         persistedHistory,
+        arePersistedListsLoaded,
         threadMenuEntries,
         catalogNavEntries,
         isUpdateCheckEnabled,
@@ -281,6 +302,7 @@ internal fun rememberFutachaObservedRuntimeState(
         FutachaObservedRuntimeState(
             persistedBoards = persistedBoards,
             persistedHistory = persistedHistory,
+            arePersistedListsLoaded = arePersistedListsLoaded,
             threadMenuEntries = threadMenuEntries,
             catalogNavEntries = catalogNavEntries,
             isUpdateCheckEnabled = isUpdateCheckEnabled,

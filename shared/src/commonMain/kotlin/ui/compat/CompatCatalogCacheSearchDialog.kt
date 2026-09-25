@@ -36,6 +36,7 @@ import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.normalizeCompatSearchText
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -44,7 +45,9 @@ import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.http.Url
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -94,7 +97,9 @@ internal fun CompatCatalogCacheSearchDialog(
     var query by rememberSaveable { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(CompatCatalogCacheSearchMode.OR) }
     var baseResults by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
-    var cachedBodyTextByThreadId by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Search-normalized (normalizeCompatSearchText) bodies, computed once per search.
+    var normalizedBodyTextByThreadId by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var modeFilterJob by remember { mutableStateOf<Job?>(null) }
     var results by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
     var searchedQuery by remember { mutableStateOf("") }
     var searchHistory by remember(initialSearchHistory) {
@@ -102,6 +107,19 @@ internal fun CompatCatalogCacheSearchDialog(
     }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun applyMode(nextMode: CompatCatalogCacheSearchMode) {
+        mode = nextMode
+        val base = baseResults
+        val searched = searchedQuery
+        val bodies = normalizedBodyTextByThreadId
+        modeFilterJob?.cancel()
+        modeFilterJob = scope.launch {
+            results = withContext(AppDispatchers.parsing) {
+                filterLegacyCompatCatalogCacheNormalized(base, searched, nextMode, bodies)
+            }
+        }
+    }
 
     fun runSearch(keyword: String = query) {
         val normalized = cleanCompatCacheSearchKeyword(keyword)
@@ -118,20 +136,32 @@ internal fun CompatCatalogCacheSearchDialog(
                     searchLegacyCompatCatalogCache(it, boardUrl, normalized)
                 }
                 val fetched = remoteResult?.getOrDefault(emptyList()).orEmpty()
-                cachedBodyTextByThreadId = localBodies
-                baseResults = mergeCompatCacheSearchResults(
-                    remoteResults = fetched,
-                    localHistory = localHistory,
-                    boardKey = boardKey,
-                    query = normalized,
-                    bodyTextByThreadId = localBodies
-                )
-                results = filterLegacyCompatCatalogCache(
-                    baseResults,
-                    normalized,
-                    mode,
-                    supplementalTextById = localBodies
-                )
+                val searchMode = mode
+                val (merged, filtered) = withContext(AppDispatchers.parsing) {
+                    val mergedResults = mergeCompatCacheSearchResultsNormalized(
+                        remoteResults = fetched,
+                        localHistory = localHistory,
+                        boardKey = boardKey,
+                        query = normalized,
+                        normalizedBodyTextByThreadId = localBodies
+                    )
+                    mergedResults to filterLegacyCompatCatalogCacheNormalized(
+                        mergedResults,
+                        normalized,
+                        searchMode,
+                        normalizedSupplementalTextById = localBodies
+                    )
+                }
+                modeFilterJob?.cancel()
+                normalizedBodyTextByThreadId = localBodies
+                baseResults = merged
+                results = if (mode == searchMode) {
+                    filtered
+                } else {
+                    withContext(AppDispatchers.parsing) {
+                        filterLegacyCompatCatalogCacheNormalized(merged, normalized, mode, localBodies)
+                    }
+                }
                 searchedQuery = normalized
                 searchHistory = rememberCompatCacheSearchKeyword(searchHistory, normalized)
                 onSearchHistoryChanged(searchHistory)
@@ -206,22 +236,12 @@ internal fun CompatCatalogCacheSearchDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(
                         selected = mode == CompatCatalogCacheSearchMode.OR,
-                        onClick = {
-                            mode = CompatCatalogCacheSearchMode.OR
-                            results = filterLegacyCompatCatalogCache(
-                                baseResults, searchedQuery, mode, cachedBodyTextByThreadId
-                            )
-                        }
+                        onClick = { applyMode(CompatCatalogCacheSearchMode.OR) }
                     )
                     Text(compatCatalogCacheSearchModeLabel(CompatCatalogCacheSearchMode.OR))
                     RadioButton(
                         selected = mode == CompatCatalogCacheSearchMode.AND,
-                        onClick = {
-                            mode = CompatCatalogCacheSearchMode.AND
-                            results = filterLegacyCompatCatalogCache(
-                                baseResults, searchedQuery, mode, cachedBodyTextByThreadId
-                            )
-                        }
+                        onClick = { applyMode(CompatCatalogCacheSearchMode.AND) }
                     )
                     Text(compatCatalogCacheSearchModeLabel(CompatCatalogCacheSearchMode.AND))
                 }
@@ -263,18 +283,44 @@ internal fun mergeCompatCacheSearchResults(
     boardKey: String,
     query: String,
     bodyTextByThreadId: Map<String, String> = emptyMap()
+): List<CatalogItem> = mergeCompatCacheSearchResultsNormalized(
+    remoteResults = remoteResults,
+    localHistory = localHistory,
+    boardKey = boardKey,
+    query = query,
+    normalizedBodyTextByThreadId = bodyTextByThreadId.mapValues { normalizeCompatSearchText(it.value) }
+)
+
+/** A search term with its search-normalized form, normalized once per search. */
+private class CompatCacheSearchTerm(val raw: String) {
+    val normalized: String = normalizeCompatSearchText(raw)
+}
+
+/**
+ * [mergeCompatCacheSearchResults] for bodies that are already
+ * search-normalized; each title and term is also normalized only once.
+ */
+internal fun mergeCompatCacheSearchResultsNormalized(
+    remoteResults: List<CatalogItem>,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    query: String,
+    normalizedBodyTextByThreadId: Map<String, String>
 ): List<CatalogItem> {
     val terms = cleanCompatCacheSearchKeyword(query)
         .split(compatCatalogCacheWhitespaceRegex)
         .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
     val localResults = localHistory.asSequence()
         .filter { it.boardKey == boardKey }
         .filter { entry ->
-            terms.isEmpty() || terms.any { term ->
-                normalizeCompatSearchText(entry.title).contains(normalizeCompatSearchText(term)) ||
-                    entry.threadNo.contains(term) ||
-                    normalizeCompatSearchText(bodyTextByThreadId[entry.threadNo].orEmpty())
-                        .contains(normalizeCompatSearchText(term))
+            if (terms.isEmpty()) return@filter true
+            val title = normalizeCompatSearchText(entry.title)
+            val body = normalizedBodyTextByThreadId[entry.threadNo].orEmpty()
+            terms.any { term ->
+                title.contains(term.normalized) ||
+                    entry.threadNo.contains(term.raw) ||
+                    body.contains(term.normalized)
             }
         }
         .map { entry ->
@@ -343,17 +389,36 @@ internal fun filterLegacyCompatCatalogCache(
     query: String,
     mode: CompatCatalogCacheSearchMode,
     supplementalTextById: Map<String, String> = emptyMap()
+): List<CatalogItem> = filterLegacyCompatCatalogCacheNormalized(
+    items = items,
+    query = query,
+    mode = mode,
+    normalizedSupplementalTextById = supplementalTextById.mapValues { normalizeCompatSearchText(it.value) }
+)
+
+/**
+ * [filterLegacyCompatCatalogCache] for supplemental text that is already
+ * search-normalized; each title and term is also normalized only once.
+ */
+internal fun filterLegacyCompatCatalogCacheNormalized(
+    items: List<CatalogItem>,
+    query: String,
+    mode: CompatCatalogCacheSearchMode,
+    normalizedSupplementalTextById: Map<String, String>
 ): List<CatalogItem> {
-    val terms = query.trim().split(compatCatalogCacheWhitespaceRegex).filter(String::isNotBlank)
+    val terms = query.trim().split(compatCatalogCacheWhitespaceRegex)
+        .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
     if (terms.isEmpty()) return items
-    fun matches(item: CatalogItem, term: String): Boolean =
-        normalizeCompatSearchText(item.title.orEmpty()).contains(normalizeCompatSearchText(term)) ||
-            item.id.contains(term) ||
-            normalizeCompatSearchText(supplementalTextById[item.id].orEmpty())
-                .contains(normalizeCompatSearchText(term))
     return items.filter { item ->
-        if (mode == CompatCatalogCacheSearchMode.AND) terms.all { matches(item, it) }
-        else terms.any { matches(item, it) }
+        val title = normalizeCompatSearchText(item.title.orEmpty())
+        val supplemental = normalizedSupplementalTextById[item.id].orEmpty()
+        fun matches(term: CompatCacheSearchTerm): Boolean =
+            title.contains(term.normalized) ||
+                item.id.contains(term.raw) ||
+                supplemental.contains(term.normalized)
+        if (mode == CompatCatalogCacheSearchMode.AND) terms.all(::matches)
+        else terms.any(::matches)
     }
 }
 
@@ -362,6 +427,7 @@ internal fun compatCacheSearchBodyText(snapshot: CompatThreadSnapshot): String =
         listOfNotNull(post.subject, post.author, post.messageHtml).joinToString(" ")
     }
 
+/** Search-normalized body text of the locally cached threads of [boardKey]. */
 private suspend fun loadCompatCacheSearchBodyText(
     store: CompatibilityStore,
     localHistory: List<CompatHistoryEntry>,
@@ -378,7 +444,12 @@ private suspend fun loadCompatCacheSearchBodyText(
                         store.loadThreadSnapshotByCanonicalUrl(entry.canonicalUrl)
                     }.getOrNull()
                 }
-                entry.threadNo to snapshot?.let(::compatCacheSearchBodyText)
+                // Join and normalize each body once, off the main thread.
+                entry.threadNo to snapshot?.let {
+                    withContext(AppDispatchers.parsing) {
+                        normalizeCompatSearchText(compatCacheSearchBodyText(it))
+                    }
+                }
             }
         }
         .toList()

@@ -179,32 +179,21 @@ class MainActivity : ComponentActivity() {
                     com.valoser.futacha.shared.util.applyAppIconVariant(this@MainActivity, variant)
                 }
             }
-            val modernBoards by stateStore.boards.collectAsState(initial = emptyList())
-            val modernHistory by stateStore.history.collectAsState(initial = emptyList())
-            androidx.compose.runtime.LaunchedEffect(activeProfile, app, modernBoards, modernHistory) {
-                try {
-                    if (
-                        activeProfile == com.valoser.futacha.shared.compat.ExperienceProfile.TOSHIAKI_COMPAT &&
-                        app != null
-                    ) {
-                        // The first Flow emission can be an empty loading value. Do
-                        // not permanently mark the compat bootstrap as complete
-                        // before the seeded/current board list is available, but
-                        // keep retrying history import when boards and history are
-                        // emitted separately.
-                        if (modernBoards.isNotEmpty()) {
-                            app.compatibilityStore.bootstrapBoardsIfNeeded(modernBoards)
-                        }
-                        app.compatibilityStore.importModernHistory(modernHistory)
+            androidx.compose.runtime.LaunchedEffect(activeProfile, app, stateStore) {
+                val compatStore = app?.compatibilityStore ?: return@LaunchedEffect
+                if (activeProfile != ExperienceProfile.TOSHIAKI_COMPAT) return@LaunchedEffect
+                kotlinx.coroutines.flow.combine(stateStore.observedBoards, stateStore.observedHistory) { boards, history ->
+                    boards to history
+                }.collect { (boards, history) ->
+                    try {
+                        if (boards.isNotEmpty()) compatStore.bootstrapBoardsIfNeeded(boards)
+                        compatStore.importModernHistory(history)
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Throwable) {
+                        // Same as before the shared-flow change: log and keep the
+                        // app running; the next emission retries the import.
+                        com.valoser.futacha.shared.util.Logger.e("MainActivity", "Compatibility bootstrap failed", failure)
                     }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Throwable) {
-                    com.valoser.futacha.shared.util.Logger.e(
-                        "MainActivity",
-                        "Compatibility bootstrap failed",
-                        failure
-                    )
                 }
             }
             androidx.compose.runtime.LaunchedEffect(app, stateStore, activeProfile) {
@@ -229,7 +218,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             } else {
                                 var hasObservedLoadedModernBoards = false
-                                stateStore.boards.collect { modernBoards ->
+                                stateStore.observedBoards.collect { modernBoards ->
                                     if (modernBoards.isNotEmpty()) hasObservedLoadedModernBoards = true
                                     if (!hasObservedLoadedModernBoards) return@collect
                                     val desired = modernBoardsToCompatibility(modernBoards)

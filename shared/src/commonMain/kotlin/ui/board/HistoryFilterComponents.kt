@@ -33,7 +33,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun HistoryFilterSheet(
     totalCount: Int,
-    filteredCount: Int,
+    // null while the count for the current draft is being computed.
+    filteredCount: Int?,
     settings: HistoryViewSettings,
     boardOptions: List<HistoryBoardFilterOption>,
     onSettingsChanged: (HistoryViewSettings) -> Unit,
@@ -57,7 +58,7 @@ internal fun HistoryFilterSheet(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "${totalCount.coerceAtLeast(0)}件中 ${filteredCount.coerceAtLeast(0)}件を表示",
+                    text = "${totalCount.coerceAtLeast(0)}件中 ${filteredCount?.coerceAtLeast(0) ?: "…"}件を表示",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

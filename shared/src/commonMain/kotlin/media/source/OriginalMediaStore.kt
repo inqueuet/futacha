@@ -121,7 +121,13 @@ class OriginalMediaStore(
     /** A dedicated cache owned exclusively by this store, opened off the UI thread. */
     private val createCache: suspend () -> DiskCache,
     private val downloader: OriginalMediaDownloader,
-    private val dispatcher: CoroutineDispatcher = AppDispatchers.io
+    private val dispatcher: CoroutineDispatcher = AppDispatchers.io,
+    /**
+     * How long an unfinished playback download keeps running after its last player let go.
+     * A player that gave up (stall, error screen) and is retried joins the same transfer
+     * instead of restarting from byte 0. Explicit reloads (a new token) still restart.
+     */
+    private val playbackLingerMillis: Long = DEFAULT_PLAYBACK_LINGER_MILLIS
 ) : OriginalMediaSource, AutoCloseable {
     init { require(cacheNamespace.isNotBlank()) }
     override val cacheIdentity = cacheNamespace.encodeUtf8().sha256().hex()
@@ -153,6 +159,9 @@ class OriginalMediaStore(
         val progress = MutableStateFlow(OriginalMediaReadState())
         var readHandle: FileHandle? = null
         val playbackRequested = MutableStateFlow(false)
+        /** No users, but the download continues for [playbackLingerMillis] so a retry can join. */
+        var lingering = false
+        var lingerSerial = 0L
     }
 
     private class Asset(
@@ -187,21 +196,46 @@ class OriginalMediaStore(
             return Lease(file, fileSystem, info, identity, fromCache, dispatcher, release, references)
         }
 
+        /** Opens the file for this one read; a parser should use [withReader]. */
         suspend fun readAt(offset: Long, length: Int): ByteArray = withContext(dispatcher) {
             check(!closed.value) { "Original media lease is closed" }
-            require(offset >= 0 && length in 0..MAX_READ_BYTES && offset <= Long.MAX_VALUE - length)
-            if (offset >= info.sizeBytes || length == 0) return@withContext ByteArray(0)
-            val result = ByteArray(minOf(length.toLong(), info.sizeBytes - offset).toInt())
-            fileSystem.openReadOnly(file).use { handle ->
-                var count = 0
-                while (count < result.size) {
-                    currentCoroutineContext().ensureActive()
-                    val read = handle.read(offset + count, result, count, result.size - count)
-                    if (read <= 0) throw IOException("Original media ended before its recorded size")
-                    count += read
+            fileSystem.openReadOnly(file).use { handle -> readFrom(handle, offset, length) }
+        }
+
+        /**
+         * Runs [block] with a positional reader over one file handle opened for the
+         * whole session. Metadata parsing issues thousands of small reads; opening
+         * and closing the file for each one used up the parse's time budget.
+         */
+        suspend fun <T> withReader(block: suspend (readAt: suspend (Long, Int) -> ByteArray) -> T): T {
+            check(!closed.value) { "Original media lease is closed" }
+            val handle = withContext(dispatcher) { fileSystem.openReadOnly(file) }
+            try {
+                return block { offset, length ->
+                    check(!closed.value) { "Original media lease is closed" }
+                    withContext(dispatcher) { readFrom(handle, offset, length) }
+                }
+            } finally {
+                withContext(NonCancellable + dispatcher) {
+                    try { handle.close() } catch (failure: IOException) {
+                        Logger.w("OriginalMediaStore", "Failed to close original media reader: ${failure.message}")
+                    }
                 }
             }
-            result
+        }
+
+        private suspend fun readFrom(handle: FileHandle, offset: Long, length: Int): ByteArray {
+            require(offset >= 0 && length in 0..MAX_READ_BYTES && offset <= Long.MAX_VALUE - length)
+            if (offset >= info.sizeBytes || length == 0) return ByteArray(0)
+            val result = ByteArray(minOf(length.toLong(), info.sizeBytes - offset).toInt())
+            var count = 0
+            while (count < result.size) {
+                currentCoroutineContext().ensureActive()
+                val read = handle.read(offset + count, result, count, result.size - count)
+                if (read <= 0) throw IOException("Original media ended before its recorded size")
+                count += read
+            }
+            return result
         }
 
         override fun close() {
@@ -262,7 +296,7 @@ class OriginalMediaStore(
                 }
                 active[key] = created
                 live += created
-            }).also { it.users++; if (playback) it.playbackRequested.value = true }
+            }).also { it.users++; it.lingering = false; if (playback) it.playbackRequested.value = true }
         }
         entry.job.start()
         return entry
@@ -337,7 +371,10 @@ class OriginalMediaStore(
                         val readHandle = try { disk.fileSystem.openOriginalMediaReadHandle(editor.data) }
                         catch (failure: Throwable) { rawSink.close(); throw failure }
                         entry.readHandle = readHandle
-                        entry.progress.value = OriginalMediaReadState(read = readHandle::readOriginalMediaPrefix)
+                        entry.progress.value = OriginalMediaReadState(
+                            read = readHandle::readOriginalMediaPrefix,
+                            readInto = readHandle::readOriginalMediaPrefixInto
+                        )
                         val streamingSink = object : Sink by rawSink {
                             override fun write(source: Buffer, byteCount: Long) {
                                 rawSink.write(source, byteCount)
@@ -413,7 +450,11 @@ class OriginalMediaStore(
                     if (entry.readHandle == null) entry.readHandle = asset.disk.fileSystem.openOriginalMediaReadHandle(asset.snapshot.data)
                     val reader = requireNotNull(entry.readHandle)
                     entry.asset = asset
-                    entry.progress.value = OriginalMediaReadState(asset.info, asset.info.sizeBytes, true, read = reader::readOriginalMediaPrefix)
+                    entry.progress.value = OriginalMediaReadState(
+                        asset.info, asset.info.sizeBytes, true,
+                        read = reader::readOriginalMediaPrefix,
+                        readInto = reader::readOriginalMediaPrefixInto
+                    )
                     pending = null
                 }
             }
@@ -450,13 +491,14 @@ class OriginalMediaStore(
     }
 
     private fun ensureCurrentLocked(entry: Entry) {
-        if (closed.value || entry.retired || entry.generation != generation || entry.users == 0) {
+        if (closed.value || entry.retired || entry.generation != generation || (entry.users == 0 && !entry.lingering)) {
             throw CancellationException("Original media request invalidated")
         }
     }
 
     private fun retireLocked(entry: Entry) {
         entry.retired = true
+        entry.lingering = false
         if (active[entry.key] === entry) active.remove(entry.key)
         if (entry.asset == null) entry.job.cancel()
     }
@@ -465,13 +507,37 @@ class OriginalMediaStore(
         check(entry.users > 0)
         entry.users--
         if (entry.users == 0) {
-            retireLocked(entry)
-            disposeIfUnusedLocked(entry)
+            if (shouldLingerLocked(entry)) lingerLocked(entry)
+            else {
+                retireLocked(entry)
+                disposeIfUnusedLocked(entry)
+            }
+        }
+    }
+
+    private fun shouldLingerLocked(entry: Entry) = playbackLingerMillis > 0 && entry.playbackRequested.value &&
+        entry.asset == null && !entry.finished && !entry.retired && !closed.value &&
+        entry.generation == generation && active[entry.key] === entry
+
+    private fun lingerLocked(entry: Entry) {
+        entry.lingering = true
+        val serial = ++entry.lingerSerial
+        scope.launch {
+            kotlinx.coroutines.delay(playbackLingerMillis)
+            mutex.withLock {
+                if (entry.lingering && entry.lingerSerial == serial && entry.users == 0) {
+                    retireLocked(entry)
+                    disposeIfUnusedLocked(entry)
+                }
+            }
         }
     }
 
     private fun disposeIfUnusedLocked(entry: Entry) {
         if (entry.users == 0 && entry.finished) {
+            // A lingering download ended with nobody attached; later requests start afresh
+            // (a committed original is then read back from the disk cache).
+            if (entry.lingering) retireLocked(entry)
             closeReadHandleLocked(entry)
             val asset = entry.asset
             entry.asset = null
@@ -569,6 +635,7 @@ class OriginalMediaStore(
 
     companion object {
         internal const val DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS = 30_000L
+        internal const val DEFAULT_PLAYBACK_LINGER_MILLIS = 60_000L
         private const val MAX_SUPERSEDED_REJOINS = 3
         private const val MAX_INDEX_BYTES = 32 * 1024
         private const val MAX_READ_BYTES = 2 * 1024 * 1024

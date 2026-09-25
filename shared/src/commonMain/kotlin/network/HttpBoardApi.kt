@@ -181,6 +181,47 @@ class HttpBoardApi(
         )
     }
 
+    override suspend fun fetchThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalTextFetchResult {
+        val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
+        val failureDescription = "Failed to fetch thread from $url"
+        return try {
+            withHttpBoardApiRetry(
+                logTag = TAG,
+                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+                maxAttempts = REQUEST_MAX_ATTEMPTS
+            ) {
+                executeHttpBoardApiConditionalTextGet(
+                    client = client,
+                    request = HttpBoardApiTextGetRequest(
+                        url = url,
+                        referer = resolveBoardRefererBase(board),
+                        errorLabel = "thread",
+                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
+                        readMode = HttpBoardApiTextReadMode.BODY
+                    ),
+                    validators = validators,
+                    userAgent = DEFAULT_USER_AGENT,
+                    accept = DEFAULT_ACCEPT,
+                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+                    readSmallResponseSummary = ::readSmallResponseSummary,
+                    readResponseBodyAsString = ::readResponseBodyAsString
+                )
+            }
+        } catch (e: NetworkException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val errorMsg = "$failureDescription: ${e.message}"
+            Logger.e(TAG, errorMsg, e)
+            throw NetworkException(errorMsg, cause = e)
+        }
+    }
+
     override suspend fun fetchThreadByUrl(threadUrl: String): String {
         val url = threadUrl
         return fetchText(
@@ -219,6 +260,9 @@ class HttpBoardApi(
     override suspend fun probeThreadGone(threadUrl: String): Boolean {
         return try {
             client.head(threadUrl) {
+                // Same as probeThreadExists: an inconclusive probe keeps the entry and is
+                // repeated later, so platform retries would only delay the caller.
+                attributes.put(HigherLayerRetryManaged, true)
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = "*/*"
                 headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
@@ -246,6 +290,10 @@ class HttpBoardApi(
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         try {
             val response: HttpResponse = client.get(url) {
+                // A vote is a GET but not idempotent: a replay after a lost response
+                // can count twice. Opt out of the platform's automatic GET retries;
+                // nothing above retries a vote either, the user can simply tap again.
+                attributes.put(HigherLayerRetryManaged, true)
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = "*/*"
                 headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE

@@ -25,6 +25,13 @@ private const val REQUEST_TIMEOUT_MS = 75_000L
 private const val CONNECT_TIMEOUT_MS = 15_000L
 private const val SOCKET_TIMEOUT_MS = 45_000L
 
+// OkHttp does not probe an idle HTTP/1 connection before reusing it for a GET,
+// and this client never lets OkHttp replay a request. With the 5-minute
+// default, a read after a pause could meet two connections the server had
+// already closed and fail both attempts. Keep idle sockets only briefly; a
+// burst of catalog/thread requests still reuses them.
+private const val IDLE_CONNECTION_KEEP_ALIVE_SECONDS = 30L
+
 /**
  * Creates a properly configured HttpClient with lifecycle management.
  * Note: Callers should manage the lifecycle and call close() when done.
@@ -73,8 +80,7 @@ actual fun createHttpClient(
 
         engine {
             config {
-                // Connection pool with timeout to prevent resource leaks
-                connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+                connectionPool(ConnectionPool(5, IDLE_CONNECTION_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS))
 
                 // Ktor closes the OkHttp response body from the coroutine completion
                 // handler. Compose can cancel that coroutine on the main thread when a

@@ -5,7 +5,6 @@ import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
 
 internal const val HISTORY_SCROLL_OFFSET_WRITE_THRESHOLD_PX = 96
 internal const val HISTORY_SCROLL_PERSIST_MIN_INTERVAL_MS = 15_000L
-internal const val HISTORY_SCROLL_VISITED_UPDATE_INTERVAL_MS = 60_000L
 
 internal fun shouldSkipHistoryScrollUpdate(
     existingEntry: ThreadHistoryEntry?,
@@ -13,7 +12,13 @@ internal fun shouldSkipHistoryScrollUpdate(
     offset: Int,
     nowMillis: Long,
     forcePersist: Boolean = false,
-    postId: String? = existingEntry?.lastReadPostId
+    postId: String? = existingEntry?.lastReadPostId,
+    /**
+     * When this entry's scroll position was last written in this process. Scrolling
+     * does not update [ThreadHistoryEntry.lastVisitedEpochMillis] (history keeps the
+     * open order), so the visit (open) time is only the base until the first write.
+     */
+    lastPersistedAtMillis: Long? = null
 ): Boolean {
     existingEntry ?: return false
 
@@ -34,7 +39,8 @@ internal fun shouldSkipHistoryScrollUpdate(
     val offsetDelta = absoluteIntDistance(existingEntry.lastReadItemOffset, offset)
     return !hasEpochIntervalElapsed(
         nowMillis,
-        existingEntry.lastVisitedEpochMillis,
+        lastPersistedAtMillis?.let { maxOf(it, existingEntry.lastVisitedEpochMillis) }
+            ?: existingEntry.lastVisitedEpochMillis,
         HISTORY_SCROLL_PERSIST_MIN_INTERVAL_MS
     ) &&
         indexDelta <= 2L &&

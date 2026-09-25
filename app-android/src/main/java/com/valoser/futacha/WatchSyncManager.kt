@@ -118,8 +118,12 @@ class WatchSyncManager(
     private val isStartCheckInFlight = AtomicBoolean(false)
     private val isStarted = AtomicBoolean(false)
     private var startCheckJob: Job? = null
+    // Guards snapshotCollectorJob/readAloudCollectorJob and isStarted so a
+    // cancelled collector's late finally cannot reset a newer start().
+    private val collectorLock = Any()
     private var snapshotCollectorJob: Job? = null
     private var readAloudCollectorJob: Job? = null
+    private val watchRefreshJobLock = Any()
     private var watchRefreshJob: Job? = null
 
     fun start() {
@@ -150,12 +154,20 @@ class WatchSyncManager(
     @OptIn(FlowPreview::class)
     private fun startCollectors() {
         if (!isModernProfileActive()) return
-        if (!isStarted.compareAndSet(false, true)) return
-        snapshotCollectorJob = scope.launch {
+        synchronized(collectorLock) {
+            if (!isStarted.compareAndSet(false, true)) return
+            snapshotCollectorJob = launchSnapshotCollector()
+            readAloudCollectorJob = launchReadAloudCollector()
+        }
+    }
+
+    @OptIn(FlowPreview::class)
+    private fun launchSnapshotCollector(): Job =
+        scope.launch {
             try {
                 combine(
-                    stateStore.boards,
-                    stateStore.history
+                    stateStore.observedBoards,
+                    stateStore.observedHistory
                         .map { history ->
                             WatchHistorySnapshotInput(
                                 history = history,
@@ -207,10 +219,25 @@ class WatchSyncManager(
                 if (error is CancellationException) throw error
                 Logger.e(TAG, "Watch snapshot stream stopped unexpectedly", error)
             } finally {
-                isStarted.set(false)
+                // stop() followed by start() replaces the collector before
+                // this cancelled one unwinds. Only the current collector may
+                // mark the manager stopped; otherwise a later start() would
+                // launch a duplicate next to the live one.
+                val finishedJob = coroutineContext[Job]
+                synchronized(collectorLock) {
+                    if (snapshotCollectorJob === finishedJob) {
+                        snapshotCollectorJob = null
+                        readAloudCollectorJob?.cancel()
+                        readAloudCollectorJob = null
+                        isStarted.set(false)
+                    }
+                }
             }
         }
-        readAloudCollectorJob = scope.launch {
+
+    @OptIn(FlowPreview::class)
+    private fun launchReadAloudCollector(): Job =
+        scope.launch {
             var hasObservedInitialStatus = false
             WatchReadAloudStatusStore.status
                 .debounce(WATCH_READ_ALOUD_STATUS_DEBOUNCE_MILLIS)
@@ -237,26 +264,29 @@ class WatchSyncManager(
                     }
                 }
         }
-    }
 
     fun stop() {
         startCheckJob?.cancel()
-        snapshotCollectorJob?.cancel()
-        readAloudCollectorJob?.cancel()
-        watchRefreshJob?.cancel()
         startCheckJob = null
-        snapshotCollectorJob = null
-        readAloudCollectorJob = null
-        watchRefreshJob = null
-        isStarted.set(false)
+        synchronized(collectorLock) {
+            snapshotCollectorJob?.cancel()
+            readAloudCollectorJob?.cancel()
+            snapshotCollectorJob = null
+            readAloudCollectorJob = null
+            isStarted.set(false)
+        }
+        synchronized(watchRefreshJobLock) {
+            watchRefreshJob?.cancel()
+            watchRefreshJob = null
+        }
     }
 
     suspend fun stopAndAwait(timeoutMillis: Long = WATCH_STOP_TIMEOUT_MILLIS) {
         val jobs = listOfNotNull(
             startCheckJob,
-            snapshotCollectorJob,
-            readAloudCollectorJob,
-            watchRefreshJob
+            synchronized(collectorLock) { snapshotCollectorJob },
+            synchronized(collectorLock) { readAloudCollectorJob },
+            synchronized(watchRefreshJobLock) { watchRefreshJob }
         ).distinct()
         stop()
         if (jobs.isNotEmpty()) {
@@ -372,45 +402,7 @@ class WatchSyncManager(
     private fun handleCommand(command: WatchCommand) {
         when (command.type) {
             WatchCommandType.Refresh -> {
-                val nextRefreshJob = scope.launch {
-                    val expectedGeneration = currentModernProfileGeneration() ?: return@launch
-                    var didStartRefresh = false
-                    try {
-                        didStartRefresh = beginWatchRefreshIfAllowed()
-                        if (!didStartRefresh) {
-                            return@launch
-                        }
-                        runCatching {
-                            withTimeout(WATCH_REFRESH_TIMEOUT_MILLIS) {
-                                historyRefresher.refresh(
-                                    autoSaveBudgetMillis = WATCH_REFRESH_AUTO_SAVE_BUDGET_MILLIS,
-                                    maxThreadsPerRun = WATCH_REFRESH_MAX_THREADS_PER_RUN,
-                                    maxAutoSavesPerRun = WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN,
-                                    historyCommitGate = { commit ->
-                                        runIfModernProfileGenerationCurrent(expectedGeneration, commit)
-                                    },
-                                    autoSaveCommitGate = { commit ->
-                                        runIfModernProfileGenerationCurrent(expectedGeneration, commit)
-                                    }
-                                )
-                            }
-                        }.onFailure { error ->
-                            if (error is CancellationException && error !is TimeoutCancellationException) {
-                                throw error
-                            }
-                        }
-                    } finally {
-                        if (didStartRefresh) {
-                            finishWatchRefresh()
-                        }
-                        requestSnapshot(includePreviewThreadPages = false)
-                        if (watchRefreshJob == coroutineContext[Job]) {
-                            watchRefreshJob = null
-                        }
-                    }
-                }
-                watchRefreshJob?.cancel()
-                watchRefreshJob = nextRefreshJob
+                handleRefreshCommand()
             }
             WatchCommandType.OpenThreadOnPhone -> {
                 enqueueOpenThreadCommand(command)
@@ -435,6 +427,66 @@ class WatchSyncManager(
             }
         }
     }
+
+    private fun handleRefreshCommand() {
+        // A second Refresh while one is running must not cancel it: the
+        // replacement would observe the still-unwinding in-flight state (or
+        // the 2 minute throttle) and only send a snapshot, so the watch would
+        // lose the refresh it asked for. Coalesce into the running refresh,
+        // which sends a fresh snapshot when it finishes, and answer now with
+        // the current snapshot.
+        val launched = synchronized(watchRefreshJobLock) {
+            when (resolveWatchRefreshCommandAction(isRefreshJobActive = watchRefreshJob?.isActive == true)) {
+                WatchRefreshCommandAction.CoalesceIntoRunningRefresh -> null
+                WatchRefreshCommandAction.LaunchRefresh -> launchWatchRefresh().also { watchRefreshJob = it }
+            }
+        }
+        if (launched == null) {
+            requestSnapshot(includePreviewThreadPages = false)
+        }
+    }
+
+    private fun launchWatchRefresh(): Job =
+        scope.launch {
+            val expectedGeneration = currentModernProfileGeneration() ?: return@launch
+            var didStartRefresh = false
+            try {
+                didStartRefresh = beginWatchRefreshIfAllowed()
+                if (!didStartRefresh) {
+                    return@launch
+                }
+                runCatching {
+                    withTimeout(WATCH_REFRESH_TIMEOUT_MILLIS) {
+                        historyRefresher.refresh(
+                            autoSaveBudgetMillis = WATCH_REFRESH_AUTO_SAVE_BUDGET_MILLIS,
+                            maxThreadsPerRun = WATCH_REFRESH_MAX_THREADS_PER_RUN,
+                            maxAutoSavesPerRun = WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN,
+                            historyCommitGate = { commit ->
+                                runIfModernProfileGenerationCurrent(expectedGeneration, commit)
+                            },
+                            autoSaveCommitGate = { commit ->
+                                runIfModernProfileGenerationCurrent(expectedGeneration, commit)
+                            }
+                        )
+                    }
+                }.onFailure { error ->
+                    if (error is CancellationException && error !is TimeoutCancellationException) {
+                        throw error
+                    }
+                }
+            } finally {
+                if (didStartRefresh) {
+                    finishWatchRefresh()
+                }
+                requestSnapshot(includePreviewThreadPages = false)
+                val finishedJob = coroutineContext[Job]
+                synchronized(watchRefreshJobLock) {
+                    if (watchRefreshJob === finishedJob) {
+                        watchRefreshJob = null
+                    }
+                }
+            }
+        }
 
     private suspend fun isDuplicateCommand(command: WatchCommand): Boolean {
         val commandId = command.commandId

@@ -50,6 +50,9 @@ internal fun projectFutachaThread(
     phashHidden: Set<String> = emptySet(),
     modernNgHidden: Set<String> = emptySet()
 ): ThreadPage {
+    if (context.extraction == null && (!settings.ngEnabled || (rules.isEmpty() && phashHidden.isEmpty()))) {
+        return normallyFiltered
+    }
     val snapshots = source.toCompatThreadSnapshot(context.tabKey, 0).posts
     val index = buildCompatThreadNgRuleIndex(rules, context.tabKey, context.boardKey)
     val hidden = snapshots.filter { it.postNo in phashHidden || it.matchesCompatThreadNg(index) }
@@ -72,7 +75,8 @@ internal fun projectFutachaThread(
 /**
  * The Futacha page with the shared (compatibility) NG rules and extraction
  * applied. Returns null while a needed projection is still running, so the
- * caller shows a loading state instead of posts that NG rules will hide; when
+ * initial frame waits instead of exposing posts that NG rules will hide. Later
+ * projections keep the last accepted page mounted; when
  * nothing needs hiding or extracting the normal page is returned at once.
  * Image NG needs network hashes and is applied as its results arrive.
  */
@@ -86,12 +90,21 @@ internal fun rememberFutachaFilteredThreadPage(
     val features = LocalFutachaSharedFeatures.current ?: return normallyFiltered
     val context = LocalFutachaThreadProjection.current ?: return normallyFiltered
     // null until the store delivered its rules; an empty initial list showed NG'd posts first.
-    val loadedRules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(null)
-    val rules = loadedRules
+    val loadedRules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(features.ngRulesState?.value)
+    val rules = remember(loadedRules, context.tabKey, context.boardKey) {
+        loadedRules?.filter { rule -> when (rule.kind) {
+            CompatNgKind.THREAD_IMAGE, CompatNgKind.THREAD_IMAGE_PHASH ->
+                rule.appliesToThreadImage(context.boardKey, context.tabKey)
+            CompatNgKind.THREAD_POST_NO, CompatNgKind.THREAD_POSTER_ID, CompatNgKind.THREAD_WORD,
+            CompatNgKind.THREAD_IGNORE, CompatNgKind.THREAD_REFUSE ->
+                rule.scopeKey == "*" || rule.scopeKey == context.tabKey
+            else -> false
+        } }
+    }
     val phashRules = remember(rules, context) { rules.orEmpty().filter {
         it.kind == CompatNgKind.THREAD_IMAGE_PHASH && it.appliesToThreadImage(context.boardKey, context.tabKey)
     } }
-    val threshold = features.preferences.compatPreferenceValue("thread", "threadImageNgPhashThreshold")
+    val threshold = features.value("thread", "threadImageNgPhashThreshold")
         ?.toIntOrNull() ?: CompatImagePhash.DEFAULT_THRESHOLD
     val phashHidden by produceState(emptySet<String>(), source, phashRules, threshold) {
         if (phashRules.isEmpty()) {
@@ -101,8 +114,15 @@ internal fun rememberFutachaFilteredThreadPage(
         val posts = withContext(AppDispatchers.parsing) { source.toCompatThreadSnapshot(context.tabKey, 0).posts }
         value = compatImagePhashHiddenPostNos(features.httpClient, posts, phashRules, threshold)
     }
-    val settings = FutachaThreadProjectionSettings.from(features.preferences)
-    val result by produceState<ThreadPage?>(null, source, normallyFiltered, context, rules,
+    val settings = FutachaThreadProjectionSettings(
+        ngEnabled = features.value("thread", "threadNg", "NG機能") != "OFF",
+        saidaneThreshold = features.value("thread", "threadExtractSoudaneNum", "そうだねが多いレス")?.toIntOrNull() ?: 3,
+        quoteThreshold = features.value("thread", "threadExtractQuoteNum", "返信が多いレス")?.toIntOrNull() ?: 3
+    )
+    val needsProjection = rules == null || context.extraction != null ||
+        (settings.ngEnabled && rules.isNotEmpty())
+    val result = key(context.tabKey) {
+    val projected by produceState<ThreadPage?>(null, source, normallyFiltered, context, rules,
         settings, phashHidden, ngHeaders, ngWords) {
         val currentRules = rules ?: return@produceState
         value = withContext(AppDispatchers.parsing) {
@@ -111,10 +131,11 @@ internal fun rememberFutachaFilteredThreadPage(
                 phashHidden, source.posts.filter { it.id !in modernVisible }.mapTo(hashSetOf()) { it.id })
         }
     }
+    projected
+    }
+    if (!needsProjection) return normallyFiltered
     result?.let { return it }
     // Modern NG is already applied to normallyFiltered; only shared rules or an
     // extraction can hide more.
-    val needsProjection = rules == null || context.extraction != null ||
-        (settings.ngEnabled && rules.isNotEmpty())
-    return if (needsProjection) null else normallyFiltered
+    return null
 }

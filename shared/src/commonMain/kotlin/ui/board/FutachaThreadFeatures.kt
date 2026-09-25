@@ -35,7 +35,7 @@ import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 
 internal data class FutachaThreadTool(val label: String, val icon: ImageVector, val enabled: Boolean = true, val action: () -> Unit)
-internal val LocalFutachaThreadTools = staticCompositionLocalOf<List<FutachaThreadTool>> { emptyList() }
+internal val LocalFutachaThreadTools = compositionLocalOf<List<FutachaThreadTool>> { emptyList() }
 
 internal fun CompatTab.toFutachaHistoryEntry(): ThreadHistoryEntry = ThreadHistoryEntry(
     threadId = threadNo, boardId = boardKey, boardName = boardName, boardUrl = originalUrl,
@@ -43,12 +43,38 @@ internal fun CompatTab.toFutachaHistoryEntry(): ThreadHistoryEntry = ThreadHisto
     lastVisitedEpochMillis = contentUpdatedAtEpochMillis
 )
 
+internal data class FutachaThreadUndoSnapshots(
+    val previous: ThreadUiState.Success? = null,
+    val latest: ThreadUiState.Success? = null,
+    val latestGeneration: Long? = null
+)
+
+/**
+ * "更新前に戻す" returns to the accepted remote page of an earlier load. A local copy is
+ * never recorded, and the archive supplement of the same load (same [generation])
+ * refines that load's page instead of becoming its own undo step.
+ */
+internal fun resolveFutachaThreadUndoSnapshots(
+    current: FutachaThreadUndoSnapshots,
+    next: ThreadUiState.Success,
+    isCachedPage: Boolean,
+    generation: Long,
+    restoring: Boolean
+): FutachaThreadUndoSnapshots {
+    if (isCachedPage) return current
+    val previous = if (!restoring && current.latestGeneration != generation) current.latest else current.previous
+    return FutachaThreadUndoSnapshots(previous = previous, latest = next, latestGeneration = generation)
+}
+
 @Composable
 internal fun FutachaThreadFeatureHost(
     board: BoardSummary,
     threadId: String,
     threadTitle: String,
     currentState: ThreadUiState,
+    isCachedPage: Boolean = false,
+    /** Incremented by the screen for each thread load; a supplement of one load keeps it. */
+    loadGeneration: Long = 0L,
     listState: LazyListState,
     repository: BoardRepository,
     onRestore: (ThreadUiState.Success) -> Unit,
@@ -91,25 +117,33 @@ internal fun FutachaThreadFeatureHost(
         stripVisible = features.value("design", "designTabSelectorOpened") == "ON"
     }
     var extraction by remember(tabKey) { mutableStateOf<CompatExtractionKind?>(null) }
-    val history by features.store.history.collectAsState(emptyList())
     val apngCache = remember(scope) { CompatApngMarkerCache(scope) }
     fun launchAction(block: suspend () -> Unit) = scope.launch {
         try { block() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = failure.message ?: "操作に失敗しました" }
     }
-    LaunchedEffect(currentState, tabKey) {
+    var latestGeneration by remember(tabKey) { mutableStateOf<Long?>(null) }
+    val currentLoadGeneration by rememberUpdatedState(loadGeneration)
+    LaunchedEffect(currentState, tabKey, isCachedPage) {
         val next = currentState as? ThreadUiState.Success ?: return@LaunchedEffect
-        if (latest?.page != next.page) {
-            if (!restoring) previous = latest
-            restoring = false
-            latest = next
-        }
+        // Compared once, off the main thread; repeating it here deep-compared
+        // up to 2,000 posts on every accepted page.
+        if (withContext(AppDispatchers.parsing) { latest?.page == next.page }) return@LaunchedEffect
+        val snapshots = resolveFutachaThreadUndoSnapshots(
+            FutachaThreadUndoSnapshots(previous, latest, latestGeneration),
+            next, isCachedPage, currentLoadGeneration, restoring
+        )
+        previous = snapshots.previous
+        latest = snapshots.latest
+        latestGeneration = snapshots.latestGeneration
+        restoring = false
+        if (isCachedPage && features.store.tabs.first().any { it.key == tabKey }) return@LaunchedEffect
         try {
             val now = Clock.System.now().toEpochMilliseconds()
             features.store.importModernBoards(listOf(board))
-            // Also supports fixture/locally restored responses whose cache was not written by HTTP loading.
-            // Converting and comparing every post is too much for the main thread on large threads.
+            // Single persistence path, after the accepted page is visible. The
+            // effect is cancelled when this page is superseded or the screen closes.
             val snapshot = withContext(AppDispatchers.parsing) { next.page.toCompatThreadSnapshot(tabKey, now) }
             val storedSnapshot = features.store.loadThreadSnapshot(tabKey)
             val snapshotChanged = withContext(AppDispatchers.parsing) {
@@ -124,8 +158,8 @@ internal fun FutachaThreadFeatureHost(
                 threadId, threadTitle, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now)).copy(
                 title = threadTitle, replyCount = next.page.compatReplyCount(),
                 checkedReplyCount = next.page.compatReplyCount(), snapshotRevision = if (snapshotChanged) snapshot.revision else storedSnapshot?.revision ?: snapshot.revision,
-                contentUpdatedAtEpochMillis = now, thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl)
-            if (existing == null) features.store.openTab(updated) else features.store.updateTab(updated)
+                contentUpdatedAtEpochMillis = if (snapshotChanged) now else existing?.contentUpdatedAtEpochMillis ?: now, thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl)
+            if (existing == null) features.store.openTab(updated) else if (updated != existing) features.store.updateTab(updated)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
     }
@@ -170,8 +204,14 @@ internal fun FutachaThreadFeatureHost(
     }
     val scrollPixels = features.value("thread", "autoScrollPixel", "オートスクロール量")?.filter(Char::isDigit)?.toFloatOrNull()?.coerceIn(1f, 100f) ?: 5f
     val scrollDelay = features.value("thread", "autoScrollSpeed", "オートスクロール速度")?.filter(Char::isDigit)?.toLongOrNull()?.coerceIn(10, 1000) ?: 50L
-    LaunchedEffect(automatic, scrollPixels, scrollDelay, tab.isDead) {
+    // Auto-scroll pauses while the app is not foreground-visible; otherwise its
+    // end-of-thread reload kept refreshing (and auto-saving) every ~12 s with the
+    // screen off. It resumes when the app returns.
+    var isForeground by remember { mutableStateOf(true) }
+    CompatForegroundLifecycleEffect { isForeground = it }
+    LaunchedEffect(automatic, scrollPixels, scrollDelay, tab.isDead, isForeground) {
         if (!automatic || tab.isDead) { automatic = false; return@LaunchedEffect }
+        if (!isForeground) return@LaunchedEffect
         while (isActive) {
             delay(scrollDelay)
             if (Clock.System.now().toEpochMilliseconds() - touchedAt < 5_000 || listState.isScrollInProgress) continue
@@ -239,14 +279,24 @@ internal fun FutachaThreadFeatureHost(
         canonicalBoard, threadTitle, { pageSaveOpen = false })
     if (ngOpen) FutachaNgManagementDialog(features, boardKey, tabKey, board.name, onDismiss = { ngOpen = false })
     if (mediaOpen) {
+        val galleryGridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        val preparedMedia by produceState<CompatThreadSnapshot?>(null, page, tabKey) {
+            value = withContext(AppDispatchers.parsing) {
+                page?.toCompatThreadSnapshot(tabKey, tab.snapshotRevision)
+            } ?: features.store.loadThreadSnapshot(tabKey)?.let {
+                withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
+            }
+        }
         Dialog(onDismissRequest = { mediaOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize()) {
                 when {
+                    preparedMedia == null -> CircularProgressIndicator()
                     viewerToolbarOpen -> CompatToolbarEditorScreen(CompatToolbarSurface.VIEWER, features.store) {
                         viewerToolbarOpen = false; viewerToolbarRevision++
                     }
                     viewerIndex != null -> CompatViewerScreen(
                         tab = tab, initialIndex = viewerIndex ?: 0, initialPostNo = viewerPostNo,
+                        preparedSnapshot = preparedMedia,
                         store = features.store, preferences = features.preferences, ngRules = ngRules,
                         httpClient = features.httpClient, fileSystem = features.fileSystem,
                         cookieRepository = features.cookieRepository, toolbarRefreshToken = viewerToolbarRevision,
@@ -261,6 +311,7 @@ internal fun FutachaThreadFeatureHost(
                         onBack = { viewerIndex = null }
                     )
                     else -> CompatGalleryScreen(tab = tab, store = features.store, preferences = features.preferences,
+                        preparedSnapshot = preparedMedia, gridState = galleryGridState, restoreInitialPosition = false,
                         ngRules = ngRules, httpClient = features.httpClient, apngMarkerCache = apngCache,
                         fileSystem = features.fileSystem, cookieRepository = features.cookieRepository,
                         onOpenViewer = { index, post -> viewerIndex = index; viewerPostNo = post },
@@ -271,7 +322,7 @@ internal fun FutachaThreadFeatureHost(
         }
     }
     if (cacheSearchOpen) CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, canonicalBoard,
-        localHistory = history,
+        localHistory = features.store.history.collectAsState(emptyList()).value,
         onDismiss = { cacheSearchOpen = false }, onOpenThread = { item ->
             onOpenThread(tab.copy(threadNo = item.id, title = item.title.orEmpty(), originalUrl = item.threadUrl,
                 canonicalUrl = item.threadUrl, key = compatTabKey(item.threadUrl)).toFutachaHistoryEntry())

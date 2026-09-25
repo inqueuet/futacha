@@ -181,8 +181,10 @@ internal fun ThreadTreeContent(
             prefix = "tree-post"
         )
     }
-    var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
-    val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
+    // Keyed by thread only: a refresh must not close an open quote preview,
+    // and a growing AI-hidden set must not re-hide posts the user chose to show.
+    var quotePreviewState by remember(page.threadId) { mutableStateOf<QuotePreviewState?>(null) }
+    val revealedAiHiddenPostIds = remember(page.threadId) { mutableStateListOf<String>() }
     val hasAiHiddenPostsSummary = aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }
     val firstNewPostIndex = remember(displayedPosts, newPostIds) {
         displayedPosts.indexOfFirst { it.id in newPostIds }
@@ -197,8 +199,9 @@ internal fun ThreadTreeContent(
         hasAiPostModeration = aiPostModerationUiState.isEnabled,
         hasAiHiddenPostsSummary = hasAiHiddenPostsSummary
     )
-    LaunchedEffect(displayedPosts, itemsBeforePosts) {
-        onDisplayedPostsChanged(ThreadDisplayedPostsLayout(displayedPosts, itemsBeforePosts))
+    val collapsedAiPostIds = aiHiddenPostIds.filterTo(HashSet()) { it !in revealedAiHiddenPostIds }
+    LaunchedEffect(displayedPosts, itemsBeforePosts, collapsedAiPostIds) {
+        onDisplayedPostsChanged(ThreadDisplayedPostsLayout(displayedPosts, itemsBeforePosts, collapsedAiPostIds))
     }
     ThreadPostScrollEffect(
         request = searchScrollRequest,
@@ -285,6 +288,7 @@ internal fun ThreadTreeContent(
                 }
                 itemsIndexed(
                     items = treeNodes,
+                    contentType = { _, _ -> "post" },
                     key = { index, node ->
                         treePostLazyListKeys.getOrNull(index) ?: "tree-post-${node.post.id}"
                     }
@@ -293,13 +297,13 @@ internal fun ThreadTreeContent(
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
                     val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds
                     val normalizedPosterId = normalizePosterIdValue(post.posterId)
-                    val postCardCallbacks = buildThreadScreenPostCardCallbacks(
+                    val postCardCallbacks = rememberThreadScreenPostCardCallbacks(
                         post = post,
                         normalizedPosterId = normalizedPosterId,
                         postIndex = postIndex,
                         referencedByMap = referencedByMap,
                         postsByPosterId = postsByPosterId,
-                        quotePreviewState = quotePreviewState,
+                        quotePreviewState = { quotePreviewState },
                         onShowQuotePreview = showQuotePreview,
                         onQuoteRequestedForPost = onQuoteRequestedForPost,
                         onSaidaneClick = onSaidaneClick,

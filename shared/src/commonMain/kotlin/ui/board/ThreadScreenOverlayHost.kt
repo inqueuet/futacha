@@ -29,7 +29,7 @@ internal data class ThreadScreenOverlayHostBindings(
     val history: List<ThreadHistoryEntry>,
     val boardName: String,
     val resolvedThreadTitle: String,
-    val replyDialogState: ThreadReplyDialogState,
+    val replyDialogState: () -> ThreadReplyDialogState,
     val mediaPreviewState: ThreadMediaPreviewState,
     val mediaPreviewEntries: List<MediaPreviewEntry>,
     val galleryPosts: List<Post>?,
@@ -38,14 +38,14 @@ internal data class ThreadScreenOverlayHostBindings(
     val ngWords: List<String>,
     val ngFilteringEnabled: Boolean,
     val readAloudSegments: List<ReadAloudSegment>,
-    val currentReadAloudIndex: Int,
+    val currentReadAloudIndex: () -> Int,
     val firstVisibleSegmentIndex: () -> Int,
-    val readAloudStatus: ReadAloudStatus,
+    val readAloudStatus: () -> ReadAloudStatus,
     val isPrivacyFilterEnabled: Boolean,
-    val saveProgress: SaveProgress?,
+    val saveProgress: () -> SaveProgress?,
     val preferencesState: ScreenPreferencesState,
     val uiBindings: ThreadScreenUiBindingsBundle,
-    val filterUiState: ThreadFilterUiState,
+    val filterUiState: () -> ThreadFilterUiState,
     val fileSystem: FileSystem?,
     val autoSavedThreadRepository: SavedThreadRepository?,
     val cookieRepository: CookieRepository?,
@@ -132,51 +132,7 @@ internal fun ThreadScreenOverlayHost(
         )
     }
 
-    if (bindings.replyDialogState.isVisible) {
-        val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
-        val subtitle = remember(bindings.boardName, bindings.resolvedThreadTitle) {
-            listOfNotNull(
-                bindings.boardName.takeIf { it.isNotBlank() },
-                bindings.resolvedThreadTitle.takeIf { it.isNotBlank() }
-            ).joinToString(" · ").ifBlank { null }
-        }
-        MaterialTheme(
-            colorScheme = bindings.appColorScheme,
-            typography = MaterialTheme.typography,
-            shapes = MaterialTheme.shapes
-        ) {
-            ThreadFormDialog(
-                title = "返信",
-                boardUrl = bindings.effectiveBoardUrl,
-                subtitle = subtitle,
-                barColorScheme = bindings.appColorScheme,
-                attachmentPickerPreference = bindings.preferencesState.attachmentPickerPreference,
-                preferredFileManagerPackage = bindings.preferencesState.preferredFileManagerPackage,
-                emailPresets = emailPresets,
-                comment = bindings.replyDialogState.draft.comment,
-                onCommentChange = bindings.uiBindings.replyDialogCallbacks.onCommentChange,
-                name = bindings.replyDialogState.draft.name,
-                onNameChange = bindings.uiBindings.replyDialogCallbacks.onNameChange,
-                email = bindings.replyDialogState.draft.email,
-                onEmailChange = bindings.uiBindings.replyDialogCallbacks.onEmailChange,
-                subject = bindings.replyDialogState.draft.subject,
-                onSubjectChange = bindings.uiBindings.replyDialogCallbacks.onSubjectChange,
-                password = bindings.replyDialogState.draft.password,
-                onPasswordChange = bindings.uiBindings.replyDialogCallbacks.onPasswordChange,
-                selectedImage = bindings.replyDialogState.draft.imageData,
-                onImageSelected = bindings.uiBindings.replyDialogCallbacks.onImageSelected,
-                onDismiss = bindings.uiBindings.replyDialogCallbacks.onDismiss,
-                onSubmit = bindings.onReplySubmit,
-                onClear = bindings.uiBindings.replyDialogCallbacks.onClear,
-                isSubmitEnabled = bindings.replyDialogState.draft.comment.trim().isNotBlank() &&
-                    hasDeleteKeyForSubmit(bindings.replyDialogState.draft.password),
-                sendDescription = "返信",
-                showSubject = true,
-                showPassword = true,
-                bodyTextSize = bindings.preferencesState.threadBodyTextSize
-            )
-        }
-    }
+    ThreadReplyOverlay(bindings)
 
     val mediaPreviewDialogState = resolveThreadMediaPreviewDialogState(
         state = bindings.mediaPreviewState,
@@ -225,32 +181,9 @@ internal fun ThreadScreenOverlayHost(
         )
     }
 
-    if (bindings.sheetOverlayState.isFilterVisible) {
-        ThreadFilterSheet(
-            selectedOptions = bindings.filterUiState.options,
-            activeSortOption = bindings.filterUiState.sortOption,
-            keyword = bindings.filterUiState.keyword,
-            onOptionToggle = bindings.uiBindings.filterSheetCallbacks.onOptionToggle,
-            onKeywordChange = bindings.uiBindings.filterSheetCallbacks.onKeywordChange,
-            onClear = bindings.uiBindings.filterSheetCallbacks.onClear,
-            onDismiss = bindings.uiBindings.filterSheetCallbacks.onDismiss
-        )
-    }
+    ThreadFilterOverlay(bindings)
 
-    if (bindings.sheetOverlayState.isReadAloudControlsVisible) {
-        ReadAloudControlSheet(
-            segments = bindings.readAloudSegments,
-            currentIndex = bindings.currentReadAloudIndex,
-            visibleSegmentIndex = bindings.firstVisibleSegmentIndex(),
-            status = bindings.readAloudStatus,
-            onSeek = bindings.uiBindings.readAloudControlCallbacks.onSeek,
-            onSeekToVisible = bindings.uiBindings.readAloudControlCallbacks.onSeekToVisible,
-            onPlay = bindings.uiBindings.readAloudControlCallbacks.onPlay,
-            onPause = bindings.uiBindings.readAloudControlCallbacks.onPause,
-            onStop = bindings.uiBindings.readAloudControlCallbacks.onStop,
-            onDismiss = bindings.uiBindings.readAloudControlCallbacks.onDismiss
-        )
-    }
+    ThreadReadAloudOverlay(bindings)
 
     if (bindings.postOverlayState.isNgManagementVisible) {
         NgManagementSheet(
@@ -277,11 +210,7 @@ internal fun ThreadScreenOverlayHost(
         }
     }
 
-    SaveProgressDialog(
-        progress = bindings.saveProgress,
-        onDismissRequest = bindings.uiBindings.saveProgressDialogCallbacks.onDismissRequest,
-        onCancelRequest = bindings.uiBindings.saveProgressDialogCallbacks.onCancelRequest
-    )
+    ThreadSaveProgressOverlay(bindings)
 
     if (bindings.modalOverlayState.isGlobalSettingsVisible) {
         MaterialTheme(colorScheme = bindings.appColorScheme) {
@@ -314,4 +243,99 @@ internal fun ThreadScreenOverlayHost(
             )
         }
     }
+}
+
+@Composable
+private fun ThreadReplyOverlay(bindings: ThreadScreenOverlayHostBindings) {
+    if (bindings.replyDialogState().isVisible) {
+        val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
+        val subtitle = remember(bindings.boardName, bindings.resolvedThreadTitle) {
+            listOfNotNull(
+                bindings.boardName.takeIf { it.isNotBlank() },
+                bindings.resolvedThreadTitle.takeIf { it.isNotBlank() }
+            ).joinToString(" · ").ifBlank { null }
+        }
+        MaterialTheme(
+            colorScheme = bindings.appColorScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
+            ThreadFormDialog(
+                title = "返信",
+                boardUrl = bindings.effectiveBoardUrl,
+                subtitle = subtitle,
+                barColorScheme = bindings.appColorScheme,
+                attachmentPickerPreference = bindings.preferencesState.attachmentPickerPreference,
+                preferredFileManagerPackage = bindings.preferencesState.preferredFileManagerPackage,
+                emailPresets = emailPresets,
+                comment = bindings.replyDialogState().draft.comment,
+                onCommentChange = bindings.uiBindings.replyDialogCallbacks.onCommentChange,
+                name = bindings.replyDialogState().draft.name,
+                onNameChange = bindings.uiBindings.replyDialogCallbacks.onNameChange,
+                email = bindings.replyDialogState().draft.email,
+                onEmailChange = bindings.uiBindings.replyDialogCallbacks.onEmailChange,
+                subject = bindings.replyDialogState().draft.subject,
+                onSubjectChange = bindings.uiBindings.replyDialogCallbacks.onSubjectChange,
+                password = bindings.replyDialogState().draft.password,
+                onPasswordChange = bindings.uiBindings.replyDialogCallbacks.onPasswordChange,
+                selectedImage = bindings.replyDialogState().draft.imageData,
+                onImageSelected = bindings.uiBindings.replyDialogCallbacks.onImageSelected,
+                onDismiss = bindings.uiBindings.replyDialogCallbacks.onDismiss,
+                onSubmit = bindings.onReplySubmit,
+                onClear = bindings.uiBindings.replyDialogCallbacks.onClear,
+                isSubmitEnabled = bindings.replyDialogState().draft.comment.trim().isNotBlank() &&
+                    hasDeleteKeyForSubmit(bindings.replyDialogState().draft.password),
+                sendDescription = "返信",
+                showSubject = true,
+                showPassword = true,
+                bodyTextSize = bindings.preferencesState.threadBodyTextSize
+            )
+        }
+    }
+
+}
+
+@Composable
+private fun ThreadFilterOverlay(bindings: ThreadScreenOverlayHostBindings) {
+    if (bindings.sheetOverlayState.isFilterVisible) {
+        ThreadFilterSheet(
+            selectedOptions = bindings.filterUiState().options,
+            activeSortOption = bindings.filterUiState().sortOption,
+            keyword = bindings.filterUiState().keyword,
+            onOptionToggle = bindings.uiBindings.filterSheetCallbacks.onOptionToggle,
+            onKeywordChange = bindings.uiBindings.filterSheetCallbacks.onKeywordChange,
+            onClear = bindings.uiBindings.filterSheetCallbacks.onClear,
+            onDismiss = bindings.uiBindings.filterSheetCallbacks.onDismiss
+        )
+    }
+
+}
+
+@Composable
+private fun ThreadReadAloudOverlay(bindings: ThreadScreenOverlayHostBindings) {
+    if (bindings.sheetOverlayState.isReadAloudControlsVisible) {
+        ReadAloudControlSheet(
+            segments = bindings.readAloudSegments,
+            currentIndex = bindings.currentReadAloudIndex(),
+            visibleSegmentIndex = bindings.firstVisibleSegmentIndex(),
+            status = bindings.readAloudStatus(),
+            onSeek = bindings.uiBindings.readAloudControlCallbacks.onSeek,
+            onSeekToVisible = bindings.uiBindings.readAloudControlCallbacks.onSeekToVisible,
+            onPlay = bindings.uiBindings.readAloudControlCallbacks.onPlay,
+            onPause = bindings.uiBindings.readAloudControlCallbacks.onPause,
+            onStop = bindings.uiBindings.readAloudControlCallbacks.onStop,
+            onDismiss = bindings.uiBindings.readAloudControlCallbacks.onDismiss
+        )
+    }
+
+}
+
+@Composable
+private fun ThreadSaveProgressOverlay(bindings: ThreadScreenOverlayHostBindings) {
+    SaveProgressDialog(
+        progress = bindings.saveProgress(),
+        onDismissRequest = bindings.uiBindings.saveProgressDialogCallbacks.onDismissRequest,
+        onCancelRequest = bindings.uiBindings.saveProgressDialogCallbacks.onCancelRequest
+    )
+
 }

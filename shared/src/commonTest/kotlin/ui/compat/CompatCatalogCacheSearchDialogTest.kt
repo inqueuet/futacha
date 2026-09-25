@@ -203,6 +203,30 @@ class CompatCatalogCacheSearchDialogTest {
         )
     }
 
+    @Test
+    fun preNormalizedBodiesGiveTheSameResultsAsRawBodies() {
+        val local = listOf(
+            historyItem("2", "ＡＢＣ 題名", "may-b"),
+            historyItem("3", "無関係", "may-b"),
+            historyItem("4", "題名なし", "may-b")
+        )
+        val raw = mapOf("3" to "<b>ｶﾀｶﾅ</b> と ABC", "4" to "犬")
+        val normalized = raw.mapValues { com.valoser.futacha.shared.compat.normalizeCompatSearchText(it.value) }
+        listOf("abc", "カタカナ 犬", "ABC カタカナ", "4").forEach { query ->
+            val merged = mergeCompatCacheSearchResults(emptyList(), local, "may-b", query, raw)
+            assertEquals(
+                merged,
+                mergeCompatCacheSearchResultsNormalized(emptyList(), local, "may-b", query, normalized)
+            )
+            CompatCatalogCacheSearchMode.entries.forEach { mode ->
+                assertEquals(
+                    filterLegacyCompatCatalogCache(merged, query, mode, raw),
+                    filterLegacyCompatCatalogCacheNormalized(merged, query, mode, normalized)
+                )
+            }
+        }
+    }
+
     private fun cacheItem(id: String, title: String) = CatalogItem(
         id = id,
         threadUrl = "https://may.2chan.net/b/res/$id.htm",

@@ -69,6 +69,12 @@ class HistoryFilterSupportTest {
         )
 
         assertEquals(listOf(target), result)
+        val countSettings = HistoryViewSettings(boardKey = "img", titleQuery = "猫")
+        assertEquals(
+            applyHistoryViewSettings(history, countSettings).size,
+            countHistoryViewSettingsMatches(history, countSettings)
+        )
+        assertEquals(3, countHistoryViewSettingsMatches(history, countSettings))
     }
 
     @Test

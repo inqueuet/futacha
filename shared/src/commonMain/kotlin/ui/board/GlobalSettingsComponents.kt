@@ -173,18 +173,8 @@ internal fun GlobalSettingsScaffold(
         },
         snackbarHost = { SnackbarHost(bindings.snackbarHostState) }
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-        ) {
-            item {
-                GlobalSettingsModeSection()
-            }
-            item {
-                GlobalSettingsDisplaySection(
+        var displayExpanded by rememberSaveable { mutableStateOf(false) }
+        val displayItems = GlobalSettingsDisplaySection(
                     themeMode = bindings.behavior.themeMode,
                     onThemeModeChanged = bindings.behavior.onThemeModeChanged,
                     themePalette = bindings.behavior.themePalette,
@@ -200,6 +190,30 @@ internal fun GlobalSettingsScaffold(
                     appIconVariant = bindings.behavior.appIconVariant,
                     onAppIconVariantChanged = bindings.behavior.onAppIconVariantChanged
                 )
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            item {
+                GlobalSettingsModeSection()
+            }
+            item(key = "display-header") {
+                SettingsSection(title = "表示", icon = Icons.Rounded.Palette,
+                    description = "テーマ、文字、画像、スレッドの見え方をまとめています。",
+                    expanded = displayExpanded, onExpandedChange = { displayExpanded = it }) {}
+            }
+            if (displayExpanded) {
+                displayItems.forEachIndexed { index, displayContent ->
+                    item(key = "display-$index") {
+                        Surface(shape = MaterialTheme.shapes.large, tonalElevation = 2.dp) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)) { displayContent() }
+                        }
+                    }
+                }
             }
             item {
                 if (LocalFutachaSharedFeatures.current != null) SettingsSection(
@@ -353,9 +367,12 @@ internal fun SettingsSection(
     icon: ImageVector,
     description: String? = null,
     initiallyExpanded: Boolean = false,
+    expanded: Boolean? = null,
+    onExpandedChange: ((Boolean) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    var isExpanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    var internalExpanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    val isExpanded = expanded ?: internalExpanded
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -370,10 +387,12 @@ internal fun SettingsSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        isExpanded = !isExpanded
+                        val next = !isExpanded
+                        internalExpanded = next
+                        onExpandedChange?.invoke(next)
                         AnalyticsTracker.uiControl(
                             "settings_section",
-                            "$title を${if (isExpanded) "開く" else "閉じる"}"
+                            "$title を${if (next) "開く" else "閉じる"}"
                         )
                     },
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -406,7 +425,7 @@ internal fun SettingsSection(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            AnimatedVisibility(visible = isExpanded) {
+            if (isExpanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     content()
                 }
@@ -467,13 +486,10 @@ internal fun GlobalSettingsDisplaySection(
     onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit,
     appIconVariant: AppIconVariant,
     onAppIconVariantChanged: (AppIconVariant) -> Unit
-) {
+): List<@Composable () -> Unit> {
     val sharedFeatures = LocalFutachaSharedFeatures.current
-    SettingsSection(
-        title = "表示",
-        icon = Icons.Rounded.Palette,
-        description = "テーマ、文字、画像、スレッドの見え方をまとめています。"
-    ) {
+    return listOf(
+        {
         SharedSettingsLink("design", "フォント・タブ一覧", "フォントとタブ一覧の設定を両モードで共有します。配色はふたちゃのテーマに従います。")
         SharedSettingsLink("thread", "スレッドの表示・画像サイズ", "レスの文字・画像・NG・抽出・スクロール")
         ListItem(
@@ -499,7 +515,8 @@ internal fun GlobalSettingsDisplaySection(
                 onClick = { onThemeModeChanged(mode) }
             )
         }
-        HorizontalDivider()
+        },
+        {
         ListItem(
             headlineContent = { Text("テーマ種類") },
             supportingContent = {
@@ -524,7 +541,8 @@ internal fun GlobalSettingsDisplaySection(
                 onClick = { onThemePaletteChanged(palette) }
             )
         }
-        HorizontalDivider()
+        },
+        {
         ListItem(
             headlineContent = { Text("文字サイズ") },
             supportingContent = {
@@ -554,7 +572,8 @@ internal fun GlobalSettingsDisplaySection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        HorizontalDivider()
+        },
+        {
         ListItem(
             headlineContent = { Text("コンパクトヘッダー") },
             supportingContent = {
@@ -583,7 +602,8 @@ internal fun GlobalSettingsDisplaySection(
                     }
                 )
         )
-        HorizontalDivider()
+        },
+        {
         if (sharedFeatures == null) {
         ListItem(
             headlineContent = { Text("レス画像サイズ") },
@@ -610,7 +630,8 @@ internal fun GlobalSettingsDisplaySection(
             )
         }
         }
-        HorizontalDivider()
+        },
+        {
         ListItem(
             headlineContent = { Text("スレ表示モード") },
             supportingContent = {
@@ -633,7 +654,8 @@ internal fun GlobalSettingsDisplaySection(
                 onClick = { onThreadDisplayModeChanged(mode) }
             )
         }
-        HorizontalDivider()
+        },
+        {
         ListItem(
             headlineContent = { Text("アプリアイコン") },
             supportingContent = {
@@ -652,7 +674,8 @@ internal fun GlobalSettingsDisplaySection(
                 onClick = { onAppIconVariantChanged(variant) }
             )
         }
-    }
+        }
+    )
 }
 
 @Composable

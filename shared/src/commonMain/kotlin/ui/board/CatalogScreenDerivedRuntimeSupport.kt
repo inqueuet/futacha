@@ -1,9 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.State
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -42,11 +44,28 @@ private class CatalogVisibleItemsItemsKey(
     }
 }
 
-private class CatalogVisibleItemsPreviousResult(
-    var sourceKey: String?,
-    var items: List<CatalogItem>,
-    var visibleItems: List<CatalogItem>? = null
+internal class CatalogVisibleItemsResult(
+    val sourceKey: String?,
+    val items: List<CatalogItem>,
+    val visibleItems: List<CatalogItem>
 )
+
+/**
+ * The list to show, or null while nothing has been computed for this board yet
+ * (so the screen shows loading instead of "no threads"). A result for the same
+ * board is kept while a newer one is computed after a refresh or filter change,
+ * except one computed for the empty list shown before the first load.
+ */
+internal fun resolveDisplayedCatalogVisibleItems(
+    result: CatalogVisibleItemsResult?,
+    sourceKey: String?,
+    items: List<CatalogItem>
+): List<CatalogItem>? {
+    if (result == null) return null
+    if (shouldResetCatalogVisibleItemsForSourceChange(result.sourceKey, sourceKey)) return null
+    if (result.items !== items && result.items.isEmpty() && items.isNotEmpty()) return null
+    return result.visibleItems
+}
 
 internal fun buildCatalogVisibleItemsRequest(
     sourceKey: String?,
@@ -76,24 +95,10 @@ internal fun shouldResetCatalogVisibleItemsForSourceChange(
 }
 
 @Composable
-internal fun rememberCatalogVisibleItemsState(
+internal fun rememberCatalogVisibleItems(
     request: CatalogVisibleItemsRequest
-): State<List<CatalogItem>> {
-    val previousResult = remember {
-        CatalogVisibleItemsPreviousResult(request.sourceKey, request.items)
-    }
-    if (
-        shouldResetCatalogVisibleItemsForSourceChange(
-            previousSourceKey = previousResult.sourceKey,
-            currentSourceKey = request.sourceKey
-        )
-    ) {
-        previousResult.visibleItems = null
-        previousResult.sourceKey = request.sourceKey
-        previousResult.items = request.items
-    } else if (previousResult.items !== request.items) {
-        previousResult.items = request.items
-    }
+): List<CatalogItem>? {
+    var result by remember { mutableStateOf<CatalogVisibleItemsResult?>(null) }
     val itemsKey = CatalogVisibleItemsItemsKey(request.sourceKey, request.items)
     val filterKey = CatalogVisibleItemsFilterKey(
         mode = request.mode,
@@ -102,11 +107,7 @@ internal fun rememberCatalogVisibleItemsState(
         catalogNgFilteringEnabled = request.catalogNgFilteringEnabled,
         query = request.query
     )
-    return produceState<List<CatalogItem>>(
-        initialValue = previousResult.visibleItems.orEmpty(),
-        key1 = itemsKey,
-        key2 = filterKey
-    ) {
+    LaunchedEffect(itemsKey, filterKey) {
         val visibleItems = withContext(AppDispatchers.parsing) {
             buildVisibleCatalogItems(
                 items = request.items,
@@ -117,7 +118,7 @@ internal fun rememberCatalogVisibleItemsState(
                 query = request.query
             )
         }
-        value = visibleItems
-        previousResult.visibleItems = visibleItems
+        result = CatalogVisibleItemsResult(request.sourceKey, request.items, visibleItems)
     }
+    return resolveDisplayedCatalogVisibleItems(result, request.sourceKey, request.items)
 }

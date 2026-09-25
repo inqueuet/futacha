@@ -3,9 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.compat.CompatibilityStore
-import com.valoser.futacha.shared.compat.compatTabKey
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
-import com.valoser.futacha.shared.compat.toCompatThreadSnapshot
 import com.valoser.futacha.shared.compat.toThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -16,7 +14,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
-import kotlin.time.Clock
 
 internal data class ThreadLoadRunnerConfig(
     val threadId: String,
@@ -61,7 +58,8 @@ internal data class ThreadLoadRunnerCallbacks(
     val loadOfflineFallback: suspend () -> ThreadPage?,
     val loadLocalStalePage: suspend () -> ThreadPage? = loadOfflineFallback,
     val onArchiveFallbackTimeout: (String) -> Unit = {},
-    val onOfflineFallbackMiss: () -> Unit = {}
+    val onOfflineFallbackMiss: () -> Unit = {},
+    val supplementRemote: suspend (ThreadLoadExecutionResult) -> ThreadLoadExecutionResult = { it }
 )
 
 internal data class ThreadLoadExecutionResult(
@@ -87,28 +85,8 @@ internal fun buildThreadLoadRunnerCallbacks(
     onInfo: (String) -> Unit = {},
     compatibilityStore: CompatibilityStore? = null
 ): ThreadLoadRunnerCallbacks {
-    suspend fun cacheRemoteContent(rawUrl: String, content: ThreadPageContent) {
-        val store = compatibilityStore ?: return
-        val parsed = canonicalizeThreadUrl(rawUrl) ?: return
-        val revision = Clock.System.now().toEpochMilliseconds()
-        runSuspendCatchingPreservingCancellation {
-            store.saveSharedThreadSnapshot(
-                canonicalUrl = parsed.canonicalUrl,
-                originalUrl = rawUrl,
-                boardName = boardName,
-                title = threadTitle.orEmpty(),
-                thumbnailUrl = content.page.posts.firstOrNull()?.thumbnailUrl
-                    ?: content.page.posts.firstOrNull()?.imageUrl,
-                snapshot = content.page.toCompatThreadSnapshot(
-                    tabKey = compatTabKey(parsed.canonicalUrl),
-                    revision = revision
-                )
-            )
-        }.onFailure { error ->
-            onWarning("共有スレキャッシュの保存に失敗しました: ${error.message}")
-        }
-    }
-
+    // The feature host persists the accepted page after it becomes visible.
+    // Keep loading free of conversion/write work (including manual refresh).
     suspend fun loadSharedCachedPage(): ThreadPage? {
         val store = compatibilityStore ?: return null
         val rawUrl = currentThreadUrlOverride()
@@ -123,21 +101,25 @@ internal fun buildThreadLoadRunnerCallbacks(
     }
 
     return ThreadLoadRunnerCallbacks(
+        supplementRemote = { result ->
+            if (result.usedOffline || repository !is FutachaSharedBoardRepository) result else {
+                val source = result.nextThreadUrlOverride ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
+                runSuspendCatchingPreservingCancellation {
+                    val supplemented = repository.supplement(source, ThreadPageContent(result.page, result.embeddedHtml))
+                    result.copy(page = supplemented.page, embeddedHtml = supplemented.embeddedHtml)
+                }.getOrElse { result }
+            }
+        },
         loadRemoteByUrl = { url ->
             val content = withContext(AppDispatchers.io) {
                 repository.getThreadContentByUrl(url)
             }
-            cacheRemoteContent(url, content)
             content
         },
         loadRemoteByBoard = { effectiveBoardUrl, targetThreadId ->
             val content = withContext(AppDispatchers.io) {
                 repository.getThreadContent(effectiveBoardUrl, targetThreadId)
             }
-            cacheRemoteContent(
-                "${effectiveBoardUrl.trimEnd('/')}/res/$targetThreadId.htm",
-                content
-            )
             content
         },
         loadArchiveFallback = {

@@ -19,6 +19,9 @@ import com.valoser.futacha.shared.ai.sanitizeFutachaAiCommandParameters
 import com.valoser.futacha.shared.compat.ExperienceProfile
 import com.valoser.futacha.shared.util.Logger
 import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 @RequiresApi(36)
 class FutachaAppFunctionService : AppFunctionService() {
@@ -92,44 +95,97 @@ class FutachaAppFunctionService : AppFunctionService() {
             )
             return
         }
-        val accepted = FutachaAiCommandBridge.enqueue(
-            FutachaAiCommand(
-                action = action,
-                parameters = commandParameters,
-                source = "android-app-functions"
-            )
+        val command = FutachaAiCommand(
+            action = action,
+            parameters = commandParameters,
+            source = "android-app-functions"
         )
-        if (!accepted) {
-            forgetAcceptedCommandId(commandId)
-            callback.onError(
-                AppFunctionException(
-                    AppFunctionException.ERROR_CANCELLED,
-                    "Futacha is busy. Open the app and try again."
-                )
-            )
+        val app = application as? FutachaApplication
+        if (app == null || app.startedMainActivities.value > 0) {
+            // The UI is on screen and consumes the bridge immediately.
+            if (!enqueueCommand(command, commandId, callback)) return
+            openMainActivity()
+            callback.onResult(acceptedResponse(reception, commandId))
             return
         }
 
+        // No MainActivity is started. Android 10+ silently blocks activity
+        // starts from a background service, and a command left in the bridge
+        // would then run whenever the user opens the app later. Only queue it
+        // once the activity has actually come to the foreground; otherwise
+        // report that the app could not be opened.
+        if (!openMainActivity()) {
+            forgetAcceptedCommandId(commandId)
+            callback.onError(appNotOpenedError())
+            return
+        }
+        app.applicationScope.launch {
+            val opened = withTimeoutOrNull(APP_FUNCTION_ACTIVITY_START_TIMEOUT_MILLIS) {
+                app.startedMainActivities.first { it > 0 }
+            } != null
+            if (cancellationSignal.isCanceled) {
+                forgetAcceptedCommandId(commandId)
+                callback.onError(
+                    AppFunctionException(
+                        AppFunctionException.ERROR_CANCELLED,
+                        "Futacha AI command was cancelled"
+                    )
+                )
+                return@launch
+            }
+            if (!opened) {
+                Logger.w(TAG, "MainActivity did not start for AppFunction command; not queuing it")
+                forgetAcceptedCommandId(commandId)
+                callback.onError(appNotOpenedError())
+                return@launch
+            }
+            if (!enqueueCommand(command, commandId, callback)) return@launch
+            callback.onResult(acceptedResponse(reception, commandId))
+        }
+    }
+
+    private fun enqueueCommand(
+        command: FutachaAiCommand,
+        commandId: String,
+        callback: OutcomeReceiver<ExecuteAppFunctionResponse, AppFunctionException>
+    ): Boolean {
+        if (FutachaAiCommandBridge.enqueue(command)) return true
+        forgetAcceptedCommandId(commandId)
+        callback.onError(
+            AppFunctionException(
+                AppFunctionException.ERROR_CANCELLED,
+                "Futacha is busy. Open the app and try again."
+            )
+        )
+        return false
+    }
+
+    /** Returns false only when the start request itself was rejected. */
+    private fun openMainActivity(): Boolean {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        runCatching {
+        return runCatching {
             startActivity(intent)
         }.onFailure { error ->
             Logger.w(TAG, "Failed to open MainActivity for AppFunction command: ${error.message}")
-        }
+        }.isSuccess
+    }
 
-        callback.onResult(
-            ExecuteAppFunctionResponse(
-                buildResultDocument(
-                    reception = reception,
-                    commandId = commandId,
-                    status = reception.status,
-                    message = reception.message,
-                    duplicate = false
-                )
+    private fun appNotOpenedError() = AppFunctionException(
+        AppFunctionException.ERROR_APP_UNKNOWN_ERROR,
+        "Futacha could not be brought to the foreground. Open the app and try again."
+    )
+
+    private fun acceptedResponse(reception: FutachaAiCommandReception, commandId: String) =
+        ExecuteAppFunctionResponse(
+            buildResultDocument(
+                reception = reception,
+                commandId = commandId,
+                status = reception.status,
+                message = reception.message,
+                duplicate = false
             )
         )
-    }
 
     private fun buildResultDocument(
         reception: FutachaAiCommandReception,
@@ -236,6 +292,7 @@ class FutachaAppFunctionService : AppFunctionService() {
         private const val APP_FUNCTION_ACCEPTED_COMMAND_ID_MAX_COUNT = 256
         private const val APP_FUNCTION_DUPLICATE_STATUS = "accepted_duplicate"
         private const val APP_FUNCTION_INACTIVE_PROFILE_STATUS = "inactive_profile"
+        private const val APP_FUNCTION_ACTIVITY_START_TIMEOUT_MILLIS = 5_000L
         private val acceptedCommandIdsLock = Any()
         private val acceptedCommandIds = LinkedHashSet<String>()
     }

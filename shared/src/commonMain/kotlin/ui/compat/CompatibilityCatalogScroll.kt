@@ -2,11 +2,8 @@ package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -27,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -245,16 +243,6 @@ internal fun CompatBidirectionalPullRefresh(
     var pullRefreshActive by remember { mutableStateOf(false) }
     var headerHeightPx by remember { mutableIntStateOf(0) }
     var settleJob by remember { mutableStateOf<Job?>(null) }
-    val loadingTransition = rememberInfiniteTransition(label = "compat-pull-loading")
-    val loadingRotation by loadingTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 720f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(COMPAT_PULL_LOADING_ROTATION_MILLIS, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "compat-pull-loading-rotation"
-    )
 
     suspend fun animateOffset(start: Float, target: Float) {
         animate(
@@ -476,7 +464,13 @@ internal fun CompatBidirectionalPullRefresh(
         )
         // The APK exposes the pull hint only while a gesture is in progress.
         // At offset == 0 it must not sit permanently over the catalog/loading UI.
-        if (pullRefreshActive || abs(displayOffset) > 0.5f) {
+        val pullHeaderVisible = pullRefreshActive || abs(displayOffset) > 0.5f
+        // Only spin while the loading hint is actually painted.  An always-on
+        // InfiniteTransition requested a frame on every vsync while idle.
+        val loadingRotation by rememberCompatPullLoadingRotation(
+            running = refreshing && pullHeaderVisible
+        )
+        if (pullHeaderVisible) {
             val label = when (compatPullLabel(displayOffset, maxOf(headerHeightPx.toFloat(), minimumTriggerPx), refreshing)) {
                 CompatPullLabel.PULL -> "画面を引っ張って…"
                 CompatPullLabel.RELEASE -> "指を離して更新…"
@@ -536,6 +530,29 @@ internal fun CompatBidirectionalPullRefresh(
             content = content
         )
     }
+}
+
+/**
+ * Rotation of the pull-refresh loading arc.  The animation exists only while
+ * [running]; when idle it awaits no frames, so the host stays asleep.
+ */
+@Composable
+internal fun rememberCompatPullLoadingRotation(running: Boolean): State<Float> {
+    val rotation = remember { Animatable(0f) }
+    LaunchedEffect(running) {
+        if (!running) {
+            rotation.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            rotation.snapTo(0f)
+            rotation.animateTo(
+                targetValue = 720f,
+                animationSpec = tween(COMPAT_PULL_LOADING_ROTATION_MILLIS, easing = LinearEasing)
+            )
+        }
+    }
+    return rotation.asState()
 }
 
 // Read layout state inside a small restart scope, and not at all when disabled.

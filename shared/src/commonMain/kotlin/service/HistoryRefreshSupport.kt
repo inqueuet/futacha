@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repo.ConditionalThreadFetchResult
+import com.valoser.futacha.shared.network.HttpConditionalValidators
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.NetworkException
@@ -12,6 +14,7 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.isWithinEpochInterval
 import com.valoser.futacha.shared.util.resolveThreadTitle
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CoroutineScope
@@ -147,6 +150,30 @@ internal fun resolveHistoryRefreshEntry(
     )
 }
 
+/**
+ * The ETag / Last-Modified each refreshed thread last answered with, so a later
+ * refresh can ask for the page only if it changed. Process-local and bounded:
+ * losing it only means one full fetch.
+ */
+internal class HistoryThreadValidatorCache(private val maxEntries: Int = 1_024) {
+    private val mutex = Mutex()
+    private val entries = LinkedHashMap<HistoryRefreshKey, HttpConditionalValidators>()
+
+    suspend fun get(key: HistoryRefreshKey): HttpConditionalValidators? = mutex.withLock {
+        entries.remove(key)?.also { entries[key] = it }
+    }
+
+    suspend fun put(key: HistoryRefreshKey, validators: HttpConditionalValidators?) = mutex.withLock {
+        entries.remove(key)
+        if (validators != null && !validators.isEmpty) {
+            entries[key] = validators
+            while (entries.size > maxEntries) {
+                entries.remove(entries.keys.first())
+            }
+        }
+    }
+}
+
 internal class HistoryRefreshRunProcessor(
     private val stateStore: AppStateStore,
     private val repository: BoardRepository,
@@ -174,7 +201,12 @@ internal class HistoryRefreshRunProcessor(
     private val threadRefreshStage: String,
     private val archiveLookupStage: String,
     private val refreshAbortStage: String,
-    private val tag: String
+    private val tag: String,
+    private val threadValidators: HistoryThreadValidatorCache = HistoryThreadValidatorCache(),
+    /** No new thread fetch starts after this: it could not finish within the run budget. */
+    private val fetchStartDeadline: Long? = null,
+    /** Receives entries left for the next run because of [fetchStartDeadline]. */
+    private val onDeferredForBudget: suspend (ThreadHistoryEntry) -> Unit = {}
 ) {
     private val autoSaveLauncher = HistoryRefreshAutoSaveLauncher(
         updates = updates,
@@ -221,6 +253,10 @@ internal class HistoryRefreshRunProcessor(
                 skipThreadTtlMillis = skipThreadTtlMillis
             ) ?: return
             fetchSemaphore.withPermit {
+                if (fetchStartDeadline != null && Clock.System.now().toEpochMilliseconds() > fetchStartDeadline) {
+                    onDeferredForBudget(entry)
+                    return@withPermit
+                }
                 refreshResolvedEntry(resolvedEntry)
             }
         } catch (e: CancellationException) {
@@ -242,15 +278,46 @@ internal class HistoryRefreshRunProcessor(
     private suspend fun refreshResolvedEntry(
         resolvedEntry: HistoryRefreshResolvedEntry
     ) {
-        val entry = resolvedEntry.entry
         val board = resolvedEntry.board
         val key = resolvedEntry.key
         val baseUrl = resolvedEntry.baseUrl
+        // The size cap and index limits may have evicted the auto-save since the
+        // flag was set. Treat it as missing so this run saves the thread again
+        // (and the conditional fetch below does not skip it as unchanged).
+        val entry = resolvedEntry.entry.let { original ->
+            if (original.hasAutoSave && !isAutoSaveStillIndexed(original, board, baseUrl)) {
+                original.copy(hasAutoSave = false)
+            } else {
+                original
+            }
+        }
         try {
             stats.markAttempt()
-            val page = withTimeoutOrNull(fetchTimeoutMillis) {
-                repository.getThread(baseUrl, entry.threadId)
+            // Conditional only when an unchanged page needs nothing else: without an
+            // auto-save the full page is needed to create one.
+            val validators = if (entry.hasAutoSave) threadValidators.get(key) else null
+            val fetched = withTimeoutOrNull(fetchTimeoutMillis) {
+                repository.getThreadIfModified(baseUrl, entry.threadId, validators)
             } ?: throw NetworkException("Thread fetch timed out for ${entry.threadId}")
+            val page = when (fetched) {
+                ConditionalThreadFetchResult.NotModified -> {
+                    // 304: alive and unchanged. Keep the entry as the last full
+                    // fetch left it; nothing to auto-save.
+                    stats.markSuccess()
+                    updates.put(
+                        key,
+                        entry.copy(
+                            lastConfirmedAliveEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                            isAutoRefreshDisabled = false
+                        )
+                    )
+                    return
+                }
+                is ConditionalThreadFetchResult.Modified -> fetched.page.also { modifiedPage ->
+                    // Never answer a later refresh with 304 for a page that parsed empty.
+                    threadValidators.put(key, fetched.validators.takeIf { modifiedPage.posts.isNotEmpty() })
+                }
+            }
             val opPost = page.posts.firstOrNull()
             val resolvedTitle = resolveThreadTitle(opPost, entry.title)
             stats.markSuccess()
@@ -307,6 +374,20 @@ internal class HistoryRefreshRunProcessor(
                 }
             }
         }
+    }
+
+    private suspend fun isAutoSaveStillIndexed(
+        entry: ThreadHistoryEntry,
+        board: BoardSummary?,
+        baseUrl: String
+    ): Boolean {
+        val repository = autoSavedThreadRepository ?: return true
+        return runSuspendCatchingPreservingCancellation {
+            repository.resolveIndexedStorageId(
+                entry.threadId,
+                resolveHistoryEntryBoardId(entry, board, baseUrl)
+            ) != null
+        }.getOrDefault(true)
     }
 
     private fun shouldAutoSaveRefreshedEntry(

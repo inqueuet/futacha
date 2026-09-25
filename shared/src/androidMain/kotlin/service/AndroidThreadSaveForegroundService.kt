@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import com.valoser.futacha.shared.model.SaveProgress
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,20 +60,51 @@ class AndroidThreadSaveForegroundService : Service() {
         val save = AndroidProtectedThreadSaveRegistry.get(sessionId)
         val currentId = activeSessionId
         val current = currentId?.let(AndroidProtectedThreadSaveRegistry::get)
-        startForeground(
-            NOTIFICATION_ID,
-            when {
-                save != null -> buildProgressNotification(sessionId, save.title, save.progress.value)
-                current != null -> buildProgressNotification(currentId, current.title, current.progress.value)
-                else -> buildFinishingNotification()
-            }
-        )
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                when {
+                    save != null -> buildProgressNotification(sessionId, save.title, save.progress.value)
+                    current != null -> buildProgressNotification(currentId, current.title, current.progress.value)
+                    else -> buildFinishingNotification()
+                }
+            )
+        } catch (e: RuntimeException) {
+            // Android 15+ refuses a new dataSync foreground service once the
+            // daily time limit is used up (ForegroundServiceStartNotAllowedException).
+            // The save keeps running unprotected; do not crash the app over it.
+            Logger.w(TAG, "Thread save foreground protection unavailable: ${e::class.simpleName}")
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
         when {
             save != null -> activate(sessionId, save)
             current != null -> Unit
             else -> stopIfIdle()
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Android 15+ caps dataSync foreground services at 6 hours per 24 hours
+     * and crashes the app (ForegroundServiceDidNotStopInTimeException) unless
+     * the service stops within a few seconds of this callback. A save that is
+     * still running this long is stuck, so cancel it, tell the user why, and
+     * stop immediately. Lower API levels never call this.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        val interrupted = AndroidProtectedThreadSaveRegistry.cancelAll(THREAD_SAVE_TIMEOUT_REASON)
+        activeSessionId = null
+        progressJob?.cancel()
+        progressJob = null
+        sessionWatchJob?.cancel()
+        sessionWatchJob = null
+        releaseLocks()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        if (interrupted > 0) {
+            runCatching { notifySaveInterrupted(this) }
+        }
     }
 
     override fun onDestroy() {
@@ -207,6 +239,21 @@ class AndroidThreadSaveForegroundService : Service() {
         private const val NOTIFICATION_INTERVAL_MS = 700L
         private const val WAKE_LOCK_TIMEOUT_MS = 10_800_000L
         private const val WAKE_LOCK_TAG = "futacha:threadsave"
+        private const val TAG = "ThreadSaveService"
+        private const val THREAD_SAVE_TIMEOUT_REASON = "スレ保存が端末の実行時間制限に達したため中断しました"
+
+        private fun notifySaveInterrupted(context: Context) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(
+                NOTIFICATION_ID_DONE,
+                Notification.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setContentTitle("スレ保存を中断しました")
+                    .setContentText(THREAD_SAVE_TIMEOUT_REASON)
+                    .setAutoCancel(true)
+                    .build()
+            )
+        }
 
         fun notifySaveDone(context: Context) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

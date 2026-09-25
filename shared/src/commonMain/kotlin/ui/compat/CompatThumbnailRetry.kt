@@ -40,3 +40,17 @@ internal fun resolveCompatThumbnailFailureAction(
         // and could retry a permanently cached error without reaching the server.
         CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
     }
+
+/**
+ * Catalog cells walk their preview candidates (low-quality → thumbnail →
+ * original) only when the current one is missing (404/410), like the inline
+ * thumbnail policy above.  Any transient failure used to download the full
+ * original for every failed cell.  The tutorial board's example.com URLs can
+ * never load, so they still fall through to the packaged fixture drawable.
+ */
+internal fun shouldAdvanceCompatCatalogPreviewCandidate(
+    failedUrl: String?,
+    failure: Throwable?
+): Boolean =
+    com.valoser.futacha.shared.ui.image.isMissingImage(failure) ||
+        failedUrl.orEmpty().contains("example.com", ignoreCase = true)

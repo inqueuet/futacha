@@ -110,7 +110,7 @@ internal fun FutachaPostToolbar(
     }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).navigationBarsPadding(),
         horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        toolbar.filter { it.active }.sortedBy { it.position }.forEach { item ->
+        remember(toolbar) { toolbar.filter { it.active }.sortedBy { it.position } }.forEach { item ->
             IconButton(enabled = !busy && (item.key != "send" || enabled), onClick = { runCommand(item.key) }) {
                 Icon(compatToolbarIcon(item.key), master.firstOrNull { it.key == item.key }?.label ?: item.key)
             }
@@ -118,7 +118,7 @@ internal fun FutachaPostToolbar(
         Box {
             IconButton(onClick = { overflow = true }, enabled = !busy) { Icon(Icons.Default.MoreVert, "投稿のその他") }
             DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
-                toolbar.filterNot { it.active }.sortedBy { it.position }.forEach { item ->
+                remember(toolbar) { toolbar.filterNot { it.active }.sortedBy { it.position } }.forEach { item ->
                     DropdownMenuItem(text = { Text(master.firstOrNull { it.key == item.key }?.label ?: item.key) },
                         enabled = item.key != "send" || enabled, onClick = { runCommand(item.key) })
                 }

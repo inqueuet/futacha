@@ -23,6 +23,46 @@ class VideoAnalysisFramesTest {
         assertFailsWith<IllegalArgumentException> { VideoAnalysisRequest(frames, 0, 100_000, 1025, true) }
     }
 
+    @Test fun chunkedReadsShareOneDecoderAndPublishOnlyCompleteChunks() = kotlinx.coroutines.runBlocking {
+        val info = VideoEditInfo(1, 1, frames, hasAudio = false, hdr = false, rotationDegrees = 0)
+        // Descending, as reverse tracking reads; the empty middle range is dropped.
+        val ranges = listOf(250_000L to 383_333L, 116_667L to 116_667L, 50_000L to 250_000L)
+        var decoderRuns = 0
+        val decodeAll: suspend (String, VideoEditInfo, List<VideoAnalysisRequest>, suspend (Int, AnalysisFrame) -> Unit) -> Unit =
+            { _, _, requests, consume ->
+                decoderRuns++
+                requests.forEachIndexed { chunk, request ->
+                    for (i in request.firstIndex until request.endIndex) consume(chunk, frame(frames.timeAt(i)))
+                }
+            }
+        val chunks = ArrayList<List<Long>>()
+        readVideoAnalysisFrameChunks("/video.mp4", info, ranges, 640, true, { chunks += it.map { f -> f.timeUs } }, decodeAll)
+        assertEquals(1, decoderRuns)
+        assertEquals(listOf(listOf(250_000L, 350_000L), listOf(50_000L, 83_333L, 116_667L)), chunks)
+
+        // A dropped frame fails the chunk before it reaches the tracker.
+        chunks.clear()
+        assertFailsWith<IllegalStateException> {
+            readVideoAnalysisFrameChunks("/video.mp4", info, ranges, 640, true, { chunks += it.map { f -> f.timeUs } }) { _, _, _, consume ->
+                consume(0, frame(250_000)); consume(1, frame(50_000))
+            }
+        }
+        assertTrue(chunks.isEmpty())
+        // Chunks must arrive in request order.
+        assertFailsWith<IllegalStateException> {
+            readVideoAnalysisFrameChunks("/video.mp4", info, ranges, 640, true, { chunks += it.map { f -> f.timeUs } }) { _, _, _, consume ->
+                consume(1, frame(50_000)); consume(0, frame(250_000))
+            }
+        }
+        // A decoder that stops early leaves the last chunk unpublished.
+        assertFailsWith<IllegalStateException> {
+            readVideoAnalysisFrameChunks("/video.mp4", info, ranges, 640, true, { chunks += it.map { f -> f.timeUs } }) { _, _, _, consume ->
+                consume(0, frame(250_000)); consume(0, frame(350_000)); consume(1, frame(50_000))
+            }
+        }
+        assertEquals(listOf(listOf(250_000L, 350_000L)), chunks)
+    }
+
     @Test fun extractorEditListMappingRequiresEverySampleAndUnchangedRelativeTiming() {
         val timeline = VideoDecodeTimeline(listOf(66_667, 33_333, 0, 200_000, 300_000), frames)
         assertEquals(50_000L, timeline.originalTime(0)); assertEquals(250_000L, timeline.originalTime(200_000))

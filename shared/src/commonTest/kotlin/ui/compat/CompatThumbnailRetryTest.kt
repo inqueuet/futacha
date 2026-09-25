@@ -26,6 +26,19 @@ class CompatThumbnailRetryTest {
         assertEquals(CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
             resolveCompatThumbnailFailureAction(0, true, IllegalStateException("transport already exhausted")))
     }
+    @Test fun catalogCellFallsBackToOriginalOnlyForMissingPreview() {
+        val thumb = "https://img.2chan.net/b/thumb/1s.jpg"
+        for (status in listOf(404, 410)) {
+            assertTrue(shouldAdvanceCompatCatalogPreviewCandidate(thumb, HttpException(NetworkResponse(code = status))))
+        }
+        for (status in listOf(403, 429, 500, 503)) {
+            assertFalse(shouldAdvanceCompatCatalogPreviewCandidate(thumb, HttpException(NetworkResponse(code = status))))
+        }
+        assertFalse(shouldAdvanceCompatCatalogPreviewCandidate(thumb, IllegalStateException("timeout")))
+        assertFalse(shouldAdvanceCompatCatalogPreviewCandidate(thumb, null))
+        // The tutorial fixture's unreachable host still reaches the packaged drawable.
+        assertTrue(shouldAdvanceCompatCatalogPreviewCandidate("https://example.com/thumb/1s.jpg", IllegalStateException("dns")))
+    }
     @Test fun originalImageFailureBecomesTerminalAfterTheBoundedRetries() {
         assertEquals(CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
             resolveCompatThumbnailFailureAction(2, false, HttpException(NetworkResponse(code = 404))))

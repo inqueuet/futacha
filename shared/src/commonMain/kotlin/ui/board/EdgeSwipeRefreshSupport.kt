@@ -4,7 +4,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -117,14 +119,16 @@ internal fun rememberEdgeSwipeRefreshVisualState(
     animationLabel: String
 ): EdgeSwipeRefreshVisualState {
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
-    val overscrollOffset = animateFloatAsState(
-        targetValue = overscrollTarget,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = animationLabel
-    )
+    val animation = remember { Animatable(0f) }
+    val overscrollOffset = remember(animation) { animation.asState() }
+    LaunchedEffect(animation) {
+        snapshotFlow { overscrollTarget }.collectLatest { target ->
+            animation.animateTo(target, spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMedium
+            ))
+        }
+    }
 
     LaunchedEffect(isRefreshing) {
         if (!isRefreshing) {

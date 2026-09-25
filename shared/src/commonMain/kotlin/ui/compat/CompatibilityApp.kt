@@ -125,6 +125,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.NonRestartableComposable
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -142,6 +143,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -309,6 +311,11 @@ import com.valoser.futacha.shared.compat.CompatAutoScrollAction
 import com.valoser.futacha.shared.compat.COMPAT_AUTO_SCROLL_TOUCH_PAUSE_MILLIS
 import com.valoser.futacha.shared.compat.COMPAT_AUTO_SCROLL_RELOAD_WAIT_MILLIS
 import com.valoser.futacha.shared.compat.resolveCompatAutoScrollAction
+import com.valoser.futacha.shared.compat.runCompatAutoScroll
+import com.valoser.futacha.shared.compat.compatCatalogLastFetchCountPreferenceKey
+import com.valoser.futacha.shared.compat.compatDroppedReferencePreferenceDeletions
+import com.valoser.futacha.shared.compat.compatOwnPostPreferencePrefix
+import com.valoser.futacha.shared.compat.compatReferencedOwnPostTabKeys
 import com.valoser.futacha.shared.compat.CompatibilityWorkspaceState
 import com.valoser.futacha.shared.compat.distinctCompatBoards
 import com.valoser.futacha.shared.compat.distinctCompatTabs
@@ -467,6 +474,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -536,7 +545,7 @@ private val COMPAT_CATALOG_PLATFORM_AI_ACTIONS = setOf(
 private const val COMPAT_EDGE_SWIPE_WIDTH_DP = 64
 
 private fun compatCatalogLastFetchCountKey(boardKey: String, sort: CompatCatalogSort): String =
-    "compat.catalog.lastFetchThreadCount.$boardKey.${sort.name}"
+    compatCatalogLastFetchCountPreferenceKey(boardKey, sort.name)
 
 private class CompatCatalogRefreshTimeoutException : IllegalStateException()
 
@@ -659,6 +668,12 @@ private fun CompatibilityAppContent(
     var preferences by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var preferencesLoaded by remember { mutableStateOf(false) }
     var changeLogChecked by remember { mutableStateOf(false) }
+    // Parsed once per stored value: a fresh list on every recomposition made
+    // CompatCatalogScreen/CompatThreadScreen impossible to skip.
+    val archiveSearchHistoryRaw = preferences[COMPAT_ARCHIVE_SEARCH_HISTORY_KEY]
+    val archiveSearchHistory = remember(archiveSearchHistoryRaw) {
+        parseCompatArchiveSearchHistory(archiveSearchHistoryRaw)
+    }
     var catalogSelectorOpen by rememberSaveable { mutableStateOf(false) }
     var threadSelectorOpen by rememberSaveable { mutableStateOf(false) }
     var ngRules by remember { mutableStateOf<List<CompatNgRule>>(emptyList()) }
@@ -710,6 +725,7 @@ private fun CompatibilityAppContent(
     // SaveableStateHolder gives the Compose implementation the same per-tab lifetime
     // for LazyList/search/dialog state instead of reusing the active tab's state.
     val threadStateHolder = rememberSaveableStateHolder()
+    PruneCompatClosedTabSaveableState(threadStateHolder) { state }
     // Catalog is removed from the host tree while a thread, settings, or another
     // secondary screen is visible. Keep one saveable state per board so returning
     // to the catalog restores the exact grid/list position instead of recreating a
@@ -734,6 +750,15 @@ private fun CompatibilityAppContent(
         else -> false
     }
     CompatForegroundLifecycleEffect { isCompatHostForeground = it }
+    CompatDroppedReferencePruneEffect(
+        store = store,
+        active = workspaceLoaded && historiesLoaded && boardsLoaded && preferencesLoaded,
+        tabs = state.tabs,
+        pendingClose = state.pendingClose,
+        histories = histories,
+        boards = boards,
+        preferences = preferences
+    )
 
     /**
      * UI callbacks can outlive the Android compatibility store during an
@@ -903,19 +928,29 @@ private fun CompatibilityAppContent(
         dispatch(CompatibilityEvent.OpenDrawer(preferredDrawerPage()))
     }
 
+    // Empty placeholders before the store has loaded are not the user's
+    // boards, history or settings; the theme guard relies on this.
     LaunchedEffect(store) {
+        store.isLoaded.first { it }
         store.boards.collectLatest {
             boards = distinctCompatBoards(it)
             boardsLoaded = true
         }
     }
     LaunchedEffect(store) {
-        store.history.collectLatest {
-            histories = distinctCompatHistory(it)
-            historiesLoaded = true
-        }
+        store.isLoaded.first { it }
+        // A long history is de-duplicated (and compared) off the main thread.
+        store.history
+            .map(::distinctCompatHistory)
+            .distinctUntilChanged()
+            .flowOn(AppDispatchers.parsing)
+            .collectLatest {
+                histories = it
+                historiesLoaded = true
+            }
     }
     LaunchedEffect(store) {
+        store.isLoaded.first { it }
         store.preferences.collectLatest {
             preferences = it
             preferencesLoaded = true
@@ -1885,12 +1920,13 @@ private fun CompatibilityAppContent(
                     insertedAtEpochMillis = now,
                     contentUpdatedAtEpochMillis = metadata.savedAt
                 )
-                val page = metadata.toThreadPage(
-                    fileSystem = fs,
-                    baseDirectory = MANUAL_SAVE_DIRECTORY
-                )
+                // Converting every saved post (and resolving its local media
+                // paths) is not UI work; keep both steps off the main thread.
                 val snapshot = withContext(AppDispatchers.parsing) {
-                    page.toCompatThreadSnapshot(tab.key, now)
+                    metadata.toThreadPage(
+                        fileSystem = fs,
+                        baseDirectory = MANUAL_SAVE_DIRECTORY
+                    ).toCompatThreadSnapshot(tab.key, now)
                 }
                 store.openTab(
                     tab,
@@ -2440,9 +2476,7 @@ private fun CompatibilityAppContent(
                         repository = repository,
                         httpClient = httpClient,
                         archiveBaseUrl = preferences[COMPAT_CACHE_BASE_URL_KEY],
-                        archiveSearchHistory = parseCompatArchiveSearchHistory(
-                            preferences[COMPAT_ARCHIVE_SEARCH_HISTORY_KEY]
-                        ),
+                        archiveSearchHistory = archiveSearchHistory,
                         archiveSearchNoticeHidden =
                             preferences[COMPAT_ARCHIVE_SEARCH_NOTICE_HIDDEN_KEY] == "ON",
                         localHistory = histories,
@@ -2555,9 +2589,7 @@ private fun CompatibilityAppContent(
                             initialToolbarItems = toolbarItemsBySurface[CompatToolbarSurface.THREAD],
                             threadRefreshToken = threadRefreshToken,
                             archiveBaseUrl = preferences[COMPAT_CACHE_BASE_URL_KEY],
-                            archiveSearchHistory = parseCompatArchiveSearchHistory(
-                                preferences[COMPAT_ARCHIVE_SEARCH_HISTORY_KEY]
-                            ),
+                            archiveSearchHistory = archiveSearchHistory,
                             archiveSearchNoticeHidden =
                                 preferences[COMPAT_ARCHIVE_SEARCH_NOTICE_HIDDEN_KEY] == "ON",
                             localHistory = histories,
@@ -3453,10 +3485,111 @@ private fun CompatibilityAppContent(
     }
 }
 
+/**
+ * Thread tab keys whose saveable state may be dropped: keys seen before that
+ * are neither open nor awaiting Undo in the pending close batch.
+ */
+internal fun compatStaleThreadStateKeys(
+    known: Set<String>,
+    open: Set<String>,
+    pendingClose: Set<String>
+): Set<String> = known.filterTo(mutableSetOf()) { it !in open && it !in pendingClose }
+
+/**
+ * Each thread tab keeps a SaveableStateProvider entry. Nothing removed the
+ * entry of a closed tab, so the holder grew for the process lifetime and
+ * bloated Android's saved-instance Bundle (TransactionTooLargeException).
+ * Drop the entry once the tab is closed and can no longer be restored by Undo.
+ */
+@Composable
+private fun PruneCompatClosedTabSaveableState(
+    holder: SaveableStateHolder,
+    workspace: () -> CompatibilityWorkspaceState
+) {
+    val latestWorkspace = rememberUpdatedState(workspace)
+    LaunchedEffect(holder) {
+        val known = mutableSetOf<String>()
+        snapshotFlow {
+            val current = latestWorkspace.value()
+            current.tabs.mapTo(mutableSetOf(), CompatTab::key) to
+                current.pendingClose?.tabs.orEmpty().mapTo(mutableSetOf()) { it.tab.key }
+        }.distinctUntilChanged().collect { (open, pending) ->
+            val stale = compatStaleThreadStateKeys(known, open, pending)
+            stale.forEach(holder::removeState)
+            known.removeAll(stale)
+            known.addAll(open)
+        }
+    }
+}
+
 private fun remainingCompatDeadlineMillis(deadlineMillis: Long, nowMillis: Long): Long {
     if (deadlineMillis <= nowMillis) return 0L
     val remaining = deadlineMillis - nowMillis
     return if (remaining < 0L) Long.MAX_VALUE else remaining
+}
+
+/**
+ * Per-cell catalog values computed at most once for each displayed catalog.
+ * Recomputing the reply indicator (URL canonicalisation) and the NFKC watch
+ * word match for every visible cell on every catalog recomposition, and
+ * passing a fresh list each time, made all visible cells recompose on any
+ * catalog screen change.
+ */
+private class CompatCatalogCellDecorations(
+    tabs: List<CompatTab>,
+    private val replyDeltas: Map<String, Int>,
+    private val watchWords: List<String>,
+    private val extractRules: List<CompatNgRule>
+) {
+    private val openTabsByUrl = tabs.associateBy(CompatTab::canonicalUrl)
+    // Keyed by the item itself: a malformed catalog can repeat an id.
+    private val replyIndicators = HashMap<CatalogItem, CompatCatalogReplyIndicator?>()
+    private val matchedWords = HashMap<CatalogItem, List<String>>()
+
+    fun replyIndicator(item: CatalogItem): CompatCatalogReplyIndicator? =
+        replyIndicators.getOrPut(item) {
+            val canonical = canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl
+            val tab = canonical?.let(openTabsByUrl::get)
+            resolveCompatCatalogReplyIndicator(
+                currentReplyCount = item.replyCount,
+                checkedReplyCount = tab?.checkedReplyCount,
+                previousCatalogDelta = replyDeltas[item.compatCatalogReplyDeltaKey()]
+            )
+        }
+
+    fun matchedWatchWords(item: CatalogItem): List<String> =
+        matchedWords.getOrPut(item) {
+            compatCatalogMatchedWords(item = item, watchWords = watchWords, rules = extractRules)
+        }
+}
+
+@Composable
+private fun CompatCatalogImageNgProgressLabel(
+    progressState: State<Pair<Int, Int>?>,
+    modifier: Modifier
+) {
+    val progress = progressState.value?.takeIf { it.second > 0 } ?: return
+    Text(
+        CompatImagePhash.progressLabel(progress.first, progress.second),
+        modifier = modifier
+            .padding(top = 8.dp)
+            .background(Color(0xCC000000), RoundedCornerShape(3.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag("compat-catalog-image-ng-progress"),
+        color = Color.White,
+        fontSize = 12.sp
+    )
+}
+
+@Composable
+private fun rememberCompatCatalogCellDecorations(
+    displayedItems: List<CatalogItem>,
+    tabs: List<CompatTab>,
+    replyDeltas: Map<String, Int>,
+    watchWords: List<String>,
+    extractRules: List<CompatNgRule>
+): CompatCatalogCellDecorations = remember(displayedItems, tabs, replyDeltas, watchWords, extractRules) {
+    CompatCatalogCellDecorations(tabs, replyDeltas, watchWords, extractRules)
 }
 
 @Composable
@@ -3562,7 +3695,10 @@ private fun CompatCatalogScreen(
     var managedNgKind by remember { mutableStateOf<CompatNgKind?>(null) }
     var catalogRuleRequest by remember { mutableStateOf<CompatCatalogRuleRequest?>(null) }
     var catalogImagePhashes by remember(board.key) { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var catalogImageNgProgress by remember(board.key) { mutableStateOf<Pair<Int, Int>?>(null) }
+    // Read only by CompatCatalogImageNgProgressLabel: the value changes once
+    // per hashed image, and reading it here recomposed the whole catalog.
+    val catalogImageNgProgressState = remember(board.key) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var catalogImageNgProgress by catalogImageNgProgressState
     var watchWordsDialogOpen by remember { mutableStateOf(false) }
     var cacheSearchOpen by remember(board.key) { mutableStateOf(false) }
     var archiveSearchOpen by remember(board.key) { mutableStateOf(false) }
@@ -3605,7 +3741,12 @@ private fun CompatCatalogScreen(
             val candidates = items.mapNotNull { item ->
                 (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it }
             }.distinctBy { it.second }.take(256)
-            val storedHashes = store.loadImagePhashes(candidates.map { compatImagePhashCachePreferenceKey(it.second) })
+            // Image NG is optional. A storage failure (for example SQLITE_FULL)
+            // must neither crash the app nor discard hashes computed here.
+            val storedHashes = runSuspendCatchingPreservingCancellation {
+                store.loadImagePhashes(candidates.map { compatImagePhashCachePreferenceKey(it.second) })
+            }.onFailure { Logger.e("CompatibilityCatalog", "Failed to load image hashes", it) }
+                .getOrDefault(emptyMap())
             val cached = candidates.mapNotNull { (itemId, url) ->
                 storedHashes[compatImagePhashCachePreferenceKey(url)]
                     ?.takeIf(::isValidCompatImagePhash)
@@ -3624,7 +3765,8 @@ private fun CompatCatalogScreen(
                 if (unsaved.isEmpty()) return
                 val batch = unsaved.toMap()
                 unsaved.clear()
-                store.saveImagePhashes(batch)
+                runSuspendCatchingPreservingCancellation { store.saveImagePhashes(batch) }
+                    .onFailure { Logger.e("CompatibilityCatalog", "Failed to save image hashes", it) }
             }
             val computed = try {
                 withTimeoutOrNull(COMPAT_PHASH_BATCH_TIMEOUT_MILLIS) {
@@ -4009,10 +4151,15 @@ private fun CompatCatalogScreen(
                 val fetchedAt = Clock.System.now().toEpochMilliseconds()
                 val revision = maxOf(fetchedAt, lastSnapshotRevision + 1L)
                 val previousSnapshot = store.loadCatalogSnapshot(board.key, sort)
-                catalogReplyDeltas = buildCompatCatalogReplyDeltas(
-                    current = loadedItems,
-                    previous = previousSnapshot?.items.orEmpty()
-                )
+                // Up to thousands of rows: diff, NFKC watch matching and the
+                // generation diff below run on the parsing dispatcher.
+                val nextReplyDeltas = withContext(AppDispatchers.parsing) {
+                    buildCompatCatalogReplyDeltas(
+                        current = loadedItems,
+                        previous = previousSnapshot?.items.orEmpty()
+                    )
+                }
+                catalogReplyDeltas = nextReplyDeltas
                 items = loadedItems
                 catalogHistoryGeneration = 0
                 // The timestamp in the legacy toolbar describes the cached
@@ -4020,25 +4167,31 @@ private fun CompatCatalogScreen(
                 // that snapshot, so clear the cache marker until the next
                 // cached open (#46).
                 lastUpdatedAtEpochMillis = null
-                val watchMatches = collectCompatWatchMatches(
-                    board = board,
-                    items = loadedItems,
-                    watchWords = compatWatchWordsForBoard(preferences, board.key),
-                    existingHistory = localHistory,
-                    nowEpochMillis = fetchedAt
-                )
+                val watchWordsAtRefresh = compatWatchWordsForBoard(preferences, board.key)
+                val historyAtRefresh = localHistory
+                val watchMatches = withContext(AppDispatchers.parsing) {
+                    collectCompatWatchMatches(
+                        board = board,
+                        items = loadedItems,
+                        watchWords = watchWordsAtRefresh,
+                        existingHistory = historyAtRefresh,
+                        nowEpochMillis = fetchedAt
+                    )
+                }
                 watchMatches.forEach { match ->
                     launchCatalogStoreSafely("watch history persistence", "監視履歴の保存に失敗しました") {
                         CompatWatcherRepository(store).record(match)
                     }
                 }
                 val activeDroppedThreadIds = previousSnapshot?.takeIf { catalogDroppedTrackingEnabled }?.let { previous ->
-                    val vanished = diffCompatCatalogGenerations(
-                        current = loadedItems,
-                        previous = previous.items,
-                        requestedThreadCount = catalogLimit,
-                        enabled = true
-                    ).vanishedWithin.take(COMPAT_DROPPED_PROBE_MAX_ITEMS)
+                    val vanished = withContext(AppDispatchers.parsing) {
+                        diffCompatCatalogGenerations(
+                            current = loadedItems,
+                            previous = previous.items,
+                            requestedThreadCount = catalogLimit,
+                            enabled = true
+                        ).vanishedWithin.take(COMPAT_DROPPED_PROBE_MAX_ITEMS)
+                    }
                     withTimeoutOrNull(COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS) {
                         buildSet {
                             vanished.forEach { dropped ->
@@ -4462,16 +4615,13 @@ private fun CompatCatalogScreen(
                 }
                 onDispose { CompatVolumeKeyBus.unregister(volumeKeyOwner) }
             }
-            val openTabsByUrl = tabs.associateBy(CompatTab::canonicalUrl)
-            fun replyIndicator(item: CatalogItem): CompatCatalogReplyIndicator? {
-                val canonical = canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl
-                val tab = canonical?.let(openTabsByUrl::get)
-                return resolveCompatCatalogReplyIndicator(
-                    currentReplyCount = item.replyCount,
-                    checkedReplyCount = tab?.checkedReplyCount,
-                    previousCatalogDelta = catalogReplyDeltas[item.compatCatalogReplyDeltaKey()]
-                )
-            }
+            val cellDecorations = rememberCompatCatalogCellDecorations(
+                displayedItems = displayedItems,
+                tabs = tabs,
+                replyDeltas = catalogReplyDeltas,
+                watchWords = watchWords,
+                extractRules = catalogExtractRules
+            )
             CompatBidirectionalPullRefresh(
                 enabled = catalogPullRefreshEnabled,
                 refreshing = loading,
@@ -4503,7 +4653,7 @@ private fun CompatCatalogScreen(
                                 imageRetryGeneration = catalogRefreshGeneration,
                                 thumbnailRequestSizePx = gridThumbnailRequestSizePx,
                                 lowQuality = catalogLowQuality,
-                                replyIndicator = replyIndicator(item),
+                                replyIndicator = cellDecorations.replyIndicator(item),
                                 isOld = catalogItemStates[item.id]?.isOld == true,
                                 droppedClass = droppedClassByThreadId[item.id],
                                 titleLength = gridTitleLength,
@@ -4513,11 +4663,7 @@ private fun CompatCatalogScreen(
                                 privacyAlpha = if (catalogPrivacyEnabled) {
                                     compatPrivacyContentAlpha(privacyAlpha)
                                 } else 1f,
-                                matchedWatchWords = compatCatalogMatchedWords(
-                                    item = item,
-                                    watchWords = watchWords,
-                                    rules = catalogExtractRules
-                                ),
+                                matchedWatchWords = cellDecorations.matchedWatchWords(item),
                                 onClick = { onOpenThread(item) },
                                 onLongClick = { handleCatalogLongTap(item) }
                             )
@@ -4542,7 +4688,7 @@ private fun CompatCatalogScreen(
                                 imageRetryGeneration = catalogRefreshGeneration,
                                 thumbnailRequestSizePx = listThumbnailRequestSizePx,
                                 lowQuality = catalogLowQuality,
-                                replyIndicator = replyIndicator(item),
+                                replyIndicator = cellDecorations.replyIndicator(item),
                                 isOld = catalogItemStates[item.id]?.isOld == true,
                                 droppedClass = droppedClassByThreadId[item.id],
                                 titleLength = listTitleLength,
@@ -4553,11 +4699,7 @@ private fun CompatCatalogScreen(
                                 privacyAlpha = if (catalogPrivacyEnabled) {
                                     compatPrivacyContentAlpha(privacyAlpha)
                                 } else 1f,
-                                matchedWatchWords = compatCatalogMatchedWords(
-                                    item = item,
-                                    watchWords = watchWords,
-                                    rules = catalogExtractRules
-                                ),
+                                matchedWatchWords = cellDecorations.matchedWatchWords(item),
                                 onClick = { onOpenThread(item) },
                                 onLongClick = { handleCatalogLongTap(item) }
                             )
@@ -4588,19 +4730,10 @@ private fun CompatCatalogScreen(
                 modifier = Modifier.align(Alignment.Center).testTag("compat-catalog-blocking-loading"),
                 size = 50.dp
             )
-            catalogImageNgProgress?.takeIf { it.second > 0 }?.let { progress ->
-                Text(
-                    CompatImagePhash.progressLabel(progress.first, progress.second),
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 8.dp)
-                        .background(Color(0xCC000000), RoundedCornerShape(3.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("compat-catalog-image-ng-progress"),
-                    color = Color.White,
-                    fontSize = 12.sp
-                )
-            }
+            CompatCatalogImageNgProgressLabel(
+                progressState = catalogImageNgProgressState,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
             error?.let { Text(it, modifier = Modifier.align(Alignment.Center).background(Color(0xFF646464), RoundedCornerShape(22.dp)).padding(12.dp), color = Color.White) }
             transientMessage?.let {
                 Text(it, modifier = Modifier.align(Alignment.Center).background(Color(0xFF646464), RoundedCornerShape(22.dp)).padding(12.dp), color = Color.White)
@@ -5049,6 +5182,100 @@ private data class CompatCatalogRuleRequest(
     val kind: CompatNgKind
 )
 
+private class CompatSeenReferences {
+    var tabKeys: Set<String> = emptySet()
+    var boardKeys: Set<String> = emptySet()
+}
+
+/**
+ * Removes own-post markers of threads that are no longer open, undo-able or in
+ * history, and catalog fetch counters of deleted boards.  Nothing else ever
+ * deleted these preference rows.  Only references seen earlier in this
+ * composition count as dropped, so an empty not-yet-loaded store is harmless.
+ */
+@Composable
+private fun CompatDroppedReferencePruneEffect(
+    store: CompatibilityStore,
+    active: Boolean,
+    tabs: List<CompatTab>,
+    pendingClose: ClosedTabBatch?,
+    histories: List<CompatHistoryEntry>,
+    boards: List<CompatBoard>,
+    preferences: Map<String, String>
+) {
+    val latestPreferences by rememberUpdatedState(preferences)
+    val seen = remember(store) { CompatSeenReferences() }
+    LaunchedEffect(store, active, tabs, pendingClose, histories, boards) {
+        if (!active) return@LaunchedEffect
+        // Tab, history and board emissions of one operation arrive separately.
+        delay(1_000)
+        val (tabKeys, boardKeys) = withContext(AppDispatchers.parsing) {
+            compatReferencedOwnPostTabKeys(tabs, histories, pendingClose) to
+                boards.mapTo(HashSet(), CompatBoard::key)
+        }
+        val deletions = compatDroppedReferencePreferenceDeletions(
+            latestPreferences,
+            droppedTabKeys = seen.tabKeys - tabKeys,
+            droppedBoardKeys = seen.boardKeys - boardKeys
+        )
+        seen.tabKeys = tabKeys
+        seen.boardKeys = boardKeys
+        if (deletions.isNotEmpty()) {
+            runSuspendCatchingPreservingCancellation { store.savePreferences(deletions) }
+                .onFailure { Logger.e("CompatibilityApp", "Stale own-post marker cleanup failed", it) }
+        }
+    }
+}
+
+/**
+ * Thread auto-scroll loop, kept out of [CompatThreadScreen] (near the JVM
+ * method-size limit).  It pauses while the host is not foreground: the old
+ * loop kept scrolling every step and reloading every 12 s in the background.
+ */
+@Composable
+private fun CompatThreadAutoScrollEffect(
+    autoScrollingState: MutableState<Boolean>,
+    autoScrollPixel: Int,
+    autoScrollSpeedMillis: Long,
+    touchGeneration: Int,
+    tabKey: String,
+    isDead: Boolean,
+    listState: LazyListState,
+    onReload: suspend () -> Unit,
+    onStoppedDead: () -> Unit
+) {
+    var foreground by remember { mutableStateOf(true) }
+    CompatForegroundLifecycleEffect { foreground = it }
+    val latestIsDead by rememberUpdatedState(isDead)
+    val latestOnReload by rememberUpdatedState(onReload)
+    val latestOnStoppedDead by rememberUpdatedState(onStoppedDead)
+    var autoScrolling by autoScrollingState
+    LaunchedEffect(
+        autoScrolling,
+        autoScrollPixel,
+        autoScrollSpeedMillis,
+        touchGeneration,
+        tabKey
+    ) {
+        if (autoScrolling && touchGeneration > 0) {
+            delay(COMPAT_AUTO_SCROLL_TOUCH_PAUSE_MILLIS)
+        }
+        runCompatAutoScroll(
+            isAutoScrolling = { autoScrolling },
+            awaitForeground = { snapshotFlow { foreground }.first { it } },
+            canScrollForward = { listState.canScrollForward },
+            isDead = { latestIsDead },
+            stepDelayMillis = autoScrollSpeedMillis,
+            scrollStep = { listState.scrollBy(autoScrollPixel.toFloat()) },
+            reload = { latestOnReload() },
+            stopDead = {
+                autoScrolling = false
+                latestOnStoppedDead()
+            }
+        )
+    }
+}
+
 @Composable
 private fun CompatThreadScreen(
     tab: CompatTab,
@@ -5116,6 +5343,8 @@ private fun CompatThreadScreen(
     val tabIndex = tabs.indexOfFirst { it.key == tab.key }
     val previousTab = tabs.getOrNull(tabIndex - 1)
     val nextTab = tabs.getOrNull(tabIndex + 1)
+    val latestPreviousTab = rememberUpdatedState(previousTab)
+    val latestNextTab = rememberUpdatedState(nextTab)
     // Observe only the swipe direction: reading the animated offset here re-ran
     // this whole screen body on every drag and settle frame.
     val pagerShowsNext by remember(pagerOffset) { derivedStateOf { pagerOffset.value < 0f } }
@@ -5210,7 +5439,7 @@ private fun CompatThreadScreen(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
     val ownPostNos = remember(preferences, tab.key) {
-        val prefix = "compat.ownpost.${tab.key}."
+        val prefix = compatOwnPostPreferencePrefix(tab.key)
         preferences.asSequence()
             .filter { (key, value) -> key.startsWith(prefix) && value == "1" }
             .map { (key, _) -> key.removePrefix(prefix) }
@@ -5297,6 +5526,10 @@ private fun CompatThreadScreen(
     val extractionKeywordState = remember(tab.key) { mutableStateOf("") }
     var extractionKeyword by extractionKeywordState
     var headerExtractionPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
+    // Computed off the main thread by the long press that opens the dialog.
+    var headerExtractionKinds by remember(tab.key) {
+        mutableStateOf<List<CompatHeaderExtractionKind>>(emptyList())
+    }
     val mediaContextPostState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
     var mediaContextPost by mediaContextPostState
     val imageNgRegistrationState = remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
@@ -6146,7 +6379,7 @@ private fun CompatThreadScreen(
         compatWifiConnected,
         showDeletedPosts
     ) {
-        val posts = presentCompatPostsForDeletedVisibility(
+        val posts = presentCompatPostsForDeletedVisibilityOffMain(
             posts = snapshot?.posts.orEmpty(),
             showDeletedContent = showDeletedPosts
         )
@@ -6181,7 +6414,7 @@ private fun CompatThreadScreen(
         imagePhashes,
         imageNgPhashThreshold
     ) {
-        val posts = presentCompatPostsForDeletedVisibility(
+        val posts = presentCompatPostsForDeletedVisibilityOffMain(
             posts = snapshot?.posts.orEmpty(),
             showDeletedContent = showDeletedPosts
         )
@@ -6304,8 +6537,8 @@ private fun CompatThreadScreen(
         val width = pagerWidthPx.toFloat().coerceAtLeast(1f)
         val offset = finalGestureOffset
         val target = when {
-            offset <= -width * 0.25f -> nextTab
-            offset >= width * 0.25f -> previousTab
+            offset <= -width * 0.25f -> latestNextTab.value
+            offset >= width * 0.25f -> latestPreviousTab.value
             else -> null
         }
         scope.launch {
@@ -6327,6 +6560,8 @@ private fun CompatThreadScreen(
             }
         }
     }
+
+    val latestSettlePagerSwipe = rememberUpdatedState<(Float) -> Unit> { settlePagerSwipe(it) }
 
     // Restore only after the filtered list has been installed. The old code
     // attempted this from the network/cache loader, before LazyColumn had any
@@ -6608,7 +6843,10 @@ private fun CompatThreadScreen(
             when (kinds.size) {
                 0 -> error = "抽出する要素が見つかりません"
                 1 -> openHeaderExtraction(post, kinds.single())
-                else -> headerExtractionPost = post
+                else -> {
+                    headerExtractionKinds = kinds
+                    headerExtractionPost = post
+                }
             }
         }
     }
@@ -6681,35 +6919,17 @@ private fun CompatThreadScreen(
             listState.scrollToItem(threadListLastIndex)
         }
     }
-    LaunchedEffect(
-        autoScrolling,
-        autoScrollPixel,
-        autoScrollSpeedMillis,
-        autoScrollTouchGeneration,
-        tab.key
-    ) {
-        if (autoScrolling && autoScrollTouchGeneration > 0) {
-            delay(COMPAT_AUTO_SCROLL_TOUCH_PAUSE_MILLIS)
-        }
-        while (autoScrolling) {
-            when (resolveCompatAutoScrollAction(listState.canScrollForward, tab.isDead)) {
-                CompatAutoScrollAction.SCROLL -> {
-                    listState.scrollBy(autoScrollPixel.toFloat())
-                    delay(autoScrollSpeedMillis)
-                }
-                CompatAutoScrollAction.WAIT_FOR_RELOAD -> {
-                    delay(COMPAT_AUTO_SCROLL_RELOAD_WAIT_MILLIS)
-                    if (autoScrolling && !listState.canScrollForward) {
-                        load(manual = false, refreshOnActivation = true)
-                    }
-                }
-                CompatAutoScrollAction.STOP_DEAD -> {
-                    autoScrolling = false
-                    error = "オートスクロールを停止します(スレ落)"
-                }
-            }
-        }
-    }
+    CompatThreadAutoScrollEffect(
+        autoScrollingState = autoScrollingState,
+        autoScrollPixel = autoScrollPixel,
+        autoScrollSpeedMillis = autoScrollSpeedMillis,
+        touchGeneration = autoScrollTouchGeneration,
+        tabKey = tab.key,
+        isDead = tab.isDead,
+        listState = listState,
+        onReload = { load(manual = false, refreshOnActivation = true) },
+        onStoppedDead = { error = "オートスクロールを停止します(スレ落)" }
+    )
     LaunchedEffect(searchQuery, searchMatches) {
         if (searchQuery.isEmpty()) {
             searchMatchIndex = 0
@@ -7015,9 +7235,12 @@ private fun CompatThreadScreen(
                     // receive pointer input once the LazyColumn is drawn above
                     // it, which made the APK-compatible left-edge drawer swipe
                     // appear to work only on empty space.
+                    // `tabs` is deliberately not a key: a store re-emission
+                    // (for example a persisted scroll anchor) would cancel an
+                    // in-progress swipe and leave pagerOffset unsettled. The
+                    // gesture reads the latest neighbours through state holders.
                     .pointerInput(
                         tab.key,
-                        tabs,
                         pagerWidthPx,
                         COMPAT_DRAWER_EDGE_GESTURE_WIDTH_DP
                     ) {
@@ -7044,7 +7267,7 @@ private fun CompatThreadScreen(
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) {
-                                    if (horizontal && !deferToDrawer) settlePagerSwipe(gesturePagerOffset)
+                                    if (horizontal && !deferToDrawer) latestSettlePagerSwipe.value(gesturePagerOffset)
                                     finished = true
                                     break
                                 }
@@ -7074,7 +7297,11 @@ private fun CompatThreadScreen(
                                     change.consume()
                                 }
                                 if (horizontal) {
-                                    val hasAdjacent = if (totalDx < 0f) nextTab != null else previousTab != null
+                                    val hasAdjacent = if (totalDx < 0f) {
+                                        latestNextTab.value != null
+                                    } else {
+                                        latestPreviousTab.value != null
+                                    }
                                     val resistance = if (hasAdjacent) 1f else 0.22f
                                     val width = pagerWidthPx.toFloat().coerceAtLeast(1f)
                                     gesturePagerOffset = (gesturePagerOffset + dx * resistance)
@@ -7085,7 +7312,7 @@ private fun CompatThreadScreen(
                                     }
                                 }
                             }
-                            if (!finished && horizontal) settlePagerSwipe(gesturePagerOffset)
+                            if (!finished && horizontal) latestSettlePagerSwipe.value(gesturePagerOffset)
                         }
                     }
             ) {
@@ -7300,7 +7527,6 @@ private fun CompatThreadScreen(
     if (scrollDialogOpen) {
         val lastIndex = threadListLastIndex
         val sliderDenominator = lastIndex.coerceAtLeast(1)
-        val currentIndex = listState.firstVisibleItemIndex.coerceIn(0, lastIndex)
         Dialog(
             onDismissRequest = { scrollDialogOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -7336,6 +7562,10 @@ private fun CompatThreadScreen(
                                 }
                             ) { Text("最新レス") }
                         }
+                        // Read the scroll position only inside the dialog content:
+                        // reading it in the thread screen body recomposed the
+                        // whole screen for every slider step.
+                        val currentIndex = listState.firstVisibleItemIndex.coerceIn(0, lastIndex)
                         Slider(
                             value = currentIndex.toFloat() / sliderDenominator.toFloat(),
                             onValueChange = { value ->
@@ -7456,7 +7686,7 @@ private fun CompatThreadScreen(
         )
     }
     headerExtractionPost?.let { post ->
-        val kinds = compatHeaderExtractionKinds(post, snapshot?.posts.orEmpty())
+        val kinds = headerExtractionKinds
         AlertDialog(
             onDismissRequest = { headerExtractionPost = null },
             title = { Text("抽出") },

@@ -6,11 +6,20 @@ import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.service.buildThreadStorageLockKey
 import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.AUTO_SAVE_EVICTION_RECENT_GRACE_MILLIS
+import com.valoser.futacha.shared.service.AUTO_SAVE_MAX_TOTAL_BYTES
+import com.valoser.futacha.shared.service.AutoSaveRetentionRegistry
+import com.valoser.futacha.shared.service.autoSaveRetentionKey
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -50,13 +59,72 @@ class SavedThreadRepository(
     internal val resolvedSaveLocation = baseSaveLocation ?: SaveLocation.fromString(baseDirectory)
     internal val useSaveLocationApi = resolvedSaveLocation !is SaveLocation.Path
     internal val indexRelativePath = "index.json"
+    /** The app-private history auto-save root, which may drop its oldest saves to stay bounded. */
+    internal val isAutoSaveRepository =
+        !useSaveLocationApi && baseDirectory.trim().trimEnd('/') == AUTO_SAVE_DIRECTORY
     internal var isBaseDirectoryPrepared = false
+    /** Index limits; the reader and writer use the same values. Lowered only by tests. */
+    internal var indexEntryLimit = MAX_SAVED_THREAD_INDEX_ENTRIES
+    internal var indexByteLimit = MAX_SAVED_THREAD_INDEX_BYTES
+    /** Size cap of an auto-save repository ([isAutoSaveRepository]). Lowered only by tests. */
+    internal var autoSaveTotalByteLimit = AUTO_SAVE_MAX_TOTAL_BYTES
+    /** Parsed index reused while nothing has rewritten index.json; guarded by the index lock. */
+    internal var cachedIndexEntry: SavedThreadIndexCacheEntry? = null
+    /** When this instance last refreshed index.json.backup; 0 until its first index write. */
+    internal var lastIndexBackupWriteMillis = 0L
+    private val droppedEntryCleanupScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private val droppedEntryCleanupMutex = Mutex()
+    private val scheduledDroppedEntryStorageIds = mutableSetOf<String>()
 
     companion object {
         private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 30_000L
         private const val INDEX_LOCK_OPERATION_TIMEOUT_MILLIS = 30_000L
         private const val MAX_THREAD_PURGE_CUTOFFS = 1_024
         private const val MAX_ORPHAN_METADATA_SCAN_ENTRIES = 20_000
+        private const val MAX_DROPPED_ENTRY_CLEANUP_PER_READ = 20_000
+        private const val DROPPED_ENTRY_CLEANUP_LOCK_TIMEOUT_MILLIS = 15_000L
+    }
+
+    /**
+     * Deletes, in the background, the folders of auto-save index entries dropped
+     * because an index from an older build exceeded the entry cap; nothing would
+     * reference them again. A folder is kept if the index lists it again by then
+     * or its thread is being saved. Manual saves are never deleted here: they
+     * stay recoverable with [recoverUnindexedThreads].
+     */
+    internal fun scheduleDroppedIndexEntryCleanup(dropped: List<SavedThread>) {
+        if (!isAutoSaveRepository || dropped.isEmpty()) return
+        val candidates = dropped
+            .asSequence()
+            .take(MAX_DROPPED_ENTRY_CLEANUP_PER_READ)
+            .map { it to resolveSavedThreadStorageId(it) }
+            .toList()
+        droppedEntryCleanupScope.launch {
+            val fresh = droppedEntryCleanupMutex.withLock {
+                candidates.filter { (_, storageId) -> scheduledDroppedEntryStorageIds.add(storageId) }
+            }
+            fresh.forEach { (thread, storageId) ->
+                yield()
+                val retained = AutoSaveRetentionRegistry.snapshot()
+                if (purgeIdentityKey(thread.threadId, thread.boardId) in retained) return@forEach
+                withTimeoutOrNull(DROPPED_ENTRY_CLEANUP_LOCK_TIMEOUT_MILLIS) {
+                    ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                        val stillIndexed = runSuspendCatchingNonCancellation {
+                            withIndexLock {
+                                readSavedThreadIndexUnlocked().threads.any { resolveSavedThreadStorageId(it) == storageId }
+                            }
+                        }.getOrDefault(true)
+                        if (!stillIndexed) {
+                            deletePath(storageId).exceptionOrNull()?.let { error ->
+                                if (!isPathAlreadyDeleted(error)) {
+                                    Logger.w("SavedThreadRepository", "Failed to delete dropped auto-save $storageId: ${error.message}")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -131,6 +199,12 @@ class SavedThreadRepository(
         val replacedStorageIds = linkedSetOf<String>()
         repeat(3) { attempt ->
             try {
+                // Taken before the index lock: saves in flight are never evicted for size.
+                val retainedIdentities = if (isAutoSaveRepository) {
+                    AutoSaveRetentionRegistry.snapshot()
+                } else {
+                    emptySet()
+                }
                 mutationMutex.withLock {
                     val storageId = resolveSavedThreadStorageId(thread)
                     val identityKey = purgeIdentityKey(thread.threadId, thread.boardId)
@@ -145,18 +219,44 @@ class SavedThreadRepository(
                         error("Discarded an auto-save that started before history deletion")
                     }
                     withIndexLock {
-                        this@SavedThreadRepository.mutateIndexThreadsUnlocked { threads ->
+                        replacedStorageIds.clear()
+                        val evicted = this@SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked { threads ->
                             val newStorageId = resolveSavedThreadStorageId(thread)
                             replacedStorageIds.clear()
                             threads
                                 .filter { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
                                 .mapTo(replacedStorageIds) { resolveSavedThreadStorageId(it) }
                             replacedStorageIds.remove(newStorageId)
-                            threads
+                            val updated = threads
                                 .filterNot { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
                                 .plus(thread)
                                 .sortedByDescending { it.savedAt }
+                            if (!isAutoSaveRepository) {
+                                updated
+                            } else {
+                                val nowMillis = Clock.System.now().toEpochMilliseconds()
+                                val overLimit = selectSavedThreadsOverSizeLimit(
+                                    threads = updated,
+                                    maxTotalBytes = autoSaveTotalByteLimit
+                                ) { candidate ->
+                                    isSameSavedThreadIdentity(candidate, thread.threadId, thread.boardId) ||
+                                        purgeIdentityKey(candidate.threadId, candidate.boardId) in retainedIdentities ||
+                                        candidate.savedAt in
+                                        (nowMillis - AUTO_SAVE_EVICTION_RECENT_GRACE_MILLIS)..nowMillis
+                                }
+                                if (overLimit.isNotEmpty()) {
+                                    Logger.i(
+                                        "SavedThreadRepository",
+                                        "Evicting ${overLimit.size} oldest auto-saves beyond the $autoSaveTotalByteLimit-byte limit"
+                                    )
+                                    overLimit.mapTo(replacedStorageIds) { resolveSavedThreadStorageId(it) }
+                                    replacedStorageIds.remove(newStorageId)
+                                }
+                                updated.filterNot { it in overLimit }
+                            }
                         }
+                        evicted.mapTo(replacedStorageIds) { resolveSavedThreadStorageId(it) }
+                        replacedStorageIds.remove(resolveSavedThreadStorageId(thread))
                     }
                 }
                 cleanupReplacedSavedThreadStorage(replacedStorageIds)
@@ -194,14 +294,16 @@ class SavedThreadRepository(
             }
             withIndexLock {
                 val newStorageId = storageId
-                this@SavedThreadRepository.mutateIndexThreadsUnlocked { threads ->
+                this@SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked { threads ->
                     threads
                         .filterNot { resolveSavedThreadStorageId(it) == newStorageId }
                         .plus(thread)
                         .sortedByDescending { it.savedAt }
                 }
+                    .mapTo(linkedSetOf()) { resolveSavedThreadStorageId(it) }
+                    .apply { remove(newStorageId) }
             }
-        }
+        }.let { evictedStorageIds -> cleanupReplacedSavedThreadStorage(evictedStorageIds) }
     }
 
     /**
@@ -339,6 +441,32 @@ class SavedThreadRepository(
         }
 
     /**
+     * [purgeThreadStorage] without scanning every folder's metadata for orphans. Used for
+     * background cleanup of many entries, e.g. history dropped by its size limit.
+     */
+    suspend fun purgeIndexedThreadStorage(threadId: String, boardId: String? = null): Result<Unit> =
+        runSuspendCatchingNonCancellation {
+            withContext(AppDispatchers.io) {
+                mutationMutex.withLock {
+                    threadPurgeCutoffMillis[purgeIdentityKey(threadId, boardId)] =
+                        Clock.System.now().toEpochMilliseconds()
+                    trimThreadPurgeCutoffsLocked()
+                }
+                deleteThread(threadId, boardId).getOrThrow()
+                linkedSetOf(
+                    resolveSavedThreadStorageId(threadId, boardId),
+                    resolveLegacySavedThreadStorageId(threadId, boardId)
+                ).filter(String::isNotBlank).forEach { storageId ->
+                    ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                        deletePath(storageId).exceptionOrNull()?.let { error ->
+                            if (!isPathAlreadyDeleted(error)) throw error
+                        }
+                    }
+                }
+            }
+        }
+
+    /**
      * スレッドを削除し、削除後のインデックスを返す。
      */
     suspend fun deleteThreadAndLoadIndex(threadId: String, boardId: String? = null): Result<SavedThreadIndex> =
@@ -388,7 +516,8 @@ class SavedThreadRepository(
                                 threads = emptyList(),
                                 totalSize = 0L,
                                 lastUpdated = Clock.System.now().toEpochMilliseconds()
-                            )
+                            ),
+                            forceBackup = true
                         )
                     }
                 }
@@ -489,6 +618,12 @@ class SavedThreadRepository(
     }
 
     private suspend fun cleanupReplacedSavedThreadStorage(storageIds: Set<String>) {
+        if (storageIds.isEmpty()) return
+        // Recursive deletes of whole thread folders must not run on the caller's (UI) thread.
+        withContext(AppDispatchers.io) { cleanupReplacedSavedThreadStorageOnIo(storageIds) }
+    }
+
+    private suspend fun cleanupReplacedSavedThreadStorageOnIo(storageIds: Set<String>) {
         storageIds.forEach { storageId ->
             val cleanupResult = withTimeoutOrNull(15_000L) {
                 ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
@@ -569,7 +704,7 @@ class SavedThreadRepository(
     }
 
     private fun purgeIdentityKey(threadId: String, boardId: String?): String {
-        return "${boardId?.trim()?.lowercase().orEmpty()}\u0000${threadId.trim()}"
+        return autoSaveRetentionKey(threadId, boardId)
     }
 
     private fun trimThreadPurgeCutoffsLocked() {

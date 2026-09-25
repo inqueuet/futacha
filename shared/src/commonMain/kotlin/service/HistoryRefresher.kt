@@ -26,10 +26,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.valoser.futacha.shared.state.historyEntryIdentity
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlin.time.ExperimentalTime
@@ -55,12 +59,28 @@ private const val AUTO_SAVE_DRAIN_TIMEOUT_MILLIS = 5_000L
 private const val AUTO_SAVE_CANCEL_JOIN_TIMEOUT_MILLIS = 5_000L
 private const val THREAD_REFRESH_EARLY_ABORT_MIN_ATTEMPTS = 25
 private const val THREAD_REFRESH_EARLY_ABORT_MIN_FAILURES = 20
-private const val THREAD_REFRESH_EARLY_ABORT_FAILURE_RATE = 0.9f
+private const val THREAD_REFRESH_EARLY_ABORT_FAILURE_RATE = 0.8f
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_MIN_ATTEMPTS = 30
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_MIN_FAILURES = 20
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_FAILURE_RATE = 0.85f
 private const val STATE_SNAPSHOT_READ_TIMEOUT_MILLIS = 10_000L
 private const val ABORT_FLUSH_TIMEOUT_MILLIS = 5_000L
+/**
+ * Default time budget of a window-limited (background) run: the Android worker
+ * gives the history refresh about 4 of its 6 minutes. Threads that could not
+ * finish inside it are left for the next run instead of being cut off.
+ */
+private const val DEFAULT_WINDOWED_RUN_BUDGET_MILLIS = 4L * 60_000L
+private const val HISTORY_REFRESH_CURSOR_PATH = "private/history_refresh_cursor.json"
+private const val HISTORY_REFRESH_CURSOR_MAX_BYTES = 16L * 1024L
+
+/** Where the next window-limited run starts; kept across process restarts. */
+@Serializable
+private data class PersistedHistoryRefreshCursor(
+    val index: Int = 0,
+    /** The entry at [index] when saved; found again if newer history moved it. */
+    val identity: String? = null
+)
 
 /**
  * Headless use case to refresh history entries without tying to Compose/UI.
@@ -92,6 +112,9 @@ class HistoryRefresher(
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
     private var historyRefreshCursor = 0
+    private var historyRefreshCursorLoaded = false
+    private var persistedHistoryRefreshCursor: PersistedHistoryRefreshCursor? = null
+    private val threadValidators = HistoryThreadValidatorCache()
 
     // FIX: エラー状態を公開
     private val _lastRefreshError = MutableStateFlow<RefreshError?>(null)
@@ -119,6 +142,12 @@ class HistoryRefresher(
         maxThreadsPerRun: Int? = null,
         maxAutoSavesPerRun: Int? = null,
         threadFetchTimeoutMillisOverride: Long? = null,
+        /**
+         * No thread fetch starts once less than one fetch timeout of this budget
+         * remains. Defaults to [DEFAULT_WINDOWED_RUN_BUDGET_MILLIS] for runs limited
+         * by [maxThreadsPerRun]; unlimited otherwise.
+         */
+        runBudgetMillis: Long? = null,
         historyCommitGate: suspend (commit: suspend () -> Unit) -> Boolean = { commit ->
             commit()
             true
@@ -173,6 +202,7 @@ class HistoryRefresher(
                         (refreshStartedAt - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
                 }
             }
+            loadHistoryRefreshCursorIfNeeded(fullHistory)
             val history = selectHistoryWindow(
                 history = fullHistory,
                 maxThreadsPerRun = maxThreadsPerRun,
@@ -198,18 +228,27 @@ class HistoryRefresher(
             } else {
                 null
             }
-            val threadRefreshAbortThreshold = HistoryRefreshAbortThreshold(
+            val threadRefreshAbortThreshold = scaledHistoryRefreshAbortThreshold(
                 label = "thread refresh",
-                minAttempts = THREAD_REFRESH_EARLY_ABORT_MIN_ATTEMPTS,
-                minFailures = THREAD_REFRESH_EARLY_ABORT_MIN_FAILURES,
+                runSize = history.size,
+                maxMinAttempts = THREAD_REFRESH_EARLY_ABORT_MIN_ATTEMPTS,
+                maxMinFailures = THREAD_REFRESH_EARLY_ABORT_MIN_FAILURES,
                 failureRateThreshold = THREAD_REFRESH_EARLY_ABORT_FAILURE_RATE
             )
-            val archiveLookupAbortThreshold = HistoryRefreshAbortThreshold(
+            val archiveLookupAbortThreshold = scaledHistoryRefreshAbortThreshold(
                 label = "archive lookup",
-                minAttempts = ARCHIVE_LOOKUP_EARLY_ABORT_MIN_ATTEMPTS,
-                minFailures = ARCHIVE_LOOKUP_EARLY_ABORT_MIN_FAILURES,
+                runSize = history.size,
+                maxMinAttempts = ARCHIVE_LOOKUP_EARLY_ABORT_MIN_ATTEMPTS,
+                maxMinFailures = ARCHIVE_LOOKUP_EARLY_ABORT_MIN_FAILURES,
                 failureRateThreshold = ARCHIVE_LOOKUP_EARLY_ABORT_FAILURE_RATE
             )
+            val effectiveRunBudgetMillis = runBudgetMillis
+                ?: DEFAULT_WINDOWED_RUN_BUDGET_MILLIS.takeIf { maxThreadsPerRun != null }
+            val fetchStartDeadline = effectiveRunBudgetMillis?.let { budget ->
+                refreshStartedAt + budget.coerceAtLeast(0L) - runThreadFetchTimeoutMillis
+            }
+            val deferredForBudget = mutableListOf<ThreadHistoryEntry>()
+            val deferredMutex = Mutex()
             val stats = HistoryRefreshRunStats()
             val errors = HistoryRefreshErrorTracker(
                 maxErrorsToTrack = 100
@@ -259,7 +298,10 @@ class HistoryRefresher(
                 threadRefreshStage = ERROR_STAGE_THREAD_REFRESH,
                 archiveLookupStage = ERROR_STAGE_ARCHIVE_LOOKUP,
                 refreshAbortStage = ERROR_STAGE_REFRESH_ABORT,
-                tag = HISTORY_REFRESH_TAG
+                tag = HISTORY_REFRESH_TAG,
+                threadValidators = threadValidators,
+                fetchStartDeadline = fetchStartDeadline,
+                onDeferredForBudget = { entry -> deferredMutex.withLock { deferredForBudget += entry } }
             )
 
             supervisorScope {
@@ -294,6 +336,15 @@ class HistoryRefresher(
                     batchStart = batchEndExclusive
                     yield()
                 }
+            }
+
+            val deferred = deferredMutex.withLock { deferredForBudget.toList() }
+            if (deferred.isNotEmpty()) {
+                Logger.w(
+                    HISTORY_REFRESH_TAG,
+                    "Run budget reached; leaving ${deferred.size} thread(s) for the next refresh"
+                )
+                rewindHistoryRefreshCursor(fullHistory, deferred)
             }
 
             val autoSaveChildren = scopedAutoSaveJob.children.toList()
@@ -406,6 +457,7 @@ class HistoryRefresher(
             Logger.e(HISTORY_REFRESH_TAG, "History refresh aborted by fatal error", error)
             throw error
         } finally {
+            persistHistoryRefreshCursorIfChanged()
             autoSaveParentJob?.let { job ->
                 job.cancel()
                 // Also cover refresh cancellation/fatal-error paths that exit
@@ -461,6 +513,74 @@ class HistoryRefresher(
         }
         historyRefreshCursor = selection.nextCursor
         return selection.entries
+    }
+
+    /** The next run starts at the first entry this run left for lack of time. */
+    private fun rewindHistoryRefreshCursor(
+        fullHistory: List<ThreadHistoryEntry>,
+        deferred: List<ThreadHistoryEntry>
+    ) {
+        val deferredIdentities = deferred.mapTo(HashSet()) { historyEntryIdentity(it) }
+        val window = fullHistory.indices.map { offset ->
+            (historyRefreshCursorBeforeRun + offset) % fullHistory.size
+        }
+        window.firstOrNull { index -> historyEntryIdentity(fullHistory[index]) in deferredIdentities }
+            ?.let { historyRefreshCursor = it }
+    }
+
+    private var historyRefreshCursorBeforeRun = 0
+
+    private suspend fun loadHistoryRefreshCursorIfNeeded(fullHistory: List<ThreadHistoryEntry>) {
+        if (!historyRefreshCursorLoaded) {
+            historyRefreshCursorLoaded = true
+            val fs = fileSystem
+            if (fs != null) {
+                persistedHistoryRefreshCursor = runSuspendCatchingPreservingCancellation {
+                    if (!fs.exists(HISTORY_REFRESH_CURSOR_PATH)) return@runSuspendCatchingPreservingCancellation null
+                    require(fs.getFileSize(HISTORY_REFRESH_CURSOR_PATH) in 0L..HISTORY_REFRESH_CURSOR_MAX_BYTES)
+                    archiveSearchJson.decodeFromString(
+                        PersistedHistoryRefreshCursor.serializer(),
+                        fs.readString(HISTORY_REFRESH_CURSOR_PATH).getOrThrow()
+                    )
+                }.onFailure { error ->
+                    Logger.w(HISTORY_REFRESH_TAG, "Ignoring unreadable history refresh cursor: ${error.message}")
+                }.getOrNull()
+                persistedHistoryRefreshCursor?.let { saved ->
+                    val byIdentity = saved.identity?.takeIf { it.isNotBlank() }?.let { identity ->
+                        fullHistory.indexOfFirst { historyEntryIdentity(it) == identity }.takeIf { it >= 0 }
+                    }
+                    historyRefreshCursor = byIdentity ?: saved.index.coerceAtLeast(0)
+                }
+            }
+        }
+        historyRefreshCursorBeforeRun = if (fullHistory.isEmpty()) 0 else {
+            ((historyRefreshCursor % fullHistory.size) + fullHistory.size) % fullHistory.size
+        }
+        lastRunHistory = fullHistory
+    }
+
+    private var lastRunHistory: List<ThreadHistoryEntry> = emptyList()
+
+    private suspend fun persistHistoryRefreshCursorIfChanged() {
+        val fs = fileSystem ?: return
+        val history = lastRunHistory
+        val identity = history.getOrNull(
+            if (history.isEmpty()) 0 else ((historyRefreshCursor % history.size) + history.size) % history.size
+        )?.let(::historyEntryIdentity)
+        val next = PersistedHistoryRefreshCursor(index = historyRefreshCursor, identity = identity)
+        if (next == persistedHistoryRefreshCursor) return
+        withContext(NonCancellable) {
+            runSuspendCatchingPreservingCancellation {
+                fs.createDirectory(HISTORY_REFRESH_CURSOR_PATH.substringBeforeLast('/')).getOrThrow()
+                fs.writeString(
+                    HISTORY_REFRESH_CURSOR_PATH,
+                    archiveSearchJson.encodeToString(PersistedHistoryRefreshCursor.serializer(), next)
+                ).getOrThrow()
+                persistedHistoryRefreshCursor = next
+            }.onFailure { error ->
+                Logger.w(HISTORY_REFRESH_TAG, "Failed to persist history refresh cursor: ${error.message}")
+            }
+        }
     }
 
     private fun normalizeBoardKey(url: String?): String? {

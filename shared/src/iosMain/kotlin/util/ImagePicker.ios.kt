@@ -141,6 +141,48 @@ internal fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
     }
 }
 
+/**
+ * Deletes the copies an `asCopy = true` document picker placed in the app's
+ * `tmp/<bundle>-Inbox/` (or legacy `Documents/Inbox/`) once they were read.
+ * Nothing else is ever deleted, so a user's original (non-copied) file is safe.
+ */
+internal fun deleteIosDocumentPickerInboxCopies(urls: List<*>) {
+    urls.forEach { value ->
+        val url = value as? NSURL ?: return@forEach
+        if (!isIosDocumentPickerInboxCopy(url)) return@forEach
+        val path = url.path ?: return@forEach
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            if (NSFileManager.defaultManager.fileExistsAtPath(path) &&
+                !NSFileManager.defaultManager.removeItemAtPath(path, error.ptr)
+            ) {
+                Logger.w("ImagePicker.ios", "Failed to delete picker inbox copy: ${error.value?.localizedDescription}")
+            }
+        }
+    }
+}
+
+internal fun isIosDocumentPickerInboxCopy(url: NSURL): Boolean {
+    if (!url.fileURL) return false
+    val path = url.path?.let(::resolvedIosPath) ?: return false
+    val temporary = resolvedIosPath(NSTemporaryDirectory()).trimEnd('/')
+    if (path.startsWith("$temporary/")) {
+        val components = path.removePrefix("$temporary/").split('/')
+        return components.size >= 2 && components.first().endsWith("-Inbox") &&
+            components.none { it == ".." || it.isEmpty() }
+    }
+    val documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true)
+        .firstOrNull() as? String ?: return false
+    val inbox = resolvedIosPath(documents).trimEnd('/') + "/Inbox/"
+    return path.startsWith(inbox) && path.length > inbox.length &&
+        path.removePrefix(inbox).split('/').none { it == ".." || it.isEmpty() }
+}
+
+private fun resolvedIosPath(path: String): String {
+    val standardized = NSString.create(string = path).stringByStandardizingPath
+    return NSString.create(string = standardized).stringByResolvingSymlinksInPath
+}
+
 internal fun loadPickedMediaFromUrl(
     url: NSURL,
     isVideo: Boolean,
@@ -339,12 +381,17 @@ suspend fun pickMediaFromDocuments(
                 complete = { complete(it, failed = true) }
             )
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
-                val selected = loadPickedMediaFromUrl(
-                    url = url,
-                    isVideo = isVideo,
-                    fallbackFileName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME,
-                    maxBytes = maxBytes
-                )
+                val selected = try {
+                    loadPickedMediaFromUrl(
+                        url = url,
+                        isVideo = isVideo,
+                        fallbackFileName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME,
+                        maxBytes = maxBytes
+                    )
+                } finally {
+                    // The bytes (or the rejection) are final: drop the picker's copy.
+                    deleteIosDocumentPickerInboxCopies(didPickDocumentsAtURLs)
+                }
                 dispatch_async(dispatch_get_main_queue()) {
                     complete(selected, failed = selected == null)
                 }
@@ -422,12 +469,16 @@ suspend fun pickFontFromDocuments(): ImageData? = suspendCancellableCoroutine { 
             }
             loadTimeout = schedulePickedMediaLoadTimeout(logLabel = "custom font", complete = ::complete)
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
-                val selected = loadPickedFileFromUrl(
-                    url = url,
-                    maxBytes = MAX_CUSTOM_FONT_BYTES,
-                    fileLabel = "custom font",
-                    fallbackFileName = "font.ttf"
-                )
+                val selected = try {
+                    loadPickedFileFromUrl(
+                        url = url,
+                        maxBytes = MAX_CUSTOM_FONT_BYTES,
+                        fileLabel = "custom font",
+                        fallbackFileName = "font.ttf"
+                    )
+                } finally {
+                    deleteIosDocumentPickerInboxCopies(didPickDocumentsAtURLs)
+                }
                 dispatch_async(dispatch_get_main_queue()) {
                     complete(selected)
                 }

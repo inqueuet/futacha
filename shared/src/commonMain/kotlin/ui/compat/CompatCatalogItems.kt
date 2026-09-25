@@ -546,8 +546,10 @@ internal fun CompatCatalogGridItem(
     val imageState by imagePainter.state.collectAsState()
     val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
-        if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
-            imageCandidateIndex < imageCandidates.lastIndex
+        val failedState = imageState as? coil3.compose.AsyncImagePainter.State.Error
+        if (failedState != null &&
+            imageCandidateIndex < imageCandidates.lastIndex &&
+            shouldAdvanceCompatCatalogPreviewCandidate(imageUrl, failedState.result.throwable)
         ) {
             imageCandidateIndex += 1
         }
@@ -738,8 +740,10 @@ internal fun CompatCatalogListItem(
     val imageState by imagePainter.state.collectAsState()
     val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
-        if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
-            imageCandidateIndex < imageCandidates.lastIndex
+        val failedState = imageState as? coil3.compose.AsyncImagePainter.State.Error
+        if (failedState != null &&
+            imageCandidateIndex < imageCandidates.lastIndex &&
+            shouldAdvanceCompatCatalogPreviewCandidate(imageUrl, failedState.result.throwable)
         ) {
             imageCandidateIndex += 1
         }

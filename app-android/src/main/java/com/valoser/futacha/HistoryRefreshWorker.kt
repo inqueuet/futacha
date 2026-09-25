@@ -81,7 +81,18 @@ class HistoryRefreshWorker(
                 Result.failure()
             }
         }
-        val sharedFeaturesEnabled = com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(app.compatibilityStore.preferences.first())
+        // The Application initializes the compatibility store asynchronously.
+        // On a cold WorkManager start its preferences are still the empty
+        // placeholder, which would silently disable shared patrol/liveness.
+        val sharedFeaturesEnabled = try {
+            app.compatibilityStore.ensureInitialized()
+            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(app.compatibilityStore.preferences.first())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read shared feature settings; skipping shared features", e)
+            false
+        }
         if (!enabledState.hasAnyEnabled && !sharedFeaturesEnabled) {
             Logger.d(TAG, "Background refresh disabled; skipping work")
             AnalyticsTracker.event(
@@ -188,12 +199,10 @@ class HistoryRefreshWorker(
                     "last_background_refresh_source" to "workmanager"
                 )
             )
-            if (shouldRetryBackgroundRefreshTimeout(runAttemptCount, MAX_TIMEOUT_RETRIES)) {
-                Result.retry()
-            } else {
-                Logger.e(TAG, "Timeout retry limit reached; marking run as failure (attempt=$runAttemptCount)")
-                Result.failure()
-            }
+            // The whole budget was used. Retrying (30 s, then 60 s backoff)
+            // spent up to three budgets of every 15-minute period on a bad
+            // network; finish and let the next periodic run continue.
+            Result.success()
         } catch (e: CancellationException) {
             throw e
         } catch (t: Exception) {
@@ -245,7 +254,7 @@ class HistoryRefreshWorker(
         return try {
             // The Application initializes this store asynchronously. Waiting here
             // makes a cold-start WorkManager run see the same tabs/preferences as UI.
-            app.compatibilityStore.initialize()
+            app.compatibilityStore.ensureInitialized()
             val preferences = app.compatibilityStore.preferences.first()
             val updatePolicy = parseCompatForegroundNetworkPolicy(
                 preferences["compat.background.backgroundThreadUpdateCheck"]
@@ -303,7 +312,8 @@ class HistoryRefreshWorker(
             Result.success()
         } catch (e: TimeoutCancellationException) {
             Logger.w(TAG, "Compatibility background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
-            if (runAttemptCount < MAX_COMPAT_RETRY_ATTEMPTS) Result.retry() else Result.failure()
+            // Same as the modern run: the next periodic run continues.
+            Result.success()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -378,7 +388,6 @@ class HistoryRefreshWorker(
         private const val MAX_COMPAT_TABS_PER_RUN = 20
         private const val MAX_COMPAT_RETRY_ATTEMPTS = 2
         private const val MAX_SETTING_READ_RETRIES = 3
-        private const val MAX_TIMEOUT_RETRIES = 2
         private const val MAX_RETRY_ATTEMPTS = 3
 
         private val constraints: Constraints = Constraints.Builder()

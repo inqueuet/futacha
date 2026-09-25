@@ -201,7 +201,7 @@ internal fun rememberFutachaBindingsRuntimeState(
             observedRuntimeState.activeSavedThreadsRepository
         ).distinct()
     }
-    val screenBindings = buildFutachaScreenBindingsBundle(
+    val screenBindings = rememberFutachaScreenBindingsBundle(
         coroutineScope = coroutineScope,
         inputs = FutachaScreenBindingsInputs(
             history = persistedHistory,

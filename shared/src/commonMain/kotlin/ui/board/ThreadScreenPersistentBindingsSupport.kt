@@ -31,7 +31,7 @@ internal fun rememberThreadScreenPersistentBindings(
     boardId: String,
     threadId: String
 ): ThreadScreenPersistentBindings {
-    val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
+    val lastUsedDeleteKeyState = stateStore?.observedLastUsedDeleteKey?.collectPreferenceAsState(initial = "")
     var fallbackDeleteKey by rememberSaveable { mutableStateOf("") }
     val lastUsedDeleteKey = lastUsedDeleteKeyState?.value ?: fallbackDeleteKey
     val updateLastUsedDeleteKey: (String) -> Unit = remember(stateStore, coroutineScope) {
@@ -47,7 +47,7 @@ internal fun rememberThreadScreenPersistentBindings(
     }
 
     val persistedSelfPostMapState =
-        stateStore?.selfPostIdentifiersByThread?.collectAsState(initial = emptyMap())
+        stateStore?.observedSelfPostIdentifiersByThread?.collectPreferenceAsState(initial = emptyMap())
     val persistedSelfPostMap = persistedSelfPostMapState?.value ?: emptyMap()
     val scopedSelfPostKey = remember(boardId, threadId) {
         buildThreadScopedSelfPostKey(boardId, threadId)
@@ -72,8 +72,8 @@ internal fun rememberThreadScreenPersistentBindings(
     val fallbackNgWordsState = rememberSaveable(boardId, threadId) {
         mutableStateOf<List<String>>(emptyList())
     }
-    val ngHeadersState = stateStore?.ngHeaders?.collectAsState(initial = fallbackNgHeadersState.value)
-    val ngWordsState = stateStore?.ngWords?.collectAsState(initial = fallbackNgWordsState.value)
+    val ngHeadersState = stateStore?.observedNgHeaders?.collectPreferenceAsState(initial = fallbackNgHeadersState.value)
+    val ngWordsState = stateStore?.observedNgWords?.collectPreferenceAsState(initial = fallbackNgWordsState.value)
     val ngHeaders = ngHeadersState?.value ?: fallbackNgHeadersState.value
     val ngWords = ngWordsState?.value ?: fallbackNgWordsState.value
 

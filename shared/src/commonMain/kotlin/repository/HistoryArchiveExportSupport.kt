@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.HistoryArchiveManifest
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
@@ -30,7 +31,10 @@ data class HistoryArchiveExportResult(
     val archiveDirectory: String,
     val copiedFileCount: Int,
     val historyOnlyCount: Int,
-    val partialPayloadCount: Int
+    val partialPayloadCount: Int,
+    // History entries left out because the archive holds at most
+    // MAX_HISTORY_ARCHIVE_ENTRIES (the oldest by last visit are dropped).
+    val omittedEntryCount: Int = 0
 )
 
 suspend fun exportHistoryArchive(
@@ -42,9 +46,11 @@ suspend fun exportHistoryArchive(
         prettyPrint = true
         ignoreUnknownKeys = true
     }
-): Result<HistoryArchiveExportResult> {
+): Result<HistoryArchiveExportResult> = withContext(AppDispatchers.io) {
+    // Callers launch from the UI scope; payload copies and the manifest
+    // encoding run here.
     var incompleteArchiveDirectory: String? = null
-    return try {
+    try {
         coroutineContext.ensureActive()
         require(request.historyEntries.size <= MAX_HISTORY_ARCHIVE_ENTRIES) {
             "History archive contains too many entries"

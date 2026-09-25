@@ -34,7 +34,13 @@ internal actual fun rememberDeviceVideoPicker(onSelected: suspend (VideoEditSour
                 val photos = awaitIosTwoOptionChoice("動画を選択", "スマホ内の動画を編集用に読み込みます（最大1GB）。", "写真ライブラリ", "ファイル") ?: return@launch
                 val resource = pickVideoResource(photos) ?: return@launch
                 if (resource is NSItemProvider) withTimeout(120_000) { owned = importPhotoVideo(request, resource) }
-                else withContext(AppDispatchers.io) { owned = importVideoUrl(request, resource as NSURL) }
+                else try {
+                    withContext(AppDispatchers.io) { owned = importVideoUrl(request, resource as NSURL) }
+                } finally {
+                    // The Files picker copied the movie into tmp/<bundle>-Inbox; the
+                    // import made its own work copy, so drop the picker's copy (up to 1GB).
+                    withContext(NonCancellable + AppDispatchers.io) { deleteIosDocumentPickerInboxCopies(listOf(resource)) }
+                }
                 ensureActive()
                 owned?.let { it.checkActive(); busy(false); selected(it) }
             } catch (timeout: TimeoutCancellationException) { if (request.gate.isCurrent(request.permit)) error("動画の取得がタイムアウトしました。ダウンロード済みの動画で再度お試しください") }

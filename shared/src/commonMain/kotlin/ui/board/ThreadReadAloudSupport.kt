@@ -29,7 +29,9 @@ private val READ_ALOUD_WHITESPACE_REGEX = Regex("\\s{2,}")
 
 internal suspend fun buildReadAloudSegments(
     posts: List<Post>,
-    textCache: ThreadPostTextCache? = null
+    textCache: ThreadPostTextCache? = null,
+    /** Posts collapsed by the AI filter; they are skipped unless the user revealed them. */
+    skippedPostIds: Set<String> = emptySet()
 ): List<ReadAloudSegment> {
     val segments = ArrayList<ReadAloudSegment>()
     posts.forEachIndexed { index, post ->
@@ -37,7 +39,7 @@ internal suspend fun buildReadAloudSegments(
             coroutineContext.ensureActive()
             yield()
         }
-        if (post.isDeleted) return@forEachIndexed
+        if (post.isDeleted || post.id in skippedPostIds) return@forEachIndexed
         val lines = (textCache?.get(post)?.lines ?: messageHtmlToLines(post.messageHtml))
             .map { stripUrlsForReadAloud(it).trim() }
             .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }

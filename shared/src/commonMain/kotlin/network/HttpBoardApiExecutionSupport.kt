@@ -6,6 +6,8 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -14,6 +16,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal suspend fun <T> withHttpBoardApiRetry(
     logTag: String,
@@ -102,17 +105,21 @@ internal suspend fun getOrLoadHttpBoardApiPostingConfig(
             }
         }
     } finally {
-        locksGuard.withLock {
-            val current = locks[board]
-            if (current === lockEntry) {
-                current.holders -= 1
-                if (current.holders <= 0 && !current.mutex.isLocked) {
-                    locks.remove(board)
+        withContext(NonCancellable) {
+            locksGuard.withLock {
+                val current = locks[board]
+                if (current === lockEntry) {
+                    current.holders -= 1
+                    if (current.holders <= 0 && !current.mutex.isLocked) {
+                        locks.remove(board)
+                    }
                 }
             }
         }
     }
 }
+
+internal const val HTTP_BOARD_API_POSTING_CONFIG_TIMEOUT_MILLIS = 30_000L
 
 internal suspend fun fetchHttpBoardApiPostingConfig(
     client: HttpClient,
@@ -125,7 +132,8 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
     logTag: String,
     fallbackChrencValue: String,
     readSmallResponseSummary: suspend (HttpResponse) -> String?,
-    readResponseBodyAsString: suspend (HttpResponse) -> String
+    readResponseBodyAsString: suspend (HttpResponse) -> String,
+    timeoutMillis: Long = HTTP_BOARD_API_POSTING_CONFIG_TIMEOUT_MILLIS
 ): HttpBoardApiPostingConfig {
     val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
     val url = threadId
@@ -135,12 +143,38 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.htm")
         }
-    val response = client.get(url) {
-        headers[HttpHeaders.UserAgent] = userAgent
-        headers[HttpHeaders.Accept] = accept
-        headers[HttpHeaders.AcceptLanguage] = acceptLanguage
-        headers[HttpHeaders.CacheControl] = cacheControl
-    }
+    // This fetch precedes every post. Without a bound, the platform retry plugin
+    // (up to 3 attempts x the 75 s request timeout on Android) could hold the post for
+    // minutes on a bad network; a failure here falls back to the default config instead.
+    return withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+        val response = client.get(url) {
+            attributes.put(HigherLayerRetryManaged, true)
+            headers[HttpHeaders.UserAgent] = userAgent
+            headers[HttpHeaders.Accept] = accept
+            headers[HttpHeaders.AcceptLanguage] = acceptLanguage
+            headers[HttpHeaders.CacheControl] = cacheControl
+        }
+        readHttpBoardApiPostingConfigResponse(
+            response = response,
+            board = board,
+            url = url,
+            logTag = logTag,
+            fallbackChrencValue = fallbackChrencValue,
+            readSmallResponseSummary = readSmallResponseSummary,
+            readResponseBodyAsString = readResponseBodyAsString
+        )
+    } ?: throw NetworkException("Timed out after ${timeoutMillis}ms fetching posting config from $url")
+}
+
+private suspend fun readHttpBoardApiPostingConfigResponse(
+    response: HttpResponse,
+    board: String,
+    url: String,
+    logTag: String,
+    fallbackChrencValue: String,
+    readSmallResponseSummary: suspend (HttpResponse) -> String?,
+    readResponseBodyAsString: suspend (HttpResponse) -> String
+): HttpBoardApiPostingConfig {
     try {
         if (!response.status.isSuccess()) {
             val detail = readSmallResponseSummary(response)

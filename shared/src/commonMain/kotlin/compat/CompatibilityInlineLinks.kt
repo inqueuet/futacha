@@ -65,7 +65,7 @@ private const val COMPAT_INLINE_LINK_MAX_RESULTS = 512
  * offsets in [String.toCompatPlainText], which is the text shown by Compose.
  */
 fun compatInlineLinks(messageHtml: String): List<CompatInlineLink> {
-    val plainText = messageHtml.toCompatPlainText()
+    val plainText = messageHtml.toCompatPlainTextCached()
     if (plainText.isBlank()) return emptyList()
 
     val links = mutableListOf<CompatInlineLink>()

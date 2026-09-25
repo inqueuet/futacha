@@ -31,9 +31,16 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.service.buildTrimmedHistoryAutoSavePurger
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,8 +71,16 @@ class AppStateStore internal constructor(
     private val json: Json = Json {
         ignoreUnknownKeys = true
     },
-    scrollDebounceDelayMillis: Long = SCROLL_DEBOUNCE_DELAY_MS
+    scrollDebounceDelayMillis: Long = SCROLL_DEBOUNCE_DELAY_MS,
+    /** Cleans up storage of entries the history size limit dropped; runs off the history write. */
+    private val onHistoryEntriesTrimmed: (suspend (List<ThreadHistoryEntry>) -> Unit)? = null
 ) {
+    private val observationScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private fun <T> Flow<T>.shared(): Flow<T> =
+        flowOn(AppDispatchers.io).shareIn(observationScope, SharingStarted.WhileSubscribed(0, 0), replay = 1)
+
+    fun close() { observationScope.cancel() }
+
     // FIX: 複数のMutexを使用する際のデッドロック防止ガイドライン
     // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
     // - history 用のロックは historyCoordinator に閉じ込め、store 本体では
@@ -112,7 +127,19 @@ class AppStateStore internal constructor(
         historyFileStore = historyFileStore,
         json = json,
         tag = TAG,
-        rethrowIfCancellation = ::rethrowIfCancellation
+        rethrowIfCancellation = ::rethrowIfCancellation,
+        onEntriesTrimmed = { trimmed ->
+            onHistoryEntriesTrimmed?.let { cleanup ->
+                observationScope.launch {
+                    try {
+                        cleanup(trimmed)
+                    } catch (error: Exception) {
+                        rethrowIfCancellation(error)
+                        Logger.w(TAG, "Failed to clean up storage of trimmed history: ${error.message}")
+                    }
+                }
+            }
+        }
     )
     private val scrollPersistenceCoordinator = AppStateHistoryScrollPersistenceCoordinator(
         debounceDelayMillis = scrollDebounceDelayMillis,
@@ -163,6 +190,7 @@ class AppStateStore internal constructor(
         json = json,
         tag = TAG
     )
+    val observedBoards: Flow<List<BoardSummary>> = boards.shared()
 
     private val persistedHistory: Flow<List<ThreadHistoryEntry>> =
         if (historyFileStore != null) {
@@ -171,7 +199,9 @@ class AppStateStore internal constructor(
                 storage.historyJson.map { Unit }
             )
                 .map {
-                    historyFileStore.readHistorySnapshot {
+                    historyFileStore.readHistorySnapshot(
+                        clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+                    ) {
                         storage.historyJson.first()
                     }
                 }
@@ -208,7 +238,8 @@ class AppStateStore internal constructor(
                 entry
             }
         }
-    }.distinctUntilChanged()
+    }.distinctUntilChanged().flowOn(AppDispatchers.io)
+    val observedHistory: Flow<List<ThreadHistoryEntry>> = history.shared()
 
     val mediaFeatureSettings: Flow<MediaFeatureSettings> = storage.mediaFeatureSettingsJson
         .map(MediaFeatureSettings::decode).distinctUntilChanged()
@@ -270,6 +301,18 @@ class AppStateStore internal constructor(
     val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = selfPostIdentifierMapFlow
     val selfPostIdentifiers: Flow<List<String>> = preferenceFlows.selfPostIdentifiers
     private val preferredFileManagerFlow: Flow<PreferredFileManager?> = preferenceFlows.preferredFileManagerFlow
+    // UI observation is shared; authoritative mutation reads above remain fresh.
+    val observedCatalogModes = catalogModes.shared()
+    val observedCatalogDisplayStyle = catalogDisplayStyle.shared()
+    val observedCatalogGridColumns = catalogGridColumns.shared()
+    val observedNgHeaders = ngHeaders.shared()
+    val observedNgWords = ngWords.shared()
+    val observedCatalogNgWords = catalogNgWords.shared()
+    val observedWatchWords = watchWords.shared()
+    val observedBoardWatchWords = boardWatchWords.shared()
+    val observedLastUsedDeleteKey = lastUsedDeleteKey.shared()
+    val observedSelfPostIdentifiersByThread = selfPostIdentifiersByThread.shared()
+
     val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = preferenceFlows.threadMenuConfig
     val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = preferenceFlows.threadSettingsMenuConfig
     val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = preferenceFlows.threadMenuEntries
@@ -567,7 +610,11 @@ fun createAppStateStore(platformContext: Any? = null, fileSystem: FileSystem? = 
             tag = "AppStateStore"
         )
     }
-    return AppStateStore(storage, historyFileStore)
+    return AppStateStore(
+        storage = storage,
+        historyFileStore = historyFileStore,
+        onHistoryEntriesTrimmed = fileSystem?.let(::buildTrimmedHistoryAutoSavePurger)
+    )
 }
 
 internal interface PlatformStateStorage {

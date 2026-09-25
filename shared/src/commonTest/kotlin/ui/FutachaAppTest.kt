@@ -1257,8 +1257,8 @@ class FutachaAppTest {
         )
 
         callbacks.onScrollPositionPersistImmediately("123", 10, 40, "110")
-        yield()
-        delay(1)
+        // Wait for the launched persistence job itself instead of a 1 ms delay.
+        coroutineContext[Job]!!.children.toList().forEach { it.join() }
 
         assertEquals(
             10,
@@ -1713,6 +1713,33 @@ class FutachaAppTest {
         requireNotNull(selection)
         assertEquals("img-b", selection.boardId)
         assertNull(selection.threadUrl)
+    }
+
+    @Test
+    fun resolveHistoryEntrySelection_matchesThreadUrlToBoardPageUrlAcrossSchemes() {
+        val sameNameOtherServer = board(
+            id = "img-other",
+            name = "二次元裏",
+            url = "https://img.2chan.net/b/futaba.php"
+        )
+        val target = board(
+            id = "may-b",
+            name = "二次元裏",
+            url = "https://may.2chan.net/b/futaba.php"
+        )
+        val entry = historyEntry(
+            boardId = "",
+            boardName = "二次元裏",
+            boardUrl = "http://MAY.2chan.net/b/res/123.htm"
+        )
+
+        val selection = resolveHistoryEntrySelection(entry, listOf(sameNameOtherServer, target))
+
+        assertEquals("may-b", requireNotNull(selection).boardId)
+        assertEquals(
+            historyBoardLookupKey("https://may.2chan.net/b/"),
+            historyBoardLookupKey("http://may.2chan.net/b/futaba.php?mode=cat")
+        )
     }
 
     @Test

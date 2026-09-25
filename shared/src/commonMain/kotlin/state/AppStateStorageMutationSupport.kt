@@ -76,9 +76,24 @@ internal class AppStateBoardsCoordinator(
 
     suspend fun updateBoards(transform: (List<BoardSummary>) -> List<BoardSummary>) {
         boardsMutex.withLock {
-            val currentBoards = storage.boardsJson.first()?.let { stored ->
-                decodeAppStateBoards(stored, json, tag)
-            } ?: emptyList()
+            val stored = storage.boardsJson.first()
+            val currentBoards = if (stored == null) {
+                emptyList()
+            } else {
+                decodeAppStateBoardsResult(stored, json).getOrElse { error ->
+                    // An unreadable list is not an empty one: transforming it would save
+                    // only the new change and wipe every stored board. Keep the raw value.
+                    runStorageMutation(
+                        "updateBoards",
+                        { "Refusing to update boards: the stored board list could not be read" },
+                        {},
+                        false
+                    ) {
+                        throw IllegalStateException("Stored board list is unreadable", error)
+                    }
+                    return
+                }
+            }
             val updatedBoards = transform(currentBoards)
             if (updatedBoards == currentBoards) {
                 return

@@ -167,6 +167,44 @@ internal data class ThreadPostCardCallbacks(
     val onLongPress: () -> Unit
 )
 
+@androidx.compose.runtime.Composable
+internal fun rememberThreadScreenPostCardCallbacks(
+    post: Post,
+    normalizedPosterId: String?,
+    postIndex: Map<String, Post>,
+    referencedByMap: Map<String, List<Post>>,
+    postsByPosterId: Map<String, List<Post>>,
+    quotePreviewState: () -> QuotePreviewState?,
+    onShowQuotePreview: (String, List<Post>) -> Unit,
+    onQuoteRequestedForPost: (Post) -> Unit,
+    onSaidaneClick: (Post) -> Unit,
+    onMediaClick: ((String, MediaType) -> Unit)?,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
+    onPostLongPress: (Post) -> Unit
+): ThreadPostCardCallbacks {
+    val callbacks = buildThreadScreenPostCardCallbacks(
+        post, normalizedPosterId, postIndex, referencedByMap, postsByPosterId, null,
+        onShowQuotePreview, onQuoteRequestedForPost, onSaidaneClick, onMediaClick, onMediaLongPress, onPostLongPress
+    )
+    // Do not read this state during composition: the callback bundle is newly
+    // built on every invocation. It is read only when the user acts.
+    val current = androidx.compose.runtime.rememberUpdatedState(callbacks)
+    val currentQuotePreview = androidx.compose.runtime.rememberUpdatedState(quotePreviewState)
+    return androidx.compose.runtime.remember(post.id, callbacks.onPosterIdClick != null,
+        callbacks.onReferencedByClick != null, callbacks.onMediaClick != null, callbacks.onMediaLongPress != null) {
+        ThreadPostCardCallbacks(
+            onQuoteClick = { current.value.onQuoteClick(it) },
+            onQuoteRequested = { current.value.onQuoteRequested() },
+            onPosterIdClick = callbacks.onPosterIdClick?.let { { current.value.onPosterIdClick?.invoke(); Unit } },
+            onReferencedByClick = callbacks.onReferencedByClick?.let { { current.value.onReferencedByClick?.invoke(); Unit } },
+            onSaidaneClick = { current.value.onSaidaneClick() },
+            onMediaClick = callbacks.onMediaClick?.let { { url, type -> current.value.onMediaClick?.invoke(url, type); Unit } },
+            onMediaLongPress = callbacks.onMediaLongPress?.let { { value, url, type -> current.value.onMediaLongPress?.invoke(value, url, type); Unit } },
+            onLongPress = { if (canHandleThreadPostLongPress(currentQuotePreview.value())) current.value.onLongPress() }
+        )
+    }
+}
+
 internal fun buildThreadScreenPostCardCallbacks(
     post: Post,
     normalizedPosterId: String?,

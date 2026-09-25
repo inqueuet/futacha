@@ -4,6 +4,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
@@ -424,6 +425,7 @@ internal fun ThreadAutoSaveLaunchEffect(
     val currentOnStartAutoSave = rememberUpdatedState(onStartAutoSave)
     val latestPageForAutoSave = rememberUpdatedState(currentPageForAutoSave)
     val latestLastAutoSaveTimestampMillis = rememberUpdatedState(lastAutoSaveTimestampMillis)
+    val startupWindow = remember(threadId) { ThreadAutoSaveStartupWindowHolder() }
     LaunchedEffect(
         threadId,
         isShowingOfflineCopy,
@@ -434,7 +436,9 @@ internal fun ThreadAutoSaveLaunchEffect(
     ) {
         when (autoSaveEffectState.availability) {
             ThreadAutoSaveAvailability.Ready -> {
-                awaitThreadAutoSaveStartupWindow(lastAutoSaveTimestampMillis)
+                val windowStart = startupWindow.startedAtMillis
+                    ?: Clock.System.now().toEpochMilliseconds().also { startupWindow.startedAtMillis = it }
+                awaitThreadAutoSaveStartupWindow(lastAutoSaveTimestampMillis, windowStartedAtMillis = windowStart)
                 val page = latestPageForAutoSave.value ?: autoSaveEffectState.page
                 if (
                     isThreadAutoSaveReadyNow(

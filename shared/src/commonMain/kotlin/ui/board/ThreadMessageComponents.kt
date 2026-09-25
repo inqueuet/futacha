@@ -5,8 +5,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -20,13 +20,10 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
-import com.valoser.futacha.shared.util.AppDispatchers
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
@@ -69,15 +66,22 @@ private class ThreadMessageAnnotationCache(
     private var estimatedBytes = 0L
     private val mutex = Mutex()
 
-    suspend fun get(key: ThreadMessageAnnotationCacheKey): AnnotatedString? = mutex.withLock {
-        val value = entries.remove(key)
-        if (value != null) {
-            entries[key] = value
-        }
-        value
+    fun peek(key: ThreadMessageAnnotationCacheKey): AnnotatedString? {
+        if (!mutex.tryLock()) return null
+        // Move a hit to the end so eviction stays least-recently-used.
+        return try { entries.remove(key)?.also { entries[key] = it } } finally { mutex.unlock() }
     }
 
-    suspend fun put(key: ThreadMessageAnnotationCacheKey, value: AnnotatedString) = mutex.withLock {
+    fun getOrBuild(key: ThreadMessageAnnotationCacheKey, build: () -> AnnotatedString): AnnotatedString {
+        peek(key)?.let { return it }
+        val value = build()
+        if (mutex.tryLock()) {
+            try { putLocked(key, value) } finally { mutex.unlock() }
+        }
+        return value
+    }
+
+    private fun putLocked(key: ThreadMessageAnnotationCacheKey, value: AnnotatedString) {
         entries.remove(key)?.let { removed ->
             estimatedBytes -= estimateEntryBytes(key, removed)
         }
@@ -86,9 +90,12 @@ private class ThreadMessageAnnotationCache(
         while (entries.size > maxEntries || estimatedBytes > maxBytes) {
             val iterator = entries.entries.iterator()
             if (!iterator.hasNext()) break
+            // Read the entry before removing it: Kotlin/Native entries
+            // throw ConcurrentModificationException once removed.
             val removed = iterator.next()
+            val removedBytes = estimateEntryBytes(removed.key, removed.value)
             iterator.remove()
-            estimatedBytes -= estimateEntryBytes(removed.key, removed.value)
+            estimatedBytes -= removedBytes
         }
     }
 
@@ -121,8 +128,15 @@ internal fun ThreadMessageText(
     onUrlClick: (String) -> Unit,
     highlightRanges: List<IntRange> = emptyList(),
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    // The body's tap detector consumes every down, so the post card's own
+    // detector never sees presses over the text. Presses that don't land on a
+    // link or quote are handed back through these instead.
+    onPlainLongPress: (() -> Unit)? = null,
+    onPlainTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val latestPlainLongPress = rememberUpdatedState(onPlainLongPress)
+    val latestPlainTap = rememberUpdatedState(onPlainTap)
     val threadColors = LocalFutabaThreadColors.current
     val highlightStyle = SpanStyle(
         background = MaterialTheme.colorScheme.secondary.copy(alpha = 0.32f)
@@ -140,29 +154,12 @@ internal fun ThreadMessageText(
             linkColor = threadColors.link
         )
     }
-    val baseAnnotated: AnnotatedString by produceState(
-        initialValue = AnnotatedString(""),
-        key1 = annotationCacheKey,
-        key2 = messageHtml,
-        key3 = quoteReferences
-    ) {
-        threadMessageAnnotationBaseCache.get(annotationCacheKey)?.let {
-            value = it
-            return@produceState
-        }
-        if (messageHtml.isBlank()) {
-            value = AnnotatedString("")
-            return@produceState
-        }
-        value = withContext(AppDispatchers.textAnnotation) {
-            buildAnnotatedMessageBase(
-                messageHtml,
+    val baseAnnotated = remember(annotationCacheKey) {
+        threadMessageAnnotationBaseCache.getOrBuild(annotationCacheKey) {
+            buildAnnotatedMessageBase(messageHtml,
                 quoteReferences.take(THREAD_MESSAGE_QUOTE_REFERENCE_MAX_COUNT),
-                quoteColor = threadColors.quote,
-                linkColor = threadColors.link
-            )
+                quoteColor = threadColors.quote, linkColor = threadColors.link)
         }
-        threadMessageAnnotationBaseCache.put(annotationCacheKey, value)
     }
     val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle) {
         val withNotices = if (isDeleted) AnnotatedString.Builder(baseAnnotated).apply {
@@ -189,23 +186,30 @@ internal fun ThreadMessageText(
         modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
             detectTapGestures(
                 onLongPress = { position ->
-                    val layout = textLayoutResult.value ?: return@detectTapGestures
-                    val offset = layout.getOffsetForPosition(position)
-                    val quoteIndex = annotated
-                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
-                        .firstOrNull()
-                        ?.item
-                        ?.toIntOrNull()
-                    quoteIndex
+                    val layout = textLayoutResult.value
+                    val offset = layout?.getOffsetForPosition(position)
+                    val quote = offset?.let {
+                        annotated
+                            .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                            .firstOrNull()
+                            ?.item
+                            ?.toIntOrNull()
+                    }
                         ?.let { index -> quoteReferences.getOrNull(index) }
                         ?.takeIf { it.targetPostIds.isNotEmpty() }
-                        ?.let {
-                            AnalyticsTracker.uiControl("thread_message", "レス内の引用を長押しで開く")
-                            onQuoteClick(it)
-                        }
+                    if (quote != null) {
+                        AnalyticsTracker.uiControl("thread_message", "レス内の引用を長押しで開く")
+                        onQuoteClick(quote)
+                    } else {
+                        latestPlainLongPress.value?.invoke()
+                    }
                 },
                 onTap = { position ->
-                    val layout = textLayoutResult.value ?: return@detectTapGestures
+                    val layout = textLayoutResult.value
+                    if (layout == null) {
+                        latestPlainTap.value?.invoke()
+                        return@detectTapGestures
+                    }
                     val offset = layout.getOffsetForPosition(position)
                     val url = annotated
                         .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
@@ -216,18 +220,19 @@ internal fun ThreadMessageText(
                         onUrlClick(url)
                         return@detectTapGestures
                     }
-                    val quoteIndex = annotated
+                    val quote = annotated
                         .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
                         .firstOrNull()
                         ?.item
                         ?.toIntOrNull()
-                    quoteIndex
                         ?.let { index -> quoteReferences.getOrNull(index) }
                         ?.takeIf { it.targetPostIds.isNotEmpty() }
-                        ?.let {
-                            AnalyticsTracker.uiControl("thread_message", "レス内の引用を開く")
-                            onQuoteClick(it)
-                        }
+                    if (quote != null) {
+                        AnalyticsTracker.uiControl("thread_message", "レス内の引用を開く")
+                        onQuoteClick(quote)
+                    } else {
+                        latestPlainTap.value?.invoke()
+                    }
                 }
             )
         },

@@ -73,18 +73,20 @@ internal fun buildBoardManagementHistoryDrawerCallbacks(
             if (currentIsHistoryRefreshing()) return@refresh
             setIsHistoryRefreshing(true)
             coroutineScope.launch {
-                try {
+                // Cleared before showing: showSnackbar suspends until dismissed.
+                val message = try {
                     onHistoryRefresh()
-                    showSnackbar(buildBoardManagementHistoryRefreshSuccessMessage())
+                    buildBoardManagementHistoryRefreshSuccessMessage()
                 } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
-                    showSnackbar(buildBoardManagementHistoryRefreshBusyMessage())
+                    buildBoardManagementHistoryRefreshBusyMessage()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    showSnackbar(buildBoardManagementHistoryRefreshFailureMessage(e))
+                    buildBoardManagementHistoryRefreshFailureMessage(e)
                 } finally {
                     setIsHistoryRefreshing(false)
                 }
+                showSnackbar(message)
             }
         },
         onExportClick = {

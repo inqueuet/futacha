@@ -115,6 +115,7 @@ class DesktopRuntimeTest {
         val directory = Files.createTempDirectory("futacha-player-test").toFile()
         System.setProperty("futacha.resourcesDir", File("../app-desktop/resources/${DesktopPlatform.resourceDirectory}").canonicalPath)
         try {
+            val instance = com.valoser.futacha.shared.ui.board.DesktopVlc.factory()
             for (name in listOf("landscape", "webm", "portrait")) {
                 val input = File(directory, "$name.mp4").apply { writeBytes(if (name == "webm") com.valoser.futacha.testing.video.VideoPlaybackFixtures.webm() else VideoEditFixtures.bytes(name)) }
                 var width = 0
@@ -134,6 +135,8 @@ class DesktopRuntimeTest {
                 withTimeout(10_000) { while (!player.failed.get()) delay(30) }
                 assertFalse(player.hasFrame.get())
             } finally { player.close() }
+            // Players share one libVLC instance instead of reloading every plugin per video.
+            assertSame(instance, com.valoser.futacha.shared.ui.board.DesktopVlc.factory())
         } finally { directory.deleteRecursively() }
     }
 

@@ -113,4 +113,42 @@ class OriginalMediaSessionTest {
             withTimeout(5000) { assertFailsWith<IllegalStateException> { waiting.await() } }
         }
     }
+
+    @Test fun briefDefaultLocationFromANewScreenDoesNotClearTheLiveCache(): Unit = runBlocking {
+        val root = Files.createTempDirectory("original-settle").toFile()
+        val calls = AtomicInteger()
+        val session = OriginalMediaSession("test", { _, sink ->
+            calls.incrementAndGet(); sink.writeUtf8("bytes")
+            OriginalMediaInfo("image/png", 5, resolvedUrl = request.url)
+        }, configurationSettleMillis = 200L)
+        try {
+            val saved = OriginalMediaCacheConfiguration(root.resolve("internal").path.toPath(), quota)
+            session.configure(saved)
+            val cached = session.acquire(request).use { it.file }
+            // A recreated screen publishes its default location, then the saved one.
+            session.configure(OriginalMediaCacheConfiguration(root.resolve("device").path.toPath(), quota))
+            session.configure(saved)
+            withTimeout(5000) { session.acquire(request.copy(allowNetwork = false)) }.use { assertTrue(it.fromCache) }
+            assertTrue(java.io.File(cached.toString()).exists())
+            assertEquals(1, calls.get())
+        } finally { withTimeout(5000) { session.closeAndAwait() }; root.deleteRecursively() }
+    }
+
+    @Test fun acquireBehindAReconfigurationWaitingForLeasesIsBounded(): Unit = runBlocking {
+        val directory = Files.createTempDirectory("original-bounded").toFile()
+        val session = OriginalMediaSession("test", { _, sink ->
+            sink.writeUtf8("bytes"); OriginalMediaInfo("image/png", 5, resolvedUrl = request.url)
+        }, configurationSettleMillis = 1L, readyWaitTimeoutMillis = 200L)
+        try {
+            val config = OriginalMediaCacheConfiguration(directory.path.toPath(), quota)
+            session.configure(config)
+            val playing = session.acquire(request)
+            session.configure(config.copy(maxBytes = quota / 2))
+            assertFailsWith<IllegalStateException> {
+                withTimeout(5000) { session.acquire(request.copy(allowNetwork = false)) }
+            }
+            playing.close()
+            withTimeout(5000) { session.acquire(request.copy(allowNetwork = false)) }.use { assertTrue(it.fromCache) }
+        } finally { withTimeout(5000) { session.closeAndAwait() }; directory.deleteRecursively() }
+    }
 }

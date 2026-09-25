@@ -3,38 +3,48 @@ package com.valoser.futacha.shared.util
 import com.valoser.futacha.shared.model.SaveLocation
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.ArrayDeque
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
+/**
+ * Every suspend operation switches to [Dispatchers.IO] like the mobile file
+ * systems: desktop UI coroutines run on the Swing event thread, and a caller
+ * saving an attachment or reading a font there must not freeze the window.
+ */
 internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
 
-    override suspend fun createDirectory(path: String): Result<Unit> = runCatching {
+    override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         val directory = File(resolveAbsolutePath(path))
         check(directory.isDirectory || directory.mkdirs()) { "フォルダを作成できません: $path" }
-    }
+    } }
 
-    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         validateFileSystemSize(bytes.size.toLong(), "bytes")
         val file = File(resolveAbsolutePath(path))
         file.parentFile?.mkdirs()
-        file.writeBytes(bytes)
-    }
+        writeFileAtomically(file, bytes)
+    } }
 
-    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         validateFileSystemSize(bytes.size.toLong(), "bytes")
         val file = File(resolveAbsolutePath(path))
         file.parentFile?.mkdirs()
         file.appendBytes(bytes)
-    }
+    } }
 
-    override suspend fun writeByteStream(path: String, block: suspend (FileWriteSink) -> Unit): Result<Unit> {
-        return try {
+    override suspend fun writeByteStream(path: String, block: suspend (FileWriteSink) -> Unit): Result<Unit> =
+        withContext(Dispatchers.IO) {
+        try {
             validateFileSystemPath(path)
             val file = File(resolveAbsolutePath(path))
             file.parentFile?.mkdirs()
@@ -68,15 +78,15 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
     override suspend fun writeString(path: String, content: String): Result<Unit> =
         writeBytes(path, content.encodeToByteArray())
 
-    override suspend fun readBytes(path: String): Result<ByteArray> = runCatching {
+    override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         val file = File(resolveAbsolutePath(path))
         validateFileSystemSize(file.length(), "file")
         file.readBytes()
-    }
+    } }
 
     override suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
-        runSuspendCatchingPreservingCancellation {
+        withContext(Dispatchers.IO) { runSuspendCatchingPreservingCancellation {
             validateFileSystemPath(path)
             File(resolveAbsolutePath(path)).inputStream().use { input ->
                 block(object : FileReadSource {
@@ -86,22 +96,22 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
                     }
                 })
             }
-        }
+        } }
 
-    override suspend fun readString(path: String): Result<String> = runCatching {
+    override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         val file = File(resolveAbsolutePath(path))
         validateFileSystemSize(file.length(), "file")
         file.readText()
-    }
+    } }
 
-    override suspend fun delete(path: String): Result<Unit> = runCatching {
+    override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(path)
         val file = File(resolveAbsolutePath(path))
         check(!file.exists() || file.delete()) { "ファイルを削除できません: $path" }
-    }
+    } }
 
-    override suspend fun deleteRecursively(path: String): Result<Unit> = try {
+    override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) { try {
         validateFileSystemPath(path)
         val root = File(resolveAbsolutePath(path))
         if (root.exists() || Files.isSymbolicLink(root.toPath())) {
@@ -112,7 +122,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         throw cancelled
     } catch (error: Throwable) {
         Result.failure(error)
-    }
+    } }
 
     private suspend fun deleteFileTreeBounded(root: File) {
         val deadlineNanos = System.nanoTime() + FILE_TREE_DELETE_MAX_DURATION_NANOS
@@ -142,14 +152,17 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         }
     }
 
-    override suspend fun exists(path: String): Boolean =
+    override suspend fun exists(path: String): Boolean = withContext(Dispatchers.IO) {
         File(resolveAbsolutePath(path)).exists()
+    }
 
-    override suspend fun getFileSize(path: String): Long =
+    override suspend fun getFileSize(path: String): Long = withContext(Dispatchers.IO) {
         File(resolveAbsolutePath(path)).takeIf { it.exists() }?.length() ?: 0L
+    }
 
-    override suspend fun listFiles(directory: String): List<String> =
+    override suspend fun listFiles(directory: String): List<String> = withContext(Dispatchers.IO) {
         File(resolveAbsolutePath(directory)).list()?.toList() ?: emptyList()
+    }
 
     override fun getAppDataDirectory(): String {
         rootDirectory.mkdirs()
@@ -262,7 +275,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         validateFileSystemRelativePath(relativePath, paramName, allowEmpty)
     }.exceptionOrNull()
 
-    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> = runCatching {
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> = withContext(Dispatchers.IO) { runCatching {
         validateFileSystemPath(fromPath)
         validateFileSystemPath(toPath)
         val from = File(resolveAbsolutePath(fromPath)).toPath()
@@ -276,7 +289,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
             java.nio.file.Files.copy(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
         }
         Unit
-    }
+    } }
 
     override fun supportsAtomicReplace(base: SaveLocation): Boolean = base is SaveLocation.Path
 
@@ -284,7 +297,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         base: SaveLocation,
         fromRelative: String,
         toRelative: String
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = withContext(Dispatchers.IO) { runCatching<Unit> {
         val path = base as? SaveLocation.Path
             ?: throw UnsupportedOperationException("Atomic replace needs a file path location")
         validateFileSystemPath(fromRelative)
@@ -301,14 +314,76 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
             // Still a move of the finished file; the destination is never truncated first.
             java.nio.file.Files.move(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
         }
-    }
+    } }
 
     private fun join(base: String, relativePath: String): String =
         if (relativePath.isBlank()) base else "$base/$relativePath"
 
-    private companion object {
+    /**
+     * Writes beside [file], syncs, then renames over it, so a crash or power loss
+     * leaves either the old or the new index.json/history/cookies, never a
+     * truncated one. Temp names match Android's `tmp_*.tmp` for [cleanupTempFiles].
+     */
+    private fun writeFileAtomically(file: File, bytes: ByteArray) {
+        val temporary = File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, file.absoluteFile.parentFile)
+        try {
+            FileOutputStream(temporary, false).use { output ->
+                output.write(bytes)
+                output.flush()
+                output.channel.force(true)
+            }
+            try {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Still a rename of the finished file; the destination is never truncated first.
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temporary.exists() && !temporary.delete()) {
+                Logger.w("JvmFileSystem", "Failed to delete temp file: ${temporary.absolutePath}")
+            }
+        }
+    }
+
+    /**
+     * Deletes `tmp_*.tmp` files older than an hour that a crash left behind in
+     * the app data directory (bounded like Android's startup cleanup).
+     */
+    fun cleanupTempFiles(): Int {
+        val root = File(getAppDataDirectory())
+        val cutoff = System.currentTimeMillis() - TEMP_MAX_AGE_MILLIS
+        val deadline = System.nanoTime() + TEMP_CLEANUP_MAX_DURATION_NANOS
+        var examined = 0
+        var deleted = 0
+        val pending = ArrayDeque<Pair<File, Int>>()
+        pending.add(root to 0)
+        while (!pending.isEmpty() && examined < TEMP_CLEANUP_MAX_ENTRIES && System.nanoTime() < deadline) {
+            val (directory, depth) = pending.removeLast()
+            for (child in directory.listFiles().orEmpty()) {
+                if (++examined > TEMP_CLEANUP_MAX_ENTRIES) break
+                if (Files.isSymbolicLink(child.toPath())) continue
+                if (child.isDirectory) {
+                    if (depth < TEMP_CLEANUP_MAX_DEPTH) pending.add(child to depth + 1)
+                } else if (child.name.startsWith(TEMP_PREFIX) && child.name.endsWith(TEMP_SUFFIX) &&
+                    child.lastModified() < cutoff && child.delete()
+                ) {
+                    deleted++
+                }
+            }
+        }
+        if (deleted > 0) Logger.i("JvmFileSystem", "Cleaned up $deleted temp files")
+        return deleted
+    }
+
+    internal companion object {
         const val FILE_TREE_DELETE_MAX_ITEMS = 10_000
         const val FILE_TREE_DELETE_MAX_DURATION_NANOS = 30_000_000_000L
+        const val TEMP_PREFIX = "tmp_"
+        const val TEMP_SUFFIX = ".tmp"
+        const val TEMP_MAX_AGE_MILLIS = 60 * 60 * 1000L
+        const val TEMP_CLEANUP_MAX_DEPTH = 3
+        const val TEMP_CLEANUP_MAX_ENTRIES = 5_000
+        const val TEMP_CLEANUP_MAX_DURATION_NANOS = 2_000_000_000L
     }
 }
 

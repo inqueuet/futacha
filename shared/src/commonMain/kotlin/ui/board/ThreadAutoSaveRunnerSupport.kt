@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.AutoSaveNetworkPolicy
+import com.valoser.futacha.shared.service.AutoSaveRetentionRegistry
 import com.valoser.futacha.shared.service.RawHtmlSaveOptions
 import com.valoser.futacha.shared.service.ThreadSaveStorageOptions
 import com.valoser.futacha.shared.service.ThreadSaveLimits
@@ -79,7 +81,9 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
      * stable folder with a newer generation, that generation seeds this save
      * instead of every file being downloaded again.
      */
-    resolveIndexedStorageId: suspend (threadId: String, boardId: String) -> String? = { _, _ -> null }
+    resolveIndexedStorageId: suspend (threadId: String, boardId: String) -> String? = { _, _ -> null },
+    /** Originals and videos only on an unmetered network; thumbnails always. */
+    allowsFullMediaDownloads: () -> Boolean = AutoSaveNetworkPolicy::allowsFullMediaDownloads
 ): ThreadAutoSaveRunnerCallbacks {
     return ThreadAutoSaveRunnerCallbacks(
         saveThread = { config, onInitialSavedThread ->
@@ -87,42 +91,46 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
             val seedStorageId = runSuspendCatchingPreservingCancellation {
                 resolveIndexedStorageId(config.threadId, config.boardId)
             }.getOrNull()
-            ThreadStorageLockRegistry.withStorageLock(
-                buildThreadStorageLockKey(
-                    storageId = stableStorageId,
-                    baseDirectory = AUTO_SAVE_DIRECTORY
-                )
-            ) {
-                withSeedStorageLock(seedStorageId, stableStorageId) {
-                    saveService.saveThread(
-                        threadId = config.threadId,
-                        boardId = config.boardId,
-                        boardName = config.boardName,
-                        boardUrl = config.boardUrl,
-                        title = config.title,
-                        expiresAtLabel = config.expiresAtLabel,
-                        posts = config.posts,
-                        isTruncated = config.isTruncated,
-                        truncationReason = config.truncationReason,
-                        baseDirectory = AUTO_SAVE_DIRECTORY,
-                        writeMetadata = true,
-                        rawHtmlOptions = RawHtmlSaveOptions(enable = false),
-                        limits = ThreadSaveLimits(
-                            maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
-                            maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS,
-                            maxParallelDownloads = THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS,
-                            mediaDownloadStartDelayMs = THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS
-                        ),
-                        storageOptions = ThreadSaveStorageOptions(
-                            storageIdOverride = stableStorageId,
-                            clearExistingOutput = false,
-                            reuseExistingMedia = true,
-                            pruneUnreferencedExistingMedia = true,
-                            seedFromStorageId = seedStorageId
-                        ),
-                        writeInitialMetadataBeforeMedia = false,
-                        onInitialSavedThread = onInitialSavedThread
+            // The auto-save size cap must not evict the thread being saved (and shown).
+            AutoSaveRetentionRegistry.retain(config.threadId, config.boardId) {
+                ThreadStorageLockRegistry.withStorageLock(
+                    buildThreadStorageLockKey(
+                        storageId = stableStorageId,
+                        baseDirectory = AUTO_SAVE_DIRECTORY
                     )
+                ) {
+                    withSeedStorageLock(seedStorageId, stableStorageId) {
+                        saveService.saveThread(
+                            threadId = config.threadId,
+                            boardId = config.boardId,
+                            boardName = config.boardName,
+                            boardUrl = config.boardUrl,
+                            title = config.title,
+                            expiresAtLabel = config.expiresAtLabel,
+                            posts = config.posts,
+                            isTruncated = config.isTruncated,
+                            truncationReason = config.truncationReason,
+                            baseDirectory = AUTO_SAVE_DIRECTORY,
+                            writeMetadata = true,
+                            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+                            limits = ThreadSaveLimits(
+                                maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
+                                maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS,
+                                maxParallelDownloads = THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS,
+                                mediaDownloadStartDelayMs = THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS,
+                                downloadFullMedia = allowsFullMediaDownloads()
+                            ),
+                            storageOptions = ThreadSaveStorageOptions(
+                                storageIdOverride = stableStorageId,
+                                clearExistingOutput = false,
+                                reuseExistingMedia = true,
+                                pruneUnreferencedExistingMedia = true,
+                                seedFromStorageId = seedStorageId
+                            ),
+                            writeInitialMetadataBeforeMedia = false,
+                            onInitialSavedThread = onInitialSavedThread
+                        )
+                    }
                 }
             }
         }

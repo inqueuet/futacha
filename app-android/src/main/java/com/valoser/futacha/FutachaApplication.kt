@@ -28,6 +28,7 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.DefaultBoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.AutoSaveNetworkPolicy
 import com.valoser.futacha.shared.service.CatalogWatchAlertRefresher
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.service.initializeAndroidThreadSavePlatformProtection
@@ -56,6 +57,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -144,12 +146,21 @@ class FutachaApplication : Application() {
     private val networkServicesErrorValue = MutableStateFlow<String?>(null)
     val networkServicesError: StateFlow<String?> = networkServicesErrorValue.asStateFlow()
 
+    private val startedMainActivitiesValue = MutableStateFlow(0)
+
+    /** Number of MainActivity instances between onStart and onStop. */
+    internal val startedMainActivities: StateFlow<Int> = startedMainActivitiesValue.asStateFlow()
+
     override fun onCreate() {
         super.onCreate()
         initializeAndroidPersistentLogging(applicationContext)
         initializeAndroidThreadSavePlatformProtection(this)
         initializeCompatPostPlatformContext(applicationContext)
+        // Background auto-saves in a UI-less worker process need the context to
+        // tell Wi-Fi from metered data; without it they assume metered.
+        AutoSaveNetworkPolicy.install(applicationContext)
         experienceProfileStore = AndroidExperienceProfileStore(applicationContext)
+        registerActivityLifecycleCallbacks(MainActivityStartTracker(startedMainActivitiesValue))
         if (isLightweightWorkerProcess()) {
             return
         }
@@ -193,7 +204,7 @@ class FutachaApplication : Application() {
             aliasReconciler = AndroidLauncherAliasManager(applicationContext)
         )
         applicationScope.launch {
-            compatibilityStore.initialize()
+            compatibilityStore.ensureInitialized()
             compatibilityStore.recoverStaleArchiveReports(System.currentTimeMillis())
             // Archive reporting is optional telemetry and is not part of the
             // first interactive screen.  WorkManager startup plus the first
@@ -371,6 +382,11 @@ class FutachaApplication : Application() {
                 Context.MODE_PRIVATE
             )
             var hasObservedBackgroundToggle = false
+            // The compatibility preferences read before the store has loaded
+            // are an empty placeholder: evaluating them disabled the refresh,
+            // cancelled the running worker and then re-enqueued it with an
+            // unthrottled immediate run. Decide from stored values only.
+            compatibilityStore.isLoaded.first { it }
             try {
                 combine(
                     appStateStore.isBackgroundRefreshEnabled,
@@ -457,6 +473,19 @@ class FutachaApplication : Application() {
         }
     }
 
+    /**
+     * The watch manager is created by the asynchronous network-services job.
+     * A cold start by a Wear message reaches its listener before that job
+     * finishes; waiting here keeps the watch's command from being dropped.
+     * Returns null when initialization failed.
+     */
+    internal suspend fun awaitWatchSyncManagerOrNull(): WatchSyncManager? {
+        watchSyncManagerValue?.let { return it }
+        return if (awaitNetworkServicesReady()) watchSyncManagerValue else null
+    }
+
+    internal fun watchSyncManagerOrNull(): WatchSyncManager? = watchSyncManagerValue
+
     private suspend fun awaitNetworkServicesReady(): Boolean =
         combine(networkServicesReady, networkServicesError) { ready, error -> ready to error }
             .first { (ready, error) -> ready || error != null }
@@ -542,4 +571,22 @@ class FutachaApplication : Application() {
             ?.firstOrNull { it.pid == currentPid }
             ?.processName
     }
+}
+
+private class MainActivityStartTracker(
+    private val startedCount: MutableStateFlow<Int>
+) : Application.ActivityLifecycleCallbacks {
+    override fun onActivityStarted(activity: android.app.Activity) {
+        if (activity is MainActivity) startedCount.update { it + 1 }
+    }
+
+    override fun onActivityStopped(activity: android.app.Activity) {
+        if (activity is MainActivity) startedCount.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+    override fun onActivityResumed(activity: android.app.Activity) = Unit
+    override fun onActivityPaused(activity: android.app.Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+    override fun onActivityDestroyed(activity: android.app.Activity) = Unit
 }

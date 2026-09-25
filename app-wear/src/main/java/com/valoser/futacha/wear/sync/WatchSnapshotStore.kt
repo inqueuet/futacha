@@ -21,6 +21,7 @@ import androidx.wear.tiles.TileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +31,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 object WatchSnapshotStore {
@@ -44,6 +46,7 @@ object WatchSnapshotStore {
     private val snapshotState = MutableStateFlow<WatchSnapshot?>(null)
     private val saveMutex = Mutex()
     private val lastTileUpdateRequestElapsedMillis = AtomicLong(0L)
+    private val trailingTileUpdateScheduled = AtomicBoolean(false)
 
     fun observe(): StateFlow<WatchSnapshot?> {
         return snapshotState.asStateFlow()
@@ -243,6 +246,18 @@ object WatchSnapshotStore {
             previousElapsedMillis > 0L &&
             nowElapsedMillis - previousElapsedMillis in 0 until TILE_UPDATE_REQUEST_MIN_INTERVAL_MILLIS
         ) {
+            // A dropped request left the tile on the older snapshot until the
+            // next one arrived. Request once more when the interval has passed;
+            // the tile reads the latest snapshot then.
+            if (trailingTileUpdateScheduled.compareAndSet(false, true)) {
+                val appContext = context.applicationContext
+                val waitMillis = TILE_UPDATE_REQUEST_MIN_INTERVAL_MILLIS - (nowElapsedMillis - previousElapsedMillis)
+                storeScope.launch {
+                    delay(waitMillis)
+                    trailingTileUpdateScheduled.set(false)
+                    requestTileUpdateIfAllowed(appContext)
+                }
+            }
             return
         }
         if (!lastTileUpdateRequestElapsedMillis.compareAndSet(previousElapsedMillis, nowElapsedMillis)) {

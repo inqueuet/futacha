@@ -10,8 +10,10 @@ import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
@@ -50,8 +52,10 @@ suspend fun importHistoryArchive(
         prettyPrint = true
         ignoreUnknownKeys = true
     }
-): Result<HistoryArchiveImportResult> {
-    return try {
+): Result<HistoryArchiveImportResult> = withContext(AppDispatchers.io) {
+    // Callers launch from the UI scope; the manifest (up to 4 MB) and each
+    // snapshot's metadata (up to 8 MB, 2,000 entries) are decoded here.
+    try {
         coroutineContext.ensureActive()
         val importStartedAtMillis = Clock.System.now().toEpochMilliseconds()
         val archiveDirectory = request.archiveDirectory.trim().trimEnd('/')

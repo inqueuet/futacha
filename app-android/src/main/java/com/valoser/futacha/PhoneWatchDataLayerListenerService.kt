@@ -12,6 +12,9 @@ import com.valoser.futacha.shared.watch.WATCH_COMMAND_PATH
 import com.valoser.futacha.shared.watch.WATCH_REQUEST_SNAPSHOT_PATH
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_ACK_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_ACK_PATH
+import com.valoser.futacha.shared.watch.WATCH_UPDATED_AT_KEY
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 class PhoneWatchDataLayerListenerService : WearableListenerService() {
     override fun onPeerConnected(peer: Node) {
@@ -53,6 +56,18 @@ class PhoneWatchDataLayerListenerService : WearableListenerService() {
                     if (command.encodeToByteArray().size > WATCH_COMMAND_PAYLOAD_MAX_BYTES) {
                         return@forEach
                     }
+                    if (
+                        isStaleWatchCommandDataItem(
+                            updatedAtMillis = dataMap.getLong(WATCH_UPDATED_AT_KEY, 0L),
+                            nowMillis = System.currentTimeMillis()
+                        )
+                    ) {
+                        com.valoser.futacha.shared.util.Logger.i(
+                            "PhoneWatchDataLayer",
+                            "Dropped a watch command queued while disconnected"
+                        )
+                        return@forEach
+                    }
                     manager.handleCommandPayload(command.encodeToByteArray())
                 }
             }
@@ -80,12 +95,22 @@ class PhoneWatchDataLayerListenerService : WearableListenerService() {
     private fun activeManagerOrNull(): WatchSyncManager? {
         val app = application as? FutachaApplication ?: return null
         if (app.experienceProfileStore.readActiveProfile() != ExperienceProfile.FUTACHA) return null
-        return runCatching { app.watchSyncManager }.getOrNull()
+        app.watchSyncManagerOrNull()?.let { return it }
+        // A watch message can cold-start the process before the Application's
+        // asynchronous network setup creates the manager. Listener callbacks
+        // run on a background thread and their DataEventBuffer is released
+        // on return, so wait here (bounded) instead of dropping the command.
+        return runCatching {
+            runBlocking {
+                withTimeoutOrNull(WATCH_MANAGER_INIT_WAIT_MILLIS) { app.awaitWatchSyncManagerOrNull() }
+            }
+        }.getOrNull()
     }
 
     private companion object {
         private const val WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
         private const val WATCH_SNAPSHOT_ACK_PAYLOAD_MAX_BYTES = 128
         private const val WATCH_SNAPSHOT_ACK_DATA_ITEM_MAX_BYTES = 4 * 1024
+        private const val WATCH_MANAGER_INIT_WAIT_MILLIS = 5_000L
     }
 }

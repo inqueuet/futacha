@@ -237,10 +237,10 @@ private fun ThreadScreenContent(
     val threadTitle = contextHandles.threadTitle
     val initialReplyCount = contextHandles.initialReplyCount
     val threadUrlOverride = contextHandles.threadUrlOverride
-    val onBack = contextHandles.onBack
+    val requestedOnBack = contextHandles.onBack
     val onScrollPositionPersist = contextHandles.onScrollPositionPersist
     val onScrollPositionPersistImmediately = contextHandles.onScrollPositionPersistImmediately
-    val onHistoryEntrySelected = contextHandles.onHistoryEntrySelected
+    val requestedOnHistoryEntrySelected = contextHandles.onHistoryEntrySelected
     val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
     val onHistoryCleared = contextHandles.onHistoryCleared
     val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
@@ -280,7 +280,20 @@ private fun ThreadScreenContent(
     val snackbarHostState = runtimeHandles.snackbarHostState
     val coroutineScope = runtimeHandles.coroutineScope
     val externalUrlLauncher = runtimeHandles.externalUrlLauncher
-    val handleUrlClick = runtimeHandles.handleUrlClick
+    // Leaving this thread while a reply is posting cancels the request (see runUnlessPosting).
+    var isReplySending by remember { mutableStateOf(false) }
+    val notifyReplySending: () -> Unit = {
+        coroutineScope.launch { snackbarHostState.showSnackbar(THREAD_REPLY_SENDING_MESSAGE) }
+    }
+    val onBack: () -> Unit = {
+        runUnlessPosting(isReplySending, notifyReplySending, Unit) { requestedOnBack() }
+    }
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = { entry ->
+        runUnlessPosting(isReplySending, notifyReplySending, Unit) { requestedOnHistoryEntrySelected(entry) }
+    }
+    val handleUrlClick: (String) -> Unit = { url ->
+        runUnlessPosting(isReplySending, notifyReplySending, Unit) { runtimeHandles.handleUrlClick(url) }
+    }
     val archiveSearchJson = runtimeHandles.archiveSearchJson
     val persistentBindings = screenSetupHandles.persistentBindings
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
@@ -308,6 +321,9 @@ private fun ThreadScreenContent(
     var actionInProgress by interactionStateRefs.actionInProgress
     var lastBusyActionNoticeAtMillis by interactionStateRefs.lastBusyActionNoticeAtMillis
     val saidaneOverrides = interactionStateRefs.saidaneOverrides
+    // Server label each override replaced; once a refresh brings a different
+    // one, the server value is shown again instead of the stale local count.
+    val saidaneOverrideBaseLabels = remember(threadId) { mutableMapOf<String, String?>() }
     var postOverlayState by interactionStateRefs.postOverlayState
     var isReplyDialogVisible by interactionStateRefs.isReplyDialogVisible
     var selectedThreadFilterOptions by formStateRefs.selectedThreadFilterOptions
@@ -467,11 +483,14 @@ private fun ThreadScreenContent(
         currentIsHistoryRefreshing = { isHistoryRefreshing },
         setIsHistoryRefreshing = { isHistoryRefreshing = it }
     )
+    var displayedPostsLayout by remember(threadId) { mutableStateOf(ThreadDisplayedPostsLayout()) }
     val readAloudCallbacks = ThreadScreenReadAloudCallbacks(
         showMessage = showMessage,
         showOptionalMessage = showOptionalMessage,
         scrollToPostIndex = { postIndex ->
-            lazyListState.animateScrollToItem(postIndex)
+            // Segments index the displayed posts; the list has summary/notice
+            // rows ahead of them.
+            lazyListState.animateScrollToItem(displayedPostsLayout.itemsBeforePosts.coerceAtLeast(0) + postIndex)
         },
         speakText = textSpeaker::speak,
         cancelActiveReadAloud = cancelActiveReadAloud
@@ -595,7 +614,20 @@ private fun ThreadScreenContent(
             }
         }
     )
-    val loadBindings = asyncHandles.loadBindings
+    // Counts thread loads for the "更新前に戻す" snapshot (FutachaThreadFeatureHost).
+    var threadLoadGeneration by remember(threadId) { mutableLongStateOf(0L) }
+    val loadBindings = asyncHandles.loadBindings.let { bindings ->
+        bindings.copy(
+            startManualRefresh = { index, offset ->
+                threadLoadGeneration += 1L
+                bindings.startManualRefresh(index, offset)
+            },
+            refreshThread = {
+                threadLoadGeneration += 1L
+                bindings.refreshThread()
+            }
+        )
+    }
     val startManualRefresh = loadBindings.startManualRefresh
     val handleThreadSaveRequest: () -> Unit = {
         if (!isManualSaveInProgress && !isSingleMediaSaveInProgress) {
@@ -622,6 +654,8 @@ private fun ThreadScreenContent(
         },
         isDrawerOpen = { isDrawerOpen },
         onCloseDrawer = drawerState::close,
+        isSearchActive = { searchStateRefs.isSearchActive.value },
+        onExitSearch = { searchStateRefs.isSearchActive.value = false },
         onBack = onBack,
         onRefreshThread = loadBindings.refreshThread
     )
@@ -648,7 +682,10 @@ private fun ThreadScreenContent(
 
     val refreshThread = loadBindings.refreshThread
 
-    LaunchedEffect(effectiveBoardUrl, threadId) {
+    // Keyed on the repository too: on Android the first frame can use the
+    // "通信機能を初期化中です" placeholder (process-death restore, deep link), and the
+    // first load must run again once the real repository replaces it.
+    LaunchedEffect(effectiveBoardUrl, threadId, activeRepository) {
         runtimeLifecycleBindings.onInitialRefresh()
     }
 
@@ -670,19 +707,20 @@ private fun ThreadScreenContent(
         else -> false
     }
     val postTextCache = remember(threadId) { ThreadPostTextCache() }
-    var displayedPostsLayout by remember(threadId) { mutableStateOf(ThreadDisplayedPostsLayout()) }
+    val isReadAloudActive by remember { derivedStateOf { readAloudStatus != ReadAloudStatus.Idle } }
     val derivedRuntimeState = rememberThreadScreenDerivedRuntimeState(
         currentState,
         initialReplyCount,
         threadTitle,
         sheetOverlayState.isReadAloudControlsVisible,
-        readAloudStatus,
-        shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand,
+        ReadAloudStatus.Idle,
+        shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand || isReadAloudActive,
         lazyListState,
         isSearchActive,
         debouncedThreadSearchQuery,
         searchPosts = displayedPostsLayout.posts.takeIf { it.isNotEmpty() },
-        postTextCache = postTextCache
+        postTextCache = postTextCache,
+        displayedPostsLayout = displayedPostsLayout
     )
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
@@ -734,12 +772,18 @@ private fun ThreadScreenContent(
     }
     LaunchedEffect(derivedUiState.currentPosts) {
         if (mediaPreviewCollectionPosts !== null && mediaPreviewCollectionPosts !== derivedUiState.currentPosts) {
+            if (mediaPreviewState.previewMediaIndex != null) {
+                // The viewer is open: rebuild now and keep showing the same media.
+                val previousEntries = mediaPreviewCollection.entries
+                val rebuilt = ensureMediaPreviewCollection()
+                setMediaPreviewState(relocateThreadMediaPreviewState(mediaPreviewState, previousEntries, rebuilt))
+                return@LaunchedEffect
+            }
             mediaPreviewCollectionPosts = null
             mediaPreviewCollection = MediaPreviewCollection(
                 entries = emptyList(),
                 indexByKey = emptyMap()
             )
-            setMediaPreviewState(normalizeThreadMediaPreviewState(mediaPreviewState, totalCount = 0))
         }
     }
 
@@ -781,61 +825,9 @@ private fun ThreadScreenContent(
     val readAloudDependencies = ThreadScreenReadAloudDependencies(
         currentSegments = { readAloudSegments }
     )
-    ThreadReadAloudIndexEffect(
-        segmentCount = readAloudSegments.size,
-        currentReadAloudIndex = currentReadAloudIndex,
-        onCurrentReadAloudIndexChanged = { currentReadAloudIndex = it }
-    )
-    val watchReadAloudPlaybackState = when (readAloudStatus) {
-        is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
-        is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
-        ReadAloudStatus.Idle -> null
-    }
-    val watchReadAloudProgressBucket = remember(
-        watchReadAloudPlaybackState,
-        currentReadAloudIndex,
-        readAloudSegments.size
-    ) {
-        resolveWatchReadAloudProgressUpdateBucket(
-            playbackState = watchReadAloudPlaybackState,
-            currentIndex = currentReadAloudIndex,
-            totalPosts = readAloudSegments.size
-        )
-    }
-    LaunchedEffect(
-        board.id,
-        effectiveBoardUrl,
-        threadId,
-        watchReadAloudPlaybackState,
-        watchReadAloudProgressBucket,
-        readAloudSegments.size
-    ) {
-        if (watchReadAloudPlaybackState == null) {
-            WatchReadAloudStatusStore.clearIfMatches(
-                boardId = board.id,
-                boardUrl = effectiveBoardUrl,
-                threadId = threadId
-            )
-            return@LaunchedEffect
-        }
-        val segment = when (val status = readAloudStatus) {
-            is ReadAloudStatus.Speaking -> status.segment
-            is ReadAloudStatus.Paused -> status.segment
-            ReadAloudStatus.Idle -> null
-        }
-        WatchReadAloudStatusStore.update(
-            WatchReadAloudStatus(
-                boardId = board.id,
-                boardUrl = effectiveBoardUrl,
-                threadId = threadId,
-                state = watchReadAloudPlaybackState,
-                postId = segment?.postId,
-                currentIndex = currentReadAloudIndex.coerceAtLeast(0),
-                totalPosts = readAloudSegments.size,
-                updatedAtMillis = Clock.System.now().toEpochMilliseconds()
-            )
-        )
-    }
+    ThreadReadAloudWatchEffects(board.id, effectiveBoardUrl, threadId, readAloudSegments,
+        currentStatus = { readAloudStatus }, currentIndex = { currentReadAloudIndex },
+        setIndex = { currentReadAloudIndex = it })
     DisposableEffect(board.id, effectiveBoardUrl, threadId) {
         onDispose {
             WatchReadAloudStatusStore.clearIfMatches(
@@ -849,6 +841,11 @@ private fun ThreadScreenContent(
     val firstVisibleSegmentIndex = derivedRuntimeState.firstVisibleSegmentIndex
 
     val currentPage = derivedUiState.currentPage
+    LaunchedEffect(currentPage) {
+        val posts = currentPage?.posts ?: return@LaunchedEffect
+        if (saidaneOverrides.isEmpty()) return@LaunchedEffect
+        dropSupersededSaidaneOverrides(posts, saidaneOverrides, saidaneOverrideBaseLabels)
+    }
     val searchMatches = derivedRuntimeState.searchMatches
     val postHighlightRanges = derivedRuntimeState.postHighlightRanges
     var postScrollRequestSequence by remember(threadId) { mutableStateOf(0L) }
@@ -963,6 +960,7 @@ private fun ThreadScreenContent(
             },
             isSelfPost = isSelfPost,
             onSaidaneLabelUpdated = { post, updatedLabel ->
+                saidaneOverrideBaseLabels.getOrPut(post.id) { post.saidaneLabel }
                 saidaneOverrides[post.id] = updatedLabel
             },
             repository = activeRepository,
@@ -1242,9 +1240,7 @@ private fun ThreadScreenContent(
         base = appColorScheme
     )
     val historyDrawerCallbacks = interactionUiHandles.historyDrawerCallbacks
-    val readAloudIndicatorSegment = (readAloudStatus as? ReadAloudStatus.Speaking)?.segment
-    val replyDialogState = replyDialogBinding.currentState()
-    val currentFilterUiState = threadFilterBinding.currentState()
+    val readAloudIndicatorSegment = { (readAloudStatus as? ReadAloudStatus.Speaking)?.segment }
     val overlayActionCallbacks = buildThreadScreenOverlayActionCallbacks(
         ThreadScreenOverlayActionInputs(
             currentPostOverlayState = { postOverlayState },
@@ -1310,20 +1306,20 @@ private fun ThreadScreenContent(
             isRefreshing = isRefreshing,
             sheetOverlayState = sheetOverlayState,
             modalOverlayState = modalOverlayState,
-            replyDialogState = replyDialogState,
+            replyDialogState = replyDialogBinding.currentState,
             mediaPreviewState = mediaPreviewState,
             mediaPreviewEntries = mediaPreviewEntries,
             galleryPosts = currentSuccessState?.page?.posts,
             isSingleMediaSaveInProgress = isSingleMediaSaveInProgress,
             readAloudSegments = readAloudSegments,
-            currentReadAloudIndex = currentReadAloudIndex,
+            currentReadAloudIndex = { currentReadAloudIndex },
             firstVisibleSegmentIndex = firstVisibleSegmentIndex,
-            readAloudStatus = readAloudStatus,
+            readAloudStatus = { readAloudStatus },
             isPrivacyFilterEnabled = isPrivacyFilterEnabled,
-            saveProgress = saveProgress,
+            saveProgress = { saveProgress },
             preferencesState = preferencesState,
             uiBindings = uiBindings,
-            filterUiState = currentFilterUiState,
+            filterUiState = threadFilterBinding.currentState,
             fileSystem = fileSystem,
             autoSavedThreadRepository = autoSaveRepository,
             cookieRepository = cookieRepository,
@@ -1386,7 +1382,7 @@ private fun ThreadScreenContent(
             },
             actionInProgress = actionInProgress,
             readAloudIndicatorSegment = readAloudIndicatorSegment,
-            isDrawerOpen = isDrawerOpen,
+            isDrawerOpen = { isDrawerOpen },
             onReplySubmit = {
                 handleThreadScreenReplySubmit(
                     ThreadScreenReplySubmitDependencies(
@@ -1406,7 +1402,8 @@ private fun ThreadScreenContent(
                                 modalOverlayState = openThreadCookieRecoveryGuideOverlay(modalOverlayState)
                             }
                         },
-                        showMessage = showMessage
+                        showMessage = showMessage,
+                        onSendingChanged = { isReplySending = it }
                     )
                 )
             }
@@ -1414,7 +1411,8 @@ private fun ThreadScreenContent(
     )
 
     FutachaThreadFeatureHost(
-        board = board, threadId = threadId, threadTitle = resolvedThreadTitle, currentState = currentState,
+        board = board, threadId = threadId, threadTitle = resolvedThreadTitle, currentState = currentState, isCachedPage = isShowingOfflineCopy,
+        loadGeneration = threadLoadGeneration,
         listState = lazyListState, repository = activeRepository,
         onRestore = { uiState.value = it }, onRefresh = refreshThread,
         onOpenThread = onHistoryEntrySelected, onShowPost = scrollToPost, onClose = onBack,
@@ -1546,5 +1544,86 @@ private fun resolveWatchReadAloudProgressUpdateBucket(
         normalizedIndex == 0 -> 0
         lastIndex >= 0 && normalizedIndex >= lastIndex -> lastIndex
         else -> normalizedIndex / WATCH_READ_ALOUD_PROGRESS_UPDATE_STEP
+    }
+}
+
+@Composable
+private fun ThreadReadAloudWatchEffects(
+    boardId: String, effectiveBoardUrl: String, threadId: String,
+    readAloudSegments: List<ReadAloudSegment>,
+    currentStatus: () -> ReadAloudStatus,
+    currentIndex: () -> Int,
+    setIndex: (Int) -> Unit
+) {
+    val readAloudStatus = currentStatus()
+    val currentReadAloudIndex = currentIndex()
+    ThreadReadAloudIndexEffect(
+        segmentCount = readAloudSegments.size,
+        currentReadAloudIndex = currentReadAloudIndex,
+        onCurrentReadAloudIndexChanged = setIndex
+    )
+    val watchReadAloudPlaybackState = when (readAloudStatus) {
+        is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
+        is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
+        ReadAloudStatus.Idle -> null
+    }
+    val watchReadAloudProgressBucket = remember(
+        watchReadAloudPlaybackState,
+        currentReadAloudIndex,
+        readAloudSegments.size
+    ) {
+        resolveWatchReadAloudProgressUpdateBucket(
+            playbackState = watchReadAloudPlaybackState,
+            currentIndex = currentReadAloudIndex,
+            totalPosts = readAloudSegments.size
+        )
+    }
+    LaunchedEffect(
+        boardId,
+        effectiveBoardUrl,
+        threadId,
+        watchReadAloudPlaybackState,
+        watchReadAloudProgressBucket,
+        readAloudSegments.size
+    ) {
+        if (watchReadAloudPlaybackState == null) {
+            WatchReadAloudStatusStore.clearIfMatches(
+                boardId = boardId,
+                boardUrl = effectiveBoardUrl,
+                threadId = threadId
+            )
+            return@LaunchedEffect
+        }
+        val segment = when (val status = readAloudStatus) {
+            is ReadAloudStatus.Speaking -> status.segment
+            is ReadAloudStatus.Paused -> status.segment
+            ReadAloudStatus.Idle -> null
+        }
+        WatchReadAloudStatusStore.update(
+            WatchReadAloudStatus(
+                boardId = boardId,
+                boardUrl = effectiveBoardUrl,
+                threadId = threadId,
+                state = watchReadAloudPlaybackState,
+                postId = segment?.postId,
+                currentIndex = currentReadAloudIndex.coerceAtLeast(0),
+                totalPosts = readAloudSegments.size,
+                updatedAtMillis = Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+}
+
+/** Removes overrides whose post now carries a server label other than the one they replaced. */
+internal fun dropSupersededSaidaneOverrides(
+    posts: List<Post>,
+    overrides: MutableMap<String, String>,
+    baseLabels: MutableMap<String, String?>
+) {
+    posts.forEach { post ->
+        if (post.id in overrides && baseLabels.containsKey(post.id) && post.saidaneLabel != baseLabels[post.id]) {
+            overrides.remove(post.id)
+            baseLabels.remove(post.id)
+        }
     }
 }

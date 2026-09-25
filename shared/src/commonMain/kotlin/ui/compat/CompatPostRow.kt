@@ -331,6 +331,8 @@ import com.valoser.futacha.shared.compat.compatSelectorContextChoices
 import com.valoser.futacha.shared.compat.resolveCompatScrollPosition
 import com.valoser.futacha.shared.compat.ScrollAnchor
 import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.compat.toCompatPlainTextCached
+import com.valoser.futacha.shared.compat.compatInlineLinksCached
 import com.valoser.futacha.shared.compat.normalizeCompatSearchText
 import com.valoser.futacha.shared.util.extractFirstUsableTitleLine
 import com.valoser.futacha.shared.compat.toCompatHistoryEntry
@@ -498,7 +500,7 @@ internal fun compatPostQuotesOwnPost(
             reference.targetPostIds.any(ownPostNos::contains)
         }
     ) return true
-    return post.messageHtml.toCompatPlainText().lineSequence().any { line ->
+    return post.messageHtml.toCompatPlainTextCached().lineSequence().any { line ->
         val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
         query.startsWith("no:", ignoreCase = true) &&
             query.substringAfter(':').trim() in ownPostNos
@@ -562,7 +564,7 @@ internal fun CompatPostRow(
             }
     }
     val firstQuoteQuery = remember(post.messageHtml) {
-        post.messageHtml.toCompatPlainText()
+        post.messageHtml.toCompatPlainTextCached()
             .lineSequence()
             .mapNotNull(::compatQuoteQueryForLine)
             .firstOrNull()
@@ -604,73 +606,108 @@ internal fun CompatPostRow(
         ?.substringAfterLast('/')
         ?.substringBefore('?')
         ?.takeIf { it.isNotBlank() }
-    val headerText = buildAnnotatedString {
-        withStyle(
-            SpanStyle(
-                color = when {
-                    isOwnPost -> palette.headerSelfPost
-                    quotesOwnPost -> palette.headerSelfQuote
-                    else -> palette.text
-                },
-                fontWeight = if (isOwnPost || quotesOwnPost) FontWeight.Bold else null
-            )
-        ) { append(post.position.toString()) }
-        append(" ")
-        subject?.let {
-            withStyle(SpanStyle(color = palette.headerSubject, fontWeight = FontWeight.Bold)) {
-                append(it); append(" ")
-            }
-        }
-        author?.let {
-            withStyle(SpanStyle(color = palette.headerAuthor, fontWeight = FontWeight.Bold)) {
-                append(it); append(" ")
-            }
-        }
-        post.mail?.trim()?.takeIf(String::isNotEmpty)?.let {
-            withStyle(SpanStyle(color = palette.headerEmail)) { append("["); append(it); append("] ") }
-        }
-        val timestampText = post.timestamp.replace(compatHeaderIdentityTokenRegex, " ")
-            .replace(compatAppWhitespaceRegex, " ")
-            .trim()
-        if (timestampText.isNotBlank()) {
-            withStyle(SpanStyle(color = palette.headerSubtext)) { append(timestampText) }
-        }
-        if (post.referencedCount > 0) {
-            withStyle(SpanStyle(color = palette.headerSubject)) {
-                if (simpleQuoteCount) {
-                    append(" ")
-                    appendInlineContent("compat-quote-count", "返信")
-                    append(post.referencedCount.toString())
-                } else {
-                    append(" ${post.referencedCount}レス")
+    // Rows are recreated each time they re-enter the viewport and recompose
+    // with every thread-screen change; keep the header span tree (and its
+    // timestamp regular expressions) until one of its inputs changes.
+    val headerText = remember(
+        post,
+        palette,
+        isOwnPost,
+        quotesOwnPost,
+        subject,
+        author,
+        simpleQuoteCount,
+        displayedSaidane,
+        rightAlignedSaidane,
+        saidaneColor,
+        posterIdentityProgress,
+        mediaFileName
+    ) {
+        buildAnnotatedString {
+            withStyle(
+                SpanStyle(
+                    color = when {
+                        isOwnPost -> palette.headerSelfPost
+                        quotesOwnPost -> palette.headerSelfQuote
+                        else -> palette.text
+                    },
+                    fontWeight = if (isOwnPost || quotesOwnPost) FontWeight.Bold else null
+                )
+            ) { append(post.position.toString()) }
+            append(" ")
+            subject?.let {
+                withStyle(SpanStyle(color = palette.headerSubject, fontWeight = FontWeight.Bold)) {
+                    append(it); append(" ")
                 }
             }
-        }
-        if (!rightAlignedSaidane) {
-            displayedSaidane?.let {
-                withStyle(SpanStyle(color = saidaneColor)) { append(" "); append(it) }
+            author?.let {
+                withStyle(SpanStyle(color = palette.headerAuthor, fontWeight = FontWeight.Bold)) {
+                    append(it); append(" ")
+                }
+            }
+            post.mail?.trim()?.takeIf(String::isNotEmpty)?.let {
+                withStyle(SpanStyle(color = palette.headerEmail)) { append("["); append(it); append("] ") }
+            }
+            val timestampText = post.timestamp.replace(compatHeaderIdentityTokenRegex, " ")
+                .replace(compatAppWhitespaceRegex, " ")
+                .trim()
+            if (timestampText.isNotBlank()) {
+                withStyle(SpanStyle(color = palette.headerSubtext)) { append(timestampText) }
+            }
+            if (post.referencedCount > 0) {
+                withStyle(SpanStyle(color = palette.headerSubject)) {
+                    if (simpleQuoteCount) {
+                        append(" ")
+                        appendInlineContent("compat-quote-count", "返信")
+                        append(post.referencedCount.toString())
+                    } else {
+                        append(" ${post.referencedCount}レス")
+                    }
+                }
+            }
+            if (!rightAlignedSaidane) {
+                displayedSaidane?.let {
+                    withStyle(SpanStyle(color = saidaneColor)) { append(" "); append(it) }
+                }
+            }
+            posterIdentityProgress.forEach { progress ->
+                val color = if (progress.total > 4) palette.identityTotal else palette.text
+                withStyle(SpanStyle(color = color)) {
+                    append(" ")
+                    append(progress.identity.display)
+                    append("(")
+                    append(progress.label)
+                    append(")")
+                }
+            }
+            if (!rightAlignedSaidane) {
+                withStyle(SpanStyle(color = palette.headerSubtext)) {
+                    append(" No.")
+                    append(post.postNo)
+                }
+            }
+            mediaFileName?.let {
+                append("\n")
+                withStyle(SpanStyle(color = palette.fileName)) { append(it) }
             }
         }
-        posterIdentityProgress.forEach { progress ->
-            val color = if (progress.total > 4) palette.identityTotal else palette.text
-            withStyle(SpanStyle(color = color)) {
-                append(" ")
-                append(progress.identity.display)
-                append("(")
-                append(progress.label)
-                append(")")
+    }
+    val headerInlineContent = remember {
+        mapOf(
+            "compat-quote-count" to InlineTextContent(
+                Placeholder(
+                    width = 1.2.em,
+                    height = 0.96.em,
+                    placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
+                )
+            ) {
+                Image(
+                    painter = painterResource(Res.drawable.thread_header_quote),
+                    contentDescription = "返信数",
+                    modifier = Modifier.fillMaxSize()
+                )
             }
-        }
-        if (!rightAlignedSaidane) {
-            withStyle(SpanStyle(color = palette.headerSubtext)) {
-                append(" No.")
-                append(post.postNo)
-            }
-        }
-        mediaFileName?.let {
-            append("\n")
-            withStyle(SpanStyle(color = palette.fileName)) { append(it) }
-        }
+        )
     }
     Column(
         modifier = Modifier.fillMaxWidth()
@@ -700,21 +737,7 @@ internal fun CompatPostRow(
                     .padding(horizontal = 10.dp, vertical = 2.dp),
                 fontSize = 11.2f.sp,
                 lineHeight = 14.sp,
-                inlineContent = mapOf(
-                    "compat-quote-count" to InlineTextContent(
-                        Placeholder(
-                            width = 1.2.em,
-                            height = 0.96.em,
-                            placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
-                        )
-                    ) {
-                        Image(
-                            painter = painterResource(Res.drawable.thread_header_quote),
-                            contentDescription = "返信数",
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                ),
+                inlineContent = headerInlineContent,
                 color = when {
                     post.isContentRedacted -> Color.Red
                     post.isDeleted -> Color.Red
@@ -1066,8 +1089,8 @@ private fun CompatMessageText(
     onUrlClick: (String) -> Unit = {},
     onQuoteClick: (String) -> Unit
 ) {
-    val message = remember(post.messageHtml) { post.messageHtml.toCompatPlainText() }
-    val inlineLinks = remember(post.messageHtml) { compatInlineLinks(post.messageHtml) }
+    val message = remember(post.messageHtml) { post.messageHtml.toCompatPlainTextCached() }
+    val inlineLinks = remember(post.messageHtml) { compatInlineLinksCached(post.messageHtml) }
     val palette = LocalCompatibilityPalette.current
     val searchTextHighlight = palette.searchTextHighlight
     val deletedNoticeRanges = remember(post, message) {
