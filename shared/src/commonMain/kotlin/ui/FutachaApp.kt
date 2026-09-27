@@ -538,7 +538,11 @@ fun FutachaApp(
                 }
             }
         }
+        val historyImageRepositories = com.valoser.futacha.shared.ui.image.rememberHistoryImageRepositories(
+            fileSystem, autoSavedThreadRepository
+        )
         CompositionLocalProvider(
+            com.valoser.futacha.shared.ui.image.LocalHistoryImageRepositories provides historyImageRepositories,
             LocalFutachaImageLoader provides imageLoader,
             LocalOriginalMediaSource provides promptMediaSource,
             LocalMediaFeatureSettings provides mediaFeatureSettings,

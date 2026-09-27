@@ -26,9 +26,6 @@ private data class CompatArchiveResponse(
 private val ftbucketContentLinkRegex = Regex(
     """(?i)href\s*=\s*['\"]([^'\"]*cont/[^'\"]+/index\.htm(?:[?#][^'\"]*)?)['\"]"""
 )
-private val ftbucketMetaRedirectRegex = Regex(
-    """(?i)(?:url|URL)\s*=\s*([^\s;\"']+)"""
-)
 internal fun normalizeCompatArchiveApuViewLabelHtml(messageHtml: String): String =
     normalizeFutabaArchiveApuViewLabelHtml(messageHtml)
 
@@ -84,8 +81,11 @@ internal suspend fun fetchCompatArchiveThreadPage(
                 val body = TextEncoding.decodeToString(bytes, contentType)
                 CompatArchiveResponse(
                     body = body,
-                    contentPath = ftbucketContentLinkRegex.find(body)?.groupValues?.getOrNull(1),
-                    redirectPath = ftbucketMetaRedirectRegex.find(body)?.groupValues?.getOrNull(1)
+                    contentPath = if (Url(currentUrl).host == "dev2.ftbucket.info" &&
+                        !Url(currentUrl).encodedPath.contains("/cont/")) {
+                        ftbucketContentLinkRegex.find(body)?.groupValues?.getOrNull(1)
+                    } else null,
+                    redirectPath = extractArchiveMetaRefresh(body)
                 )
             }
         }
@@ -104,7 +104,7 @@ internal suspend fun fetchCompatArchiveThreadPage(
 
         val parserBaseUrl = currentUrl.substringBeforeLast('/').trimEnd('/')
         val parserBody = withContext(AppDispatchers.parsing) {
-            if (currentUrl.contains("ftbucket", ignoreCase = true)) {
+            if (Url(currentUrl).host in setOf("dev2.ftbucket.info", "kako.futakuro.com")) {
                 // The archived page keeps the original Futaba canonical link, but
                 // its relative img/thumb files live beside the FTBucket capture.
                 // Remove that canonical override so media stays in the archive.
@@ -112,14 +112,16 @@ internal suspend fun fetchCompatArchiveThreadPage(
                     Regex("""(?is)<link\b[^>]{0,1000}\brel\s*=\s*['\"]canonical['\"][^>]{0,1000}>"""),
                     ""
                 )
+            } else if (Url(currentUrl).host == "futabaforest.net") {
+                normalizeForestThreadHtml(archiveResponse.body)
             } else {
                 archiveResponse.body
             }
         }
         val page = withContext(AppDispatchers.parsing) {
-            normalizeCompatArchiveApuViewLabels(
+            normalizeCompatArchiveMedia(normalizeCompatArchiveApuViewLabels(
                 ThreadHtmlParserCore.parseThread(parserBody, parserBaseUrl)
-            )
+            ))
         }
         require(page.posts.isNotEmpty()) { "アーカイブ本文にレスがありません" }
         return page

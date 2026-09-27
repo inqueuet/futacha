@@ -117,7 +117,7 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
-    fun performThreadLoadWithOfflineFallback_skipsArchiveAfterLocalStalePage() = runBlocking {
+    fun performThreadLoadWithOfflineFallback_loadsArchiveAfterLocalStalePageWhenThreadIsGone() = runBlocking {
         val remoteFailure = NetworkException("HTTP error", statusCode = 404)
         val page = ThreadPage(
             threadId = "123",
@@ -152,9 +152,34 @@ class ThreadScreenLoadLogicTest {
             )
         )
 
-        assertEquals(page, result.page)
-        assertTrue(result.usedOffline)
-        assertFalse(archiveCalled)
+        assertEquals(page.copy(boardTitle = "archive"), result.page)
+        assertFalse(result.usedOffline)
+        assertTrue(archiveCalled)
+    }
+
+    @Test
+    fun archiveMissAfterLocalStaleKeepsOfflineCopyAndTransientErrorsSkipArchives() = runBlocking {
+        val page = ThreadPage("123", "saved", null, null, emptyList())
+        for (status in listOf(404, 410, 503)) {
+            var archiveCalls = 0
+            val result = performThreadLoadWithOfflineFallback(
+                config = buildThreadLoadRunnerConfig(
+                    threadId = "123", effectiveBoardUrl = "https://may.2chan.net/b/",
+                    threadUrlOverride = null, allowOfflineFallback = true,
+                    archiveFallbackTimeoutMillis = 100, offlineFallbackTimeoutMillis = 100,
+                    preferOfflineFallbackAfterLocalStale = true
+                ),
+                callbacks = ThreadLoadRunnerCallbacks(
+                    loadRemoteByUrl = { error("unused") },
+                    loadRemoteByBoard = { _, _ -> throw NetworkException("HTTP error", statusCode = status) },
+                    loadArchiveFallback = { archiveCalls++; ArchiveFallbackOutcome.NotFound },
+                    loadOfflineFallback = { page }
+                )
+            )
+            assertEquals(if (status == 503) 0 else 1, archiveCalls)
+            assertEquals(page, result.page)
+            assertTrue(result.usedOffline)
+        }
     }
 
     @Test

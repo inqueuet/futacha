@@ -431,5 +431,5 @@ internal fun shouldPreferOfflineFallbackAfterLocalStale(
     fallbackState: ThreadLoadFallbackState
 ): Boolean {
     return config.preferOfflineFallbackAfterLocalStale &&
-        fallbackState.shouldTryOfflineFallback
+        fallbackState.shouldTryOfflineFallback && !fallbackState.shouldTryArchiveFallback
 }

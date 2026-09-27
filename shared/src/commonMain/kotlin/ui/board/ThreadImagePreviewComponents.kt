@@ -309,6 +309,9 @@ private fun ImagePreviewTransformSurface(
                     do {
                         val event = awaitPointerEvent()
                         val pointerCount = event.changes.count { it.pressed }
+                        // An all-up event has no centroid. Multiplying its NaN
+                        // coordinates by zero still poisons the image layer's translation.
+                        if (pointerCount == 0) break
                         if (pointerCount >= 2) ownsGesture = true
                         if (ownsGesture) {
                             val gestureZoom = if (pointerCount >= 2) event.calculateZoom() else 1f
@@ -321,7 +324,11 @@ private fun ImagePreviewTransformSurface(
                                 viewportSize.width / 2f,
                                 viewportSize.height / 2f
                             )
-                            val focalCompensation = (centroid - viewportCenter) * (1f - gestureZoom)
+                            val focalCompensation = if (centroid.x.isFinite() && centroid.y.isFinite()) {
+                                (centroid - viewportCenter) * (1f - gestureZoom)
+                            } else {
+                                Offset.Zero
+                            }
                             scale = updatedScale
                             translation = if (updatedScale <= IMAGE_PREVIEW_ZOOM_THRESHOLD) {
                                 Offset.Zero
@@ -394,6 +401,7 @@ private fun clampImagePreviewZoomOffset(
     viewport: Float,
     scale: Float
 ): Float {
+    if (!offset.isFinite()) return 0f
     val maxOffset = (viewport * (scale - 1f) / 2f).coerceAtLeast(0f)
     return offset.coerceIn(-maxOffset, maxOffset)
 }

@@ -36,7 +36,7 @@ internal fun buildCompatForestUrl(threadUrl: String): String? {
     }
     return threadUrl.replaceFirst(
         compatMayHostRegex,
-        "http://futabaforest.net"
+        "https://futabaforest.net"
     )
 }
 

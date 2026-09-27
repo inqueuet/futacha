@@ -1106,7 +1106,7 @@ class CompatibilityCoreTest {
     fun externalArchiveLinks_matchReferenceApkRoutes() {
         val mayThread = "https://may.2chan.net/b/res/12345.htm"
         assertEquals(
-            "http://futabaforest.net/b/res/12345.htm",
+            "https://futabaforest.net/b/res/12345.htm",
             buildCompatForestUrl(mayThread)
         )
         assertEquals(

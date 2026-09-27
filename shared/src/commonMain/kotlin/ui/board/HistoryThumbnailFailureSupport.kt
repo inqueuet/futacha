@@ -20,10 +20,18 @@ internal class HistoryThumbnailFailureCache(
     private val failedAtByUrl = LinkedHashMap<String, Long>()
 
     fun isKnownMissing(url: String): Boolean {
-        val failedAt = failedAtByUrl[url] ?: return false
-        if (nowMillis() - failedAt < ttlMillis) return true
+        return retryAfterMillis(url) > 0L
+    }
+
+    fun retryAfterMillis(url: String): Long {
+        val failedAt = failedAtByUrl[url] ?: return 0L
+        val remaining = (ttlMillis - (nowMillis() - failedAt)).coerceIn(0L, ttlMillis)
+        if (remaining == 0L) failedAtByUrl.remove(url)
+        return remaining
+    }
+
+    fun forget(url: String) {
         failedAtByUrl.remove(url)
-        return false
     }
 
     fun recordMissing(url: String) {

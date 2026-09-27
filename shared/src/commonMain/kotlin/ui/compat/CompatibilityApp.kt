@@ -596,7 +596,11 @@ fun CompatibilityApp(
             if (imageLoader == null) effectiveImageLoader.shutdown()
         }
     }
+    val historyImageRepositories = com.valoser.futacha.shared.ui.image.rememberHistoryImageRepositories(
+        fileSystem, historyAutoSavedThreadRepository
+    )
     CompositionLocalProvider(
+        com.valoser.futacha.shared.ui.image.LocalHistoryImageRepositories provides historyImageRepositories,
         LocalFutachaImageLoader provides effectiveImageLoader,
         LocalFutachaCatalogImageLoader provides effectiveCatalogImageLoader
     ) {
@@ -6136,7 +6140,9 @@ private fun CompatThreadScreen(
                     if (committed) {
                         val replyCount = page.compatReplyCount()
                         val statusFlags = parseCompatThreadStatusFlags(page.deletedNotice)
-                        val thumbnailUrl = tab.thumbnailUrl ?: compatSnapshotThumbnail(newSnapshot, tab.threadNo)
+                        val thumbnailUrl = com.valoser.futacha.shared.ui.image.updatedHistoryThumbnailUrl(
+                            tab.thumbnailUrl, compatSnapshotThumbnail(newSnapshot, tab.threadNo)
+                        )
                         store.updateTab(
                             tab.copy(
                                 title = resolvedThreadTitle,
@@ -9649,6 +9655,14 @@ private fun CompatHistoryMetadataRow(
     val latestCount = maxOf(entry.replyCount, openTab?.replyCount ?: 0)
     val reply = compatDrawerReplyPresentation(readCount, latestCount)
     val noThumb = painterResource(Res.drawable.cmn_no_thumb)
+    val image = com.valoser.futacha.shared.ui.image.rememberHistoryImagePainter(
+        threadId = entry.threadNo,
+        boardId = entry.boardKey,
+        boardUrl = entry.canonicalUrl,
+        thumbnailUrl = entry.thumbnailUrl,
+        sizePx = with(LocalDensity.current) { COMPAT_REFERENCE_DRAWER_THREAD_THUMBNAIL_DP.dp.roundToPx() },
+        catalogImageLoader = LocalFutachaCatalogImageLoader.current
+    )
     Row(
         modifier = Modifier.fillMaxWidth().height(COMPAT_REFERENCE_DRAWER_THREAD_ROW_DP.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -9657,11 +9671,9 @@ private fun CompatHistoryMetadataRow(
             .padding(horizontal = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AsyncImage(
-            model = entry.thumbnailUrl,
+        Image(
+            painter = if (image.state is coil3.compose.AsyncImagePainter.State.Success) image.painter else noThumb,
             contentDescription = null,
-            fallback = noThumb,
-            error = noThumb,
             contentScale = ContentScale.Crop,
             modifier = Modifier.size(COMPAT_REFERENCE_DRAWER_THREAD_THUMBNAIL_DP.dp)
                 .testTag("compat-drawer-history-thumb-${entry.canonicalUrl}")

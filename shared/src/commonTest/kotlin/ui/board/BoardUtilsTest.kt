@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 
 class BoardUtilsTest {
     @Test
-    fun buildHistoryEntryFromPageAt_updatesExistingEntryAndPreservesExistingImage() {
+    fun buildHistoryEntryFromPageAt_updatesExistingEntryAndReplacesStaleImage() {
         val board = BoardSummary(
             id = "b",
             name = "二次元裏",
@@ -60,7 +60,7 @@ class BoardUtilsTest {
         )
 
         assertEquals("body", updated.title)
-        assertEquals("https://example.com/existing.jpg", updated.titleImageUrl)
+        assertEquals("https://example.com/new.jpg", updated.titleImageUrl)
         assertEquals("二次元裏", updated.boardName)
         assertEquals(1L, updated.lastVisitedEpochMillis)
         assertEquals(999L, updated.lastConfirmedAliveEpochMillis)

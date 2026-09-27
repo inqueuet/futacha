@@ -53,7 +53,7 @@ class ThreadArchiveFallbackTest {
             }))
             assertEquals(listOf("dev2.ftbucket.info", "futabaforest.net"), hosts)
             assertEquals("archived body", outcome.page.posts.first().messageHtml)
-            assertEquals("http://futabaforest.net/b/src/123.jpg", outcome.page.posts.first().imageUrl)
+            assertEquals("https://futabaforest.net/b/src/123.jpg", outcome.page.posts.first().imageUrl)
             assertEquals(source, outcome.threadUrl)
         } finally { client.close() }
     }
@@ -81,4 +81,18 @@ class ThreadArchiveFallbackTest {
             }
         } finally { client.close() }
     }
+    @Test fun fastMissDonatesTimeToMultistepProvider() = runBlocking<Unit> {
+        val client = HttpClient(MockEngine { request ->
+            assertEquals("dev2.ftbucket.info", request.url.host)
+            delay(2_100) // Longer than the old fixed 1,875ms slice.
+            respond(html, headers = headersOf("Content-Type", "text/html; charset=UTF-8"))
+        })
+        try {
+            val result = assertIs<ArchiveFallbackOutcome.Success>(fetch(client, repository {
+                throw NetworkException("gone", statusCode = 404)
+            }))
+            assertEquals("123", result.page.posts.first().id)
+        } finally { client.close() }
+    }
+
 }

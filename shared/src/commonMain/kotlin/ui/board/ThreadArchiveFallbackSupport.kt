@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlin.time.TimeSource
 
 internal data class ThreadArchiveFallbackPlan(
     val scope: ArchiveSearchScope?,
@@ -67,8 +68,12 @@ internal suspend fun performThreadArchiveFallback(
     var partialUrl: String? = null
     val candidates = buildCompatArchiveThreadCandidates(sourceUrl)
     // Reserve time for merging and returning a partial result within the outer timeout.
-    val providerTimeout = (ARCHIVE_FALLBACK_TIMEOUT_MS - 500L) / candidates.size.coerceAtLeast(1)
-    for (candidate in candidates) {
+    val started = TimeSource.Monotonic.markNow()
+    for ((index, candidate) in candidates.withIndex()) {
+        val remainingMillis = ARCHIVE_FALLBACK_TIMEOUT_MS - 500L - started.elapsedNow().inWholeMilliseconds
+        if (remainingMillis <= 0L) break
+        // Fast misses donate their unused budget to later providers (FTBucket needs three reads).
+        val providerTimeout = (remainingMillis / (candidates.size - index)).coerceIn(1L, 4_000L)
         val content = try {
             withTimeoutOrNull(providerTimeout) {
                 if (candidate == matchUrl) {

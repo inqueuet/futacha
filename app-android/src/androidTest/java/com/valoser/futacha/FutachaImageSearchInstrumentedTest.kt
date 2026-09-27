@@ -60,9 +60,9 @@ class FutachaImageSearchInstrumentedTest {
             when (request.url.host) {
                 "search-test.invalid" -> respond(byteArrayOf(1, 2, 3), headers = headersOf("Content-Type", "image/png"))
                 "iqdb.org" -> respond("<html><body>Fixture image search result</body></html>")
-                "futabaforest.net" -> respond("""<html><body><div class="thre" data-res="123">
+                "futabaforest.net" -> respond("""<html><head><script>${'$'}data = `
                     <span class="cno">No.123</span><a href="/b/src/image.png"><img src="/b/thumb/image.png"></a>
-                    <blockquote>フォレストから取得した本文</blockquote></div></body></html>""",
+                    <blockquote>フォレストから取得した本文</blockquote>`;</script></head><body><div id="res_body"></div></body></html>""",
                     headers = headersOf("Content-Type", "text/html; charset=UTF-8"))
                 else -> respond("unavailable", HttpStatusCode.ServiceUnavailable)
             }

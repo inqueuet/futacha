@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.TimeSource
 
 @Composable
 internal fun rememberFutachaSharedRepository(repository: BoardRepository): BoardRepository {
@@ -103,14 +104,22 @@ internal class FutachaSharedBoardRepository(
         val completed = arrayOfNulls<ThreadPage>(candidates.size)
         // At most two requests at once and four seconds for the entire
         // supplement. Keep successful results even if the remaining work times out.
+        val batches = candidates.withIndex().chunked(2)
+        val started = TimeSource.Monotonic.markNow()
         withTimeoutOrNull(4_000) {
-            for (batch in candidates.withIndex().chunked(2)) {
-                coroutineScope {
-                    batch.map { (index, url) -> async {
-                        try { completed[index] = fetchCompatArchiveThreadPage(client, url) }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { /* Another source can still fill the gap. */ }
-                    } }.forEach { it.await() }
+            for ((batchIndex, batch) in batches.withIndex()) {
+                // Reserve a share for later providers even if the first pair stalls.
+                val remainingMillis = 3_750L - started.elapsedNow().inWholeMilliseconds
+                if (remainingMillis <= 0L) break
+                val batchTimeout = (remainingMillis / (batches.size - batchIndex)).coerceAtLeast(1L)
+                withTimeoutOrNull(batchTimeout) {
+                    coroutineScope {
+                        batch.map { (index, url) -> async {
+                            try { completed[index] = fetchCompatArchiveThreadPage(client, url) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { /* Another source can still fill the gap. */ }
+                        } }.forEach { it.await() }
+                    }
                 }
                 val merged = withContext(AppDispatchers.parsing) {
                     mergeCompatThreadPages(content.page, completed.filterNotNull())

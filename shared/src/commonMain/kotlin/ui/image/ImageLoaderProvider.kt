@@ -500,6 +500,7 @@ internal fun buildFutachaImageLoader(
         add(refreshInterceptor)
         add(ImageMemoryPressureInterceptor(pressureGate))
         add(FutabaExtensionFallbackInterceptor())
+        add(ArchiveImageFallbackInterceptor())
         add(VisibleImageRequestInterceptor())
         originalMediaStore?.let { addOriginalMediaSupport(it) }
         // Fetchers are tried in registration order and the Ktor factory accepts
@@ -552,6 +553,12 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         // Retry with alternative extensions for Futaba source media URLs.
         if (initialResult is ErrorResult && isMissingImage(initialResult.throwable)) {
             val url = initialRequest.data.toString()
+            // Archive attachments have explicit saved names and have already tried
+            // their mirrors. Retain extension recovery for live-board URLs only.
+            if (archiveImageFallbackCandidates(url).isNotEmpty() &&
+                runCatching { io.ktor.http.Url(url).host }.getOrNull() !in setOf("may.2chan.net", "img.2chan.net")) {
+                return initialResult
+            }
             // あぷ小 already gives the application the real source URL.  A
             // failed derived thumbnail must not fan out into every supported
             // extension (and the old builder also produced /up2//src/ URLs).
@@ -614,7 +621,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         fallbackUrl: String,
         policy: FutabaExtensionFallbackPolicy
     ): ImageResult? {
-        val request = initialRequest.newBuilder().data(fallbackUrl).build()
+        val request = initialRequest.newBuilder().data(fallbackUrl).skipArchiveImageFallback().build()
         val proceed: suspend () -> ImageResult = {
             chain.withRequest(request).proceed()
         }

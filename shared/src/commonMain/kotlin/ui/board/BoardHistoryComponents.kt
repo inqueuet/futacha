@@ -54,10 +54,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
-import coil3.compose.LocalPlatformContext
-import coil3.compose.rememberAsyncImagePainter
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
@@ -66,7 +62,6 @@ import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreviewEntry
-import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1025,34 +1020,19 @@ private fun HistoryEntryCard(
     entry: ThreadHistoryEntry,
     onClick: () -> Unit
 ) {
-    val platformContext = LocalPlatformContext.current
-    val imageLoader = LocalFutachaImageLoader.current
     val density = LocalDensity.current
-    val titleImageSizePx = remember(density) {
-        with(density) { 48.dp.roundToPx() }
-    }
-    val isTitleImageKnownMissing = remember(entry.titleImageUrl) {
-        historyThumbnailFailureCache.isKnownMissing(entry.titleImageUrl)
-    }
-    val titleImageRequest = remember(platformContext, entry.titleImageUrl, titleImageSizePx, isTitleImageKnownMissing) {
-        ImageRequest.Builder(platformContext)
-            // A null model settles immediately as an error and shows the fallback icon.
-            .data(entry.titleImageUrl.takeUnless { isTitleImageKnownMissing })
-            .crossfade(false)
-            .size(titleImageSizePx, titleImageSizePx)
-            .build()
-    }
-    val titlePainter = rememberAsyncImagePainter(
-        model = titleImageRequest,
-        imageLoader = imageLoader
+    val titleImage = com.valoser.futacha.shared.ui.image.rememberHistoryImagePainter(
+        threadId = entry.threadId,
+        boardId = entry.boardId,
+        boardUrl = entry.boardUrl,
+        thumbnailUrl = entry.titleImageUrl,
+        sizePx = with(density) { 48.dp.roundToPx() },
+        savedCopyAvailable = entry.hasAutoSave,
+        catalogImageLoader = if (LocalFutachaSharedFeatures.current == null) null
+            else com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
     )
-    val titlePainterState by titlePainter.state.collectAsState()
-    LaunchedEffect(titlePainterState) {
-        val failure = (titlePainterState as? AsyncImagePainter.State.Error)?.result?.throwable
-        if (entry.titleImageUrl.isNotBlank() && com.valoser.futacha.shared.ui.image.isMissingImage(failure)) {
-            historyThumbnailFailureCache.recordMissing(entry.titleImageUrl)
-        }
-    }
+    val titlePainter = titleImage.painter
+    val titlePainterState = titleImage.state
     val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
         formatLastVisited(entry.lastVisitedEpochMillis)
     }

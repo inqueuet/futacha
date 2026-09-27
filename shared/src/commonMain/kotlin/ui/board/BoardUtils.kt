@@ -99,8 +99,9 @@ internal fun resolveHistoryEntryImageUrl(
     existingEntry: ThreadHistoryEntry?,
     pageThumbnailUrl: String?
 ): String {
-    return existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
-        ?: pageThumbnailUrl.orEmpty()
+    return com.valoser.futacha.shared.ui.image.updatedHistoryThumbnailUrl(
+        existingEntry?.titleImageUrl, pageThumbnailUrl
+    ).orEmpty()
 }
 
 internal fun resolveHistoryEntryBoardUrl(
