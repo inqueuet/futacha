@@ -47,7 +47,7 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100_000_013
+        versionCode = 100_000_014
         versionName = "1.7"
     }
 

@@ -37,7 +37,8 @@ internal fun aiPostFilterSettingDescription(aiAvailability: AiAvailability): Str
         return "アルファ版のため現在は画面上から有効化できません。"
     }
     return if (isAiPostFilterFeatureAvailable(aiAvailability)) {
-        "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。"
+        if (aiAvailability.externalModeration) "OpenAI Moderationで選択カテゴリと閾値に基づいて候補を判定します。自動折りたたみは詳細設定で変更できます。連投やスレの文脈から荒らしを判断する機能ではありません。"
+        else "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。"
     } else {
         aiAvailability.unavailableReason ?: "誤判定対策を含めた判定モデル接続後に有効化されます。"
     }

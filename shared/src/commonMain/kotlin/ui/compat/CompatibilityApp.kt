@@ -362,6 +362,7 @@ import com.valoser.futacha.shared.compat.hasCompatTabToolbarUpdate
 import com.valoser.futacha.shared.compat.resolveCompatThreadBottomScrollIndex
 import com.valoser.futacha.shared.compat.compatQuoteSelection
 import com.valoser.futacha.shared.compat.compatGoogleSearchTerms
+import com.valoser.futacha.shared.compat.filterCompatThreadPosts
 import com.valoser.futacha.shared.compat.extractCompatPosts
 import com.valoser.futacha.shared.compat.extractCompatHeaderPosts
 import com.valoser.futacha.shared.compat.buildCompatThreadNgRuleIndex
@@ -2582,6 +2583,7 @@ private fun CompatibilityAppContent(
                     }
                     threadStateHolder.SaveableStateProvider(tab.key) {
                         CompatThreadScreen(
+                            stateStore = stateStore,
                             tab = tab,
                             tabs = distinctCompatTabs(state.tabs),
                             isDrawerOpen = drawerState.currentValue == DrawerValue.Open,
@@ -3158,6 +3160,7 @@ private fun CompatibilityAppContent(
                 onBack = { dispatch(CompatibilityEvent.Back) }
             )
             is CompatHost.Settings -> CompatSettingsScreen(
+                stateStore = stateStore,
                 path = host.path,
                 store = store,
                 preferences = preferences,
@@ -5282,6 +5285,7 @@ private fun CompatThreadAutoScrollEffect(
 
 @Composable
 private fun CompatThreadScreen(
+    stateStore: AppStateStore?,
     tab: CompatTab,
     tabs: List<CompatTab>,
     isDrawerOpen: Boolean = false,
@@ -5451,6 +5455,9 @@ private fun CompatThreadScreen(
     }
     val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var snapshot by snapshotState
+    var aiRetry by remember(tab.key) { mutableStateOf(0) }
+    val threadAi = rememberCompatThreadAi(stateStore, snapshot, tab.title, ownPostNos, aiRetry)
+    val speechAiHiddenPostNos by rememberUpdatedState(if (threadNgEnabled) threadAi.hiddenPostNos else emptySet())
     val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
     val undoRefreshSnapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var undoRefreshSnapshot by undoRefreshSnapshotState
@@ -6247,7 +6254,7 @@ private fun CompatThreadScreen(
         readAloudDialogOpen = true
         readAloudJob = scope.launch {
             val hasText = withContext(AppDispatchers.textAnnotation) {
-                snapshot?.posts.orEmpty().any { post -> compatReadAloudText(post).isNotBlank() }
+                snapshot?.posts.orEmpty().any { post -> post.postNo !in speechAiHiddenPostNos && compatReadAloudText(post).isNotBlank() }
             }
             if (!hasText) {
                 error = "読み上げ対象がありません"
@@ -6267,13 +6274,18 @@ private fun CompatThreadScreen(
                         readAloudCursor = 0
                         readAloudCharacterOffset = 0
                     }
+                    while (currentPosts.getOrNull(readAloudCursor)?.postNo in speechAiHiddenPostNos) {
+                        readAloudCursor++
+                        readAloudCharacterOffset = 0
+                    }
                     readAloudDisplayPost = currentPosts.getOrNull(readAloudCursor)
                     readAloudStatus = null
                     val batch = withContext(AppDispatchers.textAnnotation) {
                         buildCompatReadAloudBatch(
                             posts = currentPosts,
                             startPostIndex = readAloudCursor,
-                            startCharacterOffset = readAloudCharacterOffset
+                            startCharacterOffset = readAloudCharacterOffset,
+                            hiddenPostNos = speechAiHiddenPostNos
                         )
                     }
                     if (batch.text.isNotBlank()) {
@@ -6418,7 +6430,8 @@ private fun CompatThreadScreen(
         ngRules,
         tab.key,
         imagePhashes,
-        imageNgPhashThreshold
+        imageNgPhashThreshold,
+        threadAi.hiddenPostNos
     ) {
         val posts = presentCompatPostsForDeletedVisibilityOffMain(
             posts = snapshot?.posts.orEmpty(),
@@ -6443,13 +6456,8 @@ private fun CompatThreadScreen(
                         scopeKey = tab.key,
                         boardKey = tab.boardKey
                     )
-                    posts.filter { post ->
-                        !post.matchesCompatThreadNg(
-                                index = ngRuleIndex,
-                                imagePhash = imagePhashes[post.postNo],
-                                imagePhashThreshold = imageNgPhashThreshold
-                            )
-                    }
+                    filterCompatThreadPosts(posts, threadNgEnabled, ngRuleIndex,
+                        threadAi.hiddenPostNos, imagePhashes, imageNgPhashThreshold)
                 }
                 if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
                     calculateVisiblePosts()
@@ -7167,6 +7175,12 @@ private fun CompatThreadScreen(
                         )
                     }
                     CompatTitleStrip(tabs, tab)
+                    CompatThreadAiPanel(threadAi, threadNgEnabled,
+                        onCandidates = {
+                            quoteStack = quoteStack + CompatQuoteFrame("AI判定の候補", "ai-candidates",
+                                snapshot?.posts.orEmpty().filter { it.postNo in threadAi.candidatePostNos })
+                        },
+                        onRetry = { aiRetry++ })
                 }
         },
         bottomBar = {
@@ -7612,6 +7626,7 @@ private fun CompatThreadScreen(
             route = route,
             tab = tab,
             ngRules = ngRules,
+            aiHiddenPostNos = threadAi.hiddenPostNos,
             preferences = preferences,
             store = store,
             httpClient = httpClient,
@@ -7917,6 +7932,7 @@ private fun CompatThreadScreen(
     CompatThreadExtractionDialogs(
         tab = tab,
         ngRules = ngRules,
+        aiHiddenPostNos = threadAi.hiddenPostNos,
         ownPostNos = ownPostNos,
         saidaneExtractThreshold = saidaneExtractThreshold,
         quoteExtractThreshold = quoteExtractThreshold,
@@ -8745,6 +8761,7 @@ private fun CompatThreadOtherMenuDialog(
     route: CompatOtherMenuRoute,
     tab: CompatTab,
     ngRules: List<CompatNgRule>,
+    aiHiddenPostNos: Set<String>,
     preferences: Map<String, String>,
     store: CompatibilityStore,
     httpClient: HttpClient?,
@@ -8806,7 +8823,7 @@ private fun CompatThreadOtherMenuDialog(
         route = route,
         ngEnabled = threadNgEnabled,
         canUndoClose = canUndoClose,
-        ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
+        ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" } + aiHiddenPostNos.size,
         cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
         activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key }
     )
@@ -8948,7 +8965,8 @@ private fun CompatThreadOtherMenuDialog(
                     ngRules,
                     ownPostNos,
                     saidaneExtractThreshold,
-                    quoteExtractThreshold
+                    quoteExtractThreshold,
+                    aiHiddenPostNos = aiHiddenPostNos
                 ) { frame -> quoteStack = quoteStack + frame }
                 "extract_keyword" -> {
                     extractionKeyword = ""
@@ -9031,6 +9049,7 @@ private fun CompatThreadPostSelectionDialog(
 private fun CompatThreadExtractionDialogs(
     tab: CompatTab,
     ngRules: List<CompatNgRule>,
+    aiHiddenPostNos: Set<String>,
     ownPostNos: Set<String>,
     saidaneExtractThreshold: Int,
     quoteExtractThreshold: Int,
@@ -9048,7 +9067,7 @@ private fun CompatThreadExtractionDialogs(
     var quoteStack by quoteStackState
     if (extractionMenuOpen) {
         CompatExtractionMenuDialog(
-            ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" },
+            ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" } + aiHiddenPostNos.size,
             onDismiss = { extractionMenuOpen = false },
             onKeyword = {
                 extractionMenuOpen = false
@@ -9067,7 +9086,8 @@ private fun CompatThreadExtractionDialogs(
                             ngRules = ngRules,
                             ownPostNos = ownPostNos,
                             saidaneThreshold = saidaneExtractThreshold,
-                            quoteThreshold = quoteExtractThreshold
+                            quoteThreshold = quoteExtractThreshold,
+                            aiHiddenPostNos = aiHiddenPostNos
                         )
                     }
                     quoteStack = quoteStack + CompatQuoteFrame(title, "extract:${kind.name}", matches)
@@ -9427,6 +9447,7 @@ private fun openCompatExtraction(
     ownPostNos: Set<String>,
     saidaneThreshold: Int,
     quoteThreshold: Int,
+    aiHiddenPostNos: Set<String> = emptySet(),
     onFrame: (CompatQuoteFrame) -> Unit
 ) {
     scope.launch {
@@ -9439,7 +9460,8 @@ private fun openCompatExtraction(
                 ngRules = ngRules,
                 ownPostNos = ownPostNos,
                 saidaneThreshold = saidaneThreshold,
-                quoteThreshold = quoteThreshold
+                quoteThreshold = quoteThreshold,
+                aiHiddenPostNos = aiHiddenPostNos
             )
         }
         onFrame(CompatQuoteFrame(title, "extract:${kind.name}", matches))

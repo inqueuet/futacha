@@ -327,6 +327,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
         )
     ),
     "ふたちゃ拡張" to listOf(
+        CompatSettingEntry("AI・補助機能", "スレ要約・荒らし非表示", "ai"),
         CompatSettingEntry("モード", "現在の表示モード", preferenceKey = "mode"),
         CompatSettingEntry(
             "アップデート確認",
@@ -811,6 +812,7 @@ internal fun compatPtmtMutationNotice(existingValue: String?, requestedValue: St
 }
 
 internal fun String.compatSettingsTitle(): String = when (this) {
+    "ai" -> "AI・補助機能"
     "design" -> "デザイン"
     "control" -> "コントロール"
     "storage" -> "ストレージ"
@@ -968,7 +970,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             it.preferenceKey in setOf("designTheme", "designTextColor", "designNavigationBar")
     }
     return when (path) {
-        "media" -> emptyList()
+        "media", "ai" -> emptyList()
         "design" -> listOf(
             "スタイル" to entries.compatKeys(
                 "designTheme", "designNavigationBar", "designLoading", "dummyCustomFont"

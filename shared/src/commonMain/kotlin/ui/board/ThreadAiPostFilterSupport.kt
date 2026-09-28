@@ -25,7 +25,8 @@ internal data class AiPostModerationUiState(
     val processedPosts: Int = 0,
     val totalPosts: Int = 0,
     val failedBatchCount: Int = 0,
-    val results: List<PostModerationResult> = emptyList()
+    val results: List<PostModerationResult> = emptyList(),
+    val errorMessage: String? = null
 ) {
     val hiddenCandidateCount: Int
         get() = results.count { it.shouldHide }
@@ -71,9 +72,10 @@ internal fun buildAiHiddenPostResolutionContext(
 
 internal fun resolveAiHiddenPostState(
     context: AiHiddenPostResolutionContext,
-    moderationResults: List<PostModerationResult>
+    moderationResults: List<PostModerationResult>,
+    automaticallyHide: Boolean = true
 ): AiHiddenPostState {
-    if (context.existingPostIds.isEmpty() || moderationResults.isEmpty()) {
+    if (!automaticallyHide || context.existingPostIds.isEmpty() || moderationResults.isEmpty()) {
         return AiHiddenPostState()
     }
     val hiddenPostIds = linkedSetOf<String>()

@@ -241,6 +241,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             appColorScheme = scaffoldInputs.appColorScheme
         ),
         contentBindings = ThreadScreenContentHostBindings(
+            aiSourceBoard = overlayInputs.effectiveBoardUrl,
+            aiThreadTitle = scaffoldInputs.resolvedThreadTitle,
             uiState = contentInputs.uiState,
             refreshThread = contentInputs.refreshThread,
             threadFilterBinding = contentInputs.threadFilterBinding,

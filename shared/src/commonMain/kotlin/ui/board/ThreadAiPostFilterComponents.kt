@@ -74,6 +74,7 @@ internal fun AiPostModerationProgressCard(
 private fun resolveAiPostModerationProgressTitle(state: AiPostModerationUiState): String {
     return when {
         state.isRunning -> "AI荒らし判定中"
+        state.failedBatchCount > 0 -> "AI荒らし判定が完了していません"
         state.totalPosts <= 0 && state.results.isEmpty() -> "AI荒らし判定待機中"
         else -> "AI荒らし判定完了"
     }
@@ -94,7 +95,7 @@ private fun buildAiPostModerationProgressText(
     } else {
         ""
     }
-    return "$progressText - $resultText$failureText"
+    return "$progressText - $resultText$failureText" + state.errorMessage?.let { "\n$it" }.orEmpty()
 }
 
 @Composable

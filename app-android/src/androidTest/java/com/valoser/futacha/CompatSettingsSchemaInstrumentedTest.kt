@@ -167,6 +167,37 @@ class CompatSettingsSchemaInstrumentedTest {
     }
 
     @Test
+    fun compatAiSettingsExposeOnlySelectedProviderDetailsAndKeepFeaturesOff() {
+        val app = context as FutachaApplication
+        runBlocking {
+            app.appStateStore.setThreadSummaryModeEnabled(false)
+            app.appStateStore.setAiPostFilterEnabled(false)
+        }
+        rule.setContent {
+            MaterialTheme {
+                CompatibilityApp(store = store, repository = null, stateStore = app.appStateStore, onExitApplication = {})
+            }
+        }
+        rule.onNodeWithContentDescription("その他").performClick()
+        rule.onNodeWithText("設定").performClick()
+        rule.onNodeWithTag("compat-settings-list-root").performScrollToNode(hasText("AI・補助機能"))
+        rule.onNodeWithText("AI・補助機能").performClick()
+        rule.onNodeWithTag("compat-ai-summary-enabled").performScrollTo().assertIsOff()
+        rule.onNodeWithTag("compat-ai-moderation-enabled").performScrollTo().assertIsOff()
+        rule.onNodeWithTag("ai-moderation-DEVICE").performScrollTo().performClick()
+        rule.onAllNodesWithTag("openai-api-key").assertCountEquals(0)
+        rule.onNodeWithTag("ai-moderation-OPENAI").performScrollTo().performClick()
+        rule.onNodeWithTag("openai-api-key").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("openai-moderation-threshold").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("閾値以上の候補をNGと同様に非表示にする").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithTag("ai-summary-OPENAI").assertCountEquals(0)
+        rule.onNodeWithTag("ai-moderation-DEVICE").performScrollTo().performClick()
+        rule.onAllNodesWithTag("openai-api-key").assertCountEquals(0)
+        assertFalse(runBlocking { app.appStateStore.isThreadSummaryModeEnabled.first() })
+        assertFalse(runBlocking { app.appStateStore.isAiPostFilterEnabled.first() })
+    }
+
+    @Test
     fun issue78PersistedArchiveLabelsAreAbsentFromBodyAndQuoteOnDevice() {
         val boardUrl = "https://img.2chan.net/b/"
         val boardKey = compatBoardKey(boardUrl)

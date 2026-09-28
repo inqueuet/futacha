@@ -3,6 +3,22 @@ package com.valoser.futacha.shared.ui.compat
 import kotlin.test.*
 
 class HelpSearchSupportTest {
+    @Test fun aiHelpExplainsSharedSettingsProviderPrivacyAndNgRestoration() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "初期状態OFF").any { "両モードで共通" in it.body })
+        assertTrue(searchHelp(sections, "スレ要約").any { "端末内AIのみ" in it.body })
+        assertTrue(searchHelp(sections, "OpenAI").any { "外部サービスへ送信" in it.body })
+        assertTrue(searchHelp(sections, "APIキー").any { "登録だけでは判定は始まりません" in it.body })
+        assertTrue(searchHelp(sections, "閾値").any { "0.70" in it.body && "確率ではありません" in it.body })
+        assertTrue(searchHelp(sections, "NG表示切替").any { "手動NGとAI非表示の両方" in it.body })
+        assertTrue(searchHelp(sections, "判定候補").any { "手動NGへ登録しない" in it.body })
+        assertTrue(searchHelp(sections, "Windows").any { "OpenAIの荒らし判定" in it.body })
+        val searched = searchedHelpHtml(html, "OpenAI")
+        assertTrue(searched.contains("<input checked type=\"checkbox\" id=\"ai-help\""))
+        assertTrue(searched.contains("<mark>OpenAI</mark>"))
+    }
+
     @Test fun searchesClosedSectionsJapaneseEntitiesAndLiteralWords() {
         val html = """<html><style>invisible-style</style><body><label>巡回</label><input type="checkbox"><div>
             <p class="title">Wi-Fi と通信</p><p>にじろぐは不要です。A&amp;B<br/>[検索]できます<img src="data:image/png;base64,private-image"/></p>

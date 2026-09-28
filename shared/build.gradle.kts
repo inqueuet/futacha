@@ -201,6 +201,7 @@ kotlin {
         val jvmMain by getting {
             kotlin.srcDir("src/jvmAndAndroidMain/kotlin")
             dependencies {
+                implementation("net.java.dev.jna:jna-platform-jpms:5.16.0")
                 implementation(libs.onnxruntime.jvm)
                 implementation(libs.androidx.datastore.preferences)
                 implementation("org.xerial:sqlite-jdbc:3.50.3.0")

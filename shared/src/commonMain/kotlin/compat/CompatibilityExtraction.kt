@@ -107,6 +107,20 @@ fun CompatPostSnapshot.matchesCompatThreadNg(
     )
 }
 
+/** Display filtering is temporary; it never adds AI decisions to persisted NG rules. */
+fun filterCompatThreadPosts(
+    posts: List<CompatPostSnapshot>,
+    ngEnabled: Boolean,
+    index: CompatThreadNgRuleIndex,
+    aiHiddenPostNos: Set<String> = emptySet(),
+    imagePhashes: Map<String, String> = emptyMap(),
+    imagePhashThreshold: Int = CompatImagePhash.DEFAULT_THRESHOLD
+): List<CompatPostSnapshot> = if (!ngEnabled) posts else posts.filter { post ->
+    post.postNo !in aiHiddenPostNos && !post.matchesCompatThreadNg(
+        index, imagePhash = imagePhashes[post.postNo], imagePhashThreshold = imagePhashThreshold
+    )
+}
+
 fun extractCompatPosts(
     posts: List<CompatPostSnapshot>,
     kind: CompatExtractionKind,
@@ -116,7 +130,8 @@ fun extractCompatPosts(
     ownPostNos: Set<String> = emptySet(),
     keyword: String = "",
     saidaneThreshold: Int = 3,
-    quoteThreshold: Int = 3
+    quoteThreshold: Int = 3,
+    aiHiddenPostNos: Set<String> = emptySet()
 ): List<CompatPostSnapshot> {
     val ngIndex = if (kind == CompatExtractionKind.NG) {
         buildCompatThreadNgRuleIndex(ngRules, scopeKey, boardKey)
@@ -138,7 +153,7 @@ fun extractCompatPosts(
             CompatExtractionKind.KEYWORD -> keyword.isNotEmpty() && (
                 post.messageHtml.toCompatPlainText().contains(keyword) || post.mail.orEmpty().contains(keyword)
             )
-            CompatExtractionKind.NG -> post.matchesCompatThreadNg(checkNotNull(ngIndex))
+            CompatExtractionKind.NG -> post.postNo in aiHiddenPostNos || post.matchesCompatThreadNg(checkNotNull(ngIndex))
         }
     }
 }

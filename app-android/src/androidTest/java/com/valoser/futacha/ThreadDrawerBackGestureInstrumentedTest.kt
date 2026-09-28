@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.MotionEvent
 import android.view.InputDevice
+import android.view.KeyEvent
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -38,6 +39,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Inject through Android's input dispatcher, including SystemUI's edge recognizer. */
 @SdkSuppress(minSdkVersion = 34)
@@ -52,8 +55,6 @@ class ThreadDrawerBackGestureInstrumentedTest {
 
     @Before
     fun openThreadWithCachedPosts() {
-        assumeTrue("Run with Android gesture navigation enabled",
-            Settings.Secure.getInt(context.contentResolver, "navigation_mode", 0) == 2)
         val boardUrl = "https://drawer-gesture.2chan.net/b/"
         val boardKey = compatBoardKey(boardUrl)
         runBlocking {
@@ -101,8 +102,81 @@ class ThreadDrawerBackGestureInstrumentedTest {
 
     @Test
     fun modernThreadSystemLeftEdgeOpensHistoryAndRightEdgeKeepsBack() {
+        requireGestureNavigation()
+        val backs = AtomicInteger(0)
+        showModernThread(backs)
+        swipe(.01f, .75f, .5f)
+        rule.onNodeWithTag("history-drawer").assertIsDisplayed()
+        assertEquals(0, backs.get())
+        swipe(.99f, .25f, .5f)
+        waitForModernDrawerClosed()
+        rule.onNodeWithContentDescription("履歴を開く").assertIsDisplayed()
+        swipe(.99f, .25f, .5f)
+        rule.waitUntil(5_000) { backs.get() == 1 }
+        assertEquals(1, backs.get())
+    }
+
+    @Test
+    fun modernButtonBackNavigatesWithoutOpeningHistory() {
+        val backs = AtomicInteger(0)
+        showModernThread(backs)
+        pressSystemBack()
+        rule.waitForIdle()
+        assertEquals(1, backs.get())
+        rule.onNodeWithTag("history-drawer").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun compatButtonBackNavigatesWithoutOpeningTabs() {
+        pressSystemBack()
+        rule.waitForIdle()
+        rule.onNodeWithTag("compat-board-list").assertIsDisplayed()
+        rule.onNodeWithContentDescription("開いているタブ").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun modernRepeatedButtonBackWhileDrawerClosesDoesNotReopenIt() {
+        val backs = AtomicInteger(0)
+        showModernThread(backs)
+        rule.onNodeWithContentDescription("履歴を開く").performClick()
+        rule.onNodeWithTag("history-drawer").assertIsDisplayed()
+        rule.mainClock.autoAdvance = false
+        try {
+            repeat(4) {
+                pressSystemBack()
+                rule.mainClock.advanceTimeByFrame()
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        waitForModernDrawerClosed()
+        assertEquals(0, backs.get())
+        pressSystemBack()
+        rule.waitForIdle()
+        assertEquals(1, backs.get())
+        rule.onNodeWithTag("history-drawer").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun compatRepeatedButtonBackWhileDrawerClosesDoesNotReopenIt() {
+        rule.onNodeWithContentDescription("ドロワー").performClick()
+        rule.onNodeWithText("閲覧中のスレッド").assertIsDisplayed()
+        rule.mainClock.autoAdvance = false
+        try {
+            repeat(4) {
+                pressSystemBack()
+                rule.mainClock.advanceTimeByFrame()
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("compat-board-list").assertIsDisplayed()
+        rule.onNodeWithContentDescription("開いているタブ").assertIsNotDisplayed()
+    }
+
+    private fun showModernThread(backs: AtomicInteger) {
         val loader = ImageLoader(context).also { modernImageLoader = it }
-        val backs = java.util.concurrent.atomic.AtomicInteger(0)
         rule.runOnUiThread {
             rule.activity.setContent {
                 CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
@@ -116,22 +190,18 @@ class ThreadDrawerBackGestureInstrumentedTest {
             }
         }
         rule.onNodeWithContentDescription("履歴を開く").assertIsDisplayed()
-        swipe(.01f, .75f, .5f)
-        rule.onNodeWithTag("history-drawer").assertIsDisplayed()
-        org.junit.Assert.assertEquals(0, backs.get())
-        swipe(.99f, .25f, .5f)
+    }
+
+    private fun waitForModernDrawerClosed() {
         rule.waitUntil(5_000) {
             rule.waitForIdle()
             runCatching { rule.onNodeWithTag("history-drawer").assertIsNotDisplayed() }.isSuccess
         }
-        rule.onNodeWithContentDescription("履歴を開く").assertIsDisplayed()
-        swipe(.99f, .25f, .5f)
-        rule.waitUntil(5_000) { backs.get() == 1 }
-        org.junit.Assert.assertEquals(1, backs.get())
     }
 
     @Test
     fun leftEdgeAtEveryHeightOpensHistoryAndRightEdgeClosesIt() {
+        requireGestureNavigation()
         for (y in listOf(.30f, .50f, .80f)) {
             swipe(.01f, .75f, y)
             rule.onNodeWithContentDescription("履歴").assertIsDisplayed().performClick()
@@ -146,6 +216,7 @@ class ThreadDrawerBackGestureInstrumentedTest {
 
     @Test
     fun cancelledLeftEdgeKeepsThreadAndCenterPagingAndRightBackStillWork() {
+        requireGestureNavigation()
         swipe(.01f, .35f, .5f, cancel = true)
         rule.onNodeWithContentDescription("ドロワー").assertIsDisplayed()
         rule.onNodeWithTag("compat-thread-post-7320").assertIsDisplayed()
@@ -161,6 +232,7 @@ class ThreadDrawerBackGestureInstrumentedTest {
 
     @Test
     fun searchLeftEdgeDismissesSearchInsteadOfOpeningHistory() {
+        requireGestureNavigation()
         rule.onNodeWithContentDescription("検索").performClick()
         rule.onNodeWithTag("compat-thread-search-field").assertIsDisplayed()
         waitForIme(visible = true)
@@ -173,6 +245,24 @@ class ThreadDrawerBackGestureInstrumentedTest {
         }
         rule.onNodeWithContentDescription("ドロワー").assertIsDisplayed()
         rule.onNodeWithTag("compat-thread-pager").assertIsDisplayed()
+    }
+
+    private fun requireGestureNavigation() {
+        assumeTrue("Run with Android gesture navigation enabled",
+            Settings.Secure.getInt(context.contentResolver, "navigation_mode", 0) == 2)
+    }
+
+    private fun pressSystemBack() {
+        // Go through ViewRootImpl's key handling. Calling the app dispatcher
+        // directly skips the synthetic EDGE_LEFT start that caused this bug.
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val downTime = SystemClock.uptimeMillis()
+        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            assertTrue(automation.injectInputEvent(KeyEvent(
+                downTime, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_BACK,
+                0, 0, -1, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD
+            ), true))
+        }
     }
 
     private fun waitForSelectedTab(number: String) {

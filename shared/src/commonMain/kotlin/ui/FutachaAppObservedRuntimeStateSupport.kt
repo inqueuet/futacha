@@ -34,7 +34,7 @@ import com.valoser.futacha.shared.version.VersionChecker
 import androidx.compose.runtime.remember as composeRemember
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.ai.AiAvailability
-import com.valoser.futacha.shared.ai.createOnDeviceAiService
+import com.valoser.futacha.shared.ui.board.rememberSelectedAiService
 import com.valoser.futacha.shared.ui.board.ALPHA_AI_COMMAND_ENABLED
 import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
 import kotlinx.coroutines.delay
@@ -132,7 +132,7 @@ internal fun rememberFutachaObservedRuntimeState(
     // re-enable telemetry before an existing OFF value is restored.
     val isTelemetryCollectionEnabled by stateStore.isTelemetryCollectionEnabled.collectAsState(initial = false)
     val appLockPasswordHash by stateStore.appLockPasswordHash.collectAsState(initial = null)
-    val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+    val aiService = rememberSelectedAiService(platformContext)
     val shouldContinuouslyRefreshAiAvailability = shouldContinuouslyRefreshFutachaAiAvailability(
         isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
         isAiPostFilterEnabled = isAiPostFilterEnabled,
@@ -168,6 +168,8 @@ internal fun rememberFutachaObservedRuntimeState(
         // process 1.5 seconds after startup, which caused a large main-window
         // frame stall on physical devices.  The key changes when an AI feature
         // is enabled on a visible thread, so the producer is restarted then.
+        value = AiAvailability(false, "AIを確認中です。")
+        if (aiService.isExternalService) refreshAvailability()
         if (!shouldContinuouslyRefreshAiAvailability) {
             return@produceState
         }

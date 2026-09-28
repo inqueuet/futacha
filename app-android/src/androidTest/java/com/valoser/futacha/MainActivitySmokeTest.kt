@@ -10,6 +10,21 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import kotlinx.coroutines.flow.first
+import com.valoser.futacha.shared.ai.AiProvider
+import com.valoser.futacha.shared.ai.getAiConnectionStore
+import kotlinx.coroutines.runBlocking
+import java.io.File
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.core.app.ApplicationProvider
@@ -133,6 +148,59 @@ class MainActivitySmokeTest {
         // composed after it and is therefore the second node while the menu is open.
         rule.onAllNodesWithText("設定")[1].assertIsDisplayed().performClick()
         rule.onNodeWithText("モード").assertIsDisplayed()
+    }
+
+    @Test
+    fun openAiSettings_keepIndependentProvidersAndEncryptTheKey() {
+        val store = getAiConnectionStore(app)
+        runBlocking { store.load() }
+        org.junit.Assume.assumeFalse("Use a test device without a real API key", store.state.value.hasApiKey)
+        val original = store.state.value
+        val originalSummary = runBlocking { app.appStateStore.isThreadSummaryModeEnabled.first() }
+        val originalFilter = runBlocking { app.appStateStore.isAiPostFilterEnabled.first() }
+        runBlocking { app.appStateStore.setThreadSummaryModeEnabled(false); app.appStateStore.setAiPostFilterEnabled(false) }
+        try {
+            openSeededThread()
+            rule.onNodeWithContentDescription("その他").performClick()
+            rule.onAllNodesWithText("設定")[1].performClick()
+            rule.onNodeWithTag("global-settings-list").performScrollToNode(hasText("AI・補助機能"))
+            rule.onNodeWithText("AI・補助機能").performClick()
+            rule.onNodeWithTag("openai-api-key").assertDoesNotExist()
+            rule.onNodeWithTag("openai-moderation-threshold").assertDoesNotExist()
+            rule.onNodeWithTag("ai-summary-OPENAI").assertDoesNotExist()
+            rule.onNodeWithTag("ai-moderation-OPENAI").performScrollTo().performClick()
+            rule.onNodeWithTag("ai-summary-device-only").performScrollTo().assertIsDisplayed()
+            rule.onNodeWithText("判定カテゴリを選択（4 / 13）").performScrollTo().performClick()
+            rule.onNodeWithTag("openai-category-sexual").performScrollTo().performClick()
+            rule.onNodeWithText("閉じる").performClick()
+            rule.onNodeWithTag("openai-api-key").performScrollTo().performTextInput("test-only-ui-key")
+            rule.onNodeWithTag("openai-api-key").performImeAction()
+            rule.onNodeWithTag("openai-moderation-threshold").performScrollTo()
+                .performSemanticsAction(SemanticsActions.SetProgress) { it(0.9f) }
+            rule.onNodeWithTag("openai-moderation-auto-hide").performScrollTo().performClick()
+            rule.onNodeWithText("AI設定を保存").performScrollTo().assertIsNotEnabled()
+            rule.onNodeWithTag("ai-cloud-consent").performScrollTo().performClick()
+            rule.onNodeWithText("AI設定を保存").performScrollTo().performClick()
+            rule.waitUntil(10_000) { store.state.value.hasApiKey }
+            assertEquals(AiProvider.DEVICE, store.state.value.summaryProvider)
+            assertEquals(AiProvider.OPENAI, store.state.value.moderationProvider)
+            assertEquals(0.9f, store.state.value.moderationThreshold)
+            org.junit.Assert.assertFalse(store.state.value.moderationAutoHide)
+            assertTrue("sexual" in store.state.value.moderationCategories)
+            val encrypted = File(app.noBackupFilesDir, "openai-connection.enc").readBytes()
+            assertTrue(encrypted.isNotEmpty())
+            org.junit.Assert.assertFalse(encrypted.decodeToString().contains("test-only-ui-key"))
+            rule.onNodeWithText("APIキーを削除").performScrollTo().performClick()
+            rule.waitUntil(10_000) { !store.state.value.hasApiKey }
+            assertEquals(AiProvider.DEVICE, store.state.value.moderationProvider)
+            rule.onNodeWithTag("openai-api-key").assertDoesNotExist()
+        } finally {
+            runBlocking {
+                store.save(original.summaryProvider, original.moderationProvider, original.summaryModel, "", original.moderationThreshold, original.moderationAutoHide, original.moderationCategories)
+                app.appStateStore.setThreadSummaryModeEnabled(originalSummary)
+                app.appStateStore.setAiPostFilterEnabled(originalFilter)
+            }
+        }
     }
 
     @Test

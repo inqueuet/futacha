@@ -11,7 +11,12 @@ internal class ThreadDrawerBackAnimationCallback(private val onBack: () -> Unit)
     private var drawerRequest: (() -> Boolean)? = null
 
     override fun onBackStarted(backEvent: BackEvent) {
-        drawerRequest = if (backEvent.swipeEdge == BackEvent.EDGE_LEFT) {
+        // ViewRootImpl also sends onBackStarted for button Back. Android 14/15
+        // use EDGE_LEFT with (0, 0), while newer versions can use EDGE_NONE or
+        // NaN coordinates. Only a real touch position may open the drawer.
+        val hasTouchPosition = backEvent.touchX.isFinite() && backEvent.touchY.isFinite() &&
+            (backEvent.touchX != 0f || backEvent.touchY != 0f)
+        drawerRequest = if (backEvent.swipeEdge == BackEvent.EDGE_LEFT && hasTouchPosition) {
             CompatBackGestureBus.captureDrawerRequest()
         } else null
     }

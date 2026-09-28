@@ -37,13 +37,19 @@ internal fun buildCompatReadAloudBatch(
     posts: List<CompatPostSnapshot>,
     startPostIndex: Int,
     startCharacterOffset: Int,
-    maxChars: Int = COMPAT_READ_ALOUD_MAX_BATCH_CHARS
+    maxChars: Int = COMPAT_READ_ALOUD_MAX_BATCH_CHARS,
+    hiddenPostNos: Set<String> = emptySet()
 ): CompatReadAloudBatch {
     require(maxChars > 0) { "Read-aloud batch size must be positive" }
     var postIndex = startPostIndex.coerceIn(0, posts.size)
     var characterOffset = startCharacterOffset.coerceAtLeast(0)
     val output = StringBuilder(minOf(maxChars, 512))
     while (postIndex < posts.size && output.length < maxChars) {
+        if (posts[postIndex].postNo in hiddenPostNos) {
+            postIndex += 1
+            characterOffset = 0
+            continue
+        }
         val text = compatReadAloudText(posts[postIndex])
         if (characterOffset >= text.length) {
             postIndex += 1

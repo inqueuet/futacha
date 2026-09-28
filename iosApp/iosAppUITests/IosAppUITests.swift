@@ -6,6 +6,112 @@ import XCTest
  * Xcode can install and launch the complete SwiftUI/Compose application.
  */
 final class IosAppUITests: XCTestCase {
+    func testCompatAiSettingsUseNgHidingAndDefaultOff() throws {
+#if targetEnvironment(simulator)
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "toshiaki_compat",
+            "-thread_summary_mode_enabled", "false", "-ai_post_filter_enabled", "false",
+            "-update_check_enabled", "false", "-futacha_apple_intelligence_available", "true"]
+        app.launch()
+        XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15))
+        app.buttons["その他"].firstMatch.tap()
+        app.buttons["設定"].firstMatch.tap()
+        func tagged(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<24 {
+                let frame = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 90)
+                if element.exists && element.isHittable && frame.contains(element.frame) { return }
+                let up = !element.exists || element.frame.midY > frame.midY
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.75 : 0.30))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.30 : 0.75)), withVelocity: .slow, thenHoldForDuration: 0.1)
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+        func tap(_ element: XCUIElement) {
+            reveal(element)
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: element.frame.midX, dy: element.frame.midY)).tap()
+        }
+        tap(app.staticTexts["AI・補助機能"].firstMatch)
+        XCTAssertTrue(tagged("compat-settings-list-ai").waitForExistence(timeout: 10))
+        for id in ["compat-ai-summary-enabled", "compat-ai-moderation-enabled"] {
+            reveal(tagged(id))
+            XCTAssertTrue(tagged(id).isEnabled)
+            XCTAssertFalse(tagged(id).isSelected)
+        }
+        tap(tagged("ai-moderation-DEVICE"))
+        XCTAssertFalse(tagged("openai-api-key").exists)
+        tap(tagged("ai-moderation-OPENAI"))
+        reveal(tagged("openai-api-key"))
+        XCTAssertTrue(tagged("openai-api-key").exists)
+        reveal(app.staticTexts["閾値以上の候補をNGと同様に非表示にする"].firstMatch)
+        XCTAssertFalse(tagged("ai-summary-OPENAI").exists)
+        tap(tagged("ai-moderation-DEVICE"))
+        XCTAssertFalse(tagged("openai-api-key").exists)
+#else
+        throw XCTSkip("Use an isolated simulator for AI settings checks.")
+#endif
+    }
+
+    func testOpenAiModerationSettingsPersistInKeychain() throws {
+#if targetEnvironment(simulator)
+        func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+            for _ in 0..<24 {
+                let frame = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 90)
+                if element.exists && element.isHittable && frame.contains(element.frame) { return }
+                let up = !element.exists || element.frame.midY > frame.midY
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.75 : 0.30))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.30 : 0.75)), withVelocity: .slow, thenHoldForDuration: 0.1)
+                Thread.sleep(forTimeInterval: 0.8)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+        func tap(_ element: XCUIElement, in app: XCUIApplication) {
+            reveal(element, in: app)
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: element.frame.midX, dy: element.frame.midY)).tap()
+        }
+        func settings() throws -> XCUIApplication {
+            let app = try openFutachaHistoryForInspection(black: false, additionalLaunchArguments: [
+                "-thread_summary_mode_enabled", "false", "-ai_post_filter_enabled", "false",
+                // Simulate availability only; feature flags stay OFF, so no model runs.
+                "-futacha_apple_intelligence_available", "true"
+            ])
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "設定")).firstMatch.tap()
+            tap(app.descendants(matching: .any).matching(identifier: "settings-section-AI・補助機能").firstMatch, in: app)
+            return app
+        }
+        var app = try settings()
+        func tagged(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        XCTAssertFalse(tagged("openai-api-key").exists, "Use a simulator without a real OpenAI configuration.")
+        for id in ["ai-summary-enabled", "ai-moderation-enabled"] {
+            reveal(tagged(id), in: app)
+            XCTAssertTrue(tagged(id).isEnabled, "Opening AI settings must allow enabling a supported local feature from OFF.")
+            XCTAssertFalse(tagged(id).isSelected)
+        }
+        tap(tagged("ai-moderation-OPENAI"), in: app)
+        let key = tagged("openai-api-key")
+        tap(key, in: app)
+        app.typeText("test-only-ios-key\n")
+        tap(tagged("ai-cloud-consent"), in: app)
+        tap(app.buttons["AI設定を保存"].firstMatch, in: app)
+        XCTAssertTrue(app.staticTexts["AI設定を保存しました。"].waitForExistence(timeout: 10))
+        app.terminate()
+        app = try settings()
+        reveal(tagged("openai-api-key"), in: app)
+        XCTAssertTrue(app.staticTexts["登録済み（変更するときだけ入力）"].firstMatch.exists)
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "openai-keychain-restored-settings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        tap(app.buttons["APIキーを削除"].firstMatch, in: app)
+        XCTAssertTrue(app.staticTexts["APIキーを削除し、荒らし判定を端末内AIへ戻しました。"].waitForExistence(timeout: 10))
+        XCTAssertFalse(tagged("openai-api-key").exists)
+#else
+        throw XCTSkip("This test registers a synthetic key on an isolated simulator.")
+#endif
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -220,7 +326,7 @@ final class IosAppUITests: XCTestCase {
         try verifyFutachaHistoryAndMediaHelp(black: true)
     }
 
-    private func openFutachaHistoryForInspection(black: Bool) throws -> XCUIApplication {
+    private func openFutachaHistoryForInspection(black: Bool, additionalLaunchArguments: [String] = []) throws -> XCUIApplication {
         let app = makeApplication()
         let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
             "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
@@ -229,6 +335,7 @@ final class IosAppUITests: XCTestCase {
         app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false",
             "-thread_body_text_size", "ExtraLarge", "-boards_json", boardArgument,
             "-theme_palette", black ? "FutabaBlack" : "FutabaClassic", "-theme_mode", black ? "Dark" : "Light"]
+        app.launchArguments += additionalLaunchArguments
         app.launch()
         // Create a real history entry through the bundled tutorial. History is file-backed,
         // so overriding the legacy history_json preference would not replace it.

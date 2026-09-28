@@ -12,7 +12,8 @@ import com.valoser.futacha.shared.ai.OnDeviceAiService
 import com.valoser.futacha.shared.ai.PostModerationInput
 import com.valoser.futacha.shared.ai.PostModerationResult
 import com.valoser.futacha.shared.ai.ThreadSummaryInput
-import com.valoser.futacha.shared.ai.createOnDeviceAiService
+import com.valoser.futacha.shared.ai.aiDigest
+import com.valoser.futacha.shared.ai.openAiSummaryText
 import com.valoser.futacha.shared.ai.normalizeThreadSummary
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
@@ -34,6 +35,8 @@ private const val THREAD_AI_POST_MODERATION_SUMMARY_WAIT_DELAY_MS = 120L
 private const val THREAD_AI_SUMMARY_START_DELAY_MS = 120L
 
 internal data class ThreadScreenContentHostBindings(
+    val aiSourceBoard: String = "",
+    val aiThreadTitle: String? = null,
     val uiState: ThreadUiState,
     val refreshThread: () -> Unit,
     val threadFilterBinding: ThreadFilterUiStateBinding,
@@ -220,7 +223,7 @@ internal fun ThreadScreenContentHost(
                 )
             }
             val platformContext = LocalPlatformContext.current
-            val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+            val aiService = rememberSelectedAiService(platformContext)
             val aiInferenceMutex = remember { Mutex() }
             val threadSummaryCache = remember { linkedMapOf<ThreadSummaryCacheKey, ThreadSummaryUiState.Ready>() }
             val threadPostModerationCache = remember { linkedMapOf<ThreadPostModerationCacheKey, PostModerationResult>() }
@@ -228,24 +231,31 @@ internal fun ThreadScreenContentHost(
             val aiPostModerationSourcePosts = remember(aiSourcePosts) {
                 resolveThreadAiPostModerationSourcePosts(aiSourcePosts)
             }
+            val externalSummaryFingerprint = remember(aiSourcePosts, bindings.aiThreadTitle, aiService.externalSummary) {
+                if (aiService.externalSummary) aiDigest(openAiSummaryText(ThreadSummaryInput(state.page.threadId, bindings.aiThreadTitle, aiSourcePosts))) else ""
+            }
             val aiCacheKey = remember(
+                bindings.aiSourceBoard,
                 state.page.threadId,
                 postsFingerprint,
-                bindings.preferencesState.aiAvailability.providerLabel
+                aiService.configurationKey
             ) {
                 ThreadAiCacheKey(
-                    threadId = state.page.threadId,
+                    threadId = "${bindings.aiSourceBoard}/${state.page.threadId}",
                     postsFingerprint = postsFingerprint,
-                    providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                    providerLabel = aiService.configurationKey
                 )
             }
             val threadSummaryCacheKey = remember(
+                bindings.aiSourceBoard,
                 state.page.threadId,
-                bindings.preferencesState.aiAvailability.providerLabel
+                aiService.configurationKey,
+                externalSummaryFingerprint,
+                state.page.isTruncated
             ) {
                 buildThreadSummaryCacheKey(
-                    threadId = state.page.threadId,
-                    providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                    threadId = "${bindings.aiSourceBoard}/${state.page.threadId}",
+                    providerLabel = "${aiService.configurationKey}:$externalSummaryFingerprint:${state.page.isTruncated}"
                 )
             }
             val summaryState by produceState<ThreadSummaryUiState?>(
@@ -265,11 +275,13 @@ internal fun ThreadScreenContentHost(
                 delay(THREAD_AI_SUMMARY_START_DELAY_MS)
                 val summaryInput = ThreadSummaryInput(
                     threadId = state.page.threadId,
-                    title = null,
-                    posts = aiSourcePosts
+                    title = bindings.aiThreadTitle,
+                    posts = aiSourcePosts,
+                    sourceKey = "${bindings.aiSourceBoard}/${state.page.threadId}",
+                    isTruncated = state.page.isTruncated
                 )
                 val summaryResult = runThreadAiInferenceWithTimeout(
-                    timeoutMillis = THREAD_AI_SUMMARY_UI_TIMEOUT_MS,
+                    timeoutMillis = if (aiService.externalSummary) 300_000L else THREAD_AI_SUMMARY_UI_TIMEOUT_MS,
                     aiInferenceMutex = aiInferenceMutex,
                     aiService = aiService
                 ) {
@@ -277,7 +289,7 @@ internal fun ThreadScreenContentHost(
                 }
                 value = summaryResult?.fold(
                     onSuccess = {
-                        ThreadSummaryUiState.Ready(normalizeThreadSummary(it)).also { readyState ->
+                        ThreadSummaryUiState.Ready(if (aiService.externalSummary) it else normalizeThreadSummary(it)).also { readyState ->
                             putBoundedAiCacheEntry(
                                 cache = threadSummaryCache,
                                 key = threadSummaryCacheKey,
@@ -300,6 +312,10 @@ internal fun ThreadScreenContentHost(
                 key2 = aiCacheKey,
                 key3 = shouldShowThreadSummary
             ) {
+                if (!shouldApplyAiPostFilter) {
+                    value = AiPostModerationUiState(isEnabled = false)
+                    return@produceState
+                }
                 while (
                     shouldDeferAiPostModeration(
                         shouldApplyAiPostFilter = shouldApplyAiPostFilter,
@@ -317,6 +333,21 @@ internal fun ThreadScreenContentHost(
                     threadId = state.page.threadId,
                     posts = aiPostModerationSourcePosts
                 )
+                if (aiService.externalModeration) {
+                    value = AiPostModerationUiState(isEnabled = true, isRunning = true, totalPosts = input.posts.size)
+                    val response = runThreadAiInferenceWithTimeout(300_000L, aiInferenceMutex, aiService) {
+                        aiService.classifyPosts(input)
+                    }
+                    val result = response?.getOrNull()
+                    value = AiPostModerationUiState(
+                        isEnabled = true, isRunning = false, totalPosts = input.posts.size,
+                        processedPosts = if (result == null) 0 else input.posts.size,
+                        failedBatchCount = if (result == null) 1 else 0,
+                        results = result.orEmpty(),
+                        errorMessage = if (response == null) "判定がタイムアウトしました。" else response.exceptionOrNull()?.message
+                    )
+                    return@produceState
+                }
                 val cachedResults = linkedMapOf<String, PostModerationResult>()
                 val uncachedPosts = mutableListOf<Post>()
                 input.posts.forEach { post ->
@@ -425,7 +456,8 @@ internal fun ThreadScreenContentHost(
             val aiHiddenPostState by produceState(
                 initialValue = AiHiddenPostState(),
                 key1 = aiHiddenPostResolutionContext,
-                key2 = aiPostModerationUiState.results
+                key2 = aiPostModerationUiState.results,
+                key3 = aiService.automaticallyHideModeratedPosts
             ) {
                 val resolutionContext = aiHiddenPostResolutionContext
                 value = if (resolutionContext == null) {
@@ -434,7 +466,8 @@ internal fun ThreadScreenContentHost(
                     withContext(AppDispatchers.parsing) {
                         resolveAiHiddenPostState(
                             context = resolutionContext,
-                            moderationResults = aiPostModerationUiState.results
+                            moderationResults = aiPostModerationUiState.results,
+                            automaticallyHide = aiService.automaticallyHideModeratedPosts
                         )
                     }
                 }

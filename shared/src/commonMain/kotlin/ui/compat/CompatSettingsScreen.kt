@@ -288,7 +288,8 @@ internal fun CompatSettingsScreen(
     onBack: () -> Unit,
     initialScrollPosition: Pair<Int, Int>? = null,
     onScrollPositionChanged: (Pair<Int, Int>) -> Unit = {},
-    modernPresentation: Boolean = false
+    modernPresentation: Boolean = false,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null
 ) {
     val profileController = LocalExperienceProfileUiController.current
     val scope = rememberCoroutineScope()
@@ -708,6 +709,7 @@ internal fun CompatSettingsScreen(
             state = settingsListState,
             modifier = Modifier.fillMaxSize().padding(padding).testTag("compat-settings-list-$path")
         ) {
+            if (path == "ai") item(key = "ai-settings") { CompatAiSettingsControls(stateStore) }
             if (path == "media") item(key = "media-settings") {
                 com.valoser.futacha.shared.ui.media.DeviceImageEditorSettings()
                 HorizontalDivider()

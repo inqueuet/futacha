@@ -15,6 +15,7 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
     return html
+        .replace("<label for=\"post\"", aiHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"drawer\"", com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection() + "<label for=\"drawer\"")
         .replace("<label for=\"background\"", watcherHelpHtmlSection() + "<label for=\"background\"")
 }

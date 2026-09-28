@@ -92,7 +92,11 @@ import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MAX_LENGTH
 import com.valoser.futacha.shared.state.isValidAppLockPassword
 import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.ui.theme.LocalFutachaThemePalette
+import com.valoser.futacha.shared.util.AppDispatchers
+import coil3.compose.LocalPlatformContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class GlobalSettingsEntry(
     val label: String,
@@ -192,6 +196,7 @@ internal fun GlobalSettingsScaffold(
                 )
         LazyColumn(
             modifier = Modifier
+                .testTag("global-settings-list")
                 .fillMaxSize()
                 .padding(innerPadding),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -385,6 +390,7 @@ internal fun SettingsSection(
         ) {
             Row(
                 modifier = Modifier
+                    .testTag("settings-section-$title")
                     .fillMaxWidth()
                     .clickable {
                         val next = !isExpanded
@@ -867,10 +873,25 @@ internal fun GlobalSettingsAiSection(
     SettingsSection(
         title = "AI・補助機能",
         icon = Icons.Rounded.Psychology,
-        description = "端末AIを使った要約、分類、アプリ操作をまとめています。"
+        description = "要約・判定のAI接続先とアプリ操作を設定します。"
     ) {
+        // Opening this section must allow enabling an initially OFF feature.
+        // Normal board/catalog startup still does not bind the optional AI service.
+        val service = rememberSelectedAiService(LocalPlatformContext.current)
+        var settingsAvailability by remember(service) {
+            mutableStateOf(AiAvailability(false, "AIを確認中です。"))
+        }
+        LaunchedEffect(service, aiAvailability) {
+            settingsAvailability = try {
+                withContext(AppDispatchers.io) { service.getAvailability() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                AiAvailability(false, "AIの利用状況を確認できませんでした。設定を開き直してください。")
+            }
+        }
         GlobalSettingsAiControls(
-            aiAvailability = aiAvailability,
+            aiAvailability = settingsAvailability,
             isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
             onThreadSummaryModeChanged = onThreadSummaryModeChanged,
             isAiPostFilterEnabled = isAiPostFilterEnabled,
@@ -1210,6 +1231,7 @@ private fun GlobalSettingsAiControls(
 ) {
     val summaryEnabled = isThreadSummaryFeatureAvailable(aiAvailability)
     val postFilterEnabled = isAiPostFilterFeatureAvailable(aiAvailability)
+    OpenAiConnectionControls()
     ListItem(
         leadingContent = {
             Icon(
@@ -1218,12 +1240,12 @@ private fun GlobalSettingsAiControls(
                 tint = MaterialTheme.colorScheme.primary
             )
         },
-        headlineContent = { Text("端末AI") },
+        headlineContent = { Text("AIの利用状況") },
         supportingContent = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = aiAvailability.unavailableReason
-                        ?: "${aiAvailability.providerLabel} を使って端末内で処理します。",
+                        ?: aiAvailability.providerLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1243,10 +1265,11 @@ private fun GlobalSettingsAiControls(
         modifier = Modifier.fillMaxWidth()
     )
     ListItem(
-        headlineContent = { Text("端末内処理") },
+        headlineContent = { Text("本文の処理先") },
         supportingContent = {
             Text(
-                text = aiLocalProcessingDescription(aiAvailability.providerLabel),
+                text = if (aiAvailability.isExternalService) "外部サービスを選んだ機能は本文をOpenAIへ送信します。端末内AIを選んだ機能は端末内で処理します。"
+                    else aiLocalProcessingDescription(aiAvailability.providerLabel),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1291,6 +1314,7 @@ private fun GlobalSettingsAiControls(
         },
         trailingContent = {
             Switch(
+                modifier = Modifier.testTag("ai-summary-enabled"),
                 checked = isThreadSummaryModeEnabled && summaryEnabled,
                 enabled = summaryEnabled,
                 onCheckedChange = {
@@ -1316,6 +1340,7 @@ private fun GlobalSettingsAiControls(
         },
         trailingContent = {
             Switch(
+                modifier = Modifier.testTag("ai-moderation-enabled"),
                 checked = isAiPostFilterEnabled && postFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
                 enabled = postFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
                 onCheckedChange = {
