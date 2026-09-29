@@ -90,12 +90,17 @@ import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MIN_LENGTH
 import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MAX_LENGTH
 import com.valoser.futacha.shared.state.isValidAppLockPassword
+import com.valoser.futacha.shared.ui.image.HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY
+import com.valoser.futacha.shared.ui.image.HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH
+import com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.compat.compatPreferenceStorageKey
 import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.ui.theme.LocalFutachaThemePalette
 import com.valoser.futacha.shared.util.AppDispatchers
 import coil3.compose.LocalPlatformContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.withContext
 
 internal data class GlobalSettingsEntry(
@@ -635,6 +640,10 @@ internal fun GlobalSettingsDisplaySection(
                 onClick = { onThreadPostImageSizeChanged(size) }
             )
         }
+        } else {
+            // The image size itself is the shared thread setting linked above;
+            // the quality mode is shared with the compatibility network page.
+            HighQualityThumbnailSetting(sharedFeatures)
         }
         },
         {
@@ -685,6 +694,57 @@ internal fun GlobalSettingsDisplaySection(
 }
 
 @Composable
+private fun HighQualityThumbnailSetting(features: FutachaSharedFeatures) {
+    val scope = rememberCoroutineScope()
+    val current = HighQualityThumbnailMode.fromStored(
+        features.value(HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH, HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY)
+    )
+    ListItem(
+        headlineContent = { Text("サムネイルの高画質表示") },
+        supportingContent = {
+            Text(
+                text = "ふたばのサムネイルは最大250pxのため、大きく表示すると粗く見えます。" +
+                    "大きく引き伸ばす場合に、元画像を表示サイズへ縮小して表示します。" +
+                    "カタログは取得済みの元画像だけを使います。としあき(仮)モードと共通の設定です。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    HighQualityThumbnailMode.entries.forEach { mode ->
+        GlobalSettingsRadioOptionRow(
+            label = mode.label,
+            description = when (mode) {
+                HighQualityThumbnailMode.OFF -> "サムネイルをそのまま拡大して表示します。"
+                HighQualityThumbnailMode.CACHED ->
+                    "画像ビューア・保存・自動保存で取得済みの元画像だけを使います。通信量は増えません。"
+                HighQualityThumbnailMode.UNMETERED ->
+                    "Wi-Fiなど従量制でない回線では、表示したレス画像の元画像（4MBまで）も取得します。"
+                HighQualityThumbnailMode.ALWAYS ->
+                    "モバイル回線でも、表示したレス画像の元画像（4MBまで）を取得します。通信量が増えます。"
+            },
+            selected = current == mode,
+            onClick = {
+                if (mode != current) {
+                    scope.launch {
+                        runCatching {
+                            features.store.savePreference(
+                                compatPreferenceStorageKey(
+                                    HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH,
+                                    HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY
+                                ),
+                                mode.storedValue
+                            )
+                        }.onFailure { Logger.e("GlobalSettings", "Failed to save thumbnail quality", it) }
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
 internal fun GlobalSettingsBackgroundSection(
     text: GlobalSettingsBehaviorText,
     isUpdateCheckEnabled: Boolean,
@@ -701,7 +761,7 @@ internal fun GlobalSettingsBackgroundSection(
         icon = Icons.Rounded.History,
         description = "自動更新、通信量、匿名の品質改善データに関わる動作をまとめています。"
     ) {
-        SharedSettingsLink("network", "ネットワーク", "キャッシュサーバー・画像の同時取得")
+        SharedSettingsLink("network", "ネットワーク", "キャッシュサーバー・画像の同時取得・サムネイルの高画質表示")
         SharedSettingsLink("background", "タブの自動確認", "生存確認・更新確認の通信条件")
         SharedSettingsLink("watcher", "巡回管理", "キーワード・自動巡回・通知・にじろぐ連携")
         ListItem(

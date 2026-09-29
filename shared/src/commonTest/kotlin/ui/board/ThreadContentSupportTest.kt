@@ -28,14 +28,13 @@ class ThreadContentSupportTest {
     }
 
     @Test
-    fun countThreadContentItemsBeforePostsIncludesAiRows() {
+    fun countThreadContentItemsBeforePostsIncludesSummaryAndRevealRowWithoutModerationProgress() {
         assertEquals(
-            3,
+            2,
             countThreadContentItemsBeforePosts(
                 page = threadPage(deletedNotice = null),
                 embeddedHtml = emptyList(),
                 hasSummary = true,
-                hasAiPostModeration = true,
                 hasAiHiddenPostsSummary = true
             )
         )
@@ -79,12 +78,11 @@ class ThreadContentSupportTest {
         )
 
         assertEquals(
-            8,
+            7,
             countThreadContentItems(
                 page = page,
                 embeddedHtml = embeddedHtml,
                 hasSummary = true,
-                hasAiPostModeration = true,
                 hasAiHiddenPostsSummary = false
             )
         )

@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.runtime.*
+import androidx.compose.foundation.lazy.LazyListState
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.ai.*
 import com.valoser.futacha.shared.compat.*
@@ -38,6 +39,7 @@ internal class CompatThreadAiSession(private val service: OnDeviceAiService) {
         title: String,
         summaryEnabled: Boolean,
         moderationEnabled: Boolean,
+        nearbyPostIds: Set<String>? = null,
         publish: (CompatThreadAiState) -> Unit
     ) {
         if (!summaryEnabled && !moderationEnabled) return
@@ -58,15 +60,17 @@ internal class CompatThreadAiSession(private val service: OnDeviceAiService) {
             } else {
                 val source = resolveThreadAiPostModerationSourcePosts(posts)
                 val results = mutableListOf<PostModerationResult>()
-                // OpenAI owns its score cache and reevaluates threshold/category changes.
-                val pending = if (service.externalModeration) source else source.filter { post ->
+                // Session decisions include the configuration revision; OpenAI also caches raw scores.
+                val pending = source.filter { post ->
                     val cached = moderation[buildThreadPostModerationCacheKey(snapshot.tabKey, post, service.configurationKey)]
                     if (cached != null) results += cached
-                    cached == null
+                    cached == null && (nearbyPostIds == null || post.id in nearbyPostIds)
                 }
-                val batches = if (service.externalModeration) listOf(pending) else pending.chunked(8)
+                state = state.copy(results = results.toList())
+                publish(state)
+                val batches = pending.chunked(if (service.externalModeration) 32 else 8)
                 for (batch in batches.filter { it.isNotEmpty() }) {
-                    val result = aiAttempt(if (service.externalModeration) 300_000L else 45_000L) {
+                    val result = aiAttempt(if (service.externalModeration) 150_000L else 45_000L) {
                         service.classifyPosts(PostModerationInput(snapshot.tabKey, batch)).getOrThrow()
                     }
                     result.onSuccess { classified ->
@@ -78,9 +82,9 @@ internal class CompatThreadAiSession(private val service: OnDeviceAiService) {
                                 PostModerationResult(post.id, shouldHide = false)
                             } else continue
                             results += decision
-                            if (!service.externalModeration) putBoundedAiCacheEntry(moderation,
+                            putBoundedAiCacheEntry(moderation,
                                 buildThreadPostModerationCacheKey(snapshot.tabKey, post, service.configurationKey),
-                                decision, THREAD_AI_POST_MODERATION_CACHE_MAX_ENTRIES)
+                                decision, maxOf(THREAD_AI_POST_MODERATION_CACHE_MAX_ENTRIES, posts.size))
                         }
                     }.onFailure {
                         state = state.copy(moderationError = "一部のレスを判定できませんでした。再試行できます。")
@@ -136,7 +140,7 @@ internal fun CompatThreadAiState.resolveVisibility(ownPostNos: Set<String>, auto
 @Composable
 internal fun rememberCompatThreadAi(
     stateStore: AppStateStore?, snapshot: CompatThreadSnapshot?, title: String,
-    ownPostNos: Set<String>, retry: Int
+    ownPostNos: Set<String>, retry: Int, listState: LazyListState, displayedPosts: List<CompatPostSnapshot>
 ): CompatThreadAiState {
     val summaryEnabled = stateStore?.isThreadSummaryModeEnabled?.collectAsState(false)?.value ?: false
     val moderationEnabled = stateStore?.isAiPostFilterEnabled?.collectAsState(false)?.value ?: false
@@ -146,9 +150,15 @@ internal fun rememberCompatThreadAi(
     var state by remember(snapshot, service, summaryEnabled, moderationEnabled, retry) {
         mutableStateOf(CompatThreadAiState(summaryEnabled, moderationEnabled, running = snapshot != null))
     }
-    LaunchedEffect(snapshot, title, service, summaryEnabled, moderationEnabled, retry) {
+    val orderedIds = remember(displayedPosts) { displayedPosts.map { it.postNo } }
+    val itemKeys = remember(displayedPosts) { displayedPosts.associate { "${it.postNo}:${it.position}" to it.postNo } }
+    val nearbyIds = rememberModerationViewport(listState, orderedIds, itemKeys, moderationEnabled)
+    LaunchedEffect(snapshot, title, service, summaryEnabled, moderationEnabled, retry, nearbyIds) {
         try {
-            snapshot?.let { session.analyze(it, title, summaryEnabled, moderationEnabled) { next -> state = next } }
+            snapshot?.let { session.analyze(it, title, summaryEnabled, moderationEnabled, nearbyIds) { next ->
+                state = next.copy(results = if (next.running && next.posts.isEmpty()) state.results else next.results,
+                    posts = next.posts.ifEmpty { state.posts }, summary = next.summary ?: state.summary)
+            } }
         } finally {
             service.cancelActiveRequests()
         }

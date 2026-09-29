@@ -548,8 +548,7 @@ private fun ThreadScreenContent(
                     totalItems = countThreadContentItems(
                         page = successUiState.page,
                         embeddedHtml = successUiState.embeddedHtml,
-                        hasSummary = isThreadSummaryFeatureEnabled(preferencesState),
-                        hasAiPostModeration = isAiPostFilterFeatureEnabled(preferencesState)
+                        hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
                     ),
                     onFailure = { message, _ ->
                         Logger.w(THREAD_SCREEN_TAG, message)
@@ -860,8 +859,7 @@ private fun ThreadScreenContent(
     val threadContentItemCount = countThreadContentItems(
         page = currentPage,
         embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
-        hasSummary = isThreadSummaryFeatureEnabled(preferencesState),
-        hasAiPostModeration = isAiPostFilterFeatureEnabled(preferencesState)
+        hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
     )
     val initialScrollRestoreState = rememberThreadInitialScrollRestoreState(
         hasRestoredInitialScroll,

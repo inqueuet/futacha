@@ -156,6 +156,11 @@ internal object ThreadHtmlParserCore {
         pattern = "\\bheight\\s*=\\s*['\"]?(\\d+)['\"]?",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // Futaba states the original's size as the thumbnail's alt text: alt="78559 B".
+    private val fileSizeAltRegex = Regex(
+        pattern = "\\balt\\s*=\\s*['\"](\\d{1,12})\\s*B['\"]",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
     private val mailRegex = Regex(
         pattern = "<a\\s+[^>]{0,500}href=['\"]mailto:([^'\"]{0,500})['\"][^>]{0,500}>",
         options = setOf(RegexOption.IGNORE_CASE)
@@ -432,6 +437,9 @@ internal object ThreadHtmlParserCore {
         val thumbnailHeight = thumbnailTag
             ?.let { heightAttrRegex.find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
             ?.takeIf { it > 0 }
+        val imageFileSizeBytes = thumbnailTag
+            ?.let { fileSizeAltRegex.find(it)?.groupValues?.getOrNull(1)?.toLongOrNull() }
+            ?.takeIf { it > 0 }
         val order = orderRegex.find(block)?.groupValues?.getOrNull(1)?.toIntOrNull()
             ?: if (isOp) 0 else null
         val saidane = saidaneRegex.find(block)
@@ -462,7 +470,8 @@ internal object ThreadHtmlParserCore {
             isIsolated = isIsolated,
             mail = mail,
             thumbnailWidth = thumbnailWidth,
-            thumbnailHeight = thumbnailHeight
+            thumbnailHeight = thumbnailHeight,
+            imageFileSizeBytes = imageFileSizeBytes
         )
     }
 

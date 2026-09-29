@@ -44,16 +44,43 @@ class CompatThreadAiSupportTest {
         assertTrue(service.summaries.isEmpty())
     }
 
-    @Test fun externalModerationIncludesLastPostInOneBatchAndWorksWithoutLocalSummary() = runBlocking {
+    @Test fun externalModerationBatchesPostsAndWorksWithoutLocalSummary() = runBlocking {
         val service = FakeAi(true).apply { summaryAvailable = false }
         var state = CompatThreadAiState()
         CompatThreadAiSession(service).analyze(snapshot((1..101).map(::post)), "スレ", true, true) { state = it }
-        assertEquals(listOf(101), service.batches.map { it.posts.size })
-        assertEquals("101", service.batches.single().posts.last().id)
+        assertEquals(listOf(32, 32, 32, 5), service.batches.map { it.posts.size })
+        assertEquals("101", service.batches.last().posts.last().id)
         assertEquals(101, state.results.size)
         assertNotNull(state.summaryError)
         assertFalse(state.running)
         assertTrue(service.summaries.isEmpty())
+    }
+
+    @Test fun viewportChangesOnlySendUncachedNearbyPostsAndKeepPreviousDecisions() = runBlocking {
+        val service = FakeAi(true)
+        val session = CompatThreadAiSession(service)
+        val source = snapshot((1..1000).map(::post))
+        var state = CompatThreadAiState()
+        session.analyze(source, "スレ", false, true, emptySet()) { state = it }
+        assertTrue(service.batches.isEmpty())
+        val first = (492..511).map(Int::toString).toSet()
+        session.analyze(source, "スレ", false, true, first) { state = it }
+        assertEquals(first, service.batches.single().posts.map { it.id }.toSet())
+        val next = (502..521).map(Int::toString).toSet()
+        session.analyze(source, "スレ", false, true, next) { state = it }
+        assertEquals((512..521).map(Int::toString), service.batches.last().posts.map { it.id })
+        assertEquals((492..521).map(Int::toString).toSet(), state.results.map { it.postId }.toSet())
+        session.analyze(source, "スレ", false, true, first) { state = it }
+        assertEquals(2, service.batches.size)
+        assertTrue("492" in state.resolveVisibility(emptySet(), true).hiddenPostNos)
+        val edited = source.copy(posts = source.posts.map { if (it.postNo == "500") post(500, "変更本文") else it })
+        session.analyze(edited, "スレ", false, true, first) { state = it }
+        assertEquals(listOf("500"), service.batches.last().posts.map { it.id })
+        service.fail = true
+        session.analyze(edited, "スレ", false, true, setOf("800")) { state = it }
+        assertNotNull(state.moderationError)
+        assertTrue("492" in state.resolveVisibility(emptySet(), true).hiddenPostNos)
+        assertFalse("800" in state.resolveVisibility(emptySet(), true).hiddenPostNos)
     }
 
     @Test fun localCachesReuseUnchangedPostsAndInvalidateEditedBodyAndBoard() = runBlocking {

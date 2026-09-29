@@ -535,6 +535,7 @@ internal fun CompatCatalogGridItem(
                     .compatImageFallbackPolicy()
                     .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
                     .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
+                    .precision(coil3.size.Precision.INEXACT)
                     .crossfade(false)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
@@ -544,6 +545,17 @@ internal fun CompatCatalogGridItem(
         )
     }
     val imageState by imagePainter.state.collectAsState()
+    val highQualityPainter = rememberCompatCatalogHighQualityPainter(
+        item = item,
+        imageUrl = imageUrl,
+        imageState = imageState,
+        intrinsicSize = imagePainter.intrinsicSize,
+        slotWidthPx = thumbnailRequestSizePx,
+        slotHeightPx = thumbnailRequestSizePx,
+        lowQuality = lowQuality,
+        crop = cropThumbnail,
+        imageLoader = imageLoader
+    )
     val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
         val failedState = imageState as? coil3.compose.AsyncImagePainter.State.Error
@@ -585,7 +597,7 @@ internal fun CompatCatalogGridItem(
         ) {
             if (imageUrl != null && imageState !is coil3.compose.AsyncImagePainter.State.Error) {
                 Image(
-                    painter = imagePainter,
+                    painter = highQualityPainter ?: imagePainter,
                     contentDescription = item.title,
                     contentScale = if (cropThumbnail) ContentScale.Crop else ContentScale.Fit,
                     modifier = Modifier
@@ -729,6 +741,7 @@ internal fun CompatCatalogListItem(
                     .compatImageFallbackPolicy()
                     .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
                     .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
+                    .precision(coil3.size.Precision.INEXACT)
                     .crossfade(false)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
@@ -738,6 +751,17 @@ internal fun CompatCatalogListItem(
         )
     }
     val imageState by imagePainter.state.collectAsState()
+    val highQualityPainter = rememberCompatCatalogHighQualityPainter(
+        item = item,
+        imageUrl = imageUrl,
+        imageState = imageState,
+        intrinsicSize = imagePainter.intrinsicSize,
+        slotWidthPx = thumbnailRequestSizePx,
+        slotHeightPx = thumbnailRequestSizePx,
+        lowQuality = lowQuality,
+        crop = cropThumbnail,
+        imageLoader = imageLoader
+    )
     val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
         val failedState = imageState as? coil3.compose.AsyncImagePainter.State.Error
@@ -763,7 +787,7 @@ internal fun CompatCatalogListItem(
         ) {
             if (imageUrl != null && imageState !is coil3.compose.AsyncImagePainter.State.Error) {
                 Image(
-                    painter = imagePainter,
+                    painter = highQualityPainter ?: imagePainter,
                     contentDescription = item.title,
                     contentScale = if (cropThumbnail) ContentScale.Crop else ContentScale.Fit,
                     modifier = Modifier
@@ -834,3 +858,47 @@ private val CompatCatalogDroppedClass.compatCatalogDroppedColor: Color
         CompatCatalogDroppedClass.DELETED -> Color(0xFFB71C1C)
         CompatCatalogDroppedClass.DIE -> Color(0xFF558B2F)
     }
+
+/**
+ * Catalog slots may play an animated original; the user accepted motion in
+ * the catalog. Catalog pages state no file size, so only cached originals are used.
+ */
+@Composable
+private fun rememberCompatCatalogHighQualityPainter(
+    item: CatalogItem,
+    imageUrl: String?,
+    imageState: coil3.compose.AsyncImagePainter.State,
+    intrinsicSize: androidx.compose.ui.geometry.Size,
+    slotWidthPx: Int,
+    slotHeightPx: Int,
+    lowQuality: Boolean,
+    crop: Boolean,
+    imageLoader: coil3.ImageLoader
+): androidx.compose.ui.graphics.painter.Painter? {
+    val mode = com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode.current
+    // The catalog tag's width/height describe the 50px /cat/ image, not the
+    // /thumb/ image shown here, so only the decoded thumbnail's size is used.
+    val thumbnailWidth = intrinsicSize.width.takeIf { it.isFinite() }?.toInt()
+    val thumbnailHeight = intrinsicSize.height.takeIf { it.isFinite() }?.toInt()
+    val plan = remember(mode, item.fullImageUrl, imageUrl, thumbnailWidth, thumbnailHeight, slotWidthPx, slotHeightPx, lowQuality, crop) {
+        if (lowQuality || imageUrl != item.thumbnailUrl) null
+        else com.valoser.futacha.shared.ui.image.planHighQualityThumbnail(
+            mode = mode,
+            originalUrl = item.fullImageUrl,
+            thumbnailUrl = imageUrl,
+            thumbnailWidthPx = thumbnailWidth,
+            thumbnailHeightPx = thumbnailHeight,
+            boxWidthPx = slotWidthPx,
+            boxHeightPx = slotHeightPx,
+            originalSizeBytes = null,
+            isUnmeteredConnection = false,
+            allowAnimation = true,
+            crop = crop
+        )
+    }
+    return com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride(
+        plan = plan,
+        thumbnailReady = imageState is coil3.compose.AsyncImagePainter.State.Success,
+        imageLoader = imageLoader
+    )
+}

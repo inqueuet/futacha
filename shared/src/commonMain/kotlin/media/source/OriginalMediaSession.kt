@@ -70,6 +70,11 @@ class OriginalMediaSession internal constructor(
     internal val shutdownSignal: Deferred<Unit> get() = shutdown
     private val transition = Mutex()
     private val importers = MutableStateFlow<List<OriginalMediaCacheImporter>>(emptyList())
+    private val persistedUrlEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
+    override val persistedUrls: kotlinx.coroutines.flow.Flow<String> = persistedUrlEvents
     private val sharedDownloader = object : OriginalMediaDownloader {
         override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink) = downloader.download(request, sink)
         override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink, onHeaders: (OriginalMediaInfo) -> Unit) =
@@ -125,7 +130,8 @@ class OriginalMediaSession internal constructor(
                     cacheNamespace = cacheIdentity,
                     createCache = { createCache(configuration) },
                     downloader = sharedDownloader,
-                    dispatcher = dispatcher
+                    dispatcher = dispatcher,
+                    onPersisted = { url -> persistedUrlEvents.tryEmit(url) }
                 ))
             }
         }

@@ -6,6 +6,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.image.HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY
+import com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.PromptInfoAction
@@ -411,6 +413,7 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
         key == "threadExtractQuoteNum" -> (2..10).map(Int::toString)
         key == "threadImageNgPhashThreshold" -> (0..16).map(Int::toString)
         key == "viewerPreloadMode" -> listOf("常に利用する", "Wi-Fi回線のみ", "利用しない")
+        key == HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY -> HighQualityThumbnailMode.entries.map { it.label }
         else -> emptyList()
     }
 }
@@ -615,6 +618,7 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
             "利用しない", "none", "off" -> "none"
             else -> displayedValue
         }
+        HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY -> HighQualityThumbnailMode.fromStored(displayedValue).storedValue
         else -> displayedValue
     }
 
@@ -718,6 +722,7 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
             "none", "off", "利用しない" -> "利用しない"
             else -> storedValue
         }
+        HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY -> HighQualityThumbnailMode.fromStored(storedValue).label
         "delayFewReplies" -> storedValue.filter(Char::isDigit).let {
             if (it == "0") "0（ソートしない）" else it.ifBlank { storedValue }
         }
@@ -880,6 +885,21 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
             "減らすと1枚あたりの読み込みは速くなりますが、画面全体が出そろうまでは遅くなります。回線が細い場合は少なめが有利なことがあります。",
             preferenceKey = "dummyImageParallelNote",
             enabled = false
+        ),
+        CompatSettingEntry(
+            "サムネイルの高画質表示",
+            HighQualityThumbnailMode.DEFAULT.label,
+            preferenceKey = HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY
+        ),
+        CompatSettingEntry(
+            "高画質表示の説明",
+            "ふたばのサムネイル画像は最大250pxのため、サムネイルサイズやカタログの列数を大きくするほど粗く見えます。" +
+                "高画質表示では、サムネイルを大きく引き伸ばす場合に元画像を表示サイズへ縮小して使います。" +
+                "「取得済みの元画像のみ」は画像ビューアや保存で取得済みの元画像だけを使うため、通信量は増えません。" +
+                "元画像を取得する設定では、スレッドでファイルサイズが4MB以下と分かる画像だけを、画面に表示した分だけ取得します" +
+                "（カタログはサイズが分からないため、取得済みの元画像だけを使います）。動画はサムネイルのままです。",
+            preferenceKey = "dummyThumbHighQualityNote",
+            enabled = false
         )
     )
     "image_search" -> listOf(
@@ -1002,7 +1022,10 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
         "background" -> listOf("スレッド関連" to entries)
         "network" -> listOf(
             "キャッシュサーバー機能" to entries.compatKeys(COMPAT_CACHE_ENABLED_KEY, COMPAT_CACHE_STATUS_KEY),
-            "画像の取得" to entries.compatKeys("networkImageParallel", "dummyImageParallelNote"),
+            "画像の取得" to entries.compatKeys(
+                "networkImageParallel", "dummyImageParallelNote",
+                HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY, "dummyThumbHighQualityNote"
+            ),
             "ふたちゃ拡張" to entries.compatKeys(COMPAT_CACHE_BASE_URL_KEY)
         ).filter { it.second.isNotEmpty() }
         "image_search" -> listOf("長押しメニューに出す検索先" to entries)

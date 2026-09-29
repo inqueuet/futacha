@@ -18,6 +18,7 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         .replace("<label for=\"post\"", aiHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"drawer\"", com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection() + "<label for=\"drawer\"")
         .replace("<label for=\"background\"", watcherHelpHtmlSection() + "<label for=\"background\"")
+        .replace("<label for=\"network\"", thumbnailHelpHtmlSection() + "<label for=\"network\"")
 }
 
 // Reference help with current history/patrol guidance and inlined images.

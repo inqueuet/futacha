@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -264,6 +265,27 @@ class ThreadHtmlParserCoreTest {
 
         assertEquals(640, post.thumbnailWidth)
         assertEquals(360, post.thumbnailHeight)
+        assertNull(post.imageFileSizeBytes)
+    }
+
+    @Test
+    fun parseThread_readsTheOriginalFileSizeFromTheThumbnailAltText() {
+        // Live Futaba markup: the original's byte size is the thumbnail's alt text.
+        val html = """
+            <html><body>
+            <div class="thre" data-res="1790640387139">
+            <span class="cnw">26/09/29(火)09:00:00</span><span class="cno">No.1790640387139</span>
+            <a href="/b/src/1790640387139.jpg" target="_blank"><img src="/b/thumb/1790640387139s.jpg" border=0 align=left width=250 height=249 hspace=20 alt="78559 B" loading="lazy"></a>
+            <blockquote>本文</blockquote>
+            </div>
+            </body></html>
+        """.trimIndent()
+
+        val post = runBlocking { ThreadHtmlParserCore.parseThread(html) }.posts.single()
+
+        assertEquals(78_559L, post.imageFileSizeBytes)
+        assertEquals(250, post.thumbnailWidth)
+        assertEquals(249, post.thumbnailHeight)
     }
 
     @Test

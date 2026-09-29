@@ -64,35 +64,26 @@ internal fun CompatAiSettingsControls(stateStore: AppStateStore?) {
 }
 
 @Composable
-internal fun CompatThreadAiPanel(state: CompatThreadAiState, ngEnabled: Boolean, onCandidates: () -> Unit, onRetry: () -> Unit) {
-    if (!state.summaryEnabled && !state.moderationEnabled) return
+internal fun CompatThreadAiPanel(state: CompatThreadAiState, onRetry: () -> Unit) {
+    if (!state.summaryEnabled) return
     var expanded by rememberSaveable { mutableStateOf(true) }
     Surface(color = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface) {
         Column(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp).testTag("compat-thread-ai-panel")) {
             Row(Modifier.fillMaxWidth()) {
                 TextButton(onClick = { expanded = !expanded }, modifier = Modifier.weight(1f)) {
-                    Text(if (expanded) "AI・閉じる" else "AI・開く", color = MaterialTheme.colorScheme.onSurface)
-                }
-                if (state.candidatePostNos.isNotEmpty()) TextButton(onClick = onCandidates) {
-                    Text("判定候補 ${state.candidatePostNos.size}件", color = MaterialTheme.colorScheme.onSurface)
+                    Text(if (expanded) "スレ要約・閉じる" else "スレ要約・開く", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
             if (expanded) {
-                if (state.running) Text("AIで処理中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (state.running && state.summary == null && state.summaryError == null) Text("スレ要約を処理中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 state.summary?.let { summary ->
                     Text("スレ要約 · ${summary.providerLabel}", style = MaterialTheme.typography.labelMedium)
                     Text(summary.headline)
                     summary.bullets.forEach { Text("・$it") }
                 }
-                if (state.moderationEnabled) Text(
-                    "AI非表示 ${if (ngEnabled) state.hiddenPostNos.size else 0}件" +
-                        if (!ngEnabled) "（NG表示切替で再表示中）" else "",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                listOfNotNull(state.summaryError, state.moderationError).distinct().forEach {
-                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (state.summaryError != null || state.moderationError != null) TextButton(onRetry, enabled = !state.running) {
+                state.summaryError?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (state.summaryError != null) TextButton(onRetry, enabled = !state.running) {
                     Text("再試行", color = MaterialTheme.colorScheme.onSurface)
                 }
                 Spacer(Modifier.height(6.dp))

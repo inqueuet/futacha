@@ -24,6 +24,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -137,7 +138,6 @@ internal fun ThreadTreeContent(
     originalPostId: String? = page.posts.firstOrNull()?.id,
     embeddedHtml: List<EmbeddedHtmlContent>,
     summaryState: ThreadSummaryUiState?,
-    aiPostModerationUiState: AiPostModerationUiState = AiPostModerationUiState(),
     aiHiddenPostIds: Set<String> = emptySet(),
     aiHiddenPostReasons: Map<String, String> = emptyMap(),
     listState: LazyListState,
@@ -196,7 +196,6 @@ internal fun ThreadTreeContent(
         page = page,
         embeddedHtml = embeddedHtml,
         hasSummary = summaryState != null,
-        hasAiPostModeration = aiPostModerationUiState.isEnabled,
         hasAiHiddenPostsSummary = hasAiHiddenPostsSummary
     )
     val collapsedAiPostIds = aiHiddenPostIds.filterTo(HashSet()) { it !in revealedAiHiddenPostIds }
@@ -225,6 +224,7 @@ internal fun ThreadTreeContent(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
+                    .testTag("thread-content-list")
                     .futachaTouchScroll(listState)
                     .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.value.toInt()) }
                     .edgeSwipeRefresh(
@@ -247,15 +247,6 @@ internal fun ThreadTreeContent(
                     item(key = "thread-tree-summary") {
                         ThreadSummaryCard(
                             state = state,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-                if (aiPostModerationUiState.isEnabled) {
-                    item(key = "thread-tree-ai-post-moderation-progress") {
-                        AiPostModerationProgressCard(
-                            state = aiPostModerationUiState,
-                            hiddenPostCount = aiHiddenPostIds.size,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

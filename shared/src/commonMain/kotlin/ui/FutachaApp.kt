@@ -388,8 +388,10 @@ fun FutachaApp(
                     .onFailure { error -> Logger.e(TAG, "Failed to shutdown catalog ImageLoader", error) }
             }
         }
+        val highQualityThumbnailMode = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode(compatibilityStore)
         CompositionLocalProvider(
             LocalFutachaImageLoader provides compatibilityImageLoader,
+            com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
             LocalOriginalMediaSource provides promptMediaSource,
             LocalMediaFeatureSettings provides mediaFeatureSettings,
             LocalMediaFeatureUpdater provides updateMediaFeatures,
@@ -541,9 +543,11 @@ fun FutachaApp(
         val historyImageRepositories = com.valoser.futacha.shared.ui.image.rememberHistoryImageRepositories(
             fileSystem, autoSavedThreadRepository
         )
+        val highQualityThumbnailMode = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode(compatibilityStore)
         CompositionLocalProvider(
             com.valoser.futacha.shared.ui.image.LocalHistoryImageRepositories provides historyImageRepositories,
             LocalFutachaImageLoader provides imageLoader,
+            com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
             LocalOriginalMediaSource provides promptMediaSource,
             LocalMediaFeatureSettings provides mediaFeatureSettings,
             LocalMediaFeatureUpdater provides updateMediaFeatures,

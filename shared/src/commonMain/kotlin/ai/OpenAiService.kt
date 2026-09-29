@@ -28,7 +28,12 @@ internal fun openAiSummaryText(input: ThreadSummaryInput): String = buildString 
     }
 }
 
-internal class OpenAiFailure(message: String, val inputTooLarge: Boolean = false) : Exception(message)
+internal class OpenAiFailure(
+    message: String,
+    val inputTooLarge: Boolean = false,
+    val retryableRateLimit: Boolean = false,
+    val retryAfterMillis: Long? = null
+) : Exception(message)
 
 internal class OpenAiService(
     private val store: AiConnectionStore,
@@ -127,6 +132,10 @@ internal class OpenAiService(
             }
         }
         if (pending.isEmpty()) return cached
+        // Cache lookup precedes batching, so only missing bodies consume requests.
+        if (pending.size > 32) {
+            return cached + pending.chunked(32).flatMap { moderate(it, budget, depth) }
+        }
         val generated = try {
             budget.use()
             val result = request("moderations", buildJsonObject {
@@ -162,7 +171,11 @@ internal class OpenAiService(
             .distinct().sorted()
     }.getOrThrow()
 
-    private suspend fun request(path: String, body: JsonObject?): JsonObject {
+    private suspend fun request(path: String, body: JsonObject?): JsonObject = store.requestQueue.execute {
+        requestOnce(path, body)
+    }
+
+    private suspend fun requestOnce(path: String, body: JsonObject?): JsonObject {
         ensureCurrent()
         val key = store.apiKey(connection.revision)
         return client.prepareRequest("https://api.openai.com/v1/$path") {
@@ -193,7 +206,11 @@ internal class OpenAiService(
                 400, 404 -> "選択したモデル・APIの対応状況または入力容量を確認してください。"
                 else -> "OpenAIとの通信に失敗しました（HTTP ${response.status.value}）。"
             }
-            throw OpenAiFailure(message, tooLarge)
+            val errorType = root?.get("error")?.jsonObject?.get("type")?.jsonPrimitive?.contentOrNull
+            val permanent = setOf("insufficient_quota", "billing_hard_limit_reached", "billing_not_active", "usage_limit_reached")
+            throw OpenAiFailure(message, tooLarge,
+                retryableRateLimit = response.status.value == 429 && code !in permanent && errorType !in permanent,
+                retryAfterMillis = openAiRetryAfterMillis(response.headers[HttpHeaders.RetryAfter]))
         }
         ensureCurrent()
         root ?: throw OpenAiFailure("OpenAIの応答を読み取れませんでした。")

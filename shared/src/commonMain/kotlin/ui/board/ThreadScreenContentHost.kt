@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
@@ -231,6 +233,16 @@ internal fun ThreadScreenContentHost(
             val aiPostModerationSourcePosts = remember(aiSourcePosts) {
                 resolveThreadAiPostModerationSourcePosts(aiSourcePosts)
             }
+            var moderationDisplayedPosts by remember(bindings.aiSourceBoard, state.page.threadId, bindings.threadDisplayMode) {
+                mutableStateOf<List<Post>>(emptyList())
+            }
+            val moderationOrderedIds = remember(moderationDisplayedPosts) { moderationDisplayedPosts.map { it.id } }
+            val moderationItemKeys = remember(moderationDisplayedPosts, bindings.threadDisplayMode) {
+                val prefix = if (bindings.threadDisplayMode == ThreadDisplayMode.Tree) "tree-post" else "thread-post"
+                buildThreadPostLazyListKeys(moderationDisplayedPosts, prefix).zip(moderationOrderedIds).toMap()
+            }
+            val nearbyModerationIds = rememberModerationViewport(
+                bindings.lazyListState, moderationOrderedIds, moderationItemKeys, shouldApplyAiPostFilter)
             val externalSummaryFingerprint = remember(aiSourcePosts, bindings.aiThreadTitle, aiService.externalSummary) {
                 if (aiService.externalSummary) aiDigest(openAiSummaryText(ThreadSummaryInput(state.page.threadId, bindings.aiThreadTitle, aiSourcePosts))) else ""
             }
@@ -306,11 +318,14 @@ internal fun ThreadScreenContentHost(
                 ) ?: ThreadSummaryUiState.Unavailable("スレ要約がタイムアウトしました。")
             }
             val latestSummaryState = rememberUpdatedState(summaryState)
+            val externalModerationCache = remember(aiService, bindings.aiSourceBoard, state.page.threadId) {
+                linkedMapOf<String, Pair<String, PostModerationResult>>()
+            }
             val aiPostModerationUiState by produceState(
                 initialValue = AiPostModerationUiState(isEnabled = shouldApplyAiPostFilter),
                 key1 = shouldApplyAiPostFilter,
                 key2 = aiCacheKey,
-                key3 = shouldShowThreadSummary
+                key3 = shouldShowThreadSummary to nearbyModerationIds
             ) {
                 if (!shouldApplyAiPostFilter) {
                     value = AiPostModerationUiState(isEnabled = false)
@@ -334,18 +349,34 @@ internal fun ThreadScreenContentHost(
                     posts = aiPostModerationSourcePosts
                 )
                 if (aiService.externalModeration) {
-                    value = AiPostModerationUiState(isEnabled = true, isRunning = true, totalPosts = input.posts.size)
-                    val response = runThreadAiInferenceWithTimeout(300_000L, aiInferenceMutex, aiService) {
-                        aiService.classifyPosts(input)
+                    // Preserve offscreen decisions on refresh; discard edited or removed bodies.
+                    val currentBodies = input.posts.associate { it.id to it.messageHtml }
+                    externalModerationCache.keys.toList().forEach { id ->
+                        if (externalModerationCache[id]?.first != currentBodies[id]) externalModerationCache.remove(id)
                     }
-                    val result = response?.getOrNull()
-                    value = AiPostModerationUiState(
-                        isEnabled = true, isRunning = false, totalPosts = input.posts.size,
-                        processedPosts = if (result == null) 0 else input.posts.size,
-                        failedBatchCount = if (result == null) 1 else 0,
-                        results = result.orEmpty(),
-                        errorMessage = if (response == null) "判定がタイムアウトしました。" else response.exceptionOrNull()?.message
-                    )
+                    val externalModerationResults = externalModerationCache.mapValues { it.value.second }.toMutableMap()
+                    val pending = input.posts.filter { it.id in nearbyModerationIds && it.id !in externalModerationResults }
+                    value = AiPostModerationUiState(isEnabled = true, isRunning = pending.isNotEmpty(),
+                        totalPosts = externalModerationResults.size + pending.size,
+                        processedPosts = externalModerationResults.size, results = externalModerationResults.values.toList())
+                    for (batch in pending.chunked(32)) {
+                        val response = runThreadAiInferenceWithTimeout(150_000L, aiInferenceMutex, aiService) {
+                            aiService.classifyPosts(input.copy(posts = batch))
+                        }
+                        response?.getOrNull()?.forEach { result ->
+                            currentBodies[result.postId]?.let { body ->
+                                externalModerationResults[result.postId] = result
+                                externalModerationCache[result.postId] = body to result
+                            }
+                        }
+                        val failed = response?.isSuccess != true
+                        value = value.copy(processedPosts = externalModerationResults.size,
+                            results = externalModerationResults.values.toList(),
+                            failedBatchCount = if (failed) 1 else 0,
+                            errorMessage = if (response == null) "判定がタイムアウトしました。" else response.exceptionOrNull()?.message)
+                        if (failed) break
+                    }
+                    value = value.copy(isRunning = false)
                     return@produceState
                 }
                 val cachedResults = linkedMapOf<String, PostModerationResult>()
@@ -359,7 +390,7 @@ internal fun ThreadScreenContentHost(
                     val cachedResult = threadPostModerationCache[postCacheKey]
                     if (cachedResult != null) {
                         cachedResults[post.id] = cachedResult
-                    } else {
+                    } else if (post.id in nearbyModerationIds) {
                         uncachedPosts += post
                     }
                 }
@@ -367,8 +398,8 @@ internal fun ThreadScreenContentHost(
                     value = AiPostModerationUiState(
                         isEnabled = true,
                         isRunning = false,
-                        processedPosts = input.posts.size,
-                        totalPosts = input.posts.size,
+                        processedPosts = cachedResults.size,
+                        totalPosts = cachedResults.size + uncachedPosts.size,
                         results = cachedResults.values.toList()
                     )
                     return@produceState
@@ -386,7 +417,7 @@ internal fun ThreadScreenContentHost(
                     isEnabled = true,
                     isRunning = postBatches.isNotEmpty(),
                     processedPosts = processedPosts,
-                    totalPosts = input.posts.size,
+                    totalPosts = cachedResults.size + uncachedPosts.size,
                     results = publishedModeration
                 )
                 delay(THREAD_AI_POST_MODERATION_START_DELAY_MS)
@@ -404,7 +435,8 @@ internal fun ThreadScreenContentHost(
                     if (moderationResult == null || moderation == null) {
                         failedBatchCount += 1
                     } else {
-                        moderation.forEach { result ->
+                        val decisions = moderation.associateBy { it.postId }
+                        posts.map { decisions[it.id] ?: PostModerationResult(it.id, false) }.forEach { result ->
                             mergedModeration[result.postId] = result
                             posts.firstOrNull { it.id == result.postId }?.let { post ->
                                 putBoundedAiCacheEntry(
@@ -431,7 +463,7 @@ internal fun ThreadScreenContentHost(
                             isEnabled = true,
                             isRunning = index != postBatches.lastIndex,
                             processedPosts = processedPosts,
-                            totalPosts = input.posts.size,
+                            totalPosts = cachedResults.size + uncachedPosts.size,
                             failedBatchCount = failedBatchCount,
                             results = publishedModeration
                         )
@@ -480,7 +512,6 @@ internal fun ThreadScreenContentHost(
                     originalPostId = state.page.posts.firstOrNull()?.id,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
-                    aiPostModerationUiState = aiPostModerationUiState,
                     aiHiddenPostIds = aiHiddenPostState.postIds,
                     aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,
@@ -499,7 +530,10 @@ internal fun ThreadScreenContentHost(
                     postImageSize = bindings.preferencesState.threadPostImageSize,
                     compactHeader = bindings.preferencesState.isCompactThreadHeaderEnabled,
                     searchScrollRequest = bindings.searchScrollRequest,
-                    onDisplayedPostsChanged = bindings.onDisplayedPostsChanged,
+                    onDisplayedPostsChanged = {
+                        moderationDisplayedPosts = it.posts
+                        bindings.onDisplayedPostsChanged(it)
+                    },
                     newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
                 )
@@ -510,7 +544,6 @@ internal fun ThreadScreenContentHost(
                     originalPostId = state.page.posts.firstOrNull()?.id,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
-                    aiPostModerationUiState = aiPostModerationUiState,
                     aiHiddenPostIds = aiHiddenPostState.postIds,
                     aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,
@@ -529,7 +562,10 @@ internal fun ThreadScreenContentHost(
                     postImageSize = bindings.preferencesState.threadPostImageSize,
                     compactHeader = bindings.preferencesState.isCompactThreadHeaderEnabled,
                     searchScrollRequest = bindings.searchScrollRequest,
-                    onDisplayedPostsChanged = bindings.onDisplayedPostsChanged,
+                    onDisplayedPostsChanged = {
+                        moderationDisplayedPosts = it.posts
+                        bindings.onDisplayedPostsChanged(it)
+                    },
                     newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
                 )

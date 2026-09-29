@@ -197,7 +197,8 @@ class CompatPreferenceSchemaTest {
             "catalog" to 21,
             "control" to 11,
             "design" to 7,
-            "network" to 5,
+            // Includes the high-quality thumbnail extension and its note.
+            "network" to 7,
             "storage" to 10,
             "thread" to 16,
             "viewer" to 3
@@ -207,9 +208,9 @@ class CompatPreferenceSchemaTest {
                 .map { path to it }
         }
 
-        assertEquals(75, entries.size)
+        assertEquals(77, entries.size)
         assertEquals(
-            74,
+            76,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )
@@ -501,9 +502,17 @@ class CompatPreferenceSchemaTest {
         )
         assertEquals(" - ", groups[0].second.single { it.title == "ステータス" }.summary)
         assertEquals(
-            listOf("画像の同時取得数", "画像取得数の説明"),
+            listOf("画像の同時取得数", "画像取得数の説明", "サムネイルの高画質表示", "高画質表示の説明"),
             groups[1].second.map { it.title }
         )
+        val highQuality = groups[1].second.single { it.preferenceKey == "networkThumbHighQuality" }
+        assertEquals("Wi-Fi回線では元画像を取得", highQuality.summary)
+        assertEquals(
+            listOf("しない", "取得済みの元画像のみ", "Wi-Fi回線では元画像を取得", "常に元画像を取得"),
+            compatPreferenceOptions("network", highQuality)
+        )
+        assertEquals("wifi", compatPreferenceStoredValue("networkThumbHighQuality", "Wi-Fi回線では元画像を取得"))
+        assertEquals("常に元画像を取得", compatPreferenceDisplayValue("networkThumbHighQuality", "always"))
         assertEquals("画像の同時取得数", compatPreferenceDialogTitle(groups[1].second.first()))
     }
 

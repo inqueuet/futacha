@@ -5456,7 +5456,10 @@ private fun CompatThreadScreen(
     val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var snapshot by snapshotState
     var aiRetry by remember(tab.key) { mutableStateOf(0) }
-    val threadAi = rememberCompatThreadAi(stateStore, snapshot, tab.title, ownPostNos, aiRetry)
+    var visiblePosts by remember(tab.key) {
+        mutableStateOf<List<CompatPostSnapshot>>(emptyList())
+    }
+    val threadAi = rememberCompatThreadAi(stateStore, snapshot, tab.title, ownPostNos, aiRetry, listState, visiblePosts)
     val speechAiHiddenPostNos by rememberUpdatedState(if (threadNgEnabled) threadAi.hiddenPostNos else emptySet())
     val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
     val undoRefreshSnapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
@@ -6419,9 +6422,6 @@ private fun CompatThreadScreen(
         }
     }
 
-    var visiblePosts by remember(tab.key) {
-        mutableStateOf<List<CompatPostSnapshot>>(emptyList())
-    }
     var scrollRestoreCompleted by remember(tab.key) { mutableStateOf(false) }
     LaunchedEffect(
         snapshot?.revision,
@@ -7175,12 +7175,7 @@ private fun CompatThreadScreen(
                         )
                     }
                     CompatTitleStrip(tabs, tab)
-                    CompatThreadAiPanel(threadAi, threadNgEnabled,
-                        onCandidates = {
-                            quoteStack = quoteStack + CompatQuoteFrame("AI判定の候補", "ai-candidates",
-                                snapshot?.posts.orEmpty().filter { it.postNo in threadAi.candidatePostNos })
-                        },
-                        onRetry = { aiRetry++ })
+                    CompatThreadAiPanel(threadAi, onRetry = { aiRetry++ })
                 }
         },
         bottomBar = {

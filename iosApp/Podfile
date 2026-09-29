@@ -1,4 +1,5 @@
-platform :ios, '15.1'
+minimum_ios_version = '15.1'
+platform :ios, minimum_ios_version
 use_modular_headers!
 
 firebase_version = '12.18.0'
@@ -27,8 +28,8 @@ post_install do |installer|
     target.build_configurations.each do |config|
       config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
       current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
-      if current_target.nil? || Gem::Version.new(current_target) < Gem::Version.new('12.0')
-        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '12.0'
+      if current_target.nil? || Gem::Version.new(current_target) < Gem::Version.new(minimum_ios_version)
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
       end
     end
 

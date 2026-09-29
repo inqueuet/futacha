@@ -129,6 +129,8 @@ data class CompatPostSnapshot(
     /** Source thumbnail dimensions used to preserve the target's aspect-ratio layout. */
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
+    /** Original file size advertised by the thread page; bounds network thumbnail upgrades. */
+    val imageFileSizeBytes: Long? = null,
     /** Non-null only for a synthetic gallery/viewer item from an inline media link. */
     val mediaKey: String? = null,
     /** Retained for modern-mode quote navigation when a compatibility cache is reused. */

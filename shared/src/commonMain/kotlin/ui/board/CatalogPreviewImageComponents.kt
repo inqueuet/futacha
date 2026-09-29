@@ -60,6 +60,8 @@ internal fun CatalogPreviewImage(
             .data(activeUrl)
             .crossfade(false)
             .size(targetSizePx, targetSizePx)
+            // Futaba thumbnails are at most 250px: never enlarge them while decoding.
+            .precision(coil3.size.Precision.INEXACT)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
@@ -94,6 +96,33 @@ internal fun CatalogPreviewImage(
     val shouldShowFallback = activeUrl.isNullOrBlank() ||
         (imageState is AsyncImagePainter.State.Error && !canAdvance)
 
+    val highQualityMode = com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode.current
+    // The catalog tag's width/height describe the 50px /cat/ image, so use the
+    // decoded /thumb/ size. Catalog pages state no file size: cached originals only.
+    val decodedWidth = imagePainter.intrinsicSize.width.takeIf { it.isFinite() }?.toInt()
+    val decodedHeight = imagePainter.intrinsicSize.height.takeIf { it.isFinite() }?.toInt()
+    val highQualityPlan = remember(highQualityMode, fullImageUrl, activeUrl, thumbnailUrl, decodedWidth, decodedHeight, targetSizePx, lowQuality, crop) {
+        if (lowQuality || activeUrl != thumbnailUrl) null
+        else com.valoser.futacha.shared.ui.image.planHighQualityThumbnail(
+            mode = highQualityMode,
+            originalUrl = fullImageUrl,
+            thumbnailUrl = activeUrl,
+            thumbnailWidthPx = decodedWidth,
+            thumbnailHeightPx = decodedHeight,
+            boxWidthPx = targetSizePx,
+            boxHeightPx = targetSizePx,
+            originalSizeBytes = null,
+            isUnmeteredConnection = false,
+            // Motion is acceptable in the catalog.
+            allowAnimation = true,
+            crop = crop
+        )
+    }
+    val highQualityPainter = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride(
+        plan = highQualityPlan,
+        thumbnailReady = imageState is AsyncImagePainter.State.Success,
+        imageLoader = imageLoader
+    )
     val promptMetadata = rememberGenerationMetadata(fullImageUrl, imageState)
     Box(modifier) {
         if (shouldShowFallback) {
@@ -105,7 +134,7 @@ internal fun CatalogPreviewImage(
             )
         } else {
             Image(
-                painter = imagePainter,
+                painter = highQualityPainter ?: imagePainter,
                 contentDescription = contentDescription,
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()

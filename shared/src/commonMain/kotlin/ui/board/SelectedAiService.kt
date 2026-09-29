@@ -3,8 +3,12 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.runtime.*
 import com.valoser.futacha.shared.ai.*
 
+/** An injected service is owned and closed by its provider. */
+val LocalFutachaAiService = staticCompositionLocalOf<OnDeviceAiService?> { null }
+
 @Composable
 internal fun rememberSelectedAiService(context: Any?): OnDeviceAiService {
+    LocalFutachaAiService.current?.let { return it }
     val store = remember(context) { getAiConnectionStore(context) }
     val connection by store.state.collectAsState()
     LaunchedEffect(store) { store.load() }

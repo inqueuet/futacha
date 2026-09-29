@@ -113,6 +113,7 @@ fun ThreadPage.toCompatThreadSnapshot(tabKey: String, revision: Long): CompatThr
                 referencedCount = post.referencedCount,
                 thumbnailWidth = post.thumbnailWidth,
                 thumbnailHeight = post.thumbnailHeight,
+                imageFileSizeBytes = post.imageFileSizeBytes,
                 quoteReferences = post.quoteReferences
             ))
         }
@@ -148,7 +149,8 @@ fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage
             quoteReferences = cached.quoteReferences,
             mail = cached.mail,
             thumbnailWidth = cached.thumbnailWidth,
-            thumbnailHeight = cached.thumbnailHeight
+            thumbnailHeight = cached.thumbnailHeight,
+            imageFileSizeBytes = cached.imageFileSizeBytes
         )
     }
 )

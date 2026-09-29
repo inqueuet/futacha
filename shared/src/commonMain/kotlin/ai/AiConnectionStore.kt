@@ -49,7 +49,10 @@ internal interface AiConnectionStorage {
     fun writeCache(value: String) = Unit
 }
 
-class AiConnectionStore internal constructor(private val storage: AiConnectionStorage) {
+class AiConnectionStore internal constructor(
+    private val storage: AiConnectionStorage,
+    internal val requestQueue: OpenAiRequestQueue = OpenAiRequestQueue()
+) {
     private val mutex = Mutex()
     private var stored = StoredAiConnection()
     private val mutableState = MutableStateFlow(AiConnectionState(supportsSecureStorage = storage.supported))

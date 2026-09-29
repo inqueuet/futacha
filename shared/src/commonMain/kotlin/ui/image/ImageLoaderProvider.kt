@@ -248,6 +248,9 @@ data class FutabaExtensionFallbackPolicy(
 )
 
 private val FutabaExtensionFallbackPolicyKey = Extras.Key(FutabaExtensionFallbackPolicy())
+
+internal fun ImageRequest.futabaExtensionFallbackPolicy(): FutabaExtensionFallbackPolicy =
+    getExtra(FutabaExtensionFallbackPolicyKey)
 private val VideoThumbnailRequestPriorityKey = Extras.Key(VideoThumbnailRequestPriority.VISIBLE)
 
 internal fun ImageRequest.Builder.videoThumbnailRequestPriority(

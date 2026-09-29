@@ -15,7 +15,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -92,6 +97,12 @@ interface OriginalMediaSource {
     suspend fun acquireForExport(request: OriginalMediaRequest): OriginalMediaStore.Lease = acquire(request)
     suspend fun clear()
     suspend fun sizeBytes(): Long
+
+    /**
+     * Request URLs whose original was just stored persistently. A consumer that
+     * asked cache-only and missed can wait for its URL instead of polling.
+     */
+    val persistedUrls: Flow<String> get() = emptyFlow()
 }
 
 /** Leases still open while a store waits to shut down. */
@@ -127,10 +138,17 @@ class OriginalMediaStore(
      * A player that gave up (stall, error screen) and is retried joins the same transfer
      * instead of restarting from byte 0. Explicit reloads (a new token) still restart.
      */
-    private val playbackLingerMillis: Long = DEFAULT_PLAYBACK_LINGER_MILLIS
+    private val playbackLingerMillis: Long = DEFAULT_PLAYBACK_LINGER_MILLIS,
+    /** Also told about each persisted URL; a session forwards it across store generations. */
+    private val onPersisted: (String) -> Unit = {}
 ) : OriginalMediaSource, AutoCloseable {
     init { require(cacheNamespace.isNotBlank()) }
     override val cacheIdentity = cacheNamespace.encodeUtf8().sha256().hex()
+    private val persistedUrlEvents = MutableSharedFlow<String>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val persistedUrls: Flow<String> = persistedUrlEvents.asSharedFlow()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val cleanupScope = CoroutineScope(NonCancellable + dispatcher)
     private val mutex = Mutex()
@@ -415,6 +433,8 @@ class OriginalMediaStore(
                                 }
                                 disk.fileSystem.write(pointer.metadata) { writeUtf8("original-media-v1") }
                                 pointer.commit()
+                                persistedUrlEvents.tryEmit(entry.request.url)
+                                onPersisted(entry.request.url)
                             } catch (failure: Throwable) {
                                 pointer.abort()
                                 throw failure

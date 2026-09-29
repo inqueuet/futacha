@@ -19,6 +19,21 @@ class HelpSearchSupportTest {
         assertTrue(searched.contains("<mark>OpenAI</mark>"))
     }
 
+    @Test fun thumbnailHelpExplainsSharedSettingDefaultNetworkLimitsAndExclusions() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "サムネイルの高画質表示").any { "両モード共通" in it.body })
+        assertTrue(searchHelp(sections, "初期設定").any { "「Wi-Fi回線では元画像を取得」です" in it.body })
+        assertTrue(searchHelp(sections, "4MB").any { "カタログはファイルサイズが分からない" in it.body })
+        assertTrue(searchHelp(sections, "テザリング").any { "対象外" in it.body })
+        assertTrue(searchHelp(sections, "WebM").any { "サムネイルのまま" in it.body })
+        assertTrue(searchHelp(sections, "250px").any { "引き伸ばされて粗く見えます" in it.body })
+        // Placed with the other image/network topics, before the network help.
+        assertTrue(html.indexOf("id=\"thumbnail-help\"") in 0 until html.indexOf("id=\"network\""))
+        val searched = searchedHelpHtml(html, "高画質表示")
+        assertTrue(searched.contains("<input checked type=\"checkbox\" id=\"thumbnail-help\""))
+    }
+
     @Test fun searchesClosedSectionsJapaneseEntitiesAndLiteralWords() {
         val html = """<html><style>invisible-style</style><body><label>巡回</label><input type="checkbox"><div>
             <p class="title">Wi-Fi と通信</p><p>にじろぐは不要です。A&amp;B<br/>[検索]できます<img src="data:image/png;base64,private-image"/></p>

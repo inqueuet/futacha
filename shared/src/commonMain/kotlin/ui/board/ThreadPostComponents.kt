@@ -3,6 +3,12 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
+import com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.image.planHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride
+import androidx.compose.ui.platform.LocalWindowInfo
+import coil3.size.Precision
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -187,6 +193,9 @@ internal fun ThreadPostCard(
                     .data(displayUrl)
                     .crossfade(false)
                     .size(thumbnailTargetWidthPx, thumbnailTargetHeightPx)
+                    // Futaba thumbnails are at most 250px: enlarging them while
+                    // decoding adds no detail and uses ~12x the memory cache.
+                    .precision(Precision.INEXACT)
                     .build()
             }
             val thumbnailPainter = rememberAsyncImagePainter(
@@ -194,6 +203,35 @@ internal fun ThreadPostCard(
                 imageLoader = imageLoader
             )
             val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            val highQualityMode = LocalHighQualityThumbnailMode.current
+            val windowWidthPx = LocalWindowInfo.current.containerSize.width
+            val targetMediaUrl = resolvePostTargetMediaUrl(post)
+            val highQualityPlan = remember(
+                highQualityMode, targetMediaUrl, displayUrl, post.imageFileSizeBytes,
+                post.thumbnailWidth, post.thumbnailHeight, thumbnailTargetWidthPx,
+                thumbnailTargetHeightPx, windowWidthPx, thumbnailPainterState
+            ) {
+                planHighQualityThumbnail(
+                    mode = highQualityMode,
+                    originalUrl = targetMediaUrl,
+                    thumbnailUrl = displayUrl,
+                    thumbnailWidthPx = post.thumbnailWidth
+                        ?: thumbnailPainter.intrinsicSize.width.takeIf { it.isFinite() }?.toInt(),
+                    thumbnailHeightPx = post.thumbnailHeight
+                        ?: thumbnailPainter.intrinsicSize.height.takeIf { it.isFinite() }?.toInt(),
+                    boxWidthPx = if (windowWidthPx > 0) minOf(thumbnailTargetWidthPx, windowWidthPx)
+                        else thumbnailTargetWidthPx,
+                    boxHeightPx = thumbnailTargetHeightPx,
+                    originalSizeBytes = post.imageFileSizeBytes,
+                    isUnmeteredConnection = highQualityMode == HighQualityThumbnailMode.UNMETERED &&
+                        com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
+                )
+            }
+            val highQualityPainter = rememberHighQualityThumbnailOverride(
+                plan = highQualityPlan,
+                thumbnailReady = thumbnailPainterState is AsyncImagePainter.State.Success,
+                imageLoader = imageLoader
+            )
             val promptMetadata = rememberGenerationMetadata(resolvePostTargetMediaUrl(post), thumbnailPainterState)
             val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
             // Measured with layout modifiers instead of BoxWithConstraints: that is a
@@ -258,7 +296,7 @@ internal fun ThreadPostCard(
                             layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                         }) {
                             Image(
-                                painter = thumbnailPainter,
+                                painter = highQualityPainter ?: thumbnailPainter,
                                 contentDescription = "添付画像",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize()

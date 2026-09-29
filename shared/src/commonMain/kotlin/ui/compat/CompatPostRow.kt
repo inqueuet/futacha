@@ -10,6 +10,10 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
+import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.image.planHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride
+import coil3.size.Precision
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -802,6 +806,9 @@ internal fun CompatPostRow(
                     .data(previewUrl)
                     .compatImageFallbackPolicy()
                     .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
+                    // Futaba thumbnails are at most 250px: enlarging them while
+                    // decoding adds no detail and uses ~12x the memory cache.
+                    .precision(Precision.INEXACT)
                     // Changing the memory key makes Coil create a fresh
                     // request after a transient failure while retaining a
                     // successful disk entry. Manual reload remains the only
@@ -918,6 +925,31 @@ internal fun CompatPostRow(
                         ?: intrinsicSize.height.toInt().takeIf { it > 0 }
                 )
             }
+            val highQualityMode = LocalHighQualityThumbnailMode.current
+            val displayDensity = LocalDensity.current.density
+            val highQualityPlan = remember(
+                highQualityMode, originalMediaUrl, previewUrl, post.imageFileSizeBytes,
+                post.thumbnailWidth, post.thumbnailHeight, bounds, displayDensity, painterState
+            ) {
+                planHighQualityThumbnail(
+                    mode = highQualityMode,
+                    originalUrl = originalMediaUrl,
+                    thumbnailUrl = previewUrl,
+                    thumbnailWidthPx = post.thumbnailWidth ?: intrinsicSize.width.takeIf { it.isFinite() }?.toInt(),
+                    thumbnailHeightPx = post.thumbnailHeight ?: intrinsicSize.height.takeIf { it.isFinite() }?.toInt(),
+                    boxWidthPx = (bounds.first * displayDensity).toInt(),
+                    boxHeightPx = (bounds.second * displayDensity).toInt(),
+                    originalSizeBytes = post.imageFileSizeBytes,
+                    isUnmeteredConnection = highQualityMode ==
+                        com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode.UNMETERED &&
+                        isCompatWifiConnected(platformContext)
+                )
+            }
+            val highQualityPainter = rememberHighQualityThumbnailOverride(
+                plan = highQualityPlan,
+                thumbnailReady = painterState is coil3.compose.AsyncImagePainter.State.Success,
+                imageLoader = imageLoader
+            )
             val hasOriginalFallback =
                 !useOriginalAfterPreviewFailure &&
                     requestedPreviewUrl != null &&
@@ -953,7 +985,7 @@ internal fun CompatPostRow(
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painter,
+                    painter = highQualityPainter ?: painter,
                     contentDescription = "No.${post.postNo}の画像",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -1049,6 +1081,7 @@ internal fun CompatInlineApuSmallPreviews(
                     .data(previewUrl)
                     .compatImageFallbackPolicy()
                     .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
+                    .precision(Precision.INEXACT)
                     .build(),
                 imageLoader = imageLoader
             )

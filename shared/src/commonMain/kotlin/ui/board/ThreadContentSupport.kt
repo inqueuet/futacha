@@ -140,15 +140,11 @@ internal fun countThreadContentItemsBeforePosts(
     page: ThreadPage?,
     embeddedHtml: List<EmbeddedHtmlContent>,
     hasSummary: Boolean = false,
-    hasAiPostModeration: Boolean = false,
     hasAiHiddenPostsSummary: Boolean = false
 ): Int {
     if (page == null) return 0
     var count = 0
     if (hasSummary) {
-        count += 1
-    }
-    if (hasAiPostModeration) {
         count += 1
     }
     if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
@@ -167,7 +163,6 @@ internal fun countThreadContentItems(
     page: ThreadPage?,
     embeddedHtml: List<EmbeddedHtmlContent>,
     hasSummary: Boolean = false,
-    hasAiPostModeration: Boolean = false,
     hasAiHiddenPostsSummary: Boolean = false
 ): Int {
     if (page == null) return 0
@@ -175,7 +170,6 @@ internal fun countThreadContentItems(
         page = page,
         embeddedHtml = embeddedHtml,
         hasSummary = hasSummary,
-        hasAiPostModeration = hasAiPostModeration,
         hasAiHiddenPostsSummary = hasAiHiddenPostsSummary
     )
     count += page.posts.size

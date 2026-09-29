@@ -23,7 +23,9 @@ data class Post(
     val mail: String? = null,
     /** Dimensions advertised by the thread thumbnail tag, when available. */
     val thumbnailWidth: Int? = null,
-    val thumbnailHeight: Int? = null
+    val thumbnailHeight: Int? = null,
+    /** Original file size advertised by the thumbnail tag (`alt="12345 B"`), when available. */
+    val imageFileSizeBytes: Long? = null
 )
 
 @Serializable

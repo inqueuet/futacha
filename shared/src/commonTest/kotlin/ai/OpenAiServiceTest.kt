@@ -104,8 +104,30 @@ class OpenAiServiceTest {
             assertEquals(posts.map { it.id }.toSet(), first.map { it.postId }.toSet())
             assertTrue(first.all { it.shouldHide })
             service.classifyPosts(PostModerationInput("t", posts + post(101))).getOrThrow()
-            assertEquals(listOf(100, 1), sizes)
+            assertEquals(listOf(32, 32, 32, 4, 1), sizes)
         } finally { service.close() }
+    }
+
+    @Test fun moderationRetries429ThroughSharedQueueAndCachesSuccessfulResponse() = runBlocking {
+        var now = 0L
+        val queue = OpenAiRequestQueue({ now }, { now += it }, { 0L })
+        val store = AiConnectionStore(MemoryAiStorage(), queue).also {
+            it.load()
+            it.save(AiProvider.DEVICE, AiProvider.OPENAI, "gpt-4.1-mini", "test-only-key")
+        }
+        val starts = mutableListOf<Long>()
+        fun client() = HttpClient(MockEngine {
+            starts += now
+            if (starts.size == 1) respond("""{"error":{"code":"rate_limit_exceeded"}}""",
+                HttpStatusCode.TooManyRequests, headersOf(HttpHeaders.RetryAfter, "5"))
+            else respond(moderationResponse(2))
+        })
+        val input = PostModerationInput("t", listOf(post(1), post(2)))
+        val first = OpenAiService(store, store.state.value, client())
+        try { assertEquals(2, first.classifyPosts(input).getOrThrow().size) } finally { first.close() }
+        val second = OpenAiService(store, store.state.value, client())
+        try { assertEquals(2, second.classifyPosts(input).getOrThrow().size) } finally { second.close() }
+        assertEquals(listOf(0L, 5_000L), starts)
     }
 
     @Test fun sexualFlagAloneDoesNotBecomeHarassmentAndWrongResultCountFails() {
@@ -210,17 +232,20 @@ class OpenAiServiceTest {
     }
 
     @Test fun persistentCacheSurvivesServiceRecreationAndContainsNoKeyOrSourceBody() = runBlocking {
-        val storage = MemoryAiStorage()
-        val firstStore = store(storage)
-        val input = PostModerationInput("t", listOf(post(1, "秘密の入力本文")))
-        val first = OpenAiService(firstStore, firstStore.state.value, HttpClient(MockEngine { respond(moderationResponse(1)) }))
-        try { first.classifyPosts(input).getOrThrow() } finally { first.close() }
-        assertFalse(storage.cache!!.contains("秘密の入力本文"))
-        assertFalse(storage.cache!!.contains("test-only-key"))
-        val secondStore = AiConnectionStore(storage).also { it.load() }
-        val second = OpenAiService(secondStore, secondStore.state.value, HttpClient(MockEngine { error("Must use persistent cache") }))
-        try { assertFalse(second.classifyPosts(input).getOrThrow().single().shouldHide) }
-        finally { second.close() }
+        for (shouldHide in listOf(false, true)) {
+            val storage = MemoryAiStorage()
+            val firstStore = store(storage)
+            val input = PostModerationInput("t", listOf(post(1, "秘密の入力本文")))
+            val first = OpenAiService(firstStore, firstStore.state.value, HttpClient(MockEngine { respond(moderationResponse(1, harassment = shouldHide)) }))
+            try { assertEquals(shouldHide, first.classifyPosts(input).getOrThrow().single().shouldHide) }
+            finally { first.close() }
+            assertFalse(storage.cache!!.contains("秘密の入力本文"))
+            assertFalse(storage.cache!!.contains("test-only-key"))
+            val secondStore = AiConnectionStore(storage).also { it.load() }
+            val second = OpenAiService(secondStore, secondStore.state.value, HttpClient(MockEngine { error("Must use persistent cache") }))
+            try { assertEquals(shouldHide, second.classifyPosts(input).getOrThrow().single().shouldHide) }
+            finally { second.close() }
+        }
     }
 
     @Test fun independentSelectionsPersistAndDeletingKeyRequiresLocalChoices() = runBlocking {
