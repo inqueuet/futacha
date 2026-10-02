@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -278,6 +279,7 @@ import com.valoser.futacha.shared.compat.CompatCatalogReplyIndicator
 import com.valoser.futacha.shared.compat.CompatCatalogReplyIndicatorKind
 import com.valoser.futacha.shared.compat.resolveCompatCatalogReplyIndicator
 import com.valoser.futacha.shared.compat.mergeCompatCatalogTab
+import com.valoser.futacha.shared.compat.mergeCompatReopenedTab
 import com.valoser.futacha.shared.compat.CompatImagePhash
 import com.valoser.futacha.shared.compat.compatImagePhashCachePreferenceKey
 import com.valoser.futacha.shared.compat.isValidCompatImagePhash
@@ -434,7 +436,8 @@ import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.audio.JAPANESE_TTS_UNAVAILABLE_MESSAGE
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
-import com.valoser.futacha.shared.ai.FutachaAiCommandRisk
+import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
+import com.valoser.futacha.shared.ai.requiresConfirmation
 import com.valoser.futacha.shared.ai.boardSelectorParameter
 import com.valoser.futacha.shared.ai.boardUrlParameter
 import com.valoser.futacha.shared.ai.catalogModeParameter
@@ -480,6 +483,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -578,6 +582,8 @@ fun CompatibilityApp(
     onThreadDeepLinkConsumed: (String) -> Unit = {},
     initialBoardDeepLink: String? = null,
     onBoardDeepLinkConsumed: (String) -> Unit = {},
+    platformAiDeepLink: String? = null,
+    onPlatformAiDeepLinkConsumed: (String) -> Unit = {},
     platformAiCommand: FutachaAiCommand? = null,
     onPlatformAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     onArchiveReportEnqueued: (Int) -> Unit = {},
@@ -601,6 +607,7 @@ fun CompatibilityApp(
         fileSystem, historyAutoSavedThreadRepository
     )
     CompositionLocalProvider(
+        LocalCompatAiPreviewCache provides remember(store, stateStore) { CompatAiPreviewCache() },
         com.valoser.futacha.shared.ui.image.LocalHistoryImageRepositories provides historyImageRepositories,
         LocalFutachaImageLoader provides effectiveImageLoader,
         LocalFutachaCatalogImageLoader provides effectiveCatalogImageLoader
@@ -623,6 +630,8 @@ fun CompatibilityApp(
             onThreadDeepLinkConsumed = onThreadDeepLinkConsumed,
             initialBoardDeepLink = initialBoardDeepLink,
             onBoardDeepLinkConsumed = onBoardDeepLinkConsumed,
+            platformAiDeepLink = platformAiDeepLink,
+            onPlatformAiDeepLinkConsumed = onPlatformAiDeepLinkConsumed,
             platformAiCommand = platformAiCommand,
             onPlatformAiCommandConsumed = onPlatformAiCommandConsumed,
             onArchiveReportEnqueued = onArchiveReportEnqueued,
@@ -650,6 +659,8 @@ private fun CompatibilityAppContent(
     onThreadDeepLinkConsumed: (String) -> Unit = {},
     initialBoardDeepLink: String? = null,
     onBoardDeepLinkConsumed: (String) -> Unit = {},
+    platformAiDeepLink: String? = null,
+    onPlatformAiDeepLinkConsumed: (String) -> Unit = {},
     platformAiCommand: FutachaAiCommand? = null,
     onPlatformAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     onArchiveReportEnqueued: (Int) -> Unit = {},
@@ -665,6 +676,15 @@ private fun CompatibilityAppContent(
         buildImportedHistoryRepository(fileSystem)
     }
     var state by remember { mutableStateOf(CompatibilityWorkspaceState()) }
+    val isAppUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
+    // Command handling reads the lock outside composition: Android pauses
+    // recomposition after ON_STOP, so [isAppUnlocked] stays stale (C-1).
+    val appLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current ?: remember {
+        com.valoser.futacha.shared.ui.FutachaAppLockHolder().apply {
+            openSessionWithoutLock()
+            setContentVisible(true)
+        }
+    }
     var boards by remember { mutableStateOf<List<CompatBoard>>(emptyList()) }
     var boardsLoaded by remember { mutableStateOf(false) }
     var histories by remember { mutableStateOf<List<CompatHistoryEntry>>(emptyList()) }
@@ -702,12 +722,32 @@ private fun CompatibilityAppContent(
     var previousCompatHost by remember { mutableStateOf<CompatHost?>(null) }
     var threadRefreshToken by remember { mutableStateOf(0L) }
     var scrollToBottomRequest by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    var pendingUnregisteredDeepLink by remember { mutableStateOf<Pair<String, CanonicalThreadUrl>?>(null) }
+    var pendingUnregisteredDeepLink by remember { mutableStateOf<CompatUnregisteredThreadRequest?>(null) }
     var deepLinkError by remember { mutableStateOf<String?>(null) }
     var pendingPlatformAiConfirmation by remember { mutableStateOf<FutachaAiCommand?>(null) }
-    var pendingThreadAiCommand by remember { mutableStateOf<FutachaAiCommand?>(null) }
-    var pendingCatalogAiCommand by remember { mutableStateOf<FutachaAiCommand?>(null) }
+    val threadAiSlot = remember { CompatAiScreenCommandSlot() }
+    val pendingThreadCommandTarget = remember(com.valoser.futacha.shared.ui.AiCommandEffectKey(threadAiSlot.pending)) {
+        state.activeTabKey
+    }
+    LaunchedEffect(state.activeTabKey, state.host) {
+        if (threadAiSlot.pending != null &&
+            (state.activeTabKey != pendingThreadCommandTarget || state.host !is CompatHost.ThreadWorkspace)) {
+            threadAiSlot.clear()
+        }
+    }
     var platformAiFeedback by remember { mutableStateOf<String?>(null) }
+    // A command the thread never consumes must not block later ones, but the
+    // wait covers a slow thread load (up to ~75 s) and the user is told when
+    // one is dropped (C-5). The age counts from the forwarding, also while
+    // stopped or locked, and one held behind the lock follows the 60 s rule
+    // (C4-1/E4-1).
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(threadAiSlot.pending), isAppUnlocked) {
+        threadAiSlot.supervise(appLock)?.let { platformAiFeedback = it }
+    }
+    val catalogAiSlot = remember { CompatAiScreenCommandSlot() }
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(catalogAiSlot.pending), isAppUnlocked) {
+        catalogAiSlot.supervise(appLock)?.let { platformAiFeedback = it }
+    }
     var boardUpdateDialogOpen by remember { mutableStateOf(false) }
     var boardUpdateNotice by remember { mutableStateOf<String?>(null) }
     var closeToastVisible by remember { mutableStateOf(false) }
@@ -743,6 +783,10 @@ private fun CompatibilityAppContent(
         mutableStateOf(CompatExternalWatcherSnapshot())
     }
     val latestCompatTabs by rememberUpdatedState(state.tabs)
+    // Optimistic tabs opened before their store write commits; see ReplaceTabs.
+    val optimisticOpenTabs = remember { LinkedHashMap<String, CompatTab>() }
+    // Close batches the user undid, possibly before their close write committed.
+    val undoneCloseBatchIds = remember { mutableSetOf<String>() }
     val latestCompatPreferences by rememberUpdatedState(preferences)
     val latestCompatBoards by rememberUpdatedState(boards)
     val latestCompatHistories by rememberUpdatedState(histories)
@@ -750,6 +794,7 @@ private fun CompatibilityAppContent(
     // not cancel it merely because the user opens Settings. Keep the probe in
     // the root composition scope rather than tying its lifetime to one host.
     val cacheStatusProbeJob = remember { arrayOfNulls<Job>(1) }
+    val platformAiHistoryRefresh = remember { CompatJobSlot() }
     val referenceTimerHostActive = when (state.host) {
         CompatHost.Main, is CompatHost.Catalog, is CompatHost.ThreadWorkspace -> true
         else -> false
@@ -777,7 +822,7 @@ private fun CompatibilityAppContent(
         operation: String,
         userMessage: String? = null,
         block: suspend () -> Unit
-    ) {
+    ): Job =
         scope.launch {
             try {
                 block()
@@ -790,7 +835,6 @@ private fun CompatibilityAppContent(
                 }
             }
         }
-    }
 
     suspend fun persistStoreSafely(operation: String, block: suspend () -> Unit) {
         try {
@@ -855,6 +899,7 @@ private fun CompatibilityAppContent(
         }
         if (event == CompatibilityEvent.UndoClose) {
             val batch = state.pendingClose ?: return
+            undoneCloseBatchIds += batch.id
             // Do not expose the restored tab before SQLite has restored its draft. Doing
             // so lets Post read an empty draft during the small transaction/Flow window.
             state = state.copy(pendingClose = null)
@@ -899,16 +944,27 @@ private fun CompatibilityAppContent(
                     workspaceRecord = next
                     store.updateWorkspace(next)
                 }
-                is CompatibilityEffect.PersistClosedTabs -> launchStoreSafely(
-                    "closed tab persistence",
-                    "タブの保存に失敗しました"
-                ) {
-                    val persisted = store.closeTabs(
-                        effect.tabKeys,
-                        effect.nowEpochMillis,
-                        effect.finalScrollAnchors
-                    )
-                    if (persisted != null) state = state.copy(pendingClose = persisted)
+                is CompatibilityEffect.PersistClosedTabs -> {
+                    // The reducer's provisional batch. Undo may clear it (and queue the
+                    // restore) before this write returns; the durable batch must then
+                    // not bring the Undo notice back for a second restore.
+                    val provisionalCloseId = state.pendingClose?.id
+                    launchStoreSafely("closed tab persistence", "タブの保存に失敗しました") {
+                        val persisted = store.closeTabs(
+                            effect.tabKeys,
+                            effect.nowEpochMillis,
+                            effect.finalScrollAnchors
+                        )
+                        if (persisted == null) return@launchStoreSafely
+                        if (provisionalCloseId != null && undoneCloseBatchIds.remove(provisionalCloseId)) {
+                            // Undo wins even when its restore reached the store first.
+                            if (store.tabs.first().none { it.key in effect.tabKeys }) {
+                                store.restoreClosedTabs(persisted)
+                            }
+                        } else if (state.pendingClose?.id == provisionalCloseId) {
+                            state = state.copy(pendingClose = persisted)
+                        }
+                    }
                 }
                 is CompatibilityEffect.RestoreClosedTabs -> launchStoreSafely("closed tab restore") {
                     store.restoreClosedTabs(effect.batch)
@@ -1054,12 +1110,13 @@ private fun CompatibilityAppContent(
             }
         }
     }
+    // Keyed on stable inputs only: navigating between Main, a catalog and a
+    // thread must not restart the timer (and with it every interval).
     LaunchedEffect(
         repository,
         store,
         compatPlatformContext,
         isCompatHostForeground,
-        state.host,
         referenceTimerHostActive,
         preferencesLoaded,
         boardsLoaded,
@@ -1071,161 +1128,16 @@ private fun CompatibilityAppContent(
             !historiesLoaded || !workspaceLoaded
         ) return@LaunchedEffect
         val activeRepository = repository ?: return@LaunchedEffect
-        val initialPreferences = latestCompatPreferences
-        var lastUpdateCheckAt = parseCompatForegroundLastCheckEpochMillis(
-            initialPreferences[COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE]
+        runCompatForegroundRefreshLoop(
+            store = store,
+            repository = activeRepository,
+            platformContext = compatPlatformContext,
+            preferences = { latestCompatPreferences },
+            tabs = { latestCompatTabs },
+            boards = { latestCompatBoards },
+            histories = { latestCompatHistories },
+            persist = { operation, block -> persistStoreSafely(operation, block) }
         )
-        var lastExistenceCheckAt = parseCompatForegroundLastCheckEpochMillis(
-            initialPreferences[COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE]
-        )
-        var lastWatchCheckAt = Clock.System.now().toEpochMilliseconds()
-        var firstTick = true
-        while (true) {
-            // The reference TimerTask is scheduled with delay=0 and then every
-            // minute. Hidden persisted timestamps prevent an app restart from
-            // repeating a check before its five/fifteen-minute deadline.
-            if (firstTick) firstTick = false else delay(COMPAT_FOREGROUND_TICK_MILLIS)
-            val currentPreferences = latestCompatPreferences
-            val now = Clock.System.now().toEpochMilliseconds()
-            val plan = withContext(AppDispatchers.io) { planCompatForegroundChecks(
-                nowEpochMillis = now,
-                lastUpdateCheckEpochMillis = lastUpdateCheckAt,
-                lastExistenceCheckEpochMillis = lastExistenceCheckAt,
-                updatePolicy = parseCompatForegroundNetworkPolicy(
-                    currentPreferences.compatPreferenceValue(
-                        "background", "backgroundThreadUpdateCheck", "スレッドの更新確認"
-                    )
-                ),
-                existencePolicy = parseCompatForegroundNetworkPolicy(
-                    currentPreferences.compatPreferenceValue(
-                        "background", "backgroundThreadExistCheck", "スレッドの生存確認"
-                    )
-                ),
-                isWifiConnected = isCompatWifiConnected(compatPlatformContext)
-            ) }
-            if (plan.checkUpdates) {
-                lastUpdateCheckAt = now
-                persistStoreSafely("foreground update-check timestamp") {
-                    store.savePreference(
-                        COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE,
-                        compatForegroundLastCheckStoredValue(now)
-                    )
-                }
-            }
-            if (plan.checkExistence) {
-                lastExistenceCheckAt = now
-                persistStoreSafely("foreground existence-check timestamp") {
-                    store.savePreference(
-                        COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE,
-                        compatForegroundLastCheckStoredValue(now)
-                    )
-                }
-            }
-            val watchDue = compatWatchAllowed(currentPreferences, isCompatWifiConnected(compatPlatformContext)) && hasEpochIntervalElapsed(
-                nowMillis = now,
-                startedAtMillis = lastWatchCheckAt,
-                intervalMillis = com.valoser.futacha.shared.compat.COMPAT_THREAD_UPDATE_INTERVAL_MILLIS
-            )
-            if (watchDue) lastWatchCheckAt = now
-            val tabsToCheck = latestCompatTabs.filterNot(CompatTab::isDead)
-            // A watcher board may have no open tab.  Do not return before the
-            // catalog-only watcher pass below, otherwise the setting appears
-            // to work only while a thread tab happens to be open.
-            if (tabsToCheck.isEmpty() && !watchDue) continue
-            if (!plan.hasWork && !watchDue) continue
-            if (plan.checkUpdates || watchDue) {
-                withContext(AppDispatchers.io) {
-                // The APK does not download every thread here. It fetches each board's
-                // catalog once and reflects only the latest reply count in tabs/history.
-                tabsToCheck.groupBy(CompatTab::boardKey).forEach boardLoop@{ (boardKey, boardTabs) ->
-                    val board = latestCompatBoards.firstOrNull { it.key == boardKey }
-                        ?: return@boardLoop
-                    runSuspendCatchingPreservingCancellation {
-                        activeRepository.getCatalog(board.originalUrl, CatalogMode.Catalog)
-                    }
-                        .onSuccess { catalog ->
-                            val byCanonicalUrl = catalog.mapNotNull { item ->
-                                canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl?.let { it to item }
-                            }.toMap()
-                            val byThreadId = catalog.associateBy(CatalogItem::id)
-                            boardTabs.forEach tabLoop@{ checkedTab ->
-                                val item = byCanonicalUrl[checkedTab.canonicalUrl]
-                                    ?: byThreadId[checkedTab.threadNo]
-                                    ?: return@tabLoop
-                                if (item.replyCount != checkedTab.replyCount) {
-                                    persistStoreSafely("foreground tab refresh") {
-                                        store.applyCatalogReplyCount(
-                                            checkedTab.key,
-                                            checkedTab.canonicalUrl,
-                                            item.replyCount
-                                        )
-                                    }
-                                }
-                            }
-                            if (watchDue) {
-                                collectCompatWatchMatches(
-                                    board = board,
-                                    items = catalog,
-                                    watchWords = compatWatchWordsForBoard(currentPreferences, board.key),
-                                    existingHistory = latestCompatHistories,
-                                    nowEpochMillis = now
-                                ).takeIf { it.isNotEmpty() }?.let { matches ->
-                                    persistStoreSafely("foreground watch history refresh") {
-                                        CompatWatcherRepository(store).recordAll(matches)
-                                    }
-                                }
-                            }
-                        }
-                }
-                // A watched board can have no open tabs. It still must be checked
-                // and added to the compatibility watcher's history page.
-                if (watchDue) {
-                    val tabBoardKeys = tabsToCheck.mapTo(hashSetOf(), CompatTab::boardKey)
-                    latestCompatBoards.filterNot { board -> board.key in tabBoardKeys }
-                        .forEach { board ->
-                            runSuspendCatchingPreservingCancellation {
-                                activeRepository.getCatalog(board.originalUrl, CatalogMode.New)
-                            }
-                                .onSuccess { catalog ->
-                                    collectCompatWatchMatches(
-                                        board = board,
-                                        items = catalog,
-                                        watchWords = compatWatchWordsForBoard(currentPreferences, board.key),
-                                        existingHistory = latestCompatHistories,
-                                        nowEpochMillis = now
-                                    ).forEach { match ->
-                                        persistStoreSafely("foreground watch history refresh") {
-                                            CompatWatcherRepository(store).record(match)
-                                        }
-                                    }
-                                }
-                        }
-                }
-                }
-            }
-            // BackgroundThreadUpdateCheckAsyncTask also performs this stale existence
-            // pass; the dedicated 15-minute setting can trigger the same pass alone.
-            if (plan.checkExistence || plan.checkUpdates) {
-                withContext(AppDispatchers.io) {
-                tabsToCheck.filter { tab ->
-                    hasEpochIntervalElapsed(
-                        nowMillis = now,
-                        startedAtMillis = tab.contentUpdatedAtEpochMillis,
-                        intervalMillis = COMPAT_THREAD_EXISTENCE_STALE_MILLIS
-                    )
-                }.forEach { checkedTab ->
-                    runSuspendCatchingPreservingCancellation {
-                        activeRepository.probeThreadGone(checkedTab.originalUrl)
-                    }
-                        .onSuccess { isGone ->
-                            if (isGone) persistStoreSafely("foreground dead-thread update") {
-                                store.updateTab(checkedTab.copy(isDead = true))
-                            }
-                        }
-                }
-                }
-            }
-        }
     }
     LaunchedEffect(store) {
         loadPendingClosedTabsSafely()?.let { batch ->
@@ -1238,7 +1150,7 @@ private fun CompatibilityAppContent(
                 workspaceRecord = workspace
                 state = reduceCompatibilityWorkspace(
                     state,
-                    CompatibilityEvent.ReplaceTabs(tabs, workspace.activeTabKey)
+                    CompatibilityEvent.ReplaceTabs(tabs, workspace.activeTabKey, optimisticOpenTabs.values.toList())
                 ).state.copy(
                     catalogHostBoardKey = workspace.catalogHostBoardKey,
                     selectorPresentation = if (
@@ -1399,9 +1311,11 @@ private fun CompatibilityAppContent(
             else -> CompatThreadOrigin.MAIN
         }
         val previousTabs = state.tabs
-        val durableTab = previousTabs.firstOrNull { it.key == tab.key }
-            ?.let { tab.copy(scrollAnchor = it.scrollAnchor) }
-            ?: tab
+        // An already open tab keeps its favourite, read count and dead state.
+        val durableTab = mergeCompatReopenedTab(previousTabs.firstOrNull { it.key == tab.key }, tab)
+        // Until openTab commits, store emissions must neither drop this tab nor
+        // select the previous thread (which would record a visit to it).
+        optimisticOpenTabs[tab.key] = durableTab
         state = state.copy(tabs = previousTabs.prependCompatTab(durableTab))
         // Close the logical surface and navigate immediately. The history
         // write is persistence, not a prerequisite for rendering the thread;
@@ -1411,13 +1325,17 @@ private fun CompatibilityAppContent(
         dispatch(CompatibilityEvent.OpenThread(tab.key, origin))
         scope.launch {
             try {
-                store.openTab(tab, entry)
+                // Merge onto the stored tab at write time: the UI copy can lag.
+                val stored = store.tabs.first().firstOrNull { it.key == tab.key }
+                store.openTab(mergeCompatReopenedTab(stored, tab), entry)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
                 restoreOptimisticTab(tab.key, previousTabs)
                 deepLinkError = "履歴のスレッドを開けませんでした: ${failure.message.orEmpty()}"
                 Logger.e("CompatibilityApp", "Failed to open history thread", failure)
+            } finally {
+                optimisticOpenTabs.remove(tab.key)
             }
         }
     }
@@ -1427,7 +1345,7 @@ private fun CompatibilityAppContent(
         if (parsed == null) return
         val board = boards.firstOrNull { it.canonicalUrl == parsed.canonicalBoardUrl }
         if (board == null) {
-            pendingUnregisteredDeepLink = entry.threadUrl to parsed
+            pendingUnregisteredDeepLink = CompatUnregisteredThreadRequest(entry.threadUrl, parsed)
             closeDrawerForNavigation()
             return
         }
@@ -1525,9 +1443,7 @@ private fun CompatibilityAppContent(
             contentUpdatedAtEpochMillis = now
         )
         val previousTabs = state.tabs
-        val durableTab = previousTabs.firstOrNull { it.key == tab.key }
-            ?.let { tab.copy(scrollAnchor = it.scrollAnchor) }
-            ?: tab
+        val durableTab = mergeCompatReopenedTab(previousTabs.firstOrNull { it.key == tab.key }, tab)
         state = state.copy(tabs = previousTabs.prependCompatTab(durableTab))
         scope.launch {
             // A deep link may introduce a board at the same time as its first
@@ -1537,7 +1453,8 @@ private fun CompatibilityAppContent(
             // used to crash when "追加して開く" was tapped on a new board.
             try {
                 store.upsertBoard(board)
-                store.openTab(tab, entry)
+                val stored = store.tabs.first().firstOrNull { it.key == tab.key }
+                store.openTab(mergeCompatReopenedTab(stored, tab), entry)
                 dispatch(CompatibilityEvent.OpenThread(tab.key, origin))
                 onOpened?.invoke()
             } catch (cancelled: CancellationException) {
@@ -1554,9 +1471,43 @@ private fun CompatibilityAppContent(
         state.tabs.firstOrNull { it.key == key }
     }
 
+    // The pending command is set only once its tab is active (in place, or in
+    // onOpened after OpenThread was dispatched): the cleanup effect above drops
+    // a command recorded against the previous tab.
+    fun deliverPlatformAiThreadCommand(command: FutachaAiCommand, action: FutachaAiAction) {
+        compatPlatformAiThreadUrlRejection(command)?.let { deepLinkError = it; return }
+        val route = resolvePlatformAiThreadRoute(command, state, boards)
+        val threadNo = when (route) {
+            is CompatPlatformAiThreadRoute.Active -> route.tab.threadNo
+            is CompatPlatformAiThreadRoute.Open -> route.thread.threadNo
+            null -> {
+                deepLinkError = if (platformAiCommandNamesThread(command)) "対象スレを特定できませんでした" else "先に対象スレを開いてください"
+                return
+            }
+        }
+        val forwarded = command.copy(action = action, parameters = command.parameters + ("threadId" to threadNo))
+        when (route) {
+            is CompatPlatformAiThreadRoute.Active -> {
+                if (state.host !is CompatHost.ThreadWorkspace) {
+                    dispatch(CompatibilityEvent.OpenThread(route.tab.key, CompatThreadOrigin.DEEP_LINK))
+                }
+                threadAiSlot.forward(forwarded)
+            }
+            is CompatPlatformAiThreadRoute.Open ->
+                if (compatPlatformAiNeedsBoardConsent(route.board, boards)) {
+                    pendingUnregisteredDeepLink = CompatUnregisteredThreadRequest(route.thread.canonicalUrl, route.thread, forwarded)
+                } else {
+                    openCanonicalThread(route.thread, route.board, onOpened = { threadAiSlot.forward(forwarded) })
+                }
+        }
+    }
+
     fun runPlatformAiCommand(command: FutachaAiCommand, confirmed: Boolean = false) {
-        if (command.action.risk == FutachaAiCommandRisk.Confirm && !confirmed) {
-            pendingPlatformAiConfirmation = command
+        if (!appLock.isUnlocked) return
+        if (command.requiresConfirmation() && !confirmed) {
+            if (shouldShowCompatPlatformAiConfirmation(pendingPlatformAiConfirmation)) {
+                pendingPlatformAiConfirmation = command
+            }
             return
         }
         when (command.action) {
@@ -1568,40 +1519,23 @@ private fun CompatibilityAppContent(
             }
             FutachaAiAction.OpenThread, FutachaAiAction.OpenThreadFromUrl -> {
                 val target = resolvePlatformAiThread(command, state, boards)
-                if (target == null) deepLinkError = "対象スレを特定できませんでした"
-                else openCanonicalThread(target.first, target.second)
+                val rejection = compatPlatformAiThreadUrlRejection(command)
+                if (rejection != null) deepLinkError = rejection
+                else if (target == null) deepLinkError = "対象スレを特定できませんでした"
+                else if (compatPlatformAiNeedsBoardConsent(target.second, boards)) {
+                    pendingUnregisteredDeepLink = CompatUnregisteredThreadRequest(target.first.canonicalUrl, target.first)
+                } else openCanonicalThread(target.first, target.second)
             }
-            FutachaAiAction.OpenThreadExternally -> {
-                val target = resolvePlatformAiThread(command, state, boards)
-                if (target != null) {
-                    pendingThreadAiCommand = command.copy(
-                        parameters = command.parameters + ("threadId" to target.first.threadNo)
-                    )
-                    openCanonicalThread(target.first, target.second)
-                } else if (state.activeTabKey != null) {
-                    pendingThreadAiCommand = command
-                } else {
-                    deepLinkError = "先に対象スレを開いてください"
-                }
-            }
-            FutachaAiAction.SaveThread -> {
-                val target = resolvePlatformAiThread(command, state, boards)
-                if (target == null) deepLinkError = "対象スレを特定できませんでした"
-                else {
-                    openCanonicalThread(target.first, target.second)
-                    pendingThreadAiCommand = command.copy(
-                        action = FutachaAiAction.SaveCurrentThread,
-                        parameters = command.parameters + ("threadId" to target.first.threadNo)
-                    )
-                }
-            }
+            FutachaAiAction.OpenThreadExternally -> deliverPlatformAiThreadCommand(command, command.action)
+            FutachaAiAction.SaveThread -> deliverPlatformAiThreadCommand(command, FutachaAiAction.SaveCurrentThread)
             FutachaAiAction.OpenHistoryDrawer -> dispatch(CompatibilityEvent.OpenDrawer(CompatDrawerPage.HISTORY))
             FutachaAiAction.RefreshHistory -> {
                 val refresh = compatibilityHistoryRefresh
                 if (refresh == null) {
                     deepLinkError = "履歴更新サービスを利用できません"
-                } else {
-                    launchStoreSafely("AI command", "操作に失敗しました") {
+                } else if (!platformAiHistoryRefresh.isActive) {
+                    // Coalesced like FutachaApp: a repeated command while one runs is dropped.
+                    platformAiHistoryRefresh.job = launchStoreSafely("AI command", "操作に失敗しました") {
                         refresh()
                             .onSuccess { message -> platformAiFeedback = message }
                             .onFailure { failure ->
@@ -1629,15 +1563,9 @@ private fun CompatibilityAppContent(
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else dispatch(CompatibilityEvent.OpenHost(CompatHost.PostBuild(board.key)))
             }
-            FutachaAiAction.DraftReply -> {
-                val tab = state.activeTabKey
-                if (tab == null) deepLinkError = "先に対象スレを開いてください"
-                else dispatch(CompatibilityEvent.OpenHost(CompatHost.Post(tab)))
-            }
-            FutachaAiAction.SaveCurrentThread -> {
-                if (state.activeTabKey == null) deepLinkError = "先に対象スレを開いてください"
-                else pendingThreadAiCommand = command
-            }
+            // DraftReply, RefreshCurrentThread and OpenGallery are thread
+            // commands: delivered to the named (or shown) thread's screen (C4-6).
+            in COMPAT_THREAD_PLATFORM_AI_ACTIONS -> deliverPlatformAiThreadCommand(command, command.action)
             FutachaAiAction.RefreshCurrentBoard,
             FutachaAiAction.RefreshCatalog -> {
                 val board = resolvePlatformAiBoard(command, state, boards)
@@ -1654,18 +1582,9 @@ private fun CompatibilityAppContent(
                 val board = resolvePlatformAiBoard(command, state, boards)
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else {
-                    pendingCatalogAiCommand = command
+                    catalogAiSlot.forward(command)
                     dispatch(CompatibilityEvent.OpenCatalog(board.key))
                 }
-            }
-            FutachaAiAction.RefreshCurrentThread -> {
-                threadRefreshToken += 1L
-                if (state.activeTabKey == null) deepLinkError = "先に対象スレを開いてください"
-            }
-            FutachaAiAction.OpenGallery -> {
-                val tab = state.activeTabKey
-                if (tab == null) deepLinkError = "先に対象スレを開いてください"
-                else dispatch(CompatibilityEvent.OpenHost(CompatHost.Gallery(tab)))
             }
             FutachaAiAction.EnablePrivacyFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setPrivacyFilterEnabled(true) }
             FutachaAiAction.DisablePrivacyFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setPrivacyFilterEnabled(false) }
@@ -1841,7 +1760,8 @@ private fun CompatibilityAppContent(
                 } else {
                     val name = command.parameter("name", "board", "title", "label")
                         ?.takeIf { it.isNotBlank() }
-                        ?: canonical.substringAfterLast('/')
+                        // The canonical URL ends with '/', which left the name empty.
+                        ?: compatPlatformAiDefaultBoardName(canonical)
                     launchStoreSafely("AI command", "操作に失敗しました") {
                         store.upsertBoard(
                             CompatBoard(
@@ -1875,18 +1795,42 @@ private fun CompatibilityAppContent(
         }
     }
 
-    LaunchedEffect(platformAiCommand) {
-        val command = platformAiCommand ?: return@LaunchedEffect
-        if (command.action in COMPAT_THREAD_PLATFORM_AI_ACTIONS &&
-            command.action.risk != FutachaAiCommandRisk.Confirm
-        ) {
-            pendingThreadAiCommand = command
-        } else if (command.action in COMPAT_CATALOG_PLATFORM_AI_ACTIONS) {
-            runPlatformAiCommand(command)
-        } else {
-            runPlatformAiCommand(command)
+    // Waits (unconsumed) for the stored boards, history, tabs and settings: run
+    // against the empty placeholders the command failed and was lost (C4-2).
+    // Then the same "AIアプリ操作" setting as the modern mode applies (C4-4).
+    suspend fun deliverPlatformAiCommand(command: FutachaAiCommand, arrivedAt: kotlin.time.TimeSource.Monotonic.ValueTimeMark) {
+        snapshotFlow { boardsLoaded && historiesLoaded && workspaceLoaded && preferencesLoaded }.first { it }
+        when (holdCompatPlatformAiCommand(arrivedAt, appLock)) {
+            com.valoser.futacha.shared.ui.AiCommandHoldDecision.Run -> {
+                val enabled = com.valoser.futacha.shared.ui.readPersistedAiCommandEnabled(stateStore, fallback = false)
+                val rejection = compatPlatformAiDisabledRejection(command, enabled)
+                if (rejection != null) deepLinkError = rejection else runPlatformAiCommand(command)
+            }
+            com.valoser.futacha.shared.ui.AiCommandHoldDecision.DropExpired -> Unit
+            com.valoser.futacha.shared.ui.AiCommandHoldDecision.DropHeldByLock ->
+                platformAiFeedback = com.valoser.futacha.shared.ui.buildAiCommandHeldByLockMessage(command)
         }
+    }
+    // Not keyed on the lock: a command arriving while locked stays unconsumed
+    // and waits for the unlock, keeping its arrival time (C-1).
+    val platformAiArrivals = remember { CompatPlatformAiArrivalTracker() }
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(platformAiCommand)) {
+        val command = platformAiCommand ?: return@LaunchedEffect
+        deliverPlatformAiCommand(command, platformAiArrivals.arrivalOf(command))
         onPlatformAiCommandConsumed(command)
+    }
+    // Android `futacha://ai` links (C4-4), consumed only after they were handled.
+    LaunchedEffect(platformAiDeepLink) {
+        val raw = platformAiDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val arrivedAt = kotlin.time.TimeSource.Monotonic.markNow()
+        val command = parseFutachaAiDeepLink(raw, source = "platform")
+        if (command == null) {
+            appLock.awaitUnlocked()
+            deepLinkError = "AI操作のURLを解釈できませんでした"
+        } else {
+            deliverPlatformAiCommand(command, arrivedAt)
+        }
+        onPlatformAiDeepLinkConsumed(raw)
     }
 
     fun openSavedThread(saved: SavedThread) {
@@ -1931,10 +1875,15 @@ private fun CompatibilityAppContent(
                     metadata.toThreadPage(
                         fileSystem = fs,
                         baseDirectory = MANUAL_SAVE_DIRECTORY
-                    ).toCompatThreadSnapshot(tab.key, now)
+                    ).toCompatThreadSnapshot(tab.key, metadata.savedAt)
                 }
+                // A retained fresher cache gets the saved local media (E-4).
+                val snapshotChoice = com.valoser.futacha.shared.compat.chooseCompatSavedThreadSnapshot(
+                    store.loadThreadSnapshot(tab.key), snapshot
+                )
+                val mergedTab = mergeCompatReopenedTab(store.tabs.first().firstOrNull { it.key == tab.key }, tab)
                 store.openTab(
-                    tab,
+                    mergedTab,
                     CompatHistoryEntry(
                         canonicalUrl = tab.canonicalUrl,
                         originalUrl = tab.originalUrl,
@@ -1950,10 +1899,10 @@ private fun CompatibilityAppContent(
                 // tab table. Persist the tab first; saving the snapshot before
                 // openTab() caused saved-thread launches to fail with
                 // "Unknown compatibility tab" on real databases (#29).
-                store.saveThreadSnapshot(snapshot)
-                val durableTab = state.tabs.firstOrNull { it.key == tab.key }
-                    ?.let { tab.copy(scrollAnchor = it.scrollAnchor) }
-                    ?: tab
+                if (snapshotChoice.needsSave) store.saveThreadSnapshot(snapshotChoice.snapshot)
+                val durableTab = mergeCompatReopenedTab(
+                    state.tabs.firstOrNull { it.key == tab.key }, mergedTab
+                )
                 state = state.copy(tabs = state.tabs.prependCompatTab(durableTab))
                 dispatch(CompatibilityEvent.OpenThread(tab.key, CompatThreadOrigin.MAIN))
             } catch (cancelled: CancellationException) {
@@ -1995,7 +1944,7 @@ private fun CompatibilityAppContent(
                 onThreadDeepLinkConsumed(raw)
             }
         } else {
-            pendingUnregisteredDeepLink = raw to parsed
+            pendingUnregisteredDeepLink = CompatUnregisteredThreadRequest(raw, parsed)
         }
     }
 
@@ -2189,7 +2138,12 @@ private fun CompatibilityAppContent(
             onHistorySelected = ::openHistory,
             onTabFavoriteToggle = { tab ->
                 launchStoreSafely("favorite tab update") {
-                    store.updateTab(tab.copy(favorite = !tab.favorite))
+                    // Only the flag: a whole-tab copy reverts concurrent changes
+                    // and re-adds a tab closed in the meantime.
+                    val favorite = !tab.favorite
+                    store.updateTabIfPresent(tab.key) { current ->
+                        current.takeIf { it.favorite != favorite }?.copy(favorite = favorite)
+                    }
                 }
             },
             onTabsClosed = { keys ->
@@ -2442,13 +2396,17 @@ private fun CompatibilityAppContent(
                                         }.getOrNull()
                                     }?.takeIf(String::isNotBlank)
                                     if (resolvedTitle != null && resolvedTitle != tab.title) {
-                                        val repairedTab = tab.copy(title = resolvedTitle)
+                                        // Patch only the title onto the current tab: the merged
+                                        // favourite/read state must stay, and a tab closed during
+                                        // the lookup must not come back.
                                         state = state.copy(
                                             tabs = state.tabs.map { current ->
-                                                if (current.key == repairedTab.key) repairedTab else current
+                                                if (current.key == tab.key) current.copy(title = resolvedTitle) else current
                                             }
                                         )
-                                        store.updateTab(repairedTab)
+                                        store.updateTabIfPresent(tab.key) { current ->
+                                            current.takeIf { it.title != resolvedTitle }?.copy(title = resolvedTitle)
+                                        }
                                         if (navigate) store.upsertHistory(entry.copy(title = resolvedTitle))
                                     }
                                 }
@@ -2468,10 +2426,8 @@ private fun CompatibilityAppContent(
                         boards = boards,
                         store = store,
                         isDrawerOpen = drawerState.currentValue == DrawerValue.Open,
-                        platformAiCommand = pendingCatalogAiCommand,
-                        onPlatformAiCommandConsumed = { command ->
-                            if (pendingCatalogAiCommand === command) pendingCatalogAiCommand = null
-                        },
+                        platformAiCommand = catalogAiSlot.deliverable(isAppUnlocked),
+                        onPlatformAiCommandConsumed = { command -> catalogAiSlot.consume(command) },
                         toolbarRefreshToken = toolbarRefreshToken,
                         initialToolbarItems = toolbarItemsBySurface[CompatToolbarSurface.CATALOG],
                         preferences = preferences,
@@ -2606,10 +2562,8 @@ private fun CompatibilityAppContent(
                             ngRules = ngRules,
                             selectorOpen = threadSelectorOpen,
                             selectorPresentation = state.selectorPresentation,
-                            platformAiCommand = pendingThreadAiCommand,
-                            onPlatformAiCommandConsumed = { consumed ->
-                                if (pendingThreadAiCommand === consumed) pendingThreadAiCommand = null
-                            },
+                            platformAiCommand = threadAiSlot.deliverable(isAppUnlocked),
+                            onPlatformAiCommandConsumed = { consumed -> threadAiSlot.consume(consumed) },
                             scrollToBottomRequest = scrollToBottomRequest?.takeIf { it.first == tab.key }?.second,
                             onToggleSelector = {
                                 val next = !threadSelectorOpen
@@ -2790,13 +2744,15 @@ private fun CompatibilityAppContent(
                                 contentUpdatedAtEpochMillis = now
                             )
                             val previousTabs = state.tabs
-                            val durableTab = previousTabs.firstOrNull { it.key == openedTab.key }
-                                ?.let { openedTab.copy(scrollAnchor = it.scrollAnchor) }
-                                ?: openedTab
+                            val durableTab = mergeCompatReopenedTab(
+                                previousTabs.firstOrNull { it.key == openedTab.key }, openedTab
+                            )
                             state = state.copy(tabs = previousTabs.prependCompatTab(durableTab))
                             scope.launch {
                                 try {
-                                    store.openTab(openedTab, history)
+                                    store.openTab(mergeCompatReopenedTab(
+                                        store.tabs.first().firstOrNull { it.key == openedTab.key }, openedTab
+                                    ), history)
                                     dispatch(CompatibilityEvent.OpenThread(openedTab.key, CompatThreadOrigin.CATALOG))
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
@@ -3308,7 +3264,7 @@ private fun CompatibilityAppContent(
             val toastBottomInset = with(density) {
                 40.dp.roundToPx() + WindowInsets.navigationBars.getBottom(this)
             }
-            Popup(
+            FutachaAppLockAwareWindow { Popup(
                 alignment = Alignment.BottomCenter,
                 // Keep the popup window itself above the bottom toolbar. The
                 // old implementation put this value in Surface.padding(),
@@ -3353,11 +3309,11 @@ private fun CompatibilityAppContent(
                         }
                     }
                 }
-            }
+            } }
         }
     }
     boardUpdateNotice?.let { message ->
-        Popup(
+        FutachaAppLockAwareWindow { Popup(
             alignment = Alignment.BottomCenter,
             properties = PopupProperties(
                 focusable = false,
@@ -3377,7 +3333,7 @@ private fun CompatibilityAppContent(
             ) {
                 Text(message, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             }
-        }
+        } }
     }
     val drawerPreviewShown by remember(drawerState) {
         derivedStateOf { drawerPreviewOffsetPx > 0f && drawerState.isClosed }
@@ -3423,8 +3379,8 @@ private fun CompatibilityAppContent(
         )
     }
     }
-    pendingUnregisteredDeepLink?.let { (raw, parsed) ->
-        AlertDialog(
+    pendingUnregisteredDeepLink?.takeIf { isAppUnlocked }?.let { (raw, parsed, aiCommand) ->
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = {
                 onThreadDeepLinkConsumed(raw)
                 pendingUnregisteredDeepLink = null
@@ -3442,6 +3398,7 @@ private fun CompatibilityAppContent(
                     )
                     openCanonicalThread(parsed, board) {
                         onThreadDeepLinkConsumed(raw)
+                        aiCommand?.let(threadAiSlot::forward)
                     }
                     pendingUnregisteredDeepLink = null
                 }) { Text("追加して開く") }
@@ -3452,13 +3409,13 @@ private fun CompatibilityAppContent(
                     pendingUnregisteredDeepLink = null
                 }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
-    pendingPlatformAiConfirmation?.let { command ->
-        AlertDialog(
+    pendingPlatformAiConfirmation?.takeIf { isAppUnlocked }?.let { command ->
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { pendingPlatformAiConfirmation = null },
             title = { Text("AI操作の確認") },
-            text = { Text("「${command.action.label}」を実行します。ユーザー確認後にだけ進めます。") },
+            text = { Text(compatPlatformAiConfirmationMessage(command)) },
             confirmButton = {
                 TextButton(onClick = {
                     pendingPlatformAiConfirmation = null
@@ -3468,21 +3425,21 @@ private fun CompatibilityAppContent(
             dismissButton = {
                 TextButton(onClick = { pendingPlatformAiConfirmation = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
-    deepLinkError?.let { message ->
-        AlertDialog(
+    deepLinkError?.takeIf { isAppUnlocked }?.let { message ->
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { deepLinkError = null },
             text = { Text(message) },
             confirmButton = { TextButton(onClick = { deepLinkError = null }) { Text("OK") } }
-        )
+        ) }
     }
-    platformAiFeedback?.let { message ->
-        AlertDialog(
+    platformAiFeedback?.takeIf { isAppUnlocked }?.let { message ->
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { platformAiFeedback = null },
             text = { Text(message) },
             confirmButton = { TextButton(onClick = { platformAiFeedback = null }) { Text("OK") } }
-        )
+        ) }
     }
     // ApplyCompatSystemBars sets the platform navigation-bar color. Do not add
     // a Compose navigation-inset-sized box here: on Android 15+/API 35+ the
@@ -3775,21 +3732,21 @@ private fun CompatCatalogScreen(
                 runSuspendCatchingPreservingCancellation { store.saveImagePhashes(batch) }
                     .onFailure { Logger.e("CompatibilityCatalog", "Failed to save image hashes", it) }
             }
-            val computed = try {
+            // Hashes found before the batch budget runs out are kept (not discarded on timeout).
+            val computed = mutableMapOf<String, String>()
+            try {
                 withTimeoutOrNull(COMPAT_PHASH_BATCH_TIMEOUT_MILLIS) {
-                    buildMap {
                         missing.forEachIndexed { index, (itemId, url) ->
                         withTimeoutOrNull(COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS) {
                             fetchCompatImagePhash(client, url).getOrNull()
                         }?.let { phash ->
-                            put(itemId, phash)
+                            computed[itemId] = phash
                             unsaved[compatImagePhashCachePreferenceKey(url)] = phash
                             if (unsaved.size >= COMPAT_PHASH_SAVE_BATCH) flushHashes()
                         }
                             catalogImageNgProgress = (index + 1) to missing.size
                         }
-                    }
-                }.orEmpty()
+                }
             } finally {
                 catalogImageNgProgress = null
                 withContext(NonCancellable) { runCatching { flushHashes() } }
@@ -4185,9 +4142,11 @@ private fun CompatCatalogScreen(
                         nowEpochMillis = fetchedAt
                     )
                 }
-                watchMatches.forEach { match ->
+                // One write for the whole catalog, decoded off the main thread:
+                // recording one by one re-read all 500 result slots per match.
+                if (watchMatches.isNotEmpty()) {
                     launchCatalogStoreSafely("watch history persistence", "監視履歴の保存に失敗しました") {
-                        CompatWatcherRepository(store).record(match)
+                        withContext(AppDispatchers.io) { CompatWatcherRepository(store).recordAll(watchMatches) }
                     }
                 }
                 val activeDroppedThreadIds = previousSnapshot?.takeIf { catalogDroppedTrackingEnabled }?.let { previous ->
@@ -4199,15 +4158,9 @@ private fun CompatCatalogScreen(
                             enabled = true
                         ).vanishedWithin.take(COMPAT_DROPPED_PROBE_MAX_ITEMS)
                     }
-                    withTimeoutOrNull(COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS) {
-                        buildSet {
-                            vanished.forEach { dropped ->
-                                if (activeRepository.probeThreadExists(dropped.threadUrl)) {
-                                    add(dropped.id)
-                                }
-                            }
-                        }
-                    }.orEmpty()
+                    probeCompatDroppedThreadsNotDeleted(vanished, COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS) {
+                        activeRepository.probeThreadExists(it.threadUrl)
+                    }
                 }.orEmpty()
                 if (runSuspendCatchingPreservingCancellation {
                         store.saveCatalogSnapshot(
@@ -4384,8 +4337,11 @@ private fun CompatCatalogScreen(
             Logger.e("CompatibilityCatalog", "Failed to load catalog toolbar", failure)
         }
     }
+    val platformAiLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
     LaunchedEffect(platformAiCommand, board.key) {
         val command = platformAiCommand ?: return@LaunchedEffect
+        // As on the thread screen: never run while locked (E4-1).
+        if (platformAiLock?.isUnlocked == false) return@LaunchedEffect
         when (command.action) {
             FutachaAiAction.ScrollCatalogToTop -> {
                 if (catalogLayout == CompatCatalogLayout.GRID) {
@@ -5136,7 +5092,7 @@ private fun CompatCatalogScreen(
         )
     }
     pendingDelete?.let { request ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (!deleting) pendingDelete = null },
             title = { Text("削除依頼 ${request.item.title.orEmpty()}") },
             confirmButton = {
@@ -5163,7 +5119,7 @@ private fun CompatCatalogScreen(
                 ) { Text(if (deleting) "送信中" else "送信する") }
             },
             dismissButton = { TextButton(enabled = !deleting, onClick = { pendingDelete = null }) { Text("キャンセル") } }
-        )
+        ) }
     }
     catalogRuleRequest?.let { request ->
         CompatCatalogRuleScopeDialog(
@@ -5460,6 +5416,7 @@ private fun CompatThreadScreen(
         mutableStateOf<List<CompatPostSnapshot>>(emptyList())
     }
     val threadAi = rememberCompatThreadAi(stateStore, snapshot, tab.title, ownPostNos, aiRetry, listState, visiblePosts)
+    com.valoser.futacha.shared.ui.board.OpenAiLimitNotice(threadAi.moderationEnabled)
     val speechAiHiddenPostNos by rememberUpdatedState(if (threadNgEnabled) threadAi.hiddenPostNos else emptySet())
     val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
     val undoRefreshSnapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
@@ -5494,6 +5451,8 @@ private fun CompatThreadScreen(
     var searchActive by searchActiveState
     var searchQuery by rememberSaveable(tab.key) { mutableStateOf("") }
     var searchMatchIndex by rememberSaveable(tab.key) { mutableStateOf(0) }
+    // Not saved, so a restored screen jumps to its saved hit once.
+    val searchJumpTracker = remember(tab.key) { CompatSearchJumpTracker() }
     val searchBackDismissStagesState = rememberSaveable(tab.key) { mutableStateOf(2) }
     var searchBackDismissStages by searchBackDismissStagesState
     // These are observations of the current IME window, not user state.  Do
@@ -5701,7 +5660,7 @@ private fun CompatThreadScreen(
                 }
                 error = "Google画像検索に画像を送信中…"
                 scope.launch {
-                    searchCompatGoogleClassicFile(client, mediaUrl)
+                    runCompatImageSearchCall { searchCompatGoogleClassicFile(client, mediaUrl) }
                         .onSuccess { resultUrl -> error = null; openSearchResult(resultUrl, mode.label) }
                         .onFailure { failure ->
                             error = failure.toCompatUserMessage("Google画像検索に失敗しました")
@@ -5722,7 +5681,7 @@ private fun CompatThreadScreen(
                 }
                 error = "Google Lensに画像を送信中…"
                 scope.launch {
-                    searchCompatGoogleLensFile(client, mediaUrl)
+                    runCompatImageSearchCall { searchCompatGoogleLensFile(client, mediaUrl) }
                         .onSuccess { resultUrl ->
                             error = null
                             openSearchResult(resultUrl, mode.label)
@@ -5747,19 +5706,15 @@ private fun CompatThreadScreen(
         }
         error = "${target.label}に画像を送信中…"
         scope.launch {
-            searchCompatImageFileTarget(client, target, mediaUrl)
+            runCompatImageSearchCall { searchCompatImageFileTarget(client, target, mediaUrl) }
                 .onSuccess { result -> error = null; reverseSearchResult = result }
                 .onFailure { failure ->
                     error = failure.toCompatUserMessage("${target.label}に失敗しました")
                 }
         }
     }
-    DisposableEffect(textSpeaker) {
-        onDispose {
-            readAloudJob?.cancel()
-            textSpeaker?.close()
-        }
-    }
+    CompatTextSpeakerDisposal(textSpeaker)
+    DisposableEffect(tab.key) { onDispose { readAloudJob?.cancel() } }
 
     fun ensureTextSpeaker(): TextSpeaker = textSpeaker ?: createTextSpeaker(platformContext).also {
         textSpeaker = it
@@ -5930,10 +5885,10 @@ private fun CompatThreadScreen(
         if (savingPage) return
         withSaveDestination { saveCompatPageNow(mode, it) }
     }
-    suspend fun load(
+    suspend fun loadThreadLocked(
         manual: Boolean,
-        refreshOnActivation: Boolean = false,
-        bypassCache: Boolean = false
+        refreshOnActivation: Boolean,
+        bypassCache: Boolean
     ) = loadMutex.withLock {
         fun isCatalogTitlePlaceholder(value: String, posts: List<CompatPostSnapshot>): Boolean {
             val normalized = value.trim()
@@ -5962,10 +5917,6 @@ private fun CompatThreadScreen(
                 ?.let(::extractFirstUsableTitleLine)
             catalogTitle ?: opFirstLine ?: existingTitle
         }
-        if (loading && snapshot != null && manual) {
-            error = "読み込み中です"
-            return@withLock
-        }
         // Initial, activation and manual loads all own the indicator while
         // they are running. In particular, a restarted LaunchedEffect must be
         // able to recover the initial state without relying on the default
@@ -5987,8 +5938,9 @@ private fun CompatThreadScreen(
             // do not stay transparent after opening a cached/dead thread.
             if (tab.thumbnailUrl.isNullOrBlank()) {
                 compatSnapshotThumbnail(cached, tab.threadNo)?.let { thumbnail ->
-                    val cachedTab = tab.copy(thumbnailUrl = thumbnail)
-                    store.updateTab(cachedTab)
+                    store.updateTabIfPresent(tab.key) { current ->
+                        current.takeIf { it.thumbnailUrl.isNullOrBlank() }?.copy(thumbnailUrl = thumbnail)
+                    }
                     store.upsertHistory(
                         CompatHistoryEntry(
                             canonicalUrl = tab.canonicalUrl,
@@ -6013,8 +5965,7 @@ private fun CompatThreadScreen(
             if (cached != null && isCatalogTitlePlaceholder(tab.title, cached.posts)) {
                 val inferredTitle = inferThreadTitle(tab.title, cached.posts)
                 if (inferredTitle != tab.title) {
-                    val titledTab = tab.copy(title = inferredTitle)
-                    store.updateTab(titledTab)
+                    store.updateTabIfPresent(tab.key) { current -> current.copy(title = inferredTitle) }
                     store.upsertHistory(
                         CompatHistoryEntry(
                             canonicalUrl = tab.canonicalUrl,
@@ -6153,8 +6104,11 @@ private fun CompatThreadScreen(
                         val thumbnailUrl = com.valoser.futacha.shared.ui.image.updatedHistoryThumbnailUrl(
                             tab.thumbnailUrl, compatSnapshotThumbnail(newSnapshot, tab.threadNo)
                         )
-                        store.updateTab(
-                            tab.copy(
+                        // Applied to the stored tab, not the copy captured when this
+                        // (up to 75 s) load started: a favourite toggled meanwhile must
+                        // survive, and a tab closed meanwhile must stay closed.
+                        store.updateTabIfPresent(tab.key) { current ->
+                            current.copy(
                                 title = resolvedThreadTitle,
                                 thumbnailUrl = thumbnailUrl,
                                 replyCount = replyCount,
@@ -6165,12 +6119,12 @@ private fun CompatThreadScreen(
                                 // the live board has returned 404/410. Keep
                                 // that distinction for the tab and TTS poller.
                                 isDead = primaryThreadGone,
-                                isDeleted = if (loadedFromArchive) tab.isDeleted else statusFlags.isDeleted,
-                                isIsolated = if (loadedFromArchive) tab.isIsolated else statusFlags.isIsolated,
-                                isExploded = if (loadedFromArchive) tab.isExploded else statusFlags.isAdminDeleted,
+                                isDeleted = if (loadedFromArchive) current.isDeleted else statusFlags.isDeleted,
+                                isIsolated = if (loadedFromArchive) current.isIsolated else statusFlags.isIsolated,
+                                isExploded = if (loadedFromArchive) current.isExploded else statusFlags.isAdminDeleted,
                                 isOld = loadedFromArchive || archiveSupplemented
                             )
-                        )
+                        }
                         store.upsertHistory(
                             CompatHistoryEntry(
                                 canonicalUrl = tab.canonicalUrl,
@@ -6214,7 +6168,9 @@ private fun CompatThreadScreen(
                     val primaryFailure = (throwable as? CompatThreadFetchException)?.primaryFailure
                     if (isCompatThreadGoneFailure(primaryFailure)) {
                         readAloudThreadGone = true
-                        store.updateTab(tab.copy(isDead = true))
+                        store.updateTabIfPresent(tab.key) { current ->
+                            current.takeUnless(CompatTab::isDead)?.copy(isDead = true)
+                        }
                     }
                 }
             }
@@ -6232,6 +6188,21 @@ private fun CompatThreadScreen(
             loading = false
         }
     }
+    suspend fun load(
+        manual: Boolean,
+        refreshOnActivation: Boolean = false,
+        bypassCache: Boolean = false
+    ) {
+        // Checked before queueing on the mutex: inside it the previous load has
+        // already finished, so repeated taps would each run a full (up to 75 s)
+        // load one after another. Forced post-deletion and AI reloads must wait for
+        // the current request and then fetch fresh data, rather than being dropped.
+        if (manual && !bypassCache && snapshot != null && loadMutex.isLocked) {
+            error = "読み込み中です"
+            return
+        }
+        loadThreadLocked(manual, refreshOnActivation, bypassCache)
+    }
 
     fun stopReadAloud(message: String? = null) {
         readAloudJob?.cancel()
@@ -6245,7 +6216,8 @@ private fun CompatThreadScreen(
     }
 
     fun startReadAloud(startPostIndex: Int = readAloudCursor) {
-        if (readingAloud) return
+        // readingAloud only becomes true after prepare(); the job covers that gap.
+        if (readingAloud || readAloudJob?.isActive == true) return
         val resolvedStartIndex = resolveCompatReadAloudStartIndex(
             requestedIndex = startPostIndex,
             postCount = snapshot?.posts?.size ?: 0
@@ -6255,14 +6227,16 @@ private fun CompatThreadScreen(
         readAloudDisplayPost = null
         readAloudStatus = "読み上げを準備中"
         readAloudDialogOpen = true
-        readAloudJob = scope.launch {
+        // Started lazily so the job is the current one before any of its code runs.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val thisJob = coroutineContext[Job]
             val hasText = withContext(AppDispatchers.textAnnotation) {
                 snapshot?.posts.orEmpty().any { post -> post.postNo !in speechAiHiddenPostNos && compatReadAloudText(post).isNotBlank() }
             }
             if (!hasText) {
                 error = "読み上げ対象がありません"
                 readAloudStatus = "読み上げ対象がありません"
-                readAloudJob = null
+                if (readAloudJob === thisJob) readAloudJob = null
                 return@launch
             }
             val speaker = ensureTextSpeaker()
@@ -6323,13 +6297,26 @@ private fun CompatThreadScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
-                error = failure.toCompatUserMessage("読み上げできませんでした")
-                readAloudStatus = error
+                // A stopped/replaced job's killed utterance is not a user-visible failure
+                // (on desktop it looked like "日本語の読み上げが使えません").
+                if (isActive && readAloudJob === thisJob) {
+                    error = failure.toCompatUserMessage("読み上げできませんでした")
+                    readAloudStatus = error
+                }
             } finally {
-                readingAloud = false
-                readAloudJob = null
+                // Next/previous starts a new job before this one unwinds; only the
+                // current job may clear the shared state.
+                if (readAloudJob === thisJob) {
+                    readingAloud = false
+                    readAloudJob = null
+                    // Ended on its own (dead thread, failure): release the audio
+                    // session so other apps' audio resumes (N4-4).
+                    textSpeaker?.stop()
+                }
             }
         }
+        readAloudJob = job
+        job.start()
     }
 
     fun moveReadAloudCursor(delta: Int) {
@@ -6338,9 +6325,17 @@ private fun CompatThreadScreen(
         stopReadAloud()
         readAloudCursor = target
         readAloudCharacterOffset = 0
-        scope.launch { listState.animateScrollToItem(target) }
+        val targetPost = snapshot?.posts?.getOrNull(target)
+        val renderedIndex = targetPost?.let { post ->
+            visiblePosts.indexOfFirst { it.postNo == post.postNo }.takeIf { it >= 0 }
+                ?: visiblePosts.indexOfFirst { it.position >= post.position }.takeIf { it >= 0 }
+                ?: visiblePosts.lastIndex.takeIf { it >= 0 }
+        }
+        if (renderedIndex != null) scope.launch { listState.animateScrollToItem(renderedIndex) }
         startReadAloud(target)
     }
+    val appUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
+    LaunchedEffect(appUnlocked) { if (!appUnlocked) stopReadAloud() }
     val viewerHiddenImages = remember(ngRules, tab.key) {
         ngRules.asSequence()
             .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tab.key) }
@@ -6355,30 +6350,15 @@ private fun CompatThreadScreen(
         ngRules.filter { it.kind == CompatNgKind.THREAD_IMAGE_PHASH && it.appliesToThreadImage(tab.boardKey, tab.key) }
     }
     var imagePhashes by remember(tab.key) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Cache-backed and progressive: persisted hashes apply at once, and hashes
+    // computed before the batch timeout are kept instead of being discarded.
     LaunchedEffect(snapshot?.revision, imageNgPhashRules, httpClient) {
-        val client = httpClient
-        if (client == null || imageNgPhashRules.isEmpty()) {
+        if (imageNgPhashRules.isEmpty()) {
             imagePhashes = emptyMap()
         } else {
-            val candidates = withContext(AppDispatchers.parsing) {
-                snapshot?.posts.orEmpty()
-                    .map(::normalizeCompatPostMedia)
-                    .mapNotNull { post ->
-                        (post.imageUrl ?: post.thumbnailUrl)?.let { url -> post.postNo to url }
-                    }
-                    .distinctBy { it.second }
-                    .take(256)
+            collectCompatThreadImagePhashes(httpClient, store, snapshot?.posts.orEmpty()) { hashes ->
+                if (hashes != imagePhashes) imagePhashes = hashes
             }
-            val computed = withTimeoutOrNull(COMPAT_PHASH_BATCH_TIMEOUT_MILLIS) {
-                buildMap {
-                    candidates.forEach { (postNo, url) ->
-                        withTimeoutOrNull(COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS) {
-                            fetchCompatImagePhash(client, url).getOrNull()
-                        }?.let { put(postNo, it) }
-                    }
-                }
-            }.orEmpty()
-            imagePhashes = computed
         }
     }
     val phashHiddenPostNos = remember(snapshot?.revision, imageNgPhashRules, imagePhashes, imageNgPhashThreshold) {
@@ -6429,7 +6409,7 @@ private fun CompatThreadScreen(
         threadNgEnabled,
         ngRules,
         tab.key,
-        imagePhashes,
+        phashHiddenPostNos,
         imageNgPhashThreshold,
         threadAi.hiddenPostNos
     ) {
@@ -6457,7 +6437,7 @@ private fun CompatThreadScreen(
                         boardKey = tab.boardKey
                     )
                     filterCompatThreadPosts(posts, threadNgEnabled, ngRuleIndex,
-                        threadAi.hiddenPostNos, imagePhashes, imageNgPhashThreshold)
+                        threadAi.hiddenPostNos + phashHiddenPostNos)
                 }
                 if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
                     calculateVisiblePosts()
@@ -6754,13 +6734,15 @@ private fun CompatThreadScreen(
     }
     LaunchedEffect(visiblePosts, searchQuery) {
         searchHits = emptyList()
-        searchHits = if (visiblePosts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+        val hits = if (visiblePosts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
             findCompatThreadSearchHits(visiblePosts, searchQuery)
         } else {
             withContext(AppDispatchers.parsing) {
                 findCompatThreadSearchHits(visiblePosts, searchQuery)
             }
         }
+        searchJumpTracker.hitsQuery = searchQuery
+        searchHits = hits
     }
     val searchMatches = remember(searchHits) { searchHits.map(CompatThreadSearchHit::postIndex) }
     val searchHitsByIndex = remember(searchHits) { searchHits.associateBy(CompatThreadSearchHit::postIndex) }
@@ -6880,12 +6862,31 @@ private fun CompatThreadScreen(
             refreshOnActivation = tab.refreshOnActivation || threadRefreshToken > 0L
         )
     }
-    LaunchedEffect(platformAiCommand, tab.key, visiblePosts.size) {
+    // Not keyed on the post count or on `loading` once a snapshot exists: a
+    // refresh must not cancel and re-run a command. The guard keeps any other
+    // restart from running a suspending command (検索の次へ) twice.
+    val platformAiGuard = remember { CompatPlatformAiDeliveryGuard() }
+    val platformAiLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(platformAiCommand), tab.key, snapshot != null, snapshot == null && loading) {
         val command = platformAiCommand ?: return@LaunchedEffect
+        // Locked after the command was handed over (recomposition paused):
+        // not run or consumed here; the workspace withdraws it and checks its
+        // age again after the unlock (E4-1).
+        if (platformAiLock?.isUnlocked == false) return@LaunchedEffect
         val requestedThread = command.threadIdParameter()
         if (requestedThread != null && requestedThread != tab.threadNo) return@LaunchedEffect
+        if (snapshot == null) {
+            if (loading || error == null) return@LaunchedEffect
+            onPlatformAiCommandConsumed(command)
+            return@LaunchedEffect
+        }
+        if (!platformAiGuard.claim(command)) {
+            onPlatformAiCommandConsumed(command)
+            return@LaunchedEffect
+        }
         when (command.action) {
-            FutachaAiAction.RefreshCurrentThread -> load(manual = true, bypassCache = true)
+            // Launched on the screen scope: the next command restarts this effect and must not cancel the reload.
+            FutachaAiAction.RefreshCurrentThread -> scope.launch { load(manual = true, bypassCache = true) }
             FutachaAiAction.ScrollThreadToTop -> listState.animateScrollToItem(0)
             FutachaAiAction.ScrollThreadToBottom -> {
                 listState.animateScrollToItem((visiblePosts.lastIndex).coerceAtLeast(0))
@@ -6911,7 +6912,11 @@ private fun CompatThreadScreen(
             FutachaAiAction.OpenThreadSettings -> onOpenSettings()
             FutachaAiAction.OpenThreadExternally -> openUrl(tab.originalUrl)
             FutachaAiAction.SaveCurrentThread -> saveCompatPage("save_all")
-            FutachaAiAction.DraftReply -> onOpenPost()
+            // The draft values go to the form's stored draft first (C4-6).
+            FutachaAiAction.DraftReply -> scope.launch {
+                persistCompatPlatformAiReplyDraft(store, tab.key, command)
+                onOpenPost()
+            }
             FutachaAiAction.StartThreadReadAloud -> startReadAloud()
             FutachaAiAction.PauseThreadReadAloud -> stopReadAloud("読み上げを一時停止しました")
             FutachaAiAction.StopThreadReadAloud -> {
@@ -6944,15 +6949,20 @@ private fun CompatThreadScreen(
         onReload = { load(manual = false, refreshOnActivation = true) },
         onStoppedDead = { error = "オートスクロールを停止します(スレ落)" }
     )
-    LaunchedEffect(searchQuery, searchMatches) {
+    LaunchedEffect(searchQuery, searchMatches, searchMatchIndex, searchJumpTracker.hitsQuery) {
         if (searchQuery.isEmpty()) {
             searchMatchIndex = 0
-        } else if (searchMatches.isNotEmpty()) {
+            searchJumpTracker.reset()
+        } else if (searchMatches.isNotEmpty() && searchJumpTracker.hitsQuery == searchQuery) {
             // Query edits reset the index in onQueryChanged. On state restoration,
             // the snapshot can briefly be empty while it is reloaded. Do not erase
             // the saved result index during that gap; restore the same hit afterward.
-            searchMatchIndex = searchMatchIndex.coerceIn(0, searchMatches.lastIndex)
-            listState.scrollToItem(searchMatches[searchMatchIndex])
+            val requestedIndex = searchMatchIndex
+            val index = requestedIndex.coerceIn(0, searchMatches.lastIndex)
+            // A refresh recomputes the matches; it must not pull the reader back.
+            val jump = searchJumpTracker.shouldJump(searchQuery, requestedIndex, index)
+            if (index != requestedIndex) searchMatchIndex = index
+            if (jump) listState.scrollToItem(searchMatches[index])
         }
     }
     // Android 8/10 IME may consume the first back event without invoking the
@@ -7231,6 +7241,12 @@ private fun CompatThreadScreen(
                     simpleQuoteCount = simpleQuoteCount,
                     saidaneDisplayMode = saidaneDisplayMode,
                     saidaneThreshold = saidaneExtractThreshold,
+                    showDeletedPosts = showDeletedPosts,
+                    ngEnabled = threadNgEnabled,
+                    ngRules = ngRules,
+                    imagePhashes = rememberCompatNeighborStoredImagePhashes(store, pagerNeighborSnapshot, ngRules),
+                    aiHiddenPostNos = if (threadAi.moderationEnabled) LocalCompatAiPreviewCache.current?.hidden(pagerNeighborSnapshot).orEmpty() else emptySet(),
+                    imageNgPhashThreshold = imageNgPhashThreshold,
                     modifier = Modifier
                         .fillMaxSize()
                         .offset {
@@ -7542,7 +7558,7 @@ private fun CompatThreadScreen(
     if (scrollDialogOpen) {
         val lastIndex = threadListLastIndex
         val sliderDenominator = lastIndex.coerceAtLeast(1)
-        Dialog(
+        FutachaAppLockAwareWindow { Dialog(
             onDismissRequest = { scrollDialogOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
@@ -7596,7 +7612,7 @@ private fun CompatThreadScreen(
                     }
                 }
             }
-        }
+        } }
     }
     if (readAloudDialogOpen) {
         CompatThreadSpeechDialog(
@@ -7703,7 +7719,7 @@ private fun CompatThreadScreen(
     }
     headerExtractionPost?.let { post ->
         val kinds = headerExtractionKinds
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { headerExtractionPost = null },
             title = { Text("抽出") },
             text = {
@@ -7727,7 +7743,7 @@ private fun CompatThreadScreen(
                 }
             },
             confirmButton = {}
-        )
+        ) }
     }
 
     CompatThreadQuotePopups(
@@ -7789,7 +7805,7 @@ private fun CompatThreadScreen(
         )
     }
     delPost?.let { post ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { delPost = null },
             title = { Text("削除依頼 No.${post.postNo}") },
             confirmButton = {
@@ -7801,10 +7817,10 @@ private fun CompatThreadScreen(
             dismissButton = {
                 TextButton(onClick = { delPost = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     reportPost?.let { post ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { reportPost = null },
             title = { Text("不適切な投稿を通報") },
             text = {
@@ -7819,7 +7835,7 @@ private fun CompatThreadScreen(
             dismissButton = {
                 TextButton(onClick = { reportPost = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     selectionState?.let { selection ->
         CompatThreadPostSelectionDialog(
@@ -7863,7 +7879,7 @@ private fun CompatThreadScreen(
         )
     }
     deletePost?.let { post ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { deletePost = null },
             title = { Text("レス削除 No.${post.postNo}") },
             text = {
@@ -7922,7 +7938,7 @@ private fun CompatThreadScreen(
                 }) { Text("送信する") }
             },
             dismissButton = { TextButton(onClick = { deletePost = null }) { Text("キャンセル") } }
-        )
+        ) }
     }
     CompatThreadExtractionDialogs(
         tab = tab,
@@ -8443,9 +8459,16 @@ private fun CompatThreadPostContextDialog(
                             .find(current?.saidaneLabel.orEmpty())
                             ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                         val nextCount = oldCount + 1
-                        snapshot = snapshot?.copy(posts = snapshot?.posts.orEmpty().map {
-                            if (it.postNo == post.postNo) it.copy(saidaneLabel = "そうだねx$nextCount") else it
-                        })
+                        // Bump the revision: the visible list, extraction and
+                        // viewer projections are keyed on it, not on the posts.
+                        snapshot = snapshot?.let { current ->
+                            current.copy(
+                                posts = current.posts.map {
+                                    if (it.postNo == post.postNo) it.copy(saidaneLabel = "そうだねx$nextCount") else it
+                                },
+                                revision = current.revision + 1L
+                            )
+                        }
                         error = "そうだねx$nextCount"
                     }
                     .onFailure { error = it.toCompatUserMessage("そうだねを送信できませんでした") }
@@ -9091,7 +9114,7 @@ private fun CompatThreadExtractionDialogs(
         )
     }
     if (extractionKeywordOpen) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { extractionKeywordOpen = false },
             title = { Text("キーワード") },
             text = {
@@ -9120,7 +9143,7 @@ private fun CompatThreadExtractionDialogs(
                 }) { Text("検索する") }
             },
             dismissButton = { TextButton(onClick = { extractionKeywordOpen = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
 }
 
@@ -9161,12 +9184,14 @@ private fun CompatCatalogSearchTopBar(
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val palette = LocalCompatibilityPalette.current
+    val searchColors = compatibilitySearchBarColors(palette)
     LaunchedEffect(focusRequester) {
         delay(150)
         focusRequester.requestFocus()
         keyboardController?.show()
     }
-    TopAppBar(
+    CompatSearchBarFrame { TopAppBar(
         expandedHeight = 56.dp,
         title = {
             TextField(
@@ -9185,11 +9210,13 @@ private fun CompatCatalogSearchTopBar(
                     disabledContainerColor = Color.Transparent,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    cursorColor = Color.White,
-                    focusedPlaceholderColor = Color(0xFF80CBC4),
-                    unfocusedPlaceholderColor = Color(0xFF80CBC4)
+                    focusedTextColor = searchColors.content,
+                    unfocusedTextColor = searchColors.content,
+                    cursorColor = palette.inputCursor,
+                    focusedPlaceholderColor = searchColors.hint,
+                    unfocusedPlaceholderColor = searchColors.hint,
+                    focusedTrailingIconColor = searchColors.content,
+                    unfocusedTrailingIconColor = searchColors.content
                 )
             )
         },
@@ -9197,11 +9224,11 @@ private fun CompatCatalogSearchTopBar(
             IconButton(onClick = onClose) { Icon(Icons.Filled.ArrowBack, contentDescription = "検索を閉じる") }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = CompatTeal,
-            navigationIconContentColor = Color.White,
-            titleContentColor = Color.White
+            containerColor = searchColors.container,
+            navigationIconContentColor = searchColors.content,
+            titleContentColor = searchColors.content
         )
-    )
+    ) }
 }
 
 @Composable
@@ -9339,7 +9366,7 @@ private fun CompatToolbarOverflowDialog(
     val inactive = items.sortedBy(CompatToolbarItem::position)
         .filterNot(CompatToolbarItem::active)
         .mapNotNull { commandsByKey[it.key] }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("その他") },
         text = {
@@ -9365,7 +9392,7 @@ private fun CompatToolbarOverflowDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }
-    )
+    ) }
 }
 
 @Composable
@@ -9513,7 +9540,7 @@ private fun CompatExtractionResultPopup(
             480.dp
         }
     }
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         popupPositionProvider = remember(minimumTopY) {
             CompatExtractionPopupPositionProvider(minimumTopY)
         },
@@ -9585,7 +9612,7 @@ private fun CompatExtractionResultPopup(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -9598,7 +9625,7 @@ private fun CompatPostSelectionDialog(
     onAppend: () -> Unit,
     onCopy: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (state.mode == CompatPostSelectionMode.WEB) "Google検索" else "レス欄に…") },
         text = {
@@ -9650,14 +9677,14 @@ private fun CompatPostSelectionDialog(
                 TextButton(onClick = onSearch) { Text("検索する") }
             } else {
                 Row {
-                    TextButton(enabled = state.selected.isNotEmpty(), onClick = onOverwrite) { Text("上書き") }
-                    TextButton(enabled = state.selected.isNotEmpty(), onClick = onAppend) { Text("追加") }
                     TextButton(enabled = state.selected.isNotEmpty(), onClick = onCopy) { Text("コピー") }
+                    TextButton(enabled = state.selected.isNotEmpty(), onClick = onAppend) { Text("追加") }
+                    TextButton(enabled = state.selected.isNotEmpty(), onClick = onOverwrite) { Text("上書き") }
                 }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }
 
 @Composable

@@ -30,11 +30,68 @@ data class CompatWatchResult(
     val checkedAtEpochMillis: Long = 0
 )
 
+internal const val MAX_COMPAT_WATCH_RULES = 500
+internal const val MAX_COMPAT_WATCH_RULE_WORD_CHARS = 100
+
 fun compatWatchRules(preferences: Map<String, String>): List<CompatWatchRule> {
     val encoded = preferences[COMPAT_WATCH_RULES_KEY]
     return if (encoded == null) {
-        parseCompatWatchWords(preferences[COMPAT_WATCH_WORDS_PREFERENCE_KEY]).map { CompatWatchRule(it) }
+        legacyCompatWatchRules(parseCompatWatchWords(preferences[COMPAT_WATCH_WORDS_PREFERENCE_KEY]))
     } else runCatching { watcherJson.decodeFromString<List<CompatWatchRule>>(encoded) }.getOrDefault(emptyList())
+}
+
+/**
+ * The one set of limits for stored rules: at most [MAX_COMPAT_WATCH_RULES]
+ * rules of 1..[MAX_COMPAT_WATCH_RULE_WORD_CHARS] characters whose compact JSON
+ * fits one preference value. Saving, keyword-backup restore and the legacy
+ * word-list conversion all use it, so whatever was saved or exported restores.
+ * Returns the value to store.
+ */
+fun encodeValidCompatWatchRules(rules: List<CompatWatchRule>): String {
+    require(rules.size <= MAX_COMPAT_WATCH_RULES) { "キーワードは${MAX_COMPAT_WATCH_RULES}件までです" }
+    require(rules.all { it.word.isNotBlank() && it.word.length <= MAX_COMPAT_WATCH_RULE_WORD_CHARS }) {
+        "キーワードは1〜${MAX_COMPAT_WATCH_RULE_WORD_CHARS}文字で入力してください"
+    }
+    val encoded = watcherJson.encodeToString(rules)
+    require(isValidCompatPreference(COMPAT_WATCH_RULES_KEY, encoded)) {
+        "キーワードの合計が長すぎます。キーワードを減らしてください"
+    }
+    return encoded
+}
+
+/**
+ * Words from the pre-rules list (an older version or a words-only keyword
+ * backup, which allow far more text) become the leading rules that can still
+ * be saved, so editing, reordering or deleting one never fails on the rest.
+ */
+private fun legacyCompatWatchRules(words: List<String>): List<CompatWatchRule> {
+    val rules = mutableListOf<CompatWatchRule>()
+    var encodedChars = 2 // []
+    for (word in words) {
+        if (rules.size >= MAX_COMPAT_WATCH_RULES) break
+        if (word.isBlank() || word.length > MAX_COMPAT_WATCH_RULE_WORD_CHARS) continue
+        val rule = CompatWatchRule(word)
+        val ruleChars = watcherJson.encodeToString(rule).length + if (rules.isEmpty()) 0 else 1
+        if (encodedChars + ruleChars > MAX_COMPAT_PREFERENCE_VALUE_CHARS) break
+        encodedChars += ruleChars
+        rules += rule
+    }
+    return rules
+}
+
+/**
+ * Board-scoped rules after a board's key was corrected from [fromBoardKey] to
+ * [toBoardKey] (G-16/P4-2); null when nothing refers to the old key, the value
+ * cannot be read, or the moved rules would no longer fit one stored value.
+ * A rule already present for the corrected board is kept once.
+ */
+fun remapCompatWatchRulesBoardKey(encoded: String, fromBoardKey: String, toBoardKey: String): String? {
+    val rules = runCatching { watcherJson.decodeFromString<List<CompatWatchRule>>(encoded) }.getOrNull()
+        ?: return null
+    if (rules.none { it.boardKey == fromBoardKey }) return null
+    val moved = rules.map { rule -> if (rule.boardKey == fromBoardKey) rule.copy(boardKey = toBoardKey) else rule }
+        .distinct()
+    return runCatching { encodeValidCompatWatchRules(moved) }.getOrNull()
 }
 
 fun compatWatchWordsForBoard(preferences: Map<String, String>, boardKey: String): List<String> =
@@ -50,11 +107,7 @@ fun compatWatchAllowed(preferences: Map<String, String>, wifi: Boolean): Boolean
 /** Fixed slots bound preference growth. Results never alias or delete browsing history. */
 class CompatWatcherRepository(private val store: CompatibilityStore) {
     suspend fun saveRules(rules: List<CompatWatchRule>) {
-        require(rules.size <= 500) { "キーワードは500件までです" }
-        require(rules.all { it.word.isNotBlank() && it.word.length <= 100 }) { "キーワードは1〜100文字で入力してください" }
-        val encoded = watcherJson.encodeToString(rules)
-        requireValidCompatPreference(COMPAT_WATCH_RULES_KEY, encoded)
-        store.savePreference(COMPAT_WATCH_RULES_KEY, encoded)
+        store.savePreference(COMPAT_WATCH_RULES_KEY, encodeValidCompatWatchRules(rules))
     }
 
     private suspend fun slots(): Map<String, CompatWatchResult> = decodeSlots(store.preferences.first())

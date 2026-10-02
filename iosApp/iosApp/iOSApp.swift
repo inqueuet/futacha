@@ -46,8 +46,10 @@ private final class FutachaNetworkPathMonitor {
         started = true
         monitor.pathUpdateHandler = { path in
             // Match the reference's updated semantics: the historical Wi-Fi
-            // option means any satisfied, non-metered path.
-            let unmetered = path.status == .satisfied && !path.isExpensive
+            // option means any satisfied, non-metered path. Low Data Mode
+            // (a constrained path) is the user asking to save data, so it
+            // counts as metered too (G-23).
+            let unmetered = path.status == .satisfied && !path.isExpensive && !path.isConstrained
             MainViewControllerKt.updateIosWifiConnected(connected: unmetered)
         }
         monitor.start(queue: queue)
@@ -199,6 +201,22 @@ private func retryPendingFutachaAiDeepLinks() {
     FutachaAiDeepLinkSubmitter.shared.retryPendingSoon()
 }
 
+/// What may be logged about a Futacha AI deep link: its action id and length,
+/// never the query values (draft text, e-mail, delete key) (S-5).
+private func futachaAiDeepLinkLogDescription(_ raw: String) -> String {
+    let components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    let queryAction = components?.queryItems?.first { item in
+        let name = item.name.lowercased()
+        return name == "action" || name == "command"
+    }?.value
+    let pathAction = components?.path.split(separator: "/").first.map(String.init)
+    let candidate = (queryAction ?? pathAction ?? "").prefix(64)
+    let isActionId = !candidate.isEmpty && candidate.allSatisfy { character in
+        character.isASCII && (character.isLetter || character.isNumber || character == "_" || character == "-")
+    }
+    return "action=\(isActionId ? String(candidate) : "unknown") length=\(raw.count)"
+}
+
 private struct PendingFutachaAiDeepLink {
     let raw: String
     var attempts: Int
@@ -319,7 +337,9 @@ private final class FutachaAiDeepLinkSubmitter {
             if next.attempts < maxRetryAttempts {
                 remaining.append(next)
             } else {
-                NSLog("Dropped pending Futacha AI deep link after retries: %@", item.raw)
+                // The link can carry a draft's text, e-mail and delete key;
+                // the system log gets only its action (S-5).
+                NSLog("Dropped pending Futacha AI deep link after retries: %@", futachaAiDeepLinkLogDescription(item.raw))
             }
         }
         pending = remaining
@@ -501,13 +521,17 @@ private let futachaConfirmActionIds: Set<String> = [
 
 @available(iOS 16.0, *)
 private func futachaIntentDialog(action: String, accepted: Bool) -> IntentDialog {
+    // The intent cannot see the app lock, so both answers say what happens
+    // while it is on: held commands wait for the unlock (old ones may be
+    // skipped), and a full queue refuses new ones instead of dropping old ones (C-12).
     if !accepted {
-        return IntentDialog("操作を受け付けられませんでした。futachaを開いてから、もう一度実行してください。")
+        return IntentDialog("操作を受け付けられませんでした。futachaを開き、起動ロック中なら解除してから、もう一度実行してください。")
     }
+    let lockNote = "起動ロック中は、解除してから実行します。時間が経った操作は実行しないことがあります。"
     if futachaConfirmActionIds.contains(action) {
-        return IntentDialog("操作を受け付けました。\(futachaConfirmationReason(action: action))、アプリ内で確認してから実行します。")
+        return IntentDialog("操作を受け付けました。\(futachaConfirmationReason(action: action))、アプリ内で確認してから実行します。\(lockNote)")
     }
-    return IntentDialog("操作を受け付けました。")
+    return IntentDialog("操作を受け付けました。\(lockNote)")
 }
 
 @available(iOS 16.0, *)

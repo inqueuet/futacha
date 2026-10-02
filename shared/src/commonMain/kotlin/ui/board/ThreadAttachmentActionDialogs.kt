@@ -28,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -47,7 +48,7 @@ internal fun ThreadAttachmentActionSheet(
     if (imageNgOpen && features != null && context != null) FutachaImageNgRegistration(features,
         context.boardKey, com.valoser.futacha.shared.compat.CompatImageNgSource.THREAD, target.url,
         "No.${target.post.id}", { imageNgOpen = false })
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("attachment_action_sheet_dismiss", "添付メニューを閉じる")
             onDismiss()
@@ -130,5 +131,5 @@ internal fun ThreadAttachmentActionSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
-    }
+    } }
 }

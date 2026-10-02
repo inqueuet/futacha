@@ -54,11 +54,10 @@ internal object VideoSensitiveAnalyser {
                 for (track in tracks.filter { it.active }) {
                     checkActive()
                     val predicted = track.tracker.step(frame, cut)
-                    val match = unmatched.filter { it.label == track.label && intersectionOverUnion(it.bounds, predicted.bounds) >= .15f }
-                        .maxByOrNull { intersectionOverUnion(it.bounds, predicted.bounds) }
+                    val match = matchVideoTrackDetection(unmatched, track.label, predicted.bounds, settings.margin)
                     if (match != null) {
                         unmatched.remove(match)
-                        val bounds = expand(match.bounds, settings.margin)
+                        val bounds = expandVideoDetectionBounds(match.bounds, settings.margin)
                         track.tracker.seed(frame, bounds)
                         track.lastDetectedUs = frame.timeUs
                         track.append(frame.timeUs, bounds, match.score < .3f, end)
@@ -75,7 +74,7 @@ internal object VideoSensitiveAnalyser {
                     }
                     val track = DetectionTrack(detection.label, frame.timeUs)
                     tracks += track
-                    val bounds = expand(detection.bounds, settings.margin)
+                    val bounds = expandVideoDetectionBounds(detection.bounds, settings.margin)
                     track.tracker.seed(frame, bounds)
                     track.append(frame.timeUs, bounds, detection.score < .3f, end)
                     if (detection.score < .3f) issues.add(frame.timeUs, end, "弱い検出候補を確認してください")
@@ -174,9 +173,16 @@ internal object VideoSensitiveAnalyser {
             samples.add(time, bounds, uncertain); endUs = end
         }
     }
-    private fun expand(bounds: MosaicBounds, margin: Float) = bounds.copy(
-        width = bounds.width * (1 + margin * 2), height = bounds.height * (1 + margin * 2)).constrained()
 }
+
+internal fun expandVideoDetectionBounds(bounds: MosaicBounds, margin: Float) = bounds.copy(
+    width = bounds.width * (1 + margin * 2), height = bounds.height * (1 + margin * 2)).constrained()
+
+internal fun matchVideoTrackDetection(
+    candidates: List<Detection>, label: String, predicted: MosaicBounds, margin: Float
+): Detection? = candidates.filter {
+    it.label == label && intersectionOverUnion(expandVideoDetectionBounds(it.bounds, margin), predicted) >= .15f
+}.maxByOrNull { intersectionOverUnion(expandVideoDetectionBounds(it.bounds, margin), predicted) }
 
 private fun checkVideoAnalysisPermit(gate: MediaFeatureGate, permit: MediaFeaturePermit) {
     require(permit.feature == MediaFeature.VIDEO_EDITOR)

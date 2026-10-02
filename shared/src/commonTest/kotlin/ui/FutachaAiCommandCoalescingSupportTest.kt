@@ -21,12 +21,34 @@ class FutachaAiCommandCoalescingSupportTest {
     }
 
     @Test
-    fun resolvePendingAiScreenCommand_keepsExistingPendingCommand() {
+    fun resolvePendingAiScreenCommand_newerCommandReplacesUnconsumedOne() {
         val existing = FutachaAiCommand(FutachaAiAction.SearchCatalog)
         val incoming = FutachaAiCommand(FutachaAiAction.OpenGallery)
 
-        assertSame(existing, resolvePendingAiScreenCommand(existing, incoming))
+        // An unconsumed command must not block later ones (H1).
+        assertSame(incoming, resolvePendingAiScreenCommand(existing, incoming))
         assertSame(incoming, resolvePendingAiScreenCommand(null, incoming))
+    }
+
+    @Test
+    fun isAiCommandForThread_matchesOnlyTheNamedThread() {
+        val untargeted = FutachaAiCommand(FutachaAiAction.StartThreadReadAloud)
+        val watch = FutachaAiCommand(
+            FutachaAiAction.StartThreadReadAloud,
+            parameters = mapOf("boardId" to "b", "boardUrl" to "https://may.2chan.net/b/", "threadId" to "123"),
+            source = "watchos"
+        )
+        val byUrl = FutachaAiCommand(
+            FutachaAiAction.SearchThread,
+            parameters = mapOf("url" to "https://may.2chan.net/b/res/456.htm")
+        )
+
+        assertTrue(isAiCommandForThread(untargeted, boardId = "b", threadId = "999"))
+        assertTrue(isAiCommandForThread(watch, boardId = "b", threadId = "123"))
+        assertFalse(isAiCommandForThread(watch, boardId = "b", threadId = "999"))
+        assertFalse(isAiCommandForThread(watch, boardId = "img", threadId = "123"))
+        assertTrue(isAiCommandForThread(byUrl, boardId = "b", threadId = "456"))
+        assertFalse(isAiCommandForThread(byUrl, boardId = "b", threadId = "123"))
     }
 
     @Test

@@ -42,7 +42,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
@@ -55,7 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger
 private const val AICORE_PACKAGE = "com.google.android.aicore"
 private const val AI_STATUS_TIMEOUT_MILLIS = 10_000L
 private const val AI_SUMMARY_INFERENCE_TIMEOUT_MILLIS = 35_000L
-private const val AI_POST_MODERATION_TIMEOUT_MILLIS = 20_000L
+private const val AI_POST_MODERATION_TIMEOUT_MILLIS = 35_000L
 private const val AI_REMOTE_REQUEST_TIMEOUT_MILLIS = 180_000L
 private const val AI_REMOTE_AVAILABILITY_TIMEOUT_MILLIS = 90_000L
 private const val AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS = 15 * 60 * 1_000L
@@ -70,6 +69,7 @@ private const val KEY_RESPONSE_FINAL = "response_final"
 private const val KEY_START_DOWNLOAD = "start_download"
 private const val KEY_THREAD_ID = "thread_id"
 private const val KEY_THREAD_TITLE = "thread_title"
+private const val KEY_MODERATION_SOURCE = "moderation_source"
 private const val KEY_POST_IDS = "post_ids"
 private const val KEY_POST_SUBJECTS = "post_subjects"
 private const val KEY_POST_MESSAGES = "post_messages"
@@ -92,9 +92,7 @@ private const val KEY_AVAILABILITY_DOWNLOADED = "availability_downloaded"
 private const val KEY_AVAILABILITY_TOTAL = "availability_total"
 
 private const val AI_IPC_SUMMARY_MAX_POSTS = 80
-private const val AI_IPC_MODERATION_MAX_POSTS_PER_REQUEST = 256
 private const val AI_IPC_MAX_MESSAGE_CHARS = 500
-private const val AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS = 32_000
 private const val AI_IPC_SUMMARY_MAX_MESSAGE_CHARS = 10_000
 private const val AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS = 10_000
 
@@ -141,7 +139,8 @@ private class AndroidOnDeviceAiService(
         val availability = requestRemoteAvailability(
             context = appContext,
             startDownloadIfNeeded = false,
-            progressChannel = this
+            progressChannel = this,
+            owner = this@AndroidOnDeviceAiService
         )
         if (availability == null) {
             send(
@@ -172,7 +171,8 @@ private class AndroidOnDeviceAiService(
         return requestRemoteAvailability(
             context = appContext,
             startDownloadIfNeeded = false,
-            progressChannel = null
+            progressChannel = null,
+            owner = this
         ) ?: AiAvailability(
             isAvailable = false,
             unavailableReason = "Gemini Nano の状態確認がタイムアウトしました。",
@@ -186,26 +186,28 @@ private class AndroidOnDeviceAiService(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return Result.failure(IllegalStateException("Android 8.0 or later is required"))
         }
-        requestRemoteThreadSummary(appContext, input)?.let {
+        requestRemoteThreadSummary(appContext, input, owner = this@AndroidOnDeviceAiService)?.let {
             return it
         }
         return withContext(AppDispatchers.parsing) {
-            Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+            Result.success(buildFallbackThreadSummary(input, providerLabel = "Gemini Nano"))
         }
     }
 
     override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> = withContext(AppDispatchers.io) {
         val appContext = context?.applicationContext
         if (appContext != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            requestRemotePostModeration(appContext, input)?.let {
-                return@withContext it
-            }
+            // A worker timeout/disconnect is a failure, not "no decisions": callers retry
+            // failures but treat an empty success as answered.
+            return@withContext requestRemotePostModeration(appContext, input, owner = this@AndroidOnDeviceAiService)
+                ?: Result.failure(IllegalStateException("Gemini Nano の荒らし判定がタイムアウトしました。"))
         }
         Result.success(emptyList())
     }
 
     override fun cancelActiveRequests() {
-        aiRemoteServiceSession.cancelActiveRequests()
+        // Only this service's own request: other screens share the worker session.
+        aiRemoteServiceSession.cancelActiveRequests(owner = this)
     }
 }
 
@@ -250,7 +252,7 @@ class AndroidAiWorkerService : Service() {
                     true
                 }
                 MSG_CLASSIFY_POSTS -> {
-                    val request = message.data.toPostModerationInput()
+                    val request = message.data.getString(KEY_MODERATION_SOURCE).orEmpty()
                     val replyTo = message.replyTo
                     val requestId = message.data.getInt(KEY_REQUEST_ID)
                     launchRequest(requestId) {
@@ -316,7 +318,8 @@ class AndroidAiWorkerService : Service() {
 
 private suspend fun requestRemoteThreadSummary(
     context: Context,
-    input: ThreadSummaryInput
+    input: ThreadSummaryInput,
+    owner: Any? = null
 ): Result<ThreadSummary>? {
     val bundle = Bundle().apply {
         putInt(KEY_REQUEST_ID, aiRequestIds.getAndIncrement())
@@ -332,7 +335,8 @@ private suspend fun requestRemoteThreadSummary(
         context = context,
         what = MSG_SUMMARIZE_THREAD,
         data = bundle,
-        timeoutMillis = AI_REMOTE_REQUEST_TIMEOUT_MILLIS
+        timeoutMillis = AI_REMOTE_REQUEST_TIMEOUT_MILLIS,
+        owner = owner
     ) ?: return null
 
     if (!response.getBoolean(KEY_SUCCESS)) {
@@ -352,7 +356,8 @@ private suspend fun requestRemoteThreadSummary(
 private suspend fun requestRemoteAvailability(
     context: Context,
     startDownloadIfNeeded: Boolean,
-    progressChannel: SendChannel<AiAvailability>?
+    progressChannel: SendChannel<AiAvailability>?,
+    owner: Any? = null
 ): AiAvailability? {
     val bundle = Bundle().apply {
         putInt(KEY_REQUEST_ID, aiRequestIds.getAndIncrement())
@@ -369,24 +374,26 @@ private suspend fun requestRemoteAvailability(
         },
         onProgress = { progress ->
             progress.toAiAvailability()?.let { progressChannel?.trySend(it) }
-        }
+        },
+        owner = owner
     ) ?: return null
     return response.toAiAvailability()
 }
 private suspend fun requestRemotePostModeration(
     context: Context,
-    input: PostModerationInput
+    input: PostModerationInput,
+    owner: Any? = null
 ): Result<List<PostModerationResult>>? {
-    val postChunks = chunkModerationIpcPosts(input.posts)
+    val postChunks = buildPostModerationSourceChunks(input)
     if (postChunks.isEmpty()) {
         return Result.success(emptyList())
     }
     val mergedResults = linkedMapOf<String, PostModerationResult>()
-    for (posts in postChunks) {
+    for (source in postChunks) {
         val chunkResult = requestRemotePostModerationChunk(
             context = context,
-            threadId = input.threadId,
-            posts = posts
+            sourceText = source,
+            owner = owner
         ) ?: return null
         chunkResult.getOrElse { return Result.failure(it) }
             .forEach { result ->
@@ -398,23 +405,19 @@ private suspend fun requestRemotePostModeration(
 
 private suspend fun requestRemotePostModerationChunk(
     context: Context,
-    threadId: String,
-    posts: List<Post>
+    sourceText: String,
+    owner: Any? = null
 ): Result<List<PostModerationResult>>? {
     val bundle = Bundle().apply {
         putInt(KEY_REQUEST_ID, aiRequestIds.getAndIncrement())
-        putString(KEY_THREAD_ID, threadId)
-        putPosts(
-            posts = posts,
-            maxMessageChars = AI_IPC_MAX_MESSAGE_CHARS,
-            maxTotalMessageChars = AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS
-        )
+        putString(KEY_MODERATION_SOURCE, sourceText)
     }
     val response = requestRemoteAi(
         context = context,
         what = MSG_CLASSIFY_POSTS,
         data = bundle,
-        timeoutMillis = AI_REMOTE_REQUEST_TIMEOUT_MILLIS
+        timeoutMillis = AI_REMOTE_REQUEST_TIMEOUT_MILLIS,
+        owner = owner
     ) ?: return null
 
     if (!response.getBoolean(KEY_SUCCESS)) {
@@ -437,43 +440,21 @@ private suspend fun requestRemotePostModerationChunk(
     )
 }
 
-private fun chunkModerationIpcPosts(posts: List<Post>): List<List<Post>> {
-    if (posts.isEmpty()) return emptyList()
-    val chunks = mutableListOf<List<Post>>()
-    val current = mutableListOf<Post>()
-    var currentChars = 0
-    posts.forEach { post ->
-        val messageChars = minOf(post.messageHtml.length, AI_IPC_MAX_MESSAGE_CHARS)
-        val exceedsPostLimit = current.size >= AI_IPC_MODERATION_MAX_POSTS_PER_REQUEST
-        val exceedsCharLimit = current.isNotEmpty() &&
-            currentChars + messageChars > AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS
-        if (exceedsPostLimit || exceedsCharLimit) {
-            chunks += current.toList()
-            current.clear()
-            currentChars = 0
-        }
-        current += post
-        currentChars += messageChars
-    }
-    if (current.isNotEmpty()) {
-        chunks += current.toList()
-    }
-    return chunks
-}
-
 private suspend fun requestRemoteAi(
     context: Context,
     what: Int,
     data: Bundle,
     timeoutMillis: Long,
-    onProgress: ((Bundle) -> Unit)? = null
+    onProgress: ((Bundle) -> Unit)? = null,
+    owner: Any? = null
 ): Bundle? {
     return aiRemoteServiceSession.request(
         context = context,
         what = what,
         data = data,
         timeoutMillis = timeoutMillis,
-        onProgress = onProgress
+        onProgress = onProgress,
+        owner = owner
     )
 }
 
@@ -490,11 +471,18 @@ private class AndroidAiRemoteServiceSession {
     private var pendingBindReady: ((Messenger?) -> Unit)? = null
     private var activeDisconnectHandler: (() -> Unit)? = null
     private var activeRequestId: Int? = null
+    private var activeOwner: Any? = null
+    private var activeAbort: (() -> Unit)? = null
     private var idleUnbindRunnable: Runnable? = null
 
-    fun cancelActiveRequests() {
+    /**
+     * Cancels the active request only when [owner] issued it. The worker sends no
+     * reply for a cancelled job, so the waiting caller is resumed here; otherwise
+     * it would hold [requestMutex] until its timeout and block every other caller.
+     */
+    fun cancelActiveRequests(owner: Any?) {
         mainHandler.post {
-            activeRequestId?.let(::sendCancelToWorker)
+            if (activeRequestId != null && activeOwner === owner) activeAbort?.invoke()
         }
     }
 
@@ -503,9 +491,13 @@ private class AndroidAiRemoteServiceSession {
         what: Int,
         data: Bundle,
         timeoutMillis: Long,
-        onProgress: ((Bundle) -> Unit)?
-    ): Bundle? = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
-        requestMutex.withLock {
+        onProgress: ((Bundle) -> Unit)?,
+        owner: Any? = null,
+        queueTimeoutMillis: Long = timeoutMillis
+    ): Bundle? = requestMutex.withLockWithin(queueTimeoutMillis) {
+        // The deadline starts once this request owns the worker; the wait before it is bounded
+        // separately, so a caller without its own deadline (availability) cannot queue forever.
+        withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
             suspendCancellableCoroutine { continuation ->
                 val appContext = context.applicationContext
                 val requestId = data.getInt(KEY_REQUEST_ID)
@@ -521,6 +513,8 @@ private class AndroidAiRemoteServiceSession {
                         }
                         if (activeRequestId == requestId) {
                             activeRequestId = null
+                            activeOwner = null
+                            activeAbort = null
                         }
                         scheduleIdleUnbind(appContext)
                     }
@@ -566,6 +560,8 @@ private class AndroidAiRemoteServiceSession {
                             sendCancelToWorker(requestId)
                             if (activeRequestId == requestId) {
                                 activeRequestId = null
+                                activeOwner = null
+                                activeAbort = null
                             }
                             if (activeDisconnectHandler === handleDisconnect) {
                                 activeDisconnectHandler = null
@@ -586,6 +582,15 @@ private class AndroidAiRemoteServiceSession {
                     cancelIdleUnbind()
                     activeDisconnectHandler = handleDisconnect
                     activeRequestId = requestId
+                    activeOwner = owner
+                    activeAbort = {
+                        sendCancelToWorker(requestId)
+                        finish(Bundle().apply {
+                            putInt(KEY_REQUEST_ID, requestId)
+                            putBoolean(KEY_SUCCESS, false)
+                            putString(KEY_ERROR, "端末AIの処理を取り消しました。")
+                        })
+                    }
                     val existingRemote = remoteMessenger
                     if (existingRemote != null) {
                         sendRequest(existingRemote)
@@ -723,13 +728,6 @@ private fun Bundle.toThreadSummaryInput(): ThreadSummaryInput {
     return ThreadSummaryInput(
         threadId = getString(KEY_THREAD_ID).orEmpty(),
         title = getString(KEY_THREAD_TITLE),
-        posts = toPosts()
-    )
-}
-
-private fun Bundle.toPostModerationInput(): PostModerationInput {
-    return PostModerationInput(
-        threadId = getString(KEY_THREAD_ID).orEmpty(),
         posts = toPosts()
     )
 }
@@ -968,18 +966,18 @@ private suspend fun performLocalThreadSummary(
             val summarizer = runCatching {
                 Summarization.getClient(buildSummarizerOptions(appContext))
             }.getOrElse {
-                return@withContext Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+                return@withContext Result.success(buildFallbackThreadSummary(input, providerLabel = "Gemini Nano"))
             }
             try {
                 val status = summarizer.checkFeatureStatus().awaitOrNull(AI_STATUS_TIMEOUT_MILLIS)
                 if (status != FeatureStatus.AVAILABLE) {
-                    return@withContext Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+                    return@withContext Result.success(buildFallbackThreadSummary(input, providerLabel = "Gemini Nano"))
                 }
                 val request = SummarizationRequest.builder(sourceText).build()
                 val result = summarizer.runInference(request)
                     .awaitOrNull(AI_SUMMARY_INFERENCE_TIMEOUT_MILLIS)
                     ?: return@withContext Result.success(
-                        buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano")
+                        buildFallbackThreadSummary(input, providerLabel = "Gemini Nano")
                     )
                 Result.success(
                     parseGeneratedThreadSummary(
@@ -991,54 +989,30 @@ private suspend fun performLocalThreadSummary(
                 )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+                Result.success(buildFallbackThreadSummary(input, providerLabel = "Gemini Nano"))
             } finally {
                 summarizer.close()
             }
         }
 }
 
-private suspend fun performLocalPostModeration(
-    input: PostModerationInput
-): Result<List<PostModerationResult>> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || input.posts.isEmpty()) {
-            return Result.success(emptyList())
-        }
-        val sourceChunks = buildPostModerationSourceChunks(input)
-        if (sourceChunks.isEmpty()) {
-            return Result.success(emptyList())
-        }
-        return withContext(AppDispatchers.io) {
-            val promptModel = runCatching {
-                Generation.getClient()
-            }.getOrElse {
-                return@withContext Result.success(emptyList())
+private suspend fun performLocalPostModeration(sourceText: String): Result<List<PostModerationResult>> {
+    if (sourceText.isBlank()) return Result.success(emptyList())
+    return withContext(AppDispatchers.io) {
+        val promptModel = runCatching { Generation.getClient() }.getOrElse { return@withContext Result.failure(it) }
+        try {
+            check(withTimeoutOrNull(AI_STATUS_TIMEOUT_MILLIS) { promptModel.checkStatus() } == FeatureStatus.AVAILABLE) {
+                "端末AIの準備ができていません。"
             }
-            try {
-                val status = withTimeoutOrNull(AI_STATUS_TIMEOUT_MILLIS) {
-                    promptModel.checkStatus()
-                }
-                if (status != FeatureStatus.AVAILABLE) {
-                    return@withContext Result.success(emptyList())
-                }
-                val detected = linkedMapOf<String, PostModerationResult>()
-                sourceChunks.forEach { sourceText ->
-                    val response = withTimeoutOrNull(AI_POST_MODERATION_TIMEOUT_MILLIS) {
-                        promptModel.generateContent(buildPostModerationPrompt(sourceText))
-                    } ?: return@forEach
-                    val responseText = response.candidates.firstOrNull()?.text.orEmpty()
-                    parsePostModerationResponse(responseText).forEach { (postId, result) ->
-                        detected[postId] = result
-                    }
-                }
-                Result.success(detected.values.toList())
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                Result.success(emptyList())
-            } finally {
-                promptModel.close()
-            }
-        }
+            val response = withTimeoutOrNull(AI_POST_MODERATION_TIMEOUT_MILLIS) {
+                promptModel.generateContent(localPostModerationInstructions() + "\n" + sourceText)
+            } ?: error("端末AIの判定がタイムアウトしました。")
+            Result.success(parsePostModerationBatchResponse(response.candidates.firstOrNull()?.text.orEmpty(), sourceText))
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Result.failure(error)
+        } finally { promptModel.close() }
+    }
 }
 
 private suspend fun <T> ListenableFuture<T>.awaitOrNull(timeoutMillis: Long): T? {
@@ -1236,17 +1210,4 @@ private fun buildSummarizerOptions(context: Context): SummarizerOptions {
         .setOutputType(SummarizerOptions.OutputType.THREE_BULLETS)
         .setLanguage(SummarizerOptions.Language.JAPANESE)
         .build()
-}
-
-private fun buildPostModerationPrompt(posts: String): String {
-    return """
-        You are a local moderation assistant for a Japanese imageboard thread.
-        Hide posts that are disruptive to reading the thread: repeated flooding, copy-paste spam, harassment, threats, abusive personal attacks, slurs, unrelated vandalism, or bait that repeatedly derails discussion.
-        Do not hide ordinary disagreement, normal jokes, useful criticism, quoted text, or rough tone alone.
-        When a post is more likely disruptive than useful, hide it. Return every matching hidden post in this batch.
-        Return one line per hidden post only.
-        Format exactly: postId<TAB>HIDE<TAB>short Japanese reason
-        Posts:
-        $posts
-    """.trimIndent()
 }

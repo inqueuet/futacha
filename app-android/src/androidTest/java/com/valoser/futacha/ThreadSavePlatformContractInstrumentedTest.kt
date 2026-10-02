@@ -84,7 +84,8 @@ class ThreadSavePlatformContractInstrumentedTest {
     @Test
     fun savedHtmlViewerRemovesFtbucketPreviewControlOnDevice() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val htmlFile = java.io.File(context.cacheDir, "issue78-saved-thread.htm")
+        // Internal storage is rejected for file:// URIs, so use the app-specific external dir.
+        val htmlFile = java.io.File(requireNotNull(context.externalCacheDir), "issue78-saved-thread.htm")
         htmlFile.writeText(
             """
                 <html><head><meta charset="UTF-8"></head><body>

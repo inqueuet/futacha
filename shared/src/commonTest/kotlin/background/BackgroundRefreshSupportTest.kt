@@ -135,4 +135,77 @@ class BackgroundRefreshSupportTest {
         assertEquals(1L, normalizeBackgroundRefreshRetryDelay(-50L))
         assertEquals(250L, normalizeBackgroundRefreshRetryDelay(250L))
     }
+
+    @Test
+    fun backgroundRefresh_submitsAppRefreshAndProcessingUntilEachIsPending() {
+        val all = BackgroundRefreshTaskKind.entries.toSet()
+        // BGAppRefresh is what iOS runs periodically; it must be submitted, not only BGProcessing.
+        assertEquals(
+            listOf(BackgroundRefreshTaskKind.APP_REFRESH, BackgroundRefreshTaskKind.PROCESSING),
+            resolveBackgroundRefreshKindsToSubmit(permittedKinds = all, pendingKinds = emptySet())
+        )
+        // After the app refresh task ran, only it is submitted again.
+        assertEquals(
+            listOf(BackgroundRefreshTaskKind.APP_REFRESH),
+            resolveBackgroundRefreshKindsToSubmit(all, pendingKinds = setOf(BackgroundRefreshTaskKind.PROCESSING))
+        )
+        assertTrue(resolveBackgroundRefreshKindsToSubmit(all, pendingKinds = all).isEmpty())
+        // An identifier missing from Info.plist is never submitted.
+        assertEquals(
+            listOf(BackgroundRefreshTaskKind.PROCESSING),
+            resolveBackgroundRefreshKindsToSubmit(setOf(BackgroundRefreshTaskKind.PROCESSING), emptySet())
+        )
+        // The processing id is unchanged so requests from earlier versions are still handled.
+        assertEquals(BackgroundRefreshTaskKind.PROCESSING, BackgroundRefreshTaskKind.fromIdentifier("com.valoser.futacha.refresh"))
+        assertEquals(BackgroundRefreshTaskKind.APP_REFRESH, BackgroundRefreshTaskKind.fromIdentifier("com.valoser.futacha.appRefresh"))
+    }
+
+    @Test
+    fun backgroundRefreshPlan_processingKeepsTheLongRun() {
+        val plan = iosBackgroundRefreshPlanFor(BackgroundRefreshTaskKind.PROCESSING)
+        assertEquals(9 * 60 * 1000L, plan.totalTimeoutMillis)
+        assertEquals(IosBackgroundRefreshStage.SHARED_FEATURES, plan.stageOrder.first())
+        assertEquals(40, plan.maxThreadsPerRun)
+        assertEquals(90_000L, plan.autoSaveBudgetMillis)
+        assertEquals(2, plan.maxAutoSavesPerRun)
+        assertEquals(3 * 60 * 1000L, plan.sharedFeaturesBudgetMillis)
+        // No stage cap of its own and the refresher's defaults, as before.
+        assertEquals(null, plan.historyTimeoutMillis)
+        assertEquals(null, plan.historyRunBudgetMillis)
+        assertEquals(null, plan.threadFetchTimeoutMillis)
+        assertEquals(null, plan.watchAlertTimeoutMillis)
+        assertEquals(null, plan.archiveReportTimeoutMillis)
+        assertEquals(null, plan.compatRefreshBudgetMillis)
+        assertEquals(null, plan.compatUpdateBudgetMillis)
+    }
+
+    @Test
+    fun backgroundRefreshPlan_shortRunsGiveEveryStageTimeWithinTheirWindow() {
+        // BGAppRefresh and the Watch background task get about 30 s (H4-1).
+        listOf(
+            iosBackgroundRefreshPlanFor(BackgroundRefreshTaskKind.APP_REFRESH) to 25_000L,
+            IOS_WATCH_REFRESH_PLAN to 20_000L
+        ).forEach { (plan, window) ->
+            assertTrue(plan.totalTimeoutMillis <= window)
+            assertEquals(IosBackgroundRefreshStage.entries.toSet(), plan.stageOrder.toSet())
+            assertEquals(
+                listOf(IosBackgroundRefreshStage.HISTORY, IosBackgroundRefreshStage.WATCH_ALERTS),
+                plan.stageOrder.take(2)
+            )
+            assertTrue(requireNotNull(plan.futachaStageLimitsMillis()) < plan.totalTimeoutMillis)
+            assertTrue(requireNotNull(plan.compatStageLimitsMillis()) < plan.totalTimeoutMillis)
+            val historyBudget = requireNotNull(plan.historyRunBudgetMillis)
+            val fetchTimeout = requireNotNull(plan.threadFetchTimeoutMillis)
+            // Fetches can start, and the refresher's own budget ends before its cap.
+            assertTrue(historyBudget > fetchTimeout)
+            assertTrue(requireNotNull(plan.historyTimeoutMillis) > maxOf(historyBudget, plan.autoSaveBudgetMillis))
+            val compatBudget = requireNotNull(plan.compatRefreshBudgetMillis)
+            assertTrue(
+                requireNotNull(plan.compatUpdateBudgetMillis) + plan.compatExistenceBudgetMillis +
+                    plan.compatWatchCheckBudgetMillis < compatBudget,
+                "the watch-word phase keeps time after the capped phases"
+            )
+            assertTrue(plan.sharedFeaturesBudgetMillis > 0L)
+        }
+    }
 }

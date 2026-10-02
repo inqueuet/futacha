@@ -36,6 +36,7 @@ import com.valoser.futacha.shared.compat.CompatDroppedCatalogItem
 import com.valoser.futacha.shared.compat.buildCompatCatalogItemStates
 import com.valoser.futacha.shared.compat.diffCompatCatalogGenerations
 import com.valoser.futacha.shared.compat.mergeCompatHistoryEntry
+import com.valoser.futacha.shared.compat.planModernHistoryImport
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
@@ -64,7 +65,6 @@ import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_VALUE_CHARS
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.ScrollAnchor
 import com.valoser.futacha.shared.compat.SelectorPresentation
-import com.valoser.futacha.shared.compat.toCompatHistoryEntry
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.compat.compatBoardKey
@@ -206,7 +206,7 @@ class AndroidCompatibilityStore(
             db.migrateImagePhashPreferences()
             db.trimTransientPreferences()
             db.trimHistoryTombstones()
-            db.repairCanonicalBoards()
+            val repairDiscardedAttachments = db.repairCanonicalBoards()
             db.repairThreadSnapshotCache()
             db.enforceThreadSnapshotQuota()
             val expired = db.readClosedBatches { it.expiresAtEpochMillis <= currentTimeMillis() }
@@ -218,7 +218,7 @@ class AndroidCompatibilityStore(
             observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 value = pending,
-                candidates = expired.attachmentLocators(),
+                candidates = expired.attachmentLocators() + repairDiscardedAttachments,
                 retained = db.readRetainedAttachmentLocators()
             )
         }
@@ -280,28 +280,22 @@ class AndroidCompatibilityStore(
     override suspend fun importModernHistory(
         modernHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>
     ): Int = mutate(refresh = setOf(CompatObservableState.HISTORY)) { db ->
-        val existing = db.readHistory().associateBy { it.canonicalUrl }
-        val knownBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
-        modernHistory.mapNotNull { it.toCompatHistoryEntry() }
-            .filter { it.boardKey in knownBoardKeys }
-            .count { entry ->
-            val deletedAt = db.historyTombstoneAt(entry.canonicalUrl)
-            if (deletedAt != null && entry.lastVisitedEpochMillis <= deletedAt) {
-                return@count false
-            }
-            if (existing[entry.canonicalUrl] == entry) {
-                false
-            } else {
-                if (deletedAt != null) db.deleteHistoryTombstone(entry.canonicalUrl)
-                // Modern and compatibility lists have different item
-                // layouts. Import metadata, but keep an existing
-                // compatibility-local anchor intact.
-                db.upsertHistory(mergeCompatHistoryEntry(entry, existing[entry.canonicalUrl], recordVisit = true))
-                true
-            }
-        }.also { changed ->
-            if (changed > 0) db.trimHistory()
+        // Only rows which change and survive trimHistory() are written, and
+        // the compatibility update time is kept (see planModernHistoryImport).
+        val writes = planModernHistoryImport(
+            modernHistory = modernHistory,
+            current = db.readHistory(limit = null),
+            knownBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key },
+            tombstoneAt = { url -> db.historyTombstoneAt(url) },
+            historyLimit = HISTORY_LIMIT_TRIGGER,
+            retain = { entries -> retainedAfterHistoryTrim(entries) }
+        )
+        writes.forEach { entry ->
+            db.deleteHistoryTombstone(entry.canonicalUrl)
+            db.upsertHistory(entry)
         }
+        if (writes.isNotEmpty()) db.trimHistory()
+        writes.size
     }
 
     override suspend fun upsertBoard(board: CompatBoard) = mutate(
@@ -692,6 +686,14 @@ class AndroidCompatibilityStore(
 
     private fun SQLiteDatabase.applyThreadSnapshotRead(read: ThreadSnapshotRead, now: Long) {
         read.corruptPositions.forEach { position ->
+            // Keep the stored cache size in step with the removed row.
+            execSQL(
+                """UPDATE compat_thread_snapshot SET byte_count=MAX(0, byte_count - COALESCE((
+                    SELECT length(CAST(post_json AS BLOB)) FROM compat_post
+                    WHERE tab_key=? AND revision=? AND position=?),0))
+                    WHERE tab_key=? AND revision=?""".trimIndent(),
+                arrayOf<Any>(read.tabKey, read.revision, position, read.tabKey, read.revision)
+            )
             delete(
                 "compat_post",
                 "tab_key=? AND revision=? AND position=?",
@@ -742,13 +744,13 @@ class AndroidCompatibilityStore(
     }
 
     override suspend fun threadSnapshotCacheUsageBytes(): Long = read { db ->
-        db.readThreadSnapshotCacheRows().sumOf(ThreadSnapshotCacheRow::byteCount)
+        db.threadSnapshotCacheTotalBytes()
     }
 
     override suspend fun clearThreadSnapshotCache(): Long = mutate(
         refresh = setOf(CompatObservableState.TABS)
     ) { db ->
-        val removedBytes = db.readThreadSnapshotCacheRows().sumOf(ThreadSnapshotCacheRow::byteCount)
+        val removedBytes = db.threadSnapshotCacheTotalBytes()
         db.delete("compat_post", null, null)
         db.delete("compat_thread_snapshot", null, null)
         db.update("compat_tab", ContentValues().apply { put("snapshot_revision", 0L) }, null, null)
@@ -1248,7 +1250,9 @@ class AndroidCompatibilityStore(
                 tabs = tabs.filter { it.boardKey in boardKeys },
                 history = db.readHistory().filter { it.boardKey in boardKeys },
                 catalogPreferences = catalogPreferences,
-                preferences = db.readPreferences(totalLimit = MAX_COMPAT_PREFERENCES),
+                preferences = com.valoser.futacha.shared.compat.compatBackupExportPreferences(
+                    db.readPreferences(totalLimit = MAX_COMPAT_PREFERENCES)
+                ),
                 ngRules = db.readNgRules().filter { rule ->
                     com.valoser.futacha.shared.compat.isCompatNgScopeValid(
                         rule.kind,
@@ -1270,7 +1274,7 @@ class AndroidCompatibilityStore(
     ): CompatSettingsBackupImportReport {
         val backup = decodeCompatSettingsBackup(payload)
         validateCompatSettingsBackup(backup)
-        return mutate { db ->
+        val cleanup = mutate { db ->
             val existingBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
             val importedBoards = if (restoreUserSettings) {
                 backup.boards.forEach { board ->
@@ -1282,19 +1286,19 @@ class AndroidCompatibilityStore(
                 backup.boards.size
             } else 0
             val validBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
-            val importedTabs = if (restoreUserSettings) {
+            val restoredTabKeys = if (restoreUserSettings) {
                 backup.tabs.filter { it.boardKey in validBoardKeys }.also { tabs ->
                     tabs.forEach { tab -> db.upsertTab(tab) }
-                }.size
-            } else 0
-            val importedHistory = if (restoreUserSettings) {
+                }.map { it.key }
+            } else emptyList()
+            val restoredHistoryUrls = if (restoreUserSettings) {
                 backup.history.filter { it.boardKey in validBoardKeys }.also { entries ->
                     entries.forEach { entry ->
                         db.deleteHistoryTombstone(entry.canonicalUrl)
                         db.upsertHistory(entry)
                     }
-                }.size
-            } else 0
+                }.map { it.canonicalUrl }
+            } else emptyList()
             val importedPreferences = if (restoreUserSettings) {
                 backup.preferences.forEach { (key, value) ->
                     if (key == com.valoser.futacha.shared.compat.COMPAT_WATCH_WORDS_PREFERENCE_KEY &&
@@ -1323,15 +1327,33 @@ class AndroidCompatibilityStore(
                     }
                     if (validateCompatToolbar(surface, items)) db.replaceToolbar(surface, items)
                 }
-                val workspace = backup.workspace
-                db.updateWorkspace(
-                    workspace.copy(
-                        activeTabKey = workspace.activeTabKey?.takeIf { key -> db.readTab(key) != null },
-                        catalogHostBoardKey = workspace.catalogHostBoardKey?.takeIf { key -> key in validBoardKeys }
+                // Watch/NG-only restores carry no workspace and must keep
+                // the open tabs and selector state as they are.
+                backup.workspace?.let { workspace ->
+                    db.updateWorkspace(
+                        workspace.copy(
+                            activeTabKey = workspace.activeTabKey?.takeIf { key -> db.readTab(key) != null },
+                            catalogHostBoardKey = workspace.catalogHostBoardKey?.takeIf { key -> key in validBoardKeys }
+                        )
                     )
-                )
+                }
                 backup.preferences.size
             } else 0
+            // Apply the normal tab/history limits now (after the workspace so
+            // its active tab is protected); otherwise the next tab open drops
+            // up to 110 restored tabs at once.
+            val trimmedAttachments = if (restoreUserSettings) {
+                db.trimTabs().also { db.trimHistory() }
+            } else emptySet()
+            // Report the restored records still kept after those limits (P4-4).
+            val keptTabs = if (restoreUserSettings) com.valoser.futacha.shared.compat.countCompatRestoredKept(
+                restoredTabKeys,
+                db.readTabs().mapTo(mutableSetOf()) { it.key }
+            ) else 0
+            val keptHistory = if (restoreUserSettings) com.valoser.futacha.shared.compat.countCompatRestoredKept(
+                restoredHistoryUrls,
+                db.readHistory().mapTo(mutableSetOf()) { it.canonicalUrl }
+            ) else 0
             val importedNgRules = if (restoreNgRules) {
                 val tabKeys = db.readTabs().mapTo(mutableSetOf()) { it.key }
                 backup.ngRules.count { rule ->
@@ -1357,15 +1379,21 @@ class AndroidCompatibilityStore(
                     ) > 0
                 }
             } else 0
-            CompatSettingsBackupImportReport(
-                boardsImported = importedBoards,
-                tabsImported = importedTabs,
-                historyImported = importedHistory,
-                preferencesImported = importedPreferences,
-                ngRulesImported = importedNgRules,
-                toolbarsImported = if (restoreUserSettings) backup.toolbars.size else 0
+            AttachmentCleanupMutation(
+                value = CompatSettingsBackupImportReport(
+                    boardsImported = importedBoards,
+                    tabsImported = keptTabs,
+                    historyImported = keptHistory,
+                    preferencesImported = importedPreferences,
+                    ngRulesImported = importedNgRules,
+                    toolbarsImported = if (restoreUserSettings) backup.toolbars.size else 0
+                ),
+                candidates = trimmedAttachments,
+                retained = db.readRetainedAttachmentLocators()
             )
         }
+        cleanupAttachments(cleanup)
+        return cleanup.value
     }
 
     override suspend fun enqueueArchiveReport(
@@ -1867,6 +1895,7 @@ class AndroidCompatibilityStore(
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
         if (rejectStale && currentRevision != null && currentRevision >= snapshot.revision) return false
 
+        val postJsons = snapshot.posts.map { post -> json.encodeToString(CompatPostSnapshot.serializer(), post) }
         val values = ContentValues().apply {
             put("tab_key", snapshot.tabKey)
             put("revision", snapshot.revision)
@@ -1874,17 +1903,18 @@ class AndroidCompatibilityStore(
             put("board_title", snapshot.boardTitle)
             put("expires_label", snapshot.expiresAtLabel)
             put("deleted_notice", snapshot.deletedNotice)
+            put("byte_count", threadSnapshotByteCount(snapshot, postJsons))
         }
         if (update("compat_thread_snapshot", values, "tab_key=?", arrayOf(snapshot.tabKey)) == 0) {
             insertOrThrow("compat_thread_snapshot", null, values)
         }
         delete("compat_post", "tab_key=?", arrayOf(snapshot.tabKey))
-        snapshot.posts.forEach { post ->
+        snapshot.posts.forEachIndexed { index, post ->
             insertOrThrow("compat_post", null, ContentValues().apply {
                 put("tab_key", snapshot.tabKey)
                 put("revision", snapshot.revision)
                 put("position", post.position)
-                put("post_json", json.encodeToString(CompatPostSnapshot.serializer(), post))
+                put("post_json", postJsons[index])
             })
         }
         if (existingTab != null) {
@@ -2034,9 +2064,10 @@ class AndroidCompatibilityStore(
                 null
             }
         if (quota == null) return
-        val rows = readThreadSnapshotCacheRows()
-        var totalBytes = rows.sumOf(ThreadSnapshotCacheRow::byteCount)
+        // One row per cached thread; the post bodies are not scanned.
+        var totalBytes = threadSnapshotCacheTotalBytes()
         if (totalBytes <= quota) return
+        val rows = readThreadSnapshotCacheRows()
         val activeTabKey = readWorkspace().activeTabKey
         val protected = readTabs().filter { it.favorite }.mapTo(mutableSetOf()) { it.key }
         activeTabKey?.let(protected::add)
@@ -2050,27 +2081,26 @@ class AndroidCompatibilityStore(
             }
     }
 
+    private fun SQLiteDatabase.threadSnapshotCacheTotalBytes(): Long = DatabaseUtils.longForQuery(
+        this,
+        "SELECT COALESCE(SUM(byte_count),0) FROM compat_thread_snapshot",
+        null
+    )
+
+    /** byte_count is written with each snapshot; the access time comes from the same join. */
     private fun SQLiteDatabase.readThreadSnapshotCacheRows(): List<ThreadSnapshotCacheRow> = rawQuery(
-            """SELECT s.tab_key,s.fetched_at,
-                COALESCE(SUM(length(CAST(p.post_json AS BLOB))),0)
-                + length(CAST(s.tab_key AS BLOB))
-                + COALESCE(length(CAST(s.board_title AS BLOB)),0)
-                + COALESCE(length(CAST(s.expires_label AS BLOB)),0)
-                + COALESCE(length(CAST(s.deleted_notice AS BLOB)),0)
-                + 32
+            """SELECT s.tab_key,s.fetched_at,s.byte_count,m.value
                 FROM compat_thread_snapshot s
-                LEFT JOIN compat_post p ON p.tab_key=s.tab_key AND p.revision=s.revision
-                GROUP BY s.tab_key,s.fetched_at""".trimIndent(),
-            null
+                LEFT JOIN compat_metadata m ON m.key = ? || s.tab_key""".trimIndent(),
+            arrayOf(THREAD_SNAPSHOT_ACCESS_PREFIX)
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
-                    val tabKey = cursor.getString(0)
                     add(
                         ThreadSnapshotCacheRow(
-                            tabKey = tabKey,
+                            tabKey = cursor.getString(0),
                             byteCount = cursor.getLong(2),
-                            lastAccessedAt = threadSnapshotAccess(tabKey) ?: cursor.getLong(1)
+                            lastAccessedAt = cursor.getNullableString(3)?.toLongOrNull() ?: cursor.getLong(1)
                         )
                     )
                 }
@@ -2333,13 +2363,22 @@ class AndroidCompatibilityStore(
         }
     }
 
-    private fun SQLiteDatabase.repairCanonicalBoards() {
+    /**
+     * Moves every board-keyed row to the corrected key before the old board
+     * row is deleted; its ON DELETE CASCADE would otherwise drop the board's
+     * new-thread draft and dropped-thread records. When the corrected board
+     * already has a row with the same key, that row is kept (a newer
+     * new-thread draft wins) and the duplicate goes with the old board.
+     * Returns the attachment locators of the drafts discarded that way.
+     */
+    private fun SQLiteDatabase.repairCanonicalBoards(): Set<String> {
         val repairs = readBoards().mapNotNull { board ->
             val canonical = canonicalizeBoardUrl(board.originalUrl) ?: return@mapNotNull null
             if (canonical == board.canonicalUrl) null else board to canonical
         }
-        if (repairs.isEmpty()) return
+        if (repairs.isEmpty()) return emptySet()
         execSQL("PRAGMA defer_foreign_keys=ON")
+        val discardedAttachments = mutableSetOf<String>()
         repairs.forEach { (board, canonical) ->
             val repairedKey = compatBoardKey(canonical)
             insertWithOnConflict(
@@ -2348,10 +2387,32 @@ class AndroidCompatibilityStore(
                 board.copy(key = repairedKey, canonicalUrl = canonical).toValues(),
                 SQLiteDatabase.CONFLICT_IGNORE
             )
-            listOf("compat_tab", "compat_history", "compat_catalog_preference", "compat_catalog_item", "compat_catalog_snapshot", "compat_watch_rule")
-                .forEach { table ->
-                    update(table, ContentValues().apply { put("board_key", repairedKey) }, "board_key=?", arrayOf(board.key))
-                }
+            val sourceDraft = readBuildDraft(board.key)
+            val targetDraft = readBuildDraft(repairedKey)
+            if (sourceDraft != null && targetDraft != null) {
+                val discarded = if (sourceDraft.updatedAtEpochMillis > targetDraft.updatedAtEpochMillis) {
+                    delete("compat_build_draft", "board_key=?", arrayOf(repairedKey))
+                    targetDraft
+                } else sourceDraft
+                discarded.attachmentUri?.let(discardedAttachments::add)
+            }
+            // A cached catalog revision the corrected board also has would
+            // mix its items into that snapshot; the cache is refetched.
+            execSQL(
+                """DELETE FROM compat_catalog_snapshot WHERE board_key=? AND EXISTS (
+                    SELECT 1 FROM compat_catalog_snapshot t WHERE t.board_key=?
+                    AND t.mode=compat_catalog_snapshot.mode AND t.revision=compat_catalog_snapshot.revision)""".trimIndent(),
+                arrayOf<Any>(board.key, repairedKey)
+            )
+            CompatibilityDatabaseSchema.boardKeyTables.forEach { table ->
+                updateWithOnConflict(
+                    table,
+                    ContentValues().apply { put("board_key", repairedKey) },
+                    "board_key=?",
+                    arrayOf(board.key),
+                    SQLiteDatabase.CONFLICT_IGNORE
+                )
+            }
             update(
                 "compat_workspace",
                 ContentValues().apply { put("catalog_host_board_key", repairedKey) },
@@ -2364,8 +2425,38 @@ class AndroidCompatibilityStore(
                 "scope_key=?",
                 arrayOf(board.key)
             )
+            moveBoardKeyedPreferences(board.key, repairedKey)
             delete("compat_board", "board_key=?", arrayOf(board.key))
         }
+        return discardedAttachments
+    }
+
+    /**
+     * Board keys stored inside settings (P4-2): board-scoped watch keywords in
+     * the rules JSON (the compat_watch_rule table is unused) and the learned
+     * default name/subject. Without this they silently stop applying.
+     */
+    private fun SQLiteDatabase.moveBoardKeyedPreferences(fromKey: String, toKey: String) {
+        fun put(key: String, value: String) {
+            insertWithOnConflict(
+                "compat_preference",
+                null,
+                ContentValues().apply { put("key", key); put("value_json", value) },
+                SQLiteDatabase.CONFLICT_REPLACE
+            )
+        }
+        readPreferenceValue(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY)?.let { encoded ->
+            com.valoser.futacha.shared.compat.remapCompatWatchRulesBoardKey(encoded, fromKey, toKey)
+                ?.let { put(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY, it) }
+        }
+        com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(fromKey)
+            .zip(com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(toKey))
+            .forEach { (from, to) ->
+                val value = readPreferenceValue(from) ?: return@forEach
+                // A value already learned for the corrected board is kept.
+                if (readPreferenceValue(to) == null && com.valoser.futacha.shared.compat.isValidCompatPreference(to, value)) put(to, value)
+                delete("compat_preference", "key=?", arrayOf(from))
+            }
     }
 
     private fun SQLiteDatabase.upsertBoard(board: CompatBoard) {
@@ -2511,6 +2602,8 @@ class AndroidCompatibilityStore(
             put("content_updated_at", tab.contentUpdatedAtEpochMillis)
             put("scroll_anchor_json", json.encodeToString(anchorSerializer, tab.scrollAnchor))
             put("snapshot_revision", tab.snapshotRevision)
+            put("is_deleted", tab.isDeleted.asInt())
+            put("refresh_on_activation", tab.refreshOnActivation.asInt())
         }
         if (update("compat_tab", values, "tab_key=?", arrayOf(tab.key)) == 0) {
             insertOrThrow("compat_tab", null, values)
@@ -2558,7 +2651,9 @@ class AndroidCompatibilityStore(
         insertedAtEpochMillis = getLong(15),
         contentUpdatedAtEpochMillis = getLong(16),
         scrollAnchor = runCatching { json.decodeFromString(anchorSerializer, getString(17)) }.getOrDefault(ScrollAnchor()),
-        snapshotRevision = getLong(18)
+        snapshotRevision = getLong(18),
+        isDeleted = getInt(19) != 0,
+        refreshOnActivation = getInt(20) != 0
     )
 
     private fun SQLiteDatabase.trimTabs(): Set<String> {
@@ -2595,7 +2690,7 @@ class AndroidCompatibilityStore(
         }
     }
 
-    private fun SQLiteDatabase.readHistory(): List<CompatHistoryEntry> = query(
+    private fun SQLiteDatabase.readHistory(limit: Int? = HISTORY_LIMIT_TRIGGER + 1): List<CompatHistoryEntry> = query(
         "compat_history",
         arrayOf("canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url", "reply_count", "content_updated_at", "scroll_anchor_json", "last_visited_at"),
         null,
@@ -2603,7 +2698,7 @@ class AndroidCompatibilityStore(
         null,
         null,
         "last_visited_at DESC, canonical_url ASC",
-        (HISTORY_LIMIT_TRIGGER + 1).toString()
+        limit?.toString()
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
@@ -2625,6 +2720,12 @@ class AndroidCompatibilityStore(
             }
         }
     }
+
+    /** The rows [trimHistory] keeps: it deletes the oldest by (last_visited_at, canonical_url). */
+    private fun retainedAfterHistoryTrim(entries: List<CompatHistoryEntry>): List<CompatHistoryEntry> =
+        if (entries.size <= HISTORY_LIMIT_TRIGGER) entries else entries.sortedWith(
+            compareByDescending<CompatHistoryEntry> { it.lastVisitedEpochMillis }.thenByDescending { it.canonicalUrl }
+        ).take(HISTORY_LIMIT_AFTER_TRIM)
 
     private fun SQLiteDatabase.trimHistory() {
         val count = longForQuery("SELECT COUNT(*) FROM compat_history").coerceAtLeast(0L)
@@ -2872,7 +2973,7 @@ class AndroidCompatibilityStore(
         val TAB_COLUMNS = arrayOf(
             "tab_key", "canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url",
             "reply_count", "checked_reply_count", "is_dead", "is_isolated", "is_exploded", "is_old", "favorite", "inserted_at",
-            "content_updated_at", "scroll_anchor_json", "snapshot_revision"
+            "content_updated_at", "scroll_anchor_json", "snapshot_revision", "is_deleted", "refresh_on_activation"
         )
     }
 }
@@ -2893,6 +2994,39 @@ private class ThreadSnapshotRead(
     val revision: Long = 0L,
     val corruptPositions: List<Int> = emptyList()
 )
+
+/**
+ * Matches the SQL backfill in [CompatibilityDatabaseSchema.migration11To12]:
+ * UTF-8 bytes of the post JSON and text columns plus a fixed row overhead.
+ */
+private fun threadSnapshotByteCount(snapshot: CompatThreadSnapshot, postJsons: List<String>): Long =
+    postJsons.sumOf(String::utf8ByteCount) +
+        snapshot.tabKey.utf8ByteCount() +
+        (snapshot.boardTitle?.utf8ByteCount() ?: 0L) +
+        (snapshot.expiresAtLabel?.utf8ByteCount() ?: 0L) +
+        (snapshot.deletedNotice?.utf8ByteCount() ?: 0L) +
+        THREAD_SNAPSHOT_ROW_OVERHEAD_BYTES
+
+private const val THREAD_SNAPSHOT_ROW_OVERHEAD_BYTES = 32L
+
+private fun String.utf8ByteCount(): Long {
+    var count = 0L
+    var index = 0
+    while (index < length) {
+        val char = this[index]
+        count += when {
+            char.code < 0x80 -> 1L
+            char.code < 0x800 -> 2L
+            char.isHighSurrogate() && index + 1 < length && this[index + 1].isLowSurrogate() -> {
+                index += 1
+                4L
+            }
+            else -> 3L
+        }
+        index += 1
+    }
+    return count
+}
 
 private data class ThreadSnapshotCacheRow(
     val tabKey: String,
@@ -3094,12 +3228,37 @@ private fun List<ClosedTabBatch>.attachmentLocators(): Set<String> =
         batch.tabs.mapNotNull { closed -> closed.draft?.attachmentUri }
     }
 
-private class CompatibilityDatabaseHelper(context: Context, databaseName: String) : SQLiteOpenHelper(
-    context,
+private class CompatibilityDatabaseHelper(
+    private val appContext: Context,
+    private val databaseName: String
+) : SQLiteOpenHelper(
+    appContext,
     databaseName,
     null,
     CompatibilityDatabaseSchema.version
 ) {
+    override fun getWritableDatabase(): SQLiteDatabase = openSettingAsideIncompatible { super.getWritableDatabase() }
+
+    override fun getReadableDatabase(): SQLiteDatabase = openSettingAsideIncompatible { super.getReadableDatabase() }
+
+    /** A newer build's schema this build cannot use is kept on disk instead of blocking launch. */
+    private inline fun openSettingAsideIncompatible(open: () -> SQLiteDatabase): SQLiteDatabase = try {
+        open()
+    } catch (incompatible: IncompatibleNewerCompatibilityDatabaseException) {
+        close()
+        val backup = setAsideIncompatibleCompatibilityDatabase(
+            appContext.getDatabasePath(databaseName),
+            incompatible.databaseVersion,
+            System.currentTimeMillis()
+        )
+        Logger.e("AndroidCompatibilityStore", "Set aside a newer compatibility DB as ${backup.name}", incompatible)
+        open()
+    }
+
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        db.acceptCompatibilityDatabaseDowngrade(oldVersion, CompatibilityDatabaseSchema.createStatements)
+    }
+
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
@@ -3118,7 +3277,8 @@ private class CompatibilityDatabaseHelper(context: Context, databaseName: String
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion == newVersion) return
-        var version = oldVersion
+        // After a downgrade the newer migrations are already applied (see onDowngrade).
+        var version = maxOf(oldVersion, (db.compatAppliedSchemaVersion() ?: 0).coerceAtMost(newVersion))
         if (version == 1 && newVersion >= 2) {
             CompatibilityDatabaseSchema.migration1To2.forEach(db::execSQL)
             version = 2
@@ -3155,9 +3315,18 @@ private class CompatibilityDatabaseHelper(context: Context, databaseName: String
             CompatibilityDatabaseSchema.migration9To10.forEach(db::execSQL)
             version = 10
         }
+        if (version == 10 && newVersion >= 11) {
+            CompatibilityDatabaseSchema.migration10To11.forEach(db::execSQL)
+            version = 11
+        }
+        if (version == 11 && newVersion >= 12) {
+            CompatibilityDatabaseSchema.migration11To12.forEach(db::execSQL)
+            version = 12
+        }
         check(version == newVersion) {
             "Unsupported compatibility DB migration $oldVersion -> $newVersion (stopped at $version)"
         }
+        db.clearCompatAppliedSchemaVersionUpTo(newVersion)
     }
 
 }
@@ -3168,7 +3337,7 @@ private fun CompatNgRule.compatPayloadJson(): String = JSONObject().apply {
 }.toString()
 
 internal object CompatibilityDatabaseSchema {
-    const val version = 10
+    const val version = 12
     const val initialWorkspaceStatement =
         "INSERT INTO compat_workspace(singleton_id, selector_presentation, generation) VALUES(1, 'ABOVE', 0)"
     val migration1To2 = listOf(
@@ -3213,6 +3382,36 @@ internal object CompatibilityDatabaseSchema {
         "UPDATE compat_history SET last_visited_at = content_updated_at",
         "CREATE INDEX compat_history_visited_idx ON compat_history(last_visited_at DESC)"
     )
+    /**
+     * Older builds dropped these tab flags on every write, so the
+     * "reload when opened" request and the deleted badge vanished after the
+     * next tab update. Existing rows start as false, which is what those
+     * builds effectively stored.
+     */
+    val migration10To11 = listOf(
+        "ALTER TABLE compat_tab ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE compat_tab ADD COLUMN refresh_on_activation INTEGER NOT NULL DEFAULT 0"
+    )
+    /**
+     * The cache quota summed every cached post body on each snapshot save.
+     * Store each snapshot's size with it (same formula) so the check reads
+     * one row per thread.
+     */
+    val migration11To12 = listOf(
+        "ALTER TABLE compat_thread_snapshot ADD COLUMN byte_count INTEGER NOT NULL DEFAULT 0",
+        "UPDATE compat_thread_snapshot SET byte_count=(SELECT COALESCE(SUM(length(CAST(p.post_json AS BLOB))),0) FROM compat_post p WHERE p.tab_key=compat_thread_snapshot.tab_key AND p.revision=compat_thread_snapshot.revision) + length(CAST(tab_key AS BLOB)) + COALESCE(length(CAST(board_title AS BLOB)),0) + COALESCE(length(CAST(expires_label AS BLOB)),0) + COALESCE(length(CAST(deleted_notice AS BLOB)),0) + 32"
+    )
+    /** Every table with a board_key column except compat_board itself. */
+    val boardKeyTables = listOf(
+        "compat_tab",
+        "compat_history",
+        "compat_build_draft",
+        "compat_catalog_preference",
+        "compat_catalog_item",
+        "compat_catalog_snapshot",
+        "compat_catalog_dropped",
+        "compat_watch_rule"
+    )
     val migration8To9 = listOf(
         "ALTER TABLE compat_catalog_preference ADD COLUMN show_non_priority INTEGER NOT NULL DEFAULT 1"
     )
@@ -3236,5 +3435,6 @@ internal object CompatibilityDatabaseSchema {
         "CREATE TABLE compat_toolbar(surface TEXT NOT NULL, command_key TEXT NOT NULL, position INTEGER NOT NULL, active INTEGER NOT NULL, PRIMARY KEY(surface, command_key))",
         "CREATE TABLE compat_ng_rule(rule_id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, scope_key TEXT, normalized_value TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE compat_watch_rule(rule_id TEXT PRIMARY KEY NOT NULL, board_key TEXT, normalized_value TEXT NOT NULL, display_value TEXT NOT NULL, created_at INTEGER NOT NULL)"
-    ) + migration1To2 + migration3To4 + migration4To5 + migration5To6 + migration7To8
+    ) + migration1To2 + migration3To4 + migration4To5 + migration5To6 + migration7To8 + migration10To11 +
+        migration11To12
 }

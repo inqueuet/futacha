@@ -26,8 +26,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
+internal fun resolveFutachaSharedSaveLocation(
+    raw: String?, initial: Boolean, modernLocation: SaveLocation
+): SaveLocation = if (initial && raw == null) modernLocation
+    else parseCompatSaveLocation(raw.orEmpty()) ?: SaveLocation.Path(com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT)
 
 /**
  * Shared services for the additional controls in the existing Futacha screens.
@@ -93,20 +101,50 @@ internal fun ProvideFutachaSharedFeatures(
     }.collectAsState(initial = null)
     // Use the existing shared destination for every modern save action as well.
     // Migrate the modern destination only when the shared setting has never been saved.
+    // The sync is bidirectional: a destination chosen in this mode is written
+    // back to the shared preference, otherwise the next start re-applied the
+    // stale shared value over it.  Each direction only reacts to an actual
+    // change on its own side, so the two collectors cannot ping-pong.
     LaunchedEffect(store, appStateStore) {
         if (appStateStore == null) return@LaunchedEffect
         // Placeholder preferences lack the stored location; writing the modern
         // one then would replace the location chosen in compatibility mode.
         store.isLoaded.first { it }
+        launch {
+            appStateStore.manualSaveLocation
+                .drop(1)
+                .distinctUntilChanged()
+                .collect { location ->
+                    try {
+                        val raw = store.preferences.first()
+                            .compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
+                        if (resolveFutachaSharedSaveLocation(raw, initial = false, modernLocation = location) != location) {
+                            store.savePreference(
+                                compatPreferenceStorageKey("storage", "dummyDownloadDir"),
+                                location.toRawString()
+                            )
+                        }
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) {
+                        com.valoser.futacha.shared.util.Logger.e("FutachaSharedFeatures", "Save destination could not be shared", failure)
+                    }
+                }
+        }
+        var lastSharedRaw: String? = null
+        var hasObservedShared = false
         store.preferences.collect { values ->
             try {
             val raw = values.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
-            if (raw == null) {
-                store.savePreference(compatPreferenceStorageKey("storage", "dummyDownloadDir"),
-                    appStateStore.manualSaveLocation.first().toRawString())
-            } else {
-                val location = parseCompatSaveLocation(raw) ?: SaveLocation.Path(com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT)
-                if (appStateStore.manualSaveLocation.first() != location) appStateStore.setManualSaveLocation(location)
+            if (hasObservedShared && raw == lastSharedRaw) return@collect
+            val initial = !hasObservedShared
+            hasObservedShared = true
+            lastSharedRaw = raw
+            val modern = appStateStore.manualSaveLocation.first()
+            val location = resolveFutachaSharedSaveLocation(raw, initial, modern)
+            if (raw == null && initial) {
+                store.savePreference(compatPreferenceStorageKey("storage", "dummyDownloadDir"), location.toRawString())
+            } else if (modern != location) {
+                appStateStore.setManualSaveLocation(location)
             }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
@@ -219,10 +257,10 @@ internal fun ProvideFutachaSharedFeatures(
             val close = { settingsPaths = settingsPaths.dropLast(1) }
             if (path == "watcher") {
                 val watcher = rememberCompatExternalWatcher(store)
-                CompatWatcherManager(store, activeRepository, onDismiss = close, onResultsChanged = {},
+                FutachaAppLockAwareWindow { CompatWatcherManager(store, activeRepository, onDismiss = close, onResultsChanged = {},
                     onOpenExternal = if (com.valoser.futacha.shared.util.isAndroid()) watcher::openManager else null,
-                    onOpenHelp = { settingsPaths = settingsPaths + "help" })
-            } else Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                    onOpenHelp = { settingsPaths = settingsPaths + "help" }) }
+            } else FutachaAppLockAwareWindow { Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
                     com.valoser.futacha.shared.ui.util.PlatformBackHandler(onBack = close)
                     if (path == "help") CompatHelpScreen(onBack = close,
@@ -238,7 +276,7 @@ internal fun ProvideFutachaSharedFeatures(
                         onNavigate = { settingsPaths = settingsPaths + it }, onBack = close
                     )
                 }
-            }
+            } }
         }
         }
     }

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
@@ -22,7 +23,7 @@ import com.valoser.futacha.shared.util.TextEncoding
 import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
@@ -185,19 +186,21 @@ internal suspend fun fetchCompatBoardsFromMenu(
     existingBoards: List<CompatBoard>
 ): Result<List<CompatBoard>> = runSuspendCatchingPreservingCancellation {
     val boardMenu = withContext(AppDispatchers.io) {
-        val response = httpClient.get(menuUrl) {
+        // Streamed so the bounded reader applies before the body is buffered.
+        val (bytes, contentType) = httpClient.prepareGet(menuUrl) {
             headers {
                 append(HttpHeaders.Accept, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
                 append(HttpHeaders.AcceptLanguage, "ja-JP,ja;q=0.9")
             }
+        }.execute { response ->
+            check(response.status.isSuccess()) { "Http ${response.status.value} Error" }
+            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+            require(contentLength == null || contentLength <= COMPAT_BOARD_MENU_MAX_HTML_BYTES) {
+                "板一覧本文が大きすぎます"
+            }
+            readBoundedHttpResponseBytes(response, COMPAT_BOARD_MENU_MAX_HTML_BYTES) to
+                response.headers[HttpHeaders.ContentType]
         }
-        check(response.status.isSuccess()) { "Http ${response.status.value} Error" }
-        val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-        require(contentLength == null || contentLength <= COMPAT_BOARD_MENU_MAX_HTML_BYTES) {
-            "板一覧本文が大きすぎます"
-        }
-        val bytes = readBoundedHttpResponseBytes(response, COMPAT_BOARD_MENU_MAX_HTML_BYTES)
-        val contentType = response.headers[HttpHeaders.ContentType]
         withContext(AppDispatchers.parsing) {
             TextEncoding.decodeToString(bytes, contentType)
         }
@@ -216,7 +219,7 @@ internal fun CompatBoardUpdateDialog(
     onExecute: (String) -> Unit
 ) {
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("板一覧の取得") },
         text = {
@@ -239,5 +242,5 @@ internal fun CompatBoardUpdateDialog(
             ) { Text("更新する") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }

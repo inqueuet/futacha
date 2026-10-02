@@ -111,11 +111,16 @@ fun CookieManagementScreen(
                                 mapOf("cookie_count_bucket" to analyticsCountBucket(cookies.size))
                             )
                             scope.launch {
-                                withContext(AppDispatchers.io) {
-                                    repository.clearAll()
+                                val result = runSuspendCatchingPreservingCancellation {
+                                    withContext(AppDispatchers.io) {
+                                        repository.clearAll()
+                                    }
                                 }
                                 reload()
-                                snackbarHostState.showSnackbar(buildCookieClearAllMessage())
+                                snackbarHostState.showSnackbar(
+                                    if (result.isSuccess) buildCookieClearAllMessage()
+                                    else buildCookieMutationFailureMessage(result.exceptionOrNull())
+                                )
                             }
                         }) {
                             Icon(
@@ -183,11 +188,16 @@ fun CookieManagementScreen(
                                 onDelete = {
                                     AnalyticsTracker.uiControl("cookie_delete", "Cookieを削除")
                                     scope.launch {
-                                        withContext(AppDispatchers.io) {
-                                            repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
+                                        val result = runSuspendCatchingPreservingCancellation {
+                                            withContext(AppDispatchers.io) {
+                                                repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
+                                            }
                                         }
                                         reload()
-                                        snackbarHostState.showSnackbar(buildCookieDeleteMessage(cookie.name))
+                                        snackbarHostState.showSnackbar(
+                                            if (result.isSuccess) buildCookieDeleteMessage(cookie.name)
+                                            else buildCookieMutationFailureMessage(result.exceptionOrNull())
+                                        )
                                     }
                                 }
                             )
@@ -240,4 +250,9 @@ private fun CookieRow(
         },
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+internal fun buildCookieMutationFailureMessage(error: Throwable?): String {
+    val detail = error?.message?.takeIf { it.isNotBlank() }
+    return if (detail == null) "Cookieを削除できませんでした" else "Cookieを削除できませんでした: $detail"
 }

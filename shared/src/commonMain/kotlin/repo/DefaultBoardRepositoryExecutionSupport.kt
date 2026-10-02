@@ -24,6 +24,13 @@ import kotlin.time.ExperimentalTime
 private const val DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS = 3600L
 internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS = 60_000L
 
+/**
+ * How long a request that does not depend on the catalog layout waits for
+ * another caller's in-flight cookie setup before proceeding without it. The
+ * setup can take ~70 s (two 35 s attempts) on a bad line.
+ */
+internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_WAIT_MILLIS = 1_000L
+
 internal data class DefaultBoardRepositoryOpImageFetchResult(
     val url: String?,
     val timedOut: Boolean = false
@@ -56,8 +63,27 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
     onSetupCompleted: suspend () -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
     negativeCacheTtlMillis: Long = DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS,
+    /**
+     * True for callers whose [requireSetup] can only be false (requests that do
+     * not depend on the catalog layout). They skip the per-board lock when the
+     * board is already usable, so a catalog re-setup in flight does not hold
+     * thread loads, replies or deletions behind its network call.
+     */
+    layoutIndependent: Boolean = false,
+    /** For [layoutIndependent] callers without [forceSetup]: bound on waiting for another caller's setup. */
+    maxSetupWaitMillis: Long = DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_WAIT_MILLIS,
     fetchCatalogSetup: suspend (String) -> Unit
 ) {
+    if (layoutIndependent && !resolveDefaultBoardRepositoryCookieInitializationState(
+            initializedBoards = initializedBoards,
+            board = board,
+            cookieRepository = cookieRepository,
+            boardInitMutex = boardInitMutex,
+            requireSetup = false
+        )
+    ) {
+        return
+    }
     val boardInitializationLock = boardInitMutex.withLock {
         val entry = boardInitializationMutexes.getOrPut(board) {
             DefaultBoardRepositoryBoardInitLock(Mutex())
@@ -67,7 +93,33 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
     }
 
     try {
-        boardInitializationLock.mutex.withLock {
+        val mutex = boardInitializationLock.mutex
+        if (layoutIndependent && !forceSetup) {
+            var locked = false
+            val acquired = withTimeoutOrNull(maxSetupWaitMillis.coerceAtLeast(1L)) {
+                mutex.lock()
+                locked = true
+            } != null
+            if (!acquired) {
+                // The lock can be granted just as the timeout fires.
+                if (locked) mutex.unlock()
+                Logger.w(logTag, "Cookie setup for board $board is still running; continuing without waiting")
+                return
+            }
+            mutex.unlock()
+            // The in-flight setup normally made the board usable meanwhile.
+            if (!resolveDefaultBoardRepositoryCookieInitializationState(
+                    initializedBoards = initializedBoards,
+                    board = board,
+                    cookieRepository = cookieRepository,
+                    boardInitMutex = boardInitMutex,
+                    requireSetup = false
+                )
+            ) {
+                return
+            }
+        }
+        mutex.withLock {
             val setupRequired = requireSetup()
             val shouldInitialize = resolveDefaultBoardRepositoryCookieInitializationState(
                 initializedBoards = initializedBoards,
@@ -144,19 +196,32 @@ internal suspend fun <T> withDefaultBoardRepositoryAuthRetry(
     logTag: String,
     ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
     invalidateCookies: suspend (String) -> Unit,
+    refreshLimiter: DefaultBoardRepositoryAuthRefreshLimiter? = null,
     block: suspend () -> T
 ): T {
-    try {
+    val firstError = try {
         ensureCookiesInitialized(board, false)
-        return block()
+        return block().also { refreshLimiter?.clear(board) }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         if (!isDefaultBoardRepositoryLikelyCookieAuthFailure(e)) throw e
-
-        Logger.w(logTag, "Operation failed for board $board, retrying with fresh cookies: ${e.message}")
-        invalidateCookies(board)
-        ensureCookiesInitialized(board, true)
-        return block()
+        e
+    }
+    if (refreshLimiter != null && !refreshLimiter.mayRefresh(board)) {
+        // The last fresh setup did not cure this board's auth error.
+        Logger.w(logTag, "Operation failed for board $board; cookie refresh is cooling down: ${firstError.message}")
+        throw firstError
+    }
+    Logger.w(logTag, "Operation failed for board $board, retrying with fresh cookies: ${firstError.message}")
+    invalidateCookies(board)
+    ensureCookiesInitialized(board, true)
+    return try {
+        block().also { refreshLimiter?.clear(board) }
+    } catch (e: Exception) {
+        if (e !is CancellationException && isDefaultBoardRepositoryLikelyCookieAuthFailure(e)) {
+            refreshLimiter?.recordUnresolved(board)
+        }
+        throw e
     }
 }
 

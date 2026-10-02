@@ -12,12 +12,15 @@ internal fun rememberSelectedAiService(context: Any?): OnDeviceAiService {
     val store = remember(context) { getAiConnectionStore(context) }
     val connection by store.state.collectAsState()
     LaunchedEffect(store) { store.load() }
-    val service = remember(context, connection) {
+    // The revision changes only with the effective connection; key renames/reordering are read
+    // live by the store and must not recreate (and cancel) the services.
+    val service = remember(context, connection.revision) {
         val local by lazy { createOnDeviceAiService(context) }
         val openAi by lazy { OpenAiService(store, connection) }
         fun resolve(provider: AiProvider): OnDeviceAiService = when (provider) {
             AiProvider.DEVICE -> local
             AiProvider.OPENAI -> openAi
+            AiProvider.BOTH -> HybridModerationService(local, openAi)
         }
         RoutedAiService(local, resolve(connection.moderationProvider), "DEVICE:${connection.moderationProvider}:${connection.revision}")
     }

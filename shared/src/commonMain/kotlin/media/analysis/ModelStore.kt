@@ -9,9 +9,15 @@ import kotlinx.coroutines.sync.withLock
 import okio.*
 import okio.Path.Companion.toPath
 import kotlin.random.Random
+import kotlin.time.Clock
 
 internal fun interface ModelDownloader {
     suspend fun download(distribution: ModelDistribution, sink: BufferedSink)
+    val supportsResume: Boolean get() = false
+    suspend fun resumeDownload(distribution: ModelDistribution, sink: BufferedSink, offset: Long) {
+        require(offset == 0L)
+        download(distribution, sink)
+    }
 }
 
 internal data class VerifiedModel(val spec: AnalysisModelSpec, val path: Path)
@@ -26,7 +32,8 @@ internal class ModelStore(
     downloader: () -> ModelDownloader,
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     dispatcher: CoroutineDispatcher = AppDispatchers.io,
-    models: List<AnalysisModelSpec> = AnalysisModels.all
+    models: List<AnalysisModelSpec> = AnalysisModels.all,
+    private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() }
 ) : AutoCloseable {
     private val catalog = models.associateBy { it.id }.also { require(it.size == models.size) }
     private val directory = lazy { directory().also { fileSystem.createDirectories(it) } }
@@ -55,7 +62,11 @@ internal class ModelStore(
                 Flight(scope.async(start = CoroutineStart.LAZY) {
                     locks.getValue(model).withLock {
                         val spec = catalog.getValue(model)
-                        verifiedOnDisk(spec) ?: install(spec, importing = false, openSource = null)
+                        // The resumable partial is named after the distribution. A recreated store
+                        // (another host) must not append to it while this process still writes it.
+                        withDownloadLock(modelDirectory(), spec) {
+                            verifiedOnDisk(spec) ?: install(spec, importing = false, openSource = null)
+                        }
                     }
                 })
             }.also { it.readers++ }
@@ -135,9 +146,19 @@ internal class ModelStore(
             if (root !in preparedDirectories) {
                 val modelNames = AnalysisModel.entries.joinToString("|") { it.name }
                 val partial = Regex("($modelNames)-[0-9a-z]+(\\.extracted)?\\.part")
-                fileSystem.list(root).filter { partial.matches(it.name) }.forEach { path ->
+                // Resumable downloads survive only for a current distribution and for a limited time;
+                // partials of replaced model versions or long-abandoned downloads are never resumed.
+                val download = Regex("download-([0-9a-f]{64})\\.part")
+                val current = (catalog.values + AnalysisModels.all).mapTo(mutableSetOf()) { it.distribution.sha256 }
+                val expiresBefore = now() - RESUMABLE_PARTIAL_MAX_AGE_MILLIS
+                fileSystem.list(root).forEach { path ->
+                    val resumable = download.matchEntire(path.name)
+                    if (resumable == null && !partial.matches(path.name)) return@forEach
                     val metadata = fileSystem.metadata(path)
-                    if (metadata.isRegularFile && metadata.symlinkTarget == null) fileSystem.delete(path)
+                    if (!metadata.isRegularFile || metadata.symlinkTarget != null) return@forEach
+                    val stale = resumable == null || resumable.groupValues[1] !in current ||
+                        (metadata.lastModifiedAtMillis ?: Long.MAX_VALUE) < expiresBefore
+                    if (stale) fileSystem.delete(path)
                 }
                 preparedDirectories.add(root)
             }
@@ -166,26 +187,43 @@ internal class ModelStore(
     private suspend fun install(spec: AnalysisModelSpec, importing: Boolean, openSource: (suspend () -> Source)?): VerifiedModel {
         val token = Random.nextLong().toULong().toString(36)
         val root = modelDirectory()
-        val temporary = root.resolve("${spec.id.name}-$token.part")
+        val resumable = !importing && downloader.value.supportsResume
+        val temporary = if (resumable) root.resolve("download-${spec.distribution.sha256}.part")
+            else root.resolve("${spec.id.name}-$token.part")
+        var keepPartial = resumable
         val extracted = root.resolve("${spec.id.name}-$token.extracted.part")
         val state = progress.getValue(spec.id)
         val expected = if (importing) spec.bytes else spec.distribution.bytes
         try {
-            state.value = ModelInstallProgress(if (importing) ModelInstallStage.IMPORTING else ModelInstallStage.DOWNLOADING, 0, expected)
-            val rawSink = fileSystem.sink(temporary, mustCreate = true)
-            val bounded = object : Sink by rawSink {
-                var count = 0L
-                override fun write(source: Buffer, byteCount: Long) {
-                    if (byteCount > expected - count) throw IOException("モデルのサイズが一致しません")
-                    rawSink.write(source, byteCount)
-                    count += byteCount
-                    state.value = state.value?.copy(bytes = count)
+            val existing = if (resumable) fileSystem.metadataOrNull(temporary) else null
+            val offset = existing?.takeIf { it.isRegularFile && it.symlinkTarget == null && it.size in 0L..expected }?.size ?: 0L
+            suspend fun transfer(start: Long) {
+                state.value = ModelInstallProgress(if (importing) ModelInstallStage.IMPORTING else ModelInstallStage.DOWNLOADING, start, expected)
+                val rawSink = if (start > 0L) fileSystem.appendingSink(temporary) else fileSystem.sink(temporary)
+                val bounded = object : Sink by rawSink {
+                    var count = start
+                    override fun write(source: Buffer, byteCount: Long) {
+                        if (byteCount > expected - count) throw IOException("モデルのサイズが一致しません")
+                        rawSink.write(source, byteCount)
+                        count += byteCount
+                        state.value = state.value?.copy(bytes = count)
+                    }
+                }
+                bounded.buffer().use { sink ->
+                    if (importing) requireNotNull(openSource).invoke().use { copy(it, sink, expected) }
+                    else if (resumable) downloader.value.resumeDownload(spec.distribution, sink, start)
+                    else downloader.value.download(spec.distribution, sink)
                 }
             }
-            bounded.buffer().use { sink ->
-                if (importing) requireNotNull(openSource).invoke().use { copy(it, sink, expected) }
-                else downloader.value.download(spec.distribution, sink)
+            if (offset < expected) {
+                try { transfer(offset) }
+                catch (_: ModelResumeUnavailableException) {
+                    fileSystem.delete(temporary, mustExist = false)
+                    transfer(0L)
+                }
             }
+            // Only interrupted transfers survive. Verification/import failures never do.
+            keepPartial = false
             state.value = ModelInstallProgress(ModelInstallStage.VERIFYING, expected, expected)
             val payload = if (!importing && spec.distribution.zipEntry != null) {
                 check(matches(temporary, spec.distribution.bytes, spec.distribution.sha256)) { "モデル配布ファイルの検証に失敗しました" }
@@ -204,7 +242,7 @@ internal class ModelStore(
             return VerifiedModel(spec, target)
         } finally {
             // Synchronous file deletion also runs during cancellation; verified files remain installed.
-            try { fileSystem.delete(temporary, mustExist = false) }
+            try { if (!keepPartial) fileSystem.delete(temporary, mustExist = false) }
             finally { try { fileSystem.delete(extracted, mustExist = false) } finally { state.value = null } }
         }
     }
@@ -225,7 +263,15 @@ internal class ModelStore(
     suspend fun closeAndAwait() { close(); life.join() }
     private companion object {
         const val COPY_BYTES = 64L * 1024
+        const val RESUMABLE_PARTIAL_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
         val cleanupMutex = Mutex()
         val preparedDirectories = mutableSetOf<Path>()
+        /** Process-wide, per installed file: per-instance [locks] do not cover other stores. */
+        val downloadLocks = mutableMapOf<Path, Mutex>()
+
+        suspend fun <T> withDownloadLock(root: Path, spec: AnalysisModelSpec, block: suspend () -> T): T {
+            val lock = cleanupMutex.withLock { downloadLocks.getOrPut(root.resolve(spec.distribution.sha256)) { Mutex() } }
+            return lock.withLock { block() }
+        }
     }
 }

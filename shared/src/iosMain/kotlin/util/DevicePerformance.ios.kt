@@ -6,6 +6,8 @@ import platform.Foundation.NSFileSystemFreeSize
 import platform.Foundation.NSHomeDirectory
 import platform.Foundation.NSNumber
 import platform.Foundation.NSProcessInfo
+import platform.Foundation.NSURL
+import platform.Foundation.NSURLVolumeAvailableCapacityForImportantUsageKey
 
 @OptIn(ExperimentalForeignApi::class)
 public actual fun detectDevicePerformanceProfile(platformContext: Any?): DevicePerformanceProfile {
@@ -15,12 +17,20 @@ public actual fun detectDevicePerformanceProfile(platformContext: Any?): DeviceP
     val isLowRam = totalRamMb < 2048
 
     val homePath = NSHomeDirectory()
-    val fileManager = NSFileManager.defaultManager
-    val attrs = runCatching {
-        fileManager.attributesOfFileSystemForPath(homePath, null)
-    }.getOrNull()
-    val freeSizeBytes = attrs?.get(NSFileSystemFreeSize) as? NSNumber
-    val availableMb = freeSizeBytes?.longValue?.div(1024 * 1024)
+    // NSFileSystemFreeSize excludes purgeable space (caches, offloadable data) that
+    // iOS frees on demand, so it reports far less than the user can actually use.
+    val importantUsageBytes = runCatching {
+        NSURL.fileURLWithPath(homePath)
+            .resourceValuesForKeys(listOf(NSURLVolumeAvailableCapacityForImportantUsageKey), null)
+            ?.get(NSURLVolumeAvailableCapacityForImportantUsageKey) as? NSNumber
+    }.getOrNull()?.longValue?.takeIf { it > 0L }
+    val freeSizeBytes = importantUsageBytes ?: run {
+        val attrs = runCatching {
+            NSFileManager.defaultManager.attributesOfFileSystemForPath(homePath, null)
+        }.getOrNull()
+        (attrs?.get(NSFileSystemFreeSize) as? NSNumber)?.longValue
+    }
+    val availableMb = freeSizeBytes?.div(1024 * 1024)
     // 空き容量が1GB未満なら低ストレージ扱い
     val isLowStorage = availableMb != null && availableMb in 0..1024
 

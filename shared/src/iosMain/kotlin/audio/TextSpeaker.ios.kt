@@ -9,18 +9,28 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
 import platform.AVFAudio.AVSpeechBoundary
 import platform.AVFAudio.AVSpeechSynthesisVoice
 import platform.AVFAudio.AVSpeechSynthesizer
 import platform.AVFAudio.AVSpeechSynthesizerDelegateProtocol
 import platform.AVFAudio.AVSpeechUtterance
 import platform.Foundation.NSLock
+import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
+import platform.darwin.DISPATCH_TIME_NOW
+import platform.darwin.dispatch_after
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_time
+import platform.darwin.dispatch_get_global_queue
 import platform.darwin.NSObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 private const val IOS_JAPANESE_VOICE = "ja-JP"
 private val IOS_SPEECH_BOUNDARY_IMMEDIATE = AVSpeechBoundary.AVSpeechBoundaryImmediate
+/** How long stop() keeps the session for a following speak (next/previous, N4-7). */
+private const val IOS_SPEECH_RELEASE_GRACE_NANOS = 1_000_000_000L
 
 actual class TextSpeaker actual constructor(platformContext: Any?) {
     private val stateLock = NSLock()
@@ -28,6 +38,14 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private var activeContinuation: CancellableContinuation<Unit>? = null
     private var activeUtterance: AVSpeechUtterance? = null
     private var closed = false
+    // Held from the first speak until stop/close, so other apps' audio resumes
+    // once reading ends instead of staying interrupted for the process (G-4).
+    private var audioLease: IosPlaybackAudioLease? = null
+    // Returned by stop() only after a short grace: next/previous stop and speak
+    // again at once, and returning it in between let other apps' audio resume
+    // for a moment and stop again (N4-7). A prepare in the grace reclaims it.
+    private var pendingRelease: IosPlaybackAudioLease? = null
+    private var releaseGeneration = 0L
 
     private val delegate = object : NSObject(), AVSpeechSynthesizerDelegateProtocol {
         @ObjCSignatureOverride
@@ -56,6 +74,26 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
 
     actual suspend fun prepare() {
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
+        val held = stateLock.withLock {
+            audioLease ?: pendingRelease?.also {
+                audioLease = it
+                pendingRelease = null
+                releaseGeneration++
+            }
+        }
+        if (held == null) {
+            val lease = withContext(AppDispatchers.io) { acquireIosSpeechAudioSession() }
+            val keep = stateLock.withLock {
+                if (closed || audioLease != null) {
+                    false
+                } else {
+                    audioLease = lease
+                    true
+                }
+            }
+            if (!keep) releaseAudioLease(lease)
+            if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
+        }
         AVSpeechSynthesisVoice.voiceWithLanguage(IOS_JAPANESE_VOICE)
             ?: throw IllegalStateException(JAPANESE_TTS_UNAVAILABLE_MESSAGE)
     }
@@ -112,6 +150,22 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     actual fun stop() {
         synthesizer.stopSpeakingAtBoundary(IOS_SPEECH_BOUNDARY_IMMEDIATE)
         cancelActive(CancellationException("ユーザーにより読み上げが停止されました"))
+        val generation = stateLock.withLock {
+            val lease = audioLease ?: return
+            audioLease = null
+            // Only a prepare racing an earlier stop leaves an older pending lease: return it now.
+            pendingRelease?.let(::releaseAudioLease)
+            pendingRelease = lease
+            ++releaseGeneration
+        }
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, IOS_SPEECH_RELEASE_GRACE_NANOS),
+            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)
+        ) {
+            stateLock.withLock {
+                if (releaseGeneration == generation) pendingRelease.also { pendingRelease = null } else null
+            }?.close()
+        }
     }
 
     actual fun close() {
@@ -119,6 +173,25 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         synthesizer.stopSpeakingAtBoundary(IOS_SPEECH_BOUNDARY_IMMEDIATE)
         synthesizer.delegate = null
         cancelActive(CancellationException("TextSpeaker を閉じました"))
+        releaseHeldAudioLease()
+    }
+
+    private fun releaseHeldAudioLease() {
+        val leases = stateLock.withLock {
+            listOfNotNull(audioLease, pendingRelease).also {
+                audioLease = null
+                pendingRelease = null
+                releaseGeneration++
+            }
+        }
+        leases.forEach(::releaseAudioLease)
+    }
+
+    // Deactivating the session can block, so it never runs on the caller's (main) thread.
+    private fun releaseAudioLease(lease: IosPlaybackAudioLease) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+            lease.close()
+        }
     }
 
     private fun completeUtterance(

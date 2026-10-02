@@ -12,6 +12,10 @@ import javax.net.ssl.SSLException
 
 fun createAndroidImageTransport(cookieStorage: CookiesStorage): FutachaImageTransport = FutachaImageTransport(
     HttpClient(OkHttp) {
+        // Same refusal of userinfo and ambiguous host characters as the
+        // general clients (S4-1): an image URL from a page or a saved thread
+        // must not reach a host other than the one it appears to name.
+        installAmbiguousRequestUrlGuard()
         configureImageRequests()
         install(HttpCookies) { storage = cookieStorage }
         engine { config {

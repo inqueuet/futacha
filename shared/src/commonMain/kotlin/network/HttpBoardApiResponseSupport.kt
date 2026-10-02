@@ -11,8 +11,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.io.IOException
 import kotlinx.coroutines.yield
 import kotlin.coroutines.coroutineContext
 
@@ -115,7 +115,11 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
         throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
     }
     return withContext(AppDispatchers.io) {
-        withTimeout(responseTotalTimeoutMillis) {
+        // withTimeoutOrNull returns null only for its own deadline. A plain
+        // withTimeout reported this internal budget as TimeoutCancellationException,
+        // which callers rethrow as a cancellation of their own work (spinners
+        // that never stop, a search that silently ends).
+        withTimeoutOrNull(responseTotalTimeoutMillis) {
             val channel = response.bodyAsChannel()
             val buffer = ByteArray(responseReadBufferBytes)
             var output = ByteArray(
@@ -136,7 +140,7 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
                         httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
                     ) {
                         channel.readAvailable(buffer, 0, buffer.size)
-                    } ?: throw NetworkException("Response body read stalled")
+                    } ?: throw httpBoardApiResponseReadStalled("body")
                     if (read == -1) {
                         fullyConsumed = true
                         break
@@ -144,7 +148,7 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
                     if (read == 0) {
                         zeroReadCount += 1
                         if (zeroReadCount >= maxZeroReadRetries) {
-                            throw NetworkException("Response body read stalled")
+                            throw httpBoardApiResponseReadStalled("body")
                         }
                         delay(zeroReadBackoffMillis)
                         continue
@@ -184,8 +188,22 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
                     runCatching { channel.cancel() }
                 }
             }
-        }
+        } ?: throw httpBoardApiResponseReadTimeout("body", responseTotalTimeoutMillis)
     }
+}
+
+/**
+ * The read budget expired: a network failure (retryable like other I/O
+ * errors), not a cancellation of the caller.
+ */
+internal fun httpBoardApiResponseReadStalled(part: String): NetworkException {
+    val message = "Response $part read stalled"
+    return NetworkException(message, cause = IOException(message))
+}
+
+internal fun httpBoardApiResponseReadTimeout(part: String, timeoutMillis: Long): NetworkException {
+    val message = "Response $part read timed out after $timeoutMillis ms"
+    return NetworkException(message, cause = IOException(message))
 }
 
 internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
@@ -195,13 +213,15 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
     responseReadBufferBytes: Int,
     maxZeroReadRetries: Int,
     zeroReadBackoffMillis: Long,
-    responseTotalTimeoutMillis: Long
+    responseTotalTimeoutMillis: Long,
+    /** Return the first [maxBytes] instead of failing when the head is longer. */
+    truncateAtMaxBytes: Boolean = false
 ): ByteArray {
     require(maxBytes > 0) { "maxBytes must be positive" }
     require(responseReadBufferBytes > 0) { "responseReadBufferBytes must be positive" }
     require(maxZeroReadRetries > 0) { "maxZeroReadRetries must be positive" }
     require(responseTotalTimeoutMillis > 0L) { "responseTotalTimeoutMillis must be positive" }
-    if (maxLines <= 0) {
+    if (maxLines <= 0 && !truncateAtMaxBytes) {
         return readHttpBoardApiResponseBytesWithLimit(
             response = response,
             maxBytes = maxBytes,
@@ -211,8 +231,9 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
             responseTotalTimeoutMillis = responseTotalTimeoutMillis
         )
     }
+    val effectiveMaxLines = if (maxLines <= 0) Int.MAX_VALUE else maxLines
     return withContext(AppDispatchers.io) {
-        withTimeout(responseTotalTimeoutMillis) {
+        withTimeoutOrNull(responseTotalTimeoutMillis) {
             val channel = response.bodyAsChannel()
             val buffer = ByteArray(responseReadBufferBytes)
             var output = ByteArray(minOf(responseReadBufferBytes, maxBytes))
@@ -228,7 +249,7 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                         httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
                     ) {
                         channel.readAvailable(buffer, 0, buffer.size)
-                    } ?: throw NetworkException("Response head read stalled")
+                    } ?: throw httpBoardApiResponseReadStalled("head")
                     if (read == -1) {
                         fullyConsumed = true
                         break
@@ -236,7 +257,7 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                     if (read == 0) {
                         zeroReadCount += 1
                         if (zeroReadCount >= maxZeroReadRetries) {
-                            throw NetworkException("Response head read stalled")
+                            throw httpBoardApiResponseReadStalled("head")
                         }
                         delay(zeroReadBackoffMillis)
                         continue
@@ -247,14 +268,19 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                     for (i in 0 until read) {
                         if (buffer[i] == '\n'.code.toByte()) {
                             lineCount += 1
-                            if (lineCount >= maxLines) {
+                            if (lineCount >= effectiveMaxLines) {
                                 writeCount = i + 1
                                 break
                             }
                         }
                     }
+                    var reachedByteLimit = false
                     if (writeCount > maxBytes - totalBytes) {
-                        throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
+                        if (!truncateAtMaxBytes) {
+                            throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
+                        }
+                        writeCount = maxBytes - totalBytes
+                        reachedByteLimit = true
                     }
                     val requiredSize = totalBytes + writeCount
                     if (requiredSize > output.size) {
@@ -271,7 +297,7 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                     }
                     buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = writeCount)
                     totalBytes = requiredSize
-                    if (lineCount >= maxLines) break@reading
+                    if (lineCount >= effectiveMaxLines || reachedByteLimit) break@reading
                     readLoopCount += 1
                     if (readLoopCount % 32L == 0L) {
                         yield()
@@ -287,7 +313,7 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                     runCatching { channel.cancel() }
                 }
             }
-        }
+        } ?: throw httpBoardApiResponseReadTimeout("head", responseTotalTimeoutMillis)
     }
 }
 
@@ -343,6 +369,28 @@ internal suspend fun readSmallHttpBoardApiResponseSummary(
     zeroReadBackoffMillis: Long,
     responseTotalTimeoutMillis: Long
 ): String? {
+    val decoded = readSmallHttpBoardApiResponseBody(
+        response = response,
+        responseReadBufferBytes = responseReadBufferBytes,
+        maxZeroReadRetries = maxZeroReadRetries,
+        zeroReadBackoffMillis = zeroReadBackoffMillis,
+        responseTotalTimeoutMillis = responseTotalTimeoutMillis
+    ) ?: return null
+    return decoded
+        .trim()
+        .lineSequence()
+        .firstOrNull { it.isNotBlank() }
+        ?.take(160)
+}
+
+/** The decoded body of a small response (at most 64 KiB), or null when it cannot be read. */
+internal suspend fun readSmallHttpBoardApiResponseBody(
+    response: HttpResponse,
+    responseReadBufferBytes: Int,
+    maxZeroReadRetries: Int,
+    zeroReadBackoffMillis: Long,
+    responseTotalTimeoutMillis: Long
+): String? {
     val bytes = try {
         readHttpBoardApiResponseBytesWithLimit(
             response = response,
@@ -357,16 +405,40 @@ internal suspend fun readSmallHttpBoardApiResponseSummary(
     } catch (_: Throwable) {
         return null
     }
-    val decoded = try {
+    return try {
         TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
     } catch (e: CancellationException) {
         throw e
     } catch (_: Throwable) {
-        return null
+        null
     }
-    return decoded
-        .trim()
-        .lineSequence()
-        .firstOrNull { it.isNotBlank() }
-        ?.take(160)
+}
+
+/** The first [maxBytes] of a body (fewer when it ends earlier), decoded; the rest is not received. */
+internal suspend fun readHttpBoardApiResponsePrefixAsString(
+    response: HttpResponse,
+    maxBytes: Int,
+    responseReadBufferBytes: Int,
+    maxZeroReadRetries: Int,
+    zeroReadBackoffMillis: Long,
+    responseTotalTimeoutMillis: Long
+): String {
+    val bytes = readHttpBoardApiResponseHeadBytesWithLimit(
+        response = response,
+        maxLines = 0,
+        maxBytes = maxBytes,
+        responseReadBufferBytes = responseReadBufferBytes,
+        maxZeroReadRetries = maxZeroReadRetries,
+        zeroReadBackoffMillis = zeroReadBackoffMillis,
+        responseTotalTimeoutMillis = responseTotalTimeoutMillis,
+        truncateAtMaxBytes = true
+    )
+    // A cut inside a multi-byte character would make strict UTF-8 detection
+    // fail and decode the whole prefix as Shift_JIS. Cut at the last line
+    // break instead (0x0A is never part of a UTF-8 or Shift_JIS character).
+    val lastNewline = if (bytes.size >= maxBytes) bytes.lastIndexOf('\n'.code.toByte()) else -1
+    val complete = if (lastNewline >= 0) bytes.copyOf(lastNewline + 1) else bytes
+    return withContext(AppDispatchers.parsing) {
+        TextEncoding.decodeToString(complete, response.headers[HttpHeaders.ContentType])
+    }
 }

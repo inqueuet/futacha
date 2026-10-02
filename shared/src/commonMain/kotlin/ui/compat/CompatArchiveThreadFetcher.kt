@@ -9,7 +9,7 @@ import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Url
 import io.ktor.http.isSuccess
@@ -69,14 +69,17 @@ internal suspend fun fetchCompatArchiveThreadPage(
         // Reading a large archive response can allocate tens of megabytes. Keep both the
         // network/body read and the decode/regex work away from the Compose Main dispatcher.
         val archiveResponse = withContext(AppDispatchers.io) {
-            val response = httpClient.get(currentUrl)
-            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            require(contentLength == null || contentLength <= COMPAT_ARCHIVE_MAX_HTML_BYTES) {
-                "アーカイブ本文が大きすぎます"
+            // Streamed: get() buffered the whole (up to tens of MiB) page before the
+            // bounded reader could apply its size limit and read timeout.
+            val (bytes, contentType) = httpClient.prepareGet(currentUrl).execute { response ->
+                check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                require(contentLength == null || contentLength <= COMPAT_ARCHIVE_MAX_HTML_BYTES) {
+                    "アーカイブ本文が大きすぎます"
+                }
+                readBoundedHttpResponseBytes(response, COMPAT_ARCHIVE_MAX_HTML_BYTES) to
+                    response.headers[HttpHeaders.ContentType]
             }
-            val bytes = readBoundedHttpResponseBytes(response, COMPAT_ARCHIVE_MAX_HTML_BYTES)
-            val contentType = response.headers[HttpHeaders.ContentType]
             withContext(AppDispatchers.parsing) {
                 val body = TextEncoding.decodeToString(bytes, contentType)
                 CompatArchiveResponse(
@@ -96,9 +99,12 @@ internal suspend fun fetchCompatArchiveThreadPage(
             return@repeat
         }
 
-        val redirectPath = archiveResponse.redirectPath
-        if (redirectPath != null && redirectPath != currentUrl) {
-            currentUrl = resolveCompatArchiveRelativeUrl(currentUrl, redirectPath)
+        // Compare the resolved target: a page that refreshes to itself through a
+        // relative path ("./", "index.htm") is content, not a redirect.
+        val redirectUrl = archiveResponse.redirectPath
+            ?.let { resolveCompatArchiveRelativeUrl(currentUrl, it) }
+        if (redirectUrl != null && !isSameCompatArchiveUrl(redirectUrl, currentUrl)) {
+            currentUrl = redirectUrl
             return@repeat
         }
 
@@ -160,6 +166,23 @@ internal fun mergeCompatThreadPages(
         isTruncated = if (archiveWasComplete) false else primary.isTruncated,
         truncationReason = if (archiveWasComplete) null else primary.truncationReason
     )
+}
+
+private fun isSameCompatArchiveUrl(first: String, second: String): Boolean {
+    val a = runCatching { Url(first) }.getOrNull() ?: return first == second
+    val b = runCatching { Url(second) }.getOrNull() ?: return first == second
+    return a.protocol == b.protocol &&
+        a.host.equals(b.host, ignoreCase = true) &&
+        a.port == b.port &&
+        normalizeCompatArchiveDotSegments(a.encodedPath) == normalizeCompatArchiveDotSegments(b.encodedPath) &&
+        a.encodedQuery == b.encodedQuery
+}
+
+private fun normalizeCompatArchiveDotSegments(path: String): String {
+    var normalized = path.ifEmpty { "/" }
+    while (normalized.contains("/./")) normalized = normalized.replace("/./", "/")
+    if (normalized.endsWith("/.")) normalized = normalized.dropLast(1)
+    return normalized
 }
 
 internal fun resolveCompatArchiveRelativeUrl(baseUrl: String, rawPath: String): String {

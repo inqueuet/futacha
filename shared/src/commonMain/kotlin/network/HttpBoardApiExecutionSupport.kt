@@ -2,7 +2,7 @@ package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
@@ -17,21 +17,42 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.TimeSource
 
 internal suspend fun <T> withHttpBoardApiRetry(
     logTag: String,
     requestAttemptTimeoutMillis: Long,
     maxAttempts: Int = 3,
     initialDelayMillis: Long = 500,
+    /**
+     * Optional budget shared by all attempts. An attempt may then use whatever
+     * is left of it (capped by [requestAttemptTimeoutMillis]), so a slow but
+     * progressing download is not restarted from scratch at a fixed attempt
+     * timeout; stalls are still caught by the body reader's idle timeout.
+     */
+    overallBudgetMillis: Long? = null,
     block: suspend () -> T
 ): T {
     val safeMaxAttempts = maxAttempts.coerceIn(1, 10)
     val safeAttemptTimeoutMillis = requestAttemptTimeoutMillis.coerceIn(1L, 2L * 60L * 1000L)
+    val budgetStart = TimeSource.Monotonic.markNow()
+    val safeOverallBudgetMillis = overallBudgetMillis?.coerceIn(1L, 10L * 60L * 1000L)
     var attempt = 0
     var delayMillis = initialDelayMillis.coerceIn(0L, 5_000L)
     while (true) {
+        val attemptTimeoutMillis = if (safeOverallBudgetMillis == null) {
+            safeAttemptTimeoutMillis
+        } else {
+            val remaining = safeOverallBudgetMillis - budgetStart.elapsedNow().inWholeMilliseconds
+            if (remaining <= 0L) {
+                throw NetworkException(
+                    "Request timed out after $safeOverallBudgetMillis ms (attempts=$attempt)"
+                )
+            }
+            minOf(remaining, safeAttemptTimeoutMillis)
+        }
         try {
-            return withTimeout(safeAttemptTimeoutMillis) {
+            return withTimeout(attemptTimeoutMillis) {
                 block()
             }
         } catch (e: TimeoutCancellationException) {
@@ -43,7 +64,7 @@ internal suspend fun <T> withHttpBoardApiRetry(
             attempt += 1
             if (attempt >= safeMaxAttempts) {
                 throw NetworkException(
-                    "Request timed out after $safeAttemptTimeoutMillis ms (attempts=$attempt)",
+                    "Request timed out after $attemptTimeoutMillis ms (attempts=$attempt)",
                     cause = e
                 )
             }
@@ -147,22 +168,25 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
     // (up to 3 attempts x the 75 s request timeout on Android) could hold the post for
     // minutes on a bad network; a failure here falls back to the default config instead.
     return withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
-        val response = client.get(url) {
+        // Streamed: get() buffered the whole page (for a reply, the whole
+        // thread) before the reader could bound it or stop early.
+        client.prepareGet(url) {
             attributes.put(HigherLayerRetryManaged, true)
             headers[HttpHeaders.UserAgent] = userAgent
             headers[HttpHeaders.Accept] = accept
             headers[HttpHeaders.AcceptLanguage] = acceptLanguage
             headers[HttpHeaders.CacheControl] = cacheControl
+        }.execute { response ->
+            readHttpBoardApiPostingConfigResponse(
+                response = response,
+                board = board,
+                url = url,
+                logTag = logTag,
+                fallbackChrencValue = fallbackChrencValue,
+                readSmallResponseSummary = readSmallResponseSummary,
+                readResponseBodyAsString = readResponseBodyAsString
+            )
         }
-        readHttpBoardApiPostingConfigResponse(
-            response = response,
-            board = board,
-            url = url,
-            logTag = logTag,
-            fallbackChrencValue = fallbackChrencValue,
-            readSmallResponseSummary = readSmallResponseSummary,
-            readResponseBodyAsString = readResponseBodyAsString
-        )
     } ?: throw NetworkException("Timed out after ${timeoutMillis}ms fetching posting config from $url")
 }
 

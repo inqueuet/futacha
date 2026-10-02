@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -545,7 +546,7 @@ internal fun CompatBoardEditDialog(
         mutableStateOf(initialUrl)
     }
     var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(355.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -596,5 +597,5 @@ internal fun CompatBoardEditDialog(
             }) { Text(if (urlEditable) "追加する" else "更新する") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }

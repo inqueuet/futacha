@@ -49,7 +49,8 @@ internal fun rememberFutachaBindingsRuntimeState(
     compatibilityStore: CompatibilityStore? = null,
     navigationState: FutachaNavigationState,
     updateNavigationState: (FutachaNavigationState) -> Unit,
-    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null
+    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null,
+    onUnregisteredBoard: (String) -> Unit = {}
 ): FutachaBindingsRuntimeState {
     val refreshHistoryEntries: suspend () -> Unit = {
         AnalyticsTracker.event(
@@ -291,7 +292,8 @@ internal fun rememberFutachaBindingsRuntimeState(
                     destinationRepository = importedHistoryRepository,
                     selectedSnapshotIds = selectedSnapshotIds
                 )
-            }
+            },
+            onUnregisteredBoard = onUnregisteredBoard
         )
     )
     return remember(screenBindings) {

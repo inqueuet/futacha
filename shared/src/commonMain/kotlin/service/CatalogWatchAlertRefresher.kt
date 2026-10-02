@@ -10,11 +10,13 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.resolveBoardWatchWordKey
 import com.valoser.futacha.shared.state.resolveEffectiveWatchWordsForBoard
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -29,13 +31,21 @@ class CatalogWatchAlertRefresher(
 ) {
     private val refreshMutex = Mutex()
 
-    suspend fun refresh(): CatalogWatchAlertRefreshResult {
+    /**
+     * [onMatchesFound] receives all matches of this run once: when the check
+     * ends, or with those found so far when the caller's timeout cuts it off
+     * (then non-cancellably). Notifying only from the result dropped every
+     * match of a cut-off run; one call keeps one summary notification per run.
+     */
+    suspend fun refresh(
+        onMatchesFound: (suspend (List<CatalogWatchAlertMatch>) -> Unit)? = null
+    ): CatalogWatchAlertRefreshResult {
         if (!refreshMutex.tryLock()) {
             throw RefreshAlreadyRunningException()
         }
         return try {
             withContext(dispatcher) {
-                refreshLocked()
+                refreshLocked(onMatchesFound)
             }
         } finally {
             refreshMutex.unlock()
@@ -43,7 +53,9 @@ class CatalogWatchAlertRefresher(
     }
 
     @OptIn(ExperimentalTime::class)
-    private suspend fun refreshLocked(): CatalogWatchAlertRefreshResult {
+    private suspend fun refreshLocked(
+        onMatchesFound: (suspend (List<CatalogWatchAlertMatch>) -> Unit)?
+    ): CatalogWatchAlertRefreshResult {
         val globalWatchWords = stateStore.watchWords.first()
         val boardWatchWords = stateStore.boardWatchWords.first()
         val targets = stateStore.boards.first()
@@ -72,17 +84,31 @@ class CatalogWatchAlertRefresher(
             .mapTo(mutableSetOf()) { it.watchAlertIdentityKey() }
         val matches = mutableListOf<CatalogWatchAlertMatch>()
         val seenKeys = existingHistoryKeys.toMutableSet()
-        val failures = fetchWatchSourceCatalogs(targets) { source ->
-            val remaining = MAX_WATCH_ALERT_MATCHES_PER_RUN - matches.size
-            if (remaining <= 0) return@fetchWatchSourceCatalogs
-            source.items.asSequence()
-                .distinctBy { item -> item.id.ifBlank { item.threadUrl } }
-                .filter { item -> item.matchesNormalizedWatchWords(source.normalizedWatchWords) }
-                .mapNotNull { item -> item.toWatchAlertMatch(source.board, nowMillis) }
-                .filter { match -> seenKeys.add(match.identityKey) }
-                .take(remaining)
-                .forEach(matches::add)
+        val failures = try {
+            fetchWatchSourceCatalogs(targets) { source ->
+                val remaining = MAX_WATCH_ALERT_MATCHES_PER_RUN - matches.size
+                if (remaining <= 0) return@fetchWatchSourceCatalogs
+                source.items.asSequence()
+                    .distinctBy { item -> item.id.ifBlank { item.threadUrl } }
+                    .filter { item -> item.matchesNormalizedWatchWords(source.normalizedWatchWords) }
+                    .mapNotNull { item -> item.toWatchAlertMatch(source.board, nowMillis) }
+                    .filter { match -> seenKeys.add(match.identityKey) }
+                    .take(remaining)
+                    .forEach(matches::add)
+            }
+        } catch (cancelled: CancellationException) {
+            if (matches.isNotEmpty() && onMatchesFound != null) {
+                withContext(NonCancellable) {
+                    try {
+                        onMatchesFound(matches.toList())
+                    } catch (failure: Exception) {
+                        Logger.w(CATALOG_WATCH_ALERT_TAG, "Delivering cut-off matches failed: ${failure.message}")
+                    }
+                }
+            }
+            throw cancelled
         }
+        if (matches.isNotEmpty()) onMatchesFound?.invoke(matches.toList())
 
         return CatalogWatchAlertRefreshResult(
             matches = matches,
@@ -191,6 +217,8 @@ private sealed interface WatchAlertCatalogFetchOutcome {
 }
 
 internal const val MAX_WATCH_ALERT_MATCHES_PER_RUN = 5_000
+private const val CATALOG_WATCH_ALERT_TAG = "CatalogWatchAlertRefresher"
+
 
 private fun BoardSummary.isMockBoardForWatchAlert(): Boolean {
     return url.contains("example.com", ignoreCase = true)

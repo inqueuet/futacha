@@ -7,10 +7,15 @@ import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 
 actual object TextEncoding {
-    private val shiftJis: Charset = Charset.forName("Shift_JIS")
+    // Futaba's "Shift_JIS" is Windows-31J (CP932): the JDK's strict Shift_JIS
+    // lacks the NEC/IBM extensions (①, №, ㈱...), decodes them to U+FFFD and
+    // can swallow the following character. Android's ICU Shift_JIS already
+    // maps these.
+    private val shiftJis: Charset = runCatching { Charset.forName("windows-31j") }
+        .getOrElse { Charset.forName("Shift_JIS") }
 
     actual fun encodeToShiftJis(text: String): ByteArray =
-        text.toByteArray(shiftJis)
+        canonicalCp932Text(text).toByteArray(shiftJis)
 
     actual fun decodeToString(bytes: ByteArray, contentType: String?): String {
         return when {

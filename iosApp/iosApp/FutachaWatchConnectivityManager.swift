@@ -23,6 +23,10 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
     private var snapshotRequestGeneration = 0
     private var isSnapshotRequestInFlight = false
     private var pendingSnapshotReplyHandlers: [([String: Any]) -> Void] = []
+    /// Called once the snapshot request in flight has been sent (or given up).
+    private var currentSnapshotCompletions: [() -> Void] = []
+    /// Wait for a fresh snapshot built after the request in flight, which may predate their change.
+    private var nextSnapshotCompletions: [() -> Void] = []
     private var shouldSendSnapshotAfterCurrentRequest = false
     private var pendingSnapshotAckPayloads: [String: String] = [:]
     private var pendingSnapshotAckOrder: [String] = []
@@ -44,11 +48,14 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         session.activate()
     }
 
-    func sendSnapshotIfAvailable() {
+    /// `completion` runs on the main queue once a snapshot built after this
+    /// call has been handed to WatchConnectivity, or the attempt was given up.
+    func sendSnapshotIfAvailable(completion: (() -> Void)? = nil) {
         guard WCSession.isSupported() else {
+            completion?()
             return
         }
-        requestSnapshot(replyHandler: nil)
+        requestSnapshot(replyHandler: nil, completion: completion)
     }
 
     func session(
@@ -109,8 +116,39 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
                 replyHandler?(["accepted": false, "message": "iPhoneアプリを開いてから再実行してください。"])
                 return
             }
+            // A Refresh may arrive while the app is in the background. Hold
+            // background time for the whole run: once suspended mid-run, the
+            // refresh stayed "running" and every later Refresh was dropped.
+            var refreshTask: WatchRefreshBackgroundTask?
+            if commandType == "Refresh" {
+                guard let task = WatchRefreshBackgroundTask.begin() else {
+                    replyHandler?(["accepted": false, "message": "iPhoneアプリを開いてから再実行してください。"])
+                    return
+                }
+                refreshTask = task
+            }
             let outcome = MainViewControllerKt.handleIosWatchCommandJsonOutcome(commandJson: commandJson)
             let accepted = outcome != "rejected"
+            if let refreshTask {
+                if accepted && outcome != "refreshThrottled" {
+                    // Covers a run that was started now or one this command joined.
+                    // Keep the background time until the refreshed snapshot is
+                    // built and sent: both are asynchronous, and ending the task
+                    // first let iOS suspend the app before the Watch got it.
+                    // The expiry handler still ends the task; end() is idempotent.
+                    MainViewControllerKt.invokeWhenIosWatchRefreshIdle { [weak self] in
+                        guard let self else {
+                            refreshTask.end()
+                            return
+                        }
+                        self.sendSnapshotIfAvailable {
+                            refreshTask.end()
+                        }
+                    }
+                } else {
+                    refreshTask.end()
+                }
+            }
             replyHandler?(
                 accepted
                     ? ["accepted": true]
@@ -207,10 +245,14 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         applicationActiveLock.unlock()
     }
 
-    private func requestSnapshot(replyHandler: (([String: Any]) -> Void)?) {
+    private func requestSnapshot(
+        replyHandler: (([String: Any]) -> Void)?,
+        completion: (() -> Void)? = nil
+    ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else {
                 replyHandler?(["snapshot": ""])
+                completion?()
                 return
             }
             if let replyHandler {
@@ -219,7 +261,13 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
                 self.shouldSendSnapshotAfterCurrentRequest = true
             }
             guard !self.isSnapshotRequestInFlight else {
+                if let completion {
+                    self.nextSnapshotCompletions.append(completion)
+                }
                 return
+            }
+            if let completion {
+                self.currentSnapshotCompletions.append(completion)
             }
             self.isSnapshotRequestInFlight = true
             self.snapshotRequestGeneration += 1
@@ -274,6 +322,17 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         let deliveredBySnapshot = shouldSendSnapshot && !payload.isEmpty && sendSnapshot(payload, ackId: ackId)
         if let ackId, !deliveredByReply && !deliveredBySnapshot {
             removePendingSnapshotAck(id: ackId)
+        }
+
+        let completions = currentSnapshotCompletions
+        currentSnapshotCompletions.removeAll()
+        completions.forEach { $0() }
+        if !nextSnapshotCompletions.isEmpty {
+            let waiting = nextSnapshotCompletions
+            nextSnapshotCompletions.removeAll()
+            requestSnapshot(replyHandler: nil) {
+                waiting.forEach { $0() }
+            }
         }
     }
 
@@ -384,6 +443,50 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         dispatchPrecondition(condition: .onQueue(.main))
         snapshotRetryWorkItems.values.forEach { $0.cancel() }
         snapshotRetryWorkItems.removeAll()
+    }
+}
+
+/// Background execution time held for one Watch-requested refresh. On expiry
+/// the refresh is cancelled first, so its in-flight state is cleared and the
+/// next Refresh command starts a new run instead of joining a suspended one.
+private final class WatchRefreshBackgroundTask {
+    private let lock = NSLock()
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    /// Returns nil when iOS grants no background time (the app is about to be suspended).
+    static func begin() -> WatchRefreshBackgroundTask? {
+        #if canImport(UIKit)
+        let task = WatchRefreshBackgroundTask()
+        // beginBackgroundTask may be called off the main thread; the WCSession
+        // delegate queue must not wait for the main thread here.
+        let identifier = UIApplication.shared.beginBackgroundTask(withName: "FutachaWatchRefresh") {
+            MainViewControllerKt.cancelIosWatchRefresh()
+            task.end()
+        }
+        guard identifier != .invalid else {
+            return nil
+        }
+        task.lock.lock()
+        task.identifier = identifier
+        task.lock.unlock()
+        return task
+        #else
+        return WatchRefreshBackgroundTask()
+        #endif
+    }
+
+    /// Idempotent: completion and expiry may both end the same task.
+    func end() {
+        lock.lock()
+        let ending = identifier
+        identifier = .invalid
+        lock.unlock()
+        #if canImport(UIKit)
+        guard ending != .invalid else {
+            return
+        }
+        UIApplication.shared.endBackgroundTask(ending)
+        #endif
     }
 }
 #endif

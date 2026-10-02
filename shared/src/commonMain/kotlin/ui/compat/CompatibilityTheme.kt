@@ -113,6 +113,26 @@ internal fun compatibilityPopupContent(palette: CompatibilityPalette): Color =
 
 internal fun compatibilitySettingsCategoryColor(palette: CompatibilityPalette): Color = palette.uiPrimaryText
 
+/** Colours of the thread/catalog search bar (E-8). */
+internal data class CompatibilitySearchBarColors(
+    val container: Color,
+    val content: Color,
+    val hint: Color
+)
+
+/**
+ * The search bar uses the readable popup surface instead of the chrome. The
+ * query, hint and match count are operable text that must keep 4.5:1
+ * (AGENTS.md), which the light chromes miss even with white text (teal about
+ * 3.7:1, blue about 2.7:1; the old #80CBC4 hint on teal was about 2.0:1).
+ */
+internal fun compatibilitySearchBarColors(palette: CompatibilityPalette): CompatibilitySearchBarColors =
+    CompatibilitySearchBarColors(
+        container = compatibilityPopupSurface(palette),
+        content = compatibilityPopupContent(palette),
+        hint = palette.uiSecondaryText
+    )
+
 @Composable
 internal fun compatibilityMenuItemColors(): MenuItemColors {
     val content = compatibilityPopupContent(LocalCompatibilityPalette.current)

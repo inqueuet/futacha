@@ -3,8 +3,16 @@ package com.valoser.futacha.shared.util
 import com.valoser.futacha.shared.model.SaveLocation
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.CopyOption
+import java.nio.file.DirectoryNotEmptyException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileSystemException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.NotDirectoryException
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.ArrayDeque
 import kotlin.coroutines.cancellation.CancellationException
@@ -48,6 +56,9 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
             validateFileSystemPath(path)
             val file = File(resolveAbsolutePath(path))
             file.parentFile?.mkdirs()
+            // A hard link taken over from another save generation (linkOrCopy) must not be
+            // truncated in place, which would also damage the other generation (G4-6).
+            runCatching { java.nio.file.Files.deleteIfExists(file.toPath()) }
             FileOutputStream(file, false).use { output ->
                 var totalWritten = 0L
                 val sink = object : FileWriteSink {
@@ -304,16 +315,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         validateFileSystemPath(toRelative)
         val from = File(resolveAbsolutePath(join(path.path, fromRelative))).toPath()
         val to = File(resolveAbsolutePath(join(path.path, toRelative))).toPath()
-        try {
-            java.nio.file.Files.move(
-                from, to,
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                java.nio.file.StandardCopyOption.ATOMIC_MOVE
-            )
-        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-            // Still a move of the finished file; the destination is never truncated first.
-            java.nio.file.Files.move(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-        }
+        moveReplacingWithRetry(from, to)
     } }
 
     private fun join(base: String, relativePath: String): String =
@@ -332,12 +334,7 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
                 output.flush()
                 output.channel.force(true)
             }
-            try {
-                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: AtomicMoveNotSupportedException) {
-                // Still a rename of the finished file; the destination is never truncated first.
-                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
+            moveReplacingWithRetry(temporary.toPath(), file.toPath())
         } finally {
             if (temporary.exists() && !temporary.delete()) {
                 Logger.w("JvmFileSystem", "Failed to delete temp file: ${temporary.absolutePath}")
@@ -386,6 +383,51 @@ internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
         const val TEMP_CLEANUP_MAX_DURATION_NANOS = 2_000_000_000L
     }
 }
+
+/**
+ * Renames [from] over [to] (atomically when the volume allows it). On Windows a
+ * rename over a file that another process (an antivirus scanner, the search
+ * indexer, a backup tool) briefly holds open fails with an access-denied or
+ * sharing-violation error, so those errors are retried a few times with a short
+ * back-off (about 1.3 s in total). A failure that remains is rethrown with [from]
+ * untouched and [to] unchanged; errors that cannot clear by waiting (missing
+ * source, non-empty directory, ...) are not retried.
+ */
+internal fun moveReplacingWithRetry(
+    from: Path,
+    to: Path,
+    move: (Path, Path, Array<out CopyOption>) -> Unit = { source, target, options ->
+        Files.move(source, target, *options)
+    },
+    sleep: (Long) -> Unit = Thread::sleep
+) {
+    var attempt = 0
+    while (true) {
+        try {
+            try {
+                move(from, to, arrayOf(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING))
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Still a rename of the finished file; the destination is never truncated first.
+                move(from, to, arrayOf(StandardCopyOption.REPLACE_EXISTING))
+            }
+            return
+        } catch (error: FileSystemException) {
+            if (!isTransientReplaceFailure(error) || attempt >= REPLACE_RETRY_DELAYS_MILLIS.size) throw error
+            sleep(REPLACE_RETRY_DELAYS_MILLIS[attempt])
+            attempt += 1
+        }
+    }
+}
+
+/** Access denied / sharing violations can clear once the other process closes the file. */
+private fun isTransientReplaceFailure(error: FileSystemException): Boolean = when (error) {
+    is AccessDeniedException -> true
+    is NoSuchFileException, is DirectoryNotEmptyException, is FileAlreadyExistsException,
+    is NotDirectoryException, is AtomicMoveNotSupportedException -> false
+    else -> error.javaClass == FileSystemException::class.java
+}
+
+private val REPLACE_RETRY_DELAYS_MILLIS = longArrayOf(20L, 50L, 100L, 200L, 400L, 500L)
 
 actual fun createFileSystem(platformContext: Any?): FileSystem = JvmFileSystem(
     ((platformContext as? com.valoser.futacha.shared.desktop.DesktopEnvironment)

@@ -10,6 +10,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
@@ -156,7 +158,9 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
         finalizeDeleteBackup(
             backupPath = plan.backupIndexPath,
             backupIndexJson = plan.backupIndexJson,
-            keepBackup = keepBackup
+            keepBackup = keepBackup,
+            successfullyDeletedStorageIds = deletionResult?.successfullyDeletedStorageIds.orEmpty(),
+            cutoffSavedAtByStorageId = plan.cutoffSavedAtByStorageId
         )
     }
 
@@ -170,7 +174,9 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
 internal suspend fun SavedThreadRepository.finalizeDeleteBackup(
     backupPath: String,
     backupIndexJson: String,
-    keepBackup: Boolean
+    keepBackup: Boolean,
+    successfullyDeletedStorageIds: Set<String> = emptySet(),
+    cutoffSavedAtByStorageId: Map<String, Long> = emptyMap()
 ) {
     if (keepBackup) {
         Logger.w("SavedThreadRepository", "Keeping backup index for recovery: $backupPath")
@@ -181,12 +187,17 @@ internal suspend fun SavedThreadRepository.finalizeDeleteBackup(
             )
         }
         val canonicalBackupPath = "$indexRelativePath.backup"
-        writeStringAt(canonicalBackupPath, backupIndexJson).onFailure { copyError ->
+        withContext(NonCancellable) { withIndexLock {
+        val recoveryIndex = buildUpdatedIndexUnlocked { threads ->
+            filterThreadsAfterSavedThreadDeletion(threads, successfullyDeletedStorageIds, cutoffSavedAtByStorageId)
+        }
+        writeStringAt(canonicalBackupPath, json.encodeToString(SavedThreadIndex.serializer(), recoveryIndex)).onFailure { copyError ->
             Logger.w(
                 "SavedThreadRepository",
                 "Failed to promote delete backup to $canonicalBackupPath: ${copyError.message}"
             )
         }
+        } }
         return
     }
     cleanupStaleOperationBackups()

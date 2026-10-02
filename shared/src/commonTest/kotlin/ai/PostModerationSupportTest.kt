@@ -100,7 +100,7 @@ class PostModerationSupportTest {
     }
 
     @Test
-    fun parsePostModerationResponseKeepsOnlyHideRows() {
+    fun parsePostModerationResponseKeepsExplicitDecisions() {
         val parsed = parsePostModerationResponse(
             """
             123	HIDE	連投スパム
@@ -110,17 +110,18 @@ class PostModerationSupportTest {
             """.trimIndent()
         )
 
-        assertEquals(setOf("123", "125"), parsed.keys)
+        assertEquals(setOf("123", "124", "125"), parsed.keys)
+        assertFalse(parsed.getValue("124").shouldHide)
         assertTrue(parsed.getValue("123").shouldHide)
         assertEquals("連投スパム", parsed.getValue("123").reason)
         assertEquals("嫌がらせ", parsed.getValue("125").reason)
     }
 
     @Test
-    fun parsePostModerationResponseUsesFallbackReason() {
+    fun parsePostModerationResponseRejectsHideWithoutEvidence() {
         val parsed = parsePostModerationResponse("999\tHIDE")
 
-        assertEquals("端末AIが荒らしの可能性を検出しました。", parsed.getValue("999").reason)
+        assertTrue(parsed.isEmpty())
     }
 
     @Test
@@ -132,7 +133,7 @@ class PostModerationSupportTest {
             """.trimIndent()
         )
 
-        assertEquals(setOf("123"), parsed.keys)
+        assertEquals(setOf("123", "124"), parsed.keys)
         assertEquals("連投スパム", parsed.getValue("123").reason)
     }
 
@@ -144,6 +145,51 @@ class PostModerationSupportTest {
         assertEquals(80, reason.length)
         assertEquals('…', reason.last())
         assertFalse(reason.contains("  "))
+    }
+
+    @Test fun boundedBatchesRetainEveryTargetAndLongBodyTailWithContext() {
+        val posts = (1..25).map { post("$it", "先頭$it " + "長い本文".repeat(250) + " 末尾$it") }
+        val context = LocalModerationContext("修理相談", posts)
+        val batches = context.batches("thread", posts.drop(1))
+        assertEquals((2..25).map(Int::toString), batches.flatMap { it.posts.map(Post::id) })
+        assertTrue(batches.all { it.posts.size in 1..2 })
+        val sources = batches.flatMap { buildPostModerationSourceChunks(it) }
+        assertEquals(batches.size, sources.size)
+        assertTrue(sources.all { it.length <= 3_000 && "スレ題: 修理相談" in it && "参考 No.1:" in it })
+        assertTrue(sources.first().contains("末尾2"))
+        assertTrue(sources.first().contains("［中略］"))
+        val short = (1..25).map { post("$it", "短い正常な回答$it") }
+        assertEquals(listOf(8, 8, 8, 1), LocalModerationContext(null, short).batches("t", short).map { it.posts.size })
+    }
+
+    @Test fun quotesDeletedPostsAndContextCannotBecomeHideTargets() {
+        val quoted = post("10", "&#62;引用スパム<br>＞全角の引用<br>&gt;&gt;123")
+        val reply = post("11", "&gt;引用スパム<br>通常の返答")
+        val input = PostModerationInput("t", listOf(quoted, reply, post("12", "削除本文").copy(isDeleted = true)), "参考 No.1: 相談")
+        val source = buildPostModerationSourceChunks(input).single()
+        assertEquals(setOf("11"), postModerationTargetIds(source))
+        assertFalse(source.contains("引用スパム"))
+        assertTrue(source.contains("11\t通常の返答"))
+        val parsed = parsePostModerationBatchResponse("1 HIDE 文脈\n10 HIDE 引用\n11 KEEP\n12 HIDE 削除", source)
+        assertEquals(listOf(PostModerationResult("11", false)), parsed)
+    }
+
+    @Test fun uncertainMissingDuplicateAndInvalidDecisionsAreNotSafeCacheEntries() {
+        val parsed = parsePostModerationResponse("1 KEEP\n2 UNCERTAIN\n3 HIDE 根拠\n3 KEEP\n4 HIDE\n5 INVALID\n6 HIDE 明確な連投\n3 HIDE 後の矛盾")
+        assertEquals(setOf("1", "6"), parsed.keys)
+        assertFalse(parsed.getValue("1").shouldHide)
+        assertTrue(parsed.getValue("6").shouldHide)
+    }
+
+    @Test fun precedingContextSurvivesAppendButChangesWhenRelevantConversationChanges() {
+        val posts = (1..15).map { post("$it", "本文$it") }
+        val before = LocalModerationContext("相談", posts).forPosts(listOf(posts[9]))
+        assertEquals(before, LocalModerationContext("相談", posts + post("16", "追加")).forPosts(listOf(posts[9])))
+        val changed = posts.map { if (it.id == "8") it.copy(messageHtml = "相談の訂正") else it }
+        assertFalse(before == LocalModerationContext("相談", changed).forPosts(listOf(posts[9])))
+        assertFalse(before == LocalModerationContext("別の話題", posts).forPosts(listOf(posts[9])))
+        assertTrue(before.contains("参考 No.8:") && before.contains("参考 No.9:"))
+        assertFalse(before.contains("参考 No.10:"))
     }
 
     private fun post(id: String, messageHtml: String): Post {

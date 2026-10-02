@@ -303,6 +303,36 @@ class ImageZipSaveServiceTest {
         client.close()
     }
 
+    @Test
+    fun nextSaveRemovesStagingFilesLeftByAKilledSave() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        // A save killed before its `finally` ran (old unstamped and stamped names).
+        fileSystem.writeBytes("$ZIP_STAGING_DIRECTORY/1234-0.media", ByteArray(64)).getOrThrow()
+        fileSystem.writeBytes("$ZIP_STAGING_DIRECTORY/t1000-55-0.media", ByteArray(64)).getOrThrow()
+        val client = zipTestClient()
+
+        val saved = ImageZipSaveService(client, fileSystem).save(
+            mediaUrls = listOf("https://may.2chan.net/b/src/new.jpg"),
+            boardId = "b",
+            threadId = "7",
+            baseDirectory = "manual"
+        ).getOrThrow()
+
+        assertEquals(1, saved.savedItems)
+        assertEquals(emptyList(), fileSystem.listFiles(ZIP_STAGING_DIRECTORY))
+        client.close()
+    }
+
+    @Test
+    fun staleStagingCheckKeepsFilesOfLiveSavesInThisProcess() {
+        val start = 5_000L
+        assertTrue(isStaleZipStagingFile("t4999-1-0.media", start, emptySet()))
+        assertTrue(isStaleZipStagingFile("987654-2.media", start, emptySet()))
+        assertFalse(isStaleZipStagingFile("t5000-1-0.media", start, emptySet()))
+        assertFalse(isStaleZipStagingFile("t4999-1-0.media", start, setOf("t4999-1-0.media")))
+        assertFalse(isStaleZipStagingFile("", start, emptySet()))
+    }
+
     private fun zipTestClient(status: HttpStatusCode = HttpStatusCode.OK) = HttpClient(MockEngine) {
         engine {
             addHandler { request ->

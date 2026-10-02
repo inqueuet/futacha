@@ -1147,8 +1147,11 @@ private fun GlobalSettingsAppLockControls(
     onAppLockPasswordChanged: (String) -> Unit,
     onAppLockCleared: () -> Unit
 ) {
-    var password by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
-    var confirmation by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
+    // Not saveable: saved instance state is handed to the OS in plain text and
+    // can outlive the process, so a password being typed stays only in memory
+    // (like the API key editor).
+    var password by remember(isAppLockEnabled) { mutableStateOf("") }
+    var confirmation by remember(isAppLockEnabled) { mutableStateOf("") }
     var errorMessage by rememberSaveable(isAppLockEnabled) { mutableStateOf<String?>(null) }
     val passwordInputState = rememberStableTextInputState(
         text = password,

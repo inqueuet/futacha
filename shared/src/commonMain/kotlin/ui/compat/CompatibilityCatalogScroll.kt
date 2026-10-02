@@ -407,52 +407,67 @@ internal fun CompatBidirectionalPullRefresh(
             .nestedScroll(connection)
             .pointerInput(enabled, refreshing) {
                 awaitEachGesture {
-                    pointerGestureActive = true
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var lastY = down.position.y
-                    var fallbackRawDrag = 0f
-                    gestureDx = 0f
-                    gestureDy = 0f
-                    gestureAxis = CompatPullGestureAxis.UNDECIDED
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        recordGestureDelta(
-                            change.position.x - change.previousPosition.x,
-                            change.position.y - change.previousPosition.y
-                        )
-                        val delta = change.position.y - lastY
-                        lastY = change.position.y
-                        // LazyColumn normally exposes the overscroll through
-                        // NestedScrollConnection. Some Android/Compose versions
-                        // consume the final bottom delta before onPostScroll;
-                        // retain a small pointer-level fallback so an upward
-                        // pull at the last response still refreshes.
-                        if (
-                            latestEnabled && !latestRefreshing && !pullRefreshActive &&
-                            gestureAxis == CompatPullGestureAxis.VERTICAL &&
-                            totalRawDrag == 0f && fallbackRawDrag == 0f &&
-                            ((delta > 0f && !latestCanScrollBackward()) ||
-                                (delta < 0f && !latestCanScrollForward()))
-                        ) {
-                            fallbackRawDrag = delta
-                        } else if (fallbackRawDrag != 0f) {
-                            fallbackRawDrag = updateCompatPullDrag(
-                                totalDrag = fallbackRawDrag,
-                                dragAmount = delta,
-                                maxAbsDrag = maximumDisplayOffsetPx * COMPAT_PULL_FRICTION
-                            ).totalDrag
+                    var gestureFinished = false
+                    try {
+                        pointerGestureActive = true
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var lastY = down.position.y
+                        var fallbackRawDrag = 0f
+                        gestureDx = 0f
+                        gestureDy = 0f
+                        gestureAxis = CompatPullGestureAxis.UNDECIDED
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            recordGestureDelta(
+                                change.position.x - change.previousPosition.x,
+                                change.position.y - change.previousPosition.y
+                            )
+                            val delta = change.position.y - lastY
+                            lastY = change.position.y
+                            // LazyColumn normally exposes the overscroll through
+                            // NestedScrollConnection. Some Android/Compose versions
+                            // consume the final bottom delta before onPostScroll;
+                            // retain a small pointer-level fallback so an upward
+                            // pull at the last response still refreshes.
+                            if (
+                                latestEnabled && !latestRefreshing && !pullRefreshActive &&
+                                gestureAxis == CompatPullGestureAxis.VERTICAL &&
+                                totalRawDrag == 0f && fallbackRawDrag == 0f &&
+                                ((delta > 0f && !latestCanScrollBackward()) ||
+                                    (delta < 0f && !latestCanScrollForward()))
+                            ) {
+                                fallbackRawDrag = delta
+                            } else if (fallbackRawDrag != 0f) {
+                                fallbackRawDrag = updateCompatPullDrag(
+                                    totalDrag = fallbackRawDrag,
+                                    dragAmount = delta,
+                                    maxAbsDrag = maximumDisplayOffsetPx * COMPAT_PULL_FRICTION
+                                ).totalDrag
+                            }
+                            if (fallbackRawDrag != 0f && totalRawDrag == 0f) {
+                                displayOffset = fallbackRawDrag / COMPAT_PULL_FRICTION
+                            }
                         }
-                        if (fallbackRawDrag != 0f && totalRawDrag == 0f) {
-                            displayOffset = fallbackRawDrag / COMPAT_PULL_FRICTION
+                        if (totalRawDrag == 0f && fallbackRawDrag != 0f) {
+                            totalRawDrag = fallbackRawDrag
+                        }
+                        finishGesture()
+                        gestureFinished = true
+                    } finally {
+                        pointerGestureActive = false
+                        if (!gestureFinished) {
+                            totalRawDrag = 0f
+                            gestureDx = 0f
+                            gestureDy = 0f
+                            gestureAxis = CompatPullGestureAxis.UNDECIDED
+                            if (!pullRefreshActive) {
+                                settleJob?.cancel()
+                                displayOffset = 0f
+                            }
                         }
                     }
-                    if (totalRawDrag == 0f && fallbackRawDrag != 0f) {
-                        totalRawDrag = fallbackRawDrag
-                    }
-                    finishGesture()
-                    pointerGestureActive = false
                 }
             }
     ) {

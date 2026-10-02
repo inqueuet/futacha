@@ -200,7 +200,7 @@ private fun BoardManagementScreenContent(
     val lifecycleBindings = wiringBundle.lifecycleBindings
     val scaffoldBindings = wiringBundle.scaffoldBindings
     val overlayBindings = wiringBundle.overlayBindings
-    LaunchedEffect(args.aiCommand) {
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(args.aiCommand)) {
         val command = args.aiCommand ?: return@LaunchedEffect
         var didConsume = true
         when (command.action) {

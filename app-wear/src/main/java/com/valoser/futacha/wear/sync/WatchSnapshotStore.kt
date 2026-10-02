@@ -14,7 +14,6 @@ import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
 import com.valoser.futacha.shared.watch.hasValidTransportShape
 import com.valoser.futacha.shared.watch.shouldAcceptWatchSnapshot
-import com.valoser.futacha.shared.watch.withReadAloudStatusUpdate
 import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
 import com.valoser.futacha.wear.tile.FutachaTileService
 import androidx.wear.tiles.TileService
@@ -45,6 +44,7 @@ object WatchSnapshotStore {
     private val json = Json { ignoreUnknownKeys = true }
     private val snapshotState = MutableStateFlow<WatchSnapshot?>(null)
     private val saveMutex = Mutex()
+    private val readAloudUpdateOrdering = ReadAloudStatusUpdateOrdering()
     private val lastTileUpdateRequestElapsedMillis = AtomicLong(0L)
     private val trailingTileUpdateScheduled = AtomicBoolean(false)
 
@@ -111,50 +111,57 @@ object WatchSnapshotStore {
         }
     }
 
-    suspend fun save(context: Context, snapshot: WatchSnapshot): Boolean {
-        saveMutex.withLock {
-            val currentSnapshot = snapshotState.value
-            if (!shouldAcceptWatchSnapshot(
-                    currentGeneratedAtMillis = currentSnapshot?.generatedAtMillis,
-                    incomingGeneratedAtMillis = snapshot.generatedAtMillis,
-                    nowMillis = System.currentTimeMillis()
-                )
-            ) {
-                return false
-            }
-            if (snapshot == currentSnapshot) {
-                return false
-            }
-            val encoded = withContext(Dispatchers.Default) {
-                json.encodeToString(WatchSnapshot.serializer(), snapshot)
-            }
-            val committed = withContext(Dispatchers.IO) {
-                context.applicationContext
-                    .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(SNAPSHOT_JSON_KEY, encoded)
-                    .commit()
-            }
-            if (!committed) {
-                return false
-            }
-            snapshotState.value = snapshot
-            ReadAloudLiveUpdateNotifier.update(context.applicationContext, snapshot)
-            requestTileUpdateIfAllowed(context.applicationContext)
-            return true
+    suspend fun save(context: Context, snapshot: WatchSnapshot): Boolean =
+        saveMutex.withLock { saveLocked(context, snapshot) }
+
+    private suspend fun saveLocked(context: Context, snapshot: WatchSnapshot): Boolean {
+        val currentSnapshot = snapshotState.value
+        if (!shouldAcceptWatchSnapshot(
+                currentGeneratedAtMillis = currentSnapshot?.generatedAtMillis,
+                incomingGeneratedAtMillis = snapshot.generatedAtMillis,
+                nowMillis = System.currentTimeMillis()
+            )
+        ) {
+            return false
         }
+        if (snapshot == currentSnapshot) {
+            return false
+        }
+        val encoded = withContext(Dispatchers.Default) {
+            json.encodeToString(WatchSnapshot.serializer(), snapshot)
+        }
+        val committed = withContext(Dispatchers.IO) {
+            context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(SNAPSHOT_JSON_KEY, encoded)
+                .commit()
+        }
+        if (!committed) {
+            return false
+        }
+        snapshotState.value = snapshot
+        ReadAloudLiveUpdateNotifier.update(context.applicationContext, snapshot)
+        requestTileUpdateIfAllowed(context.applicationContext)
+        return true
     }
 
     suspend fun applyReadAloudStatusUpdate(
         context: Context,
         update: WatchReadAloudStatusUpdate
     ): Boolean {
-        val baseSnapshot = snapshotState.value ?: load(context) ?: return false
-        val updatedSnapshot = baseSnapshot.withReadAloudStatusUpdate(
-            update = update,
-            nowMillis = System.currentTimeMillis()
-        )
-        return save(context, updatedSnapshot)
+        val persisted = if (snapshotState.value == null) load(context) else null
+        // Read the base and write the result under one lock: two quick updates
+        // must not both start from the same base and let the older one win.
+        return saveMutex.withLock {
+            val baseSnapshot = snapshotState.value ?: persisted ?: return@withLock false
+            val updatedSnapshot = readAloudUpdateOrdering.apply(
+                base = baseSnapshot,
+                update = update,
+                nowMillis = System.currentTimeMillis()
+            ) ?: return@withLock false
+            saveLocked(context, updatedSnapshot)
+        }
     }
 
     suspend fun decodeSnapshot(encoded: String): WatchSnapshot? {

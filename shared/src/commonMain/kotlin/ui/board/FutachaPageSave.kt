@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.service.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -25,8 +26,8 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
     val client = features.httpClient
     val fs = features.fileSystem
     if (client == null || fs == null) {
-        AlertDialog(onDismissRequest = onDismiss, text = { Text("保存機能を利用できません") },
-            confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
+        FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, text = { Text("保存機能を利用できません") },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
         return
     }
     val saver = remember(client, fs) { ThreadSaveService(client, fs) }
@@ -37,7 +38,7 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
     val destination = rememberCompatManualSaveDestinationLauncher(features.store, features.preferences) {
         message = it.message ?: "保存先を記録できませんでした"
     }
-    if (job == null && message == null) AlertDialog(onDismissRequest = onDismiss, title = { Text("保存形式") }, text = {
+    if (job == null && message == null) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("保存形式") }, text = {
         Column { FutachaPageSaveMode.entries.forEach { mode -> TextButton(onClick = {
             destination { location -> job = scope.launch {
                 try {
@@ -56,8 +57,10 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                 finally { job = null }
             } }
         }) { Text(mode.label) } } }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
-    if (job != null) SaveProgressDialog(progress, onDismissRequest = {}, onCancelRequest = { job?.cancel() })
-    message?.let { text -> AlertDialog(onDismissRequest = onDismiss, text = { Text(text) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
+    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
+    if (job != null) FutachaAppLockAwareWindow {
+        SaveProgressDialog(progress, onDismissRequest = {}, onCancelRequest = { job?.cancel() })
+    }
+    message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, text = { Text(text) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) } }
 }

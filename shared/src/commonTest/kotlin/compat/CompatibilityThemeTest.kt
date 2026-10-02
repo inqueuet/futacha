@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.ui.compat.compatibilityLoadingUsesIcon
 import com.valoser.futacha.shared.ui.compat.compatibilityPopupContent
 import com.valoser.futacha.shared.ui.compat.compatibilityPopupSurface
 import com.valoser.futacha.shared.ui.compat.compatibilitySaidaneColor
+import com.valoser.futacha.shared.ui.compat.compatibilitySearchBarColors
 import com.valoser.futacha.shared.ui.compat.compatibilitySettingsCategoryColor
 import com.valoser.futacha.shared.ui.compat.compatibilityUsesDarkStatusBarIcons
 import com.valoser.futacha.shared.ui.compat.statusBarColor
@@ -32,6 +33,22 @@ class CompatibilityThemeTest {
                             (minOf(text.luminance(), background.luminance()) + 0.05f)
                         assertTrue(contrast >= 4.5f, "$theme / $preference UI text contrast: $contrast")
                     }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun searchBarQueryAndHintRemainOpaqueAndReadableInEveryTheme() {
+        listOf(null, "モノクロ", "ふたば", "ブルー", "ピンク", "ブラック").forEach { theme ->
+            listOf(null, "白", "薄い灰", "濃い灰", "黒").forEach { preference ->
+                val colors = compatibilitySearchBarColors(compatibilityPaletteFor(theme, preference))
+                assertEquals(1f, colors.container.alpha)
+                listOf(colors.content, colors.hint).forEach { text ->
+                    assertEquals(1f, text.alpha)
+                    val contrast = (maxOf(text.luminance(), colors.container.luminance()) + 0.05f) /
+                        (minOf(text.luminance(), colors.container.luminance()) + 0.05f)
+                    assertTrue(contrast >= 4.5f, "$theme / $preference search bar text contrast: $contrast")
                 }
             }
         }

@@ -7,6 +7,45 @@
   <key>NSPrivacyCollectedDataTypes</key>
   <array/>
   <key>NSPrivacyAccessedAPITypes</key>
-  <array/>
+  <array>
+    <!-- App settings/state in NSUserDefaults.standardUserDefaults (AppStateStore.ios.kt, MainViewController.kt, iOSApp bridges). -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>CA92.1</string>
+      </array>
+    </dict>
+    <!-- NSProcessInfo.systemUptime and Kotlin/Native TimeSource.Monotonic measure elapsed time inside the app. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>35F9.1</string>
+      </array>
+    </dict>
+    <!-- attributesOfItemAtPath / NSFileModificationDate for files in the app container and in save folders or files the user picked. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>C617.1</string>
+        <string>3B52.1</string>
+      </array>
+    </dict>
+    <!-- Free space is shown in the cache-location setting and used to detect low storage before writing caches. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>85F4.1</string>
+        <string>E174.1</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

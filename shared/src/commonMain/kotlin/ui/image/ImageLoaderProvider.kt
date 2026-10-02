@@ -22,7 +22,8 @@ import coil3.request.ErrorResult
 import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
-import coil3.network.ktor3.KtorNetworkFetcherFactory
+import coil3.network.NetworkFetcher
+import coil3.network.ktor3.asNetworkClient
 import coil3.network.DeDupeConcurrentRequestStrategy
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
@@ -501,9 +502,11 @@ internal fun buildFutachaImageLoader(
 ): ImageLoader = ImageLoader.Builder(platformContext)
     .components {
         add(refreshInterceptor)
-        add(ImageMemoryPressureInterceptor(pressureGate))
         add(FutabaExtensionFallbackInterceptor())
         add(ArchiveImageFallbackInterceptor())
+        // After the fallback chains: each attempt takes its own permit, so a
+        // slot walking extensions or mirrors never holds one for its whole chain.
+        add(ImageMemoryPressureInterceptor(pressureGate))
         add(VisibleImageRequestInterceptor())
         originalMediaStore?.let { addOriginalMediaSupport(it) }
         // Fetchers are tried in registration order and the Ktor factory accepts
@@ -516,10 +519,18 @@ internal fun buildFutachaImageLoader(
         // response cleanup to image requests cancelled by Compose.
         imageHttpClient?.let {
             add(
-                KtorNetworkFetcherFactory(
-                    httpClient = { it },
+                NetworkFetcher.Factory(
+                    // Cache-only requests must not reach the HTTP engine: see
+                    // CacheOnlyAwareNetworkClient (Darwin ignores only-if-cached).
+                    networkClient = { CacheOnlyAwareNetworkClient(it.asNetworkClient()) },
+                    // Android's connectivity snapshot can lag a Wi-Fi/mobile
+                    // handover. Let permitted requests reach the retrying
+                    // transport; only explicit cache policy may disable it.
+                    connectivityChecker = { coil3.network.ConnectivityChecker.ONLINE },
                     cacheStrategy = { ImageCacheStrategy },
-                    concurrentRequestStrategy = { createFutachaConcurrentRequestStrategy() }
+                    // Offline or under memory pressure, uncached images fail fast instead of
+                    // holding the pressure gate through retries (B-3).
+                    concurrentRequestStrategy = { createConnectivityAwareImageRequestStrategy(platformContext, pressureGate) }
                 )
             )
         }

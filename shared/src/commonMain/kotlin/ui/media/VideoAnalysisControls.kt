@@ -45,7 +45,10 @@ internal fun VideoReviewControls(document: MosaicDocument, info: VideoEditInfo, 
     val review = document.review ?: return
     var filter by remember { mutableStateOf(MosaicReviewFilter.DETECTED) }
     var issueFilter by remember { mutableStateOf(MosaicIssueFilter.ATTENTION) }
-    val index = remember(document, filter, selectedId, info) { MosaicReviewIndex.create(document, filter, selectedId, info.frames) }
+    // Intervals depend only on each region's span and label. Keying on the whole document
+    // rebuilt the index (copying every frame timestamp) on each drag of a box or contour.
+    val spans = document.regions.map { MosaicReviewSpanKey(it.id, it.label, it.startUs, it.endUs) }
+    val index = remember(spans, filter, selectedId, info) { MosaicReviewIndex.create(document, filter, selectedId, info.frames) }
     val groups = remember(review.issues) { MosaicIssueGroup.from(review.issues) }
     val visible = groups.filter { when (issueFilter) {
         MosaicIssueFilter.ATTENTION -> !it.noCandidate
@@ -105,3 +108,5 @@ internal fun VideoContourControls(region: MosaicRegion, time: Long, enabled: Boo
             modifier = Modifier.testTag("video-contour-margin"))
     }
 }
+
+private data class MosaicReviewSpanKey(val id: String, val label: String?, val startUs: Long, val endUs: Long)

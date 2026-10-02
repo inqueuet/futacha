@@ -132,20 +132,40 @@ internal fun applyHistoryViewSettings(
 ): List<ThreadHistoryEntry> {
     val matches = historyViewSettingsMatcher(settings)
     val filtered = history.filter(matches)
-    return filtered.sortedWith { first, second ->
-        val firstMissing = isHistorySortValueMissing(first, settings.sortOption)
-        val secondMissing = isHistorySortValueMissing(second, settings.sortOption)
-        if (firstMissing != secondMissing) {
-            return@sortedWith if (firstMissing) 1 else -1
-        }
-        val primary = compareHistoryEntries(first, second, settings.sortOption)
-        val directed = if (settings.sortDirection == HistorySortDirection.Descending) {
-            -primary
-        } else {
-            primary
-        }
-        if (directed != 0) directed else second.lastVisitedEpochMillis.compareTo(first.lastVisitedEpochMillis)
+    if (settings.sortOption == HistorySortOption.Title) {
+        // Lowercase each title once instead of twice per comparison: with
+        // 20k entries the comparisons dominated the sort.
+        return filtered
+            .map { entry -> HistoryTitleSortRow(entry, entry.title.lowercase()) }
+            .sortedWith { first, second ->
+                directedHistoryOrder(first.entry, second.entry, settings, first.titleKey.compareTo(second.titleKey))
+            }
+            .map(HistoryTitleSortRow::entry)
     }
+    return filtered.sortedWith { first, second ->
+        directedHistoryOrder(first, second, settings, compareHistoryEntries(first, second, settings.sortOption))
+    }
+}
+
+private class HistoryTitleSortRow(val entry: ThreadHistoryEntry, val titleKey: String)
+
+private fun directedHistoryOrder(
+    first: ThreadHistoryEntry,
+    second: ThreadHistoryEntry,
+    settings: HistoryViewSettings,
+    primary: Int
+): Int {
+    val firstMissing = isHistorySortValueMissing(first, settings.sortOption)
+    val secondMissing = isHistorySortValueMissing(second, settings.sortOption)
+    if (firstMissing != secondMissing) {
+        return if (firstMissing) 1 else -1
+    }
+    val directed = if (settings.sortDirection == HistorySortDirection.Descending) {
+        -primary
+    } else {
+        primary
+    }
+    return if (directed != 0) directed else second.lastVisitedEpochMillis.compareTo(first.lastVisitedEpochMillis)
 }
 
 /** How many entries [applyHistoryViewSettings] keeps, without sorting them. */

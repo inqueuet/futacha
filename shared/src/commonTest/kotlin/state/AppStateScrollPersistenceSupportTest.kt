@@ -38,6 +38,18 @@ class AppStateScrollPersistenceSupportTest {
     }
 
     @Test
+    fun finalScrollWriteRunsEvenWhenUiScopeIsAlreadyCancelled() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        scope.coroutineContext[Job]?.cancel()
+        var saved = false
+        scope.launchFinalHistoryScrollPersistence {
+            yield()
+            saved = true
+        }.join()
+        assertTrue(saved)
+    }
+
+    @Test
     fun scrollWriteCancellationRemainsCancellation() = runBlocking {
         val scope = CoroutineScope(coroutineContext + SupervisorJob())
         try {

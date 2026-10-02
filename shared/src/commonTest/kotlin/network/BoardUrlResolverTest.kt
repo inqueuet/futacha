@@ -75,6 +75,39 @@ class BoardUrlResolverTest {
     }
 
     @Test
+    fun resolveSiteRoot_addsHttpsToSchemelessBoardUrlLikeTheBaseUrl() {
+        // Previously parsed as a relative URL and resolved to localhost.
+        assertEquals("https://may.2chan.net", BoardUrlResolver.resolveSiteRoot("may.2chan.net/b/"))
+        assertEquals("https://may.2chan.net/b", BoardUrlResolver.resolveBoardBaseUrl("may.2chan.net/b/"))
+    }
+
+    // S4-1: Ktor would send these to evil.com (or hide the host behind userinfo).
+    @Test
+    fun ambiguousAuthoritiesAreRejectedBeforeAnyRequestUrlIsBuilt() {
+        listOf(
+            "https://evil.com\\@may.2chan.net/b/",
+            "https://evil.com\\may.2chan.net/b/futaba.php",
+            "evil.com\\@may.2chan.net/b/",
+            "https://evil.com@may.2chan.net/b/",
+            "https://may.2chan.net@evil.com/b/",
+            "https://user:pass@may.2chan.net/b/",
+            "https://evil.com%5C%40may.2chan.net/b/",
+            "https://may.2chan.net/\\evil.com/b/"
+        ).forEach { board ->
+            assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveBoardBaseUrl(board) }
+            assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveThreadUrl(board, "1") }
+            assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveCatalogUrl(board, CatalogMode.Catalog) }
+            assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveSiteRoot(board) }
+            assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveBoardSlug(board) }
+        }
+        // Queries may still carry these characters.
+        assertEquals(
+            "https://may.2chan.net/b",
+            BoardUrlResolver.resolveBoardBaseUrl("https://may.2chan.net/b/futaba.php?x=a@b%5C")
+        )
+    }
+
+    @Test
     fun sanitizePostId_allowsDigitsOnly() {
         assertEquals("123", BoardUrlResolver.sanitizePostId(" 123 "))
         assertEquals("", BoardUrlResolver.sanitizePostId("12a3"))

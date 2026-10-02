@@ -14,14 +14,18 @@ import java.io.File
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 private const val MAX_DATASTORE_READ_RETRIES = 5L
@@ -30,10 +34,14 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
     val environment = platformContext as? DesktopEnvironment ?: DesktopEnvironment.current
     // Tests keep their historical isolated in-memory storage unless explicitly given a directory.
     return if (environment == null) object : BaseInMemoryPlatformStateStorage() {}
-    else DesktopPlatformStateStorage(environment.preferences)
+    else DesktopPlatformStateStorage(environment.preferences, environment.preferencesFile)
 }
 
-private class DesktopPlatformStateStorage(private val dataStore: DataStore<Preferences>) : PlatformStateStorage {
+private class DesktopPlatformStateStorage(
+    private val dataStore: DataStore<Preferences>,
+    private val preferencesFile: File? = null
+) : PlatformStateStorage {
+    private val pendingRecoveryNoticeChecked = AtomicBoolean(false)
     private val mediaFeatureSettingsKey = stringPreferencesKey(com.valoser.futacha.shared.media.MEDIA_FEATURE_SETTINGS_KEY)
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
@@ -81,6 +89,12 @@ private class DesktopPlatformStateStorage(private val dataStore: DataStore<Prefe
     private val lastReadablePreferences = AtomicReference<Preferences?>(null)
     private val safeData: Flow<Preferences> =
         dataStore.data
+            .onStart {
+                val file = preferencesFile
+                if (file != null && pendingRecoveryNoticeChecked.compareAndSet(false, true)) {
+                    withContext(Dispatchers.IO) { restorePendingSettingsRecoveryNotice(file) }
+                }
+            }
             .onEach { prefs ->
                 lastReadablePreferences.set(prefs)
             }

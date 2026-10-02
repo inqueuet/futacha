@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.*
 import com.valoser.futacha.shared.util.ImageData
 import kotlinx.coroutines.CancellationException
@@ -32,6 +33,8 @@ internal fun FutachaPostToolbar(
     onClear: () -> Unit,
     onDismiss: () -> Unit,
     enabled: Boolean,
+    // False while the form is still stripping/compressing the previous attachment (U-4).
+    attachmentEnabled: Boolean = true,
     attachmentPickerPreference: com.valoser.futacha.shared.util.AttachmentPickerPreference,
     preferredFileManagerPackage: String?
 ) {
@@ -83,6 +86,11 @@ internal fun FutachaPostToolbar(
             }
         }
     )
+    fun commandEnabled(key: String): Boolean = when (key) {
+        "send" -> enabled
+        "attach", "pallete" -> attachmentEnabled
+        else -> true
+    }
     fun runCommand(key: String) {
         overflow = false
         when (key) {
@@ -94,8 +102,8 @@ internal fun FutachaPostToolbar(
                     sendConfirmation = warning ?: "この内容を送信しますか？"
                 } else onSubmit()
             }
-            "attach" -> attachmentMenu = true
-            "pallete" -> drawing = true
+            "attach" -> if (attachmentEnabled) attachmentMenu = true
+            "pallete" -> if (attachmentEnabled) drawing = true
             "sio" -> pickUps()
             "voice_input" -> speech()
             "network_info" -> perform {
@@ -111,7 +119,7 @@ internal fun FutachaPostToolbar(
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).navigationBarsPadding(),
         horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         remember(toolbar) { toolbar.filter { it.active }.sortedBy { it.position } }.forEach { item ->
-            IconButton(enabled = !busy && (item.key != "send" || enabled), onClick = { runCommand(item.key) }) {
+            IconButton(enabled = !busy && commandEnabled(item.key), onClick = { runCommand(item.key) }) {
                 Icon(compatToolbarIcon(item.key), master.firstOrNull { it.key == item.key }?.label ?: item.key)
             }
         }
@@ -120,7 +128,7 @@ internal fun FutachaPostToolbar(
             DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
                 remember(toolbar) { toolbar.filterNot { it.active }.sortedBy { it.position } }.forEach { item ->
                     DropdownMenuItem(text = { Text(master.firstOrNull { it.key == item.key }?.label ?: item.key) },
-                        enabled = item.key != "send" || enabled, onClick = { runCommand(item.key) })
+                        enabled = commandEnabled(item.key), onClick = { runCommand(item.key) })
                 }
                 DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { overflow = false; editing = true })
                 DropdownMenuItem(text = { Text("送信・操作の設定") }, onClick = { overflow = false; features.openSettings("control") })
@@ -131,7 +139,7 @@ internal fun FutachaPostToolbar(
             }
         }
     }
-    if (editing || drawing) {
+    if (editing || drawing) FutachaAppLockAwareWindow {
         Dialog(onDismissRequest = { if (!drawing) editing = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize()) {
                 if (editing) CompatToolbarEditorScreen(CompatToolbarSurface.POST, features.store, onBack = { editing = false })
@@ -149,7 +157,7 @@ internal fun FutachaPostToolbar(
             }
         }
     }
-    upsAttachment?.let { image ->
+    upsAttachment?.let { image -> FutachaAppLockAwareWindow {
         CompatUpsUploadDialog(image.fileName, upsComment, upsDeleteKey,
             onCommentChange = { upsComment = it }, onDeleteKeyChange = { upsDeleteKey = it },
             onCancel = { upsAttachment = null }, onSubmit = {
@@ -164,16 +172,18 @@ internal fun FutachaPostToolbar(
                     message = "$fileName をアップロードしました"
                 }
             })
-    }
-    sendConfirmation?.let { confirmation ->
+    } }
+    sendConfirmation?.let { confirmation -> FutachaAppLockAwareWindow {
         AlertDialog(onDismissRequest = { sendConfirmation = null }, title = { Text("投稿の確認") },
             text = { Text(confirmation) }, confirmButton = {
                 TextButton(enabled = enabled, onClick = { sendConfirmation = null; onSubmit() }) { Text("送信する") }
             }, dismissButton = { TextButton(onClick = { sendConfirmation = null }) { Text("キャンセル") } })
+    } }
+    if (busy) FutachaAppLockAwareWindow {
+        AlertDialog(onDismissRequest = {}, text = { LinearProgressIndicator(Modifier.fillMaxWidth()) }, confirmButton = {})
     }
-    if (busy) AlertDialog(onDismissRequest = {}, text = { LinearProgressIndicator(Modifier.fillMaxWidth()) }, confirmButton = {})
-    message?.let { text ->
+    message?.let { text -> FutachaAppLockAwareWindow {
         AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
             confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } })
-    }
+    } }
 }

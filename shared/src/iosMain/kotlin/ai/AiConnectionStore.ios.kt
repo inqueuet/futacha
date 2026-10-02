@@ -33,7 +33,7 @@ internal class IosAiConnectionStorage(private val serviceName: String = "com.val
         val data: CFDataRef = checkNotNull(result.value).reinterpret()
         try {
             val length = CFDataGetLength(data).toInt()
-            check(length in 1..8192)
+            check(length in 1..MAX_AI_CREDENTIAL_BYTES)
             checkNotNull(CFDataGetBytePtr(data)).readBytes(length).decodeToString()
         } finally { CFRelease(data) }
     } }
@@ -53,6 +53,8 @@ internal class IosAiConnectionStorage(private val serviceName: String = "com.val
             } else check(status == errSecSuccess) { "Keychain update status: $status" }
         } finally { CFRelease(update); CFRelease(data) }
     }
+    override fun readUsage(): String? = NSUserDefaults.standardUserDefaults.stringForKey("$serviceName.usage.v1")
+    override fun writeUsage(value: String) { NSUserDefaults.standardUserDefaults.setObject(value, forKey = "$serviceName.usage.v1") }
     private val cachePath: String get() = (NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, true).first() as String) + "/openai-analysis-v1.json"
     override fun readCache(): String? = NSString.stringWithContentsOfFile(cachePath, NSUTF8StringEncoding, null)
     override fun writeCache(value: String) {

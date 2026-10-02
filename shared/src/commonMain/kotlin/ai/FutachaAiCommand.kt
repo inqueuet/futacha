@@ -142,6 +142,68 @@ data class FutachaAiCommand(
     }
 }
 
+/**
+ * Sources whose command text comes from a URL (`futacha://ai?...`). Any web
+ * page can open such a link, so these are not the user's own request.
+ */
+private val FUTACHA_AI_LINK_COMMAND_SOURCES = setOf(
+    "platform",
+    "deep-link",
+    "bridge",
+    "ios",
+    "ios-retry",
+    "ios-thread-deep-link"
+)
+
+fun FutachaAiCommand.isFromExternalLink(): Boolean {
+    return FUTACHA_AI_LINK_COMMAND_SOURCES.any { it.equals(source.trim(), ignoreCase = true) }
+}
+
+/**
+ * C4-3: a Wear OS "open on phone" link carries `relay=wear-os`. The link only
+ * brings the phone app to the front; the same command (same commandId) also
+ * arrives over the Data Layer, which only the paired watch app can send. Any
+ * web page can add the marker, so it never grants anything: when the link
+ * itself is not allowed, the app just leaves the work to the Data Layer copy.
+ */
+const val FUTACHA_AI_WATCH_RELAY_PARAMETER = "relay"
+const val FUTACHA_AI_WATCH_RELAY_WEAR_OS = "wear-os"
+
+fun FutachaAiCommand.isWatchRelayLink(): Boolean {
+    return isFromExternalLink() &&
+        (action == FutachaAiAction.OpenBoard || action == FutachaAiAction.OpenThread) &&
+        parameter(FUTACHA_AI_WATCH_RELAY_PARAMETER).equals(FUTACHA_AI_WATCH_RELAY_WEAR_OS, ignoreCase = true)
+}
+
+/** Actions that change a saved setting or list (privacy, NG, watch words, ...). */
+fun FutachaAiAction.changesPersistentSettings(): Boolean {
+    return when (this) {
+        FutachaAiAction.EnablePrivacyFilter,
+        FutachaAiAction.DisablePrivacyFilter,
+        FutachaAiAction.EnableBackgroundRefresh,
+        FutachaAiAction.DisableBackgroundRefresh,
+        FutachaAiAction.EnableThreadSummaryMode,
+        FutachaAiAction.DisableThreadSummaryMode,
+        FutachaAiAction.EnableAiPostFilter,
+        FutachaAiAction.DisableAiPostFilter,
+        FutachaAiAction.SetCatalogMode,
+        FutachaAiAction.AddWatchWord,
+        FutachaAiAction.AddNgWord,
+        FutachaAiAction.AddNgHeader -> true
+        else -> false
+    }
+}
+
+/**
+ * Whether the user must confirm before the command runs. A link may not
+ * change settings silently (S-2); assistant and watch commands keep the
+ * action's own risk.
+ */
+fun FutachaAiCommand.requiresConfirmation(): Boolean {
+    return action.risk == FutachaAiCommandRisk.Confirm ||
+        (isFromExternalLink() && action.changesPersistentSettings())
+}
+
 private const val FUTACHA_AI_COMMAND_MAX_PARAMETER_COUNT = 32
 private const val FUTACHA_AI_COMMAND_MAX_PARAMETER_KEY_CHARS = 64
 private const val FUTACHA_AI_COMMAND_MAX_PARAMETER_VALUE_CHARS = 12_000

@@ -70,6 +70,26 @@ class CompatArchiveResponseTest {
         finally { client.close() }
     }
 
+    @Test fun selfRefreshThroughARelativePathAndLongDelayReloadsAreContent() = runBlocking {
+        // Both used to be followed as redirects (the self-refresh up to the loop limit).
+        for (refresh in listOf(
+            """<meta http-equiv="refresh" content="0;URL=./123.htm">""",
+            """<meta http-equiv="refresh" content="300;URL=other.htm">"""
+        )) {
+            var requests = 0
+            val client = HttpClient(MockEngine { request ->
+                requests++
+                assertEquals("/b/res/123.htm", request.url.encodedPath)
+                respond("$refresh<div class=\"thre\">$op</div>", headers = headersOf("Content-Type", "text/html; charset=UTF-8"))
+            })
+            try {
+                val page = fetchCompatArchiveThreadPage(client, "https://archive.example/b/res/123.htm")
+                assertEquals("123", page.posts.first().id)
+                assertEquals(1, requests)
+            } finally { client.close() }
+        }
+    }
+
     @Test fun futapoMissingThumbnailUsesNamedAttachmentForMirrorRecovery() = runBlocking {
         val source = "https://kako.futakuro.com/futa/may_b/123/"
         val html = """<link rel="canonical" href="https://may.2chan.net/b/res/123.htm">
@@ -100,6 +120,12 @@ class CompatArchiveResponseTest {
         val html = """<script>${'$'}data = `<blockquote>\`quoted\` \\ \n \u65e5 \x41 \${'$'}{literal}</blockquote>`;</script>"""
         assertEquals("<div class=\"thre\"><blockquote>`quoted` \\ \n 日 A ${'$'}{literal}</blockquote></div>", normalizeForestThreadHtml(html))
         assertFailsWith<IllegalStateException> { normalizeForestThreadHtml("""${'$'}data = `unterminated""") }
+    }
+    @Test fun forestTemplateDecodesCodePointEscapes() {
+        val html = """<script>${'$'}data = `<blockquote>\u{65e5}\u{1F600}\u{41} ok</blockquote>`;</script>"""
+        assertEquals("<div class=\"thre\"><blockquote>日\uD83D\uDE00A ok</blockquote></div>", normalizeForestThreadHtml(html))
+        assertFailsWith<IllegalArgumentException> { normalizeForestThreadHtml("""${'$'}data = `\u{110000}`""") }
+        assertFailsWith<IllegalArgumentException> { normalizeForestThreadHtml("""${'$'}data = `\u{}`""") }
     }
 
 }

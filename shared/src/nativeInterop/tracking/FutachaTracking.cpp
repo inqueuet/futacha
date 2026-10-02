@@ -10,6 +10,10 @@
 #include <mutex>
 #include <vector>
 
+// Corners further than this many frame sizes outside the image no longer change the mask, yet a
+// long zoom-in grows them by up to 1.25x per frame until they overflow int (undefined behaviour).
+static constexpr float kCornerLimitFrames = 64.f;
+
 // Same thresholds and cumulative polygon as toshikari's OpticalFlowTracker.kt.
 struct FutachaTracker {
     cv::Mat before;
@@ -22,11 +26,17 @@ struct FutachaTracker {
     void refill() {
         cv::Mat mask = cv::Mat::zeros(height, width, CV_8UC1);
         std::vector<cv::Point> polygon;
-        // Java's MatOfPoint conversion truncates floating coordinates.
+        // Java's MatOfPoint conversion truncates floating coordinates. Corners are bounded
+        // (see clamp_corner), so the conversion is always within int range.
         for (auto p : corners) polygon.emplace_back(static_cast<int>(p.x), static_cast<int>(p.y));
         cv::fillConvexPoly(mask, polygon, cv::Scalar(255));
         cv::goodFeaturesToTrack(before, points, 96, .01, 4., mask);
         valid = points.size() >= 8;
+    }
+
+    cv::Point2f clamp_corner(cv::Point2f p) const {
+        const float limit = kCornerLimitFrames * static_cast<float>(std::max(width, height));
+        return {std::clamp(p.x, -limit, limit), std::clamp(p.y, -limit, limit)};
     }
 
     bool advance(const cv::Mat &after) {
@@ -54,7 +64,7 @@ struct FutachaTracker {
         auto transformed = corners;
         float left = INFINITY, top = INFINITY, right = -INFINITY, bottom = -INFINITY;
         for (auto &p : transformed) {
-            p = cv::Point2f(m[0] * p.x + m[1] * p.y + m[2], m[3] * p.x + m[4] * p.y + m[5]);
+            p = clamp_corner(cv::Point2f(m[0] * p.x + m[1] * p.y + m[2], m[3] * p.x + m[4] * p.y + m[5]));
             left = std::min(left, p.x); right = std::max(right, p.x);
             top = std::min(top, p.y); bottom = std::max(bottom, p.y);
         }
@@ -94,6 +104,7 @@ int futacha_tracker_seed(FutachaTracker *t, const int8_t *gray, int w, int h,
         cv::Mat(h, w, CV_8UC1, const_cast<int8_t *>(gray)).copyTo(t->before);
         t->corners = {{(x-rw/2)*w, (y-rh/2)*h}, {(x+rw/2)*w, (y-rh/2)*h},
                       {(x+rw/2)*w, (y+rh/2)*h}, {(x-rw/2)*w, (y+rh/2)*h}};
+        for (auto &p : t->corners) p = t->clamp_corner(p);
         t->refill();
         return 0;
     } catch (...) { return -1; }

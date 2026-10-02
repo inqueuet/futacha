@@ -507,7 +507,8 @@ class ThreadScreenBindingsLogicTest {
         )
 
         assertTrue(bundle.activeRepository is FakeBoardRepository)
-        assertEquals("https://may.2chan.net/b", bundle.effectiveBoardUrl)
+        // An override on the selected board keeps the board URL (C6).
+        assertEquals("https://may.2chan.net/b/", bundle.effectiveBoardUrl)
         assertEquals(historyEntry, bundle.initialHistoryEntry)
         assertSame(autoSaveRepository, bundle.autoSaveRepository)
         assertNotNull(bundle.importedHistoryRepository)
@@ -1222,6 +1223,10 @@ class ThreadScreenBindingsLogicTest {
         assertEquals(ReadAloudStatus.Idle, state.status)
         assertEquals(0, state.currentIndex)
         assertEquals(listOf(buildReadAloudCompletedMessage()), messages)
+        // N4-4: finishing on its own stops playback (releasing the audio session) once.
+        assertEquals(1, cancelCalls)
+        assertFalse(state.cancelRequestedByUser)
+        assertNull(state.job)
 
         state = state.copy(
             status = ReadAloudStatus.Paused(segments.first()),
@@ -1230,7 +1235,9 @@ class ThreadScreenBindingsLogicTest {
         bindings.seekReadAloudToIndex(1, true)
         state.job?.join()
 
-        assertEquals(1, cancelCalls)
+        // The seek's stop plus the restarted session's stop when it finished.
+        assertEquals(3, cancelCalls)
+        assertFalse(state.cancelRequestedByUser)
         assertEquals(listOf(0, 1, 1, 1), scrollTargets)
         assertEquals(listOf("a", "b", "b"), spokenTexts)
         assertEquals(ReadAloudStatus.Idle, state.status)

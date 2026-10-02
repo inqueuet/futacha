@@ -20,6 +20,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.Url
 import io.ktor.http.URLBuilder
+import io.ktor.http.takeFrom
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
@@ -301,7 +302,9 @@ internal suspend fun searchCompatImageFileTarget(
             else -> error("この検索先のFile方式は利用できません")
         }.let(Result.Companion::success)
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        // An internal withTimeout must end as a reported failure; otherwise
+        // the caller treats it as a cancellation and stays in "送信中…".
+        Result.failure(cancelled.compatTimeoutFailureOrThrow("検索がタイムアウトしました"))
     } catch (failure: Throwable) {
         Result.failure(failure)
     }
@@ -367,7 +370,7 @@ private suspend fun searchCompatMultipartHtmlProvider(
     image: CompatSearchUploadImage,
     acceptRedirectedResultUrl: Boolean = false
 ): CompatImageSearchResult {
-    val response = httpClient.submitFormWithBinaryData(
+    val postResponse = httpClient.submitFormWithBinaryData(
         url = endpoint,
         formData = formData {
             append(
@@ -387,9 +390,13 @@ private suspend fun searchCompatMultipartHtmlProvider(
         header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
         header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8")
     }
+    val providerHost = Url(baseUrl).host
+    // Ktor's redirect plugin never follows a POST, and on iOS the Darwin
+    // engine hands the 302/303 back as is (OkHttp follows it natively), so
+    // SauceNAO/IQDB failed there. Follow the provider's own Location by GET.
+    val response = followCompatSearchPostRedirects(httpClient, postResponse, providerHost, title)
     require(response.status.isSuccess()) { "${title}検索に失敗しました (${response.status.value})" }
     val finalUrl = response.call.request.url.toString()
-    val providerHost = Url(baseUrl).host
     require(isTrustedCompatSearchResultUrl(finalUrl, providerHost)) {
         "${title}検索の応答先が不正です"
     }
@@ -403,6 +410,40 @@ private suspend fun searchCompatMultipartHtmlProvider(
     )
     require(html.isNotBlank()) { "${title}検索の結果が空です" }
     return CompatImageSearchResult.InlineHtml(title, html, baseUrl)
+}
+
+private suspend fun followCompatSearchPostRedirects(
+    httpClient: HttpClient,
+    initial: io.ktor.client.statement.HttpResponse,
+    providerHost: String,
+    title: String
+): io.ktor.client.statement.HttpResponse {
+    var response = initial
+    repeat(COMPAT_SEARCH_MAX_REDIRECTS) {
+        val location = compatSearchRedirectTarget(
+            status = response.status.value,
+            location = response.headers[HttpHeaders.Location],
+            requestUrl = response.call.request.url.toString()
+        ) ?: return response
+        require(isTrustedCompatSearchResultUrl(location, providerHost)) {
+            "${title}検索の応答先が不正です"
+        }
+        response = httpClient.get(location) {
+            header(HttpHeaders.UserAgent, COMPAT_FILE_SEARCH_USER_AGENT)
+            header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
+            header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        }
+    }
+    return response
+}
+
+private const val COMPAT_SEARCH_MAX_REDIRECTS = 4
+
+/** Absolute target of a 301/302/303 answer (re-requested by GET), or null for any other status. */
+internal fun compatSearchRedirectTarget(status: Int, location: String?, requestUrl: String): String? {
+    if (status !in setOf(301, 302, 303)) return null
+    val raw = location?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    return runCatching { URLBuilder(requestUrl).takeFrom(raw).buildString() }.getOrNull()
 }
 
 private suspend fun searchCompatYandexFile(
@@ -507,7 +548,9 @@ internal suspend fun searchCompatAscii2d(
                 ?: error("検索結果URLを取得できませんでした")
         })
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        // An internal withTimeout must end as a reported failure; otherwise
+        // the caller treats it as a cancellation and stays in "送信中…".
+        Result.failure(cancelled.compatTimeoutFailureOrThrow("検索がタイムアウトしました"))
     } catch (failure: Throwable) {
         Result.failure(failure)
     }
@@ -598,7 +641,9 @@ internal suspend fun searchCompatGoogleLensFile(
                 ?: error("Lensの検索結果URLを取得できませんでした")
         })
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        // An internal withTimeout must end as a reported failure; otherwise
+        // the caller treats it as a cancellation and stays in "送信中…".
+        Result.failure(cancelled.compatTimeoutFailureOrThrow("検索がタイムアウトしました"))
     } catch (failure: Throwable) {
         Result.failure(failure)
     }
@@ -650,7 +695,9 @@ private suspend fun searchCompatGoogleFileUpload(
                 ?: error("Google画像検索の結果URLを取得できませんでした")
         })
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        // An internal withTimeout must end as a reported failure; otherwise
+        // the caller treats it as a cancellation and stays in "送信中…".
+        Result.failure(cancelled.compatTimeoutFailureOrThrow("検索がタイムアウトしました"))
     } catch (failure: Throwable) {
         Result.failure(failure)
     }

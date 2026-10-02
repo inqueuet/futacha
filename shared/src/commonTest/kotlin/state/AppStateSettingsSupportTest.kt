@@ -4,6 +4,12 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryId
+import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.ThreadMenuItemId
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemId
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -126,6 +132,46 @@ class AppStateSettingsSupportTest {
             defaultCatalogNavEntries(),
             decodeCatalogNavEntriesValue("invalid", json, catalogNavEntriesSerializer)
         )
+    }
+
+    @Test
+    fun menuConfigDecoders_dropOnlyUnknownEntriesAndKeepTheRestOfTheLayout() {
+        val threadMenu = decodeThreadMenuConfigValue(
+            """[{"id":"Gallery","isEnabled":false,"order":0},{"id":"FutureItem","order":1},""" +
+                """{"id":"Save","isEnabled":false,"order":2}]""",
+            json,
+            threadMenuConfigSerializer
+        )
+        assertEquals(ThreadMenuItemId.entries.toSet(), threadMenu.map { it.id }.toSet())
+        assertEquals(false, threadMenu.first { it.id == ThreadMenuItemId.Gallery }.isEnabled)
+        assertEquals(false, threadMenu.first { it.id == ThreadMenuItemId.Save }.isEnabled)
+
+        val settingsMenu = decodeThreadSettingsMenuConfigValue(
+            """[{"id":"Privacy","isEnabled":false,"order":0},{"id":"FutureItem"}]""",
+            json,
+            threadSettingsMenuConfigSerializer
+        )
+        assertEquals(ThreadSettingsMenuItemId.entries.size, settingsMenu.size)
+        assertEquals(false, settingsMenu.first { it.id == ThreadSettingsMenuItemId.Privacy }.isEnabled)
+
+        // An unknown placement for one entry must not reset the others.
+        val entries = decodeThreadMenuEntriesValue(
+            """[{"id":"Reply","placement":"HIDDEN","order":0},{"id":"Gallery","placement":"FUTURE","order":1},""" +
+                """{"id":"FutureEntry","placement":"BAR"}]""",
+            json,
+            threadMenuEntriesSerializer
+        )
+        assertEquals(ThreadMenuEntryId.entries.size, entries.size)
+        assertEquals(ThreadMenuEntryPlacement.HIDDEN, entries.first { it.id == ThreadMenuEntryId.Reply }.placement)
+        assertEquals(ThreadMenuEntryPlacement.BAR, entries.first { it.id == ThreadMenuEntryId.Gallery }.placement)
+
+        val catalogNav = decodeCatalogNavEntriesValue(
+            """[{"id":"Mode","placement":"HIDDEN","order":0},{"id":"FutureEntry","placement":"BAR"}]""",
+            json,
+            catalogNavEntriesSerializer
+        )
+        assertEquals(CatalogNavEntryId.entries.size, catalogNav.size)
+        assertEquals(CatalogNavEntryPlacement.HIDDEN, catalogNav.first { it.id == CatalogNavEntryId.Mode }.placement)
     }
 
     @Test

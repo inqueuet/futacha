@@ -24,9 +24,11 @@ internal suspend fun FileSystem.writeByteStreamReplacingImpl(
     block: suspend (FileWriteSink) -> Unit
 ): Result<String> = runSuspendCatchingPreservingCancellation {
     if (supportsAtomicReplace(base)) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        sweepStalePartialFiles(base, relativePath, now)
         val temp = siblingSavedFilePath(
             relativePath,
-            ".${relativePath.substringAfterLast('/')}.partial-${Random.nextLong().toULong().toString(16)}"
+            partialFileName(relativePath.substringAfterLast('/'), now, Random.nextLong().toULong().toString(16))
         )
         try {
             writeByteStream(base, temp, block).getOrThrow()
@@ -58,6 +60,37 @@ internal suspend fun FileSystem.writeByteStreamReplacingImpl(
         }
         renameIfAbsent(base, alternate, relativePath).getOrNull() ?: alternate
     }
+}
+
+private const val STALE_PARTIAL_FILE_AGE_MILLIS = 60L * 60L * 1000L
+
+/** `.<name>.partial-t<epochMillis>-<random>`; the time lets later writes tell a leftover from a live write. */
+internal fun partialFileName(fileName: String, nowEpochMillis: Long, random: String): String =
+    ".$fileName.partial-t$nowEpochMillis-$random"
+
+/**
+ * Whether [candidate] is a temporary file of [fileName] left by a write that was killed:
+ * one stamped over an hour ago, or one in the older unstamped format (no live write uses it).
+ */
+internal fun isStalePartialFile(candidate: String, fileName: String, nowEpochMillis: Long): Boolean {
+    val prefix = ".$fileName.partial-"
+    if (!candidate.startsWith(prefix)) return false
+    val rest = candidate.substring(prefix.length)
+    if (rest.isEmpty()) return false
+    if (!rest.startsWith("t")) return rest.all { it in '0'..'9' || it in 'a'..'f' }
+    val stamp = rest.substring(1).substringBefore('-').toLongOrNull() ?: return false
+    return stamp <= nowEpochMillis - STALE_PARTIAL_FILE_AGE_MILLIS
+}
+
+/** A process killed mid-write leaves its hidden temp file; remove such leftovers next to the target. */
+private suspend fun FileSystem.sweepStalePartialFiles(base: SaveLocation, relativePath: String, nowEpochMillis: Long) {
+    val fileName = relativePath.substringAfterLast('/')
+    val parent = relativePath.substringBeforeLast('/', missingDelimiterValue = "")
+    val stale = runSuspendCatchingPreservingCancellation { listFiles(base, parent) }.getOrNull().orEmpty()
+        .map { it.trim().trimEnd('/').substringAfterLast('/') }
+        .filter { isStalePartialFile(it, fileName, nowEpochMillis) }
+        .take(16)
+    stale.forEach { name -> delete(base, siblingSavedFilePath(relativePath, name)) }
 }
 
 internal fun siblingSavedFilePath(relativePath: String, fileName: String): String {

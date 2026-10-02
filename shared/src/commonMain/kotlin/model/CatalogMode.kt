@@ -64,7 +64,8 @@ internal fun normalizeWatchWords(watchWords: List<String>): List<String> {
 
 internal fun normalizeWatchSearchText(value: String): String {
     return buildString(value.length) {
-        value.forEach { char ->
+        value.forEach { source ->
+            val char = com.valoser.futacha.shared.util.canonicalCp932Character(source)
             append(
                 when (char) {
                     '\u3000' -> ' '

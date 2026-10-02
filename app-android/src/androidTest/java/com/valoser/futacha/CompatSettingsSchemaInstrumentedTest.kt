@@ -32,6 +32,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasTextExactly
@@ -187,9 +188,12 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("ai-moderation-DEVICE").performScrollTo().performClick()
         rule.onAllNodesWithTag("openai-api-key").assertCountEquals(0)
         rule.onNodeWithTag("ai-moderation-OPENAI").performScrollTo().performClick()
-        rule.onNodeWithTag("openai-api-key").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("openai-api-management-open").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("openai-moderation-threshold").performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("閾値以上の候補をNGと同様に非表示にする").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("判定候補をNGと同様に非表示にする").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("ai-moderation-BOTH").performScrollTo().performClick()
+        rule.onNodeWithTag("ai-moderation-BOTH").assertIsSelected()
+        rule.onNodeWithTag("openai-api-management-open").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithTag("ai-summary-OPENAI").assertCountEquals(0)
         rule.onNodeWithTag("ai-moderation-DEVICE").performScrollTo().performClick()
         rule.onAllNodesWithTag("openai-api-key").assertCountEquals(0)
@@ -3403,8 +3407,9 @@ class CompatSettingsSchemaInstrumentedTest {
             rule.waitForIdle()
             loadingNode.assertIsDisplayed()
             val artworkNode = rule.onNodeWithTag("compat-loading-artwork")
-            fun loadingRotation(): Any? = artworkNode.fetchSemanticsNode().config
-                .first { it.key.name == "CompatLoadingRotation" }.value
+            // The indicator exposes a provider so its semantics stay static per frame.
+            fun loadingRotation(): Any? = (artworkNode.fetchSemanticsNode().config
+                .first { it.key.name == "CompatLoadingRotation" }.value as () -> Any?).invoke()
             val firstRotation = loadingRotation()
 
             rule.mainClock.advanceTimeBy(80L)
@@ -3492,8 +3497,9 @@ class CompatSettingsSchemaInstrumentedTest {
                 visibleArtworkPixels > 20
             )
             val artworkNode = rule.onNodeWithTag("compat-loading-artwork")
-            fun loadingRotation(): Any? = artworkNode.fetchSemanticsNode().config
-                .first { it.key.name == "CompatLoadingRotation" }.value
+            // The indicator exposes a provider so its semantics stay static per frame.
+            fun loadingRotation(): Any? = (artworkNode.fetchSemanticsNode().config
+                .first { it.key.name == "CompatLoadingRotation" }.value as () -> Any?).invoke()
             val firstRotation = loadingRotation()
             rule.mainClock.advanceTimeBy(100L)
             rule.waitForIdle()

@@ -20,7 +20,12 @@ data class SavedThread(
     val totalSize: Long,               // 合計ファイルサイズ（bytes）
     val status: SaveStatus,            // 保存状態
     val incompleteMediaCount: Int = 0, // 取得失敗または上限で省略したメディア数
-    val isHtmlMissing: Boolean = false // HTMLを指定した保存で取得／書込に失敗した
+    val isHtmlMissing: Boolean = false, // HTMLを指定した保存で取得／書込に失敗した
+    /**
+     * 履歴の自動保存で、欠けたメディアの続きの保存が進まなくなった時刻（Epoch millis、0は未判定）。
+     * 索引に残るのでWorker／BGTaskの新しいプロセスでも同じ世代を繰り返し保存しない。
+     */
+    val autoSaveContinuationStalledAtMillis: Long = 0L
 )
 
 /**

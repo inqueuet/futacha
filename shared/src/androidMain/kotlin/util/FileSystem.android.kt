@@ -78,7 +78,7 @@ class AndroidFileSystem(
     private suspend fun <T> withSafWriteTimeout(block: suspend () -> T): T {
         return try {
             withTimeout(SAF_WRITE_TIMEOUT_MILLIS) {
-                block()
+                awaitSafProviderCall(block)
             }
         } catch (e: TimeoutCancellationException) {
             throw SaveProviderTimeoutException(
@@ -177,6 +177,9 @@ class AndroidFileSystem(
                     }
                 }
             }
+            // A hard link taken over from another save generation (linkOrCopy) must not be
+            // truncated in place, which would also damage the other generation (G4-6).
+            runCatching { java.nio.file.Files.deleteIfExists(file.toPath()) }
             FileOutputStream(file, false).use { output ->
                 var totalWritten = 0L
                 val sink = object : FileWriteSink {

@@ -80,6 +80,7 @@ import com.valoser.futacha.shared.analytics.analyticsTextHasUrl
 import com.valoser.futacha.shared.analytics.analyticsTextLengthBucket
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ui.isAiCommandForThread
 import com.valoser.futacha.shared.ai.draftCommentParameter
 import com.valoser.futacha.shared.ai.draftEmailParameter
 import com.valoser.futacha.shared.ai.draftNameParameter
@@ -115,8 +116,12 @@ import kotlin.time.Clock
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.time.ExperimentalTime
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 private const val WATCH_READ_ALOUD_PROGRESS_UPDATE_STEP = 5
+/** How long a read-aloud command waits for segments of a loaded page before it is dropped. */
+
+private enum class ThreadAiCommandLoadPhase { Loading, Loaded, Failed }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
@@ -316,6 +321,9 @@ private fun ThreadScreenContent(
     val lastAutoSaveTimestamp = saveJobStateRefs.lastAutoSaveTimestamp
     val lastAutoSavePosts = saveJobStateRefs.lastAutoSavePosts
     var isShowingOfflineCopy by saveJobStateRefs.isShowingOfflineCopy
+    // "更新前に戻す" shows an older accepted page. Auto-saving it would replace the
+    // newer saved copy and prune its media, so it is skipped until the next load.
+    var isShowingRestoredSnapshot by remember(threadId) { mutableStateOf(false) }
     val drawerState = runtimeHandles.drawerState
     val isDrawerOpen by runtimeHandles.isDrawerOpen
     var actionInProgress by interactionStateRefs.actionInProgress
@@ -535,6 +543,7 @@ private fun ThreadScreenContent(
                 if (nextState is ThreadUiState.Success) {
                     newPostTracker.onPostsLoaded(nextState.page.posts)
                 }
+                isShowingRestoredSnapshot = false
                 uiState.value = nextState
             },
             setResolvedThreadUrlOverride = { resolvedThreadUrlOverride = it },
@@ -677,8 +686,17 @@ private fun ThreadScreenContent(
     }
     PlatformBackgroundLifecycleEffect {
         stopReadAloud()
+        // Recomposition (and the watch status effect) is paused after ON_STOP;
+        // clear the status here so the watch does not keep showing "speaking".
+        WatchReadAloudStatusStore.clearIfMatches(
+            boardId = board.id,
+            boardUrl = effectiveBoardUrl,
+            threadId = threadId
+        )
     }
 
+    val appUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
+    LaunchedEffect(appUnlocked) { if (!appUnlocked) stopReadAloud() }
     val refreshThread = loadBindings.refreshThread
 
     // Keyed on the repository too: on Android the first frame can use the
@@ -796,10 +814,11 @@ private fun ThreadScreenContent(
     LaunchedEffect(isCurrentThreadInHistory) {
         if (!isCurrentThreadInHistory) autoSaveJob?.cancel()
     }
+    val autoSaveBlockedByVisibleCopy = isShowingOfflineCopy || isShowingRestoredSnapshot
     val autoSaveEffectState = rememberThreadAutoSaveEffectState(
         currentPageForAutoSave = currentPageForAutoSave,
         threadId = threadId,
-        isShowingOfflineCopy = isShowingOfflineCopy,
+        isShowingOfflineCopy = autoSaveBlockedByVisibleCopy,
         autoSaveRepository = autoSaveRepository.takeIf { isCurrentThreadInHistory },
         httpClient = httpClient,
         fileSystem = fileSystem,
@@ -809,7 +828,7 @@ private fun ThreadScreenContent(
     ThreadAutoSaveLaunchEffect(
         threadId = threadId,
         currentPageForAutoSave = currentPageForAutoSave,
-        isShowingOfflineCopy = isShowingOfflineCopy,
+        isShowingOfflineCopy = autoSaveBlockedByVisibleCopy,
         httpClient = httpClient,
         fileSystem = fileSystem,
         autoSaveEffectState = autoSaveEffectState,
@@ -835,6 +854,34 @@ private fun ThreadScreenContent(
                 threadId = threadId
             )
         }
+    }
+    // Watch pause/stop reach this screen directly, also while the activity is
+    // stopped (recomposition paused) or locked, instead of waiting in the AI
+    // command queue for the UI (C-4/D7).
+    val currentRemotePause by rememberUpdatedState(pauseReadAloud)
+    val currentRemoteStop by rememberUpdatedState(stopReadAloud)
+    DisposableEffect(board.id, effectiveBoardUrl, threadId) {
+        val registration = com.valoser.futacha.shared.watch.ThreadReadAloudRemoteControl.register(
+            boardId = board.id,
+            boardUrl = effectiveBoardUrl,
+            threadId = threadId
+        ) { command ->
+            when (command) {
+                com.valoser.futacha.shared.watch.ThreadReadAloudRemoteControl.Command.Pause -> {
+                    currentRemotePause()
+                }
+                com.valoser.futacha.shared.watch.ThreadReadAloudRemoteControl.Command.Stop -> {
+                    currentRemoteStop()
+                    // The status effect needs a recomposition, which may be paused.
+                    WatchReadAloudStatusStore.clearIfMatches(
+                        boardId = board.id,
+                        boardUrl = effectiveBoardUrl,
+                        threadId = threadId
+                    )
+                }
+            }
+        }
+        onDispose { registration.unregister() }
     }
 
     val firstVisibleSegmentIndex = derivedRuntimeState.firstVisibleSegmentIndex
@@ -874,7 +921,10 @@ private fun ThreadScreenContent(
         onRestoreCompleted = { hasRestoredInitialScroll = true },
         onRestoreFailed = { message, _ ->
             Logger.w(THREAD_SCREEN_TAG, message)
-        }
+        },
+        // The local copy shown first may lack the saved post; restore again on
+        // the network page instead of persisting a wrong position (C5).
+        isProvisionalContent = isShowingOfflineCopy && refreshThreadJob?.isActive == true
     )
     ThreadSearchIndexEffects(
         searchQuery = debouncedThreadSearchQuery,
@@ -1016,8 +1066,23 @@ private fun ThreadScreenContent(
     val openQuoteSelection = postActionHandlers.onOpenQuoteSelection
     val handleNgRegistration = postActionHandlers.onNgRegister
     val performRefresh = interactionUiHandles.performRefresh
-    LaunchedEffect(args.aiCommand, readAloudSegments.size) {
+    val aiCommandLoadPhase = when (currentState) {
+        ThreadUiState.Loading -> ThreadAiCommandLoadPhase.Loading
+        is ThreadUiState.Error -> ThreadAiCommandLoadPhase.Failed
+        is ThreadUiState.Success -> ThreadAiCommandLoadPhase.Loaded
+    }
+    val aiCommandAppLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(args.aiCommand), readAloudSegments.size, aiCommandLoadPhase, derivedRuntimeState.readAloudSegmentsReady) {
         val command = args.aiCommand ?: return@LaunchedEffect
+        // Locked after the command was handed over (recomposition paused): the
+        // parent withdraws it on the next composition and hands it back after
+        // the unlock (C-1).
+        if (aiCommandAppLock?.isUnlocked == false) return@LaunchedEffect
+        // A command for another thread (e.g. from the watch) waits for that
+        // thread instead of acting on the one on screen (H2).
+        if (!isAiCommandForThread(command, boardId = board.id, threadId = threadId)) {
+            return@LaunchedEffect
+        }
         val requiresReadAloudSegments = when (command.action) {
             FutachaAiAction.StartThreadReadAloud,
             FutachaAiAction.NextThreadReadAloud,
@@ -1025,6 +1090,15 @@ private fun ThreadScreenContent(
             else -> false
         }
         if (requiresReadAloudSegments && readAloudSegments.isEmpty()) {
+            // Waiting forever would block every later command and start the
+            // read-aloud on whatever thread opens next (H1).
+            when (aiCommandLoadPhase) {
+                ThreadAiCommandLoadPhase.Loading -> return@LaunchedEffect
+                ThreadAiCommandLoadPhase.Loaded -> if (!derivedRuntimeState.readAloudSegmentsReady) return@LaunchedEffect
+                ThreadAiCommandLoadPhase.Failed -> Unit
+            }
+            args.onAiCommandConsumed(command)
+            showMessage(buildReadAloudNoTargetMessage())
             return@LaunchedEffect
         }
         val shouldConsume = when (command.action) {
@@ -1150,15 +1224,21 @@ private fun ThreadScreenContent(
         buildThreadPostIndexAction(
             currentPosts = currentSuccessState?.page?.posts.orEmpty(),
             onScrollToPostIndex = { index ->
+                // Filters, tree order and the AI summary row change what the list
+                // shows; jump by the displayed layout when it is known (C9).
+                val allPosts = currentSuccessState?.page?.posts.orEmpty()
+                val targetItem = resolveThreadLazyListIndexForDisplayedPost(
+                    postId = allPosts.getOrNull(index)?.id,
+                    allPosts = allPosts,
+                    layout = displayedPostsLayout
+                ) ?: resolveThreadLazyListIndexForPost(
+                    postIndex = index,
+                    page = currentSuccessState?.page,
+                    embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
+                    hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
+                )
                 coroutineScope.launch {
-                    lazyListState.animateScrollToItem(
-                        resolveThreadLazyListIndexForPost(
-                            postIndex = index,
-                            page = currentSuccessState?.page,
-                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
-                            hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
-                        )
-                    )
+                    lazyListState.animateScrollToItem(targetItem)
                 }
             }
         )
@@ -1412,7 +1492,10 @@ private fun ThreadScreenContent(
         board = board, threadId = threadId, threadTitle = resolvedThreadTitle, currentState = currentState, isCachedPage = isShowingOfflineCopy,
         loadGeneration = threadLoadGeneration,
         listState = lazyListState, repository = activeRepository,
-        onRestore = { uiState.value = it }, onRefresh = refreshThread,
+        onRestore = {
+            isShowingRestoredSnapshot = true
+            uiState.value = it
+        }, onRefresh = refreshThread,
         onOpenThread = onHistoryEntrySelected, onShowPost = scrollToPost, onClose = onBack,
         onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
         onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) }
@@ -1503,7 +1586,7 @@ private fun ThreadSaveLocationGuideDialog(
         ThreadSaveLocationGuideTarget.DirectoryPicker -> "フォルダを選択"
         ThreadSaveLocationGuideTarget.SaveSettings -> "設定を開く"
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("thread_save_location_guide", "スレッド保存先の案内を閉じる")
             onDismiss()
@@ -1526,7 +1609,7 @@ private fun ThreadSaveLocationGuideDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }
 
 private fun resolveWatchReadAloudProgressUpdateBucket(
@@ -1555,9 +1638,11 @@ private fun ThreadReadAloudWatchEffects(
 ) {
     val readAloudStatus = currentStatus()
     val currentReadAloudIndex = currentIndex()
+    // Keeps the read position on the same post across refreshes and AI hiding (C-6).
     ThreadReadAloudIndexEffect(
-        segmentCount = readAloudSegments.size,
-        currentReadAloudIndex = currentReadAloudIndex,
+        segments = readAloudSegments,
+        currentStatus = currentStatus,
+        currentIndex = currentIndex,
         onCurrentReadAloudIndexChanged = setIndex
     )
     val watchReadAloudPlaybackState = when (readAloudStatus) {

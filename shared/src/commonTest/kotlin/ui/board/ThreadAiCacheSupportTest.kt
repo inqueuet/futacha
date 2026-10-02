@@ -9,6 +9,15 @@ import kotlin.test.assertTrue
 
 class ThreadAiCacheSupportTest {
     @Test
+    fun moderationDecisionSurvivesVotesAndMediaUrlChangesButNotBodyEdits() {
+        val post = Post("123", author = "a", subject = null, timestamp = "", messageHtml = "body",
+            imageUrl = "https://original/123.jpg", thumbnailUrl = null, saidaneLabel = "そうだねx1")
+        fun key(value: Post) = buildThreadPostModerationCacheKey("thread", value, "config", "context")
+        assertEquals(key(post), key(post.copy(saidaneLabel = "そうだねx2", imageUrl = "/saved/123.jpg")))
+        kotlin.test.assertNotEquals(key(post), key(post.copy(messageHtml = "changed body")))
+    }
+
+    @Test
     fun putThreadAiCacheEntryKeepsCacheWithinLimitByEvictingOldestEntry() {
         val cache = linkedMapOf<ThreadAiCacheKey, String>()
         val firstKey = cacheKey(index = 0)
@@ -124,6 +133,14 @@ class ThreadAiCacheSupportTest {
     }
 
     @Test
+    fun unclassifiableHeadDoesNotBlockLaterModerationTargets() {
+        val skipped = (1..40).map { post("$it").copy(isDeleted = true) } +
+            post("41", "&gt;quoted only") + post("42", "https://example.com") + post("invalid")
+        val target = post("43", "判定する本文")
+        assertEquals(listOf(target), resolveThreadAiPostModerationSourcePosts(skipped + target))
+    }
+
+    @Test
     fun buildThreadPostModerationCacheKeyChangesOnlyForPostContentOrProvider() {
         val original = post("1")
         val same = post("1")
@@ -150,6 +167,32 @@ class ThreadAiCacheSupportTest {
             buildThreadSummaryCacheKey("100", "AI")
         )
         assertFalse(buildThreadSummaryCacheKey("100", "AI") == buildThreadSummaryCacheKey("101", "AI"))
+    }
+
+    // Round 3 A-2: the whole futacha moderation pass is keyed on this; before, そうだね, images and
+    // thumbnails changed the key and restarted it on every vote or refresh.
+    @Test
+    fun moderationPassKeyIgnoresVotesAndMediaButFollowsJudgedInput() {
+        val longBody = "a".repeat(600) + "x"
+        val posts = listOf(post("1"), post("2", body = longBody).copy(saidaneLabel = "そうだねx1"), post("3"))
+        fun key(page: List<Post>, provider: String = "both:device:openai") = buildThreadAiModerationCacheKey(
+            "may/100", resolveThreadAiPostModerationSourcePosts(page), provider)
+        val base = key(posts)
+        val voted = posts.map { if (it.id == "2") it.copy(saidaneLabel = "そうだねx5") else it }
+        val withMedia = posts.map {
+            if (it.id == "1") it.copy(imageUrl = "https://may/src/1.jpg", thumbnailUrl = "https://may/thumb/1s.jpg") else it
+        }
+        val refreshedCopy = posts.map { it.copy(referencedCount = 4) }
+        assertEquals(base, key(voted))
+        assertEquals(base, key(withMedia))
+        assertEquals(base, key(refreshedCopy))
+        // An edit past the first 512 characters with the same length must re-judge.
+        val edited = posts.map { if (it.id == "2") it.copy(messageHtml = "a".repeat(600) + "y") else it }
+        kotlin.test.assertNotEquals(base, key(edited))
+        kotlin.test.assertNotEquals(base, key(posts + post("4")))
+        kotlin.test.assertNotEquals(base, key(posts.map { if (it.id == "3") it.copy(isDeleted = true) else it }))
+        kotlin.test.assertNotEquals(base, key(posts.reversed()))
+        kotlin.test.assertNotEquals(base, key(posts, provider = "device"))
     }
 
     private fun cacheKey(index: Int): ThreadAiCacheKey {

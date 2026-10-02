@@ -72,9 +72,10 @@ private class IosOnDeviceAiService : OnDeviceAiService {
             )
         }
         val generatedText = requestFoundationModelsSummary(sourceText).getOrElse {
+            // Still shown, but marked: callers do not cache it as the model's summary.
             return Result.success(
                 withContext(AppDispatchers.parsing) {
-                    buildExtractiveThreadSummary(input, providerLabel = "Apple Intelligence")
+                    buildFallbackThreadSummary(input, providerLabel = "Apple Intelligence")
                 }
             )
         }
@@ -103,12 +104,12 @@ private class IosOnDeviceAiService : OnDeviceAiService {
         val detected = linkedMapOf<String, PostModerationResult>()
         sourceChunks.forEach { sourceText ->
             val responseText = requestFoundationModelsPostModeration(sourceText).getOrElse {
-                return@forEach
+                return Result.failure(it)
             }
             withContext(AppDispatchers.parsing) {
-                parsePostModerationResponse(responseText)
-            }.forEach { (postId, result) ->
-                detected[postId] = result
+                parsePostModerationBatchResponse(responseText, sourceText)
+            }.forEach { result ->
+                detected[result.postId] = result
             }
         }
         return Result.success(detected.values.toList())

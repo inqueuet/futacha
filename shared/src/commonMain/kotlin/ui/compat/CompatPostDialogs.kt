@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -497,7 +498,7 @@ internal fun CompatImageNgRegistrationDialog(
 ) {
     var memo by remember(initialMemo) { mutableStateOf(initialMemo) }
     var localOnly by remember { mutableStateOf(true) }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("NG画像に登録") },
         text = {
@@ -532,7 +533,7 @@ internal fun CompatImageNgRegistrationDialog(
             TextButton(onClick = { onRegister(memo.trim(), localOnly) }) { Text("登録する") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }
 
 /** Positions a quote popup around the clicked response instead of pinning it below the toolbar. */
@@ -600,7 +601,7 @@ internal fun CompatExtractionMenuDialog(
         "URLを含むレス" to CompatExtractionKind.CONTAINS_URL,
         "画像レス" to CompatExtractionKind.HAS_IMAGE
     )
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("抽出") },
         text = {
@@ -623,7 +624,7 @@ internal fun CompatExtractionMenuDialog(
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }
 
 @Composable
@@ -653,7 +654,7 @@ internal fun CompatReplyPreviewPopup(
     onMediaClick: (CompatPostSnapshot) -> Unit,
     onMediaLongClick: (CompatPostSnapshot) -> Unit
 ) {
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         popupPositionProvider = remember(anchorY, minimumTopY) {
             CompatReplyPopupPositionProvider(anchorY, minimumTopY)
         },
@@ -695,7 +696,7 @@ internal fun CompatReplyPreviewPopup(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -724,7 +725,7 @@ internal fun CompatPostContextDialog(
     // ThreadContextDialogFragment is a borderless 3x3 custom Dialog (100dp x
     // 50dp cells, no title or close button), not an AlertDialog.  Popup also
     // gives it the APK's outside-tap dismissal semantics.
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         alignment = Alignment.Center,
         offset = IntOffset(0, with(LocalDensity.current) { 35.dp.roundToPx() }),
         onDismissRequest = onDismiss,
@@ -750,7 +751,7 @@ internal fun CompatPostContextDialog(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -783,7 +784,7 @@ internal fun CompatPostNgDialog(
         // Anonymous posts without a stable ID/IP/name can still be hidden.
         listOf(CompatNgKind.THREAD_POST_NO to ("この投稿 No.${post.postNo}" to post.postNo))
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = if (reviewComplianceEnabled) {
             { Text("この利用者をブロック") }
@@ -818,5 +819,5 @@ internal fun CompatPostNgDialog(
         } else {
             {}
         }
-    )
+    ) }
 }

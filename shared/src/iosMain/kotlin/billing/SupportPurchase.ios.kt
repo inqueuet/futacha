@@ -207,6 +207,15 @@ actual class SupportPurchaseClient {
                     paymentQueue.finishTransaction(transaction)
                 }
                 SKPaymentTransactionState.SKPaymentTransactionStatePurchasing -> Unit
+                SKPaymentTransactionState.SKPaymentTransactionStateDeferred -> {
+                    // Ask to Buy: the transaction waits for parental approval, which can take
+                    // days. Release the waiting purchase instead of suspending forever; the
+                    // final Purchased/Failed state is delivered later and finished above.
+                    resumePending(
+                        transaction,
+                        SupportPurchaseResult.Unavailable("購入の承認待ちです。承認されると自動的に完了します")
+                    )
+                }
                 else -> Logger.w(TAG, "Unhandled transaction state: ${transaction.transactionState}")
             }
         }

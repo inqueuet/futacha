@@ -26,13 +26,18 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.FutachaAiCommandArrivals
 import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
 import com.valoser.futacha.shared.ai.FutachaAiCommandOutcome
+import com.valoser.futacha.shared.ai.isWatchRelayLink
 import com.valoser.futacha.shared.ai.FutachaAiConfirmationRequest
+import com.valoser.futacha.shared.ai.FutachaAiQueuedCommand
 import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.CrashReporter
@@ -103,9 +108,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.ExperimentalTime
+import kotlin.time.TimeSource
 
 private const val TAG = "FutachaApp"
 private const val APP_LOCK_HASH_LOADING = "__futacha_app_lock_loading__"
+private const val APP_LOCK_HASH_ERROR = "__futacha_app_lock_error__"
 private const val AI_COMMAND_ID_MAX_BYTES = 128
 private const val AI_HANDLED_COMMAND_ID_MAX_COUNT = 128
 private const val LIGHTWEIGHT_SHARED_IMAGE_CACHE_BYTES = 128L * 1024 * 1024
@@ -159,7 +166,13 @@ fun FutachaApp(
     onCurrentThreadChanged: (String?) -> Unit = {},
     experienceProfile: ExperienceProfile = ExperienceProfile.FUTACHA,
     compatibilityStore: CompatibilityStore? = null,
-    onExitApplication: () -> Unit = {}
+    onExitApplication: () -> Unit = {},
+    /**
+     * Reports whether the app content is visible (lock state resolved and
+     * unlocked). iOS uses it to keep its native saved-HTML sheet, which is
+     * presented outside Compose, behind the app lock (H7).
+     */
+    onAppUnlockedChanged: (Boolean) -> Unit = {}
 ) {
     val platformContext = LocalPlatformContext.current
     LaunchedEffect(platformContext) {
@@ -193,68 +206,211 @@ fun FutachaApp(
     }
     // Read the app-lock state concurrently with the theme; reading it only after
     // the theme arrived added a frame (and a spinner) to every cold start.
+    // A read failure fails closed with a retry button instead of leaving the
+    // loading spinner on screen forever.
+    var appLockLoadAttempt by remember { mutableStateOf(0) }
     val startupAppLockHash by produceState<String?>(
         initialValue = APP_LOCK_HASH_LOADING,
-        key1 = stateStore
+        key1 = stateStore,
+        key2 = appLockLoadAttempt
     ) {
+        value = APP_LOCK_HASH_LOADING
         stateStore.appLockPasswordHash
             .catch { error ->
                 if (error is CancellationException) throw error
                 Logger.e(TAG, "Failed to load app lock password hash", error)
-                value = APP_LOCK_HASH_LOADING
+                value = APP_LOCK_HASH_ERROR
             }
             .collect { storedHash ->
                 value = storedHash
             }
     }
-    var isUnlockedForSession by remember { mutableStateOf(false) }
+    // The session flag lives outside composition: Android pauses
+    // recomposition after ON_STOP, so command handlers read the holder (C-1).
+    val appLockHolder = remember { FutachaAppLockHolder() }
+    val isUnlockedForSession by appLockHolder.sessionUnlocked.collectAsState()
     LaunchedEffect(startupAppLockHash) {
         if (startupAppLockHash == null) {
-            isUnlockedForSession = true
+            appLockHolder.openSessionWithoutLock()
         }
+    }
+    // Once the app tree has been shown it stays composed while relocked: tearing
+    // it down on every ON_STOP (which Android also sends for the app's own image
+    // and folder pickers) discarded drafts, attachments, picker results and the
+    // open thread.  The lock is drawn as an opaque, input-blocking overlay.
+    val appTreeShown = remember { mutableStateOf(false) }
+    val appLockGate = resolveFutachaAppLockGate(
+        storedHash = startupAppLockHash,
+        isUnlockedForSession = isUnlockedForSession,
+        loadingSentinel = APP_LOCK_HASH_LOADING,
+        errorSentinel = APP_LOCK_HASH_ERROR
+    )
+    val currentOnAppUnlockedChanged by rememberUpdatedState(onAppUnlockedChanged)
+    val isAppUnlocked = startupTheme != null && appLockGate == FutachaAppLockGate.Unlocked
+    SideEffect { appLockHolder.setContentVisible(isAppUnlocked) }
+    DisposableEffect(isAppUnlocked) {
+        currentOnAppUnlockedChanged(isAppUnlocked)
+        onDispose { if (isAppUnlocked) currentOnAppUnlockedChanged(false) }
     }
     if (startupTheme == null) return
     val resolvedStartupTheme = startupTheme ?: return
-    if (startupAppLockHash == APP_LOCK_HASH_LOADING) {
+    if (!appTreeShown.value && appLockGate != FutachaAppLockGate.Unlocked) {
         // Compatibility owns a separate persisted palette. Painting the
         // modern loading surface before that palette is available produces a
         // clearly visible Futacha/classic flash during every cold start (#53).
         // Keep the preview window untouched until both the lock state and the
         // compatibility preferences can be resolved.
-        if (experienceProfile == ExperienceProfile.TOSHIAKI_COMPAT) return
+        if (appLockGate == FutachaAppLockGate.Loading &&
+            experienceProfile == ExperienceProfile.TOSHIAKI_COMPAT
+        ) return
         FutachaTheme(
             themeMode = resolvedStartupTheme.mode,
             themePalette = resolvedStartupTheme.palette
         ) {
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
-                FutachaAppLockLoadingScreen()
-            }
-        }
-        return
-    }
-    if (startupAppLockHash != null && !isUnlockedForSession) {
-        FutachaTheme(
-            themeMode = resolvedStartupTheme.mode,
-            themePalette = resolvedStartupTheme.palette
-        ) {
-            LaunchedEffect(Unit) {
-                AnalyticsTracker.screen("app_lock")
-            }
-            Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
-                FutachaAppLockScreen(
+                FutachaAppLockGateContent(
+                    gate = appLockGate,
                     passwordHash = startupAppLockHash.orEmpty(),
-                    onUnlocked = { isUnlockedForSession = true }
+                    onUnlocked = appLockHolder::unlockSession,
+                    onRetry = { appLockLoadAttempt += 1 }
                 )
             }
         }
         return
     }
+    if (!appTreeShown.value) {
+        SideEffect { appTreeShown.value = true }
+    }
+    // LOADING/ERROR sentinels are non-null too, so this stays registered
+    // while the lock state is being re-read.
     if (startupAppLockHash != null) {
         PlatformBackgroundLifecycleEffect {
-            isUnlockedForSession = false
+            // Runs synchronously in ON_STOP / didEnterBackground, before any
+            // command delivered in the background can read the lock state.
+            appLockHolder.lockSession()
         }
     }
+    val isAppHidden = appLockGate != FutachaAppLockGate.Unlocked
+    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(if (isAppHidden) Modifier.clearAndSetSemantics { } else Modifier)
+    ) {
+        CompositionLocalProvider(
+            LocalFutachaAppUnlocked provides !isAppHidden,
+            LocalFutachaAppLockHolder provides appLockHolder
+        ) {
+        FutachaAppContent(
+            stateStore = stateStore,
+            boardList = boardList,
+            history = history,
+            versionChecker = versionChecker,
+            httpClient = httpClient,
+            imageTransport = imageTransport,
+            originalMediaSession = originalMediaSession,
+            sharedRepository = sharedRepository,
+            sharedHistoryRefresher = sharedHistoryRefresher,
+            fileSystem = fileSystem,
+            cookieRepository = cookieRepository,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            compatibilityHistoryRefresh = compatibilityHistoryRefresh,
+            platformAiDeepLink = platformAiDeepLink,
+            onPlatformAiDeepLinkConsumed = onPlatformAiDeepLinkConsumed,
+            platformAiCommand = platformAiCommand,
+            onPlatformAiCommandConsumed = onPlatformAiCommandConsumed,
+            consumeAiCommandBridge = consumeAiCommandBridge,
+            platformThreadDeepLink = platformThreadDeepLink,
+            platformThreadDeepLinkPreapprovedBoardRegistration = platformThreadDeepLinkPreapprovedBoardRegistration,
+            onPlatformThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
+            platformBoardDeepLink = platformBoardDeepLink,
+            onPlatformBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
+            onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
+            onArchiveReportEnqueued = onArchiveReportEnqueued,
+            onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
+            onCurrentThreadChanged = onCurrentThreadChanged,
+            experienceProfile = experienceProfile,
+            compatibilityStore = compatibilityStore,
+            onExitApplication = onExitApplication,
+            platformContext = platformContext,
+            devicePerformanceProfile = devicePerformanceProfile,
+            resolvedStartupTheme = resolvedStartupTheme
+        )
+        // Both modes: tell the user once that damaged settings were recovered (G-19).
+        FutachaTheme(
+            themeMode = resolvedStartupTheme.mode,
+            themePalette = resolvedStartupTheme.palette
+        ) {
+            SettingsRecoveryNoticeDialog()
+        }
+        // Reclaims ZIP staging files left by a save that was killed (E-5).
+        fileSystem?.let { fs ->
+            LaunchedEffect(fs) { com.valoser.futacha.shared.service.sweepStaleZipStagingFiles(fs) }
+        }
+        }
+    }
+    if (isAppHidden) {
+        FutachaTheme(
+            themeMode = resolvedStartupTheme.mode,
+            themePalette = resolvedStartupTheme.palette
+        ) {
+            FutachaAppLockOverlay {
+                FutachaAppLockGateContent(
+                    gate = appLockGate,
+                    passwordHash = startupAppLockHash.orEmpty(),
+                    onUnlocked = appLockHolder::unlockSession,
+                    onRetry = { appLockLoadAttempt += 1 }
+                )
+            }
+        }
+    }
+    }
+}
 
+@OptIn(ExperimentalTime::class)
+@Composable
+private fun FutachaAppContent(
+    stateStore: AppStateStore,
+    boardList: List<BoardSummary>,
+    history: List<ThreadHistoryEntry>,
+    versionChecker: VersionChecker?,
+    httpClient: io.ktor.client.HttpClient?,
+    imageTransport: com.valoser.futacha.shared.network.FutachaImageTransport?,
+    originalMediaSession: OriginalMediaSession?,
+    sharedRepository: BoardRepository?,
+    sharedHistoryRefresher: HistoryRefresher?,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem?,
+    cookieRepository: CookieRepository?,
+    autoSavedThreadRepository: SavedThreadRepository?,
+    compatibilityHistoryRefresh: (suspend () -> Result<String>)?,
+    platformAiDeepLink: String?,
+    onPlatformAiDeepLinkConsumed: (String) -> Unit,
+    platformAiCommand: FutachaAiCommand?,
+    onPlatformAiCommandConsumed: (FutachaAiCommand) -> Unit,
+    consumeAiCommandBridge: Boolean,
+    platformThreadDeepLink: String?,
+    platformThreadDeepLinkPreapprovedBoardRegistration: Boolean,
+    onPlatformThreadDeepLinkConsumed: (String) -> Unit,
+    platformBoardDeepLink: String?,
+    onPlatformBoardDeepLinkConsumed: (String) -> Unit,
+    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)?,
+    onArchiveReportEnqueued: (Int) -> Unit,
+    onArchiveReportEnabledChanged: (Boolean) -> Unit,
+    onCurrentThreadChanged: (String?) -> Unit,
+    experienceProfile: ExperienceProfile,
+    compatibilityStore: CompatibilityStore?,
+    onExitApplication: () -> Unit,
+    platformContext: coil3.PlatformContext,
+    devicePerformanceProfile: DevicePerformanceProfile,
+    resolvedStartupTheme: FutachaStartupTheme
+) {
+    val isAppUnlocked = LocalFutachaAppUnlocked.current
+    val appLock = LocalFutachaAppLockHolder.current ?: remember {
+        FutachaAppLockHolder().apply {
+            openSessionWithoutLock()
+            setContentVisible(true)
+        }
+    }
     // Keep the update check above the profile split so compatibility-mode
     // users receive the same notification as modern-mode users.
     val updateCheckEnabled by produceState<Boolean?>(initialValue = null, stateStore) {
@@ -269,7 +425,8 @@ fun FutachaApp(
             Logger.e(TAG, "Version check failed", it)
         }
     }
-    updateInfo?.let { info ->
+    updateInfo?.takeIf { isAppUnlocked }?.let { info ->
+        LaunchedEffect(info, versionChecker) { versionChecker?.onUpdateShown(info) }
         UpdateNotificationDialog(
             updateInfo = info,
             onDismiss = { updateInfo = null }
@@ -389,6 +546,45 @@ fun FutachaApp(
             }
         }
         val highQualityThumbnailMode = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode(compatibilityStore)
+        // C-3: on Android nothing else consumes the AI bridge in this mode, so
+        // watch/AppFunctions commands piled up and replayed after a switch. This
+        // branch returns before the modern collector, so only one is active.
+        // Received only while unlocked; each keeps its arrival time so one that
+        // waited behind a relock is dropped like in the modern branch (C-1).
+        var compatBridgeQueue by remember { mutableStateOf<List<FutachaAiQueuedCommand>>(emptyList()) }
+        if (consumeAiCommandBridge) {
+            LaunchedEffect(Unit) {
+                while (true) {
+                    appLock.awaitUnlocked()
+                    val queued = FutachaAiCommandBridge.receiveQueued()
+                    compatBridgeQueue = enqueuePlatformAiCommand(compatBridgeQueue, queued)
+                }
+            }
+        }
+        val compatBridgeHead = compatBridgeQueue.firstOrNull()
+        LaunchedEffect(compatBridgeHead, isAppUnlocked) {
+            val head = compatBridgeHead ?: return@LaunchedEffect
+            if (!isAppUnlocked) return@LaunchedEffect
+            appLock.awaitUnlocked()
+            val decision = resolveAiCommandHoldDecision(
+                ageMillis = head.ageMillis(),
+                maxAgeMillis = head.maxAgeMillis,
+                wasHeldByLock = appLock.wasHeldByLock(head.enqueuedAt)
+            )
+            if (decision != AiCommandHoldDecision.Run) {
+                Logger.w(TAG, "Dropped held AI command in compatibility mode: ${head.command.action.id}")
+                compatBridgeQueue = consumePlatformAiCommand(compatBridgeQueue, head)
+            }
+        }
+        val compatPlatformAiCommand = platformAiCommand ?: compatBridgeHead
+            ?.takeIf {
+                resolveAiCommandHoldDecision(
+                    ageMillis = it.ageMillis(),
+                    maxAgeMillis = it.maxAgeMillis,
+                    wasHeldByLock = appLock.wasHeldByLock(it.enqueuedAt)
+                ) == AiCommandHoldDecision.Run
+            }
+            ?.command
         CompositionLocalProvider(
             LocalFutachaImageLoader provides compatibilityImageLoader,
             com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
@@ -413,14 +609,29 @@ fun FutachaApp(
                 appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" },
                 imageLoader = compatibilityImageLoader,
                 catalogImageLoader = compatibilityCatalogImageLoader,
-                initialThreadDeepLink = platformThreadDeepLink,
+                initialThreadDeepLink = platformThreadDeepLink.takeIf { isAppUnlocked },
                 initialThreadDeepLinkPreapprovedBoardRegistration =
                     platformThreadDeepLinkPreapprovedBoardRegistration,
                 onThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
-                initialBoardDeepLink = platformBoardDeepLink,
+                initialBoardDeepLink = platformBoardDeepLink.takeIf { isAppUnlocked },
                 onBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
-                platformAiCommand = platformAiCommand,
-                onPlatformAiCommandConsumed = onPlatformAiCommandConsumed,
+                // Android hands `futacha://ai` links over as links; they were
+                // never consumed in this mode (C4-4).
+                platformAiDeepLink = platformAiDeepLink,
+                onPlatformAiDeepLinkConsumed = onPlatformAiDeepLinkConsumed,
+                // Passed while locked too: CompatibilityApp records the arrival,
+                // waits for the unlock itself and applies the 60 s lock expiry.
+                platformAiCommand = compatPlatformAiCommand,
+                onPlatformAiCommandConsumed = { consumed ->
+                    if (consumed === platformAiCommand) {
+                        onPlatformAiCommandConsumed(consumed)
+                    } else {
+                        val head = compatBridgeQueue.firstOrNull()
+                        if (head != null && head.command === consumed) {
+                            compatBridgeQueue = consumePlatformAiCommand(compatBridgeQueue, head)
+                        }
+                    }
+                },
                 onArchiveReportEnqueued = onArchiveReportEnqueued,
                 onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
                 onExitApplication = onExitApplication
@@ -630,10 +841,12 @@ fun FutachaApp(
                 }
                 var pendingCompatThreadDeepLink by remember { mutableStateOf<String?>(null) }
                 var threadDeepLinkError by remember { mutableStateOf<String?>(null) }
+                var unregisteredBoardMessage by remember { mutableStateOf<String?>(null) }
                 val profileController = LocalExperienceProfileUiController.current
                 // Resolve only against the stored boards: the seed defaults would report a
                 // registered board as unregistered at startup.
-                LaunchedEffect(platformThreadDeepLink, persistedBoards, persistedHistory, arePersistedListsLoaded) {
+                LaunchedEffect(platformThreadDeepLink, persistedBoards, persistedHistory, arePersistedListsLoaded, isAppUnlocked) {
+                    if (!isAppUnlocked || !appLock.isUnlocked) return@LaunchedEffect
                     if (!arePersistedListsLoaded) return@LaunchedEffect
                     val raw = platformThreadDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     when (val resolution = resolveFutachaThreadDeepLink(raw, persistedBoards, persistedHistory)) {
@@ -651,7 +864,8 @@ fun FutachaApp(
                         }
                     }
                 }
-                LaunchedEffect(platformBoardDeepLink, persistedBoards, arePersistedListsLoaded) {
+                LaunchedEffect(platformBoardDeepLink, persistedBoards, arePersistedListsLoaded, isAppUnlocked) {
+                    if (!isAppUnlocked || !appLock.isUnlocked) return@LaunchedEffect
                     if (!arePersistedListsLoaded) return@LaunchedEffect
                     val raw = platformBoardDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     val board = persistedBoards.firstOrNull { candidate ->
@@ -664,7 +878,7 @@ fun FutachaApp(
                     }
                     onPlatformBoardDeepLinkConsumed(raw)
                 }
-                pendingCompatThreadDeepLink?.let { raw ->
+                pendingCompatThreadDeepLink?.takeIf { isAppUnlocked }?.let { raw ->
                     AlertDialog(
                         onDismissRequest = {
                             pendingCompatThreadDeepLink = null
@@ -686,7 +900,15 @@ fun FutachaApp(
                         }
                     )
                 }
-                threadDeepLinkError?.let { message ->
+                unregisteredBoardMessage?.takeIf { isAppUnlocked }?.let { message ->
+                    AlertDialog(
+                        onDismissRequest = { unregisteredBoardMessage = null },
+                        title = { Text("スレッドを開けませんでした") },
+                        text = { Text(message) },
+                        confirmButton = { TextButton(onClick = { unregisteredBoardMessage = null }) { Text("OK") } }
+                    )
+                }
+                threadDeepLinkError?.takeIf { isAppUnlocked }?.let { message ->
                     AlertDialog(
                         onDismissRequest = { threadDeepLinkError = null },
                         title = { Text("URLを開けませんでした") },
@@ -728,7 +950,10 @@ fun FutachaApp(
                     compatibilityStore = compatibilityStore,
                     navigationState = navigationState,
                     updateNavigationState = updateNavigationState,
-                    onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested
+                    onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
+                    onUnregisteredBoard = { boardName ->
+                        unregisteredBoardMessage = buildFutachaUnregisteredBoardMessage(boardName)
+                    }
                 )
                 val screenBindings = bindingsRuntimeState.screenBindings
                 val aiImportedHistoryRepository = remember(fileSystem) {
@@ -753,16 +978,65 @@ fun FutachaApp(
                 )
                 val resolvedDestinationContent = navigationRuntimeState.resolvedDestinationContent
                 var pendingAiConfirmation by remember { mutableStateOf<FutachaAiConfirmationRequest?>(null) }
-                var pendingAiScreenCommand by remember { mutableStateOf<FutachaAiCommand?>(null) }
+                var pendingAiScreenCommands by remember { mutableStateOf<List<FutachaAiCommand>>(emptyList()) }
+                val pendingAiScreenCommand = pendingAiScreenCommands.firstOrNull()
+                var pendingAiScreenTargets by remember {
+                    mutableStateOf<Map<AiCommandEffectKey, Pair<String?, String?>>>(emptyMap())
+                }
+                // When each command was forwarded, as a real monotonic mark (C4-1).
+                val pendingAiScreenForwardedAt = remember {
+                    HashMap<AiCommandEffectKey, TimeSource.Monotonic.ValueTimeMark>()
+                }
+                // The head the expiry effect has checked since the last unlock; the
+                // screens receive only that one, so none runs a command that is
+                // too old or held behind the lock before the check (C4-1/E4-1).
+                var releasedAiScreenCommandKey by remember { mutableStateOf<AiCommandEffectKey?>(null) }
+                val releasedAiScreenCommand = pendingAiScreenCommand?.takeIf {
+                    isAppUnlocked && releasedAiScreenCommandKey == AiCommandEffectKey(it)
+                }
+                fun enqueueAiScreenCommand(command: FutachaAiCommand) {
+                    pendingAiScreenCommands = enqueuePlatformAiCommand(pendingAiScreenCommands, command)
+                    val retained = pendingAiScreenCommands.mapTo(HashSet()) { AiCommandEffectKey(it) }
+                    pendingAiScreenTargets = (pendingAiScreenTargets +
+                        (AiCommandEffectKey(command) to (navigationState.selectedBoardId to navigationState.selectedThreadId)))
+                        .filterKeys { it in retained }
+                    pendingAiScreenForwardedAt[AiCommandEffectKey(command)] = TimeSource.Monotonic.markNow()
+                    pendingAiScreenForwardedAt.keys.retainAll(retained)
+                }
                 var aiResultMessage by remember { mutableStateOf<String?>(null) }
                 var isAiGlobalSettingsVisible by remember { mutableStateOf(false) }
                 var aiFileManagerPickerRequest by remember { mutableStateOf(0) }
                 var isAiHistoryRefreshCommandRunning by remember { mutableStateOf(false) }
                 val handledAiCommandIds = remember { LinkedHashSet<String>() }
                 val onAiScreenCommandConsumed: (FutachaAiCommand) -> Unit = { consumedCommand ->
-                    if (pendingAiScreenCommand == consumedCommand) {
-                        pendingAiScreenCommand = null
+                    pendingAiScreenCommands = consumePlatformAiCommand(pendingAiScreenCommands, consumedCommand)
+                }
+                LaunchedEffect(navigationState.selectedBoardId, navigationState.selectedThreadId) {
+                    val target = navigationState.selectedBoardId to navigationState.selectedThreadId
+                    pendingAiScreenCommands = pendingAiScreenCommands.filter {
+                        pendingAiScreenTargets[AiCommandEffectKey(it)] == target
                     }
+                }
+                // A command the screen never consumes must not block later ones,
+                // but the wait covers a slow thread load (up to ~75 s), and the
+                // user is told when one is dropped (C-5). The age counts from the
+                // forwarding, also while stopped or locked, and a command that
+                // waited behind the lock follows the 60 s rule (C4-1).
+                LaunchedEffect(AiCommandEffectKey(pendingAiScreenCommand), isAppUnlocked) {
+                    // Withdrawn on every restart (a relock restarts it), so after
+                    // the unlock the screens wait for the check below.
+                    releasedAiScreenCommandKey = null
+                    val command = pendingAiScreenCommand ?: return@LaunchedEffect
+                    val key = AiCommandEffectKey(command)
+                    val decision = superviseAiScreenCommand(
+                        forwardedAt = pendingAiScreenForwardedAt[key] ?: TimeSource.Monotonic.markNow(),
+                        appLock = appLock,
+                        onRelease = { releasedAiScreenCommandKey = key }
+                    )
+                    releasedAiScreenCommandKey = null
+                    if (pendingAiScreenCommands.firstOrNull() !== command) return@LaunchedEffect
+                    onAiScreenCommandConsumed(command)
+                    aiResultMessage = buildAiScreenCommandDropMessage(command, decision)
                 }
 
                 suspend fun handleAiOutcome(
@@ -804,11 +1078,42 @@ fun FutachaApp(
                         isCookieManagementAvailable = cookieRepository != null,
                         appVersion = observedRuntimeState.appVersion,
                         isAiCommandEnabled = observedRuntimeState.isAiCommandEnabled,
+                        appLock = appLock,
                         compatibilityStore = compatibilityStore,
                         importedHistoryRepository = aiImportedHistoryRepository
                     )
                 )
-                val currentHandleAiCommand by rememberUpdatedState<suspend (FutachaAiCommand) -> Unit> { command ->
+                // C4-2: until the store emits, the boards/history are the seed
+                // lists; a command resolved against them failed and was lost.
+                val aiCommandInputsLoaded = rememberUpdatedState(arePersistedListsLoaded)
+                suspend fun awaitAiCommandInputsLoaded() {
+                    snapshotFlow { aiCommandInputsLoaded.value }.first { it }
+                }
+                // [arrivedAt]/[maxAgeMillis]: when the command reached the app and
+                // how long its sender wants it to stay valid (watch taps).
+                val currentHandleAiCommand by rememberUpdatedState<
+                    suspend (FutachaAiCommand, TimeSource.Monotonic.ValueTimeMark, Long?) -> Unit
+                > { command, arrivedAt, maxAgeMillis ->
+                    // Held, not executed, while locked; read outside composition (C-1).
+                    appLock.awaitUnlocked()
+                    awaitAiCommandInputsLoaded()
+                    when (
+                        resolveAiCommandHoldDecision(
+                            ageMillis = arrivedAt.elapsedNow().inWholeMilliseconds,
+                            maxAgeMillis = maxAgeMillis,
+                            wasHeldByLock = appLock.wasHeldByLock(arrivedAt)
+                        )
+                    ) {
+                        AiCommandHoldDecision.Run -> Unit
+                        AiCommandHoldDecision.DropExpired -> {
+                            Logger.w(TAG, "Dropped expired AI command: ${command.action.id} from ${command.source}")
+                            return@rememberUpdatedState
+                        }
+                        AiCommandHoldDecision.DropHeldByLock -> {
+                            aiResultMessage = buildAiCommandHeldByLockMessage(command)
+                            return@rememberUpdatedState
+                        }
+                    }
                     if (handledAiCommandIds.isDuplicateAiCommand(command)) {
                         return@rememberUpdatedState
                     }
@@ -820,9 +1125,12 @@ fun FutachaApp(
                         )
                     )
                     val outcome = try {
+                        val inputs = currentAiRouterInputs
                         executeFutachaAiCommand(
                             command = command,
-                            inputs = currentAiRouterInputs
+                            inputs = inputs.copy(
+                                isAiCommandEnabled = readPersistedAiCommandEnabled(stateStore, inputs.isAiCommandEnabled)
+                            )
                         )
                     } catch (e: CancellationException) {
                         throw e
@@ -838,10 +1146,7 @@ fun FutachaApp(
                     }
                     val shouldForward = shouldForwardAiCommandToScreen(command, outcome)
                     if (shouldForward) {
-                        pendingAiScreenCommand = resolvePendingAiScreenCommand(
-                            current = pendingAiScreenCommand,
-                            incoming = command
-                        )
+                        enqueueAiScreenCommand(command)
                     }
                     AnalyticsTracker.event(
                         "ai_command_result",
@@ -855,40 +1160,83 @@ fun FutachaApp(
                     handleAiOutcome(outcome, suppressResultDialog = shouldForward)
                 }
 
+                // Not keyed on the lock: the link stays unconsumed while the
+                // effect waits for the unlock, and keeps its arrival time.
                 LaunchedEffect(platformAiDeepLink) {
                     val rawDeepLink = platformAiDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+                    val arrivedAt = TimeSource.Monotonic.markNow()
+                    appLock.awaitUnlocked()
+                    // Kept unconsumed until the stored lists are loaded (C4-2).
+                    awaitAiCommandInputsLoaded()
                     val command = parseFutachaAiDeepLink(rawDeepLink, source = "platform")
                     onPlatformAiDeepLinkConsumed(rawDeepLink)
                     if (command == null) {
                         aiResultMessage = "AI操作のURLを解釈できませんでした"
                         return@LaunchedEffect
                     }
-                    currentHandleAiCommand(command)
+                    // Consuming the link restarts this effect; run the command
+                    // outside it so the restart cannot cancel it half-way.
+                    coroutineScope.launch {
+                        // C4-3: a Wear OS link only opened the app. While links are
+                        // not allowed, the same command from the watch's Data Layer
+                        // (same commandId, allowed while OFF) does the work; its id
+                        // must not be recorded here as handled.
+                        if (command.isWatchRelayLink() &&
+                            !readPersistedAiCommandEnabled(stateStore, currentAiRouterInputs.isAiCommandEnabled)
+                        ) {
+                            return@launch
+                        }
+                        currentHandleAiCommand(command, arrivedAt, null)
+                    }
                 }
 
-                LaunchedEffect(platformAiCommand) {
+                LaunchedEffect(AiCommandEffectKey(platformAiCommand)) {
                     val command = platformAiCommand ?: return@LaunchedEffect
-                    currentHandleAiCommand(command)
+                    val arrivedAt = FutachaAiCommandArrivals.arrivalOf(command) ?: TimeSource.Monotonic.markNow()
+                    appLock.awaitUnlocked()
+                    // Mirror the bridge collector below: a long history refresh
+                    // runs outside this effect so the next queued platform
+                    // command (which restarts the effect) cannot cancel it.
+                    if (shouldLaunchAiCommandFromBridge(command)) {
+                        if (shouldStartAiBridgeCommand(command, isAiHistoryRefreshCommandRunning)) {
+                            isAiHistoryRefreshCommandRunning = true
+                            coroutineScope.launch {
+                                try {
+                                    currentHandleAiCommand(command, arrivedAt, null)
+                                } finally {
+                                    isAiHistoryRefreshCommandRunning = false
+                                }
+                            }
+                        }
+                    } else {
+                        currentHandleAiCommand(command, arrivedAt, null)
+                    }
                     onPlatformAiCommandConsumed(command)
                 }
 
                 if (consumeAiCommandBridge) {
+                    // Stays collecting across a relock (removing it cancelled a
+                    // command it was holding) but receives only while unlocked,
+                    // so commands sent meanwhile wait in the bridge (C-1).
                     LaunchedEffect(Unit) {
-                        FutachaAiCommandBridge.commands.collect { command ->
+                        while (true) {
+                            appLock.awaitUnlocked()
+                            val queued = FutachaAiCommandBridge.receiveQueued()
+                            val command = queued.command
                             if (shouldLaunchAiCommandFromBridge(command)) {
                                 if (!shouldStartAiBridgeCommand(command, isAiHistoryRefreshCommandRunning)) {
-                                    return@collect
+                                    continue
                                 }
                                 isAiHistoryRefreshCommandRunning = true
                                 launch {
                                     try {
-                                        currentHandleAiCommand(command)
+                                        currentHandleAiCommand(command, queued.enqueuedAt, queued.maxAgeMillis)
                                     } finally {
                                         isAiHistoryRefreshCommandRunning = false
                                     }
                                 }
                             } else {
-                                currentHandleAiCommand(command)
+                                currentHandleAiCommand(command, queued.enqueuedAt, queued.maxAgeMillis)
                             }
                         }
                     }
@@ -909,7 +1257,7 @@ fun FutachaApp(
                     is FutachaResolvedDestinationContent.BoardManagement -> {
                         FutachaBoardManagementDestination(
                             props = content.props,
-                            aiCommand = pendingAiScreenCommand,
+                            aiCommand = releasedAiScreenCommand,
                             onAiCommandConsumed = onAiScreenCommandConsumed
                         )
                     }
@@ -927,7 +1275,7 @@ fun FutachaApp(
                         FutachaCatalogDestination(
                             props = content.props,
                             saveableStateHolder = saveableStateHolder,
-                            aiCommand = pendingAiScreenCommand,
+                            aiCommand = releasedAiScreenCommand,
                             onAiCommandConsumed = onAiScreenCommandConsumed
                         )
                     }
@@ -935,13 +1283,13 @@ fun FutachaApp(
                     is FutachaResolvedDestinationContent.Thread -> {
                         FutachaThreadDestination(
                             props = content.props,
-                            aiCommand = pendingAiScreenCommand,
+                            aiCommand = releasedAiScreenCommand,
                             onAiCommandConsumed = onAiScreenCommandConsumed
                         )
                     }
                 }
 
-                pendingAiConfirmation?.let { request ->
+                pendingAiConfirmation?.takeIf { isAppUnlocked }?.let { request ->
                     fun dismissAiConfirmation() {
                         AnalyticsTracker.uiControl("ai_confirmation", "AI操作の確認をキャンセル")
                         pendingAiConfirmation = null
@@ -954,6 +1302,7 @@ fun FutachaApp(
                         confirmButton = {
                             TextButton(
                                 onClick = {
+                                    if (!appLock.isUnlocked) return@TextButton
                                     AnalyticsTracker.uiControl("ai_confirmation", "AI操作の確認を実行")
                                     val confirmedRequest = request
                                     pendingAiConfirmation = null
@@ -973,6 +1322,7 @@ fun FutachaApp(
                                                     isCookieManagementAvailable = cookieRepository != null,
                                                     appVersion = observedRuntimeState.appVersion,
                                                     isAiCommandEnabled = observedRuntimeState.isAiCommandEnabled,
+                                                    appLock = appLock,
                                                     compatibilityStore = compatibilityStore,
                                                     importedHistoryRepository = aiImportedHistoryRepository
                                                 ),
@@ -995,10 +1345,7 @@ fun FutachaApp(
                                             outcome
                                         )
                                         if (shouldForward) {
-                                            pendingAiScreenCommand = resolvePendingAiScreenCommand(
-                                                current = pendingAiScreenCommand,
-                                                incoming = confirmedRequest.command
-                                            )
+                                            enqueueAiScreenCommand(confirmedRequest.command)
                                         }
                                         handleAiOutcome(outcome, suppressResultDialog = shouldForward)
                                     }
@@ -1015,7 +1362,7 @@ fun FutachaApp(
                     )
                 }
 
-                aiResultMessage?.let { message ->
+                aiResultMessage?.takeIf { isAppUnlocked }?.let { message ->
                     AlertDialog(
                         onDismissRequest = {
                             AnalyticsTracker.uiControl("ai_result", "AI操作の結果を閉じる")
@@ -1034,9 +1381,12 @@ fun FutachaApp(
                     )
                 }
 
-                if (isAiGlobalSettingsVisible) {
+                if (isAiGlobalSettingsVisible && isAppUnlocked) {
                     GlobalSettingsScreen(
-                        onBack = { isAiGlobalSettingsVisible = false },
+                        onBack = {
+                            isAiGlobalSettingsVisible = false
+                            aiFileManagerPickerRequest = 0
+                        },
                         preferencesState = screenBindings.screenPreferencesState,
                         preferencesCallbacks = screenBindings.screenPreferencesCallbacks,
                         historyEntries = persistedHistory,

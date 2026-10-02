@@ -194,22 +194,23 @@ internal suspend fun writeThreadSaveBinaryStream(
     writeTimeoutMillis: Long,
     block: suspend (FileWriteSink) -> Unit
 ) {
-    val completed = withTimeoutOrNull(writeTimeoutMillis) {
-        when {
-            target.saveLocation != null && target.relativePath != null -> {
-                fileSystem.writeByteStream(target.saveLocation, target.relativePath, block).getOrThrow()
+    val boundedBlock: suspend (FileWriteSink) -> Unit = { output ->
+        block(object : FileWriteSink {
+            override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                val completed = withTimeoutOrNull(writeTimeoutMillis) {
+                    output.write(bytes, offset, length)
+                    true
+                } ?: false
+                check(completed) { "Save aborted: timed out while writing media chunk" }
             }
-            target.absolutePath != null -> {
-                fileSystem.writeByteStream(target.absolutePath, block).getOrThrow()
-            }
-            else -> {
-                throw IllegalStateException("No target path specified for media stream")
-            }
-        }
-        true
-    } ?: false
-    if (!completed) {
-        throw IllegalStateException("Save aborted: timed out while writing media stream")
+        })
+    }
+    when {
+        target.saveLocation != null && target.relativePath != null ->
+            fileSystem.writeByteStream(target.saveLocation, target.relativePath, boundedBlock).getOrThrow()
+        target.absolutePath != null ->
+            fileSystem.writeByteStream(target.absolutePath, boundedBlock).getOrThrow()
+        else -> error("No target path specified for media stream")
     }
 }
 

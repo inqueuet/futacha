@@ -1,39 +1,42 @@
 package com.valoser.futacha.shared.state
 
 import android.content.Context
-import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.preferencesDataStoreFile
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 private const val DATASTORE_NAME = "futacha_state"
 private const val MAX_DATASTORE_READ_RETRIES = 5L
+/** Set before the first DataStore read so the corruption handler can find the damaged file. */
+private val dataStoreRecoveryContext = AtomicReference<Context?>(null)
 private val Context.dataStore by preferencesDataStore(
     name = DATASTORE_NAME,
-    corruptionHandler = ReplaceFileCorruptionHandler { error ->
-        Logger.e(
-            "AndroidPlatformStateStorage",
-            "DataStore preferences were corrupted; replacing them with empty preferences",
-            error
-        )
-        emptyPreferences()
-    }
+    // Keeps every readable entry (boards, NG, app-lock password ...) and a copy
+    // of the damaged file instead of silently resetting everything (G-19).
+    // The handler runs on DataStore's IO scope, so resolving the path there is safe.
+    corruptionHandler = recoveringPreferencesCorruptionHandler(
+        settingsFile = { dataStoreRecoveryContext.get()?.preferencesDataStoreFile(DATASTORE_NAME) }
+    )
 )
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
@@ -45,6 +48,11 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
 private class AndroidPlatformStateStorage(
     private val context: Context
 ) : PlatformStateStorage {
+    init {
+        dataStoreRecoveryContext.compareAndSet(null, context)
+    }
+    private val pendingRecoveryNoticeChecked = AtomicBoolean(false)
+
     private val mediaFeatureSettingsKey = stringPreferencesKey(com.valoser.futacha.shared.media.MEDIA_FEATURE_SETTINGS_KEY)
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
@@ -92,6 +100,13 @@ private class AndroidPlatformStateStorage(
     private val lastReadablePreferences = AtomicReference<Preferences?>(null)
     private val safeData: Flow<Preferences> =
         context.dataStore.data
+            .onStart {
+                if (pendingRecoveryNoticeChecked.compareAndSet(false, true)) {
+                    withContext(Dispatchers.IO) {
+                        restorePendingSettingsRecoveryNotice(context.preferencesDataStoreFile(DATASTORE_NAME))
+                    }
+                }
+            }
             .onEach { prefs ->
                 lastReadablePreferences.set(prefs)
             }

@@ -13,7 +13,22 @@ class AndroidVersionChecker(
 ) : VersionChecker {
     companion object {
         private const val TAG = "AndroidVersionChecker"
+        private const val PLAY_STORE_INSTALLER = "com.android.vending"
+        private const val PREFS_NAME = "github_update_prompt"
+        private const val KEY_OFFERED_VERSION = "offered_version"
+        private const val KEY_OFFERED_AT = "offered_at_millis"
+        private const val REOFFER_INTERVAL_MILLIS = 7L * 24L * 60L * 60L * 1000L
     }
+
+    private fun installerPackageName(): String? = runCatching {
+        val packageManager = context.packageManager
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getInstallerPackageName(context.packageName)
+        }
+    }.getOrNull()
 
     override fun getCurrentVersion(): String {
         return try {
@@ -27,6 +42,9 @@ class AndroidVersionChecker(
 
     override suspend fun checkForUpdate(): UpdateInfo? {
         val currentVersion = getCurrentVersion()
+        // Play installs are updated through Google Play In-App Updates; the GitHub
+        // release prompt would duplicate it (and point to a build Play cannot replace).
+        if (installerPackageName() == PLAY_STORE_INSTALLER) return null
 
         // GitHub Releases APIから最新バージョンを取得
         val release = fetchLatestVersionFromGitHub(
@@ -42,6 +60,20 @@ class AndroidVersionChecker(
             return null
         }
 
+        // Offer one release at most once a week instead of on every launch.
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (!shouldOfferGitHubUpdate(
+                offeredVersion = prefs.getString(KEY_OFFERED_VERSION, null),
+                offeredAtMillis = prefs.getLong(KEY_OFFERED_AT, 0L),
+                latestVersion = latestVersion,
+                nowMillis = now,
+                reofferIntervalMillis = REOFFER_INTERVAL_MILLIS
+            )
+        ) {
+            return null
+        }
+
         // 更新メッセージを生成
         val message = buildUpdateMessage(currentVersion, latestVersion, release.name, release.body)
 
@@ -52,6 +84,24 @@ class AndroidVersionChecker(
         )
     }
 
+    override fun onUpdateShown(info: UpdateInfo) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_OFFERED_VERSION, info.latestVersion)
+            .putLong(KEY_OFFERED_AT, System.currentTimeMillis())
+            .apply()
+    }
+}
+
+internal fun shouldOfferGitHubUpdate(
+    offeredVersion: String?,
+    offeredAtMillis: Long,
+    latestVersion: String,
+    nowMillis: Long,
+    reofferIntervalMillis: Long
+): Boolean {
+    if (offeredVersion != latestVersion) return true
+    if (nowMillis < offeredAtMillis) return true
+    return nowMillis - offeredAtMillis >= reofferIntervalMillis
 }
 
 @Volatile

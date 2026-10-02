@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import com.valoser.futacha.shared.compat.CompatBoard
 import com.valoser.futacha.shared.compat.ExperienceProfile
 import com.valoser.futacha.shared.compat.compatBoardKey
@@ -21,18 +22,23 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_SEED_BENCHMARK_FIXTURE) return
         val pendingResult = goAsync()
         Thread {
+            // A malformed broadcast must report failure (the benchmark checks
+            // result=-1) instead of throwing on this thread and killing the app.
+            pendingResult.resultCode = Activity.RESULT_CANCELED
             try {
                 if (intent.getBooleanExtra(EXTRA_RESTORE_LAUNCHER_DEFAULTS, false)) {
                     restoreLauncherDefaults(context)
                     pendingResult.resultCode = Activity.RESULT_OK
                     return@Thread
                 }
+                val targetProfile = parseBenchmarkFixtureProfile(intent.getStringExtra(EXTRA_PROFILE))
+                if (targetProfile == null) {
+                    Log.w(TAG, "Ignoring benchmark fixture request with an unknown profile")
+                    return@Thread
+                }
                 val app = context.applicationContext as FutachaApplication
                 runBlocking(Dispatchers.IO) {
                     app.appStateStore.setBoards(listOf(TUTORIAL_BOARD))
-                    val targetProfile = intent.getStringExtra(EXTRA_PROFILE)
-                        ?.let(ExperienceProfile::valueOf)
-                        ?: ExperienceProfile.FUTACHA
                     app.modeSwitchCoordinator.switchTo(
                         target = targetProfile,
                         preferredFutachaIcon = AppIconVariant.Current
@@ -40,6 +46,8 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
                     app.compatibilityStore.upsertBenchmarkTutorialBoard(TUTORIAL_COMPAT_BOARD)
                 }
                 pendingResult.resultCode = Activity.RESULT_OK
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to seed the benchmark fixture", error)
             } finally {
                 pendingResult.finish()
             }
@@ -69,6 +77,7 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
     }
 
     private companion object {
+        const val TAG = "BenchmarkFixture"
         const val ACTION_SEED_BENCHMARK_FIXTURE =
             "com.valoser.futacha.action.SEED_BENCHMARK_FIXTURE"
         const val EXTRA_PROFILE = "profile"
@@ -100,4 +109,10 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
             sortOrder = 0
         )
     }
+}
+
+/** Missing selects the default profile; an unknown name is rejected instead of throwing. */
+internal fun parseBenchmarkFixtureProfile(raw: String?): ExperienceProfile? {
+    if (raw == null) return ExperienceProfile.FUTACHA
+    return ExperienceProfile.entries.firstOrNull { it.name == raw }
 }

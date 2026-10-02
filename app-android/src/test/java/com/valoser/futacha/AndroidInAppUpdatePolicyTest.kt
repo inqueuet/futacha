@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import com.google.android.play.core.install.model.InstallStatus
+import com.google.android.play.core.install.model.UpdateAvailability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -111,5 +113,99 @@ class AndroidInAppUpdatePolicyTest {
                 immediateAllowed = false
             )
         )
+    }
+
+    @Test
+    fun flexibleDownloadStartedByAnEarlierScreenIsNotResumedAsImmediate() {
+        // Play reports a running flexible download like an interrupted immediate flow.
+        listOf(InstallStatus.PENDING, InstallStatus.DOWNLOADING).forEach { status ->
+            assertEquals(
+                AndroidInAppUpdateAction.AWAIT_FLEXIBLE_DOWNLOAD,
+                resolveAndroidInAppUpdateAction(
+                    installStatus = status,
+                    updateAvailability = UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS,
+                    flexibleFlowRecorded = true,
+                    allowStartingNewUpdate = true
+                )
+            )
+        }
+    }
+
+    @Test
+    fun activeDownloadReportedAsAvailableDoesNotStartAnotherFlow() {
+        // A seven-day-old update would otherwise select the immediate flow here.
+        assertEquals(
+            AndroidInAppUpdateAction.AWAIT_FLEXIBLE_DOWNLOAD,
+            resolveAndroidInAppUpdateAction(
+                installStatus = InstallStatus.DOWNLOADING,
+                updateAvailability = UpdateAvailability.UPDATE_AVAILABLE,
+                flexibleFlowRecorded = false,
+                allowStartingNewUpdate = true
+            )
+        )
+    }
+
+    @Test
+    fun downloadedFlexibleUpdateShowsTheRestartPrompt() {
+        assertEquals(
+            AndroidInAppUpdateAction.SHOW_DOWNLOADED,
+            resolveAndroidInAppUpdateAction(
+                installStatus = InstallStatus.DOWNLOADED,
+                updateAvailability = UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS,
+                flexibleFlowRecorded = true,
+                allowStartingNewUpdate = true
+            )
+        )
+    }
+
+    @Test
+    fun interruptedImmediateFlowIsStillResumed() {
+        listOf(true, false).forEach { allowStarting ->
+            assertEquals(
+                AndroidInAppUpdateAction.RESUME_IMMEDIATE,
+                resolveAndroidInAppUpdateAction(
+                    installStatus = InstallStatus.DOWNLOADING,
+                    updateAvailability = UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS,
+                    flexibleFlowRecorded = false,
+                    allowStartingNewUpdate = allowStarting
+                )
+            )
+        }
+    }
+
+    @Test
+    fun availableUpdateStartsOnlyWhenNewFlowsAreAllowed() {
+        assertEquals(
+            AndroidInAppUpdateAction.START_NEW,
+            resolveAndroidInAppUpdateAction(
+                installStatus = InstallStatus.UNKNOWN,
+                updateAvailability = UpdateAvailability.UPDATE_AVAILABLE,
+                flexibleFlowRecorded = false,
+                allowStartingNewUpdate = true
+            )
+        )
+        assertEquals(
+            AndroidInAppUpdateAction.NONE,
+            resolveAndroidInAppUpdateAction(
+                installStatus = InstallStatus.UNKNOWN,
+                updateAvailability = UpdateAvailability.UPDATE_AVAILABLE,
+                flexibleFlowRecorded = false,
+                allowStartingNewUpdate = false
+            )
+        )
+    }
+
+    @Test
+    fun flexibleFlowRecordMatchesOnlyTheOfferedVersion() {
+        val record = encodeInAppUpdateFlowRecord(AndroidInAppUpdateKind.FLEXIBLE, 180)
+        assertTrue(isFlexibleInAppUpdateFlowRecordFor(record, 180))
+        assertFalse(isFlexibleInAppUpdateFlowRecordFor(record, 181))
+        assertFalse(
+            isFlexibleInAppUpdateFlowRecordFor(
+                encodeInAppUpdateFlowRecord(AndroidInAppUpdateKind.IMMEDIATE, 180),
+                180
+            )
+        )
+        assertFalse(isFlexibleInAppUpdateFlowRecordFor(null, 180))
     }
 }

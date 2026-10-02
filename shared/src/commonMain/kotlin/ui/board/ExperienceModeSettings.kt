@@ -19,6 +19,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.selectable
 import com.valoser.futacha.shared.compat.ExperienceProfile
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun GlobalSettingsModeSection() {
@@ -69,7 +70,7 @@ internal fun GlobalSettingsModeSection() {
 
     val target = requestedProfile
     if (target != null) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { requestedProfile = null },
             title = { Text("${target.displayName}へ切り替えますか？") },
             text = {
@@ -90,6 +91,6 @@ internal fun GlobalSettingsModeSection() {
             dismissButton = {
                 TextButton(onClick = { requestedProfile = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
 }

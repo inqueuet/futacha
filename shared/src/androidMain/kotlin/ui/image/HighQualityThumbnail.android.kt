@@ -7,3 +7,6 @@ import coil3.request.ImageRequest
 // original; BitmapFactory decodes the first frame only.
 internal actual fun ImageRequest.Builder.staticImageDecoding(): ImageRequest.Builder =
     decoderFactory(BitmapFactoryDecoder.Factory())
+
+// BitmapFactory and ImageDecoder already subsample to the requested size while decoding.
+internal actual fun ImageRequest.Builder.boundedOriginalDecoding(): ImageRequest.Builder = this

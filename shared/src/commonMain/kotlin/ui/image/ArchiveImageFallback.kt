@@ -8,6 +8,10 @@ import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
 import io.ktor.http.Url
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 private val SkipArchiveImageFallbackKey = Extras.Key(false)
@@ -69,8 +73,33 @@ internal fun archiveImageFallbackCandidates(value: String): List<String> {
     }.distinct().filter { it != value.substringBefore('#') }
 }
 
-/** A missing image is independent of whether its archive still has the thread text. */
-internal class ArchiveImageFallbackInterceptor : Interceptor {
+/** How long a fully searched image skips the mirror search. */
+internal const val ARCHIVE_IMAGE_FALLBACK_MISSING_TTL_MILLIS = 10L * 60L * 1000L
+
+/** A search ended by timeouts or transient errors is retried sooner. */
+internal const val ARCHIVE_IMAGE_FALLBACK_FAILED_TTL_MILLIS = 60L * 1000L
+private const val ARCHIVE_IMAGE_FALLBACK_MAX_ENTRIES = 512
+
+/**
+ * A missing image is independent of whether its archive still has the thread text.
+ *
+ * Mirrors that also lack the image are remembered (bounded, per loader), so each
+ * redisplay of a dead image no longer probes every mirror again. An explicit
+ * reload ([refreshImageOnce]) still searches.
+ */
+internal class ArchiveImageFallbackInterceptor(
+    private val nowMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
+    /**
+     * Bounds one mirror attempt. It matches the image transport's whole-request
+     * budget (its connect/socket timeouts still end a dead mirror early), so a
+     * large attachment on a slow line can finish instead of failing every time.
+     */
+    private val candidateTimeoutMillis: Long = IMAGE_REQUEST_TIMEOUT_MILLIS,
+    private val totalTimeoutMillis: Long = IMAGE_REQUEST_TIMEOUT_MILLIS,
+) : Interceptor {
+    private val exhaustedMutex = Mutex()
+    private val exhausted = LinkedHashMap<String, Long>()
+
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val result = chain.proceed()
         if (chain.request.getExtra(SkipArchiveImageFallbackKey)) return result
@@ -79,19 +108,49 @@ internal class ArchiveImageFallbackInterceptor : Interceptor {
         val url = if (data is OriginalMediaRef) data.request.url else data.toString()
         val candidates = archiveImageFallbackCandidates(url)
         if (candidates.isEmpty()) return result
-        return withTimeoutOrNull(30_000) {
+        val explicitReload = chain.request.getExtra(RefreshOperation) != 0L
+        if (!explicitReload && isExhausted(url)) return result
+        var allMissing = true
+        var searched = false
+        val recovered = withTimeoutOrNull(totalTimeoutMillis) {
             for (candidate in candidates) {
                 val nextData = if (data is OriginalMediaRef) {
                     OriginalMediaRef(data.request.copy(url = candidate, headers = emptyMap()))
                 } else candidate
-                // Use the image transport's socket budget, not the short HTML
-                // probe budget: a full attachment may be several megabytes.
-                val recovered = withTimeoutOrNull(IMAGE_SOCKET_TIMEOUT_MILLIS) {
+                val attempt = withTimeoutOrNull(candidateTimeoutMillis) {
                     chain.withRequest(chain.request.newBuilder().data(nextData).build()).proceed()
                 }
-                if (recovered is SuccessResult) return@withTimeoutOrNull recovered
+                if (attempt is SuccessResult) return@withTimeoutOrNull attempt
+                if (attempt !is ErrorResult || !isMissingImage(attempt.throwable)) allMissing = false
             }
-            result
-        } ?: result
+            searched = true
+            null
+        }
+        if (recovered != null) {
+            forgetExhausted(url)
+            return recovered
+        }
+        // A cancelled request proves nothing about the mirrors.
+        currentCoroutineContext().ensureActive()
+        rememberExhausted(url, if (searched && allMissing) ARCHIVE_IMAGE_FALLBACK_MISSING_TTL_MILLIS else ARCHIVE_IMAGE_FALLBACK_FAILED_TTL_MILLIS)
+        return result
     }
+
+    private suspend fun isExhausted(url: String): Boolean = exhaustedMutex.withLock {
+        val expiry = exhausted[url] ?: return@withLock false
+        if (nowMillis() < expiry) true else {
+            exhausted.remove(url)
+            false
+        }
+    }
+
+    private suspend fun rememberExhausted(url: String, ttlMillis: Long) = exhaustedMutex.withLock {
+        exhausted.remove(url)
+        exhausted[url] = nowMillis() + ttlMillis
+        while (exhausted.size > ARCHIVE_IMAGE_FALLBACK_MAX_ENTRIES) {
+            exhausted.remove(exhausted.keys.first())
+        }
+    }
+
+    private suspend fun forgetExhausted(url: String) = exhaustedMutex.withLock { exhausted.remove(url) }
 }

@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.runtime.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.material3.*
 import com.valoser.futacha.shared.desktop.DesktopOsIntegration
 import kotlinx.coroutines.*
@@ -10,8 +11,8 @@ actual fun rememberCompatShareLauncher(): (text: String, mimeType: String, absol
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("共有") },
-        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) }
+    error?.let { message -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { error = null }, title = { Text("共有") },
+        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) } }
     return { text, _, path ->
         if (!pending) {
             pending = true

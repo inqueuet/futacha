@@ -34,12 +34,33 @@ internal suspend fun preserveEditedVideoMetadata(input: String, output: String, 
             readAt = { offset, count -> handle.readExactly(offset, count) },
             writeAt = { offset, bytes -> handle.write(offset, bytes, 0, bytes.size) }, flush = { handle.flush() })
         currentCoroutineContext().ensureActive()
-        val written = PreservedVideoMetadata.fromScan(VideoMetadataReader(VIDEO_PRESERVATION_SCAN_BUDGET).read(handle.size()) { offset, count ->
+        val written = PreservedVideoMetadata.fromScan(VideoMetadataReader(VIDEO_PRESERVATION_VERIFY_BUDGET).read(handle.size()) { offset, count ->
             currentCoroutineContext().ensureActive()
             handle.readExactly(offset, count)
         })
         check(record == written) { "書き出した動画の生成情報を照合できませんでした" }
     }
+}
+
+/**
+ * The appended moov carries the interoperable text tags and the authoritative record holding the same
+ * values again, so reading it back can cost about twice what the source's tags cost (B-7). It is verified
+ * with the reader's largest budget, and [requireWritableVideoMetadata] proves before encoding that the
+ * metadata this writer will append fits that budget with room left for the encoder's own boxes.
+ */
+private const val VIDEO_PRESERVATION_VERIFY_BUDGET = 16 * 1024 * 1024
+private const val VIDEO_PRESERVATION_VERIFY_MARGIN = 1024 * 1024
+
+/** Rejects a source record before encoding unless one more edit can be appended and read back unchanged. */
+internal suspend fun requireWritableVideoMetadata(record: PreservedVideoMetadata) {
+    // A longest-possible edit entry, so the real append is never larger than this rehearsal.
+    val candidate = record.copy(edits = record.edits + PreservedVideoMetadata.Edit(atUtc = "0".repeat(64), regionCount = 16))
+    val moov = mp4Box("moov", mp4Box("udta", videoMetadataBox(candidate)))
+    val scan = VideoMetadataReader(VIDEO_PRESERVATION_VERIFY_BUDGET - VIDEO_PRESERVATION_VERIFY_MARGIN).read(moov.size.toLong()) { offset, count ->
+        currentCoroutineContext().ensureActive()
+        moov.copyOfRange(offset.toInt(), offset.toInt() + count)
+    }
+    check(PreservedVideoMetadata.fromScan(scan) == candidate) { "書き出した動画の生成情報を照合できませんでした" }
 }
 
 private fun FileHandle.readExactly(offset: Long, count: Int): ByteArray {

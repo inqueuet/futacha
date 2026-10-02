@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val COMPAT_ARCHIVE_CANDIDATE_TIMEOUT_MILLIS = 4_000L
 private val compatThreadGoneHttpRegex = Regex("HTTP(?: error)?\\s+(?:404|410)\\b", RegexOption.IGNORE_CASE)
+private val compatSourceThreadIdRegex = Regex("""/res/(\d+)\.html?""", RegexOption.IGNORE_CASE)
 
 /** Identifies which network tier supplied a compatibility thread page. */
 internal enum class CompatThreadFetchSource {
@@ -113,7 +114,7 @@ internal suspend fun loadCompatThreadWithFallback(
                 (expectedPostCount != null && cachedPage.posts.size < expectedPostCount)
             )
         if (needsArchiveSupplement) {
-            val archivePages = loadArchivePages(sourceUrl, archiveLoader)
+            val archivePages = loadArchivePages(sourceUrl, archiveLoader, cachedPage.threadId)
             val merged = withContext(AppDispatchers.parsing) {
                 mergeCompatThreadPages(cachedPage, archivePages)
             }
@@ -135,7 +136,7 @@ internal suspend fun loadCompatThreadWithFallback(
                 (expectedPostCount != null && primaryPage.posts.size < expectedPostCount)
             )
         if (needsArchiveSupplement) {
-            val archivePages = loadArchivePages(sourceUrl, archiveLoader)
+            val archivePages = loadArchivePages(sourceUrl, archiveLoader, primaryPage.threadId)
             val merged = withContext(AppDispatchers.parsing) {
                 mergeCompatThreadPages(primaryPage, archivePages)
             }
@@ -157,7 +158,7 @@ internal suspend fun loadCompatThreadWithFallback(
     } else {
         val archiveUrl = buildInqueuetArchiveThreadUrlFromUrl(sourceUrl)
         if (archiveUrl != null && archiveUrl != cacheUrl) {
-            listOf(archiveUrl to attempt(archiveUrl))
+            listOf(archiveUrl to attempt(archiveUrl).mapCatching { validateCompatArchiveThreadPage(sourceUrl, it) })
         } else {
             emptyList()
         }
@@ -190,11 +191,28 @@ internal suspend fun loadCompatThreadWithFallback(
     )
 }
 
+/**
+ * Archive pages used to supplement a cached/live page. An archive answer for a different
+ * thread (redirect, wrong mapping) must never be merged into the source thread (C7),
+ * mirroring FutachaSharedBoardRepository.supplement.
+ */
 private suspend fun loadArchivePages(
     sourceUrl: String,
-    archiveLoader: suspend (String) -> ThreadPage
-): List<ThreadPage> = loadArchivePagesWithResults(sourceUrl, archiveLoader)
-    .mapNotNull { it.second.getOrNull() }
+    archiveLoader: suspend (String) -> ThreadPage,
+    baseThreadId: String
+): List<ThreadPage> {
+    val expectedThreadId = compatSourceThreadIdRegex.find(sourceUrl)?.groupValues?.getOrNull(1)
+        ?: baseThreadId
+    return loadArchivePagesWithResults(sourceUrl, archiveLoader)
+        .mapNotNull { it.second.getOrNull() }
+        .filter { it.threadId == expectedThreadId && it.posts.isNotEmpty() }
+}
+
+private fun validateCompatArchiveThreadPage(sourceUrl: String, page: ThreadPage): ThreadPage {
+    val expected = compatSourceThreadIdRegex.find(sourceUrl)?.groupValues?.getOrNull(1)
+    require(expected == null || page.threadId == expected) { "過去ログのスレッド番号が一致しません" }
+    return page
+}
 
 private suspend fun loadArchivePagesWithResults(
     sourceUrl: String,
@@ -203,7 +221,7 @@ private suspend fun loadArchivePagesWithResults(
     return buildCompatArchiveThreadCandidates(sourceUrl).map { archiveUrl ->
         archiveUrl to try {
             withTimeoutOrNull(COMPAT_ARCHIVE_CANDIDATE_TIMEOUT_MILLIS) {
-                Result.success(archiveLoader(archiveUrl))
+                Result.success(validateCompatArchiveThreadPage(sourceUrl, archiveLoader(archiveUrl)))
             } ?: Result.failure(IllegalStateException("archive candidate timeout"))
         } catch (cancelled: CancellationException) {
             throw cancelled

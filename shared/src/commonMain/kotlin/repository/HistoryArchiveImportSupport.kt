@@ -12,8 +12,10 @@ import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
@@ -247,6 +249,40 @@ private suspend fun restoreHistoryArchiveEntryPayload(
     }.getOrNull() ?: return RestoredHistoryArchivePayloadResult(hasRestoredPayload = false, isPartial = false)
 
     val destinationStorageId = buildImportedHistoryStorageId(manifest.archiveId, entry.snapshotId)
+    // A snapshot folder this import creates is referenced only once it is indexed. When the
+    // import fails or is cancelled before that, remove the copied files instead of leaving an
+    // unreferenced folder behind. A folder already indexed by an earlier import is kept.
+    val wasIndexedBefore = runCatching {
+        destinationRepository.loadIndex().threads.any { resolveSavedThreadStorageId(it) == destinationStorageId }
+    }.getOrDefault(true)
+    var indexed = false
+    try {
+        val result = restoreHistoryArchiveEntryPayloadFiles(
+            fileSystem, destinationRepository, archiveDirectory, entry, importStartedAtMillis, json,
+            metadataPath, sourceMetadata, destinationStorageId
+        )
+        indexed = result.hasRestoredPayload
+        return result
+    } finally {
+        if (!indexed && !wasIndexedBefore) {
+            withContext(NonCancellable) {
+                withTimeoutOrNull(30_000L) { destinationRepository.deletePath(destinationStorageId) }
+            }
+        }
+    }
+}
+
+private suspend fun restoreHistoryArchiveEntryPayloadFiles(
+    fileSystem: FileSystem,
+    destinationRepository: SavedThreadRepository,
+    archiveDirectory: String,
+    entry: HistoryArchiveEntry,
+    importStartedAtMillis: Long,
+    json: Json,
+    metadataPath: String,
+    sourceMetadata: SavedThreadMetadata,
+    destinationStorageId: String
+): RestoredHistoryArchivePayloadResult {
     val payloadRoot = metadataPath.substringBeforeLast('/', "")
     val nonMetadataFiles = entry.payloadFiles.filter { it.kind != HistoryArchiveFileKind.METADATA }
     var failedCopyCount = 0

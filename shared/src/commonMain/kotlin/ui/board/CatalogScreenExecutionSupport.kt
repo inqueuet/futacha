@@ -52,6 +52,16 @@ internal fun buildCatalogHistoryRefreshFailureMessage(error: Throwable): String 
 
 internal fun buildCatalogRefreshSuccessMessage(): String = "カタログを更新しました"
 
+internal fun buildCatalogPastThreadSearchFailureMessage(error: Throwable): String {
+    return if (error is kotlinx.coroutines.TimeoutCancellationException) {
+        "検索がタイムアウトしました"
+    } else {
+        buildPastThreadSearchErrorMessage(error)
+    }
+}
+
+internal fun buildCatalogPastThreadSearchInterruptedMessage(): String = "検索を中断しました"
+
 internal fun buildCatalogPastThreadSearchClientUnavailableMessage(): String {
     return "ネットワーククライアントが利用できません"
 }
@@ -71,38 +81,62 @@ internal fun buildCatalogPersistenceBindings(
     onFallbackWatchWordsChanged: (List<String>) -> Unit
 ): CatalogPersistenceBindings {
     return CatalogPersistenceBindings(
-        persistCatalogNgWords = { updated ->
-            if (stateStore != null) {
-                coroutineScope.launch {
-                    stateStore.setCatalogNgWords(updated)
+        persistCatalogNgWords = AtomicStringListPersister(
+            replace = { updated ->
+                if (stateStore != null) {
+                    coroutineScope.launch {
+                        stateStore.setCatalogNgWords(updated)
+                    }
+                } else {
+                    onFallbackCatalogNgWordsChanged(updated)
                 }
-            } else {
-                onFallbackCatalogNgWordsChanged(updated)
+            },
+            atomicEdit = stateStore?.let { store ->
+                { edit -> coroutineScope.launch { store.updateCatalogNgWords(edit) } }
             }
-        },
-        persistGlobalWatchWords = { updated ->
-            if (stateStore != null) {
-                coroutineScope.launch {
-                    stateStore.setWatchWords(updated)
-                }
-            } else {
-                onFallbackWatchWordsChanged(updated)
-            }
-        },
-        persistBoardWatchWords = { updated ->
-            if (stateStore != null) {
-                coroutineScope.launch {
-                    val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
-                    if (boardKey.isNotEmpty()) {
-                        stateStore.setBoardWatchWords(boardKey, updated)
-                    } else {
+        ),
+        persistGlobalWatchWords = AtomicStringListPersister(
+            replace = { updated ->
+                if (stateStore != null) {
+                    coroutineScope.launch {
                         stateStore.setWatchWords(updated)
                     }
+                } else {
+                    onFallbackWatchWordsChanged(updated)
                 }
-            } else {
-                onFallbackWatchWordsChanged(updated)
+            },
+            atomicEdit = stateStore?.let { store ->
+                { edit -> coroutineScope.launch { store.updateWatchWords(edit) } }
             }
-        },
+        ),
+        persistBoardWatchWords = AtomicStringListPersister(
+            replace = { updated ->
+                if (stateStore != null) {
+                    coroutineScope.launch {
+                        val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
+                        if (boardKey.isNotEmpty()) {
+                            stateStore.setBoardWatchWords(boardKey, updated)
+                        } else {
+                            stateStore.setWatchWords(updated)
+                        }
+                    }
+                } else {
+                    onFallbackWatchWordsChanged(updated)
+                }
+            },
+            atomicEdit = stateStore?.let { store ->
+                { edit ->
+                    coroutineScope.launch {
+                        val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
+                        if (boardKey.isNotEmpty()) {
+                            store.updateBoardWatchWords(boardKey, edit)
+                        } else {
+                            store.updateWatchWords(edit)
+                        }
+                    }
+                }
+            }
+        ),
         clearBoardWatchWordsOverride = {
             if (stateStore != null) {
                 coroutineScope.launch {
@@ -301,7 +335,6 @@ internal fun buildCatalogCreateThreadBindings(
                             textOnly = imageData == null
                         )
                     }
-                    showSnackbar(buildCreateThreadSuccessMessage(threadId))
                     AnalyticsTracker.event(
                         "thread_create_result",
                         mapOf(
@@ -309,8 +342,14 @@ internal fun buildCatalogCreateThreadBindings(
                             "board_kind" to analyticsBoardKind(board.url)
                         )
                     )
+                    // showSnackbar suspends until the snackbar is dismissed;
+                    // clear the posted draft and refresh first, otherwise
+                    // leaving the screen meanwhile kept the draft (re-post risk).
                     resetDraft()
                     performRefresh()
+                    coroutineScope.launch {
+                        showSnackbar(buildCreateThreadSuccessMessage(threadId))
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -541,9 +580,11 @@ internal fun buildCatalogExecutionBindings(
                                 "item_count_bucket" to analyticsCountBucket(items.size)
                             )
                         )
-                    } catch (e: CancellationException) {
-                        throw e
                     } catch (error: Throwable) {
+                        // A timeout inside the search (withTimeout, a client
+                        // timeout surfacing as CancellationException) must end
+                        // as an error; only a cancellation of this job is rethrown.
+                        if (error is CancellationException && !isActive) throw error
                         AnalyticsTracker.event(
                             "past_thread_search_result",
                             mapOf(
@@ -555,11 +596,23 @@ internal fun buildCatalogExecutionBindings(
                         if (shouldApplyCatalogRequestResult(isActive, currentPastSearchRuntimeState().generation, requestGeneration)) {
                             setPastSearchRuntimeState(
                                 currentPastSearchRuntimeState().copy(
-                                    state = ArchiveSearchState.Error(buildPastThreadSearchErrorMessage(error))
+                                    state = ArchiveSearchState.Error(buildCatalogPastThreadSearchFailureMessage(error))
                                 )
                             )
                         }
                     } finally {
+                        val latestRuntime = currentPastSearchRuntimeState()
+                        // Never leave this request's spinner behind (e.g. when the
+                        // job was cancelled by something other than a newer search).
+                        if (latestRuntime.generation == requestGeneration &&
+                            latestRuntime.state is ArchiveSearchState.Loading
+                        ) {
+                            setPastSearchRuntimeState(
+                                latestRuntime.copy(
+                                    state = ArchiveSearchState.Error(buildCatalogPastThreadSearchInterruptedMessage())
+                                )
+                            )
+                        }
                         if (runningJob != null && currentPastSearchRuntimeState().job == runningJob) {
                             setPastSearchRuntimeState(
                                 currentPastSearchRuntimeState().copy(job = null)

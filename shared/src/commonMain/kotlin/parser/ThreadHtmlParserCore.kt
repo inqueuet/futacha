@@ -172,7 +172,9 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
-    private val noReferenceRegex = Regex("No\\.?\\s*(\\d+)", RegexOption.IGNORE_CASE)
+    // Only a Latin word ending in "no" (casino2, piano 3) is excluded: Japanese
+    // text directly before the reference (これNo.123, レスNo.123) is still a reference.
+    private val noReferenceRegex = Regex("(?<![A-Za-z\\u00C0-\\u024F\\p{N}_])No\\.?\\s*(\\d+)", RegexOption.IGNORE_CASE)
     private val leadingNumberRegex = Regex("^(\\d+)")
     private val idReferenceRegex = Regex("ID:[^\\s>]+")
     private val videoExtensions = FUTABA_COMPAT_VIDEO_EXTENSIONS
@@ -186,7 +188,18 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     // FIX: 正規表現の再コンパイル防止 - 関数内で毎回生成されていたパターンをトップレベルに移動
-    private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
+    // Matched only inside a tag: post text is HTML-escaped, so a body, name or
+    // subject that merely reads "class=deleted" has no '<' before it.
+    private val deletedRegex = Regex(
+        pattern = "<[A-Za-z][^<>]{0,500}?\\sclass\\s*=\\s*['\"]?deleted(?![\\w-])",
+        option = RegexOption.IGNORE_CASE
+    )
+    // Server notices are red <font> markup (like deletedNoticeMarkupRegex); typed
+    // text with the same wording is plain, escaped body text.
+    private val isolationNoticeMarkupRegex = Regex(
+        pattern = "^\\s*<font\\s+[^<>]{0,200}color\\s*=\\s*['\"]?#ff0000['\"]?[^<>]{0,200}>\\s*$ISOLATION_NOTICE_TEXT\\s*</font>",
+        option = RegexOption.IGNORE_CASE
+    )
     private val deletedNoticeMarkupRegex = Regex(
         pattern = "<font\\s+[^>]{0,200}color\\s*=\\s*['\"]?#ff0000['\"]?[^>]{0,200}>\\s*(?:スレッドを立てた人|書き込みをした人|管理者)によって削除されました\\s*</font>",
         options = setOf(RegexOption.IGNORE_CASE)
@@ -419,6 +432,7 @@ internal object ThreadHtmlParserCore {
         // attachment area.  Searching the whole block promoted quoted links
         // to the current reply's primary image and duplicated uploader media.
         val attachmentBlock = withoutMessageBlock(block)
+        val hasDeletedMarker = deletedRegex.containsMatchIn(block)
         val isIsolated = containsIsolationNotice(messageHtml)
         val uploaderMediaUrl = resolveUploaderMediaUrl(messageHtml)
         val imageUrl = (
@@ -452,7 +466,7 @@ internal object ThreadHtmlParserCore {
         // quoted deletion notice is ordinary user content and must not turn
         // the whole reply (including its attachment) into a deleted post.
         // This mirrors the reference APK's exact red-notice markup check.
-        val isDeleted = deletedRegex.containsMatchIn(block) ||
+        val isDeleted = hasDeletedMarker ||
             deletedNoticeMarkupRegex.containsMatchIn(messageHtml)
 
         return Post(
@@ -514,6 +528,9 @@ internal object ThreadHtmlParserCore {
 
     private fun containsIsolationNotice(messageHtml: String): Boolean {
         if (messageHtml.isBlank()) return false
+        if (isolationNoticeMarkupRegex.containsMatchIn(messageHtml)) return true
+        // The plain leading line is kept as before: the server's exact notice
+        // markup is unverified, and dropping it could hide real isolations.
         val firstLine = decodeHtmlEntities(stripTags(messageHtml))
             .lineSequence()
             .map(String::trim)

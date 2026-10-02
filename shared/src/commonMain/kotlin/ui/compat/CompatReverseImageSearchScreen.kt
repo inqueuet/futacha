@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -201,7 +202,7 @@ private fun CompatReverseImageSearchScreenContent(
         if (state.canGoBack) navigate(CompatBrowserNavigation.BACK) else onClose()
     }
 
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(
             usePlatformDefaultWidth = false
@@ -219,6 +220,11 @@ private fun CompatReverseImageSearchScreenContent(
                     .background(LocalCompatibilityPalette.current.chrome),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // The dialog window does not inherit a chrome content colour;
+                // without this the black theme drew black text on black (E-8).
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides LocalCompatibilityPalette.current.chromeContent
+                ) {
                 IconButton(onClick = onClose) {
                     Icon(Icons.Filled.Close, contentDescription = "閉じる")
                 }
@@ -256,6 +262,7 @@ private fun CompatReverseImageSearchScreenContent(
                         )
                     }
                 }
+                }
             }
             if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(3.dp))
@@ -265,7 +272,7 @@ private fun CompatReverseImageSearchScreenContent(
             when {
                 !validInitialUrl && !validInlineHtml -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("画像検索ページを開けません")
+                        Text("画像検索ページを開けません", color = androidx.compose.material3.MaterialTheme.colorScheme.onBackground)
                     }
                 }
                 initialCookies == null -> {
@@ -296,10 +303,10 @@ private fun CompatReverseImageSearchScreenContent(
                 }
             }
         }
-    }
+    } }
     longPressedLink?.let { url ->
         val linkItems = compatReverseSearchLinkMenuItems(url)
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { longPressedLink = null },
             title = { Text("リンク") },
             text = { Text(url, maxLines = 3) },
@@ -321,7 +328,7 @@ private fun CompatReverseImageSearchScreenContent(
                 }
             },
             dismissButton = {}
-        )
+        ) }
     }
 }
 

@@ -4,6 +4,8 @@ package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.compat.stableCompatHash
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.TextEncoding
+import kotlinx.io.readByteArray
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -14,6 +16,7 @@ import io.ktor.http.content.PartData
 import io.ktor.http.headersOf
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -112,13 +115,21 @@ class CompatUpsUploadTest {
                             val formValues = multipart.parts
                                 .filterIsInstance<PartData.FormItem>()
                                 .associate { it.name to it.value }
-                            val binary = multipart.parts
-                                .filterIsInstance<PartData.BinaryItem>()
-                                .single()
+                            val binaries = multipart.parts.filterIsInstance<PartData.BinaryItem>()
+                            val binary = binaries.single { it.name == "up" }
+                            val commentPart = binaries.single { it.name == "com" }
+                            val commentBytes = commentPart.provider().readByteArray()
                             assertEquals("reg", formValues["mode"])
                             assertEquals("delete-key", formValues["pass"])
-                            assertTrue(formValues["com"].orEmpty().contains(token))
-                            assertEquals("up", binary.name)
+                            // The uploader is Shift_JIS; the comment must not be sent as UTF-8.
+                            assertContentEquals(
+                                TextEncoding.encodeToShiftJis("コメント $token" + "test"),
+                                commentBytes
+                            )
+                            assertEquals(
+                                "コメント $token" + "test",
+                                TextEncoding.decodeToString(commentBytes, "text/plain; charset=Shift_JIS")
+                            )
                             assertTrue(
                                 binary.headers.getAll(HttpHeaders.ContentDisposition).orEmpty()
                                     .any { it.contains("test.png") },
@@ -142,7 +153,7 @@ class CompatUpsUploadTest {
             val result = uploadCompatUps(
                 client = client,
                 attachment = ImageData("PNGDATA".encodeToByteArray(), fileName),
-                comment = "comment",
+                comment = "コメント",
                 deleteKey = "delete-key",
                 appVersion = "test",
                 nowEpochMillis = now,

@@ -75,6 +75,7 @@ import com.valoser.futacha.shared.compat.modernBoardsToCompatibility
 import com.valoser.futacha.shared.ui.compat.fetchDefaultCompatBoardsFromMenu
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.launch
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun AddBoardDialog(
@@ -118,7 +119,7 @@ internal fun AddBoardDialog(
         cursorColor = focusedFieldColor
     )
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("board_add_dismiss", "板追加を閉じる")
             onDismiss()
@@ -245,7 +246,7 @@ internal fun AddBoardDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -442,7 +443,7 @@ internal fun BoardManagementBoardList(
         }
     }
     renamingBoardId?.let { boardId ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { renamingBoardId = null },
             title = { Text("板の名前を変更") },
             text = {
@@ -460,7 +461,7 @@ internal fun BoardManagementBoardList(
                 }) { Text("変更") }
             },
             dismissButton = { TextButton(onClick = { renamingBoardId = null }) { Text("キャンセル") } }
-        )
+        ) }
     }
 }
 

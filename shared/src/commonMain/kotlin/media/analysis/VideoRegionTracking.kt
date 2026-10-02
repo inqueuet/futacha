@@ -29,7 +29,7 @@ internal suspend fun trackVideoRegion(
             currentCoroutineContext().ensureActive(); source.checkActive()
             val manual = anchors[frame.timeUs]
             val step = if (previous == null || manual != null) {
-                val bounds = manual?.bounds ?: region.boundsAt(anchorUs)
+                val bounds = (manual?.bounds ?: region.boundsAt(anchorUs)).constrained()
                 tracker.seed(frame, bounds)
                 TrackingStep(bounds, false)
             } else tracker.step(frame, sceneChanged(previous, frame))

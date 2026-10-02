@@ -102,7 +102,7 @@ class FutachaAiCommandRouterTest {
             assertIs<FutachaAiCommandOutcome.Completed>(openBoard)
             assertIs<FutachaAiCommandOutcome.Completed>(watchOsOpenBoard)
             assertIs<FutachaAiCommandOutcome.Completed>(openThread)
-            assertIs<FutachaAiCommandOutcome.NeedsForeground>(readAloud)
+            assertIs<FutachaAiCommandOutcome.Failed>(readAloud)
             assertEquals("b", harness.navigationState.selectedBoardId)
             assertEquals("123", harness.navigationState.selectedThreadId)
         }
@@ -170,6 +170,70 @@ class FutachaAiCommandRouterTest {
 
             val confirmation = assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(outcome)
             assertTrue(confirmation.request.message.contains("板リスト"))
+        }
+    }
+
+    // S4-2: a link-sourced confirmation names the values it will store.
+    @Test
+    fun linkAddBoardConfirmationShowsTheUrlNameAndLinkOrigin() {
+        runBlocking {
+            val outcome = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.AddBoard,
+                    parameters = mapOf("name" to "外部板", "url" to "https://evil.example/b/"),
+                    source = "platform"
+                ),
+                inputs = RouterHarness().inputs()
+            )
+
+            val message = assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(outcome).request.message
+            assertTrue(message.contains("URL: 「https://evil.example/b/」"), message)
+            assertTrue(message.contains("板名: 「外部板」"), message)
+            assertTrue(message.contains("外部のリンク"), message)
+        }
+    }
+
+    @Test
+    fun linkSettingConfirmationsShowTheResolvedBoardModeAndWord() {
+        runBlocking {
+            val harness = RouterHarness(navigationState = FutachaNavigationState(selectedBoardId = "b"))
+            val mode = assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(
+                executeFutachaAiCommand(
+                    command = FutachaAiCommand(
+                        FutachaAiAction.SetCatalogMode,
+                        mapOf("mode" to CatalogMode.entries.last().name),
+                        source = "platform"
+                    ),
+                    inputs = harness.inputs()
+                )
+            ).request.message
+            assertTrue(mode.contains("板: 「二次元裏」"), mode)
+            assertTrue(mode.contains("モード: 「${CatalogMode.entries.last().label}」"), mode)
+
+            val ng = assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(
+                executeFutachaAiCommand(
+                    command = FutachaAiCommand(FutachaAiAction.AddNgWord, mapOf("word" to "荒らし"), source = "platform"),
+                    inputs = harness.inputs()
+                )
+            ).request.message
+            assertTrue(ng.contains("NGワード: 「荒らし」"), ng)
+        }
+    }
+
+    @Test
+    fun assistantConfirmationDoesNotClaimAnExternalLink() {
+        runBlocking {
+            val outcome = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.AddBoard,
+                    parameters = mapOf("name" to "新板", "url" to "https://may.2chan.net/img/"),
+                    source = "android-app-functions"
+                ),
+                inputs = RouterHarness().inputs()
+            )
+            val message = assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(outcome).request.message
+            assertTrue(message.contains("URL: 「https://may.2chan.net/img/」"), message)
+            assertFalse(message.contains("外部のリンク"), message)
         }
     }
 
@@ -994,6 +1058,186 @@ class FutachaAiCommandRouterTest {
             assertIs<FutachaAiCommandOutcome.Completed>(outcome)
             assertEquals(emptyList(), repository.getAllThreads())
         }
+    }
+
+    @Test
+    fun threadScreenCommandWithExplicitTargetOpensThatThreadInsteadOfTheShownOne() {
+        runBlocking {
+            val harness = RouterHarness(
+                navigationState = FutachaNavigationState(
+                    selectedBoardId = "b",
+                    selectedThreadId = "999"
+                )
+            )
+
+            val readAloud = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.StartThreadReadAloud,
+                    parameters = mapOf(
+                        "boardId" to "b",
+                        "boardUrl" to "https://may.2chan.net/b/",
+                        "threadId" to "123"
+                    ),
+                    source = "watchos"
+                ),
+                inputs = harness.inputs()
+            )
+            val untargeted = executeFutachaAiCommand(
+                command = FutachaAiCommand(FutachaAiAction.PauseThreadReadAloud),
+                inputs = harness.inputs()
+            )
+
+            assertIs<FutachaAiCommandOutcome.NeedsForeground>(readAloud)
+            assertIs<FutachaAiCommandOutcome.NeedsForeground>(untargeted)
+            assertEquals("b", harness.navigationState.selectedBoardId)
+            assertEquals("123", harness.navigationState.selectedThreadId)
+        }
+    }
+
+    @Test
+    fun lockRejectsEvenConfirmedDestructiveAndWatchCommands() = runBlocking {
+        val harness = RouterHarness()
+        val locked = harness.inputs().copy(isAppUnlocked = false)
+        for (action in listOf(FutachaAiAction.ClearHistory, FutachaAiAction.OpenGallery,
+            FutachaAiAction.StartThreadReadAloud, FutachaAiAction.DeleteBoard)) {
+            assertIs<FutachaAiCommandOutcome.Failed>(executeFutachaAiCommand(
+                FutachaAiCommand(action, source = "watchos"), locked, confirmed = true
+            ))
+        }
+        assertEquals(FutachaNavigationState(), harness.navigationState)
+    }
+
+    @Test
+    fun lockHolderIsReadAtExecutionTime() = runBlocking<Unit> {
+        val harness = RouterHarness()
+        val lock = FutachaAppLockHolder().apply {
+            unlockSession()
+            setContentVisible(true)
+        }
+        val inputs = harness.inputs().copy(appLock = lock)
+        // ON_STOP after the inputs were captured from composition (C-1).
+        lock.lockSession()
+        assertIs<FutachaAiCommandOutcome.Failed>(
+            executeFutachaAiCommand(FutachaAiCommand(FutachaAiAction.OpenBoardList), inputs)
+        )
+        lock.unlockSession()
+        assertIs<FutachaAiCommandOutcome.Completed>(
+            executeFutachaAiCommand(FutachaAiCommand(FutachaAiAction.OpenBoardList), inputs)
+        )
+    }
+
+    @Test
+    fun openThreadUrlRejectsHostsOutsideFutabaAndRegisteredBoards() = runBlocking<Unit> {
+        for (url in listOf(
+            "https://evil.example/b/res/123.htm",
+            "https://may.2chan.net.evil.example/b/res/123.htm",
+            "https://may.2chan.net@evil.example/b/res/123.htm",
+            "javascript://may.2chan.net/b/res/123.htm"
+        )) {
+            val harness = RouterHarness()
+            val outcome = executeFutachaAiCommand(
+                FutachaAiCommand(FutachaAiAction.OpenThreadFromUrl, mapOf("url" to url), source = "platform"),
+                harness.inputs()
+            )
+            assertIs<FutachaAiCommandOutcome.Failed>(outcome, url)
+            assertEquals(FutachaNavigationState(), harness.navigationState, url)
+        }
+        // A targeted thread action with a foreign URL is refused as well.
+        val draftHarness = RouterHarness()
+        assertIs<FutachaAiCommandOutcome.Failed>(
+            executeFutachaAiCommand(
+                FutachaAiCommand(
+                    FutachaAiAction.StartThreadReadAloud,
+                    mapOf("url" to "https://evil.example/b/res/123.htm")
+                ),
+                draftHarness.inputs()
+            )
+        )
+    }
+
+    // Z1b: the router's host check refuses what the compatibility canonicalizer refuses.
+    @Test
+    fun threadUrlHostCheckRefusesEscapesControlCharsAndOtherPorts() {
+        for (url in listOf(
+            "https://evil.com%40may.2chan.net/b/res/1.htm",
+            "https://evil.com%5C%40may.2chan.net/b/res/1.htm",
+            "https://evil.com\u0001.2chan.net/b/res/1.htm",
+            "https://may.2chan.net:8080/b/res/1.htm",
+            "https://may.2chan.net:/b/res/1.htm",
+            "https://may.2chan.net:99999/b/res/1.htm",
+            "https://may.2chan.net:44x/b/res/1.htm"
+        )) {
+            assertFalse(isAiThreadUrlAllowed(url, emptyList()), url)
+        }
+        assertTrue(isAiThreadUrlAllowed("https://may.2chan.net:443/b/res/1.htm", emptyList()))
+        assertTrue(isAiThreadUrlAllowed("http://may.2chan.net:80/b/res/1.htm", emptyList()))
+        assertTrue(isAiThreadUrlAllowed("https://MAY.2chan.net./b/res/1.htm", emptyList()))
+        // A registered board's port must match; its default port is the same host.
+        val withPort = listOf(board(id = "x", url = "http://board.example:8080/x/"))
+        assertTrue(isAiThreadUrlAllowed("http://board.example:8080/x/res/1.htm", withPort))
+        assertFalse(isAiThreadUrlAllowed("http://board.example:8081/x/res/1.htm", withPort))
+        assertFalse(isAiThreadUrlAllowed("http://board.example/x/res/1.htm", withPort))
+        val plain = listOf(board(id = "y", url = "https://board.example/y/"))
+        assertTrue(isAiThreadUrlAllowed("http://board.example/y/res/1.htm", plain))
+        assertFalse(isAiThreadUrlAllowed("https://board.example:8443/y/res/1.htm", plain))
+    }
+
+    @Test
+    fun openThreadUrlAcceptsOtherFutabaHostsAndRegisteredBoardHosts() = runBlocking<Unit> {
+        val futaba = RouterHarness()
+        assertIs<FutachaAiCommandOutcome.Completed>(
+            executeFutachaAiCommand(
+                FutachaAiCommand(
+                    FutachaAiAction.OpenThreadFromUrl,
+                    mapOf("url" to "https://IMG.2chan.net/b/res/123.htm"),
+                    source = "platform"
+                ),
+                futaba.inputs()
+            )
+        )
+        assertEquals("https://IMG.2chan.net/b/res/123.htm", futaba.navigationState.selectedThreadUrl)
+
+        val custom = RouterHarness(boards = listOf(board(id = "x", url = "https://board.example/x/")))
+        assertIs<FutachaAiCommandOutcome.Completed>(
+            executeFutachaAiCommand(
+                FutachaAiCommand(
+                    FutachaAiAction.OpenThreadFromUrl,
+                    mapOf("url" to "https://board.example/x/res/9.htm", "boardId" to "x")
+                ),
+                custom.inputs()
+            )
+        )
+        assertEquals("9", custom.navigationState.selectedThreadId)
+    }
+
+    @Test
+    fun linkSettingChangesNeedConfirmationButAssistantOnesDoNot() = runBlocking<Unit> {
+        val harness = RouterHarness()
+        val fromLink = FutachaAiCommand(FutachaAiAction.DisablePrivacyFilter, source = "platform")
+        harness.stateStore.setPrivacyFilterEnabled(true)
+
+        val pending = executeFutachaAiCommand(fromLink, harness.inputs())
+        assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(pending)
+        assertTrue(harness.stateStore.isPrivacyFilterEnabled.first())
+
+        assertIs<FutachaAiCommandOutcome.Completed>(
+            executeFutachaAiCommand(fromLink, harness.inputs(), confirmed = true)
+        )
+        assertFalse(harness.stateStore.isPrivacyFilterEnabled.first())
+
+        val ngFromLink = executeFutachaAiCommand(
+            FutachaAiCommand(FutachaAiAction.AddNgWord, mapOf("word" to "x"), source = "ios"),
+            harness.inputs()
+        )
+        assertIs<FutachaAiCommandOutcome.NeedsConfirmation>(ngFromLink)
+        assertTrue(harness.stateStore.ngWords.first().isEmpty())
+
+        assertIs<FutachaAiCommandOutcome.Completed>(
+            executeFutachaAiCommand(
+                FutachaAiCommand(FutachaAiAction.EnablePrivacyFilter, source = "android-app-functions"),
+                harness.inputs()
+            )
+        )
     }
 
     private class RouterHarness(

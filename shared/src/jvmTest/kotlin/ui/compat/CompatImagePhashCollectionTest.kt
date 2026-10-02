@@ -10,6 +10,10 @@ import io.ktor.http.headersOf
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
+import com.valoser.futacha.shared.compat.*
+import kotlinx.coroutines.*
+import java.lang.reflect.Proxy
+import kotlin.test.assertTrue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -33,6 +37,32 @@ class CompatImagePhashCollectionTest {
     private fun candidates(count: Int): List<Pair<String, String>> {
         val run = Random.nextLong().toULong().toString(16)
         return (1..count).map { "$it" to "https://img.test/$run/$it.png" }
+    }
+
+    @Test fun cancellingThreadHashingPersistsCompletedResultsBelowTheUiBatchSize() = runBlocking {
+        val secondEntered = CompletableDeferred<Unit>()
+        val urls = candidates(2)
+        val saved = linkedMapOf<String, String>()
+        val store = Proxy.newProxyInstance(CompatibilityStore::class.java.classLoader,
+            arrayOf(CompatibilityStore::class.java)) { _, method, arguments ->
+            when (method.name) {
+                "loadImagePhashes" -> emptyMap<String, String>()
+                "saveImagePhashes" -> { saved.putAll(arguments[0] as Map<String, String>); Unit }
+                else -> error("Unexpected store method: ${method.name}")
+            }
+        } as CompatibilityStore
+        val http = HttpClient(MockEngine { request ->
+            if (request.url.toString() == urls[1].second) { secondEntered.complete(Unit); awaitCancellation() }
+            respond(png, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "image/png"))
+        })
+        try {
+            val posts = urls.mapIndexed { index, (id, url) -> CompatPostSnapshot(index, id, timestamp = "", messageHtml = "", imageUrl = url) }
+            val job = launch { collectCompatThreadImagePhashes(http, store, posts) {} }
+            withTimeout(10_000) { secondEntered.await() }
+            job.cancelAndJoin()
+            assertTrue(saved.containsKey(compatImagePhashCachePreferenceKey(urls[0].second)))
+            assertEquals(1, saved.size)
+        } finally { http.close() }
     }
 
     @Test

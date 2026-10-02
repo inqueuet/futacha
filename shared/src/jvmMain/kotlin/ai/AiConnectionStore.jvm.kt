@@ -4,8 +4,10 @@ import com.valoser.futacha.shared.desktop.DesktopEnvironment
 import com.valoser.futacha.shared.desktop.DesktopPlatform
 import com.sun.jna.platform.win32.Crypt32Util
 import java.io.File
+import com.valoser.futacha.shared.util.moveReplacingWithRetry
+import java.nio.file.CopyOption
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
+import java.nio.file.Path
 import java.util.WeakHashMap
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -24,7 +26,7 @@ actual fun getAiConnectionStore(platformContext: Any?): AiConnectionStore {
             DesktopPlatform.isMac -> MacAiCredentials(aiDigest(environment.dataDirectory.canonicalPath))
             else -> return unavailable
         }
-        AiConnectionStore(DesktopAiConnectionStorage(credentials, File(environment.cacheDirectory, "openai-analysis-v1.json")))
+        AiConnectionStore(DesktopAiConnectionStorage(credentials, File(environment.cacheDirectory, "openai-analysis-v1.json"), File(environment.dataDirectory, "openai-usage-v1.json")))
     }
 }
 
@@ -35,10 +37,13 @@ internal interface DesktopAiCredentials {
 
 internal class DesktopAiConnectionStorage(
     private val credentials: DesktopAiCredentials,
-    private val cacheFile: File
+    private val cacheFile: File,
+    private val usageFile: File = File(cacheFile.parentFile, "openai-usage-v1.json")
 ) : AiConnectionStorage {
     override fun read() = credentials.read()
     override fun write(value: String) = credentials.write(value)
+    override fun readUsage(): String? = if (usageFile.isFile && usageFile.length() <= 100_000) usageFile.readText() else null
+    override fun writeUsage(value: String) = writeDesktopAiFile(usageFile, value.encodeToByteArray())
     override fun readCache(): String? = if (cacheFile.isFile && cacheFile.length() <= 4_000_000) cacheFile.readText() else null
     override fun writeCache(value: String) = writeDesktopAiFile(cacheFile, value.encodeToByteArray())
 }
@@ -47,15 +52,15 @@ internal class DesktopAiConnectionStorage(
 internal class WindowsAiCredentials(private val file: File) : DesktopAiCredentials {
     override fun read(): String? {
         if (!file.exists()) return null
-        check(file.length() in 1..32_768) { "Invalid credential data" }
+        check(file.length() in 1..131_072) { "Invalid credential data" }
         val plain = Crypt32Util.cryptUnprotectData(file.readBytes(), 0x1 /* CRYPTPROTECT_UI_FORBIDDEN */)
-        try { check(plain.size <= 8192); return plain.decodeToString(throwOnInvalidSequence = true) }
+        try { check(plain.size <= MAX_AI_CREDENTIAL_BYTES); return plain.decodeToString(throwOnInvalidSequence = true) }
         finally { plain.fill(0) }
     }
     override fun write(value: String) {
         val plain = value.encodeToByteArray()
         try {
-            require(plain.size in 1..8192)
+            require(plain.size in 1..MAX_AI_CREDENTIAL_BYTES)
             writeDesktopAiFile(file, Crypt32Util.cryptProtectData(plain, 0x1 /* CRYPTPROTECT_UI_FORBIDDEN */))
         } finally { plain.fill(0) }
     }
@@ -67,11 +72,16 @@ internal class MacAiCredentials(private val account: String) : DesktopAiCredenti
     internal fun delete() { MacAiNative.call("credentialDelete", "account" to account) }
 }
 
-internal fun writeDesktopAiFile(file: File, bytes: ByteArray) {
+/** Windows scanners briefly holding the target must not drop usage/cache/credential writes (N4-3). */
+internal fun writeDesktopAiFile(
+    file: File,
+    bytes: ByteArray,
+    move: (Path, Path, Array<out CopyOption>) -> Unit = { source, target, options -> Files.move(source, target, *options) }
+) {
     Files.createDirectories(file.parentFile.toPath())
     val temporary = Files.createTempFile(file.parentFile.toPath(), ".ai-", ".tmp")
     try {
         Files.write(temporary, bytes)
-        Files.move(temporary, file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        moveReplacingWithRetry(temporary, file.toPath(), move)
     } finally { Files.deleteIfExists(temporary) }
 }

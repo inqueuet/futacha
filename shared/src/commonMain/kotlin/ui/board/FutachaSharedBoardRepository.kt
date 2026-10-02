@@ -26,6 +26,8 @@ internal fun rememberFutachaSharedRepository(repository: BoardRepository): Board
     }
 }
 
+private val SUPPLEMENT_SOURCE_THREAD_ID_REGEX = Regex("""/res/(\d+)\.html?""", RegexOption.IGNORE_CASE)
+
 /** Reads common preferences at the start of each request; no profile-specific copy is stored. */
 internal class FutachaSharedBoardRepository(
     private val delegate: BoardRepository,
@@ -101,6 +103,8 @@ internal class FutachaSharedBoardRepository(
         val client = httpClient
         if (!needsSupplement || client == null) return content
         val candidates = buildCompatArchiveThreadCandidates(source)
+        val expectedThreadId = SUPPLEMENT_SOURCE_THREAD_ID_REGEX.find(source)?.groupValues?.getOrNull(1)
+            ?: content.page.threadId
         val completed = arrayOfNulls<ThreadPage>(candidates.size)
         // At most two requests at once and four seconds for the entire
         // supplement. Keep successful results even if the remaining work times out.
@@ -115,7 +119,11 @@ internal class FutachaSharedBoardRepository(
                 withTimeoutOrNull(batchTimeout) {
                     coroutineScope {
                         batch.map { (index, url) -> async {
-                            try { completed[index] = fetchCompatArchiveThreadPage(client, url) }
+                            // An archive answer for another thread must not be merged in (C7).
+                            try {
+                                completed[index] = fetchCompatArchiveThreadPage(client, url)
+                                    .takeIf { it.threadId == expectedThreadId && it.posts.isNotEmpty() }
+                            }
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (_: Exception) { /* Another source can still fill the gap. */ }
                         } }.forEach { it.await() }

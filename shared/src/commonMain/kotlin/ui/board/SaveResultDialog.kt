@@ -7,11 +7,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 /** A separate dialog keeps the result visible above the full-screen media preview. */
 @Composable
 internal fun SaveResultDialog(message: String, onDismiss: () -> Unit, onShare: (() -> Unit)? = null) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("保存結果") },
         text = { Text(message, Modifier.verticalScroll(rememberScrollState())) },
@@ -19,5 +20,5 @@ internal fun SaveResultDialog(message: String, onDismiss: () -> Unit, onShare: (
         dismissButton = {
             if (onShare != null) TextButton(onClick = onShare) { Text("共有") }
         }
-    )
+    ) }
 }

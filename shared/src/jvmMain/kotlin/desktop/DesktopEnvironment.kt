@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.desktop
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.valoser.futacha.shared.state.recoveringPreferencesCorruptionHandler
 import java.io.File
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
@@ -9,9 +10,15 @@ import kotlinx.coroutines.*
 /** Explicitly installed by the desktop host; common/JVM tests never touch user data. */
 class DesktopEnvironment(val dataDirectory: File, val cacheDirectory: File) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    internal val preferencesFile: File get() = File(dataDirectory, "settings.preferences_pb")
     internal val preferences by lazy {
-        PreferenceDataStoreFactory.create(scope = scope) {
-            File(dataDirectory, "settings.preferences_pb").also { it.parentFile.mkdirs() }
+        PreferenceDataStoreFactory.create(
+            // A damaged file used to make every settings read and write fail;
+            // recover what can be decoded and tell the user (G-19).
+            corruptionHandler = recoveringPreferencesCorruptionHandler(settingsFile = { preferencesFile }),
+            scope = scope
+        ) {
+            preferencesFile.also { it.parentFile.mkdirs() }
         }
     }
     private var channel: FileChannel? = null

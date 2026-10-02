@@ -45,7 +45,9 @@ internal fun buildCatalogScreenMutationBindings(
     setLocalCatalogGridColumns: (Int) -> Unit,
     currentCatalogDisplayStyle: () -> CatalogDisplayStyle,
     catalogGridState: LazyGridState,
-    catalogListState: LazyListState
+    catalogListState: LazyListState,
+    onCatalogModeWriteStarted: () -> Unit = {},
+    onCatalogModeWriteFinished: () -> Unit = {}
 ): CatalogScreenMutationBindings {
     val persistenceBindings = buildCatalogPersistenceBindings(
         coroutineScope = coroutineScope,
@@ -72,8 +74,13 @@ internal fun buildCatalogScreenMutationBindings(
             setCatalogMode(mode)
             val boardId = currentBoardId()
             if (boardId != null && stateStore != null) {
+                onCatalogModeWriteStarted()
                 coroutineScope.launch {
-                    stateStore.setCatalogMode(boardId, mode)
+                    try {
+                        stateStore.setCatalogMode(boardId, mode)
+                    } finally {
+                        onCatalogModeWriteFinished()
+                    }
                 }
             }
         },
@@ -90,7 +97,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistCatalogNgWords(mutation.updatedWords)
+                persistenceBindings.persistCatalogNgWords.persistListEdit(mutation.updatedWords) { latest ->
+                    addCatalogNgWord(latest, value).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },
@@ -107,7 +116,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistCatalogNgWords(mutation.updatedWords)
+                persistenceBindings.persistCatalogNgWords.persistListEdit(mutation.updatedWords) { latest ->
+                    removeCatalogNgWord(latest, entry).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },
@@ -137,7 +148,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistGlobalWatchWords(mutation.updatedWords)
+                persistenceBindings.persistGlobalWatchWords.persistListEdit(mutation.updatedWords) { latest ->
+                    addWatchWord(latest, value).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },
@@ -154,7 +167,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistGlobalWatchWords(mutation.updatedWords)
+                persistenceBindings.persistGlobalWatchWords.persistListEdit(mutation.updatedWords) { latest ->
+                    removeWatchWord(latest, entry).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },
@@ -171,7 +186,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistBoardWatchWords(mutation.updatedWords)
+                persistenceBindings.persistBoardWatchWords.persistListEdit(mutation.updatedWords) { latest ->
+                    addWatchWord(latest, value).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },
@@ -188,7 +205,9 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             if (mutation.shouldPersist) {
-                persistenceBindings.persistBoardWatchWords(mutation.updatedWords)
+                persistenceBindings.persistBoardWatchWords.persistListEdit(mutation.updatedWords) { latest ->
+                    removeWatchWord(latest, entry).updatedWords
+                }
             }
             showMutationMessage(mutation.message)
         },

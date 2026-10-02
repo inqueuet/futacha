@@ -59,10 +59,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsTextLengthBucket
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.ui.compat.compressCompatPostImage
 import coil3.compose.rememberAsyncImagePainter
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.max
 
@@ -128,26 +130,54 @@ internal fun ThreadFormDialog(
             catch (_: Exception) { /* Keep the board's known fallback limits. */ }
         }
     }
+    // Only the newest pick may set the attachment: a slower earlier
+    // compression finishing later must not replace it (U-4).
+    val attachmentJob = remember { arrayOfNulls<Job>(1) }
+    fun cancelAttachmentProcessing() {
+        attachmentJob[0]?.cancel()
+        attachmentJob[0] = null
+        isSanitizingAttachment = false
+    }
+    fun processAttachment(failureMessage: String, block: suspend () -> Result<ImageData>) {
+        cancelAttachmentProcessing()
+        isSanitizingAttachment = true
+        attachmentJob[0] = scope.launch {
+            val job = coroutineContext[Job]
+            try {
+                val result = block()
+                if (attachmentJob[0] !== job) return@launch
+                result.onSuccess(onImageSelected)
+                    .onFailure { attachmentProcessingError = it.message ?: failureMessage }
+            } finally {
+                if (attachmentJob[0] === job) {
+                    attachmentJob[0] = null
+                    isSanitizingAttachment = false
+                }
+            }
+        }
+    }
+    fun selectAttachment(image: ImageData?) {
+        cancelAttachmentProcessing()
+        onImageSelected(image)
+    }
     fun finishPickedImage(image: ImageData) {
         attachmentProcessingError = null
         if (!stripImageMetadata || image.fileName.isVideoAttachmentName()) {
-            onImageSelected(image)
+            selectAttachment(image)
             return
         }
-        isSanitizingAttachment = true
-        scope.launch {
-            try { compressCompatPostImage(
+        processAttachment("画像の位置情報を削除できませんでした") {
+            compressCompatPostImage(
                 attachment = image,
                 maxBytes = max(image.bytes.size, 8 * 1024 * 1024)
-            ).onSuccess(onImageSelected)
-                .onFailure { error ->
-                    attachmentProcessingError = error.message ?: "画像の位置情報を削除できませんでした"
-                }
-            } finally { isSanitizingAttachment = false }
+            )
         }
     }
     fun acceptPickedImage(image: ImageData) {
-        if (sharedFeatures == null) { finishPickedImage(image); return }
+        // Files above the old 8 MB picker cap always go through the size decision.
+        if (sharedFeatures == null && image.bytes.size <= com.valoser.futacha.shared.util.MAX_PICKED_IMAGE_BYTES) {
+            finishPickedImage(image); return
+        }
         val limit = postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val decision = com.valoser.futacha.shared.ui.compat.decideCompatPostAttachment(image, limit, postingCapabilities.supportedExtensions)
         when (decision) {
@@ -156,18 +186,19 @@ internal fun ThreadFormDialog(
             else -> attachmentProcessingError = com.valoser.futacha.shared.ui.compat.compatPostAttachmentDecisionMessage(decision, image.fileName, limit)
         }
     }
-    pendingCompression?.let { image -> AlertDialog(onDismissRequest = { pendingCompression = null },
+    pendingCompression?.let { image -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { pendingCompression = null },
         title = { Text("画像を圧縮しますか？") }, text = { Text("この板の添付上限を超えています。上限に収まるよう圧縮します。") },
         confirmButton = { TextButton(onClick = {
-            pendingCompression = null; isSanitizingAttachment = true
-            scope.launch {
-                try { compressCompatPostImage(image, postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-                    .onSuccess(onImageSelected).onFailure { attachmentProcessingError = it.message ?: "圧縮できませんでした" }
-                } finally { isSanitizingAttachment = false }
+            pendingCompression = null
+            processAttachment("圧縮できませんでした") {
+                compressCompatPostImage(image, postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             }
-        }) { Text("圧縮") } }, dismissButton = { TextButton(onClick = { pendingCompression = null }) { Text("キャンセル") } }) }
+        }) { Text("圧縮") } }, dismissButton = { TextButton(onClick = { pendingCompression = null }) { Text("キャンセル") } }) } }
+    // Read up to the compat picker limit (32 MB) so a large photo reaches the
+    // compression dialog below instead of failing to load at 8 MB (K2).
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
         preferredFileManagerPackage = preferredFileManagerPackage,
         onSelectionError = { attachmentProcessingError = it },
         onImageSelected = { image ->
@@ -182,6 +213,7 @@ internal fun ThreadFormDialog(
     val videoPickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         mimeType = "video/*",
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
         preferredFileManagerPackage = preferredFileManagerPackage,
         onSelectionError = { attachmentProcessingError = it },
         onImageSelected = { image ->
@@ -196,7 +228,7 @@ internal fun ThreadFormDialog(
     )
     var overflowMenuExpanded by remember { mutableStateOf(false) }
 
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
@@ -467,7 +499,7 @@ internal fun ThreadFormDialog(
                                 }
                                 IconButton(onClick = {
                                     AnalyticsTracker.uiControl("thread_form_attachment_remove", "投稿添付を削除")
-                                    onImageSelected(null)
+                                    selectAttachment(null)
                                 }) {
                                     Icon(
                                         imageVector = Icons.Outlined.Delete,
@@ -515,8 +547,9 @@ internal fun ThreadFormDialog(
                             onCommentChange = onCommentChange, password = password,
                             onImageSelected = ::acceptPickedImage, onChooseImage = imagePickerLauncher,
                             onChooseVideo = videoPickerLauncher, onSubmit = onSubmit,
-                            onClear = onClear, onDismiss = onDismiss,
+                            onClear = { cancelAttachmentProcessing(); onClear() }, onDismiss = onDismiss,
                             enabled = isSubmitEnabled && !isSanitizingAttachment,
+                            attachmentEnabled = !isSanitizingAttachment,
                             attachmentPickerPreference = attachmentPickerPreference,
                             preferredFileManagerPackage = preferredFileManagerPackage
                         )
@@ -534,7 +567,7 @@ internal fun ThreadFormDialog(
                                 AnalyticsTracker.uiControl("thread_form_submit", sendDescription)
                                 onSubmit()
                             },
-                            enabled = isSubmitEnabled
+                            enabled = isSubmitEnabled && !isSanitizingAttachment
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
@@ -564,6 +597,7 @@ internal fun ThreadFormDialog(
                         }
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_clear", "投稿フォームをクリア")
+                            cancelAttachmentProcessing()
                             onClear()
                         }) {
                             Icon(
@@ -588,7 +622,7 @@ internal fun ThreadFormDialog(
             }
         }
         }
-    }
+    } }
 }
 
 internal fun String.isVideoAttachmentName(): Boolean =

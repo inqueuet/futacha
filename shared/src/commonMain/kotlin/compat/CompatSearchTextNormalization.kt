@@ -25,7 +25,7 @@ fun normalizeCompatSearchText(raw: String): String {
     val normalized = StringBuilder(raw.length)
     var index = 0
     while (index < raw.length) {
-        val source = raw[index]
+        val source = com.valoser.futacha.shared.util.canonicalCp932Character(raw[index])
         val mapped = when {
             source == '\u3000' -> ' '
             source.code in 0xFF01..0xFF5E -> (source.code - 0xFEE0).toChar()

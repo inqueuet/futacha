@@ -8,8 +8,11 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Color as AndroidColor
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.content.pm.ActivityInfo
+import android.media.ExifInterface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -29,6 +32,7 @@ import com.valoser.futacha.shared.compat.rememberExperienceProfileActivityResult
 import com.valoser.futacha.shared.compat.CompatImagePhash
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -160,6 +164,21 @@ internal actual suspend fun compressCompatPostImage(
     runSuspendCatchingPreservingCancellation {
         coroutineContext.ensureActive()
         require(maxBytes > 0) { "Invalid attachment size limit" }
+        val format = detectCompatPostImageFormat(attachment.bytes)
+        // BitmapFactory never applies EXIF Orientation, so portrait photos
+        // were posted sideways once the metadata was dropped (U-1).
+        val orientation = compatExifOrientationTransform(
+            if (format == CompatPostImageFormat.GIF) 1 else readCompatExifOrientation(attachment.bytes)
+        )
+        // GIF/PNG/WebP keep animation and transparency when only metadata
+        // has to go and the original pixels already fit the limit.
+        compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+            val extension = requireNotNull(format.extension)
+            return@runSuspendCatchingPreservingCancellation ImageData(
+                bytes = sanitized,
+                fileName = compatPostSanitizedFileName(attachment.fileName, extension)
+            )
+        }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(attachment.bytes, 0, attachment.bytes.size, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "画像を読み込めませんでした" }
@@ -178,16 +197,27 @@ internal actual suspend fun compressCompatPostImage(
                 }
             )
         ) { "画像を読み込めませんでした" }
-        val bytes = try {
-            var encoded: ByteArray? = null
+        val (bytes, extension) = try {
+            bitmap = bitmap.applyCompatOrientation(orientation)
+            var result: Pair<ByteArray, String>? = null
+            if (bitmap.hasAlpha()) {
+                // Keep transparency as PNG when it fits; JPEG would turn it black.
+                coroutineContext.ensureActive()
+                val output = CappedByteArrayOutputStream(maxBytes)
+                if (bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                    output.toByteArrayOrNull()?.let { result = it to "png" }
+                }
+                if (result == null) bitmap = bitmap.flattenCompatOnWhite()
+            }
             var quality = 92
             for (iteration in 0 until 18) {
+                if (result != null) break
                 coroutineContext.ensureActive()
                 val output = CappedByteArrayOutputStream(maxBytes)
                 check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) { "画像を圧縮できませんでした" }
                 val candidate = output.toByteArrayOrNull()
                 if (candidate != null) {
-                    encoded = candidate
+                    result = candidate to "jpg"
                     break
                 }
                 if (quality > 58) {
@@ -201,14 +231,43 @@ internal actual suspend fun compressCompatPostImage(
                     quality = 86
                 }
             }
-            requireNotNull(encoded) { "上限以内に圧縮できませんでした" }
+            requireNotNull(result) { "上限以内に圧縮できませんでした" }
         } finally {
             if (!bitmap.isRecycled) bitmap.recycle()
         }
-        val stem = attachment.fileName.substringBeforeLast('.', attachment.fileName).ifBlank { "attachment" }
         coroutineContext.ensureActive()
-        ImageData(bytes = bytes, fileName = "$stem.jpg")
+        ImageData(bytes = bytes, fileName = compatPostSanitizedFileName(attachment.fileName, extension))
     }
+}
+
+private fun readCompatExifOrientation(bytes: ByteArray): Int = try {
+    ExifInterface(ByteArrayInputStream(bytes))
+        .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+} catch (_: Exception) {
+    ExifInterface.ORIENTATION_NORMAL
+}
+
+/** Returns the upright bitmap, recycling the receiver when a new one is created. */
+private fun Bitmap.applyCompatOrientation(orientation: CompatImageOrientation): Bitmap {
+    if (orientation.isIdentity) return this
+    val matrix = Matrix().apply {
+        setRotate(orientation.rotationDegrees.toFloat())
+        if (orientation.mirrorHorizontally) postScale(-1f, 1f)
+    }
+    val rotated = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
+    if (rotated !== this) recycle()
+    return rotated
+}
+
+/** Composites transparent pixels onto white before JPEG encoding, recycling the receiver. */
+private fun Bitmap.flattenCompatOnWhite(): Bitmap {
+    val flattened = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    AndroidCanvas(flattened).apply {
+        drawColor(AndroidColor.WHITE)
+        drawBitmap(this@flattenCompatOnWhite, 0f, 0f, null)
+    }
+    recycle()
+    return flattened
 }
 
 internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? {

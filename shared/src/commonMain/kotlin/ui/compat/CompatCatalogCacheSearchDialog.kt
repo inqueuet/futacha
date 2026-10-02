@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,7 +40,7 @@ import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.parameter
 import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
@@ -48,6 +49,7 @@ import io.ktor.http.Url
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -180,7 +182,7 @@ internal fun CompatCatalogCacheSearchDialog(
         }
     }
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("キャッシュ検索") },
         text = {
@@ -270,7 +272,7 @@ internal fun CompatCatalogCacheSearchDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }
-    )
+    ) }
 }
 
 /**
@@ -343,45 +345,52 @@ internal suspend fun searchLegacyCompatCatalogCache(
     boardUrl: String,
     query: String
 ): Result<List<CatalogItem>> = runSuspendCatchingPreservingCancellation {
-    val board = Url(boardUrl.trim())
-    val boardParameter = buildString {
-        // The reference APK deliberately sends the board parameter as HTTP,
-        // even when the board was opened through HTTPS.
-        append("http://").append(board.host)
-        if (board.port != board.protocol.defaultPort) append(":").append(board.port)
-        append(board.encodedPath.trimEnd('/')).append('/')
-    }
-    val response = httpClient.get(LEGACY_COMPAT_CATALOG_CACHE_SEARCH_URL) {
-        parameter("server", boardParameter)
-        parameter("keyword", query)
-        parameter("device", LEGACY_COMPAT_CACHE_USER_AGENT)
-        headers { append(HttpHeaders.UserAgent, LEGACY_COMPAT_CACHE_USER_AGENT) }
-    }
-    val body = readBoundedHttpResponseText(response, COMPAT_CACHE_SEARCH_RESPONSE_MAX_BYTES)
-    check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-    val root = Json.parseToJsonElement(body).jsonObject
-    root.stringValue("E")?.takeIf { it.isNotBlank() }?.let { error(it) }
-    root["l"]?.jsonArray.orEmpty().mapNotNull { element ->
-        val item = element.jsonObject
-        val url = item.stringValue("u")?.replace("http://", "https://") ?: return@mapNotNull null
-        val id = compatCatalogCacheThreadIdRegex.find(url)?.groupValues?.getOrNull(1)
-            ?: item.stringValue("i")?.filter(Char::isDigit)?.takeIf { it.isNotBlank() }
-            ?: return@mapNotNull null
-        // The legacy API calls this field `c` (catalog thumbnail).  `b` is
-        // not present in the sample APK's response schema and would make a
-        // perfectly valid cache result look image-less.
-        val thumb = item.stringValue("c")?.replace("http://", "https://")
-        CatalogItem(
-            id = id,
-            threadUrl = url,
-            title = item.stringValue("t"),
-            thumbnailUrl = thumb,
-            fullImageUrl = thumb,
-            thumbnailWidth = item.stringValue("e")?.toIntOrNull(),
-            thumbnailHeight = item.stringValue("f")?.toIntOrNull(),
-            replyCount = item.stringValue("C")?.toIntOrNull() ?: 0
-        )
-    }.distinctBy(CatalogItem::threadUrl)
+    withTimeoutOrNull(30_000L) {
+        val board = Url(boardUrl.trim())
+        val boardParameter = buildString {
+            // The reference APK deliberately sends the board parameter as HTTP,
+            // even when the board was opened through HTTPS.
+            append("http://").append(board.host)
+            if (board.port != board.protocol.defaultPort) append(":").append(board.port)
+            append(board.encodedPath.trimEnd('/')).append('/')
+        }
+        // Streamed so the bounded reader applies before the body is buffered.
+        val body = httpClient.prepareGet(LEGACY_COMPAT_CATALOG_CACHE_SEARCH_URL) {
+            parameter("server", boardParameter)
+            parameter("keyword", query)
+            parameter("device", LEGACY_COMPAT_CACHE_USER_AGENT)
+            headers { append(HttpHeaders.UserAgent, LEGACY_COMPAT_CACHE_USER_AGENT) }
+        }.execute { response ->
+            val text = readBoundedHttpResponseText(response, COMPAT_CACHE_SEARCH_RESPONSE_MAX_BYTES)
+            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+            text
+        }
+        withContext(AppDispatchers.parsing) {
+            val root = Json.parseToJsonElement(body).jsonObject
+            root.stringValue("E")?.takeIf { it.isNotBlank() }?.let { error(it) }
+            root["l"]?.jsonArray.orEmpty().mapNotNull { element ->
+                val item = element.jsonObject
+                val url = item.stringValue("u")?.replace("http://", "https://") ?: return@mapNotNull null
+                val id = compatCatalogCacheThreadIdRegex.find(url)?.groupValues?.getOrNull(1)
+                    ?: item.stringValue("i")?.filter(Char::isDigit)?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                // The legacy API calls this field `c` (catalog thumbnail).  `b` is
+                // not present in the sample APK's response schema and would make a
+                // perfectly valid cache result look image-less.
+                val thumb = item.stringValue("c")?.replace("http://", "https://")
+                CatalogItem(
+                    id = id,
+                    threadUrl = url,
+                    title = item.stringValue("t"),
+                    thumbnailUrl = thumb,
+                    fullImageUrl = thumb,
+                    thumbnailWidth = item.stringValue("e")?.toIntOrNull(),
+                    thumbnailHeight = item.stringValue("f")?.toIntOrNull(),
+                    replyCount = item.stringValue("C")?.toIntOrNull() ?: 0
+                )
+            }.distinctBy(CatalogItem::threadUrl)
+        }
+    } ?: error("キャッシュ検索がタイムアウトしました")
 }
 
 internal fun filterLegacyCompatCatalogCache(

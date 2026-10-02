@@ -25,4 +25,61 @@ class SavedHtmlViewerActivityTest {
             sanitizeSavedHtmlDocument(source)
         )
     }
+
+    @Test
+    fun rejectsFilesInsidePrivateAppStorageOnly() {
+        val roots = listOf("/data/user/0/com.valoser.futacha", "/data/data/com.valoser.futacha/")
+        assertTrue(isInsidePrivateAppStorage("/data/user/0/com.valoser.futacha/files/x.htm", roots))
+        assertTrue(isInsidePrivateAppStorage("/data/data/com.valoser.futacha/shared_prefs/a.html", roots))
+        assertTrue(isInsidePrivateAppStorage("/data/data/com.valoser.futacha", roots))
+        assertFalse(isInsidePrivateAppStorage("/data/data/com.valoser.futacha.other/a.htm", roots))
+        assertFalse(
+            isInsidePrivateAppStorage(
+                "/storage/emulated/0/Android/data/com.valoser.futacha/files/saved/a.htm",
+                roots
+            )
+        )
+    }
+
+    // S4-4: only a user's tap on a web link leaves the app; a meta refresh
+    // (no gesture) or a redirect does not open the browser on its own.
+    @Test
+    fun opensWebLinksExternallyOnlyForUserTaps() {
+        assertEquals(
+            SavedHtmlNavigation.OPEN_EXTERNALLY,
+            savedHtmlNavigation("https", isMainFrame = true, hasGesture = true, isRedirect = false, isSameDocumentProvider = false)
+        )
+        assertEquals(
+            SavedHtmlNavigation.OPEN_EXTERNALLY,
+            savedHtmlNavigation("http", isMainFrame = true, hasGesture = true, isRedirect = false, isSameDocumentProvider = false)
+        )
+        assertEquals(
+            SavedHtmlNavigation.BLOCK,
+            savedHtmlNavigation("https", isMainFrame = true, hasGesture = false, isRedirect = false, isSameDocumentProvider = false)
+        )
+        assertEquals(
+            SavedHtmlNavigation.BLOCK,
+            savedHtmlNavigation("https", isMainFrame = true, hasGesture = true, isRedirect = true, isSameDocumentProvider = false)
+        )
+        assertEquals(
+            SavedHtmlNavigation.BLOCK,
+            savedHtmlNavigation("https", isMainFrame = false, hasGesture = true, isRedirect = false, isSameDocumentProvider = false)
+        )
+        assertEquals(
+            SavedHtmlNavigation.BLOCK,
+            savedHtmlNavigation("intent", isMainFrame = true, hasGesture = true, isRedirect = false, isSameDocumentProvider = false)
+        )
+    }
+
+    @Test
+    fun keepsPagesOfTheSameDocumentProviderInTheViewer() {
+        assertEquals(
+            SavedHtmlNavigation.LOAD_IN_VIEW,
+            savedHtmlNavigation("content", isMainFrame = true, hasGesture = false, isRedirect = false, isSameDocumentProvider = true)
+        )
+        assertEquals(
+            SavedHtmlNavigation.BLOCK,
+            savedHtmlNavigation("content", isMainFrame = true, hasGesture = true, isRedirect = false, isSameDocumentProvider = false)
+        )
+    }
 }

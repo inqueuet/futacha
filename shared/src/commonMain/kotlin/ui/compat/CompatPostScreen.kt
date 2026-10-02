@@ -6,6 +6,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.PromptInfoAction
@@ -324,16 +325,18 @@ fun CompatUpsUploadDialog(
 ) {
     val commentFocusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(fileName) {
-        delay(150)
-        commentFocusRequester.requestFocus()
-        keyboard?.show()
-    }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {},
         modifier = Modifier.testTag("compat-ups-upload-dialog"),
         title = { Text("あぷ小アップロード") },
         text = {
+            // Inside the window (E4-2): a dialog opened while locked appears
+            // after the unlock, and only then takes focus and the keyboard.
+            LaunchedEffect(fileName) {
+                delay(150)
+                commentFocusRequester.requestFocus()
+                keyboard?.show()
+            }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("アップロードファイル")
                 Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -359,7 +362,7 @@ fun CompatUpsUploadDialog(
         dismissButton = {
             TextButton(onClick = onCancel) { Text("キャンセル") }
         }
-    )
+    ) }
 }
 
 /** Attachment block shared by thread creation and reply forms. */
@@ -783,8 +786,10 @@ internal fun CompatPostScreen(
         if (validationError != null) {
             message = validationError
         } else if (!sending) {
+            // Claim the guard before the coroutine is dispatched, so a second
+            // tap in the same frame cannot send the post twice (E-13).
+            sending = true
             launchScreenAction {
-                sending = true
                 try {
                     val currentLocator = attachmentLocator
                     if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
@@ -1037,7 +1042,16 @@ internal fun CompatPostScreen(
             // The reference form displays an empty form as one line in both
             // reply and thread-creation modes.
             val lineCount = compatPostLineCount(comment, emptyIsOneLine = !isBuild)
-            val byteCount = compatPostShiftJisByteCount(comment)
+            // Counting needs a Shift_JIS round trip of the whole comment. Run
+            // it once per edit off the main thread (iOS encoding is slow for
+            // long texts); the first value is computed synchronously so the
+            // label never flashes an empty count.
+            var byteCount by remember { mutableStateOf(compatPostShiftJisByteCount(comment)) }
+            LaunchedEffect(comment) {
+                byteCount = withContext(AppDispatchers.textAnnotation) {
+                    compatPostShiftJisByteCount(comment)
+                }
+            }
             Text(
                 "${lineCount}行 ${byteCount}バイト",
                 fontSize = 14.sp,
@@ -1213,7 +1227,7 @@ internal fun CompatPostScreen(
             // reference APKs. A plain overlay leaves Android's parent host
             // BackHandler able to win during a busy frame and close the post
             // screen while the request is still active.
-            Dialog(
+            FutachaAppLockAwareWindow { Dialog(
                 onDismissRequest = {},
                 properties = DialogProperties(
                     dismissOnBackPress = false,
@@ -1237,7 +1251,7 @@ internal fun CompatPostScreen(
                         size = 50.dp
                     )
                 }
-            }
+            } }
         }
     }
 
@@ -1261,7 +1275,7 @@ internal fun CompatPostScreen(
         if (previewAttachment == null || compatPostAttachmentKind(previewAttachment.fileName) != CompatPostAttachmentKind.IMAGE) {
             attachmentPreviewOpen = false
         } else {
-            Dialog(
+            FutachaAppLockAwareWindow { Dialog(
                 onDismissRequest = { attachmentPreviewOpen = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
@@ -1275,7 +1289,7 @@ internal fun CompatPostScreen(
                             .clickable { attachmentPreviewOpen = false }
                     )
                 }
-            }
+            } }
         }
     }
 
@@ -1288,7 +1302,9 @@ internal fun CompatPostScreen(
                 deleteKey = upsDeleteKey,
                 onCommentChange = { upsComment = it },
                 onDeleteKeyChange = { upsDeleteKey = it },
-                onSubmit = {
+                onSubmit = submit@{
+                    // The dialog closes on the next frame; ignore a second tap before that (E-13).
+                    if (upsUploadInProgress) return@submit
                     val client = httpClient
                     upsDialogOpen = false
                     if (client == null) {
@@ -1297,20 +1313,23 @@ internal fun CompatPostScreen(
                     } else {
                         upsUploadInProgress = true
                         launchScreenAction {
-                            uploadCompatUps(
-                                client = client,
-                                attachment = selected,
-                                comment = upsComment,
-                                deleteKey = upsDeleteKey,
-                                appVersion = appVersion
-                            ).onSuccess { fileName ->
-                                replaceComment(appendCompatPostText(commentValue.text, fileName))
-                                message = "${fileName}を追記しました"
-                            }.onFailure { error ->
-                                message = error.message ?: "あぷ小へのアップロードに失敗しました"
+                            try {
+                                uploadCompatUps(
+                                    client = client,
+                                    attachment = selected,
+                                    comment = upsComment,
+                                    deleteKey = upsDeleteKey,
+                                    appVersion = appVersion
+                                ).onSuccess { fileName ->
+                                    replaceComment(appendCompatPostText(commentValue.text, fileName))
+                                    message = "${fileName}を追記しました"
+                                }.onFailure { error ->
+                                    message = error.message ?: "あぷ小へのアップロードに失敗しました"
+                                }
+                            } finally {
+                                upsAttachment = null
+                                upsUploadInProgress = false
                             }
-                            upsAttachment = null
-                            upsUploadInProgress = false
                         }
                     }
                 },
@@ -1323,7 +1342,7 @@ internal fun CompatPostScreen(
     }
 
     if (discardConfirm) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { discardConfirm = false },
             title = { Text("投稿内容の破棄") },
             text = { Text("本当によろしいですか？") },
@@ -1344,10 +1363,10 @@ internal fun CompatPostScreen(
                 }) { Text("破棄する") }
             },
             dismissButton = { TextButton(onClick = { discardConfirm = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     if (sendConfirm) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { sendConfirm = false },
             title = { Text("投稿の確認") },
             text = { Text("本当によろしいですか？") },
@@ -1355,10 +1374,10 @@ internal fun CompatPostScreen(
                 TextButton(onClick = { sendConfirm = false; sendPost() }) { Text("送信する") }
             },
             dismissButton = { TextButton(onClick = { sendConfirm = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     postDestinationWarning?.let { warning ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { postDestinationWarning = null },
             title = { Text("投稿先の確認") },
             text = { Text(warning) },
@@ -1375,7 +1394,7 @@ internal fun CompatPostScreen(
             dismissButton = {
                 TextButton(onClick = { postDestinationWarning = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (toolbarOverflowOpen) {
         SecondaryToolbarOverflowPopup(
@@ -1392,7 +1411,7 @@ fun CompatPostImageCompressConfirmation(
     onCompress: () -> Unit,
     onCancel: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {},
         title = { Text("確認") },
         text = { Text("画像をリサイズしますか？") },
@@ -1402,7 +1421,7 @@ fun CompatPostImageCompressConfirmation(
         dismissButton = {
             TextButton(onClick = onCancel) { Text("キャンセル") }
         }
-    )
+    ) }
 }
 
 @Composable

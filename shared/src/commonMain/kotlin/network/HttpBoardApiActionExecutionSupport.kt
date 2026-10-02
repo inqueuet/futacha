@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.network
 import com.valoser.futacha.shared.model.CatalogFetchSettings
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
-import io.ktor.client.request.forms.submitForm
+import io.ktor.client.request.forms.prepareForm
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
@@ -24,10 +24,13 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
     userAgent: String,
     accept: String,
     acceptLanguage: String,
-    readSmallResponseSummary: suspend (HttpResponse) -> String?
+    readSmallResponseSummary: suspend (HttpResponse) -> String?,
+    readSmallResponseBody: suspend (HttpResponse) -> String? = readSmallResponseSummary
 ) {
-    val response = try {
-        client.submitForm(
+    // Streamed so the small-response reader bounds the body; submitForm()
+    // buffered the whole response before it could be checked.
+    val statement = try {
+        client.prepareForm(
             url = request.url,
             formParameters = request.formParameters
         ) {
@@ -43,16 +46,27 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
     } catch (e: Exception) {
         throw NetworkException("${request.failureMessage}: ${e.message}", cause = e)
     }
-    try {
-        if (!response.status.isSuccess()) {
-            val detail = readSmallResponseSummary(response)
-            val suffix = detail?.let { ": $it" }.orEmpty()
-            throw NetworkException("${request.responseFailureMessage} (HTTP ${response.status.value}$suffix)")
+    val failure: NetworkException? = try {
+        statement.execute { response ->
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                NetworkException("${request.responseFailureMessage} (HTTP ${response.status.value}$suffix)")
+            } else {
+                // Futaba answers a rejected deletion (wrong key, missing post,
+                // duplicate request...) with HTTP 200 and the reason as text.
+                extractHttpBoardApiShortFormFailure(readSmallResponseBody(response))
+                    ?.let { detail -> NetworkException("${request.responseFailureMessage}: $detail") }
+            }
         }
-        readSmallResponseSummary(response)
-    } finally {
-        // Body is already drained by readSmallResponseSummary.
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: NetworkException) {
+        throw e
+    } catch (e: Exception) {
+        throw NetworkException("${request.failureMessage}: ${e.message}", cause = e)
     }
+    failure?.let { throw it }
 }
 
 internal suspend fun initializeHttpBoardApiCatalogSetup(
@@ -80,7 +94,7 @@ internal suspend fun initializeHttpBoardApiCatalogSetup(
             requestAttemptTimeoutMillis = requestAttemptTimeoutMillis,
             maxAttempts = maxAttempts
         ) {
-            val response: HttpResponse = client.submitForm(
+            client.prepareForm(
                 url = url,
                 formParameters = Parameters.build {
                     append("mode", "catset")
@@ -99,9 +113,7 @@ internal suspend fun initializeHttpBoardApiCatalogSetup(
                 headers[HttpHeaders.AcceptLanguage] = acceptLanguage
                 headers[HttpHeaders.CacheControl] = "max-age=0"
                 headers[HttpHeaders.Referrer] = url
-            }
-
-            try {
+            }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val detail = readSmallResponseSummary(response)
                     val suffix = detail?.let { ": $it" }.orEmpty()
@@ -110,8 +122,6 @@ internal suspend fun initializeHttpBoardApiCatalogSetup(
                     throw NetworkException(errorMsg, response.status.value)
                 }
                 readSmallResponseSummary(response)
-            } finally {
-                // Body is already drained by readSmallResponseSummary.
             }
 
             Logger.i(

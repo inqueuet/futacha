@@ -9,13 +9,28 @@ import kotlin.test.*
 
 class MediaFeatureSettingsTest {
     @Test fun missingMalformedAndFutureSettingsAreDisabled() {
-        for (raw in listOf(null, "", "{broken", "null", "[]", "{\"version\":2,\"prompt_display_enabled\":true}",
-            "{\"prompt_display_enabled\":true,\"prompt_placement\":\"unknown\"}")) {
+        for (raw in listOf(null, "", "{broken", "null", "[]", "{\"version\":2,\"prompt_display_enabled\":true}")) {
             val settings = MediaFeatureSettings.decode(raw)
             MediaFeature.entries.forEach { assertFalse(settings.isEnabled(it), "Must be OFF: $raw") }
             assertFalse(settings.showAiLabels)
             assertFalse(settings.showInlinePrompt)
         }
+    }
+
+    @Test fun anUnreadableFieldFallsBackAloneInsteadOfDisablingEverything() {
+        val unknownPlacement = MediaFeatureSettings.decode(
+            "{\"prompt_display_enabled\":true,\"image_editor_enabled\":true,\"prompt_placement\":\"unknown\"}"
+        )
+        assertTrue(unknownPlacement.isEnabled(MediaFeature.PROMPT))
+        assertTrue(unknownPlacement.isEnabled(MediaFeature.IMAGE_EDITOR))
+        assertEquals(PromptPlacement.LABELS_AND_INLINE, unknownPlacement.promptPlacement)
+
+        val wrongType = MediaFeatureSettings.decode(
+            "{\"version\":1,\"prompt_display_enabled\":\"yes\",\"video_editor_enabled\":true,\"prompt_placement\":\"labels_only\"}"
+        )
+        assertFalse(wrongType.isEnabled(MediaFeature.PROMPT))
+        assertTrue(wrongType.isEnabled(MediaFeature.VIDEO_EDITOR))
+        assertEquals(PromptPlacement.LABELS_ONLY, wrongType.promptPlacement)
     }
 
     @Test fun roundTripKeepsIndependentTogglesAndPlacement() {

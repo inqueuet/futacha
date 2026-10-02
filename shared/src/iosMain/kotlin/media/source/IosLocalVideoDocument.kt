@@ -15,6 +15,7 @@ import platform.Foundation.NSURL
 import kotlin.random.Random
 import okio.Path.Companion.toPath
 import okio.use
+import okio.buffer
 
 /** A private HTML document and a hard link to the same original inode; no second media copy. */
 internal class IosLocalVideoDocument private constructor(
@@ -34,6 +35,20 @@ internal class IosLocalVideoDocument private constructor(
     override fun close() { if (closed.compareAndSet(false, true)) references.close() }
 
     companion object {
+        private const val COPY_CHUNK_BYTES = 256L * 1024
+
+        /** Another volume cannot hard link; closing the player must stop a large copy, not wait for it. */
+        internal suspend fun copyCancellably(fs: okio.FileSystem, source: okio.Path, destination: okio.Path) {
+            fs.source(source).use { input -> fs.sink(destination).buffer().use { output ->
+                val chunk = okio.Buffer()
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    if (input.read(chunk, COPY_CHUNK_BYTES) == -1L) break
+                    output.write(chunk, chunk.size)
+                }
+            } }
+        }
+
         private val cleanupMutex = Mutex()
         private val preparedDirectories = mutableSetOf<okio.Path>()
 
@@ -71,8 +86,9 @@ internal class IosLocalVideoDocument private constructor(
                 withContext(AppDispatchers.io) {
                     prepareDirectory(fs, directory)
                     fs.createDirectories(work)
-                    check(NSFileManager.defaultManager.linkItemAtPath(source.toString(), work.resolve("video.$extension").toString(), null)) {
-                        "Cannot make the original available to the local video player"
+                    val destination = work.resolve("video.$extension")
+                    if (!NSFileManager.defaultManager.linkItemAtPath(source.toString(), destination.toString(), null)) {
+                        copyCancellably(fs, source, destination)
                     }
                     fs.write(work.resolve("player.html")) { writeUtf8(buildEmbeddedVideoHtml("video.$extension", webmInfo?.mimeType)) }
                 }

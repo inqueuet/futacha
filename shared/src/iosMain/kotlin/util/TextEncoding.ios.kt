@@ -33,7 +33,7 @@ actual object TextEncoding {
     private val utf8CfEncoding: UInt = kCFStringEncodingUTF8
 
     actual fun encodeToShiftJis(text: String): ByteArray {
-        return encodeShiftJisDeterministically(text) { chunk ->
+        return encodeShiftJisDeterministically(canonicalCp932Text(text)) { chunk ->
             val nsString = NSString.create(string = chunk)
             val data = nsString.dataUsingEncoding(shiftJisEncoding, allowLossyConversion = false)
                 ?: return@encodeShiftJisDeterministically null

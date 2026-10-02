@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.analytics.analyticsSessionContextId
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
+import com.valoser.futacha.shared.ui.board.applyBoardListUpdate
 import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -92,9 +93,8 @@ internal fun buildFutachaBoardScreenCallbacks(
                 mapOf("board_count_bucket" to analyticsCountBucket(reorderedBoards.size))
             )
             launchFutachaCallbackMutation(coroutineScope, start = CoroutineStart.UNDISPATCHED) {
-                inputs.updateBoards {
-                    reorderedBoards
-                }
+                // Applied to the latest stored list, not the one the screen showed (U-3).
+                inputs.updateBoards { latest -> applyBoardListUpdate(latest, reorderedBoards) }
             }
         }
     )

@@ -19,7 +19,9 @@ private val trackingNative: TrackingNative by lazy {
 }
 
 internal actual class OpticalFlowTracker actual constructor() : AutoCloseable {
-    private val native = trackingNative
+    // JNA reports a missing or unloadable bridge as UnsatisfiedLinkError, an Error (B-13).
+    private val native = try { trackingNative }
+        catch (failure: LinkageError) { throw IllegalStateException("追尾ライブラリを読み込めません", failure) }
     private var pointer: Pointer? = checkNotNull(native.futacha_tracker_create()) { "追尾ライブラリを読み込めません" }
     actual fun seed(frame: AnalysisFrame, region: MosaicBounds) {
         validateTrackingFrame(frame)

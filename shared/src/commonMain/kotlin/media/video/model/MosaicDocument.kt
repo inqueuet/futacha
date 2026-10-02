@@ -18,7 +18,7 @@ internal data class MosaicBounds(val centerX: Float, val centerY: Float, val wid
     }
     fun interpolate(other: MosaicBounds, fraction: Float): MosaicBounds {
         fun mix(a: Float, b: Float) = a + (b - a) * fraction
-        return MosaicBounds(mix(centerX, other.centerX), mix(centerY, other.centerY), mix(width, other.width), mix(height, other.height))
+        return MosaicBounds(mix(centerX, other.centerX), mix(centerY, other.centerY), mix(width, other.width), mix(height, other.height)).constrained()
     }
     companion object { val DEFAULT = MosaicBounds(0.5f, 0.5f, 0.3f, 0.3f) }
 }
@@ -47,8 +47,9 @@ internal data class MosaicRegion(
         require(blockFraction.isFinite() && blockFraction in 0.005f..0.2f)
         require(darkness.isFinite() && darkness in 0f..1f)
         require(maskMargin in 0..MosaicMask.MAX_MARGIN)
-        require(masks.size<=MosaicMask.MAX_SAMPLES && masks.all { it.timeUs>=0 } && masks.zipWithNext().all { (a,b)->a.timeUs<b.timeUs })
-        require(keyframes.isNotEmpty() && keyframes.zipWithNext().all { (a,b) -> a.timeUs < b.timeUs })
+        // Index loops: this runs on every drag step of a region holding up to MAX_SAMPLES masks.
+        require(masks.size<=MosaicMask.MAX_SAMPLES && (masks.isEmpty() || masks[0].timeUs>=0) && (1 until masks.size).all { masks[it-1].timeUs<masks[it].timeUs })
+        require(keyframes.isNotEmpty() && (1 until keyframes.size).all { keyframes[it - 1].timeUs < keyframes[it].timeUs })
         require(keyframes.all { it.timeUs >= 0 && it.bounds.let { b -> listOf(b.centerX,b.centerY,b.width,b.height).all(Float::isFinite) && b == b.constrained() } })
     }
     fun activeAt(timeUs: Long) = timeUs >= startUs && timeUs < endUs
@@ -56,9 +57,34 @@ internal data class MosaicRegion(
         val found=masks.binarySearchBy(timeUs) { it.timeUs }
         return masks.getOrNull(if(found>=0)found else -found-2)?.mask
     }
-    fun withMask(timeUs: Long, mask: MosaicMask?): MosaicRegion = copy(masks=(masks.filterNot { it.timeUs==timeUs }+MosaicMaskKeyframe(timeUs,mask)).sortedBy { it.timeUs })
-    fun hasEmptyActiveMask(): Boolean = masks.indices.any { i ->
-        masks[i].mask?.isEmpty==true && maxOf(startUs,masks[i].timeUs)<minOf(endUs,masks.getOrNull(i+1)?.timeUs?:endUs)
+    /** Per mask keyframe: whether it is an empty contour. Carried over by [withMask], so a brush
+     * step tests one mask instead of every stored one (each test reads up to 2 KB). */
+    @kotlin.concurrent.Volatile private var emptyMasks: BooleanArray? = null
+    private fun emptyMasks(): BooleanArray =
+        emptyMasks ?: BooleanArray(masks.size) { masks[it].mask?.isEmpty == true }.also { emptyMasks = it }
+    /** Data-class copies drop [emptyMasks]; hands it to [next] when [next] keeps the same mask list,
+     * so dragging the box or a slider does not re-test every stored mask on each step. */
+    internal fun carryEmptyMasksTo(next: MosaicRegion): MosaicRegion {
+        if (next !== this && next.masks === masks && next.emptyMasks == null) emptyMasks?.let { next.emptyMasks = it }
+        return next
+    }
+    internal val hasCachedEmptyMasks: Boolean get() = emptyMasks != null
+    fun withMask(timeUs: Long, mask: MosaicMask?): MosaicRegion {
+        val found = masks.binarySearchBy(timeUs) { it.timeUs }
+        val frame = MosaicMaskKeyframe(timeUs, mask)
+        val flag = mask?.isEmpty == true
+        val old = emptyMasks()
+        val updated = masks.toMutableList()
+        val empty = if (found >= 0) old.copyOf().also { updated[found] = frame; it[found] = flag }
+            else BooleanArray(old.size + 1).also { val at = -found - 1
+                updated.add(at, frame); old.copyInto(it, 0, 0, at); it[at] = flag; old.copyInto(it, at + 1, at) }
+        return copy(masks = updated).also { it.emptyMasks = empty }
+    }
+    fun hasEmptyActiveMask(): Boolean {
+        val empty = emptyMasks()
+        return masks.indices.any { i ->
+            empty[i] && maxOf(startUs,masks[i].timeUs)<minOf(endUs,masks.getOrNull(i+1)?.timeUs?:endUs)
+        }
     }
     fun boundsAt(timeUs: Long): MosaicBounds {
         // Manual corrections take precedence at their sample. Re-tracking propagates them.
@@ -76,9 +102,9 @@ internal data class MosaicRegion(
     }
     fun withBounds(timeUs: Long, bounds: MosaicBounds): MosaicRegion {
         val frame = MosaicKeyframe(timeUs.coerceAtLeast(0), bounds.constrained())
-        return copy(keyframes = (keyframes.filterNot { it.timeUs == frame.timeUs } + frame).sortedBy { it.timeUs })
+        return carryEmptyMasksTo(copy(keyframes = (keyframes.filterNot { it.timeUs == frame.timeUs } + frame).sortedBy { it.timeUs }))
     }
-    fun withoutKeyframe(timeUs: Long) = if (keyframes.size == 1) this else copy(keyframes = keyframes.filterNot { it.timeUs == timeUs })
+    fun withoutKeyframe(timeUs: Long) = if (keyframes.size == 1) this else carryEmptyMasksTo(copy(keyframes = keyframes.filterNot { it.timeUs == timeUs }))
 }
 
 internal data class MosaicDocument(val regions: List<MosaicRegion> = emptyList(), val review: MosaicReview? = null) {
@@ -87,7 +113,21 @@ internal data class MosaicDocument(val regions: List<MosaicRegion> = emptyList()
         require(regions.sumOf { it.trajectory?.size?.toLong() ?: 0L } <= MosaicTrajectory.MAX_SAMPLES) { "追尾データの合計上限です。短い区間で追尾してください。" }
         require(regions.sumOf { it.masks.size.toLong() }<=MosaicMask.MAX_SAMPLES) { "輪郭データの上限です。短い区間で抽出してください。" }
     }
-    fun update(id: String, change: (MosaicRegion) -> MosaicRegion) = copy(regions = regions.map { if (it.id == id) change(it) else it }, review = review?.copy(confirmed = false))
+    fun update(id: String, change: (MosaicRegion) -> MosaicRegion) = copy(regions = regions.map { if (it.id == id) it.carryEmptyMasksTo(change(it)) else it }, review = review?.copy(confirmed = false))
+    /** One brush step on the region's mask at [timeUs]; unchanged when the region is absent or inactive there. */
+    fun paintRegionMask(id: String, timeUs: Long, imageWidth: Int, imageHeight: Int,
+        fromX: Float, fromY: Float, toX: Float, toY: Float, brush: Float, erase: Boolean): MosaicDocument {
+        val region = regions.firstOrNull { it.id == id }?.takeIf { it.activeAt(timeUs) } ?: return this
+        val old = region.maskAt(timeUs) ?: if (erase) MosaicMask.FULL else MosaicMask.EMPTY
+        val mask = old.paintWithin(region.boundsAt(timeUs), imageWidth, imageHeight, fromX, fromY, toX, toY, brush, erase)
+        return update(id) { it.withMask(timeUs, mask) }
+    }
+    /** One drag step of the region's box at [timeUs]; unchanged when the region is absent or inactive there. */
+    fun moveRegionBounds(id: String, timeUs: Long, dx: Float, dy: Float): MosaicDocument {
+        if (regions.none { it.id == id && it.activeAt(timeUs) }) return this
+        return update(id) { region -> val b = region.boundsAt(timeUs)
+            region.withBounds(timeUs, b.copy(centerX = b.centerX + dx, centerY = b.centerY + dy)) }
+    }
     companion object { const val MAX_REGIONS = 16 }
 }
 
@@ -103,15 +143,39 @@ internal class MosaicHistory(initial: MosaicDocument = MosaicDocument()) {
         undo.addLast(current); if (undo.size > 50) undo.removeFirst()
         current = value; redo.clear()
         // A few long analyses must not multiply native-sized trajectories across fifty undo entries.
-        while (undo.size > 1 && retainedTrajectoryBytes() > 32L * 1024 * 1024) undo.removeFirst()
+        trimUndoToRetainedBudget()
     }
     fun undo(): MosaicDocument { if (canUndo) { redo.addLast(current); current = undo.removeLast() }; return current }
     fun redo(): MosaicDocument { if (canRedo) { undo.addLast(current); current = redo.removeLast() }; return current }
-    private fun retainedTrajectoryBytes(): Long {
-        val regions=(undo.asSequence()+sequenceOf(current)).flatMap { it.regions.asSequence() }.toList()
-        return regions.mapNotNull { it.trajectory }.distinct().sumOf { it.byteSize } +
-            regions.flatMap { it.masks }.mapNotNull { it.mask }.distinct().sumOf { it.byteSize*2 } // Includes cached dilation.
+
+    /**
+     * Keeps the newest undo entries whose data, beyond what [current] already holds, fits the
+     * budget. Counting [current] too shrank the history to a single step once the document
+     * itself was large, and recomputing every entry per removed entry took about a second.
+     * Trajectories and masks compare by identity (shared between entries of unchanged regions);
+     * each one is attributed to the newest entry holding it, in a single newest-to-oldest pass.
+     */
+    private fun trimUndoToRetainedBudget() {
+        val seen = HashSet<Any>()
+        current.regions.forEach { region ->
+            region.trajectory?.let(seen::add)
+            region.masks.forEach { keyframe -> keyframe.mask?.let(seen::add) }
+        }
+        var total = 0L
+        var keep = 0
+        for (document in undo.asReversed()) {
+            document.regions.forEach { region ->
+                region.trajectory?.let { if (seen.add(it)) total += it.byteSize }
+                // Includes cached dilation.
+                region.masks.forEach { keyframe -> keyframe.mask?.let { if (seen.add(it)) total += it.byteSize * 2L } }
+            }
+            if (keep >= 1 && total > MAX_UNDO_RETAINED_BYTES) break
+            keep++
+        }
+        while (undo.size > keep) undo.removeFirst()
     }
+
+    private companion object { const val MAX_UNDO_RETAINED_BYTES = 32L * 1024 * 1024 }
 }
 
 /** Real presentation timestamps support frame stepping even for variable frame rate input. */

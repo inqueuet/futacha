@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 internal enum class SaveProgressDismissAction {
     Dismiss,
@@ -59,7 +60,7 @@ fun SaveProgressDialog(
     val primaryTextColor = MaterialTheme.colorScheme.onSurface
     val buttonColors = ButtonDefaults.textButtonColors(contentColor = primaryTextColor)
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             when (resolveSaveProgressDismissAction(progress, hasCancelRequest = onCancelRequest != null)) {
                 SaveProgressDismissAction.Dismiss -> {
@@ -140,5 +141,5 @@ fun SaveProgressDialog(
                 }
             }
         }
-    )
+    ) }
 }

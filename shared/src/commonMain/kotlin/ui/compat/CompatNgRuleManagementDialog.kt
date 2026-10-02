@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -613,7 +614,11 @@ internal fun CompatNgRuleManagementDialog(
             }
         }
     }
-    Dialog(
+    // While searching, the bar uses the readable search surface like the thread
+    // and catalog search bars: white text/hint on the light chromes is < 4.5:1.
+    val searchColors = compatibilitySearchBarColors(LocalCompatibilityPalette.current)
+    val barContent = if (searchOpen) searchColors.content else Color.White
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
@@ -641,10 +646,11 @@ internal fun CompatNgRuleManagementDialog(
                                     colors = TextFieldDefaults.colors(
                                         focusedContainerColor = Color.Transparent,
                                         unfocusedContainerColor = Color.Transparent,
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedPlaceholderColor = Color.White,
-                                        unfocusedPlaceholderColor = Color.White,
+                                        focusedTextColor = searchColors.content,
+                                        unfocusedTextColor = searchColors.content,
+                                        cursorColor = LocalCompatibilityPalette.current.inputCursor,
+                                        focusedPlaceholderColor = searchColors.hint,
+                                        unfocusedPlaceholderColor = searchColors.hint,
                                         focusedIndicatorColor = Color.Transparent,
                                         unfocusedIndicatorColor = Color.Transparent
                                     )
@@ -723,10 +729,10 @@ internal fun CompatNgRuleManagementDialog(
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = LocalCompatibilityPalette.current.chrome,
-                            titleContentColor = Color.White,
-                            navigationIconContentColor = Color.White,
-                            actionIconContentColor = Color.White
+                            containerColor = if (searchOpen) searchColors.container else LocalCompatibilityPalette.current.chrome,
+                            titleContentColor = barContent,
+                            navigationIconContentColor = barContent,
+                            actionIconContentColor = barContent
                         )
                     )
                 }
@@ -929,9 +935,9 @@ internal fun CompatNgRuleManagementDialog(
                 }
             }
         }
-    }
+    } }
     if (addOpen) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { addOpen = false },
             title = {
                 Text(
@@ -1051,10 +1057,10 @@ internal fun CompatNgRuleManagementDialog(
                     addOpen = false
                 }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (confirmDeleteAll) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { confirmDeleteAll = false },
             title = { Text(if (isReference) "全て削除" else "NGを全削除") },
             text = {
@@ -1076,10 +1082,10 @@ internal fun CompatNgRuleManagementDialog(
                 }
             },
             dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     pendingReferenceDeleteRule?.let { rule ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { pendingReferenceDeleteRule = null },
             title = { Text("登録の削除") },
             text = { Text("本当によろしいですか？") },
@@ -1092,10 +1098,10 @@ internal fun CompatNgRuleManagementDialog(
             dismissButton = {
                 TextButton(onClick = { pendingReferenceDeleteRule = null }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (thresholdOpen && phashThreshold != null && onPhashThresholdChange != null) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { thresholdOpen = false },
             title = { Text("類似判定のしきい値") },
             text = {
@@ -1161,10 +1167,10 @@ internal fun CompatNgRuleManagementDialog(
                     TextButton(onClick = { thresholdOpen = false }) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
     editingRule?.let { rule ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { editingRule = null },
             title = {
                 Text(
@@ -1341,7 +1347,7 @@ internal fun CompatNgRuleManagementDialog(
                     }) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
 }
 
@@ -1395,7 +1401,7 @@ internal fun CompatCatalogRuleScopeDialog(
     onDismiss: () -> Unit,
     onSelect: (allBoards: Boolean) -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(kind.compatCatalogRuleLabel()) },
         text = { Text("このルールを適用する範囲を選択してください。") },
@@ -1406,5 +1412,5 @@ internal fun CompatCatalogRuleScopeDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }

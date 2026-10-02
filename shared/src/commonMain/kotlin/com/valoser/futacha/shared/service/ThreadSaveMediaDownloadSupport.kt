@@ -23,7 +23,8 @@ internal data class ThreadSaveMediaDownloadExecutionContext(
     val logTag: String,
     val updateProgress: (current: Int, total: Int) -> Unit,
     val checkBudget: () -> Unit,
-    val downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>
+    val downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>,
+    val shouldContinueDownloading: () -> Boolean = { true }
 )
 
 internal data class ThreadSaveMediaDownloadAccumulator(
@@ -114,6 +115,7 @@ private suspend fun retryThreadSaveMediaDownload(
     for (attempt in 1..effectiveMaxRetries) {
         attemptCount = attempt
         coroutineContext.ensureActive()
+        if (!execution.shouldContinueDownloading()) break
         execution.checkBudget()
         downloadResult = try {
             execution.downloadMedia(mediaItem)

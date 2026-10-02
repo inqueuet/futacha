@@ -62,24 +62,34 @@ internal fun buildThreadNgPersistenceBindings(
     onFallbackWordsChanged: (List<String>) -> Unit
 ): ThreadNgPersistenceBindings {
     return ThreadNgPersistenceBindings(
-        persistHeaders = { updated ->
-            if (stateStore != null) {
-                coroutineScope.launch {
-                    stateStore.setNgHeaders(updated)
+        persistHeaders = AtomicStringListPersister(
+            replace = { updated ->
+                if (stateStore != null) {
+                    coroutineScope.launch {
+                        stateStore.setNgHeaders(updated)
+                    }
+                } else {
+                    onFallbackHeadersChanged(updated)
                 }
-            } else {
-                onFallbackHeadersChanged(updated)
+            },
+            atomicEdit = stateStore?.let { store ->
+                { edit -> coroutineScope.launch { store.updateNgHeaders(edit) } }
             }
-        },
-        persistWords = { updated ->
-            if (stateStore != null) {
-                coroutineScope.launch {
-                    stateStore.setNgWords(updated)
+        ),
+        persistWords = AtomicStringListPersister(
+            replace = { updated ->
+                if (stateStore != null) {
+                    coroutineScope.launch {
+                        stateStore.setNgWords(updated)
+                    }
+                } else {
+                    onFallbackWordsChanged(updated)
                 }
-            } else {
-                onFallbackWordsChanged(updated)
+            },
+            atomicEdit = stateStore?.let { store ->
+                { edit -> coroutineScope.launch { store.updateNgWords(edit) } }
             }
-        }
+        )
     )
 }
 

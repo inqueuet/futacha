@@ -2,12 +2,10 @@ package com.valoser.futacha.shared.network
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
-import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
 import io.ktor.client.plugins.cookies.CookiesStorage
-import kotlinx.coroutines.CancellationException
 
 /**
  * Creates a properly configured HttpClient with lifecycle management.
@@ -19,22 +17,10 @@ actual fun createHttpClient(
     cookieStorage: CookiesStorage?
 ): HttpClient {
     return HttpClient(Darwin) {
-        install(HttpRequestRetry) {
-            maxRetries = 2
-            exponentialDelay()
-            retryIf(maxRetries) { request, response ->
-                shouldUseClientAutomaticRetry(
-                    method = request.method,
-                    higherLayerRetryManaged = request.attributes.getOrNull(HigherLayerRetryManaged) == true
-                ) && response.status.value in 500..599
-            }
-            retryOnExceptionIf { request, cause ->
-                shouldUseClientAutomaticRetry(
-                    method = request.method,
-                    higherLayerRetryManaged = request.attributes.getOrNull(HigherLayerRetryManaged) == true
-                ) && cause !is CancellationException
-            }
-        }
+        // Ktor's HttpRedirect follows only GET/HEAD; answer a POST 302/303 with a GET.
+        // Installed first so the read retry inside it can never resend the POST.
+        installPostRedirectFollowingAndReadRetry()
+        installAmbiguousRequestUrlGuard()
 
         install(HttpTimeout) {
             requestTimeoutMillis = 75_000

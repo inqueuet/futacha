@@ -2,7 +2,6 @@ package com.valoser.futacha.shared.network
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
@@ -14,7 +13,6 @@ import okhttp3.ResponseBody
 import okio.BufferedSource
 import android.os.Looper
 import com.valoser.futacha.shared.util.Logger
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,26 +45,10 @@ actual fun createHttpClient(
     cookieStorage: CookiesStorage?
 ): HttpClient {
     return HttpClient(OkHttp) {
-        // Futaba's legacy HTTP servers occasionally close a keep-alive socket
-        // before OkHttp receives the next response headers. Retry only
-        // idempotent reads here so catalog/thread/media loads recover without
-        // ever replaying a reply, thread creation, or deletion POST.
-        install(HttpRequestRetry) {
-            maxRetries = 2
-            exponentialDelay()
-            retryIf(maxRetries) { request, response ->
-                shouldUseClientAutomaticRetry(
-                    method = request.method,
-                    higherLayerRetryManaged = request.attributes.getOrNull(HigherLayerRetryManaged) == true
-                ) && response.status.value in 500..599
-            }
-            retryOnExceptionIf { request, cause ->
-                shouldUseClientAutomaticRetry(
-                    method = request.method,
-                    higherLayerRetryManaged = request.attributes.getOrNull(HigherLayerRetryManaged) == true
-                ) && cause !is CancellationException
-            }
-        }
+        // OkHttp no longer follows redirects; restore its POST 302/303 → GET.
+        // Installed first so the read retry inside it can never resend the POST.
+        installPostRedirectFollowingAndReadRetry()
+        installAmbiguousRequestUrlGuard()
 
         install(HttpTimeout) {
             requestTimeoutMillis = REQUEST_TIMEOUT_MS
@@ -89,8 +71,9 @@ actual fun createHttpClient(
                 // NetworkOnMainThreadException from the completion handler.
                 addInterceptor(MainThreadSafeResponseCloseInterceptor)
 
-                // Follow redirects
-                followRedirects(true)
+                // Ktor must observe every redirect to save and select cookies per host.
+                followRedirects(false)
+                followSslRedirects(false)
 
                 // The client is shared by reads and non-idempotent posting
                 // requests. OkHttp can replay a buffered POST after a route or
@@ -102,7 +85,12 @@ actual fun createHttpClient(
     }
 }
 
-internal object MainThreadSafeResponseCloseInterceptor : Interceptor {
+/**
+ * Works around KTOR-9773 (Ktor 3.5.x OkHttp engine): every OkHttp-backed client in the app,
+ * including the ones created outside this factory (OpenAI, model download, archive report),
+ * must install this interceptor so a main-thread cancellation never closes a TLS socket there.
+ */
+object MainThreadSafeResponseCloseInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
         val response = chain.proceed(chain.request())
         return response.newBuilder()

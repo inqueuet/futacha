@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -34,7 +35,7 @@ internal fun CompatThreadSpeechDialog(
     fontSize: Int,
     onDismiss: () -> Unit
 ) {
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
@@ -78,7 +79,7 @@ internal fun CompatThreadSpeechDialog(
                 }
             }
         }
-    }
+    } }
 }
 
 private fun CompatPostSnapshot.compatSpeechHeader(): String = buildString {

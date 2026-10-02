@@ -54,6 +54,13 @@ internal class WatchAlertNotifier(
         }.isSuccess
     }
 
+    /**
+     * Whether notifications are turned off by the user (runtime permission or app
+     * setting). Retrying such a match later cannot deliver it either.
+     */
+    fun isDeliveryDisabled(): Boolean =
+        !canNotify() || !NotificationManagerCompat.from(context).areNotificationsEnabled()
+
     private fun canNotify(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(

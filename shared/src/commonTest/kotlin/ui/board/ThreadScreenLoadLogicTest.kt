@@ -63,7 +63,8 @@ class ThreadScreenLoadLogicTest {
             ThreadLoadExecutionResult(
                 page = page,
                 usedOffline = false,
-                nextThreadUrlOverride = "https://may.2chan.net/b/res/123.htm"
+                nextThreadUrlOverride = "https://may.2chan.net/b/res/123.htm",
+                fromArchive = true
             ),
             performThreadLoadWithOfflineFallback(
                 config = buildThreadLoadRunnerConfig(

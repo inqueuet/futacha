@@ -48,4 +48,17 @@ class ShiftJisSanitizerTest {
         assertEquals(1, result.removedCodePointCount)
         assertEquals(0, result.escapedCodePointCount)
     }
+
+    @Test
+    fun shiftJisSanitizedByteCount_matchesSanitizedWirePayload() {
+        assertEquals(0, shiftJisSanitizedByteCount(""))
+        assertEquals(8, shiftJisSanitizedByteCount("テテテテ"))
+        for (text in listOf("これはテストです", "abc\r\ndef", "A😀B", "A\uD83DB", "テスト😊です")) {
+            assertEquals(
+                TextEncoding.encodeToShiftJis(sanitizeForShiftJis(text).sanitizedText).size,
+                shiftJisSanitizedByteCount(text),
+                text
+            )
+        }
+    }
 }

@@ -4,7 +4,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogFetchSettings
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.head
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
@@ -24,7 +24,8 @@ class HttpBoardApi(
         val rangeHeader: String? = null,
         val failureDescription: String,
         val requestAttemptTimeoutMillis: Long = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
-        val maxAttempts: Int = REQUEST_MAX_ATTEMPTS
+        val maxAttempts: Int = REQUEST_MAX_ATTEMPTS,
+        val overallBudgetMillis: Long? = null
     )
 
     private data class PostSubmission(
@@ -75,6 +76,16 @@ class HttpBoardApi(
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 30_000L
         private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 35_000L
+        // Catalog/thread bodies can be several MiB. On a slow line a fixed 30 s
+        // read (inside a 35 s attempt) failed and restarted a download that was
+        // still progressing. Both attempts now share one budget that still fits
+        // the screens' 75 s loaders; a stalled body is caught by the reader's
+        // 10 s idle timeout and a dead connection by the socket timeout.
+        private const val BODY_REQUEST_BUDGET_MILLIS = 70_000L
+        private const val BODY_RESPONSE_TOTAL_TIMEOUT_MILLIS = 68_000L
+        // Only the posting form (near the top of futaba.htm / res/N.htm) is
+        // needed before a post, not the whole thread.
+        private const val POSTING_CONFIG_PREFIX_MAX_BYTES = 256 * 1024
         private const val HELPER_REQUEST_ATTEMPT_TIMEOUT_MILLIS = 5_000L
         private const val REQUEST_MAX_ATTEMPTS = 2
         private const val HELPER_REQUEST_MAX_ATTEMPTS = 1
@@ -84,6 +95,17 @@ class HttpBoardApi(
         return readHttpBoardApiResponseBodyAsString(
             response = response,
             maxBytes = MAX_RESPONSE_SIZE,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = BODY_RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
+    }
+
+    private suspend fun readPostingConfigPrefix(response: HttpResponse): String {
+        return readHttpBoardApiResponsePrefixAsString(
+            response = response,
+            maxBytes = POSTING_CONFIG_PREFIX_MAX_BYTES,
             responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
             maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
             zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
@@ -141,7 +163,9 @@ class HttpBoardApi(
                 referer = board,
                 errorLabel = "catalog",
                 readMode = HttpBoardApiTextReadMode.BODY,
-                failureDescription = "Failed to fetch catalog from $url"
+                failureDescription = "Failed to fetch catalog from $url",
+                requestAttemptTimeoutMillis = BODY_REQUEST_BUDGET_MILLIS,
+                overallBudgetMillis = BODY_REQUEST_BUDGET_MILLIS
             )
         )
     }
@@ -176,7 +200,9 @@ class HttpBoardApi(
                 referer = resolveBoardRefererBase(board),
                 errorLabel = "thread",
                 readMode = HttpBoardApiTextReadMode.BODY,
-                failureDescription = "Failed to fetch thread from $url"
+                failureDescription = "Failed to fetch thread from $url",
+                requestAttemptTimeoutMillis = BODY_REQUEST_BUDGET_MILLIS,
+                overallBudgetMillis = BODY_REQUEST_BUDGET_MILLIS
             )
         )
     }
@@ -191,8 +217,9 @@ class HttpBoardApi(
         return try {
             withHttpBoardApiRetry(
                 logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
-                maxAttempts = REQUEST_MAX_ATTEMPTS
+                requestAttemptTimeoutMillis = BODY_REQUEST_BUDGET_MILLIS,
+                maxAttempts = REQUEST_MAX_ATTEMPTS,
+                overallBudgetMillis = BODY_REQUEST_BUDGET_MILLIS
             ) {
                 executeHttpBoardApiConditionalTextGet(
                     client = client,
@@ -230,7 +257,9 @@ class HttpBoardApi(
                 referer = resolveHttpBoardApiRefererBaseFromThreadUrl(url),
                 errorLabel = "thread",
                 readMode = HttpBoardApiTextReadMode.BODY,
-                failureDescription = "Failed to fetch thread from $url"
+                failureDescription = "Failed to fetch thread from $url",
+                requestAttemptTimeoutMillis = BODY_REQUEST_BUDGET_MILLIS,
+                overallBudgetMillis = BODY_REQUEST_BUDGET_MILLIS
             )
         )
     }
@@ -289,7 +318,7 @@ class HttpBoardApi(
         val url = "$siteRoot/sd.php?$boardSlug.$sanitizedPostId"
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         try {
-            val response: HttpResponse = client.get(url) {
+            client.prepareGet(url) {
                 // A vote is a GET but not idempotent: a replay after a lost response
                 // can count twice. Opt out of the platform's automatic GET retries;
                 // nothing above retries a vote either, the user can simply tap again.
@@ -300,19 +329,16 @@ class HttpBoardApi(
                 headers[HttpHeaders.CacheControl] = "no-cache"
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
-            }
-            try {
+            }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val detail = readSmallResponseSummary(response)
                     val suffix = detail?.let { ": $it" }.orEmpty()
                     throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
                 }
-                val result = readResponseBodyAsString(response).trim()
+                val result = readSmallResponseBody(response)?.trim().orEmpty()
                 if (!isSuccessfulHttpBoardApiSaidaneResponse(result)) {
-                    throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
+                    throw NetworkException("そうだね投票に失敗しました (応答: '${result.take(160)}')")
                 }
-            } finally {
-                // Body lifecycle is managed in readResponseBodyAsString.
             }
         } catch (e: NetworkException) {
             throw e
@@ -333,6 +359,16 @@ class HttpBoardApi(
         )
     }
 
+    private suspend fun readSmallResponseBody(response: HttpResponse): String? {
+        return readSmallHttpBoardApiResponseBody(
+            response = response,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
+    }
+
     private fun resolveBoardRefererBase(board: String): String {
         val base = BoardUrlResolver.resolveBoardBaseUrl(board)
         return if (base.endsWith("/")) base else "$base/"
@@ -343,7 +379,8 @@ class HttpBoardApi(
             withHttpBoardApiRetry(
                 logTag = TAG,
                 requestAttemptTimeoutMillis = fetch.requestAttemptTimeoutMillis,
-                maxAttempts = fetch.maxAttempts
+                maxAttempts = fetch.maxAttempts,
+                overallBudgetMillis = fetch.overallBudgetMillis
             ) {
                 executeHttpBoardApiTextGet(
                     client = client,
@@ -412,7 +449,7 @@ class HttpBoardApi(
             postingConfig = postingConfig,
             forceAjaxResponse = submission.forceAjaxResponse
         )
-        val response = submitHttpBoardApiBinaryForm(
+        return submitHttpBoardApiBinaryForm(
             client = client,
             request = HttpBoardApiBinarySubmitRequest(
                 url = url,
@@ -423,8 +460,7 @@ class HttpBoardApi(
             userAgent = DEFAULT_USER_AGENT,
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
-        )
-        try {
+        ) { response ->
             if (!response.status.isSuccess()) {
                 val detail = readSmallResponseSummary(response)
                 val prefix = "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value})"
@@ -445,13 +481,12 @@ class HttpBoardApi(
                 )
             }
             val responseBody = readResponseBodyAsString(response)
-            return resolveHttpBoardApiPostResponseOrThrow(
+            resolveHttpBoardApiPostResponseOrThrow(
                 mode = submission.responseMode,
                 responseBody = responseBody,
-                logTag = TAG
+                logTag = TAG,
+                redirectedRequestUrl = response.call.request.url.toString().takeIf { it != url }
             )
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
         }
     }
 
@@ -468,7 +503,8 @@ class HttpBoardApi(
             userAgent = DEFAULT_USER_AGENT,
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-            readSmallResponseSummary = ::readSmallResponseSummary
+            readSmallResponseSummary = ::readSmallResponseSummary,
+            readSmallResponseBody = ::readSmallResponseBody
         )
     }
 
@@ -623,7 +659,7 @@ class HttpBoardApi(
             logTag = TAG,
             fallbackChrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
             readSmallResponseSummary = ::readSmallResponseSummary,
-            readResponseBodyAsString = ::readResponseBodyAsString
+            readResponseBodyAsString = ::readPostingConfigPrefix
         )
     }
 

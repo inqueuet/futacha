@@ -33,6 +33,7 @@ import com.valoser.futacha.shared.util.inferCatalogTitleCompletionPolicy
 import com.valoser.futacha.shared.util.resolveCatalogTitleCompletionPolicy
 import kotlinx.coroutines.launch
 import com.valoser.futacha.shared.ui.compat.CompatFastScrollbar
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun CatalogScreenScaffold(
@@ -201,7 +202,7 @@ internal fun CatalogScreenOverlayHost(
     }
 
     if (bindings.overlayState.showModeDialog) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = {
                 AnalyticsTracker.uiControl("catalog_mode", "カタログ表示モード選択を閉じる")
                 bindings.overlayBindings.modeDialogCallbacks.onDismiss()
@@ -244,7 +245,7 @@ internal fun CatalogScreenOverlayHost(
                     Text("閉じる")
                 }
             }
-        )
+        ) }
     }
 
     if (bindings.overlayState.showDisplayStyleDialog) {

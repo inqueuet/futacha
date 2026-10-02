@@ -19,6 +19,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.isAndroid
 import kotlinx.coroutines.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 internal data class ImageEditHost(val fileSystem: FileSystem, val stateStore: AppStateStore)
 internal val LocalLaunchDeviceImageEditor = staticCompositionLocalOf<(() -> Unit)?> { null }
@@ -56,8 +57,8 @@ internal fun DeviceImageEditingHost(fileSystem: FileSystem?, stateStore: AppStat
     if (enabled && fileSystem != null) picked?.let { image ->
         ImageEditSaveDialog(ImageEditInput(image), ImageEditHost(fileSystem, stateStore), onDismiss = { picked = null })
     }
-    error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("画像を開けませんでした") },
-        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) }
+    error?.let { message -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { error = null }, title = { Text("画像を開けませんでした") },
+        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) } }
 }
 
 @Composable
@@ -136,12 +137,12 @@ private fun ImageEditSaveDialog(input: ImageEditInput, host: ImageEditHost, onDi
         }
     )
     saved?.let { (target, path) ->
-        AlertDialog(onDismissRequest = onDismiss, title = { Text("編集した画像を保存しました") },
+        FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("編集した画像を保存しました") },
             text = { Text(shareError ?: path) }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } },
             dismissButton = { TextButton(onClick = { scope.launch {
                 try { share("", "image/jpeg", host.fileSystem.resolveSavedFile(target, path).getOrThrow()) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { shareError = failure.message ?: "共有できませんでした" }
-            } }) { Text("共有") } })
+            } }) { Text("共有") } }) }
     }
 }

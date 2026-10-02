@@ -5,8 +5,32 @@ private val threadPathRegex = Regex("^/(.+?)/res/([0-9]+)\\.htm/?$", RegexOption
 private val duplicateSlashRegex = Regex("/{2,}")
 private const val COMPAT_URL_MAX_CHARS = 8_192
 
+// The whole authority must be a plain DNS name: `2chan.net` or ASCII labels
+// below it. Userinfo (`@`), ports, `%`-escapes and non-ASCII never match.
+private val officialFutabaHostRegex = Regex("^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)*2chan\\.net$")
+
+// ASCII is checked before lowercasing: `lowercase()` maps e.g. the Kelvin sign to `k`.
 private fun isOfficialFutabaHost(host: String): Boolean =
-    host == "2chan.net" || host.endsWith(".2chan.net")
+    host.all { it.code < 0x80 } && officialFutabaHostRegex.matches(host.lowercase())
+
+/**
+ * Splits [url] into scheme, an official Futaba host and the path, or null.
+ *
+ * Ktor, OkHttp and browsers end the authority at `\` too, and browsers drop
+ * tabs and newlines inside a URL. `https://evil.com\@may.2chan.net/b/` looked
+ * like a 2chan.net host here but was sent to evil.com, so `\`, whitespace and
+ * control characters are refused before the query, where they could change
+ * what another parser takes as the host or path.
+ */
+private fun matchOfficialFutabaUrl(url: String): MatchResult? {
+    if (url.length > COMPAT_URL_MAX_CHARS) return null
+    val trimmed = url.trim()
+    val beforeQuery = trimmed.substringBefore('?').substringBefore('#')
+    if (beforeQuery.any { it == '\\' || it.isWhitespace() || it.isISOControl() }) return null
+    val match = absoluteUrlRegex.matchEntire(trimmed) ?: return null
+    if (!isOfficialFutabaHost(match.groupValues[2])) return null
+    return match
+}
 
 data class CanonicalThreadUrl(
     val canonicalUrl: String,
@@ -16,10 +40,8 @@ data class CanonicalThreadUrl(
 )
 
 fun canonicalizeBoardUrl(url: String): String? {
-    if (url.length > COMPAT_URL_MAX_CHARS) return null
-    val match = absoluteUrlRegex.matchEntire(url.trim()) ?: return null
+    val match = matchOfficialFutabaUrl(url) ?: return null
     val host = match.groupValues[2].lowercase()
-    if (!isOfficialFutabaHost(host)) return null
     val normalizedPath = match.groupValues[3]
         .ifBlank { "/" }
         .replace(duplicateSlashRegex, "/")
@@ -37,10 +59,8 @@ fun canonicalizeBoardUrl(url: String): String? {
 }
 
 fun canonicalizeThreadUrl(url: String): CanonicalThreadUrl? {
-    if (url.length > COMPAT_URL_MAX_CHARS) return null
-    val match = absoluteUrlRegex.matchEntire(url.trim()) ?: return null
+    val match = matchOfficialFutabaUrl(url) ?: return null
     val host = match.groupValues[2].lowercase()
-    if (!isOfficialFutabaHost(host)) return null
     val path = match.groupValues[3]
         .replace(duplicateSlashRegex, "/")
     val threadMatch = threadPathRegex.matchEntire(path) ?: return null

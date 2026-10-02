@@ -324,7 +324,7 @@ internal fun rememberThreadScreenCoreSetupBundle(
         boardId = board.id,
         threadId = threadId
     )
-    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
+    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = true)
         ?: remember { mutableStateOf(false) }
     return remember(
         environmentBundle,

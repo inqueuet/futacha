@@ -2,9 +2,23 @@ package com.valoser.futacha.shared.compat
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CompatibilitySettingsBackupTest {
+    @Test
+    fun restoringTheOtherBackupFormatFailsBeforeReplacingAnySettings() {
+        val backup = CompatSettingsBackup(exportedAtEpochMillis = 1L)
+        assertFailsWith<IllegalArgumentException> {
+            decodeCompatWatchNgBackup(encodeCompatSettingsBackup(backup))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            decodeCompatSettingsBackup(encodeCompatWatchNgBackup(backup))
+        }
+    }
+
     @Test
     fun settingsAndWordBackupsArePhysicallySeparate() {
         val backup = CompatSettingsBackup(
@@ -45,6 +59,32 @@ class CompatibilitySettingsBackupTest {
         val editable = decodeCompatWatchNgBackup(editablePayload)
         assertEquals("foo\nbar", editable.preferences[COMPAT_WATCH_WORDS_PREFERENCE_KEY])
         assertEquals(listOf("baz"), editable.ngRules.map(CompatNgRule::normalizedValue))
+    }
+
+    @Test
+    fun wordOnlyRestoresCarryNoWorkspaceSoOpenTabsAreKept() {
+        val backup = CompatSettingsBackup(
+            exportedAtEpochMillis = 1L,
+            preferences = mapOf(COMPAT_WATCH_WORDS_PREFERENCE_KEY to "foo"),
+            workspace = CompatWorkspaceRecord(activeTabKey = "tab")
+        )
+        assertNotNull(decodeCompatSettingsBackup(encodeCompatSettingsBackup(backup)).workspace)
+        assertNull(decodeCompatSettingsBackup(encodeCompatSettingsBackup(backup.watchAndNgOnly())).workspace)
+        assertNull(decodeCompatWatchNgBackup(encodeCompatWatchNgBackup(backup)).workspace)
+        assertEquals("tab", decodeCompatSettingsBackup(encodeCompatSettingsBackup(backup.settingsOnly())).workspace?.activeTabKey)
+    }
+
+    @Test
+    fun backupsFromNewerVersionsWithUnknownFieldsStillDecode() {
+        val payload = encodeCompatSettingsBackup(
+            CompatSettingsBackup(exportedAtEpochMillis = 7L, preferences = mapOf("compat.thread.a" to "1"))
+        )
+        val newer = payload.replaceFirst("{", "{\"futureField\":{\"x\":1},")
+        assertEquals(mapOf("compat.thread.a" to "1"), decodeCompatSettingsBackup(newer).preferences)
+        val words = encodeCompatWatchNgBackup(
+            CompatSettingsBackup(exportedAtEpochMillis = 7L, preferences = mapOf(COMPAT_WATCH_WORDS_PREFERENCE_KEY to "w"))
+        ).replaceFirst("{", "{\"futureField\":true,")
+        assertEquals("w", decodeCompatWatchNgBackup(words).preferences[COMPAT_WATCH_WORDS_PREFERENCE_KEY])
     }
 
     @Test

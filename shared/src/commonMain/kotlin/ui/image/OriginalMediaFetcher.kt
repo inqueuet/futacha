@@ -15,6 +15,7 @@ import coil3.request.Options
 import com.valoser.futacha.shared.media.source.OriginalMediaRequest
 import com.valoser.futacha.shared.media.source.OriginalMediaSource
 import com.valoser.futacha.shared.media.source.OriginalMediaCacheUnavailable
+import com.valoser.futacha.shared.media.source.originalMediaRequestFromUrl
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -43,12 +44,17 @@ internal fun isSharedOriginalImageUrl(value: String): Boolean =
 internal class SharedOriginalUriFetcherFactory(private val store: OriginalMediaSource) : Fetcher.Factory<Uri> {
     override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
         if (!isSharedOriginalImageUrl(data.toString())) return null
+        // A viewer reload appends "#compat-reload=<token>" to force a fresh request.
+        // Kept in the URL, the fragment became part of the cache key and stored a
+        // second copy of the same original per reload; it is a reload token instead.
         val original = OriginalMediaFetcher.Factory(store).create(
-            OriginalMediaRef(OriginalMediaRequest(data.toString())), options, imageLoader
+            OriginalMediaRef(originalMediaRequestFromUrl(data.toString())), options, imageLoader
         )
         return Fetcher {
             try { original.fetch() }
             catch (_: OriginalMediaCacheUnavailable) {
+                // Let Coil check its disk cache too. The cache-only network client
+                // enforces the request policy if that cache also misses.
                 // Preserve memory-only image display when the filesystem is unavailable.
                 // This happens before any original HTTP request; metadata must report
                 // source unavailable instead of downloading a second copy independently.

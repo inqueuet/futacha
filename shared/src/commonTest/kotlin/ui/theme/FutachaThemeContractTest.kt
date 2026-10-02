@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.ui.board.resolveFutabaThreadColorScheme
 import com.valoser.futacha.shared.ui.board.resolveFutabaThreadColors
 import com.valoser.futacha.shared.ui.board.futachaSharedPalette
+import com.valoser.futacha.shared.ui.board.resolveFutachaChoiceColors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -74,6 +75,35 @@ class FutachaThemeContractTest {
                     "$palette dark=$dark toolbar text")
             }
         }
+    }
+
+    @Test
+    fun selectedAndUnselectedChoiceChipsStayReadableInEveryPalette() {
+        ThemePalette.entries.forEach { palette ->
+            listOf(false, true).forEach { dark ->
+                val base = resolveFutachaColorScheme(dark, palette)
+                listOf(base, resolveFutabaThreadColorScheme(palette, base)).forEach { colors ->
+                    // Settings placement chips sit on surfaceVariant; NG section chips are transparent on sheets.
+                    listOf(colors.surfaceVariant, colors.surface, colors.surfaceContainerLow).forEach { sheet ->
+                        listOf(
+                            resolveFutachaChoiceColors(colors, selected = true, unselectedContainer = colors.surfaceVariant),
+                            resolveFutachaChoiceColors(colors, selected = false, unselectedContainer = colors.surfaceVariant),
+                            resolveFutachaChoiceColors(colors, selected = false, unselectedContainer = Color.Transparent)
+                        ).forEach { choice ->
+                            val container = if (choice.container.alpha == 0f) sheet else choice.container
+                            assertEquals(1f, choice.content.alpha, "$palette dark=$dark chip text must be opaque")
+                            assertTrue(contrastRatio(choice.content, container) >= 4.5f,
+                                "$palette dark=$dark chip: ${contrastRatio(choice.content, container)} on $container")
+                        }
+                    }
+                }
+            }
+        }
+        // The old selected pair (primary text on primaryContainer) is the U4-1 regression.
+        val black = resolveFutachaColorScheme(false, ThemePalette.FutabaBlack)
+        assertTrue(contrastRatio(black.primary, black.primaryContainer) < 4.5f)
+        assertEquals(black.onPrimaryContainer,
+            resolveFutachaChoiceColors(black, selected = true, unselectedContainer = black.surfaceVariant).content)
     }
 
     private fun contrastRatio(foreground: Color, background: Color): Float {

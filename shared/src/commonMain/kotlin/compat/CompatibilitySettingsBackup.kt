@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.compat
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Portable, deliberately bounded representation of the compatibility profile's
@@ -31,7 +32,11 @@ data class CompatSettingsBackup(
     val catalogPreferences: List<CompatCatalogPreference> = emptyList(),
     val preferences: Map<String, String> = emptyMap(),
     val ngRules: List<CompatNgRule> = emptyList(),
-    val workspace: CompatWorkspaceRecord = CompatWorkspaceRecord(),
+    /**
+     * Null for partial (watch/NG-only) restores: those must keep the current
+     * tabs, active tab and selector state instead of resetting the workspace.
+     */
+    val workspace: CompatWorkspaceRecord? = CompatWorkspaceRecord(),
     val toolbars: List<CompatToolbarBackup> = emptyList()
 )
 
@@ -45,6 +50,15 @@ data class CompatSettingsBackupImportReport(
     val toolbarsImported: Int
 )
 
+/**
+ * How many restored tabs or history entries ([restoredKeys]) are still stored
+ * ([keptKeys]) after the normal limits ran. The tab trim keeps the newest by
+ * the time each tab was opened, so restored tabs older than the device's own
+ * may be trimmed first (P4-4); the report counts what was actually kept.
+ */
+fun countCompatRestoredKept(restoredKeys: Collection<String>, keptKeys: Set<String>): Int =
+    restoredKeys.toSet().count { it in keptKeys }
+
 /** Human-editable companion file for watch words and NG rules only. */
 @Serializable
 data class CompatWatchNgBackup(
@@ -55,15 +69,37 @@ data class CompatWatchNgBackup(
     val watchRules: List<CompatWatchRule>? = null
 )
 
+/**
+ * The tab trim never removes favourites or the active tab, so a profile can
+ * legitimately hold more than [COMPAT_TAB_LIMIT_TRIGGER] tabs (P4-3). A backup
+ * accepts as many as Android reads back (MAX_COMPAT_TAB_READ_ROWS); the byte
+ * limit below still bounds the file.
+ */
+const val MAX_COMPAT_BACKUP_TABS = 1_000
 const val CURRENT_COMPAT_SETTINGS_BACKUP_VERSION = 1
 const val MAX_COMPAT_SETTINGS_BACKUP_BYTES = 2 * 1024 * 1024
 const val COMPAT_SETTINGS_BACKUP_FILE_NAME = "futacha-compat-settings.json"
 const val COMPAT_WATCH_NG_BACKUP_FILE_NAME = "futacha-compat-watch-ng.json"
 const val COMPAT_WATCH_WORDS_PREFERENCE_KEY = "compat.catalog.監視ワード"
 
+/**
+ * Post delete keys are passwords for deleting the user's own posts. A backup
+ * file can be copied or shared, so exports leave them out; restoring an older
+ * backup that still contains one keeps working.
+ */
+val COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS = setOf(
+    "compat.common.commonPostDeleteKey",
+    "compat.lastDeleteKey"
+)
+
+fun compatBackupExportPreferences(preferences: Map<String, String>): Map<String, String> =
+    preferences.filterKeys { it !in COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS }
+
 private val compatSettingsBackupJson = Json {
     encodeDefaults = true
-    ignoreUnknownKeys = false
+    // Backups written by a newer app version may carry fields this version
+    // does not know yet; the bounded validation below still applies.
+    ignoreUnknownKeys = true
     explicitNulls = true
 }
 
@@ -79,6 +115,9 @@ fun encodeCompatSettingsBackup(backup: CompatSettingsBackup): String {
 fun decodeCompatSettingsBackup(raw: String): CompatSettingsBackup {
     require(raw.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES) {
         "バックアップファイルが大きすぎます"
+    }
+    require("watchWords" !in compatSettingsBackupJson.parseToJsonElement(raw).jsonObject) {
+        "監視ワード・NGのファイルです。対応する復元メニューを利用してください"
     }
     // Backups written by older versions carry the image hash cache as
     // preferences, often thousands of them; drop it before the size check so
@@ -118,6 +157,9 @@ fun decodeCompatWatchNgBackup(raw: String): CompatSettingsBackup {
     require(raw.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES) {
         "バックアップファイルが大きすぎます"
     }
+    require("watchWords" in compatSettingsBackupJson.parseToJsonElement(raw).jsonObject) {
+        "監視ワード・NGのバックアップではありません"
+    }
     val decoded = compatSettingsBackupJson.decodeFromString(CompatWatchNgBackup.serializer(), raw)
     require(decoded.schemaVersion == CURRENT_COMPAT_SETTINGS_BACKUP_VERSION) {
         "対応していないバックアップ形式です"
@@ -141,12 +183,12 @@ fun decodeCompatWatchNgBackup(raw: String): CompatSettingsBackup {
         preferences = mapOf(
             COMPAT_WATCH_WORDS_PREFERENCE_KEY to normalizedWatchWords
         ) + (decoded.watchRules?.let { rules ->
-            require(rules.size <= 500 && rules.all { it.word.isNotBlank() && it.word.length <= 100 }) { "巡回キーワードが不正です" }
-            val value = compatSettingsBackupJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(CompatWatchRule.serializer()), rules)
-            requireValidCompatPreference(COMPAT_WATCH_RULES_KEY, value)
-            mapOf(COMPAT_WATCH_RULES_KEY to value)
+            // Same compact encoding and limits as saving: the backup file's
+            // verbose form (defaults and nulls written out) must not count.
+            mapOf(COMPAT_WATCH_RULES_KEY to encodeValidCompatWatchRules(rules))
         } ?: emptyMap()),
-        ngRules = decoded.ngRules
+        ngRules = decoded.ngRules,
+        workspace = null
     )
 }
 
@@ -173,7 +215,8 @@ fun CompatSettingsBackup.watchAndNgOnly(): CompatSettingsBackup = CompatSettings
     schemaVersion = schemaVersion,
     exportedAtEpochMillis = exportedAtEpochMillis,
     preferences = preferences.filterKeys { it == COMPAT_WATCH_WORDS_PREFERENCE_KEY || it == COMPAT_WATCH_RULES_KEY },
-    ngRules = ngRules
+    ngRules = ngRules,
+    workspace = null
 )
 
 fun validateCompatSettingsBackup(backup: CompatSettingsBackup) {
@@ -181,7 +224,7 @@ fun validateCompatSettingsBackup(backup: CompatSettingsBackup) {
         "対応していないバックアップ形式です"
     }
     require(backup.boards.size <= 100) { "板の登録数が上限を超えています" }
-    require(backup.tabs.size <= 100) { "タブの登録数が上限を超えています" }
+    require(backup.tabs.size <= MAX_COMPAT_BACKUP_TABS) { "タブの登録数が上限を超えています" }
     require(backup.history.size <= 200) { "履歴の登録数が上限を超えています" }
     require(backup.preferences.size <= 4096) { "設定項目が多すぎます" }
     require(backup.ngRules.size <= MAX_COMPAT_NG_RULES) { "NG項目が多すぎます" }

@@ -34,6 +34,9 @@ interface VersionChecker {
      * @return 更新がある場合は UpdateInfo、ない場合は null
      */
     suspend fun checkForUpdate(): UpdateInfo?
+
+    /** Called after the update prompt enters the visible, unlocked UI. */
+    fun onUpdateShown(info: UpdateInfo) = Unit
 }
 
 /**
@@ -63,6 +66,31 @@ fun selectIosUpdatePromptStyle(stalenessDays: Int): UpdatePromptStyle =
     } else {
         UpdatePromptStyle.FLEXIBLE
     }
+
+/**
+ * Compares dotted numeric OS versions (e.g. "18.2" vs "17.6.1").
+ * Returns null when either value cannot be parsed so callers can keep their
+ * default behavior for unknown data.
+ */
+fun isOsVersionAtLeast(currentOsVersion: String?, minimumOsVersion: String?): Boolean? {
+    val current = parseOsVersionComponents(currentOsVersion) ?: return null
+    val minimum = parseOsVersionComponents(minimumOsVersion) ?: return null
+    val size = maxOf(current.size, minimum.size)
+    for (index in 0 until size) {
+        val left = current.getOrElse(index) { 0 }
+        val right = minimum.getOrElse(index) { 0 }
+        if (left != right) return left > right
+    }
+    return true
+}
+
+private fun parseOsVersionComponents(raw: String?): List<Int>? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    val parts = trimmed.split('.')
+    if (parts.size > 4) return null
+    return parts.map { part -> part.toIntOrNull()?.takeIf { it >= 0 } ?: return null }
+}
 
 fun calculateUpdateStalenessDays(
     releaseEpochMillis: Long,

@@ -15,6 +15,13 @@
     <uses-permission
         android:name="com.google.android.gms.permission.AD_ID"
         tools:node="remove" />
+    <!-- Privacy Sandbox ad permissions merged from play-services-measurement-api. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION"
+        tools:node="remove" />
 
     <!-- Android 11+ package visibility: allow enumerating file managers that handle document intents -->
     <queries>
@@ -68,10 +75,13 @@
             android:name="firebase_performance_collection_enabled"
             android:value="false" />
 
+        <!-- Only the shell (adb / Baseline Profile generator) holds DUMP, so other
+             apps cannot reset boards or switch modes in benchmark builds. -->
         <receiver
             android:name=".BenchmarkFixtureReceiver"
             android:enabled="${benchmarkFixtureEnabled}"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.valoser.futacha.action.SEED_BENCHMARK_FIXTURE" />
             </intent-filter>

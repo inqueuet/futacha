@@ -168,6 +168,19 @@ class SavedThreadsScreenTest {
     }
 
     @Test
+    fun loadSavedThreadsSnapshot_returnsFailureOnTimeoutInsteadOfCancelling() = runBlocking {
+        val fileSystem = SlowIndexReadFileSystem(InMemoryFileSystem())
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        fileSystem.writeString("saved_threads/index.json", "{}").getOrThrow()
+
+        val result = loadSavedThreadsSnapshot(repository, timeoutMillis = 10L)
+
+        assertTrue(result.isFailure)
+        assertIs<kotlinx.coroutines.TimeoutCancellationException>(result.exceptionOrNull())
+        assertEquals("読み込みがタイムアウトしました", buildSavedThreadsLoadErrorMessage(result.exceptionOrNull()!!))
+    }
+
+    @Test
     fun loadSavedThreadsSnapshot_recoversFromBackupIndex() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
@@ -316,6 +329,15 @@ private class CountingIndexReadFileSystem(
         if (path == "saved_threads/index.json") {
             indexReadCount += 1
         }
+        return delegate.readString(path)
+    }
+}
+
+private class SlowIndexReadFileSystem(
+    private val delegate: InMemoryFileSystem
+) : FileSystem by delegate {
+    override suspend fun readString(path: String): Result<String> {
+        if (path.startsWith("saved_threads/index.json")) delay(5_000)
         return delegate.readString(path)
     }
 }

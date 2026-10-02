@@ -1,9 +1,10 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.model.BoardSummary
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ResponseException
-import io.ktor.client.request.get
 import io.ktor.client.request.prepareGet
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
@@ -15,6 +16,9 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.SerialName
@@ -22,6 +26,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 
 data class ArchiveSearchScope(val server: String, val board: String)
 
@@ -53,6 +59,11 @@ private const val ARCHIVE_THUMBNAIL_MAX_ZERO_READ_RETRIES = 80
 private const val ARCHIVE_THUMBNAIL_ZERO_READ_BACKOFF_MILLIS = 25L
 private const val ARCHIVE_THUMBNAIL_RESPONSE_TIMEOUT_MILLIS = 10_000L
 private const val ARCHIVE_SEARCH_PROBE_CONCURRENCY = 4
+// The search request (including its body) and the availability probes each get
+// a bounded share; without them a slow archive kept the search spinner up for
+// minutes (the platform client retries a GET up to 3 x 75 s).
+private const val ARCHIVE_SEARCH_REQUEST_TIMEOUT_MILLIS = 30_000L
+private const val ARCHIVE_SEARCH_PROBE_PHASE_TIMEOUT_MILLIS = 20_000L
 private const val ARCHIVE_SEARCH_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 private const val ARCHIVE_SEARCH_QUERY_MAX_CHARS = 512
 private const val ARCHIVE_RESULT_URL_MAX_CHARS = 8 * 1024
@@ -217,19 +228,31 @@ suspend fun searchInqueuetArchiveThreads(
     val searchBase = archiveBaseUrl?.trim()?.trimEnd('/')
         ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         ?: "https://$hostServer.inqueuet.com"
-    val response = httpClient.get("$searchBase/search") {
-        parameter("q", normalized)
-        scope?.server?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("server", it) }
-        scope?.board?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("board", it) }
-        parameter("limit", safeLimit)
-    }
-    val body = readBoundedHttpResponseText(response, ARCHIVE_SEARCH_RESPONSE_MAX_BYTES)
-    if (!response.status.isSuccess()) {
-        val detail = if (body.isBlank()) "" else ": ${body.take(120)}"
-        throw NetworkException("過去ログ検索に失敗しました (HTTP ${response.status.value}$detail)", response.status.value)
-    }
+    val body = withTimeoutOrNull(ARCHIVE_SEARCH_REQUEST_TIMEOUT_MILLIS) {
+        // Streamed: get() buffered the whole response before the bounded reader ran.
+        // The platform's GET retries stay enabled (a stale keep-alive socket
+        // recovers at once); the deadline above bounds them.
+        httpClient.prepareGet("$searchBase/search") {
+            parameter("q", normalized)
+            scope?.server?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("server", it) }
+            scope?.board?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("board", it) }
+            parameter("limit", safeLimit)
+        }.execute { response ->
+            val text = readBoundedHttpResponseText(response, ARCHIVE_SEARCH_RESPONSE_MAX_BYTES)
+            if (!response.status.isSuccess()) {
+                val detail = if (text.isBlank()) "" else ": ${text.take(120)}"
+                throw NetworkException(
+                    "過去ログ検索に失敗しました (HTTP ${response.status.value}$detail)",
+                    response.status.value
+                )
+            }
+            text
+        }
+    } ?: throw NetworkException("過去ログ検索がタイムアウトしました")
 
-    val decoded = archiveSearchJson.decodeFromString<InqueuetArchiveSearchResponse>(body)
+    val decoded = withContext(AppDispatchers.parsing) {
+        archiveSearchJson.decodeFromString<InqueuetArchiveSearchResponse>(body)
+    }
     // The remote endpoint is not trusted to honor the requested limit. Bound
     // the decoded collection before launching availability probes so a large
     // response cannot create thousands of suspended coroutines at once.
@@ -418,10 +441,16 @@ private suspend fun enrichAvailableArchiveSearchItems(
     items: List<ArchiveSearchItem>
 ): List<ArchiveSearchItem> = coroutineScope {
     val semaphore = Semaphore(ARCHIVE_SEARCH_PROBE_CONCURRENCY)
+    val probeDeadline = TimeSource.Monotonic.markNow() + ARCHIVE_SEARCH_PROBE_PHASE_TIMEOUT_MILLIS.milliseconds
     items.map { item ->
         async {
-            semaphore.withPermit {
-                val probe = fetchArchiveThreadProbe(httpClient, item.htmlUrl)
+            // A probe that does not finish within the shared deadline keeps the
+            // item (unknown availability, no extra thumbnail) instead of holding
+            // the whole result list back.
+            val probe = withTimeoutOrNull(-probeDeadline.elapsedNow()) {
+                semaphore.withPermit { fetchArchiveThreadProbe(httpClient, item.htmlUrl) }
+            } ?: ArchiveThreadProbe(statusCode = null, thumbnailUrl = null)
+            run {
                 if (isMissingArchiveThreadStatus(probe.statusCode)) {
                     null
                 } else {
@@ -452,6 +481,9 @@ private suspend fun fetchArchiveThreadProbe(
         // Streamed and ranged: only the first lines are needed for the thumbnail,
         // and a plain get() received the whole thread for every search result.
         httpClient.prepareGet(threadUrl) {
+            // A failed probe only drops the thumbnail/availability hint; the
+            // client's own retries (up to 3 x 75 s) would hold the search.
+            attributes.put(HigherLayerRetryManaged, true)
             headers[HttpHeaders.Referrer] = threadUrl.substringBeforeLast('/', threadUrl)
             headers[HttpHeaders.Range] = "bytes=0-${ARCHIVE_THUMBNAIL_HEAD_MAX_BYTES - 1}"
         }.execute { streamed ->
@@ -476,7 +508,10 @@ private suspend fun fetchArchiveThreadProbe(
         ArchiveThreadProbe(statusCode = statusCode, thumbnailUrl = thumbnailUrl)
         }
     } catch (e: CancellationException) {
-        throw e
+        // Only a cancellation of the search itself ends it; an internal
+        // timeout surfacing as a cancellation is just a failed probe.
+        currentCoroutineContext().ensureActive()
+        ArchiveThreadProbe(statusCode = null, thumbnailUrl = null)
     } catch (e: ResponseException) {
         ArchiveThreadProbe(statusCode = e.response.status.value, thumbnailUrl = null)
     } catch (e: NetworkException) {

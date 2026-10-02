@@ -73,6 +73,67 @@ fun ThreadHistoryEntry.toCompatHistoryEntry(): CompatHistoryEntry? {
     )
 }
 
+/**
+ * The modern history has no content-update time: [toCompatHistoryEntry] can
+ * only seed it with the view time. Importing therefore shares the visit time
+ * and the thread metadata but keeps the compatibility row's own update time
+ * (11.4: update and view times are separate fields) and its original URL.
+ */
+fun mergeImportedModernHistoryEntry(
+    imported: CompatHistoryEntry,
+    current: CompatHistoryEntry?
+): CompatHistoryEntry {
+    current ?: return imported
+    return mergeCompatHistoryEntry(imported, current, recordVisit = true).copy(
+        originalUrl = current.originalUrl,
+        contentUpdatedAtEpochMillis = current.contentUpdatedAtEpochMillis
+    )
+}
+
+/**
+ * Plans importing the modern history into the compatibility history.
+ *
+ * Returns only the merged entries that differ from [current] and are still
+ * kept by the store's own history limit ([retain]), so a repeated import
+ * writes nothing. [current] must be the whole compatibility history.
+ *
+ * The compatibility history keeps at most [historyLimit] entries while the
+ * modern one can hold ~20,000. Entries are visited newest first; once
+ * [historyLimit] entries were accepted, an entry visited strictly earlier
+ * cannot raise its visit time above them, so it is trimmed anyway (or, for an
+ * entry the compatibility side visited later, keeps that side's fresher
+ * metadata) and the rest of the list is not converted.
+ */
+fun planModernHistoryImport(
+    modernHistory: List<ThreadHistoryEntry>,
+    current: Collection<CompatHistoryEntry>,
+    knownBoardKeys: Set<String>,
+    tombstoneAt: (canonicalUrl: String) -> Long?,
+    historyLimit: Int,
+    retain: (List<CompatHistoryEntry>) -> List<CompatHistoryEntry>
+): List<CompatHistoryEntry> {
+    val byUrl = LinkedHashMap<String, CompatHistoryEntry>()
+    current.forEach { entry -> byUrl[entry.canonicalUrl] = entry }
+    val changed = LinkedHashMap<String, CompatHistoryEntry>()
+    val accepted = HashSet<String>()
+    var lastAcceptedVisit = Long.MAX_VALUE
+    for (modern in modernHistory.sortedByDescending(ThreadHistoryEntry::lastVisitedEpochMillis)) {
+        if (accepted.size >= historyLimit && modern.lastVisitedEpochMillis < lastAcceptedVisit) break
+        val entry = modern.toCompatHistoryEntry()?.takeIf { it.boardKey in knownBoardKeys } ?: continue
+        val tombstone = tombstoneAt(entry.canonicalUrl)
+        if (tombstone != null && entry.lastVisitedEpochMillis <= tombstone) continue
+        accepted += entry.canonicalUrl
+        lastAcceptedVisit = entry.lastVisitedEpochMillis
+        val old = changed[entry.canonicalUrl] ?: byUrl[entry.canonicalUrl]
+        val merged = mergeImportedModernHistoryEntry(entry, old)
+        if (merged != old) changed[entry.canonicalUrl] = merged
+    }
+    if (changed.isEmpty()) return emptyList()
+    changed.forEach { (url, entry) -> byUrl[url] = entry }
+    val kept = retain(byUrl.values.toList()).mapTo(HashSet(), CompatHistoryEntry::canonicalUrl)
+    return changed.values.filter { entry -> entry.canonicalUrl in kept }
+}
+
 /** Merge without dropping non-Futaba boards. */
 fun mergeCompatibilityBoards(
     modernBoards: List<BoardSummary>,
@@ -108,20 +169,43 @@ fun modernBoardsToCompatibility(modernBoards: List<BoardSummary>): List<CompatBo
  * Replace Futaba boards (and the checked-in tutorial fixture) instead of only
  * unioning them, otherwise a board deleted in としあき(仮) is imported again
  * from the modern store on the next process start.
+ *
+ * Only the board set, names, URLs and the relative order of Futaba boards come
+ * from the compatibility store. A board that already exists in the modern list
+ * keeps its ID and the modern-only fields (pin, category, description), and
+ * non-Futaba boards keep their positions: Futaba boards are written back into
+ * the positions Futaba boards occupied, in compatibility order, and extra
+ * compatibility boards are appended.
  */
 fun synchronizeModernBoardsFromCompatibility(
     modernBoards: List<BoardSummary>,
     compatBoards: List<CompatBoard>
 ): List<BoardSummary> {
-    val existingIds = modernBoards.associateBy({ boardIdentity(it.url) }, BoardSummary::id)
-    val preserved = modernBoards.filterNot { board ->
-        canonicalizeBoardUrl(board.url) != null || board.isCompatibilityTutorialFixture()
+    val existingByIdentity = buildMap {
+        modernBoards.forEach { board ->
+            val key = boardIdentity(board.url)
+            if (key !in this) put(key, board)
+        }
     }
     val synchronized = compatBoards.sortedBy(CompatBoard::sortOrder).map { board ->
         val summary = board.toBoardSummary()
-        existingIds[boardIdentity(summary.url)]?.let { id -> summary.copy(id = id) } ?: summary
+        val existing = existingByIdentity[boardIdentity(summary.url)] ?: return@map summary
+        existing.copy(
+            name = summary.name.ifBlank { existing.name },
+            url = summary.url.ifBlank { existing.url }
+        )
     }
-    return preserved + synchronized
+    val remaining = synchronized.iterator()
+    val result = ArrayList<BoardSummary>(modernBoards.size + synchronized.size)
+    modernBoards.forEach { board ->
+        when {
+            board.isCompatibilityTutorialFixture() -> Unit
+            canonicalizeBoardUrl(board.url) != null -> if (remaining.hasNext()) result += remaining.next()
+            else -> result += board
+        }
+    }
+    remaining.forEach { result += it }
+    return result
 }
 
 private fun BoardSummary.isCompatibilityTutorialFixture(): Boolean =

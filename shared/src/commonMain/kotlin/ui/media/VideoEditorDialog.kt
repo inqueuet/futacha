@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.*
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.media.MediaFeature
+import com.valoser.futacha.shared.media.mediaEditorFailureMessage
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.media.analysis.*
 import com.valoser.futacha.shared.media.video.*
 import com.valoser.futacha.shared.media.video.model.*
@@ -104,7 +106,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                     ?: selectedId?.takeIf { id -> result.regions.any { it.id == id } }
                 tool = MosaicMaskTool.MOVE
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "解析できませんでした。編集内容は変更していません" }
+            catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "解析できませんでした。編集内容は変更していません") }
             finally { working = false; cancelling = false; phase = "" }
         }
     }
@@ -114,7 +116,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
             time = info!!.frames.timeAt(0)
             analysisStart = time; analysisEnd = info!!.frames.durationUs
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { error = failure.message ?: "動画を読み取れません" }
+        catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "動画を読み取れません") }
         finally { loading = false }
     }
     val previewFrames = remember(source) { VideoPreviewFrameCache() }
@@ -134,9 +136,9 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
             }
             previewReady = true
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { error = failure.message ?: "プレビューを作れません" }
+        catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "プレビューを作れません") }
     }
-    Dialog(onDismissRequest = ::close, properties = mediaEditorDialogProperties()) {
+    FutachaAppLockAwareWindow { Dialog(onDismissRequest = ::close, properties = mediaEditorDialogProperties()) {
         Surface(Modifier.fillMaxSize().testTag("video-editor")) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -149,7 +151,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                         job = scope.launch {
                             try { output = source.export(context, fs, video, document) { progress = it } }
                             catch (cancelled: CancellationException) { throw cancelled }
-                            catch (failure: Exception) { error = failure.message ?: "動画を書き出せませんでした" }
+                            catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "動画を書き出せませんでした") }
                             finally { working = false; phase = ""; cancelling = false }
                         }
                     }) { Text("書き出して確認") }
@@ -160,7 +162,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                         Modifier.fillMaxSize().testTag("video-editor-playback"), onState = { playbackState = it },
                         onError = { error = it; stopPreview() })
                     else info?.let { video -> VideoEditCanvas(video, preview, document, selectedId, time, editable, tool, brush,
-                        onPreview = { document = it }, onCommit = { commit(document) }) }
+                        onPreview = { change -> document = change(document) }, onCommit = { commit(document) }) }
                     if (loading || working || (output == null && info != null &&
                         if (editingPlayback != null) playbackState == VideoPlayerState.Buffering else !previewReady)) CircularProgressIndicator()
                 }
@@ -189,7 +191,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                                 job = scope.launch {
                                     try { val path = saveEditedVideo(source, fs, rendered, target); saved = target to path }
                                     catch (cancelled: CancellationException) { throw cancelled }
-                                    catch (failure: Exception) { error = failure.message ?: "保存できませんでした" }
+                                    catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "保存できませんでした") }
                                     finally { working = false; phase = ""; cancelling = false }
                                 }
                             }, modifier = Modifier.testTag("video-editor-save")) { Text("動画を保存") }
@@ -260,7 +262,7 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
                 }
             }
         }
-    }
+    } }
     if (showDetection) DetectionOptionsDialog(detectionSettings, { detectionSettings = it }, onModels = { showModels = true },
         onDismiss = { showDetection = false }, onDetect = { settings ->
             showDetection = false
@@ -270,14 +272,14 @@ internal fun VideoEditorDialog(source: VideoEditSource, fs: FileSystem, stateSto
             analyse { video, snapshot, report -> VideoSensitiveAnalyser.detect(source, video, snapshot, start, end, settings, store, gate, permit, report) }
         }, video = true)
     if (showModels) AnalysisModelDialog(MediaFeature.VIDEO_EDITOR) { showModels = false }
-    if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("編集を終了しますか？") }, text = { Text("保存していない編集内容を破棄します。") },
-        confirmButton = { TextButton(onClick = { job?.cancel(); onDismiss() }) { Text("破棄して終了") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("続ける") } })
-    saved?.let { (target, path) -> AlertDialog(onDismissRequest = onDismiss, title = { Text("編集した動画を保存しました") }, text = { Text(error ?: path) },
+    if (discard) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { discard = false }, title = { Text("編集を終了しますか？") }, text = { Text("保存していない編集内容を破棄します。") },
+        confirmButton = { TextButton(onClick = { job?.cancel(); onDismiss() }) { Text("破棄して終了") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("続ける") } }) }
+    saved?.let { (target, path) -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("編集した動画を保存しました") }, text = { Text(error ?: path) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }, dismissButton = { TextButton(onClick = { scope.launch {
             try { share("", "video/mp4", fs.resolveSavedFile(target, path).getOrThrow()) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { error = failure.message ?: "共有できません" }
-        } }) { Text("共有") } }) }
+        } }) { Text("共有") } }) } }
 }
 
 @Composable
@@ -320,17 +322,14 @@ private fun VideoRegionControls(region: MosaicRegion, time: Long, info: VideoEdi
 
 @Composable
 private fun VideoEditCanvas(info: VideoEditInfo, preview: ImageBitmap?, document: MosaicDocument, selected: String?, time: Long,
-    enabled: Boolean, tool: MosaicMaskTool, brush: Float, onPreview: (MosaicDocument) -> Unit, onCommit: () -> Unit) {
-    val current by rememberUpdatedState(document)
+    enabled: Boolean, tool: MosaicMaskTool, brush: Float, onPreview: ((MosaicDocument) -> MosaicDocument) -> Unit, onCommit: () -> Unit) {
+    // Several pointer events can arrive before the next recomposition. Each step is applied by the
+    // owner to its latest document, never to the composed [document], so no stroke segment is lost (B-10).
     val update by rememberUpdatedState(onPreview)
     val commit by rememberUpdatedState(onCommit)
     fun paint(from: Offset, to: Offset) {
         val id = selected ?: return
-        val region = current.regions.firstOrNull { it.id == id } ?: return
-        if (!region.activeAt(time)) return
-        val old = region.maskAt(time) ?: if (tool == MosaicMaskTool.ADD) MosaicMask.EMPTY else MosaicMask.FULL
-        val mask = old.paintWithin(region.boundsAt(time), info.width, info.height, from.x, from.y, to.x, to.y, brush, tool == MosaicMaskTool.ERASE)
-        update(current.update(id) { it.withMask(time, mask) })
+        update { it.paintRegionMask(id, time, info.width, info.height, from.x, from.y, to.x, to.y, brush, tool == MosaicMaskTool.ERASE) }
     }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val aspect = info.width.toFloat() / info.height
@@ -345,9 +344,8 @@ private fun VideoEditCanvas(info: VideoEditInfo, preview: ImageBitmap?, document
                 val id = selected ?: return@detectDragGestures
                 change.consume()
                 if (tool == MosaicMaskTool.MOVE) {
-                    if (current.regions.none { it.id == id && it.activeAt(time) }) return@detectDragGestures
-                    update(current.update(id) { region -> val b = region.boundsAt(time); region.withBounds(time,
-                        b.copy(centerX = b.centerX + drag.x / size.width, centerY = b.centerY + drag.y / size.height)) })
+                    val dx = drag.x / size.width; val dy = drag.y / size.height
+                    update { it.moveRegionBounds(id, time, dx, dy) }
                 } else paint(Offset((change.position.x - drag.x) / size.width, (change.position.y - drag.y) / size.height),
                     Offset(change.position.x / size.width, change.position.y / size.height))
             }

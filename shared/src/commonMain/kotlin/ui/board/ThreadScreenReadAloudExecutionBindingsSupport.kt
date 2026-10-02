@@ -174,6 +174,12 @@ internal fun buildThreadScreenReadAloudBindings(
                             status = finalState.status
                         )
                     }
+                    // Reading ended on its own (finished or failed): stop playback so the
+                    // platform returns its audio session and other apps' audio resumes,
+                    // instead of holding it until the screen closes (N4-4). With no job
+                    // left this only stops playback; the user-cancel flag is restored.
+                    callbacks.cancelActiveReadAloud()
+                    updateState { it.copy(cancelRequestedByUser = false) }
                     callbacks.showOptionalMessage(finalState.message)
                     AnalyticsTracker.event(
                         "read_aloud_finished",

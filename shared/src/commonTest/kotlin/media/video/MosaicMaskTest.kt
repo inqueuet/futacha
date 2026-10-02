@@ -50,4 +50,19 @@ class MosaicMaskTest {
         assertTrue(region.copy(startUs=99).hasEmptyActiveMask())
         assertTrue(region.copy(endUs=301).hasEmptyActiveMask())
     }
+    @Test fun brushStepsKeepMasksOrderedAndTrackEmptyContoursIncrementally() {
+        val a=MosaicMask.EMPTY.stroke(.2f,.5f,.4f,.5f,.1f,.1f,false)
+        var region=MosaicRegion("a",endUs=1_000_000,masks=listOf(MosaicMaskKeyframe(100_000,a),MosaicMaskKeyframe(300_000,a)))
+        assertFalse(region.hasEmptyActiveMask())
+        region=region.withMask(0,a).withMask(200_000,MosaicMask.EMPTY).withMask(400_000,null)
+        assertEquals(listOf(0L,100_000L,200_000L,300_000L,400_000L),region.masks.map { it.timeUs })
+        assertTrue(region.hasEmptyActiveMask())
+        assertEquals(region.hasEmptyActiveMask(),region.copy().hasEmptyActiveMask())
+        region=region.withMask(200_000,a)
+        assertEquals(5,region.masks.size);assertSame(a,region.maskAt(250_000))
+        assertFalse(region.hasEmptyActiveMask());assertFalse(region.copy().hasEmptyActiveMask())
+        region=region.withMask(400_000,MosaicMask.EMPTY)
+        assertTrue(region.hasEmptyActiveMask());assertTrue(region.copy().hasEmptyActiveMask())
+        assertFalse(region.copy(endUs=400_000).hasEmptyActiveMask())
+    }
 }

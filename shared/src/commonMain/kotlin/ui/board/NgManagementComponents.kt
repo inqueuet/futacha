@@ -38,6 +38,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
+/**
+ * The (key, text) to prefill when the sheet opens or its section/initial input
+ * changes, or null when [appliedKey] shows this prefill already ran (the state
+ * was restored after a configuration change and holds the user's input).
+ */
+internal fun ngManagementPrefillToApply(
+    appliedKey: String?,
+    sectionName: String,
+    initialInput: String?,
+    prefill: String
+): Pair<String, String>? {
+    val key = sectionName + "\u0000" + initialInput.orEmpty()
+    return if (key == appliedKey) null else key to prefill
+}
 
 private enum class NgManagementSection {
     Header,
@@ -50,11 +66,16 @@ private fun SectionChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    val choice = resolveFutachaChoiceColors(
+        MaterialTheme.colorScheme,
+        selected,
+        unselectedContainer = Color.Transparent
+    )
     OutlinedButton(
         onClick = onClick,
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            containerColor = choice.container,
+            contentColor = choice.content
         ),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
@@ -101,14 +122,21 @@ internal fun NgManagementSheet(
         }
     }
     var input by rememberSaveable(section) { mutableStateOf("") }
+    // Saved with the input so a configuration change (rotation) re-runs this
+    // effect without overwriting what the user typed.
+    var appliedInputKey by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(section, initialInput) {
-        input = when (section) {
+        val prefill = when (section) {
             NgManagementSection.Header -> if (includeHeaderSection) {
                 initialInput?.takeIf { it.isNotBlank() } ?: ""
             } else {
                 ""
             }
             NgManagementSection.Word -> ""
+        }
+        ngManagementPrefillToApply(appliedInputKey, section.name, initialInput, prefill)?.let { (key, text) ->
+            appliedInputKey = key
+            input = text
         }
     }
     val inputState = rememberStableTextInputState(
@@ -134,7 +162,7 @@ internal fun NgManagementSheet(
         "一致したスレッドが即座に非表示になります"
     }
 
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("ng_management", "NG管理を閉じる")
             onDismiss()
@@ -263,8 +291,11 @@ internal fun NgManagementSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                // Measured after the fixed rows so a long list scrolls inside the
+                // sheet instead of pushing the enable/disable button off-screen.
                 LazyColumn(
                     modifier = androidx.compose.ui.Modifier
+                        .weight(1f, fill = false)
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 120.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -312,5 +343,5 @@ internal fun NgManagementSheet(
                 Text(if (ngFilteringEnabled) "NGを無効にする" else "NGを有効にする")
             }
         }
-    }
+    } }
 }

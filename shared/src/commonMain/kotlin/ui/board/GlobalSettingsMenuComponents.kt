@@ -14,6 +14,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ChipColors
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
@@ -153,13 +156,7 @@ internal fun GlobalSettingsCatalogMenuSection(
                         } else {
                             null
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (item.placement == CatalogNavEntryPlacement.BAR) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        )
+                        colors = placementChipColors(selected = item.placement == CatalogNavEntryPlacement.BAR)
                     )
                     AssistChip(
                         onClick = {
@@ -173,13 +170,7 @@ internal fun GlobalSettingsCatalogMenuSection(
                         } else {
                             null
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (item.placement == CatalogNavEntryPlacement.HIDDEN) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        )
+                        colors = placementChipColors(selected = item.placement == CatalogNavEntryPlacement.HIDDEN)
                     )
                 }
             }
@@ -334,13 +325,7 @@ internal fun GlobalSettingsThreadMenuSection(
                         } else {
                             null
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (placement == ThreadMenuEntryPlacement.BAR) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        )
+                        colors = placementChipColors(selected = placement == ThreadMenuEntryPlacement.BAR)
                     )
                     AssistChip(
                         onClick = {
@@ -353,13 +338,7 @@ internal fun GlobalSettingsThreadMenuSection(
                         } else {
                             null
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (placement == ThreadMenuEntryPlacement.SHEET) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        )
+                        colors = placementChipColors(selected = placement == ThreadMenuEntryPlacement.SHEET)
                     )
                     AssistChip(
                         onClick = {
@@ -372,13 +351,7 @@ internal fun GlobalSettingsThreadMenuSection(
                         } else {
                             null
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (placement == ThreadMenuEntryPlacement.HIDDEN) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        )
+                        colors = placementChipColors(selected = placement == ThreadMenuEntryPlacement.HIDDEN)
                     )
                 }
             }
@@ -392,6 +365,35 @@ internal fun GlobalSettingsThreadMenuSection(
             )
         }
     }
+}
+
+/** Container and text/icon colors of a selectable chip. */
+internal data class FutachaChoiceColors(val container: Color, val content: Color)
+
+/**
+ * Selected chips pair primaryContainer with onPrimaryContainer: Material's
+ * primary/onSurface defaults drop to 1.2-1.4:1 on FutabaBlack's dark
+ * container. Unselected chips keep their surface with onSurface.
+ */
+internal fun resolveFutachaChoiceColors(
+    colors: ColorScheme,
+    selected: Boolean,
+    unselectedContainer: Color
+): FutachaChoiceColors = if (selected) {
+    FutachaChoiceColors(colors.primaryContainer, colors.onPrimaryContainer)
+} else {
+    FutachaChoiceColors(unselectedContainer, colors.onSurface)
+}
+
+@Composable
+private fun placementChipColors(selected: Boolean): ChipColors {
+    val colors = MaterialTheme.colorScheme
+    val choice = resolveFutachaChoiceColors(colors, selected, unselectedContainer = colors.surfaceVariant)
+    return AssistChipDefaults.assistChipColors(
+        containerColor = choice.container,
+        labelColor = choice.content,
+        leadingIconContentColor = choice.content
+    )
 }
 
 private fun recordMenuConfigurationControl(label: String) {

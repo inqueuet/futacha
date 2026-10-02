@@ -21,6 +21,16 @@ class MosaicModelTest {
         val ellipse=MosaicBounds(0.5f,0.5f,0.5f,0.5f)
         assertTrue(ellipse.contains(0.7f,0.7f,MosaicShape.RECTANGLE)); assertFalse(ellipse.contains(0.7f,0.7f,MosaicShape.ELLIPSE))
     }
+    @Test fun interpolationAtRightBottomEdgesRemainsValidForTrackerSeeds() {
+        val widths = listOf(.025f, .03f, .17f, .33f, .71f, .9f)
+        for (a in widths) for (b in widths) for (i in 0..100) {
+            val from = MosaicBounds(1f, 1f, a, b).constrained()
+            val to = MosaicBounds(1f, 1f, b, a).constrained()
+            val interpolated = from.interpolate(to, i / 100f)
+            assertEquals(interpolated.constrained(), interpolated)
+            MosaicRegion("seed", endUs = 1000, keyframes = listOf(MosaicKeyframe(0, interpolated)))
+        }
+    }
     @Test fun undoRestoresWholeGestureAndNewActionClearsRedo() {
         val history=MosaicHistory()
         val first=MosaicDocument(listOf(MosaicRegion("a",endUs=1000)))

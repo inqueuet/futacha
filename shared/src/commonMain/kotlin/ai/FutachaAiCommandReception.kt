@@ -52,6 +52,10 @@ internal fun FutachaAiAction.confirmationReason(): String {
 
         FutachaAiAction.AddBoard -> "板リストを変更するため"
 
-        else -> "データ変更に関係するため"
+        else -> if (changesPersistentSettings()) {
+            "リンクから設定を変更するため"
+        } else {
+            "データ変更に関係するため"
+        }
     }
 }

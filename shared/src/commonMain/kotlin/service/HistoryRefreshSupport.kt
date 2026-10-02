@@ -1,11 +1,13 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.ConditionalThreadFetchResult
 import com.valoser.futacha.shared.network.HttpConditionalValidators
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.repository.isSameSavedThreadIdentity
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.model.resolveHistoryReplyCount
@@ -284,18 +286,32 @@ internal class HistoryRefreshRunProcessor(
         // The size cap and index limits may have evicted the auto-save since the
         // flag was set. Treat it as missing so this run saves the thread again
         // (and the conditional fetch below does not skip it as unchanged).
-        val entry = resolvedEntry.entry.let { original ->
-            if (original.hasAutoSave && !isAutoSaveStillIndexed(original, board, baseUrl)) {
-                original.copy(hasAutoSave = false)
-            } else {
-                original
-            }
+        val original = resolvedEntry.entry
+        val indexedAutoSave = if (original.hasAutoSave) {
+            indexedAutoSave(original, board, baseUrl)
+        } else {
+            null
         }
+        val entry = if (original.hasAutoSave && indexedAutoSave == null) {
+            original.copy(hasAutoSave = false)
+        } else {
+            original
+        }
+        // A partial generation (media budget ran out) is continued without
+        // waiting for a new reply (G5), unless the index marks it stalled.
+        val continuedIncompleteMediaCount = indexedAutoSave?.generation?.takeIf { generation ->
+            autoSaveService != null &&
+                shouldContinueAutoSaveGeneration(generation, Clock.System.now().toEpochMilliseconds())
+        }?.incompleteMediaCount
         try {
             stats.markAttempt()
             // Conditional only when an unchanged page needs nothing else: without an
-            // auto-save the full page is needed to create one.
-            val validators = if (entry.hasAutoSave) threadValidators.get(key) else null
+            // auto-save, or to continue a partial one, the full page is needed.
+            val validators = if (entry.hasAutoSave && continuedIncompleteMediaCount == null) {
+                threadValidators.get(key)
+            } else {
+                null
+            }
             val fetched = withTimeoutOrNull(fetchTimeoutMillis) {
                 repository.getThreadIfModified(baseUrl, entry.threadId, validators)
             } ?: throw NetworkException("Thread fetch timed out for ${entry.threadId}")
@@ -332,7 +348,8 @@ internal class HistoryRefreshRunProcessor(
             )
             updates.put(key, updatedEntry)
 
-            if (shouldAutoSaveRefreshedEntry(entry, page.posts.size)) {
+            val savesNewContent = shouldAutoSaveRefreshedEntry(entry, page.posts.size)
+            if (savesNewContent || continuedIncompleteMediaCount != null) {
                 autoSaveLauncher.launch(
                     HistoryRefreshAutoSavePlan(
                         resolvedEntry = resolvedEntry,
@@ -342,7 +359,9 @@ internal class HistoryRefreshRunProcessor(
                         expiresAtLabel = page.expiresAtLabel,
                         posts = page.posts,
                         isTruncated = page.isTruncated,
-                        truncationReason = page.truncationReason
+                        truncationReason = page.truncationReason,
+                        continuedIncompleteMediaCount = continuedIncompleteMediaCount.takeUnless { savesNewContent },
+                        previousGeneration = indexedAutoSave?.generation
                     )
                 )
             }
@@ -376,18 +395,26 @@ internal class HistoryRefreshRunProcessor(
         }
     }
 
-    private suspend fun isAutoSaveStillIndexed(
+    /** The newest indexed auto-save; [generation] is null when it is unknown (no repository, unreadable index). */
+    private class IndexedAutoSave(val generation: SavedThread?)
+
+    /**
+     * The newest indexed auto-save, or null when none is indexed (the size cap may
+     * have evicted it). An unreadable index counts as a complete save, as before.
+     */
+    private suspend fun indexedAutoSave(
         entry: ThreadHistoryEntry,
         board: BoardSummary?,
         baseUrl: String
-    ): Boolean {
-        val repository = autoSavedThreadRepository ?: return true
+    ): IndexedAutoSave? {
+        val repository = autoSavedThreadRepository ?: return IndexedAutoSave(null)
+        val boardId = resolveHistoryEntryBoardId(entry, board, baseUrl)
         return runSuspendCatchingPreservingCancellation {
-            repository.resolveIndexedStorageId(
-                entry.threadId,
-                resolveHistoryEntryBoardId(entry, board, baseUrl)
-            ) != null
-        }.getOrDefault(true)
+            repository.loadIndex().threads
+                .filter { isSameSavedThreadIdentity(it, entry.threadId, boardId) }
+                .maxByOrNull { it.savedAt }
+                ?.let { IndexedAutoSave(it.copy(incompleteMediaCount = it.incompleteMediaCount.coerceAtLeast(0))) }
+        }.getOrDefault(IndexedAutoSave(null))
     }
 
     private fun shouldAutoSaveRefreshedEntry(

@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.util
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Environment
+import android.os.storage.StorageManager
 
 public actual fun detectDevicePerformanceProfile(platformContext: Any?): DevicePerformanceProfile {
     val context = platformContext as? Context
@@ -13,10 +14,20 @@ public actual fun detectDevicePerformanceProfile(platformContext: Any?): DeviceP
         (memoryClassMb != null && memoryClassMb <= 128)
 
     val cacheDir = context?.cacheDir ?: Environment.getDataDirectory()
-    val availableBytes = runCatching { cacheDir.usableSpace }.getOrDefault(0L)
-    val availableMb = availableBytes / (1024 * 1024)
+    // Allocatable bytes include cached data the system can clear on demand, which is
+    // what the user can actually use; usableSpace alone flagged devices whose space
+    // was mostly reclaimable cache. An unknown value is not treated as low.
+    val allocatableBytes = context?.let { ctx ->
+        runCatching {
+            val storageManager = ctx.getSystemService(StorageManager::class.java)
+            storageManager?.getAllocatableBytes(storageManager.getUuidForPath(cacheDir))
+        }.getOrNull()
+    }
+    val availableBytes = allocatableBytes
+        ?: runCatching { cacheDir.usableSpace }.getOrNull()?.takeIf { it > 0L }
+    val availableMb = availableBytes?.div(1024 * 1024)
     // 空き容量が1GB未満なら低ストレージ扱い
-    val isLowStorage = availableMb in 0..1024
+    val isLowStorage = availableMb != null && availableMb in 0..1024
 
     return DevicePerformanceProfile(
         isLowRam = isLowRam,

@@ -48,6 +48,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun ThreadMediaPreviewDialog(
@@ -147,7 +148,7 @@ internal fun ThreadMediaPreviewDialogFrame(
         with(density) { swipeNavigationPadding.calculateBottomPadding().toPx() }
     }
 
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("media_preview", "画像・動画プレビューを閉じる")
             onDismiss()
@@ -225,7 +226,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                 )
             }
         }
-    }
+    } }
 }
 
 @Composable

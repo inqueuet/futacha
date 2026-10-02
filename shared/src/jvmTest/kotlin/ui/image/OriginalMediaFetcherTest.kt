@@ -11,6 +11,7 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.SuccessResult
+import coil3.network.ktor3.asNetworkClient
 import com.sun.net.httpserver.HttpServer
 import com.valoser.futacha.shared.media.source.*
 import com.valoser.futacha.shared.media.*
@@ -18,6 +19,7 @@ import com.valoser.futacha.shared.media.prompt.PromptMediaSource
 import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.engine.mock.respond
 import kotlinx.coroutines.*
 import okio.Path.Companion.toPath
 import java.awt.image.BufferedImage
@@ -34,6 +36,43 @@ import javax.imageio.ImageIO
 import kotlin.test.*
 
 class OriginalMediaFetcherTest {
+    @Test fun unavailableOriginalStoreStillAllowsCoilDiskCacheWithoutNetwork(): Unit = runBlocking {
+        val directory = Files.createTempDirectory("coil-fallback").toFile()
+        val requests = AtomicInteger()
+        val client = HttpClient(io.ktor.client.engine.mock.MockEngine {
+            requests.incrementAndGet()
+            respond("image", headers = io.ktor.http.headersOf(
+                "Cache-Control", "max-age=3600"))
+        })
+        val store = OriginalMediaStore("broken", { error("storage unavailable") },
+            { _, _ -> error("original downloader must not run") }, Dispatchers.IO)
+        val loader = ImageLoader.Builder(PlatformContext.INSTANCE).memoryCache(null)
+            .diskCache { DiskCache.Builder().directory(directory.path.toPath()).maxSizeBytes(1024 * 1024).build() }
+            .components {
+                addOriginalMediaSupport(store)
+                add(coil3.network.NetworkFetcher.Factory(networkClient = {
+                    CacheOnlyAwareNetworkClient(client.asNetworkClient())
+                }))
+                add(Decoder.Factory { _, _, _ -> object : Decoder {
+                    override suspend fun decode() = DecodeResult(ColorImage(0, 1, 1), false)
+                } })
+            }.build()
+        val request = ImageRequest.Builder(PlatformContext.INSTANCE)
+            .data("https://img.2chan.net/b/src/123.png").build()
+        try {
+            assertIs<SuccessResult>(loader.execute(request))
+            val cached = assertIs<SuccessResult>(loader.execute(request.newBuilder()
+                .networkCachePolicy(CachePolicy.DISABLED).build()))
+            assertEquals(coil3.decode.DataSource.DISK, cached.dataSource)
+            assertEquals(1, requests.get())
+        } finally {
+            loader.shutdown()
+            store.closeAndAwait()
+            client.close()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun twoCoilLoadersAndMetadataReadTheSameOriginalWithOneHttpGet(): Unit = runBlocking {
         val bytes = metadataPng()
         val calls = AtomicInteger()

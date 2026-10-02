@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -351,6 +352,7 @@ import com.valoser.futacha.shared.compat.compatGoogleSearchTerms
 import com.valoser.futacha.shared.compat.extractCompatPosts
 import com.valoser.futacha.shared.compat.extractCompatHeaderPosts
 import com.valoser.futacha.shared.compat.buildCompatThreadNgRuleIndex
+import com.valoser.futacha.shared.compat.filterCompatThreadPosts
 import com.valoser.futacha.shared.ui.compat.buildCompatForestUrl
 import com.valoser.futacha.shared.ui.compat.buildCompatFtbucketUrl
 import com.valoser.futacha.shared.ui.compat.buildCompatFutapoUrl
@@ -487,6 +489,54 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 
 /**
+ * Applies the active page's deleted-post presentation and NG filtering to the
+ * adjacent tab, so a tab swipe never flashes posts the thread itself hides.
+ */
+internal suspend fun compatNeighborPreviewVisiblePosts(
+    posts: List<CompatPostSnapshot>,
+    tabKey: String,
+    boardKey: String,
+    showDeletedPosts: Boolean,
+    ngEnabled: Boolean,
+    ngRules: List<CompatNgRule>,
+    hiddenPostNos: Set<String> = emptySet(),
+    imagePhashes: Map<String, String> = emptyMap(),
+    imageNgPhashThreshold: Int = CompatImagePhash.DEFAULT_THRESHOLD
+): List<CompatPostSnapshot> {
+    val presented = presentCompatPostsForDeletedVisibilityOffMain(
+        posts = posts,
+        showDeletedContent = showDeletedPosts
+    )
+    if (!ngEnabled) return presented
+    val filter = {
+        filterCompatThreadPosts(
+            posts = presented,
+            ngEnabled = true,
+            index = buildCompatThreadNgRuleIndex(ngRules, scopeKey = tabKey, boardKey = boardKey),
+            aiHiddenPostNos = hiddenPostNos,
+            imagePhashes = imagePhashes,
+            imagePhashThreshold = imageNgPhashThreshold
+        )
+    }
+    return try {
+        if (presented.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+            filter()
+        } else {
+            withContext(AppDispatchers.parsing) { filter() }
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Throwable) {
+        // Same fallback as the active page: keep the readable body.
+        Logger.e("CompatibilityThread", "Failed to filter neighbor preview posts", failure)
+        presented
+    }
+}
+
+/** Identity holder so list-state keys do not compare whole post lists. */
+private class CompatNeighborVisiblePosts(val posts: List<CompatPostSnapshot>)
+
+/**
  * Adjacent-page surface used while the pager is being dragged.  It must use
  * the same post renderer as the active page: the old lightweight text-only
  * preview hid attachments and always started at No.0, which was exactly the
@@ -506,25 +556,44 @@ internal fun CompatThreadPagerNeighborPreview(
     simpleQuoteCount: Boolean,
     saidaneDisplayMode: String,
     saidaneThreshold: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showDeletedPosts: Boolean = true,
+    ngEnabled: Boolean = false,
+    ngRules: List<CompatNgRule> = emptyList(),
+    imagePhashes: Map<String, String>? = emptyMap(),
+    imageNgPhashThreshold: Int = CompatImagePhash.DEFAULT_THRESHOLD,
+    aiHiddenPostNos: Set<String> = emptySet()
 ) {
     val palette = LocalCompatibilityPalette.current
-    val scrollPosition = snapshot?.let { resolveCompatScrollPosition(it, tab.scrollAnchor) }
-    val initialIndex = scrollPosition?.index ?: 0
-    val initialOffset = scrollPosition?.offsetPx ?: 0
-    // Key the list state by the loaded revision. If it was created while the
-    // snapshot was still null, Compose would otherwise retain (0, 0) even
-    // after the cached page arrived and expose the thread top during the swipe.
-    val listState = key(
+    // Null until the deleted/NG presentation for this revision is ready; the
+    // raw snapshot is never rendered, otherwise hidden posts flash mid-swipe.
+    var visiblePosts by remember(tab.key, snapshot?.revision) {
+        mutableStateOf<CompatNeighborVisiblePosts?>(null)
+    }
+    LaunchedEffect(
         tab.key,
         snapshot?.revision,
-        tab.scrollAnchor.postNo,
-        tab.scrollAnchor.offsetPx,
-        tab.scrollAnchor.fallbackIndex
+        showDeletedPosts,
+        ngEnabled,
+        ngRules,
+        imagePhashes,
+        aiHiddenPostNos,
+        imageNgPhashThreshold
     ) {
-        rememberLazyListState(
-            initialFirstVisibleItemIndex = initialIndex,
-            initialFirstVisibleItemScrollOffset = initialOffset
+        val posts = snapshot?.posts ?: return@LaunchedEffect
+        val readyHashes = imagePhashes ?: return@LaunchedEffect
+        visiblePosts = CompatNeighborVisiblePosts(
+            compatNeighborPreviewVisiblePosts(
+                posts = posts,
+                tabKey = tab.key,
+                boardKey = tab.boardKey,
+                showDeletedPosts = showDeletedPosts,
+                ngEnabled = ngEnabled,
+                ngRules = ngRules,
+                imagePhashes = readyHashes,
+                hiddenPostNos = aiHiddenPostNos,
+                imageNgPhashThreshold = imageNgPhashThreshold
+            )
         )
     }
     var neighborPosterIdentityProgress by remember(tab.key, snapshot?.revision) {
@@ -539,18 +608,40 @@ internal fun CompatThreadPagerNeighborPreview(
         }
     }
     Column(modifier = modifier.background(palette.background)) {
-        if (snapshot == null) {
+        val visible = visiblePosts
+        if (snapshot == null || visible == null || imagePhashes == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("読み込み中…", color = palette.uiPrimaryText)
             }
         } else {
+            // Resolve the anchor against the filtered list (the active page
+            // does the same), so hidden posts do not shift the restored row.
+            // Key the list state by the loaded list: if it were created while
+            // the posts were still loading, Compose would retain (0, 0) and
+            // expose the thread top during the swipe.
+            val listState = key(
+                tab.key,
+                visible,
+                tab.scrollAnchor.postNo,
+                tab.scrollAnchor.offsetPx,
+                tab.scrollAnchor.fallbackIndex
+            ) {
+                val scrollPosition = resolveCompatScrollPosition(
+                    snapshot.copy(posts = visible.posts),
+                    tab.scrollAnchor
+                )
+                rememberLazyListState(
+                    initialFirstVisibleItemIndex = scrollPosition.index,
+                    initialFirstVisibleItemScrollOffset = scrollPosition.offsetPx
+                )
+            }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 // Archive/cache merges and malformed live responses can carry
                 // duplicate or blank post numbers. A LazyColumn key made only
                 // from postNo crashes during the catalog -> thread transition
                 // (#29); position keeps each rendered row unique while the
                 // post number remains the semantic identity everywhere else.
-                items(snapshot.posts, key = { "${it.postNo}:${it.position}" }) { post ->
+                items(visible.posts, key = { "${it.postNo}:${it.position}" }) { post ->
                     CompatPostRow(
                         post = post,
                         fontSize = fontSize,
@@ -739,7 +830,7 @@ internal fun CompatTabSelector(
             previewWidth = previewWidthPx,
             previewHeight = previewHeightPx
         )
-        Popup(
+        FutachaAppLockAwareWindow { Popup(
             popupPositionProvider = CompatSelectorWindowPositionProvider,
             properties = PopupProperties(
                 focusable = false,
@@ -770,7 +861,7 @@ internal fun CompatTabSelector(
                     CompatTabSelectorCell(drag.tab, drag.tab.key == currentTabKey, threadContext)
                 }
             }
-        }
+        } }
     }
     menuTab?.let { selected ->
         CompatLegacyChoiceDialog(

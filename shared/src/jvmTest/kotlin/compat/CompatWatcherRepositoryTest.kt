@@ -239,6 +239,28 @@ class CompatWatcherRepositoryTest {
         assertEquals(4, catalogRequests)
     }
 
+    @Test fun sharedRefreshNotifiesRecordedWatchMatchesOnceAndHonorsNotifyOff() = runBlocking {
+        suspend fun run(notifyOff: Boolean): List<List<CompatWatchMatch>> {
+            val f = Fixture(listOf(board))
+            CompatWatcherRepository(f.store).saveRules(listOf(CompatWatchRule("猫", board.key)))
+            if (notifyOff) f.preferences.value += (COMPAT_WATCH_NOTIFY_KEY to "OFF")
+            val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
+                when (method.name) {
+                    "getCatalog" -> listOf(CatalogItem("7", "https://may.2chan.net/b/res/7.htm", "猫スレ", null, null, replyCount = 1))
+                    "probeThreadExists" -> true
+                    else -> error("Unexpected repository call: ${method.name}")
+                }
+            } as BoardRepository
+            val notified = mutableListOf<List<CompatWatchMatch>>()
+            refreshSharedFeatures(f.store, repository, isWifiConnected = true, onNewMatches = { notified += it })
+            return notified
+        }
+        val notified = run(notifyOff = false)
+        // Delivered from the recording callback, not a second time from the final result.
+        assertEquals(listOf("https://may.2chan.net/b/res/7.htm"), notified.flatten().map { it.history.canonicalUrl })
+        assertTrue(run(notifyOff = true).isEmpty())
+    }
+
     @Test fun matchingFoldsAsciiAndVoicedHalfwidthKana() {
         assertEquals(normalizeCompatWatchText("1 ガンダム"), normalizeCompatWatchText("① ｶﾞﾝﾀﾞﾑ"))
         val matches = collectCompatWatchMatches(board,

@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.NetworkException
 import kotlin.test.Test
@@ -254,4 +256,90 @@ class HistoryRefreshSupportTest {
             isAutoRefreshDisabled = isAutoRefreshDisabled
         )
     }
+}
+
+class HistoryRefreshAutoSaveBudgetTest {
+    @Test
+    fun mediaBudgetSubtractsLockWaitAndRespectsTheRunDeadline() {
+        // No wait: the per-thread timeout minus the finalize reserve, as before.
+        assertEquals(70_000L, historyAutoSaveMediaBudgetMillis(1_000L, 1_000L, 90_000L, null))
+        // 50 s waiting for the storage lock leaves only 20 s of media work.
+        assertEquals(20_000L, historyAutoSaveMediaBudgetMillis(1_000L, 51_000L, 90_000L, null))
+        // The run cancels unfinished saves at its deadline.
+        assertEquals(10_000L, historyAutoSaveMediaBudgetMillis(1_000L, 1_000L, 90_000L, autoSaveDeadline = 31_000L))
+        // Too late for media: still publishes the text promptly.
+        assertEquals(1_000L, historyAutoSaveMediaBudgetMillis(1_000L, 80_000L, 90_000L, null))
+    }
+
+    @Test
+    fun continuationStopsOnlyWhenItMadeNoProgress() {
+        val now = 10_000_000L
+        val partial = autoSaveGeneration(incomplete = 5)
+        assertFalse(shouldContinueAutoSaveGeneration(autoSaveGeneration(incomplete = 0), now))
+        assertTrue(shouldContinueAutoSaveGeneration(partial, now))
+        // Progress (5 -> 3) keeps continuing.
+        val progressed = resolveAutoSaveContinuationStalledAtMillis(partial, 5, 3, now)
+        assertEquals(0L, progressed)
+        assertTrue(shouldContinueAutoSaveGeneration(autoSaveGeneration(3, progressed), now))
+        // No progress (3 -> 3) marks the generation stalled.
+        val stalledAt = resolveAutoSaveContinuationStalledAtMillis(autoSaveGeneration(3), 3, 3, now)
+        assertEquals(now, stalledAt)
+        assertFalse(shouldContinueAutoSaveGeneration(autoSaveGeneration(3, stalledAt), now + 60_000L))
+        // Completed: nothing left to continue.
+        assertEquals(0L, resolveAutoSaveContinuationStalledAtMillis(autoSaveGeneration(3), 3, 0, now))
+    }
+
+    @Test
+    fun newReplySaveKeepsAStallUnlessMissingMediaDecreased() {
+        val now = 10_000_000L
+        val stalled = autoSaveGeneration(incomplete = 3, stalledAt = now - 1_000L)
+        // G4-4: a save for new replies no longer resets the stall (2 saves per reply).
+        assertEquals(now - 1_000L, resolveAutoSaveContinuationStalledAtMillis(stalled, null, 3, now))
+        assertEquals(now - 1_000L, resolveAutoSaveContinuationStalledAtMillis(stalled, null, 4, now))
+        assertEquals(0L, resolveAutoSaveContinuationStalledAtMillis(stalled, null, 2, now))
+        // Not stalled before: the new generation may be continued once.
+        assertEquals(0L, resolveAutoSaveContinuationStalledAtMillis(autoSaveGeneration(3), null, 3, now))
+        assertEquals(0L, resolveAutoSaveContinuationStalledAtMillis(null, null, 3, now))
+    }
+
+    @Test
+    fun stalledContinuationIsRetriedAfterTheRetryInterval() {
+        val stalledAt = 10_000_000L
+        val stalled = autoSaveGeneration(incomplete = 3, stalledAt = stalledAt)
+        assertFalse(shouldContinueAutoSaveGeneration(stalled, stalledAt + AUTO_SAVE_CONTINUATION_RETRY_MILLIS - 1L))
+        assertTrue(shouldContinueAutoSaveGeneration(stalled, stalledAt + AUTO_SAVE_CONTINUATION_RETRY_MILLIS))
+        // A clock moved back does not keep the stall forever.
+        assertTrue(shouldContinueAutoSaveGeneration(stalled, stalledAt - 1L))
+        // A new-reply save after the interval that still leaves as much missing stalls again from now.
+        val later = stalledAt + AUTO_SAVE_CONTINUATION_RETRY_MILLIS
+        assertEquals(later, resolveAutoSaveContinuationStalledAtMillis(stalled, null, 3, later))
+    }
+
+    @Test
+    fun stallMarkSurvivesTheIndexJson() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val stalled = autoSaveGeneration(incomplete = 3, stalledAt = 42L)
+        val decoded = json.decodeFromString(SavedThread.serializer(), json.encodeToString(SavedThread.serializer(), stalled))
+        assertEquals(42L, decoded.autoSaveContinuationStalledAtMillis)
+        // Indexes written before the field existed read as not stalled.
+        val legacy = json.encodeToString(SavedThread.serializer(), autoSaveGeneration(incomplete = 3))
+        assertFalse("autoSaveContinuationStalledAtMillis" in legacy)
+        assertEquals(0L, json.decodeFromString(SavedThread.serializer(), legacy).autoSaveContinuationStalledAtMillis)
+    }
+
+    private fun autoSaveGeneration(incomplete: Int, stalledAt: Long = 0L) = SavedThread(
+        threadId = "reg-1",
+        boardId = "b",
+        boardName = "b",
+        title = "t",
+        thumbnailPath = null,
+        savedAt = 1L,
+        postCount = 1,
+        imageCount = 0,
+        videoCount = 0,
+        totalSize = 0L,
+        status = if (incomplete > 0) SaveStatus.PARTIAL else SaveStatus.COMPLETED,
+        incompleteMediaCount = incomplete,
+        autoSaveContinuationStalledAtMillis = stalledAt
+    )
 }

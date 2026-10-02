@@ -39,3 +39,16 @@
 -keep class com.valoser.futacha.shared.analytics.PlatformPerformanceTrace { *; }
 -keep class com.valoser.futacha.shared.analytics.PlatformCrashReporter { *; }
 -keep class com.valoser.futacha.shared.media.analysis.TrackingNative { *; }
+
+# analyticsFailureCategory(), the Crashlytics "type=" message and Performance
+# "error_type" read Throwable::class.simpleName (e.g. "timeout"/"cancel"/"parse"
+# in Ktor/coroutines/app exception names). Keep exception class names only;
+# shrinking and optimisation still apply, so unused exceptions are removed.
+-keepnames class * extends java.lang.Throwable
+
+# libonnxruntime4j_jni.so resolves ONNX Runtime classes, constructors and
+# fields by their original JNI names (FindClass "ai/onnxruntime/OrtException",
+# TensorInfo, NodeInfo, OnnxMap, OnnxJavaType, ...). The AAR ships no consumer
+# rules, so renaming or shrinking them makes the first native error (including
+# a cancelled detection/contour/tracking run) abort the process.
+-keep class ai.onnxruntime.** { *; }

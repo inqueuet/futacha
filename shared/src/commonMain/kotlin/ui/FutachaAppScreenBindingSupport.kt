@@ -97,7 +97,8 @@ internal data class FutachaScreenBindingsInputs(
     val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
     val onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
     val onHistoryImport: suspend () -> String = { "" },
-    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" }
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
+    val onUnregisteredBoard: (String) -> Unit = {}
 )
 
 internal data class FutachaScreenBindingsBundle(
@@ -220,7 +221,8 @@ internal fun buildFutachaScreenBindingsBundle(
     val navigationCallbacks = buildFutachaNavigationCallbacks(
         currentBoards = inputs.currentBoards,
         currentNavigationState = inputs.currentNavigationState,
-        setNavigationState = inputs.setNavigationState
+        setNavigationState = inputs.setNavigationState,
+        onUnregisteredBoard = inputs.onUnregisteredBoard
     )
     val boardScreenCallbacks = buildFutachaBoardScreenCallbacks(
         coroutineScope = coroutineScope,

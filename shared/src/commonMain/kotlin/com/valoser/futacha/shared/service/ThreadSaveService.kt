@@ -53,7 +53,9 @@ data class ThreadSaveLimits(
      * False stores thumbnails only: originals and videos are not downloaded, but
      * those an earlier save (or its seed generation) already holds are kept.
      */
-    val downloadFullMedia: Boolean = true
+    val downloadFullMedia: Boolean = true,
+    /** Stop media work early enough to publish a partial generation before the host deadline. */
+    val mediaDownloadBudgetMs: Long? = null
 )
 
 data class ThreadSaveStorageOptions(
@@ -330,6 +332,11 @@ class ThreadSaveService(
                     createUrlToPathMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
                     createMediaKeyToFileInfoMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
                     initialSeed = reusableMediaSeed,
+                    shouldContinueDownloading = {
+                        effectiveLimits.mediaDownloadBudgetMs?.let {
+                            Clock.System.now().toEpochMilliseconds() - startedAtMillis < it
+                        } ?: true
+                    },
                     updateProgress = { current, total ->
                         updateProgress(
                             SavePhase.DOWNLOADING,
@@ -339,7 +346,7 @@ class ThreadSaveService(
                         )
                     },
                     downloadMedia = { mediaItem ->
-                        downloadAndSaveMedia(
+                        suspend fun download() = downloadAndSaveMedia(
                             url = mediaItem.url,
                             storageTarget = storageTarget,
                             boardPath = boardPath,
@@ -348,6 +355,12 @@ class ThreadSaveService(
                             startedAtMillis = startedAtMillis,
                             maxSaveDurationMs = effectiveLimits.maxSaveDurationMs
                         )
+                        val budget = effectiveLimits.mediaDownloadBudgetMs
+                        if (budget == null) download() else {
+                            val remaining = budget - (Clock.System.now().toEpochMilliseconds() - startedAtMillis)
+                            kotlinx.coroutines.withTimeoutOrNull(remaining.coerceAtLeast(1L)) { download() }
+                                ?: Result.failure(okio.IOException("Auto-save media budget reached"))
+                        }
                     },
                     enforceBudget = { totalSizeBytes ->
                         enforceBudget(totalSizeBytes, startedAtMillis, effectiveLimits.maxSaveDurationMs)

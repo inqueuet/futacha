@@ -170,6 +170,7 @@ class DefaultBoardRepository(
     private val boardInitMutex = Mutex()
     private val boardInitializationMutexes = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
     private val cookieSetupFailures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+    private val authRefreshLimiter = DefaultBoardRepositoryAuthRefreshLimiter()
     private val catalogLayoutLocksGuard = Mutex()
     private val catalogLayoutLocks = mutableMapOf<String, Mutex>()
 
@@ -218,7 +219,8 @@ class DefaultBoardRepository(
          * posting and helper requests must not re-post catset merely because
          * another caller last used a different layout.
          */
-        layoutSensitive: Boolean = false
+        layoutSensitive: Boolean = false,
+        refreshCookies: Boolean = false
     ) {
         val settings = (settingsOverride ?: catalogFetchSettingsProvider()).normalized()
         initializeDefaultBoardRepositoryCookies(
@@ -230,11 +232,13 @@ class DefaultBoardRepository(
             boardInitializationMutexes = boardInitializationMutexes,
             cookieSetupFailures = cookieSetupFailures,
             forceSetup = forceSetup,
+            layoutIndependent = !layoutSensitive && !refreshCookies,
             requireSetup = {
                 val previousSettings = boardInitMutex.withLock {
                     initializedCatalogFetchSettings[board]
                 }
                 when {
+                    refreshCookies -> true
                     previousSettings == null -> {
                         layoutSensitive &&
                             !hasDefaultBoardRepositoryCatalogSettingsCookie(cookieRepository, board, settings)
@@ -270,6 +274,11 @@ class DefaultBoardRepository(
     }
 
     override suspend fun invalidateCookies(board: String) {
+        clearCookieInitialization(board)
+        authRefreshLimiter.clear(board)
+    }
+
+    private suspend fun clearCookieInitialization(board: String) {
         boardInitMutex.withLock {
             initializedBoards.remove(board)
             initializedCatalogFetchSettings.remove(board)
@@ -283,13 +292,23 @@ class DefaultBoardRepository(
         layoutSensitive: Boolean = false,
         block: suspend () -> T
     ): T {
+        // A request that does not choose a layout refreshes with the layout the
+        // board was last set up with, so an auth retry does not rewrite cxyl.
+        var refreshLayout: CatalogFetchSettings? = null
         return withDefaultBoardRepositoryAuthRetry(
             board = board,
             logTag = TAG,
             ensureCookiesInitialized = { targetBoard, forceSetup ->
-                ensureCookiesInitialized(targetBoard, forceSetup, settingsOverride, layoutSensitive)
+                ensureCookiesInitialized(targetBoard, forceSetup, settingsOverride ?: refreshLayout,
+                    layoutSensitive, refreshCookies = forceSetup)
             },
-            invalidateCookies = ::invalidateCookies,
+            invalidateCookies = { targetBoard ->
+                if (!layoutSensitive) {
+                    refreshLayout = boardInitMutex.withLock { initializedCatalogFetchSettings[targetBoard] }
+                }
+                clearCookieInitialization(targetBoard)
+            },
+            refreshLimiter = authRefreshLimiter,
             block = block
         )
     }

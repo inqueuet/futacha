@@ -23,6 +23,7 @@ import kotlinx.coroutines.yield
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
@@ -49,8 +50,8 @@ class SavedThreadRepository(
     internal val deleteMutex = Mutex()
     internal val backupCleanupMutex = Mutex()
     internal var lastOperationBackupCleanupEpochMillis = 0L
-    private var rootPurgeCutoffMillis = Long.MIN_VALUE
-    private val threadPurgeCutoffMillis = mutableMapOf<String, Long>()
+    // Purge cutoffs live in state shared by every instance of this root (see SavedThreadPurgeState).
+    private var purgeStateCache: SavedThreadPurgeState? = null
 
     internal val json = Json {
         ignoreUnknownKeys = true
@@ -72,6 +73,7 @@ class SavedThreadRepository(
     internal var cachedIndexEntry: SavedThreadIndexCacheEntry? = null
     /** When this instance last refreshed index.json.backup; 0 until its first index write. */
     internal var lastIndexBackupWriteMillis = 0L
+    internal var replacedStorageCleanupWaitMillis = 15_000L
     private val droppedEntryCleanupScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
     private val droppedEntryCleanupMutex = Mutex()
     private val scheduledDroppedEntryStorageIds = mutableSetOf<String>()
@@ -83,6 +85,7 @@ class SavedThreadRepository(
         private const val MAX_ORPHAN_METADATA_SCAN_ENTRIES = 20_000
         private const val MAX_DROPPED_ENTRY_CLEANUP_PER_READ = 20_000
         private const val DROPPED_ENTRY_CLEANUP_LOCK_TIMEOUT_MILLIS = 15_000L
+        private const val PURGE_RESUME_BATCH_SIZE = 64
     }
 
     /**
@@ -137,29 +140,49 @@ class SavedThreadRepository(
     /** Explicit manual-save recovery; never run this for history auto-save repositories. */
     suspend fun recoverUnindexedThreads(): Result<Int> = runSuspendCatchingNonCancellation {
         withContext(AppDispatchers.io) {
+            resumeInterruptedPurgeIfNeeded()
+            // Scan without holding the mutation locks: on a SAF folder the scan costs one
+            // provider query per saved thread, and holding the locks blocked every save and
+            // delete meanwhile. The batch context lists each folder once instead of once per
+            // lookup (which was O(folders × children)).
+            val candidates = withContext(fileSystem.saveBatchContext()) {
+                val indexedStorageIds = loadIndex().threads.map(::resolveSavedThreadStorageId).toSet()
+                val found = mutableListOf<SavedThread>()
+                for (child in listFilesAt("").take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)) {
+                    // Some test/platform implementations return full paths; only accept direct children.
+                    val storageId = child.removePrefix(baseDirectory.trimEnd('/') + "/")
+                    if (!isRecoverableSavedThreadDirectory(storageId) || storageId in indexedStorageIds) continue
+                    if (storageId == indexRelativePath || storageId.startsWith("$indexRelativePath.")) continue
+                    val saved = ThreadStorageLockRegistry.withStorageLockOrNull(
+                        storageId = storageLockKey(storageId),
+                        waitTimeoutMillis = 1_000L
+                    ) {
+                        recoverSavedThreadMetadata(storageId)
+                    }
+                    if (saved != null) found += saved
+                }
+                found
+            }
+            if (candidates.isEmpty()) return@withContext 0
             deleteMutex.withLock {
                 mutationMutex.withLock {
-                    val existing = loadIndex().threads
-                    val indexedStorageIds = existing.map(::resolveSavedThreadStorageId).toSet()
-                    val recovered = mutableListOf<SavedThread>()
-                    for (child in listFilesAt("").take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)) {
-                        // Some test/platform implementations return full paths; only accept direct children.
-                        val storageId = child.removePrefix(baseDirectory.trimEnd('/') + "/")
-                        if (!isRecoverableSavedThreadDirectory(storageId) || storageId in indexedStorageIds) continue
-                        val saved = ThreadStorageLockRegistry.withStorageLockOrNull(
-                            storageId = storageLockKey(storageId),
-                            waitTimeoutMillis = 1_000L
-                        ) {
-                            recoverSavedThreadMetadata(storageId)
-                        }
-                        if (saved != null) recovered += saved
+                    // Re-check only the few candidates under the locks, without cached
+                    // listings, so a thread deleted during the scan is not resurrected.
+                    val recovered = candidates.filter { saved ->
+                        val storageId = saved.storageId ?: return@filter false
+                        existsAt("$storageId/metadata.json")
                     }
+                    // A purge interrupted by a failure or a kill leaves folders behind
+                    // with an empty index; its persisted cutoff keeps them deleted.
+                    val rootCutoff = maxOf(rootPurgeCutoffMillis(), readPersistedPurgeCutoffMillis())
                     withIndexLock {
                         val current = readSavedThreadIndexUnlocked()
+                        val currentStorageIds = current.threads.map(::resolveSavedThreadStorageId).toSet()
                         val identities = current.threads.map { purgeIdentityKey(it.threadId, it.boardId) }.toMutableSet()
                         val additions = recovered.sortedByDescending { it.savedAt }.filter { saved ->
+                            if (resolveSavedThreadStorageId(saved) in currentStorageIds) return@filter false
                             val identity = purgeIdentityKey(saved.threadId, saved.boardId)
-                            val cutoff = maxOf(rootPurgeCutoffMillis, threadPurgeCutoffMillis[identity] ?: Long.MIN_VALUE)
+                            val cutoff = maxOf(rootCutoff, purgeCutoffMillis(identity))
                             saved.savedAt > cutoff && identities.add(identity)
                         }
                         if (additions.isNotEmpty()) {
@@ -208,17 +231,11 @@ class SavedThreadRepository(
                 mutationMutex.withLock {
                     val storageId = resolveSavedThreadStorageId(thread)
                     val identityKey = purgeIdentityKey(thread.threadId, thread.boardId)
-                    val cutoff = maxOf(
-                        rootPurgeCutoffMillis,
-                        threadPurgeCutoffMillis[identityKey] ?: Long.MIN_VALUE
-                    )
-                    if (thread.savedAt <= cutoff) {
-                        ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
-                            deletePath(storageId).getOrThrow()
-                        }
-                        error("Discarded an auto-save that started before history deletion")
-                    }
-                    withIndexLock {
+                    // Checked under the index lock every instance of this root shares, so a
+                    // purge through another instance is either seen here or deletes the
+                    // entry after it is written.
+                    val discarded = withIndexLock {
+                        if (thread.savedAt <= purgeCutoffMillis(identityKey)) return@withIndexLock true
                         replacedStorageIds.clear()
                         val evicted = this@SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked { threads ->
                             val newStorageId = resolveSavedThreadStorageId(thread)
@@ -257,6 +274,13 @@ class SavedThreadRepository(
                         }
                         evicted.mapTo(replacedStorageIds) { resolveSavedThreadStorageId(it) }
                         replacedStorageIds.remove(resolveSavedThreadStorageId(thread))
+                        false
+                    }
+                    if (discarded) {
+                        ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                            deletePath(storageId).getOrThrow()
+                        }
+                        error("Discarded an auto-save that started before history deletion")
                     }
                 }
                 cleanupReplacedSavedThreadStorage(replacedStorageIds)
@@ -282,17 +306,10 @@ class SavedThreadRepository(
     ): Result<Unit> = runSuspendCatchingNonCancellation {
         mutationMutex.withLock {
             val storageId = resolveSavedThreadStorageId(thread)
-            val cutoff = maxOf(
-                rootPurgeCutoffMillis,
-                threadPurgeCutoffMillis[purgeIdentityKey(thread.threadId, thread.boardId)] ?: Long.MIN_VALUE
-            )
-            if (mutationStartedAtMillis <= cutoff) {
-                ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
-                    deletePath(storageId).getOrThrow()
-                }
-                error("Discarded an imported snapshot that started before history deletion")
-            }
-            withIndexLock {
+            val identityKey = purgeIdentityKey(thread.threadId, thread.boardId)
+            // Under the shared index lock, as in addThreadToIndex.
+            val evictedStorageIds = withIndexLock {
+                if (mutationStartedAtMillis <= purgeCutoffMillis(identityKey)) return@withIndexLock null
                 val newStorageId = storageId
                 this@SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked { threads ->
                     threads
@@ -303,6 +320,13 @@ class SavedThreadRepository(
                     .mapTo(linkedSetOf()) { resolveSavedThreadStorageId(it) }
                     .apply { remove(newStorageId) }
             }
+            if (evictedStorageIds == null) {
+                ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                    deletePath(storageId).getOrThrow()
+                }
+                error("Discarded an imported snapshot that started before history deletion")
+            }
+            evictedStorageIds
         }.let { evictedStorageIds -> cleanupReplacedSavedThreadStorage(evictedStorageIds) }
     }
 
@@ -331,6 +355,7 @@ class SavedThreadRepository(
                 throw IllegalArgumentException("threadId must not be blank")
             }
             val normalizedBoardId = boardId?.trim()?.takeIf { it.isNotBlank() }
+            resumeInterruptedPurgeIfNeeded()
             val triedPaths = linkedSetOf<String>()
             var lastError: Throwable? = null
 
@@ -388,15 +413,22 @@ class SavedThreadRepository(
                 add("$normalizedThreadId/metadata.json")
             }
 
+            suspend fun tryLoadLiveMetadataAt(path: String): SavedThreadMetadata? =
+                tryLoadMetadataAt(path)?.takeUnless { metadata ->
+                    isInterruptedPurgeLeftover(path, metadata).also { leftover ->
+                        if (leftover) lastError = IllegalStateException("Saved thread was deleted")
+                    }
+                }
+
             fastCandidates.forEach { path ->
-                tryLoadMetadataAt(path)?.let { return@withContext it }
+                tryLoadLiveMetadataAt(path)?.let { return@withContext it }
             }
 
             val metadataCandidates = withIndexLock {
                 this@SavedThreadRepository.resolveMetadataCandidatesUnlocked(normalizedThreadId, normalizedBoardId)
             }
             metadataCandidates.forEach { path ->
-                tryLoadMetadataAt(path)?.let { return@withContext it }
+                tryLoadLiveMetadataAt(path)?.let { return@withContext it }
             }
 
             throw lastError ?: IllegalStateException("Metadata not found for threadId=$threadId boardId=${boardId.orEmpty()}")
@@ -418,11 +450,7 @@ class SavedThreadRepository(
     suspend fun purgeThreadStorage(threadId: String, boardId: String? = null): Result<Unit> =
         runSuspendCatchingNonCancellation {
             val currentStorageId = resolveSavedThreadStorageId(threadId, boardId)
-            mutationMutex.withLock {
-                threadPurgeCutoffMillis[purgeIdentityKey(threadId, boardId)] =
-                    Clock.System.now().toEpochMilliseconds()
-                trimThreadPurgeCutoffsLocked()
-            }
+            mutationMutex.withLock { recordThreadPurgeCutoff(purgeIdentityKey(threadId, boardId)) }
             deleteThread(threadId, boardId).getOrThrow()
             val candidates = linkedSetOf(
                 currentStorageId,
@@ -447,11 +475,7 @@ class SavedThreadRepository(
     suspend fun purgeIndexedThreadStorage(threadId: String, boardId: String? = null): Result<Unit> =
         runSuspendCatchingNonCancellation {
             withContext(AppDispatchers.io) {
-                mutationMutex.withLock {
-                    threadPurgeCutoffMillis[purgeIdentityKey(threadId, boardId)] =
-                        Clock.System.now().toEpochMilliseconds()
-                    trimThreadPurgeCutoffsLocked()
-                }
+                mutationMutex.withLock { recordThreadPurgeCutoff(purgeIdentityKey(threadId, boardId)) }
                 deleteThread(threadId, boardId).getOrThrow()
                 linkedSetOf(
                     resolveSavedThreadStorageId(threadId, boardId),
@@ -507,18 +531,77 @@ class SavedThreadRepository(
         withContext(AppDispatchers.io) {
             deleteMutex.withLock {
                 mutationMutex.withLock {
-                    rootPurgeCutoffMillis = Clock.System.now().toEpochMilliseconds()
-                    fileSystem.deleteRecursively(baseDirectory).getOrThrow()
-                    isBaseDirectoryPrepared = false
-                    withIndexLock {
-                        saveSavedThreadIndexUnlocked(
-                            SavedThreadIndex(
-                                threads = emptyList(),
-                                totalSize = 0L,
-                                lastUpdated = Clock.System.now().toEpochMilliseconds()
-                            ),
-                            forceBackup = true
+                    val cutoffMillis = Clock.System.now().toEpochMilliseconds()
+                    // Everything in the root now is to be deleted. The list is kept outside
+                    // the root until the whole root is gone, so a purge cut short by a
+                    // failure or a kill is finished later instead of its threads coming back.
+                    val leftovers = listRootChildrenForPurge()
+                    val state = purgeState()
+                    // Under the marker lock, so a resume of an older purge finishing now
+                    // cannot write over or delete this purge's marker (G4-3).
+                    val generation = state.markerMutex.withLock {
+                        val generation = state.mutex.withLock {
+                            state.rootCutoffMillis = cutoffMillis
+                            state.pendingLeftovers.clear()
+                            state.pendingLeftovers.addAll(leftovers)
+                            state.pendingLeftoverCutoffMillis = cutoffMillis
+                            state.interruptedPurgeResumeChecked = true
+                            ++state.markerGeneration
+                        }
+                        fileSystem.writeString(
+                            purgeMarkerPath,
+                            encodeSavedThreadPurgeMarker(SavedThreadPurgeMarker(cutoffMillis, leftovers))
                         )
+                            .onSuccess { deleteLegacyPurgeMarker() }
+                            .exceptionOrNull()
+                            ?.let { Logger.w("SavedThreadRepository", "Failed to record purge cutoff: ${it.message}") }
+                        generation
+                    }
+                    suspend fun clearIndex() {
+                        isBaseDirectoryPrepared = false
+                        withIndexLock {
+                            saveSavedThreadIndexUnlocked(SavedThreadIndex(emptyList(), 0L,
+                                Clock.System.now().toEpochMilliseconds()), forceBackup = true)
+                        }
+                    }
+                    clearIndex()
+                    var purged = false
+                    try {
+                        val started = kotlin.time.TimeSource.Monotonic.markNow()
+                        var attempts = 0
+                        while (true) {
+                            val result = fileSystem.deleteRecursively(baseDirectory)
+                            if (result.isSuccess) {
+                                state.markerMutex.withLock {
+                                    // A newer purge through another instance keeps its own marker.
+                                    // The leftovers stay hidden in this process: a read may have
+                                    // loaded one just before the delete. A later save has a newer savedAt.
+                                    if (state.mutex.withLock { state.markerGeneration } == generation) {
+                                        fileSystem.delete(purgeMarkerPath)
+                                    }
+                                }
+                                purged = true
+                                break
+                            }
+                            val failure = result.exceptionOrNull()!!
+                            val chunkLimit = failure.message.orEmpty().let {
+                                it.contains("Too many files") || it.contains("Timed out while deleting file tree")
+                            }
+                            if (!chunkLimit || ++attempts >= 128 || started.elapsedNow().inWholeMilliseconds >= 120_000L) {
+                                throw failure
+                            }
+                            yield()
+                        }
+                    } finally {
+                        withContext(NonCancellable) {
+                            // The next metadata read or recovery tries the rest once more.
+                            if (!purged) {
+                                state.mutex.withLock {
+                                    if (state.markerGeneration == generation) state.interruptedPurgeResumeChecked = false
+                                }
+                            }
+                            clearIndex()
+                        }
                     }
                 }
             }
@@ -619,21 +702,42 @@ class SavedThreadRepository(
 
     private suspend fun cleanupReplacedSavedThreadStorage(storageIds: Set<String>) {
         if (storageIds.isEmpty()) return
-        // Recursive deletes of whole thread folders must not run on the caller's (UI) thread.
-        withContext(AppDispatchers.io) { cleanupReplacedSavedThreadStorageOnIo(storageIds) }
+        withContext(AppDispatchers.io) {
+            storageIds.forEach { storageId ->
+                val completed = withTimeoutOrNull(replacedStorageCleanupWaitMillis) {
+                    cleanupReplacedSavedThreadStorageOnIo(setOf(storageId))
+                    true
+                }
+                if (completed == null) {
+                    // A busy save must not leave its predecessor orphaned.
+                    // Retry outside the caller's bounded completion path.
+                    droppedEntryCleanupScope.launch { cleanupReplacedSavedThreadStorageOnIo(setOf(storageId)) }
+                }
+            }
+        }
     }
 
     private suspend fun cleanupReplacedSavedThreadStorageOnIo(storageIds: Set<String>) {
         storageIds.forEach { storageId ->
-            val cleanupResult = withTimeoutOrNull(15_000L) {
+            val cleanupResult = runSuspendCatchingNonCancellation {
                 ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
-                    deletePath(storageId)
+                    // Another repository may have published this generation
+                    // while we waited. Check the index, then delete with only
+                    // the storage lock held: a large folder (or a slow SAF
+                    // provider) must not block every index reader, and the
+                    // index lock's operation timeout must not cut the delete.
+                    val stillIndexed = withIndexLock {
+                        readSavedThreadIndexUnlocked().threads.any {
+                            resolveSavedThreadStorageId(it) == storageId
+                        }
+                    }
+                    if (!stillIndexed) {
+                        deletePath(storageId).getOrThrow()
+                    }
                 }
             }
-            val error = cleanupResult?.exceptionOrNull()
-            if (cleanupResult == null) {
-                Logger.w("SavedThreadRepository", "Timed out cleaning replaced saved thread storage: $storageId")
-            } else if (error != null && !isPathAlreadyDeleted(error)) {
+            val error = cleanupResult.exceptionOrNull()
+            if (error != null && !isPathAlreadyDeleted(error)) {
                 Logger.w(
                     "SavedThreadRepository",
                     "Failed to clean replaced saved thread storage $storageId: ${error.message}"
@@ -703,17 +807,245 @@ class SavedThreadRepository(
         )
     }
 
+    /** Records the last [purgeAllStorage] cutoff and leftovers until it completes (see [savedThreadPurgeMarkerPath]). */
+    private val purgeMarkerPath: String get() = savedThreadPurgeMarkerPath(baseDirectory)
+
+    private val legacyPurgeMarkerPath: String get() = legacySavedThreadPurgeMarkerPath(baseDirectory)
+
+    private suspend fun deleteLegacyPurgeMarker() {
+        if (legacyPurgeMarkerPath == purgeMarkerPath || !fileSystem.exists(legacyPurgeMarkerPath)) return
+        fileSystem.delete(legacyPurgeMarkerPath).exceptionOrNull()?.let { error ->
+            Logger.w("SavedThreadRepository", "Failed to delete the old purge marker: ${error.message}")
+        }
+    }
+
+    /**
+     * Reads the purge marker, moving one an older build left at [legacyPurgeMarkerPath]
+     * into the private location first; the old copy is removed once the new one is
+     * written. Callers hold the state's marker lock.
+     */
+    private suspend fun readPurgeMarkerUnlocked(): SavedThreadPurgeMarker? {
+        if (useSaveLocationApi) return null
+        if (fileSystem.exists(purgeMarkerPath)) {
+            // A marker at the new location supersedes an old one: it lists everything left then.
+            deleteLegacyPurgeMarker()
+            return fileSystem.readString(purgeMarkerPath).getOrNull()?.let(::decodeSavedThreadPurgeMarker)
+        }
+        if (legacyPurgeMarkerPath == purgeMarkerPath || !fileSystem.exists(legacyPurgeMarkerPath)) return null
+        val encoded = fileSystem.readString(legacyPurgeMarkerPath).getOrNull() ?: return null
+        val legacy = decodeSavedThreadPurgeMarker(encoded)
+        if (legacy == null) {
+            deleteLegacyPurgeMarker()
+            return null
+        }
+        fileSystem.writeString(purgeMarkerPath, encodeSavedThreadPurgeMarker(legacy))
+            .onSuccess { deleteLegacyPurgeMarker() }
+            .onFailure { Logger.w("SavedThreadRepository", "Failed to move the purge marker: ${it.message}") }
+        return legacy
+    }
+
+    private suspend fun readPersistedPurgeCutoffMillis(): Long {
+        val state = purgeState()
+        return state.markerMutex.withLock { readPurgeMarkerUnlocked() }?.cutoffMillis ?: Long.MIN_VALUE
+    }
+
+    private suspend fun purgeState(): SavedThreadPurgeState =
+        purgeStateCache ?: SavedThreadPurgeRegistry
+            .stateFor(fileSystem, storageLockKey(indexRelativePath))
+            .also { purgeStateCache = it }
+
+    private suspend fun rootPurgeCutoffMillis(): Long =
+        purgeState().let { state -> state.mutex.withLock { state.rootCutoffMillis } }
+
+    /** Saves of [identityKey] started at or before this were deleted and must not be indexed. */
+    private suspend fun purgeCutoffMillis(identityKey: String): Long = purgeState().let { state ->
+        state.mutex.withLock {
+            maxOf(state.rootCutoffMillis, state.threadCutoffMillis[identityKey] ?: Long.MIN_VALUE)
+        }
+    }
+
+    private suspend fun recordThreadPurgeCutoff(identityKey: String) {
+        val state = purgeState()
+        state.mutex.withLock {
+            state.threadCutoffMillis.remove(identityKey)
+            state.threadCutoffMillis[identityKey] = Clock.System.now().toEpochMilliseconds()
+            // Insertion order is cutoff order: drop the oldest.
+            while (state.threadCutoffMillis.size > MAX_THREAD_PURGE_CUTOFFS) {
+                state.threadCutoffMillis.remove(state.threadCutoffMillis.keys.first())
+            }
+        }
+    }
+
+    /** Direct children of the root, by name, for the purge marker. */
+    private suspend fun listRootChildrenForPurge(): List<String> {
+        val prefix = baseDirectory.trimEnd('/') + "/"
+        return runSuspendCatchingNonCancellation { fileSystem.listFiles(baseDirectory) }
+            .getOrDefault(emptyList())
+            .asSequence()
+            .map { it.removePrefix(prefix) }
+            .filter(::isRecoverableSavedThreadDirectory)
+            .distinct()
+            .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
+            .toList()
+    }
+
+    /**
+     * Finishes a [purgeAllStorage] that a failure or a kill cut short. The read that
+     * triggers it only loads the marker, so every leftover is hidden from
+     * [loadThreadMetadata] at once (concurrent reads wait for that load, not for the
+     * deletes); the leftovers are then deleted in the background (G4-2). Runs once per
+     * process, and once more after a purge fails.
+     */
+    private suspend fun resumeInterruptedPurgeIfNeeded() {
+        if (useSaveLocationApi) return
+        val state = purgeState()
+        if (state.mutex.withLock { state.interruptedPurgeResumeChecked }) return
+        state.markerMutex.withLock {
+            if (state.mutex.withLock { state.interruptedPurgeResumeChecked }) return
+            // Best effort: a failure here must not fail the read that triggered it.
+            val persisted = runSuspendCatchingNonCancellation { readPurgeMarkerUnlocked() }
+                .onFailure { Logger.w("SavedThreadRepository", "Failed to read the purge marker: ${it.message}") }
+                .getOrNull()
+            val (marker, generation) = state.mutex.withLock {
+                state.interruptedPurgeResumeChecked = true
+                // Without a readable marker, what a failed purge of this process listed is still finished.
+                val marker = persisted ?: state.pendingLeftovers.takeIf { it.isNotEmpty() }?.let { pending ->
+                    SavedThreadPurgeMarker(state.pendingLeftoverCutoffMillis, pending.toList())
+                }
+                state.pendingLeftovers.clear()
+                if (marker != null) {
+                    state.pendingLeftovers.addAll(marker.leftovers)
+                    state.pendingLeftoverCutoffMillis = marker.cutoffMillis
+                }
+                marker to state.markerGeneration
+            }
+            if (marker != null) {
+                state.resumeJob = droppedEntryCleanupScope.launch {
+                    runSuspendCatchingNonCancellation {
+                        finishInterruptedPurge(state, marker, generation, markerPersisted = persisted != null)
+                    }.onFailure {
+                        Logger.w("SavedThreadRepository", "Failed to finish an interrupted purge: ${it.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    /** Waits for the background part of [resumeInterruptedPurgeIfNeeded]; for tests. */
+    internal suspend fun awaitInterruptedPurgeResume() {
+        purgeState().resumeJob?.join()
+    }
+
+    /**
+     * Deletes what [marker] listed, except the current index files and folders that a
+     * save made after it re-used (indexed, busy, or with newer metadata). Holds no
+     * repository-wide lock across the deletes: each item takes only its storage lock and
+     * briefly the index lock. Stops when a newer purge ([SavedThreadPurgeState.markerGeneration])
+     * took over. What still cannot be deleted stays listed and hidden.
+     */
+    private suspend fun finishInterruptedPurge(
+        state: SavedThreadPurgeState,
+        marker: SavedThreadPurgeMarker,
+        generation: Long,
+        markerPersisted: Boolean
+    ) {
+        suspend fun isCurrent() = state.mutex.withLock { state.markerGeneration == generation }
+        val currentIndexFiles = setOf(indexRelativePath, "$indexRelativePath.backup")
+        val remaining = mutableListOf<String>()
+        val settled = mutableListOf<String>()
+        suspend fun publishSettled() {
+            if (settled.isEmpty()) return
+            state.mutex.withLock {
+                if (state.markerGeneration == generation) state.pendingLeftovers.removeAll(settled.toSet())
+            }
+            settled.clear()
+        }
+        marker.leftovers.forEachIndexed { position, name ->
+            if (position % PURGE_RESUME_BATCH_SIZE == 0) {
+                publishSettled()
+                yield()
+                if (!isCurrent()) return
+            }
+            // A deleted leftover stays hidden: a read may have loaded its metadata just before
+            // the delete. One kept for a later save is shown again; an undeleted one stays listed.
+            val outcome = if (name in currentIndexFiles) {
+                PurgeLeftoverOutcome.KEPT
+            } else {
+                ThreadStorageLockRegistry.withStorageLockOrNull(
+                    storageId = storageLockKey(name),
+                    waitTimeoutMillis = 1_000L
+                ) {
+                    val indexed = withIndexLock {
+                        readSavedThreadIndexUnlocked().threads.any { resolveSavedThreadStorageId(it) == name }
+                    }
+                    val reusedAfterPurge = indexed || readMetadataSavedAtOrNull(name)
+                        ?.let { savedAt -> savedAt > marker.cutoffMillis } == true
+                    if (reusedAfterPurge) {
+                        PurgeLeftoverOutcome.KEPT
+                    } else {
+                        val error = deletePath(name).exceptionOrNull()
+                        if (error != null && !isPathAlreadyDeleted(error)) {
+                            PurgeLeftoverOutcome.UNDELETED
+                        } else {
+                            PurgeLeftoverOutcome.DELETED
+                        }
+                    }
+                } ?: PurgeLeftoverOutcome.UNDELETED
+            }
+            when (outcome) {
+                PurgeLeftoverOutcome.UNDELETED -> remaining += name
+                PurgeLeftoverOutcome.KEPT -> settled += name
+                PurgeLeftoverOutcome.DELETED -> Unit
+            }
+        }
+        publishSettled()
+        state.markerMutex.withLock {
+            if (!isCurrent()) return
+            // Another process may have finished or replaced this marker meanwhile.
+            val onDisk = readPurgeMarkerUnlocked()
+            val unchanged = if (onDisk != null) onDisk.cutoffMillis == marker.cutoffMillis else !markerPersisted
+            if (!unchanged) return
+            if (remaining.isEmpty()) {
+                fileSystem.delete(purgeMarkerPath)
+            } else {
+                Logger.w("SavedThreadRepository", "Interrupted purge left ${remaining.size} item(s) undeleted")
+                fileSystem.writeString(
+                    purgeMarkerPath,
+                    encodeSavedThreadPurgeMarker(SavedThreadPurgeMarker(marker.cutoffMillis, remaining))
+                )
+            }
+        }
+    }
+
+    private suspend fun readMetadataSavedAtOrNull(storageId: String): Long? {
+        if (!existsAt("$storageId/metadata.json")) return null
+        return runSuspendCatchingNonCancellation {
+            val encoded = readStringAtWithLimit("$storageId/metadata.json", MAX_SAVED_THREAD_METADATA_BYTES).getOrThrow()
+            json.decodeFromString<SavedThreadMetadata>(encoded).savedAt
+        }.getOrNull()
+    }
+
+    /**
+     * Whether [metadata] read from [path] belongs to a not yet deleted leftover of an
+     * interrupted purge, and so to a thread the user already deleted.
+     */
+    private suspend fun isInterruptedPurgeLeftover(path: String, metadata: SavedThreadMetadata): Boolean {
+        val storageId = path.substringBefore('/')
+        val state = purgeState()
+        val cutoff = state.mutex.withLock {
+            if (storageId !in state.pendingLeftovers) return false
+            state.pendingLeftoverCutoffMillis
+        }
+        if (metadata.savedAt > cutoff) return false
+        return withIndexLock {
+            readSavedThreadIndexUnlocked().threads.none { resolveSavedThreadStorageId(it) == storageId }
+        }
+    }
+
     private fun purgeIdentityKey(threadId: String, boardId: String?): String {
         return autoSaveRetentionKey(threadId, boardId)
     }
 
-    private fun trimThreadPurgeCutoffsLocked() {
-        if (threadPurgeCutoffMillis.size <= MAX_THREAD_PURGE_CUTOFFS) return
-        threadPurgeCutoffMillis.entries
-            .sortedBy { it.value }
-            .take(threadPurgeCutoffMillis.size - MAX_THREAD_PURGE_CUTOFFS)
-            .forEach { threadPurgeCutoffMillis.remove(it.key) }
-    }
 
     private suspend fun findOrphanStorageIdsForHistoryIdentity(
         threadId: String,
@@ -723,7 +1055,7 @@ class SavedThreadRepository(
         // Callers run on the UI scope when a history entry is swiped away, and
         // this may read thousands of metadata files. Only the identity is needed,
         // so skip decoding every post of every saved thread.
-        return withContext(AppDispatchers.io) {
+        return withContext(AppDispatchers.io + fileSystem.saveBatchContext()) {
             listFilesAt("")
                 .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
                 .mapNotNullTo(linkedSetOf()) { childName ->
@@ -788,3 +1120,5 @@ private data class SavedThreadIdentityProbe(
     val threadId: String = "",
     val boardId: String? = null
 )
+
+private enum class PurgeLeftoverOutcome { DELETED, KEPT, UNDELETED }

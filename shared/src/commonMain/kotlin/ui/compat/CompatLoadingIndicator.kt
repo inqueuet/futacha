@@ -493,7 +493,10 @@ private const val COMPAT_LOADING_ROTATION_MILLIS = 500
 // moving gap so the user can actually tell that the UI thread is still painting.
 private const val COMPAT_LOADING_DEFAULT_SWEEP_DEGREES = 300f
 
-private val CompatLoadingRotationSemanticsKey = SemanticsPropertyKey<Int>("CompatLoadingRotation")
+// Tests read the current angle through this provider. A provider (instead of
+// the angle itself) keeps the semantics static, so accessibility services are
+// not sent a content change on every animation frame.
+private val CompatLoadingRotationSemanticsKey = SemanticsPropertyKey<() -> Int>("CompatLoadingRotation")
 private var SemanticsPropertyReceiver.compatLoadingRotation by CompatLoadingRotationSemanticsKey
 
 @Composable
@@ -505,7 +508,7 @@ internal fun CompatLoadingIndicator(
     val iconStyle = compatibilityLoadingUsesIcon(style)
     val color = compatibilityLoadingColor(LocalCompatibilityPalette.current, style)
     val rotationTransition = rememberInfiniteTransition(label = "compat-loading")
-    val rotation by rotationTransition.animateFloat(
+    val rotation = rotationTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
@@ -514,6 +517,7 @@ internal fun CompatLoadingIndicator(
         ),
         label = "compat-loading-rotation"
     )
+    val rotationProvider = remember(rotation) { { rotation.value.roundToInt() } }
     Box(
         modifier = modifier.semantics {
             contentDescription = "読み込み中"
@@ -525,7 +529,7 @@ internal fun CompatLoadingIndicator(
             modifier = Modifier
                 .size(size)
                 .testTag("compat-loading-artwork")
-                .semantics { compatLoadingRotation = rotation.roundToInt() }
+                .semantics { compatLoadingRotation = rotationProvider }
         ) {
             val diameter = this.size.minDimension
             val center = Offset(this.size.width / 2f, this.size.height / 2f)
@@ -533,7 +537,7 @@ internal fun CompatLoadingIndicator(
             // Canvas itself on every frame on both Android and iOS; relying on
             // a child graphics layer could leave the initial thread artwork's
             // cached layer unchanged while the request was suspended.
-            rotate(degrees = rotation, pivot = center) {
+            rotate(degrees = rotation.value, pivot = center) {
                 if (iconStyle) {
                     drawCircle(color = color, radius = diameter / 2f, center = center)
 

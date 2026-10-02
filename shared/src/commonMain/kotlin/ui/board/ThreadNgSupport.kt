@@ -4,6 +4,35 @@ import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.analytics.analyticsEnabledValue
 
+/**
+ * A string-list persistence callback that can also re-apply an edit to the
+ * latest stored list atomically.  Invoked as a plain function it replaces the
+ * whole list (kept for callers that build their own list).
+ */
+internal class AtomicStringListPersister(
+    private val replace: (List<String>) -> Unit,
+    private val atomicEdit: (((List<String>) -> List<String>) -> Unit)?
+) : (List<String>) -> Unit {
+    override fun invoke(updated: List<String>) = replace(updated)
+
+    fun persistEdit(updated: List<String>, edit: (List<String>) -> List<String>) {
+        val apply = atomicEdit
+        if (apply != null) apply(edit) else replace(updated)
+    }
+}
+
+/**
+ * Persists an add/remove edit.  With an [AtomicStringListPersister] the edit is
+ * re-applied to the latest stored list, so quick consecutive edits computed
+ * from the same UI snapshot no longer overwrite each other.
+ */
+internal fun ((List<String>) -> Unit).persistListEdit(
+    updated: List<String>,
+    edit: (List<String>) -> List<String>
+) {
+    if (this is AtomicStringListPersister) persistEdit(updated, edit) else invoke(updated)
+}
+
 internal data class ThreadNgMutationState(
     val updatedEntries: List<String>,
     val message: String,
@@ -47,7 +76,9 @@ internal fun buildThreadNgMutationCallbacks(
                 )
             )
             if (mutation.shouldPersist) {
-                persistHeaders(mutation.updatedEntries)
+                persistHeaders.persistListEdit(mutation.updatedEntries) { latest ->
+                    addThreadNgHeader(latest, value).updatedEntries
+                }
             }
             showMessage(mutation.message)
         },
@@ -64,7 +95,9 @@ internal fun buildThreadNgMutationCallbacks(
                 )
             )
             if (mutation.shouldPersist) {
-                persistWords(mutation.updatedEntries)
+                persistWords.persistListEdit(mutation.updatedEntries) { latest ->
+                    addThreadNgWord(latest, value).updatedEntries
+                }
             }
             showMessage(mutation.message)
         },
@@ -81,7 +114,9 @@ internal fun buildThreadNgMutationCallbacks(
                 )
             )
             if (mutation.shouldPersist) {
-                persistHeaders(mutation.updatedEntries)
+                persistHeaders.persistListEdit(mutation.updatedEntries) { latest ->
+                    removeThreadNgHeader(latest, entry).updatedEntries
+                }
             }
             showMessage(mutation.message)
         },
@@ -98,7 +133,9 @@ internal fun buildThreadNgMutationCallbacks(
                 )
             )
             if (mutation.shouldPersist) {
-                persistWords(mutation.updatedEntries)
+                persistWords.persistListEdit(mutation.updatedEntries) { latest ->
+                    removeThreadNgWord(latest, entry).updatedEntries
+                }
             }
             showMessage(mutation.message)
         },

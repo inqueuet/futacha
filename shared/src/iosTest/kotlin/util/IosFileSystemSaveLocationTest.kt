@@ -116,6 +116,28 @@ class IosFileSystemSaveLocationTest {
         }
     }
 
+    @Test
+    fun savedFolderPathFromAnEarlierLaunchRegainsItsBookmarkedAccess() = runBlocking {
+        val fs = createFileSystem()
+        val basePath = fs.resolveAbsolutePath("ios_bookmark_relaunch_test")
+        val base = SaveLocation.Path(basePath)
+        try {
+            fs.createDirectory(base).getOrThrow()
+            val bookmark = securityScopedBookmark(basePath)
+            fs.writeBytes(bookmark, "clip.mp4", byteArrayOf(1, 2, 3)).getOrThrow()
+            val folder = requireNotNull(resolveBookmarkPathForDisplay(bookmark.bookmarkData)).trimEnd('/')
+            val video = "$folder/clip.mp4"
+            assertTrue(bookmarkedMediaDirectoryForPath(video) != null)
+            // A new process keeps the saved page's paths but has resolved no bookmark yet.
+            forgetResolvedMediaBookmarksForTest()
+            assertTrue(bookmarkedMediaDirectoryForPath(video) != null,
+                "The folder's remembered bookmark must be resolved for a path from an earlier launch")
+            assertTrue(bookmarkedMediaDirectoryForPath("/private/var/elsewhere/clip.mp4") == null)
+        } finally {
+            fs.delete(base).getOrThrow()
+        }
+    }
+
     @OptIn(ExperimentalEncodingApi::class)
     private fun securityScopedBookmark(path: String): SaveLocation.Bookmark = memScoped {
         val error = alloc<ObjCObjectVar<platform.Foundation.NSError?>>()

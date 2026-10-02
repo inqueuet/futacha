@@ -9,6 +9,44 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ThreadHtmlParserCoreTest {
+    @Test fun wordsEndingInNoAreQuotedTextInsteadOfPostNumbers() = runBlocking {
+        val html = """
+            <div class="thre" data-res="1"><span class="cno">No.1</span><blockquote>casino2<br>piano 3</blockquote></div>
+            <table border="0"><tr><td class="rtd"><span id="delcheck2" class="rsc">1</span><span class="cno">No.2</span><blockquote>another response</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span id="delcheck3" class="rsc">2</span><span class="cno">No.3</span><blockquote>third response</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span id="delcheck4" class="rsc">3</span><span class="cno">No.4</span><blockquote>&gt;casino2<br>&gt;piano 3</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span id="delcheck5" class="rsc">4</span><span class="cno">No.5</span><blockquote>&gt;No.2</blockquote></td></tr></table>
+        """.trimIndent()
+        val page = ThreadHtmlParserCore.parseThread(html)
+        assertEquals(setOf("1"), page.posts.first { it.id == "4" }.quoteReferences.flatMap { it.targetPostIds }.toSet())
+        assertEquals(setOf("2"), page.posts.first { it.id == "5" }.quoteReferences.flatMap { it.targetPostIds }.toSet())
+    }
+
+    @Test fun noReferencesDirectlyAfterJapaneseTextAreRecognized() = runBlocking {
+        val html = """
+            <div class="thre" data-res="1"><span class="cno">No.1</span><blockquote>OP</blockquote></div>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.2</span><blockquote>second</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.3</span><blockquote>third</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.4</span><blockquote>&gt;これNo.2<br>&gt;レスNo.3</blockquote></td></tr></table>
+        """.trimIndent()
+        val post = ThreadHtmlParserCore.parseThread(html).posts.first { it.id == "4" }
+        assertEquals(listOf(setOf("2"), setOf("3")), post.quoteReferences.map { it.targetPostIds.toSet() })
+    }
+
+    @Test fun noInsideQuotedTextLinksByBodyUnlessThatPostExists() = runBlocking {
+        val html = """
+            <div class="thre" data-res="1"><span class="cno">No.1</span><blockquote>OP</blockquote></div>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.2</span><blockquote>シャネルNo.5の香り</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.3</span><blockquote>&gt;シャネルNo.5の香り<br>いいね</blockquote></td></tr></table>
+            <table border="0"><tr><td class="rtd"><span class="cno">No.4</span><blockquote>&gt;香水はシャネルNo.5よりNo.2<br>&gt;No.99</blockquote></td></tr></table>
+        """.trimIndent()
+        val posts = ThreadHtmlParserCore.parseThread(html).posts.associateBy { it.id }
+        // F4-2: No.5 does not exist, so the quote links to the post it copies.
+        assertEquals(listOf(setOf("2")), posts.getValue("3").quoteReferences.map { it.targetPostIds.toSet() })
+        // A later existing number still counts; a leading No. stays a reference.
+        assertEquals(listOf(setOf("2"), setOf("99")), posts.getValue("4").quoteReferences.map { it.targetPostIds.toSet() })
+    }
+
     @Test
     fun parseThread_keepsAllMediaAcrossOneThousandReplies() {
         val replyCount = 1_000
@@ -157,6 +195,36 @@ class ThreadHtmlParserCoreTest {
         assertEquals(listOf("500", "501", "502"), page.posts.map { it.id })
         assertTrue(page.posts[1].isIsolated)
         assertEquals("https://www.example.com/b/src/501.jpg", page.posts[1].imageUrl)
+    }
+
+    @Test
+    fun parseThread_typedDeletionMarkersInPostTextKeepTheReplyVisible() {
+        val html = """
+            <html><body>
+            <div class="thre" data-res="700">
+            <span class="cnw">25/01/01(月)00:00:00</span><span class="cno">No.700</span>
+            <blockquote>OP body</blockquote>
+            </div>
+            <table border=0><tr><td class=rtd>
+            <span class="csb">class=deleted</span>
+            <span class="cnw">25/01/01(月)00:01:00</span><span class="cno">No.701</span>
+            <blockquote>class=deleted って書くとどうなる？<br>class=&quot;deleted&quot;</blockquote>
+            </td></tr></table>
+            <table border=0 class=deleted><tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:03:00</span><span class="cno">No.703</span>
+            <blockquote>削除依頼によって隔離されました<br>二行目</blockquote>
+            </td></tr></table>
+            </body></html>
+        """.trimIndent()
+
+        val posts = runBlocking { ThreadHtmlParserCore.parseThread(html) }.posts
+
+        assertEquals(listOf("700", "701", "703"), posts.map { it.id })
+        assertFalse(posts[1].isDeleted)
+        assertFalse(posts[1].isIsolated)
+        // A server-marked deleted post keeps its isolation notice kind.
+        assertTrue(posts[2].isDeleted)
+        assertTrue(posts[2].isIsolated)
     }
 
     @Test

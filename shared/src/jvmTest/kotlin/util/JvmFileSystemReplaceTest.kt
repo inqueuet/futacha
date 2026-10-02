@@ -69,4 +69,28 @@ class JvmFileSystemReplaceTest {
             root.deleteRecursively()
         }
     }
+    /** G4-6: rewriting a linked media file without deleting it first must not truncate the other generation. */
+    @Test
+    fun streamWriteOverAHardLinkLeavesTheOtherGenerationIntact() = runBlocking {
+        val root = Files.createTempDirectory("futacha-link-write").toFile()
+        try {
+            val fileSystem = JvmFileSystem(root)
+            fileSystem.writeBytes("auto/old/b/src/1.jpg", "original".encodeToByteArray()).getOrThrow()
+            fileSystem.linkOrCopy("auto/old/b/src/1.jpg", "auto/new/b/src/1.jpg").getOrThrow()
+
+            // A download that fails part way, written straight over the link.
+            val failed = fileSystem.writeByteStream("auto/new/b/src/1.jpg") {
+                it.write("par".encodeToByteArray())
+                error("connection lost")
+            }
+            assertTrue(failed.isFailure)
+            assertEquals("original", root.resolve("auto/old/b/src/1.jpg").readText())
+
+            fileSystem.writeByteStream("auto/new/b/src/1.jpg") { it.write("replaced".encodeToByteArray()) }.getOrThrow()
+            assertEquals("original", root.resolve("auto/old/b/src/1.jpg").readText())
+            assertEquals("replaced", root.resolve("auto/new/b/src/1.jpg").readText())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

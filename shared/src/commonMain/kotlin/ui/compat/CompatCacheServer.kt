@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Url
 import io.ktor.http.isSuccess
@@ -150,22 +150,25 @@ internal suspend fun probeCompatCacheServer(
         ?: return CompatCacheServerStatus(false, "接続先URLが不正です", nowEpochMillis)
     return try {
         withTimeout(timeoutMillis) {
-            val health = httpClient.get("$normalized/health/search") {
+            // Streamed: a misbehaving endpoint cannot make the client buffer a
+            // huge body before the bounded reader applies its limit.
+            httpClient.prepareGet("$normalized/health/search") {
                 headers[HttpHeaders.Accept] = "application/json"
                 headers[HttpHeaders.CacheControl] = "no-cache"
-            }
-            readBoundedHttpResponseText(
-                health,
-                CACHE_STATUS_RESPONSE_MAX_BYTES,
-                timeoutMillis
-            )
-            if (health.status.isSuccess()) {
-                // The reference status API supplies a user-facing message;
-                // the current health endpoint supplies machine JSON instead.
-                // Keep the reference summary rather than exposing raw JSON.
-                CompatCacheServerStatus(true, "稼働中", nowEpochMillis)
-            } else {
-                CompatCacheServerStatus(false, "Http ${health.status.value} Error", nowEpochMillis)
+            }.execute { health ->
+                readBoundedHttpResponseText(
+                    health,
+                    CACHE_STATUS_RESPONSE_MAX_BYTES,
+                    timeoutMillis
+                )
+                if (health.status.isSuccess()) {
+                    // The reference status API supplies a user-facing message;
+                    // the current health endpoint supplies machine JSON instead.
+                    // Keep the reference summary rather than exposing raw JSON.
+                    CompatCacheServerStatus(true, "稼働中", nowEpochMillis)
+                } else {
+                    CompatCacheServerStatus(false, "Http ${health.status.value} Error", nowEpochMillis)
+                }
             }
         }
     } catch (_: TimeoutCancellationException) {

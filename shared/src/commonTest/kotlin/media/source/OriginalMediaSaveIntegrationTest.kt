@@ -96,11 +96,21 @@ class OriginalMediaSaveIntegrationTest {
             val zip = ImageZipSaveService(f.client, f.output).save(listOf(url), "b", "123", baseDirectory = "zip").getOrThrow()
             assertEquals(1, zip.savedItems)
             val archive = f.output.readBytes("zip/${zip.fileName}").getOrThrow()
-            // ZIP local header: uncompressed entry payload follows the UTF-8 filename.
+            // ZIP local header: the entry follows the UTF-8 filename as RFC 1951 stored
+            // (uncompressed) deflate blocks: BFINAL/BTYPE byte, LEN, NLEN, then LEN bytes.
             val nameLength = (archive[26].toInt() and 255) or ((archive[27].toInt() and 255) shl 8)
             val extraLength = (archive[28].toInt() and 255) or ((archive[29].toInt() and 255) shl 8)
-            val start = 30 + nameLength + extraLength
-            assertContentEquals(f.payload, archive.copyOfRange(start, start + f.payload.size))
+            var offset = 30 + nameLength + extraLength
+            val payload = buildList {
+                do {
+                    val header = archive[offset].toInt() and 255
+                    val length = (archive[offset + 1].toInt() and 255) or ((archive[offset + 2].toInt() and 255) shl 8)
+                    offset += 5
+                    for (i in 0 until length) add(archive[offset + i])
+                    offset += length
+                } while (header and 1 == 0)
+            }.toByteArray()
+            assertContentEquals(f.payload, payload)
             assertEquals(1, f.calls.value)
         }
     }

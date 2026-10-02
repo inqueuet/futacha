@@ -9,8 +9,6 @@ import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
 import io.ktor.http.ContentType
 import kotlin.text.RegexOption
 
-private const val THREAD_SAVE_TAG_ATTR_LIMIT = 700
-private const val THREAD_SAVE_EXTERNAL_TAG_BODY_LIMIT = 200_000
 private val IMAGE_SRC_REGEX = Regex("""<img\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
 private val LINK_HREF_REGEX = Regex("""<a\b[^>]{0,700}\bhref\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
 private val VIDEO_SRC_REGEX = Regex("""<video\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
@@ -22,11 +20,10 @@ private val CONTENT_TYPE_META_REGEX = Regex(
 )
 private val CONTENT_TYPE_CHARSET_REGEX = Regex("""charset\s*=\s*[^"'>;\s]+""", RegexOption.IGNORE_CASE)
 private val CONTENT_TYPE_CONTENT_ATTR_REGEX = Regex("""\bcontent\s*=\s*(["'])([^"']*)\1""", RegexOption.IGNORE_CASE)
-private val META_REFRESH_REGEX = Regex(
-    """<meta\b[^>]{0,700}\bhttp-equiv\s*=\s*(["']?)refresh\1[^>]{0,700}>""",
+private val META_REFRESH_ATTRIBUTE_REGEX = Regex(
+    """\bhttp-equiv\s*=\s*["']?\s*refresh\b""",
     RegexOption.IGNORE_CASE
 )
-private val BASE_TAG_REGEX = Regex("""<base\b[^>]{0,700}>""", RegexOption.IGNORE_CASE)
 private val HEAD_OPEN_REGEX = Regex("""<head\b[^>]*>""", RegexOption.IGNORE_CASE)
 private val HTML_OPEN_REGEX = Regex("""<html\b[^>]*>""", RegexOption.IGNORE_CASE)
 private const val SAVED_HTML_CONTENT_SECURITY_POLICY =
@@ -110,45 +107,125 @@ internal fun rewriteSavedOriginalHtml(
     return updated
 }
 
+/**
+ * Removes active content from a saved page. Tags are found the way a browser
+ * ends them (at the first '>' outside a quoted attribute value), without a
+ * length limit: a bounded scan let an opening tag with very long attributes, or
+ * a body longer than the bound, keep its script. Each pass is linear.
+ */
 internal fun stripSavedExternalScriptsAndIframes(html: String): String {
-    val withoutScripts = stripSavedActiveTag(html, tagName = "script")
-    val withoutFrames = stripSavedActiveTag(withoutScripts, tagName = "iframe")
-    val withoutObjects = stripSavedActiveTag(withoutFrames, tagName = "object")
-    val withoutEmbeds = stripSavedActiveTag(withoutObjects, tagName = "embed")
-    val withoutRefresh = META_REFRESH_REGEX.replace(withoutEmbeds, "")
-    return BASE_TAG_REGEX.replace(withoutRefresh, "")
+    // script and iframe are raw text up to their end tag; unclosed, the rest
+    // of the document is their (never displayed) text.
+    val withoutScripts = stripSavedActiveTag(html, tagName = "script", unclosedRunsToEnd = true)
+    val withoutFrames = stripSavedActiveTag(withoutScripts, tagName = "iframe", unclosedRunsToEnd = true)
+    val withoutObjects = stripSavedActiveTag(withoutFrames, tagName = "object", unclosedRunsToEnd = false)
+    // embed is a void element: it has no content to remove.
+    val withoutEmbeds = stripSavedActiveTag(withoutObjects, tagName = "embed", unclosedRunsToEnd = false, hasContent = false)
+    val withoutRefresh = stripSavedTags(withoutEmbeds, tagName = "meta") { META_REFRESH_ATTRIBUTE_REGEX.containsMatchIn(it) }
+    return stripSavedTags(withoutRefresh, tagName = "base") { true }
 }
 
 private fun stripSavedActiveTag(
     html: String,
-    tagName: String
+    tagName: String,
+    unclosedRunsToEnd: Boolean,
+    hasContent: Boolean = true
 ): String {
     val startToken = "<$tagName"
-    val endToken = "</$tagName>"
     val builder = StringBuilder(html.length)
+    var copyFrom = 0
+    var searchStart = 0
+    // Searches only move forward, so once no end tag follows, none will.
+    var endTagMissing = !hasContent
+    while (searchStart < html.length) {
+        val tagStart = html.indexOf(startToken, startIndex = searchStart, ignoreCase = true)
+        if (tagStart == -1) break
+        val nameEnd = tagStart + startToken.length
+        if (!isSavedTagNameEnd(html, nameEnd)) {
+            searchStart = nameEnd
+            continue
+        }
+        builder.append(html, copyFrom, tagStart)
+        val tagEnd = findSavedTagEnd(html, nameEnd)
+        var endExclusive = if (tagEnd == -1) html.length else tagEnd + 1
+        if (tagEnd != -1 && !endTagMissing) {
+            val closeIndex = findSavedEndTag(html, tagName, tagEnd + 1)
+            if (closeIndex == -1) {
+                endTagMissing = true
+                if (unclosedRunsToEnd) endExclusive = html.length
+            } else {
+                endExclusive = html.indexOf('>', startIndex = closeIndex).takeIf { it != -1 }?.plus(1) ?: html.length
+            }
+        }
+        copyFrom = endExclusive
+        searchStart = endExclusive
+    }
+    if (copyFrom < html.length) builder.append(html, copyFrom, html.length)
+    return builder.toString()
+}
+
+/** Drops each `<tagName ...>` tag for which [shouldRemove] returns true. */
+private fun stripSavedTags(html: String, tagName: String, shouldRemove: (String) -> Boolean): String {
+    val startToken = "<$tagName"
+    val builder = StringBuilder(html.length)
+    var copyFrom = 0
     var searchStart = 0
     while (searchStart < html.length) {
         val tagStart = html.indexOf(startToken, startIndex = searchStart, ignoreCase = true)
-        if (tagStart == -1) {
-            builder.append(html, searchStart, html.length)
-            break
-        }
-        builder.append(html, searchStart, tagStart)
-        val tagEnd = findBoundedThreadSaveTagEnd(html, tagStart)
-        if (tagEnd == -1) {
-            builder.append(html[tagStart])
-            searchStart = tagStart + 1
+        if (tagStart == -1) break
+        val nameEnd = tagStart + startToken.length
+        if (!isSavedTagNameEnd(html, nameEnd)) {
+            searchStart = nameEnd
             continue
         }
-        val tag = html.substring(tagStart, tagEnd + 1)
-        val closeIndex = html.indexOf(endToken, startIndex = tagEnd + 1, ignoreCase = true)
-        val boundedCloseIndex = closeIndex.takeIf {
-            it != -1 && it - tagEnd <= THREAD_SAVE_EXTERNAL_TAG_BODY_LIMIT
+        val tagEnd = findSavedTagEnd(html, nameEnd)
+        val endExclusive = if (tagEnd == -1) html.length else tagEnd + 1
+        if (tagEnd == -1 || shouldRemove(html.substring(tagStart, endExclusive))) {
+            builder.append(html, copyFrom, tagStart)
+            copyFrom = endExclusive
         }
-        val endExclusive = boundedCloseIndex?.plus(endToken.length) ?: tagEnd + 1
         searchStart = endExclusive
     }
+    if (copyFrom < html.length) builder.append(html, copyFrom, html.length)
     return builder.toString()
+}
+
+private fun isSavedTagNameEnd(html: String, index: Int): Boolean {
+    if (index >= html.length) return true
+    val char = html[index]
+    return char == '>' || char == '/' || char.isWhitespace()
+}
+
+/** Index of the '>' that ends the tag whose name ends before [startIndex], or -1. */
+private fun findSavedTagEnd(html: String, startIndex: Int): Int {
+    var quote: Char? = null
+    var afterEquals = false
+    var index = startIndex
+    while (index < html.length) {
+        val char = html[index]
+        if (quote != null) {
+            if (char == quote) quote = null
+        } else if (char == '>') {
+            return index
+        } else if ((char == '"' || char == '\'') && afterEquals) {
+            quote = char
+        }
+        afterEquals = quote == null && (char == '=' || (afterEquals && char.isWhitespace()))
+        index += 1
+    }
+    return -1
+}
+
+private fun findSavedEndTag(html: String, tagName: String, startIndex: Int): Int {
+    val endToken = "</$tagName"
+    var searchStart = startIndex
+    while (searchStart < html.length) {
+        val index = html.indexOf(endToken, startIndex = searchStart, ignoreCase = true)
+        if (index == -1) return -1
+        if (isSavedTagNameEnd(html, index + endToken.length)) return index
+        searchStart = index + endToken.length
+    }
+    return -1
 }
 
 private fun insertSavedHtmlContentSecurityPolicy(html: String): String {
@@ -166,19 +243,6 @@ private fun insertSavedHtmlContentSecurityPolicy(html: String): String {
         )
     }
     return meta + html
-}
-
-private fun findBoundedThreadSaveTagEnd(html: String, startIndex: Int): Int {
-    val limit = minOf(html.length, startIndex + THREAD_SAVE_TAG_ATTR_LIMIT)
-    var index = startIndex + 1
-    while (index < limit) {
-        when (html[index]) {
-            '>' -> return index
-            '<' -> return -1
-        }
-        index += 1
-    }
-    return -1
 }
 
 internal fun forceSavedHtmlUtf8Charset(html: String): String {

@@ -620,12 +620,14 @@ internal fun CompatSearchTopBar(
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val palette = LocalCompatibilityPalette.current
+    val searchColors = compatibilitySearchBarColors(palette)
     LaunchedEffect(focusRequester) {
         delay(150)
         focusRequester.requestFocus()
         keyboardController?.show()
     }
-    TopAppBar(
+    CompatSearchBarFrame { TopAppBar(
         expandedHeight = 56.dp,
         title = {
             TextField(
@@ -650,11 +652,13 @@ internal fun CompatSearchTopBar(
                     disabledContainerColor = Color.Transparent,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    cursorColor = Color.White,
-                    focusedPlaceholderColor = Color(0xFF80CBC4),
-                    unfocusedPlaceholderColor = Color(0xFF80CBC4)
+                    focusedTextColor = searchColors.content,
+                    unfocusedTextColor = searchColors.content,
+                    cursorColor = palette.inputCursor,
+                    focusedPlaceholderColor = searchColors.hint,
+                    unfocusedPlaceholderColor = searchColors.hint,
+                    focusedTrailingIconColor = searchColors.content,
+                    unfocusedTrailingIconColor = searchColors.content
                 )
             )
         },
@@ -670,12 +674,21 @@ internal fun CompatSearchTopBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = CompatTeal,
-            navigationIconContentColor = Color.White,
-            titleContentColor = Color.White,
-            actionIconContentColor = Color.White
+            containerColor = searchColors.container,
+            navigationIconContentColor = searchColors.content,
+            titleContentColor = searchColors.content,
+            actionIconContentColor = searchColors.content
         )
-    )
+    ) }
+}
+
+/**
+ * Keeps the status-bar strip on the chrome, as [CompatTopBar] does, while the
+ * search bar inside uses the readable search surface (E-8).
+ */
+@Composable
+internal fun CompatSearchBarFrame(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().background(CompatTeal).compatReferenceStatusBarPadding()) { content() }
 }
 
 @Composable

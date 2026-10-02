@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -42,7 +43,7 @@ internal fun CompatLegacyChoiceDialog(
     footer: (@Composable () -> Unit)? = null
 ) {
     val palette = LocalCompatibilityPalette.current
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
@@ -106,5 +107,5 @@ internal fun CompatLegacyChoiceDialog(
                 }
             }
         }
-    }
+    } }
 }

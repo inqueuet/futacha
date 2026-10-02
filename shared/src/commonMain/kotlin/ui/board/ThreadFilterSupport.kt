@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.util.canonicalCp932Text
 
 internal fun applyNgFilters(
     page: ThreadPage,
@@ -20,8 +21,8 @@ internal fun applyNgFilters(
     precomputedLowerBodyByPost: Map<Post, String>? = null
 ): ThreadPage {
     if (!enabled) return page
-    val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
-    val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    val headerFilters = canonicalNgFilters(ngHeaders)
+    val wordFilters = canonicalNgFilters(ngWords)
     if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
     val lowerBodyByPost = if (wordFilters.isEmpty()) {
         emptyMap()
@@ -140,8 +141,8 @@ private fun applyNgFiltersToIndexedPosts(
     precomputedLowerBodyByPost: Map<Post, String>?
 ): List<IndexedValue<Post>> {
     if (!enabled) return posts
-    val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
-    val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    val headerFilters = canonicalNgFilters(ngHeaders)
+    val wordFilters = canonicalNgFilters(ngWords)
     if (headerFilters.isEmpty() && wordFilters.isEmpty()) return posts
     val lowerBodyByPost = if (wordFilters.isEmpty()) {
         emptyMap()
@@ -255,21 +256,28 @@ internal val THREAD_FILTER_URL_REGEX =
     Regex("""https?://[^\s"'<>]+|www\.[^\s"'<>]+""", RegexOption.IGNORE_CASE)
 private val THREAD_FILTER_SAIDANE_COUNT_REGEX = Regex("""\d+""")
 
+private fun canonicalNgFilters(values: List<String>): List<String> =
+    values.mapNotNull { value ->
+        value.trim().takeIf { it.isNotBlank() }?.lowercase()?.let(::canonicalCp932Text)
+    }
+
 internal fun matchesNgFilters(
     post: Post,
     headerFilters: List<String>,
     wordFilters: List<String>,
     lowerBodyByPost: Map<Post, String>
 ): Boolean {
+    // The post text is canonicalized once per post, not once per rule; the
+    // short rules are left as they are when already canonical (no copy).
     if (headerFilters.isNotEmpty()) {
-        val headerText = buildPostHeaderText(post)
-        if (headerFilters.any { headerText.contains(it) }) {
+        val headerText = canonicalCp932Text(buildPostHeaderText(post))
+        if (headerFilters.any { headerText.contains(canonicalCp932Text(it)) }) {
             return true
         }
     }
     if (wordFilters.isNotEmpty()) {
-        val bodyText = lowerBodyByPost[post] ?: ""
-        if (wordFilters.any { bodyText.contains(it) }) {
+        val bodyText = canonicalCp932Text(lowerBodyByPost[post] ?: "")
+        if (wordFilters.any { bodyText.contains(canonicalCp932Text(it)) }) {
             return true
         }
     }

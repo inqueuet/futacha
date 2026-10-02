@@ -27,6 +27,9 @@ data class OriginalMediaCacheConfiguration(val directory: Path, val maxBytes: Lo
 fun interface OriginalMediaCacheImporter {
     /** Return null only before writing to sink. HTTP is forbidden in this operation. */
     suspend fun copyCached(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo?
+
+    /** A cheap existence check; false only when [copyCached] certainly returns null. */
+    suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean = true
 }
 
 /** Lives with the host's HTTP client, across Activity and Compose mode recreation. */
@@ -85,6 +88,8 @@ class OriginalMediaSession internal constructor(
             for (importer in importers.value) importer.copyCached(request, sink)?.let { return it }
             return null
         }
+        override suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean =
+            request.reloadToken == 0L && importers.value.any { it.mayHaveCached(request) }
     }
     private val worker = scope.launch {
         requested.filterNotNull().collect { published ->

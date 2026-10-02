@@ -278,7 +278,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
             setUiState = setUiState,
             setResolvedThreadUrlOverride = setResolvedThreadUrlOverride,
             setIsShowingOfflineCopy = setIsShowingOfflineCopy,
-            currentUiState = currentUiState
+            currentUiState = currentUiState,
+            currentIsShowingOfflineCopy = currentIsShowingOfflineCopy
         ),
         loadUiCallbacks = buildThreadScreenLoadUiCallbacks(
             onUiStateChanged = setUiState,

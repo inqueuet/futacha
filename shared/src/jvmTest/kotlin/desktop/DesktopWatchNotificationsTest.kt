@@ -27,6 +27,46 @@ class DesktopWatchNotificationsTest {
         } finally { directory.deleteRecursively() }
     }
 
+    @Test fun failedLedgerWriteAfterDeliveryDoesNotNotifyAgainAndIsRetried() = runBlocking {
+        val directory = Files.createTempDirectory("futacha-notification-ledger").toFile()
+        try {
+            val ledger = File(directory, "ledger.tsv")
+            var failing = true
+            val delivered = mutableListOf<String>()
+            val notifier = DesktopWatchNotifications(ledger, move = { source, target, options ->
+                if (failing) throw java.io.IOException("ledger locked")
+                Files.move(source, target, *options)
+            }) { _, _, _, url -> delivered += url }
+            notifier.notify(listOf(match("123"))) { true }
+            assertFalse(ledger.exists())
+            notifier.notify(listOf(match("123"), match("456"))) { true }
+            assertEquals(listOf("https://may.2chan.net/b/res/123.htm", "https://may.2chan.net/b/res/456.htm"), delivered)
+            failing = false
+            notifier.notify(emptyList()) { true }
+            assertTrue(ledger.isFile)
+            assertFalse(File(directory, "ledger.tsv.pending").exists())
+            DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += url }
+                .notify(listOf(match("123"), match("456"))) { true }
+            assertEquals(2, delivered.size)
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun ledgerReplaceRetriesWhileTheFileIsBrieflyHeld() = runBlocking {
+        val directory = Files.createTempDirectory("futacha-notification-retry").toFile()
+        try {
+            val ledger = File(directory, "ledger.tsv")
+            var moves = 0
+            DesktopWatchNotifications(ledger, move = { source, target, options ->
+                if (++moves <= 2) throw java.nio.file.AccessDeniedException(target.toString())
+                Files.move(source, target, *options)
+            }) { _, _, _, _ -> }.notify(listOf(match("123"))) { true }
+            assertEquals(3, moves)
+            val retried = mutableListOf<String>()
+            DesktopWatchNotifications(ledger) { _, _, _, url -> retried += url }.notify(listOf(match("123"))) { true }
+            assertTrue(retried.isEmpty())
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun rejectedDeliveryRemainsRetryableAndEarlierSuccessIsPreserved() = runBlocking {
         val directory = Files.createTempDirectory("futacha-notification-failure").toFile()
         try {

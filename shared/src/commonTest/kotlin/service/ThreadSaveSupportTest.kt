@@ -679,6 +679,53 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun rewriteSavedOriginalHtml_stripsActiveContentWithLongOrQuotedTags() {
+        val padding = "x".repeat(5_000)
+        val longBody = "a".repeat(250_000)
+        val html = """
+            <html><head>
+              <meta data-pad="$padding" http-equiv="refresh" content="0;url=https://example.com/long-refresh">
+              <base data-pad="$padding" href="https://example.com/">
+              <script data-pad="$padding">alert('long attributes')</script>
+              <script data-x="a<b>c">alert('quoted')</script>
+              <script>var s = "$longBody"; alert('long body')</script>
+              <iframe data-pad="$padding" src="https://example.com/frame"></iframe>
+              <meta name="viewport" content="width=device-width">
+            </head><body>
+              <p>本文</p>
+              <scripted>独自タグ</scripted>
+            </body></html>
+        """.trimIndent()
+
+        val rewritten = rewriteSavedOriginalHtml(
+            html = html,
+            boardPath = "b",
+            urlToPathMap = emptyMap(),
+            stripExternalResources = true
+        )
+
+        assertFalse(rewritten.contains("<script ", ignoreCase = true))
+        assertFalse(rewritten.contains("<script>", ignoreCase = true))
+        assertFalse(rewritten.contains("alert("))
+        assertFalse(rewritten.contains("<iframe", ignoreCase = true))
+        assertFalse(rewritten.contains("<base", ignoreCase = true))
+        assertFalse(rewritten.contains("long-refresh"))
+        assertFalse(rewritten.contains(longBody))
+        assertTrue(rewritten.contains("""<meta name="viewport" content="width=device-width">"""))
+        assertTrue(rewritten.contains("<p>本文</p>"))
+        assertTrue(rewritten.contains("<scripted>独自タグ</scripted>"))
+    }
+
+    @Test
+    fun rewriteSavedOriginalHtml_unclosedScriptHidesTheRestLikeABrowser() {
+        val rewritten = stripSavedExternalScriptsAndIframes(
+            "<p>前</p><embed src=\"https://example.com/e\"><p>中</p><script>alert(1)<p>後</p>"
+        )
+
+        assertEquals("<p>前</p><p>中</p>", rewritten)
+    }
+
+    @Test
     fun rewriteSavedOriginalHtml_rewritesMappedAttributeUrlsWithoutGlobalReplacement() {
         val html = """
             <img src="https://other.example/src/123.jpg">

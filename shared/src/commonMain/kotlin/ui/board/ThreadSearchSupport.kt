@@ -123,7 +123,7 @@ internal suspend fun buildThreadSearchMatches(
     query: String
 ): List<ThreadSearchMatch> {
     if (searchTargets.isEmpty()) return emptyList()
-    val normalizedQuery = query.trim().lowercase()
+    val normalizedQuery = com.valoser.futacha.shared.util.canonicalCp932Text(query.trim()).lowercase()
     if (normalizedQuery.isEmpty()) return emptyList()
     val matches = ArrayList<ThreadSearchMatch>()
     searchTargets.forEachIndexed { index, target ->
@@ -131,7 +131,7 @@ internal suspend fun buildThreadSearchMatches(
             coroutineContext.ensureActive()
             yield()
         }
-        val haystack = target.searchableText
+        val haystack = com.valoser.futacha.shared.util.canonicalCp932Text(target.searchableText)
         if (haystack.contains(normalizedQuery)) {
             val ranges = computeHighlightRanges(target.messagePlainText, normalizedQuery)
             matches += ThreadSearchMatch(target.postId, target.postIndex, target.post, ranges)
@@ -158,7 +158,7 @@ internal fun buildSearchTextForPost(post: Post, messagePlainText: String): Strin
 
 internal fun computeHighlightRanges(text: String, normalizedQuery: String): List<IntRange> {
     if (normalizedQuery.isEmpty()) return emptyList()
-    val normalizedText = text.lowercase()
+    val normalizedText = com.valoser.futacha.shared.util.canonicalCp932Text(text).lowercase()
     val ranges = mutableListOf<IntRange>()
     var startIndex = normalizedText.indexOf(normalizedQuery)
     while (startIndex >= 0 && ranges.size < THREAD_SEARCH_MAX_HIGHLIGHT_RANGES_PER_POST) {

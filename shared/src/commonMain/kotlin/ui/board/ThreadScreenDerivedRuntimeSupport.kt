@@ -45,6 +45,7 @@ internal data class ThreadScreenDerivedRuntimeState(
     val searchMatches: List<ThreadSearchMatch>,
     val postHighlightRanges: Map<Post, List<IntRange>>,
     val readAloudSegments: List<ReadAloudSegment>,
+    val readAloudSegmentsReady: Boolean,
     val firstVisibleSegmentIndex: () -> Int
 )
 
@@ -138,20 +139,24 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     val readAloudPosts = reportedLayout?.posts ?: currentPosts
     val readAloudItemsBeforePosts = reportedLayout?.itemsBeforePosts ?: 0
     val readAloudSkippedPostIds = reportedLayout?.collapsedPostIds.orEmpty()
-    val readAloudSegments by produceState<List<ReadAloudSegment>>(
-        initialValue = emptyList(),
-        key1 = readAloudPosts,
-        key2 = derivedUiState.shouldPrepareReadAloudSegments,
-        key3 = readAloudSkippedPostIds
+    val preparation = remember(readAloudPosts, derivedUiState.shouldPrepareReadAloudSegments, readAloudSkippedPostIds) { Any() }
+    val preparedSegments by produceState<Pair<Any, List<ReadAloudSegment>>?>(
+        initialValue = null,
+        key1 = preparation
     ) {
         if (!derivedUiState.shouldPrepareReadAloudSegments || readAloudPosts.isEmpty()) {
-            value = emptyList()
+            value = preparation to emptyList()
             return@produceState
         }
-        value = withContext(AppDispatchers.parsing) {
+        value = preparation to withContext(AppDispatchers.parsing) {
             buildReadAloudSegments(readAloudPosts, postTextCache, readAloudSkippedPostIds)
         }
     }
+    val currentPreparedSegments = preparedSegments?.takeIf { it.first === preparation }
+    // While a refresh or an AI hide rebuilds the segments, keep the previous
+    // ones: an empty list would clamp the read-aloud position to the start.
+    // [ThreadScreenDerivedRuntimeState.readAloudSegmentsReady] tells them apart.
+    val readAloudSegments = (currentPreparedSegments ?: preparedSegments)?.second.orEmpty()
     val firstVisibleSegmentIndexState = remember(
         readAloudSegments,
         readAloudItemsBeforePosts,
@@ -187,6 +192,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         searchMatches = searchMatches,
         postHighlightRanges = postHighlightRanges,
         readAloudSegments = readAloudSegments,
+        readAloudSegmentsReady = currentPreparedSegments != null,
         firstVisibleSegmentIndex = firstVisibleSegmentIndex
     )
 }

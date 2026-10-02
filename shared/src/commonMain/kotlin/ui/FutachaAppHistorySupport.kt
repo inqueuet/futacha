@@ -15,6 +15,7 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateHistoryScrollUpdateRequest
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.launchFinalHistoryScrollPersistence
 import com.valoser.futacha.shared.state.launchHistoryScrollPersistence
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import kotlinx.coroutines.CoroutineScope
@@ -95,7 +96,9 @@ internal fun buildFutachaThreadMutationCallbacks(
             }
         },
         onScrollPositionPersistImmediately = { threadId, index, offset, postId ->
-            coroutineScope.launchHistoryScrollPersistence {
+            // Called from the thread screen's dispose path while the UI scope is being
+            // cancelled; the final save must still run (D11).
+            coroutineScope.launchFinalHistoryScrollPersistence {
                 persistFutachaThreadScrollPositionImmediately(
                     stateStore = stateStore,
                     threadId = threadId,

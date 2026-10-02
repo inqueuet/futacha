@@ -3,12 +3,14 @@ package com.valoser.futacha.shared.ui
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.FutachaAiCommandOutcome
-import com.valoser.futacha.shared.ai.FutachaAiCommandRisk
 import com.valoser.futacha.shared.ai.FutachaAiConfirmationRequest
 import com.valoser.futacha.shared.ai.boardSelectorParameter
 import com.valoser.futacha.shared.ai.boardUrlParameter
 import com.valoser.futacha.shared.ai.catalogModeParameter
-import com.valoser.futacha.shared.ai.confirmationReason
+import com.valoser.futacha.shared.ai.buildFutachaAiConfirmationMessage
+import com.valoser.futacha.shared.ai.confirmationDetailLines
+import com.valoser.futacha.shared.ai.toConfirmationValue
+import com.valoser.futacha.shared.ai.requiresConfirmation
 import com.valoser.futacha.shared.ai.searchQueryParameter
 import com.valoser.futacha.shared.ai.titleParameter
 import com.valoser.futacha.shared.ai.threadIdParameter
@@ -50,7 +52,13 @@ internal data class FutachaAiRouterInputs(
     val appVersion: String,
     val isAiCommandEnabled: Boolean,
     val compatibilityStore: CompatibilityStore? = null,
-    val importedHistoryRepository: SavedThreadRepository? = null
+    val importedHistoryRepository: SavedThreadRepository? = null,
+    val isAppUnlocked: Boolean = true,
+    /**
+     * Read at execution time: the composition value behind [isAppUnlocked]
+     * stays "unlocked" while Android has recomposition paused (C-1).
+     */
+    val appLock: FutachaAppLockHolder? = null
 )
 
 @OptIn(ExperimentalTime::class)
@@ -59,13 +67,16 @@ internal suspend fun executeFutachaAiCommand(
     inputs: FutachaAiRouterInputs,
     confirmed: Boolean = false
 ): FutachaAiCommandOutcome {
+    if (!inputs.isAppUnlocked || inputs.appLock?.isUnlocked == false) {
+        return FutachaAiCommandOutcome.Failed("起動ロックを解除してください")
+    }
     if (!inputs.isAiCommandEnabled && !command.isAllowedWhenAiCommandsDisabled()) {
-        return FutachaAiCommandOutcome.Failed("AIアプリ操作は設定でOFFです。設定画面から「AIアプリ操作」をONにしてください。")
+        return FutachaAiCommandOutcome.Failed(AI_COMMANDS_DISABLED_MESSAGE)
     }
 
-    if (command.action.risk == FutachaAiCommandRisk.Confirm && !confirmed) {
+    if (command.requiresConfirmation() && !confirmed) {
         return FutachaAiCommandOutcome.NeedsConfirmation(
-            buildFutachaAiConfirmationRequest(command)
+            buildFutachaAiConfirmationRequest(command, inputs)
         )
     }
 
@@ -111,6 +122,9 @@ internal suspend fun executeFutachaAiCommand(
         FutachaAiAction.OpenThreadFromUrl,
         FutachaAiAction.SearchThread,
         FutachaAiAction.SaveThread -> {
+            if (!isAiThreadUrlAllowed(command, inputs)) {
+                return FutachaAiCommandOutcome.Failed(AI_UNTRUSTED_THREAD_URL_MESSAGE)
+            }
             val target = resolveAiThreadSelection(command, inputs)
                 ?: return FutachaAiCommandOutcome.Failed("対象スレを特定できませんでした")
             inputs.updateNavigationState(applyFutachaThreadSelection(inputs.navigationState, target))
@@ -137,9 +151,21 @@ internal suspend fun executeFutachaAiCommand(
         FutachaAiAction.OpenThreadExternally,
         FutachaAiAction.SaveCurrentThread,
         FutachaAiAction.DraftReply -> {
-            val target = resolveCurrentThreadSelection(inputs)
-                ?: resolveAiThreadSelection(command, inputs)
-                ?: return FutachaAiCommandOutcome.Failed("先に対象スレを開いてください")
+            // A command naming its thread (watch read-aloud carries boardId and
+            // threadId) targets that thread, not whichever one is on screen (H2).
+            if (!isAiThreadUrlAllowed(command, inputs)) {
+                return FutachaAiCommandOutcome.Failed(AI_UNTRUSTED_THREAD_URL_MESSAGE)
+            }
+            val current = resolveCurrentThreadSelection(inputs)
+            val target = if (command.hasExplicitThreadTarget()) {
+                resolveAiThreadSelection(command, inputs)
+                    ?.let { requested -> current?.takeIf { it.isSameThreadAs(requested) } ?: requested }
+                    ?: return FutachaAiCommandOutcome.Failed("対象スレを特定できませんでした")
+            } else {
+                current
+                    ?: resolveAiThreadSelection(command, inputs)
+                    ?: return FutachaAiCommandOutcome.Failed("先に対象スレを開いてください")
+            }
             inputs.updateNavigationState(applyFutachaThreadSelection(inputs.navigationState, target))
             FutachaAiCommandOutcome.NeedsForeground("${target.threadId} を開きました。${command.action.label} を実行します。")
         }
@@ -371,7 +397,11 @@ internal suspend fun executeFutachaAiCommand(
     }
 }
 
-private fun FutachaAiCommand.isAllowedWhenAiCommandsDisabled(): Boolean {
+internal const val AI_COMMANDS_DISABLED_MESSAGE =
+    "AIアプリ操作は設定でOFFです。設定画面から「AIアプリ操作」をONにしてください。"
+
+/** Shared with the compatibility workspace, which applies the same setting gate (C4-4). */
+internal fun FutachaAiCommand.isAllowedWhenAiCommandsDisabled(): Boolean {
     return action.isAlwaysAllowedWhenAiCommandsDisabled() ||
         isAllowedWatchCommandWhenAiCommandsDisabled()
 }
@@ -386,18 +416,35 @@ private fun FutachaAiCommand.isAllowedWatchCommandWhenAiCommandsDisabled(): Bool
     if (WATCH_AI_COMMAND_SOURCES.none { it.equals(source, ignoreCase = true) }) return false
     return action == FutachaAiAction.OpenBoard ||
         action == FutachaAiAction.OpenThread ||
-        action == FutachaAiAction.StartThreadReadAloud ||
         action == FutachaAiAction.PauseThreadReadAloud ||
-        action == FutachaAiAction.StopThreadReadAloud ||
-        action == FutachaAiAction.NextThreadReadAloud ||
-        action == FutachaAiAction.PreviousThreadReadAloud
+        action == FutachaAiAction.StopThreadReadAloud
 }
 
-private fun buildFutachaAiConfirmationRequest(command: FutachaAiCommand): FutachaAiConfirmationRequest {
+private fun buildFutachaAiConfirmationRequest(
+    command: FutachaAiCommand,
+    inputs: FutachaAiRouterInputs
+): FutachaAiConfirmationRequest {
+    // S4-2: show what will be stored, resolved like the confirmed run resolves it.
+    val details = when (command.action) {
+        FutachaAiAction.AddBoard -> listOf(
+            "板名: ${(command.parameter("name", "board", "title", "label") ?: "新しい板").toConfirmationValue()}",
+            "URL: ${command.boardUrlParameter()?.toConfirmationValue() ?: "（指定なし）"}"
+        )
+        FutachaAiAction.SetCatalogMode -> listOfNotNull(
+            currentOrRequestedBoard(command, inputs)?.let { "板: ${it.name.toConfirmationValue()}" }
+                ?: command.boardSelectorParameter()?.let { "板: ${it.toConfirmationValue()}" },
+            (resolveCatalogMode(command)?.label ?: command.catalogModeParameter())
+                ?.let { "モード: ${it.toConfirmationValue()}" }
+        )
+        FutachaAiAction.DeleteBoard -> resolveAiBoard(command, inputs)
+            ?.let { listOf("板: ${it.name.toConfirmationValue()}") }
+            ?: command.confirmationDetailLines()
+        else -> command.confirmationDetailLines()
+    }
     return FutachaAiConfirmationRequest(
         command = command,
         title = "AI操作の確認",
-        message = "「${command.action.label}」を実行します。${command.action.confirmationReason()}、ユーザー確認後にだけ進めます。",
+        message = buildFutachaAiConfirmationMessage(command, details),
         confirmLabel = "続行"
     )
 }
@@ -459,8 +506,12 @@ private fun resolveAiThreadSelection(
     command: FutachaAiCommand,
     inputs: FutachaAiRouterInputs
 ): FutachaThreadSelection? {
-    val url = command.threadUrlParameter()
-    val parsed = url?.let(::parseThreadFromUrl)
+    val rawUrl = command.threadUrlParameter()
+    // Only an absolute URL on a Futaba or registered host becomes the URL the
+    // thread screen fetches; anything else at most names the thread number.
+    if (rawUrl != null && !isAiThreadUrlAllowed(rawUrl, inputs.boards)) return null
+    val url = rawUrl?.takeIf { aiAbsoluteUrlHost(it) != null }
+    val parsed = rawUrl?.let(::parseThreadFromUrl)
     val threadId = command.threadIdParameter()
         ?: parsed?.second
         ?: inputs.navigationState.selectedThreadId.takeUnless { inputs.navigationState.isSavedThreadsVisible }
@@ -492,6 +543,66 @@ private fun resolveAiThreadSelection(
         threadUrl = url ?: historyEntry?.boardUrl?.let { "$it/res/$threadId.htm" },
         isSavedThreadsVisible = false
     )
+}
+
+internal const val AI_UNTRUSTED_THREAD_URL_MESSAGE =
+    "ふたば（2chan.net）か登録済みの板のURLだけを開けます"
+
+private fun isAiThreadUrlAllowed(command: FutachaAiCommand, inputs: FutachaAiRouterInputs): Boolean {
+    val url = command.threadUrlParameter() ?: return true
+    return isAiThreadUrlAllowed(url, inputs.boards)
+}
+
+/**
+ * S-1: a `futacha://ai` link may name any URL. An absolute URL is accepted only
+ * on a Futaba host (as for HTTP deep links) or the host of a registered board;
+ * otherwise the thread would be fetched — and later refreshed from history and
+ * posted to — on an arbitrary server. A value without a scheme is never used
+ * as the fetch URL, so it is not rejected here.
+ */
+internal fun isAiThreadUrlAllowed(url: String, boards: List<BoardSummary>): Boolean {
+    if (!url.contains("://")) return true
+    val host = aiAbsoluteUrlHost(url) ?: return false
+    if (host == "2chan.net" || host.endsWith(".2chan.net")) return true
+    return boards.any { board -> aiAbsoluteUrlHost(board.url) == host }
+}
+
+private val AI_ABSOLUTE_URL_AUTHORITY_REGEX = Regex("""^(https?)://([^/?#]*)""", RegexOption.IGNORE_CASE)
+
+/**
+ * The lower-case host of an absolute http(s) URL, followed by ":port" when the
+ * URL names a port other than its scheme's default, so a Futaba host on
+ * another port (or another port of a registered host) is not taken for it.
+ * Null for anything URL libraries may read differently, as the compatibility
+ * canonicalizer refuses: user info ("may.2chan.net@evil.example"), backslashes,
+ * `%`-escapes, whitespace or control characters, or a malformed port.
+ */
+private fun aiAbsoluteUrlHost(url: String): String? {
+    val match = AI_ABSOLUTE_URL_AUTHORITY_REGEX.find(url.trim()) ?: return null
+    val authority = match.groupValues[2]
+    if (authority.any { it == '@' || it == '\\' || it == '%' || it.isWhitespace() || it.isISOControl() }) return null
+    val hostEnd = if (authority.startsWith('[')) {
+        authority.indexOf(']').takeIf { it > 0 }?.plus(1) ?: return null
+    } else {
+        authority.indexOf(':').takeIf { it >= 0 } ?: authority.length
+    }
+    val host = authority.substring(0, hostEnd).trimEnd('.').lowercase().takeIf { it.isNotBlank() } ?: return null
+    val portText = authority.substring(hostEnd)
+    if (portText.isEmpty()) return host
+    val digits = portText.removePrefix(":")
+    if (digits.length == portText.length || digits.isEmpty() || digits.length > 5 || !digits.all { it in '0'..'9' }) return null
+    val port = digits.toInt().takeIf { it in 1..65535 } ?: return null
+    val defaultPort = if (match.groupValues[1].equals("https", ignoreCase = true)) 443 else 80
+    return if (port == defaultPort) host else "$host:$port"
+}
+
+private fun FutachaAiCommand.hasExplicitThreadTarget(): Boolean {
+    return parameter("thread", "threadId", "thread_id", "threadNo", "thread_no") != null ||
+        threadUrlParameter()?.let(::parseThreadFromUrl) != null
+}
+
+private fun FutachaThreadSelection.isSameThreadAs(other: FutachaThreadSelection): Boolean {
+    return threadId == other.threadId && boardId == other.boardId
 }
 
 private fun resolveCurrentThreadSelection(inputs: FutachaAiRouterInputs): FutachaThreadSelection? {

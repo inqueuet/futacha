@@ -16,6 +16,16 @@ internal fun sanitizeForShiftJis(text: String): ShiftJisSanitizationResult {
         )
     }
 
+    // Fast path: ordinary Japanese/ASCII text round-trips as a whole, so the
+    // per-code-point loop (one encode/decode per character) is only needed
+    // when something has to be escaped or removed.
+    if (isRoundTripShiftJisSafe(text)) {
+        return ShiftJisSanitizationResult(
+            sanitizedText = text,
+            removedCodePointCount = 0
+        )
+    }
+
     val sanitized = StringBuilder(text.length)
     var removed = 0
     var escaped = 0
@@ -44,12 +54,27 @@ internal fun sanitizeForShiftJis(text: String): ShiftJisSanitizationResult {
     )
 }
 
+/**
+ * Number of Shift_JIS bytes [text] occupies after [sanitizeForShiftJis]
+ * escaping, encoding the text only once in the common case.
+ */
+internal fun shiftJisSanitizedByteCount(text: String): Int {
+    if (text.isEmpty()) return 0
+    val encoded = TextEncoding.encodeToShiftJis(text)
+    if (encoded.isNotEmpty() &&
+        canonicalCp932Text(TextEncoding.decodeToString(encoded, SHIFT_JIS_CONTENT_TYPE)) == canonicalCp932Text(text)
+    ) {
+        return encoded.size
+    }
+    return TextEncoding.encodeToShiftJis(sanitizeForShiftJis(text).sanitizedText).size
+}
+
 private fun isRoundTripShiftJisSafe(value: String): Boolean {
     if (value.isEmpty()) return true
     val encoded = TextEncoding.encodeToShiftJis(value)
     if (encoded.isEmpty()) return false
     val decoded = TextEncoding.decodeToString(encoded, SHIFT_JIS_CONTENT_TYPE)
-    return decoded == value
+    return canonicalCp932Text(decoded) == canonicalCp932Text(value)
 }
 
 private fun String.toNumericCharacterReference(): String? {

@@ -46,7 +46,8 @@ data class ThreadSummary(
 
 data class PostModerationInput(
     val threadId: String,
-    val posts: List<Post>
+    val posts: List<Post>,
+    val contextText: String = ""
 )
 
 @Serializable
@@ -54,13 +55,15 @@ data class PostModerationResult(
     val postId: String,
     val shouldHide: Boolean,
     val reason: String? = null,
-    val confidence: Float = 0f
+    val confidence: Float = 0f,
+    val isComplete: Boolean = true
 )
 
 interface OnDeviceAiService {
     val isExternalService: Boolean get() = false
     val externalSummary: Boolean get() = isExternalService
     val externalModeration: Boolean get() = isExternalService
+    val hybridModeration: Boolean get() = false
     val automaticallyHideModeratedPosts: Boolean get() = true
     val configurationKey: String get() = "device"
     fun observeAvailability(): Flow<AiAvailability> = flow {
@@ -70,6 +73,8 @@ interface OnDeviceAiService {
     suspend fun getAvailability(): AiAvailability
     suspend fun summarizeThread(input: ThreadSummaryInput): Result<ThreadSummary>
     suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>>
+    suspend fun classifyPosts(input: PostModerationInput, onPartialResult: (List<PostModerationResult>) -> Unit): Result<List<PostModerationResult>> =
+        classifyPosts(input)
     fun cancelActiveRequests() = Unit
     fun close() = Unit
 }

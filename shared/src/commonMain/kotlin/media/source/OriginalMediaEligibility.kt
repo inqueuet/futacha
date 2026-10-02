@@ -13,11 +13,13 @@ internal fun isSharedOriginalMediaUrl(value: String): Boolean =
     isSharedOriginalImageUrl(value) || isSharedOriginalVideoUrl(value)
 
 /** Strip only UI fragments; signed query bytes remain part of the original's identity. */
-internal fun originalVideoRequest(value: String): OriginalMediaRequest = OriginalMediaRequest(
+internal fun originalMediaRequestFromUrl(value: String): OriginalMediaRequest = OriginalMediaRequest(
     url = value.substringBefore('#'),
     reloadToken = value.substringAfter('#', "").takeIf { it.startsWith("compat-reload=") }
         ?.substringAfter('=')?.toLongOrNull() ?: 0L
 )
+
+internal fun originalVideoRequest(value: String): OriginalMediaRequest = originalMediaRequestFromUrl(value)
 
 private fun isSharedOriginalUrl(value: String, extensions: Set<String>): Boolean {
     val url = runCatching { Url(value) }.getOrNull() ?: return false

@@ -126,6 +126,69 @@ internal fun resolveThreadReadAloudIndexUpdate(
     return normalizedIndex.takeIf { it != currentIndex }
 }
 
+/**
+ * Keeps the read-aloud position on the same post when the segments are
+ * rebuilt (a refresh or an AI hide adds or drops segments before it). The
+ * index of a Speaking/Paused session follows its segment, an idle index the
+ * post it pointed at in [previousSegments]. A post that is no longer read
+ * resumes at the next one that still is. Returns null when nothing changes.
+ */
+internal fun resolveThreadReadAloudIndexRemap(
+    previousSegments: List<ReadAloudSegment>?,
+    segments: List<ReadAloudSegment>,
+    status: ReadAloudStatus,
+    currentIndex: Int
+): Int? {
+    val previous = previousSegments?.takeUnless { it === segments || it.isEmpty() }
+    val anchor = when (status) {
+        is ReadAloudStatus.Speaking -> status.segment
+        is ReadAloudStatus.Paused -> status.segment
+        ReadAloudStatus.Idle -> previous?.getOrNull(currentIndex)
+    }
+    val mappedIndex = when {
+        anchor != null -> mapReadAloudAnchorIndex(previous, segments, anchor, currentIndex)
+        // Finished or past the end: stay after the last post that was read.
+        previous != null && currentIndex >= previous.size -> {
+            val indexByPostId = indexReadAloudSegmentsByPostId(segments)
+            val lastKept = previous.asReversed().firstNotNullOfOrNull { old -> indexByPostId[old.postId] }
+            lastKept?.plus(1) ?: currentIndex
+        }
+        else -> currentIndex
+    }
+    return resolveThreadReadAloudIndexUpdate(mappedIndex, segments.size)
+        ?: mappedIndex.takeIf { it != currentIndex }
+}
+
+private fun mapReadAloudAnchorIndex(
+    previous: List<ReadAloudSegment>?,
+    segments: List<ReadAloudSegment>,
+    anchor: ReadAloudSegment,
+    currentIndex: Int
+): Int {
+    // Nothing to map onto: leave the index to the caller's clamp.
+    if (segments.isEmpty()) return currentIndex
+    // Already on the anchor (every segment start of a session lands here).
+    if (segments.getOrNull(currentIndex)?.postId == anchor.postId) return currentIndex
+    val indexByPostId = indexReadAloudSegmentsByPostId(segments)
+    indexByPostId[anchor.postId]?.let { return it }
+    // The anchor is no longer read: continue at the next previous segment kept.
+    val anchorPosition = previous?.indexOfFirst { it.postId == anchor.postId } ?: -1
+    if (anchorPosition >= 0) {
+        for (position in anchorPosition + 1 until previous!!.size) {
+            indexByPostId[previous[position].postId]?.let { return it }
+        }
+    }
+    val next = segments.indexOfFirst { it.postIndex > anchor.postIndex }
+    return if (next >= 0) next else segments.size
+}
+
+/** The first segment index of each post, so remapping stays O(n) on 2,000+ posts. */
+private fun indexReadAloudSegmentsByPostId(segments: List<ReadAloudSegment>): Map<String, Int> {
+    val indexByPostId = HashMap<String, Int>(segments.size * 2)
+    segments.forEachIndexed { index, segment -> indexByPostId.getOrPut(segment.postId) { index } }
+    return indexByPostId
+}
+
 internal fun resolveThreadSearchResultIndexUpdate(
     currentIndex: Int,
     matchCount: Int
@@ -254,18 +317,56 @@ internal fun ThreadReplyDialogAutofillEffect(
     }
 }
 
+private class ThreadReadAloudIndexedSegments {
+    var segments: List<ReadAloudSegment>? = null
+}
+
+/**
+ * Keeps the read-aloud index on the same post across segment rebuilds (see
+ * [resolveThreadReadAloudIndexRemap]). Live values are re-read so a seek made
+ * after this composition is never overwritten with a stale remap.
+ */
 @Composable
 internal fun ThreadReadAloudIndexEffect(
-    segmentCount: Int,
-    currentReadAloudIndex: Int,
+    segments: List<ReadAloudSegment>,
+    currentStatus: () -> ReadAloudStatus,
+    currentIndex: () -> Int,
     onCurrentReadAloudIndexChanged: (Int) -> Unit
 ) {
-    LaunchedEffect(segmentCount) {
-        resolveThreadReadAloudIndexUpdate(
-            currentIndex = currentReadAloudIndex,
-            segmentCount = segmentCount
-        )?.let(onCurrentReadAloudIndexChanged)
+    val indexed = remember { ThreadReadAloudIndexedSegments() }
+    val status = currentStatus()
+    val index = currentIndex()
+    LaunchedEffect(segments, status, index) {
+        // Empty idle segments (closed read-aloud controls, or every post
+        // hidden) hold no position: keep the index and the last list as the
+        // remap source, so the position returns to its post with them (U4-4).
+        if (segments.isEmpty() && status == ReadAloudStatus.Idle) return@LaunchedEffect
+        val previous = indexed.segments
+        indexed.segments = segments
+        if (currentStatus() != status || currentIndex() != index) return@LaunchedEffect
+        resolveThreadReadAloudIndexRemap(previous, segments, status, index)
+            ?.let(onCurrentReadAloudIndexChanged)
     }
+}
+
+
+/**
+ * Whether an initial restore may be marked complete. While a provisional page
+ * (a local copy shown ahead of the network) lacks the saved post, the restore
+ * must run again on the real page instead of persisting a wrong position.
+ */
+internal fun shouldCompleteThreadInitialScrollRestore(
+    savedPostId: String?,
+    displayedPostsLayout: ThreadDisplayedPostsLayout,
+    isProvisionalContent: Boolean
+): Boolean {
+    if (!isProvisionalContent || savedPostId == null) return true
+    return displayedPostsLayout.posts.any { it.id == savedPostId }
+}
+
+/** The layout a provisional restore already scrolled to (see [ThreadInitialScrollRestoreEffect]). */
+internal class ThreadProvisionalScrollRestoreHolder {
+    var restoredLayout: ThreadDisplayedPostsLayout? = null
 }
 
 @Composable
@@ -275,11 +376,26 @@ internal fun ThreadInitialScrollRestoreEffect(
     lazyListState: LazyListState,
     displayedPostsLayout: ThreadDisplayedPostsLayout,
     onRestoreCompleted: () -> Unit,
-    onRestoreFailed: (String, Throwable?) -> Unit
+    onRestoreFailed: (String, Throwable?) -> Unit,
+    /** A local copy is on screen while the network load still runs. */
+    isProvisionalContent: Boolean = false
 ) {
-    LaunchedEffect(threadId, restoreState, displayedPostsLayout) {
+    val provisionalRestore = remember(threadId) { ThreadProvisionalScrollRestoreHolder() }
+    LaunchedEffect(threadId, restoreState, displayedPostsLayout, isProvisionalContent) {
         if (!restoreState.shouldRestore) return@LaunchedEffect
         if (restoreState.savedPostId != null && displayedPostsLayout.posts.isEmpty()) {
+            return@LaunchedEffect
+        }
+        if (isProvisionalContent && provisionalRestore.restoredLayout != null &&
+            !shouldCompleteThreadInitialScrollRestore(restoreState.savedPostId,
+                displayedPostsLayout, isProvisionalContent = true)) {
+            return@LaunchedEffect
+        }
+        if (!isProvisionalContent && provisionalRestore.restoredLayout == displayedPostsLayout) {
+            // The load ended without a different page (e.g. only the local copy
+            // exists); the position applied to it stands. Do not scroll again.
+            provisionalRestore.restoredLayout = null
+            onRestoreCompleted()
             return@LaunchedEffect
         }
         // The predicted content count can become available before LazyColumn
@@ -306,7 +422,18 @@ internal fun ThreadInitialScrollRestoreEffect(
             delay(16L)
         }
         if (restored) {
-            onRestoreCompleted()
+            if (
+                shouldCompleteThreadInitialScrollRestore(
+                    savedPostId = restoreState.savedPostId,
+                    displayedPostsLayout = displayedPostsLayout,
+                    isProvisionalContent = isProvisionalContent
+                )
+            ) {
+                provisionalRestore.restoredLayout = null
+                onRestoreCompleted()
+            } else {
+                provisionalRestore.restoredLayout = displayedPostsLayout
+            }
         }
     }
 }
@@ -426,12 +553,16 @@ internal fun ThreadAutoSaveLaunchEffect(
     val latestPageForAutoSave = rememberUpdatedState(currentPageForAutoSave)
     val latestLastAutoSaveTimestampMillis = rememberUpdatedState(lastAutoSaveTimestampMillis)
     val startupWindow = remember(threadId) { ThreadAutoSaveStartupWindowHolder() }
+    // Keyed on the availability and page, not the whole state: its retry delay
+    // is recomputed from the clock on every recomposition, which restarted this
+    // effect (and its throttle wait) on each frame of scrolling or loading.
     LaunchedEffect(
         threadId,
         isShowingOfflineCopy,
         httpClient,
         fileSystem,
-        autoSaveEffectState,
+        autoSaveEffectState.availability,
+        autoSaveEffectState.page,
         lastAutoSaveTimestampMillis
     ) {
         when (autoSaveEffectState.availability) {

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.CompatNgRuleManagementDialog
 import com.valoser.futacha.shared.ui.compat.compatPreferenceStorageKey
 import com.valoser.futacha.shared.ui.compat.CompatImageNgRegistrationDialog
@@ -18,7 +19,7 @@ internal fun FutachaImageNgRegistration(features: FutachaSharedFeatures, boardKe
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    if (!busy) CompatImageNgRegistrationDialog(imageUrl, initialMemo, onDismiss) { memo, localOnly ->
+    if (!busy) FutachaAppLockAwareWindow { CompatImageNgRegistrationDialog(imageUrl, initialMemo, onDismiss) { memo, localOnly ->
         busy = true
         scope.launch {
             try {
@@ -34,10 +35,12 @@ internal fun FutachaImageNgRegistration(features: FutachaSharedFeatures, boardKe
             catch (failure: Exception) { error = failure.message ?: "画像を登録できませんでした" }
             finally { busy = false }
         }
+    } }
+    if (busy) FutachaAppLockAwareWindow {
+        AlertDialog(onDismissRequest = {}, text = { Text("画像の類似判定を準備しています…") }, confirmButton = {})
     }
-    if (busy) AlertDialog(onDismissRequest = {}, text = { Text("画像の類似判定を準備しています…") }, confirmButton = {})
-    error?.let { text -> AlertDialog(onDismissRequest = { error = null }, text = { Text(text) },
-        confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) }
+    error?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { error = null }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) } }
 }
 
 @Composable
@@ -60,11 +63,11 @@ internal fun FutachaNgManagementDialog(
         catch (failure: Exception) { message = failure.message ?: "NG設定を保存できませんでした" }
     } }
     val selectedKind = kind
-    if (selectedKind == null) {
+    if (selectedKind == null) FutachaAppLockAwareWindow {
         AlertDialog(onDismissRequest = onDismiss, title = { Text("NG・監視の詳細管理") }, text = {
             Column { choices.forEach { (label, value) -> TextButton(onClick = { kind = value }) { Text(label) } } }
         }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
-    } else {
+    } else FutachaAppLockAwareWindow {
         val image = selectedKind in setOf(CompatNgKind.CATALOG_IMAGE, CompatNgKind.THREAD_IMAGE)
         val kinds = when {
             image -> compatImageNgKinds(if (tabKey == null) CompatImageNgSource.CATALOG else CompatImageNgSource.THREAD)
@@ -100,6 +103,6 @@ internal fun FutachaNgManagementDialog(
             onDismiss = { kind = null }
         )
     }
-    message?.let { text -> AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
-        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) }
+    message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }

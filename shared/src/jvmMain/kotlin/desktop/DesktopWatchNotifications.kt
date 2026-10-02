@@ -7,16 +7,27 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.moveReplacingWithRetry
+import java.nio.file.CopyOption
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
+import java.nio.file.Path
 import java.util.UUID
 
-/** Persist only notifications accepted by the OS, so failed delivery can be retried. */
+/**
+ * Persist only notifications accepted by the OS, so failed delivery can be retried.
+ * The ledger is also kept in memory: a delivered notification whose ledger write still
+ * fails after the replace retries is not shown again, and the write is retried next time (N4-3).
+ */
 internal class DesktopWatchNotifications(
     private val ledger: File,
+    private val move: (Path, Path, Array<out CopyOption>) -> Unit = { source, target, options -> Files.move(source, target, *options) },
     private val deliver: suspend (String, String, String, String) -> Unit = DesktopOsIntegration::notify
 ) {
     private val mutex = Mutex()
+    /** Latest ledger including entries not yet on disk; null until something was recorded. */
+    private var recorded: String? = null
+    private var unsaved = false
 
     suspend fun notify(
         matches: List<CatalogWatchAlertMatch>,
@@ -24,7 +35,8 @@ internal class DesktopWatchNotifications(
         isCurrent: suspend () -> Boolean
     ) = mutex.withLock {
         withContext(Dispatchers.IO) {
-            var entries = if (ledger.isFile) ledger.inputStream().bufferedReader().use { it.readTextBounded() } else ""
+            if (unsaved) persist(requireNotNull(recorded))
+            var entries = recorded ?: if (ledger.isFile) ledger.inputStream().bufferedReader().use { it.readTextBounded() } else ""
             val pending = WatchAlertNotificationLedger.filterNewMatches(entries, matches = matches).distinctBy { it.identityKey }
             for (match in pending) {
                 ensureActive()
@@ -38,15 +50,28 @@ internal class DesktopWatchNotifications(
                         // Once the OS accepts it, finish the ledger even if the screen/profile closes.
                         withContext(NonCancellable) {
                             entries = WatchAlertNotificationLedger.markMatches(entries, matches = listOf(match), nowMillis = System.currentTimeMillis())
-                            val temporary = File(ledger.parentFile, "${ledger.name}.pending")
-                            temporary.outputStream().use { output -> output.write(entries.toByteArray(Charsets.UTF_8)); output.fd.sync() }
-                            Files.move(temporary.toPath(), ledger.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                            recorded = entries
+                            unsaved = true
+                            persist(entries)
                         }
                         accepted = true
                     }
                 }
                 if (!accepted) return@withContext
             }
+        }
+    }
+
+    private fun persist(entries: String) {
+        val temporary = File(ledger.parentFile, "${ledger.name}.pending")
+        try {
+            temporary.outputStream().use { output -> output.write(entries.toByteArray(Charsets.UTF_8)); output.fd.sync() }
+            moveReplacingWithRetry(temporary.toPath(), ledger.toPath(), move)
+            unsaved = false
+        } catch (failure: Exception) {
+            // The OS already showed it; the in-memory ledger suppresses a repeat until a later write succeeds.
+            Logger.w("DesktopWatchNotifications", "Failed to record notification: ${failure.message}")
+            temporary.delete()
         }
     }
 

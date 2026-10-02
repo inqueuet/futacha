@@ -50,6 +50,92 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
     }
 
     @Test
+    fun version11To12_backfillsThreadCacheSizeWithoutScanningPostsLater() = runBlocking {
+        val statements = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("compatibility-schema/11.sql").bufferedReader().useLines { lines ->
+                lines.map(String::trim)
+                    .filter { it.isNotEmpty() && !it.startsWith("--") }
+                    .map { it.removeSuffix(";") }
+                    .toList()
+            }
+        val posts = listOf("{\"postNo\":\"1\"}", "{\"c\":\"あ\"}")
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            statements.forEach(db::execSQL)
+            db.execSQL(
+                "INSERT INTO compat_thread_snapshot(tab_key,revision,fetched_at,board_title,expires_label,deleted_notice) VALUES(?,?,?,?,?,?)",
+                arrayOf<Any?>("tab12", 3L, 10L, "虹裏", null, "削除")
+            )
+            posts.forEachIndexed { position, postJson ->
+                db.execSQL(
+                    "INSERT INTO compat_post(tab_key,revision,position,post_json) VALUES(?,?,?,?)",
+                    arrayOf<Any?>("tab12", 3L, position, postJson)
+                )
+            }
+            // A stale revision's rows are not part of the cached thread.
+            db.execSQL(
+                "INSERT INTO compat_post(tab_key,revision,position,post_json) VALUES(?,?,?,?)",
+                arrayOf<Any?>("tab12", 2L, 0, "{\"stale\":true}")
+            )
+            assertEquals(11, db.version)
+        }
+        val expectedBytes = posts.sumOf { it.encodeToByteArray().size } +
+            "tab12".encodeToByteArray().size + "虹裏".encodeToByteArray().size +
+            "削除".encodeToByteArray().size + 32
+
+        val store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        assertEquals(expectedBytes.toLong(), store.threadSnapshotCacheUsageBytes())
+        store.closeForTest()
+        openStore = null
+
+        SQLiteDatabase.openDatabase(
+            context.getDatabasePath(databaseName).absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READONLY
+        ).use { db ->
+            assertEquals(12, db.version)
+            assertEquals(expectedBytes, db.scalarInt("SELECT byte_count FROM compat_thread_snapshot WHERE tab_key='tab12'"))
+        }
+    }
+
+    @Test
+    fun version10To11_keepsTabsAndPersistsRefreshOnActivationAndDeletedFlags() = runBlocking {
+        val statements = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("compatibility-schema/10.sql").bufferedReader().useLines { lines ->
+                lines.map(String::trim).filter { it.isNotEmpty() && !it.startsWith("--") }.toList()
+            }
+        val boardUrl = "https://may.2chan.net/b/"
+        val threadUrl = "${boardUrl}res/77.htm"
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            statements.forEach(db::execSQL)
+            db.execSQL("INSERT INTO compat_board VALUES(?, ?, ?, ?, ?)", arrayOf<Any?>("may-b", "虹裏", boardUrl, boardUrl, 0))
+            db.execSQL(
+                "INSERT INTO compat_tab VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any?>("tab77", threadUrl, threadUrl, "may-b", "虹裏", "77", "old", null, 3, 1, 0, 0, 0, 0, 1, 10L, 20L, "{}", 0L)
+            )
+            assertEquals(10, db.version)
+        }
+        var store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        val migrated = store.tabs.first().single()
+        assertEquals("tab77", migrated.key)
+        assertTrue(migrated.favorite)
+        assertEquals(false, migrated.isDeleted)
+        assertEquals(false, migrated.refreshOnActivation)
+        store.updateTab(migrated.copy(isDeleted = true, refreshOnActivation = true))
+        store.closeForTest()
+        store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        val reloaded = store.tabs.first().single()
+        assertTrue(reloaded.isDeleted)
+        assertTrue(reloaded.refreshOnActivation)
+        assertEquals(12, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+    }
+
+    @Test
     fun version9To10_preservesHistoryThenTracksVisitsInsteadOfRefreshCompletion() = runBlocking {
         val statements = InstrumentationRegistry.getInstrumentation().context.assets
             .open("compatibility-schema/9.sql").bufferedReader().useLines { lines ->
@@ -88,9 +174,9 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
     }
 
     @Test
-    fun version10SchemaExport_matchesCurrentStatementsAndFreshDatabase() = runBlocking {
+    fun version12SchemaExport_matchesCurrentStatementsAndFreshDatabase() = runBlocking {
         val exportedStatements = InstrumentationRegistry.getInstrumentation().context.assets
-            .open("compatibility-schema/10.sql")
+            .open("compatibility-schema/12.sql")
             .bufferedReader()
             .useLines { lines ->
                 lines.map(String::trim)
@@ -100,7 +186,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             }
         val expectedStatements = CompatibilityDatabaseSchema.createStatements +
             CompatibilityDatabaseSchema.initialWorkspaceStatement +
-            "PRAGMA user_version=10"
+            "PRAGMA user_version=12"
         assertEquals(expectedStatements, exportedStatements)
 
         val production = AndroidCompatibilityStore(context, databaseName = databaseName)
@@ -125,7 +211,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_workspace WHERE singleton_id=1"))
             db.schemaSignature()
         }
@@ -157,7 +243,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(
                 1,
                 db.scalarInt(
@@ -196,7 +282,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         openStore = store
         store.initialize()
 
-        assertEquals(10, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+        assertEquals(12, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
         val migrated = store.loadCatalogPreference("may-b")
         assertEquals(false, migrated.replyPriorityEnabled)
         assertEquals(true, migrated.showNonPriority)
@@ -214,6 +300,84 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         assertEquals(true, saved.replyPriorityEnabled)
         assertEquals(false, saved.showNonPriority)
         assertEquals(9, saved.fewRepliesDelay)
+    }
+
+    @Test
+    fun newerAdditiveSchema_downgradeKeepsDataAndReupgradeSkipsAppliedMigrations() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val threadUrl = "${boardUrl}res/88.htm"
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            CompatibilityDatabaseSchema.createStatements.forEach(db::execSQL)
+            db.execSQL(CompatibilityDatabaseSchema.initialWorkspaceStatement)
+            // What a newer build may add: a column with a default and a new table.
+            db.execSQL("ALTER TABLE compat_tab ADD COLUMN future_flag INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("CREATE TABLE compat_future(id TEXT PRIMARY KEY NOT NULL)")
+            db.execSQL("INSERT INTO compat_board VALUES(?, ?, ?, ?, ?)", arrayOf<Any?>("may-b", "虹裏", boardUrl, boardUrl, 0))
+            db.execSQL(
+                "INSERT INTO compat_tab(tab_key, canonical_url, original_url, board_key, board_name, thread_no, title, " +
+                    "thumbnail_url, reply_count, checked_reply_count, is_dead, is_isolated, is_exploded, is_old, favorite, " +
+                    "inserted_at, content_updated_at, scroll_anchor_json, snapshot_revision) " +
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any?>("tab88", threadUrl, threadUrl, "may-b", "虹裏", "88", "newer", null, 3, 1, 0, 0, 0, 0, 1, 10L, 20L, "{}", 0L)
+            )
+            db.version = 13
+        }
+        var store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        assertEquals("tab88", store.tabs.first().single().key)
+        store.closeForTest()
+        openStore = null
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(12, db.version)
+            assertEquals(
+                1,
+                db.scalarInt("SELECT COUNT(*) FROM compat_metadata WHERE key='schema.appliedVersion' AND value='13'")
+            )
+            // Re-running 11 -> 12 here would fail on the duplicate byte_count column.
+            db.version = 11
+        }
+        store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        assertEquals("tab88", store.tabs.first().single().key)
+        store.closeForTest()
+        openStore = null
+        assertEquals(12, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+    }
+
+    @Test
+    fun incompatibleNewerSchema_isSetAsideAndAFreshDatabaseOpens() = runBlocking {
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            CompatibilityDatabaseSchema.createStatements.forEach(db::execSQL)
+            db.execSQL(CompatibilityDatabaseSchema.initialWorkspaceStatement)
+            db.execSQL("DROP TABLE compat_watch_rule")
+            db.version = 13
+        }
+        val databaseFile = context.getDatabasePath(databaseName)
+        try {
+            val store = AndroidCompatibilityStore(context, databaseName = databaseName)
+            openStore = store
+            store.initialize()
+            assertTrue(store.tabs.first().isEmpty())
+            store.closeForTest()
+            openStore = null
+            val backups = databaseFile.parentFile!!.listFiles { file ->
+                file.name.startsWith("${databaseFile.name}.newer-v13-") && !file.name.endsWith("-wal") &&
+                    !file.name.endsWith("-shm") && !file.name.endsWith("-journal")
+            }.orEmpty()
+            assertEquals(1, backups.size)
+            SQLiteDatabase.openDatabase(backups.single().path, null, SQLiteDatabase.OPEN_READWRITE).use { backup ->
+                assertEquals(13, backup.version)
+            }
+            context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+                assertEquals(12, db.version)
+                assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE name='compat_watch_rule'"))
+            }
+        } finally {
+            databaseFile.parentFile?.listFiles { file -> file.name.startsWith("${databaseFile.name}.newer-v") }
+                ?.forEach { it.delete() }
+        }
     }
 
     @Test
@@ -294,7 +458,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_thread_snapshot WHERE tab_key='$tabKey'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_post WHERE tab_key='$tabKey'"))
             assertEquals(0, db.scalarInt("SELECT COUNT(*) FROM compat_reply_draft WHERE tab_key='$tabKey'"))
@@ -348,7 +512,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='compat_closed_batch'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_closed_batch_expires_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -449,7 +613,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='compat_closed_batch'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_closed_batch_expires_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -499,7 +663,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_build_draft WHERE board_key='$boardKey'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archive_report_outbox'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -563,7 +727,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM archive_report_outbox"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_archive_report_outbox_due'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_archive_report_outbox_batch'"))
@@ -644,7 +808,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_catalog_dropped"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_catalog_dropped_recent_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -706,7 +870,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(10, db.version)
+            assertEquals(12, db.version)
             assertEquals(3, db.scalarInt("SELECT COUNT(*) FROM pragma_table_info('compat_catalog_dropped') WHERE name IN ('last_seen_at','drop_class','inserted_at')"))
             assertEquals(12_345, db.scalarInt("SELECT last_seen_at FROM compat_catalog_dropped WHERE thread_id='123'"))
             assertEquals(12_345, db.scalarInt("SELECT inserted_at FROM compat_catalog_dropped WHERE thread_id='123'"))

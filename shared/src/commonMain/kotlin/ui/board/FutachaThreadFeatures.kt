@@ -24,6 +24,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.compat.*
 import com.valoser.futacha.shared.util.rememberUrlLauncher
@@ -31,6 +32,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 
@@ -64,6 +66,31 @@ internal fun resolveFutachaThreadUndoSnapshots(
     if (isCachedPage) return current
     val previous = if (!restoring && current.latestGeneration != generation) current.latest else current.previous
     return FutachaThreadUndoSnapshots(previous = previous, latest = next, latestGeneration = generation)
+}
+
+/** The probe's verdict holds only for the page it was made on; a newer page (manual retry) clears it. */
+internal fun isFutachaThreadConfirmedGone(goneConfirmedFor: ThreadUiState?, shown: ThreadUiState): Boolean =
+    goneConfirmedFor != null && goneConfirmedFor === shown
+
+/**
+ * Whether the auto-scroll end-of-thread reload must stop instead of reloading
+ * again (C5). Only after a reload that left [shown] unchanged (failed, or no new
+ * reply) does it run the background refresher's 404/410 HEAD probe; a reload
+ * that brought a new page skips it. A timed-out or failed probe is not dead.
+ */
+internal suspend fun futachaAutoReloadConfirmsGone(
+    reloadedFrom: ThreadUiState?,
+    shown: ThreadUiState,
+    probeGone: suspend () -> Boolean
+): Boolean {
+    if (reloadedFrom == null || reloadedFrom !== shown) return false
+    return try {
+        withTimeoutOrNull(COMPAT_EXISTENCE_PROBE_TIMEOUT_MILLIS) { probeGone() } == true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
 }
 
 @Composable
@@ -137,7 +164,9 @@ internal fun FutachaThreadFeatureHost(
         previous = snapshots.previous
         latest = snapshots.latest
         latestGeneration = snapshots.latestGeneration
+        val wasRestoring = restoring
         restoring = false
+        if (wasRestoring) return@LaunchedEffect
         if (isCachedPage && features.store.tabs.first().any { it.key == tabKey }) return@LaunchedEffect
         try {
             val now = Clock.System.now().toEpochMilliseconds()
@@ -209,14 +238,30 @@ internal fun FutachaThreadFeatureHost(
     // screen off. It resumes when the app returns.
     var isForeground by remember { mutableStateOf(true) }
     CompatForegroundLifecycleEffect { isForeground = it }
-    LaunchedEffect(automatic, scrollPixels, scrollDelay, tab.isDead, isForeground) {
-        if (!automatic || tab.isDead) { automatic = false; return@LaunchedEffect }
+    // A dead thread without an archive copy keeps its old page on screen, so
+    // neither tab.isDead nor isArchived changes (C5). Holds the page on which
+    // the 404/410 probe confirmed that; a newer page (manual retry) clears it.
+    var goneConfirmedFor by remember(tabKey) { mutableStateOf<ThreadUiState?>(null) }
+    val latestState by rememberUpdatedState(currentState)
+    val threadGone = tab.isDead || (currentState as? ThreadUiState.Success)?.isArchived == true ||
+        !page?.deletedNotice.isNullOrBlank() || isFutachaThreadConfirmedGone(goneConfirmedFor, currentState)
+    LaunchedEffect(automatic, scrollPixels, scrollDelay, threadGone, isForeground) {
+        if (!automatic || threadGone) { automatic = false; return@LaunchedEffect }
         if (!isForeground) return@LaunchedEffect
+        var reloadedFrom: ThreadUiState? = null
         while (isActive) {
             delay(scrollDelay)
             if (Clock.System.now().toEpochMilliseconds() - touchedAt < 5_000 || listState.isScrollInProgress) continue
             if (listState.canScrollForward) listState.scrollBy(scrollPixels)
-            else { delay(12_000); if (isActive && Clock.System.now().toEpochMilliseconds() - touchedAt >= 5_000) latestRefresh() }
+            else { delay(12_000); if (isActive && Clock.System.now().toEpochMilliseconds() - touchedAt >= 5_000) {
+                val shown = latestState
+                if (futachaAutoReloadConfirmsGone(reloadedFrom, shown) { repository.probeThreadGone(sourceUrl) }) {
+                    goneConfirmedFor = shown
+                    return@LaunchedEffect
+                }
+                reloadedFrom = shown
+                latestRefresh()
+            } }
         }
     }
     val tools = listOf(
@@ -287,7 +332,7 @@ internal fun FutachaThreadFeatureHost(
                 withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
             }
         }
-        Dialog(onDismissRequest = { mediaOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        FutachaAppLockAwareWindow { Dialog(onDismissRequest = { mediaOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize()) {
                 when {
                     preparedMedia == null -> CircularProgressIndicator()
@@ -319,19 +364,19 @@ internal fun FutachaThreadFeatureHost(
                         onOpenCommonSettings = { features.openSettings("viewer") }, onBack = { mediaOpen = false })
                 }
             }
-        }
+        } }
     }
-    if (cacheSearchOpen) CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, canonicalBoard,
+    if (cacheSearchOpen) FutachaAppLockAwareWindow { CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, canonicalBoard,
         localHistory = features.store.history.collectAsState(emptyList()).value,
         onDismiss = { cacheSearchOpen = false }, onOpenThread = { item ->
             onOpenThread(tab.copy(threadNo = item.id, title = item.title.orEmpty(), originalUrl = item.threadUrl,
                 canonicalUrl = item.threadUrl, key = compatTabKey(item.threadUrl)).toFutachaHistoryEntry())
             cacheSearchOpen = false
-        })
+        }) }
     if (urlsOpen) {
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         val share = rememberCompatShareLauncher()
-        AlertDialog(onDismissRequest = { urlsOpen = false }, title = { Text("URL・アーカイブ") }, text = {
+        FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { urlsOpen = false }, title = { Text("URL・アーカイブ") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(sourceUrl)); urlsOpen = false }) { Text("URLをコピー") }
                 TextButton(onClick = { share(sourceUrl, "text/plain", null) }) { Text("URLを共有") }
@@ -343,8 +388,8 @@ internal fun FutachaThreadFeatureHost(
                 buildCompatForestUrl(sourceUrl)?.let { url -> TextButton(onClick = { openUrl(url) }) { Text("ふたばフォレストで開く") } }
                 buildCompatFutapoUrl(sourceUrl)?.let { url -> TextButton(onClick = { openUrl(url) }) { Text("ふたポで開く") } }
             }
-        }, confirmButton = { TextButton(onClick = { urlsOpen = false }) { Text("閉じる") } })
+        }, confirmButton = { TextButton(onClick = { urlsOpen = false }) { Text("閉じる") } }) }
     }
-    message?.let { text -> AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
-        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) }
+    message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }

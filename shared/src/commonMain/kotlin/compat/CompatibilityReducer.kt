@@ -85,7 +85,16 @@ data class CompatibilityWorkspaceState(
 )
 
 sealed interface CompatibilityEvent {
-    data class ReplaceTabs(val tabs: List<CompatTab>, val activeTabKey: String?) : CompatibilityEvent
+    /**
+     * [pendingTabs] are optimistic tabs whose store write has not committed yet.
+     * A store emission from before that commit must not drop them (or move the
+     * selection back to the previously active thread).
+     */
+    data class ReplaceTabs(
+        val tabs: List<CompatTab>,
+        val activeTabKey: String?,
+        val pendingTabs: List<CompatTab> = emptyList()
+    ) : CompatibilityEvent
     data class OpenCatalog(val boardKey: String) : CompatibilityEvent
     data class OpenThread(val tabKey: String, val origin: CompatThreadOrigin) : CompatibilityEvent
     data class OpenDrawer(val page: CompatDrawerPage) : CompatibilityEvent
@@ -186,6 +195,26 @@ internal fun mergeCompatCatalogTab(
     )
 }
 
+/**
+ * Reopen a thread from history, the watcher or a link without discarding the
+ * state of a tab that is already open: favourite, read baseline, dead/old/
+ * deleted badges, snapshot revision, insertion time and scroll anchor all stay.
+ * The candidate only fills in what the existing tab lacks.
+ */
+internal fun mergeCompatReopenedTab(existing: CompatTab?, candidate: CompatTab): CompatTab {
+    if (existing == null) return candidate
+    val existingTitle = existing.title.trim()
+    val keepExistingTitle = existingTitle.isNotEmpty() &&
+        (existingTitle != "No.${existing.threadNo}" || candidate.title.isBlank())
+    return existing.copy(
+        originalUrl = existing.originalUrl.ifBlank { candidate.originalUrl },
+        boardName = existing.boardName.ifBlank { candidate.boardName },
+        title = if (keepExistingTitle) existing.title else candidate.title,
+        thumbnailUrl = existing.thumbnailUrl ?: candidate.thumbnailUrl,
+        replyCount = maxOf(existing.replyCount, candidate.replyCount)
+    )
+}
+
 /** Keep history keys unique at the UI boundary as well as in SQLite. */
 internal fun distinctCompatHistory(history: List<CompatHistoryEntry>): List<CompatHistoryEntry> =
     history.distinctByKeepingInstance(CompatHistoryEntry::canonicalUrl)
@@ -215,9 +244,17 @@ fun reduceCompatibilityWorkspace(
         // retain the current key when possible, then fall back to the first
         // durable tab. Distinct keys also keep a stale/duplicated migration
         // row from producing duplicate selector items (#30/#33).
-        val tabs = distinctCompatTabs(event.tabs)
+        val durableTabs = distinctCompatTabs(event.tabs)
+        val durableKeys = durableTabs.mapTo(mutableSetOf()) { it.key }
+        val uncommitted = event.pendingTabs.filterNot { it.key in durableKeys }
+        val tabs = if (uncommitted.isEmpty()) durableTabs else distinctCompatTabs(uncommitted + durableTabs)
         val keys = tabs.mapTo(mutableSetOf()) { it.key }
-        val active = event.activeTabKey?.takeIf(keys::contains)
+        // The store's active key still names the previous thread until the
+        // pending open is committed (also for a tab that was already stored);
+        // keep the optimistic selection meanwhile.
+        val pendingActive = state.activeTabKey?.takeIf { key -> event.pendingTabs.any { it.key == key } }
+        val active = pendingActive
+            ?: event.activeTabKey?.takeIf(keys::contains)
             ?: state.activeTabKey?.takeIf(keys::contains)
             ?: tabs.firstOrNull()?.key
         CompatibilityReduction(state.copy(tabs = tabs, activeTabKey = active))

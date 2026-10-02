@@ -3,9 +3,9 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.parameter
-import io.ktor.client.request.forms.submitForm
+import io.ktor.client.request.forms.prepareForm
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.encodeURLParameter
@@ -62,19 +62,22 @@ internal suspend fun registerCompatTsumanne(
 
     // The reference app first checks the JSON index. A direct registration
     // POST is not idempotent on tsumanne.net and can create duplicates.
-    val lookupResponse = client.get("${baseUrl}indexes.php") {
+    // Streamed so the bounded reader applies before the body is buffered.
+    val lookupBody = client.prepareGet("${baseUrl}indexes.php") {
         // D.Server.Cache.Json.Display in sample/1.apk resolves to "w".
         parameter("w", threadUrl)
         parameter("sbmt", "URL")
         parameter("format", "json")
         headers[HttpHeaders.Referrer] = baseUrl
-    }
-    val lookupBody = readBoundedHttpResponseText(
-        lookupResponse,
-        COMPAT_EXTERNAL_ARCHIVE_RESPONSE_MAX_BYTES
-    )
-    check(lookupResponse.status.isSuccess()) {
-        "つまんね。の登録確認に失敗しました（HTTP ${lookupResponse.status.value}）"
+    }.execute { lookupResponse ->
+        val text = readBoundedHttpResponseText(
+            lookupResponse,
+            COMPAT_EXTERNAL_ARCHIVE_RESPONSE_MAX_BYTES
+        )
+        check(lookupResponse.status.isSuccess()) {
+            "つまんね。の登録確認に失敗しました（HTTP ${lookupResponse.status.value}）"
+        }
+        text
     }
     val lookupJson = runCatching { Json.parseToJsonElement(lookupBody).jsonObject }
         .getOrElse { error("つまんね。の応答を解釈できませんでした") }
@@ -97,7 +100,7 @@ internal suspend fun registerCompatTsumanne(
         null -> error("つまんね。の応答を解釈できませんでした")
     }
 
-    val response = client.submitForm(
+    val responseBody = client.prepareForm(
         url = "${baseUrl}input.php",
         formParameters = Parameters.build {
             append("url", threadUrl)
@@ -106,12 +109,13 @@ internal suspend fun registerCompatTsumanne(
         }
     ) {
         headers[HttpHeaders.Referrer] = baseUrl
+    }.execute { response ->
+        check(response.status.isSuccess()) { "スレ登録失敗（HTTP ${response.status.value}）" }
+        readBoundedHttpResponseText(
+            response,
+            COMPAT_EXTERNAL_ARCHIVE_RESPONSE_MAX_BYTES
+        )
     }
-    check(response.status.isSuccess()) { "スレ登録失敗（HTTP ${response.status.value}）" }
-    val responseBody = readBoundedHttpResponseText(
-        response,
-        COMPAT_EXTERNAL_ARCHIVE_RESPONSE_MAX_BYTES
-    )
     check(
         !responseBody.contains("<b>Warning</b>", ignoreCase = true) &&
             !responseBody.contains("Undefined array key", ignoreCase = true)

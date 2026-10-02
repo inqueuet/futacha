@@ -121,8 +121,13 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
     val reader = AVAssetReader(asset, null)
     val videoRead = AVAssetReaderTrackOutput(track, mapOf(cfVideoString(kCVPixelBufferPixelFormatTypeKey) to kCVPixelFormatType_32BGRA.toInt()))
     videoRead.alwaysCopiesSampleData = false
+    require(reader.canAddOutput(videoRead)) { "この動画を読み取れません" }
     reader.addOutput(videoRead)
-    val audioRead = audioTracks.singleOrNull()?.let { AVAssetReaderTrackOutput(it, null).also { a -> a.alwaysCopiesSampleData = false; reader.addOutput(a) } }
+    val audioRead = audioTracks.singleOrNull()?.let { AVAssetReaderTrackOutput(it, null).also { a ->
+        a.alwaysCopiesSampleData = false
+        require(reader.canAddOutput(a)) { "この動画の音声を読み取れません" }
+        reader.addOutput(a)
+    } }
     val writer = AVAssetWriter(NSURL.fileURLWithPath(output), AVFileTypeMPEG4, null)
     val ci = videoRenderingContext()
     val kernel = VideoMosaicKernel()
@@ -132,7 +137,7 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
     var pendingVideo: CMSampleBufferRef? = null
     var completed = false
     fun nextVideo(): CMSampleBufferRef? {
-        val sample = videoRead.copyNextSampleBuffer() ?: return null
+        val sample = videoRead.copyNextNonEmptySample() ?: return null
         return try {
             autoreleasepool { renderVideoSample(sample, track, info, document, kernel, ci, colorSpace, encoder) }
         } finally { CFRelease(sample) }
@@ -145,7 +150,7 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
         val videoWrite = AVAssetWriterInput(AVMediaTypeVideo, null, CMSampleBufferGetFormatDescription(pendingVideo))
         videoWrite.expectsMediaDataInRealTime = false; videoWrite.mediaTimeScale = 1_000_000
         require(writer.canAddInput(videoWrite)) { "この解像度で動画を書き出せません" }; writer.addInput(videoWrite)
-        pendingAudio = audioRead?.copyNextSampleBuffer()
+        pendingAudio = audioRead?.copyNextNonEmptySample()
         val audioWrite = pendingAudio?.let { sample ->
             val format = requireNotNull(CMSampleBufferGetFormatDescription(sample))
             require(CMFormatDescriptionGetMediaSubType(format) == kAudioFormatMPEG4AAC) { "現在iOSではAAC音声の動画に対応しています" }
@@ -189,7 +194,7 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
                     autoreleasepool {
                         try { if (CMSampleBufferGetNumSamples(sample) > 0) check(audioWrite.appendSampleBuffer(sample)) { writer.error?.localizedDescription ?: "音声を書き出せません" } }
                         finally { CFRelease(sample); pendingAudio = null }
-                        pendingAudio = audioRead?.copyNextSampleBuffer()
+                        pendingAudio = audioRead?.copyNextNonEmptySample()
                     }
                 }
                 advanced = true
@@ -200,7 +205,9 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
         check(reader.status == AVAssetReaderStatusCompleted) { reader.error?.localizedDescription ?: "動画の読み取りが未完了です" }
         val finished = CompletableDeferred<Unit>()
         writer.finishWritingWithCompletionHandler { finished.complete(Unit) }
-        withTimeout(30_000) { finished.await() }
+        // A timeout is a failed export, not a cancellation: report it so the editor shows an error,
+        // and the staging output is cancelled here and deleted by VideoEditSource.export (B-9).
+        withTimeoutOrNull(30_000) { finished.await() } ?: error("動画の書き出しを確定できませんでした（時間切れ）")
         check(writer.status == AVAssetWriterStatusCompleted) { writer.error?.localizedDescription ?: "動画を確定できません" }
         currentCoroutineContext().ensureActive(); completed = true; onProgress(1f)
     } finally {
@@ -208,6 +215,15 @@ internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info:
         if (!completed) writer.cancelWriting()
         VTCompressionSessionInvalidate(encoder); CFRelease(encoder)
         CGColorSpaceRelease(colorSpace)
+    }
+}
+
+/** AVAssetReader may return empty timing/end samples which have no image or audio payload. */
+private fun AVAssetReaderTrackOutput.copyNextNonEmptySample(): CMSampleBufferRef? {
+    while (true) {
+        val sample = copyNextSampleBuffer() ?: return null
+        if (CMSampleBufferGetNumSamples(sample) > 0) return sample
+        CFRelease(sample)
     }
 }
 

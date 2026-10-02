@@ -23,8 +23,10 @@ internal object BoardUrlResolver {
             } else {
                 boardUrl
             }
+            requireUnambiguousAuthority(normalized)
             val parsed = Url(normalized)
             ensureHttpScheme(parsed)
+            requireUnambiguousAuthority(parsed)
             URLBuilder().apply {
                 takeFrom(parsed)
                 encodedPath = when {
@@ -109,6 +111,7 @@ internal object BoardUrlResolver {
             boardUrl
         }
 
+        requireUnambiguousAuthority(urlToParse)
         val url = runCatching { Url(urlToParse) }.getOrElse { error ->
             Logger.e(
                 TAG,
@@ -117,6 +120,7 @@ internal object BoardUrlResolver {
             throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
         }
         ensureHttpScheme(url)
+        requireUnambiguousAuthority(url)
 
         val segments = url.encodedPath
             .split('/')
@@ -157,8 +161,12 @@ internal object BoardUrlResolver {
             throw IllegalArgumentException("Board URL cannot be blank")
         }
 
-        val url = runCatching { Url(boardUrl) }.getOrElse { error ->
-            val normalized = boardUrl
+        // Same scheme fix-up as resolveBoardBaseUrl: Url("may.2chan.net/b/")
+        // parses as a relative URL on localhost, which sent del/sd requests there.
+        val boardUrlWithScheme = if (!boardUrl.contains("://")) "https://$boardUrl" else boardUrl
+        requireUnambiguousAuthority(boardUrlWithScheme)
+        val url = runCatching { Url(boardUrlWithScheme) }.getOrElse { error ->
+            val normalized = boardUrlWithScheme
                 .substringBefore('#')
                 .substringBefore('?')
             val schemeSeparator = normalized.indexOf("://")
@@ -174,6 +182,7 @@ internal object BoardUrlResolver {
             return "$scheme://$host"
         }
         ensureHttpScheme(url)
+        requireUnambiguousAuthority(url)
 
         val portSegment = when {
             url.port == url.protocol.defaultPort -> ""
@@ -195,6 +204,35 @@ internal object BoardUrlResolver {
             ""
         }
     }
+
+    /**
+     * S4-1: Ktor and OkHttp end the authority at `\`, a quick check of the
+     * string only at `/`, and userinfo hides the host behind `@`:
+     * `https://evil.com\@may.2chan.net/b/` was sent to evil.com although it
+     * reads as a 2chan.net board. A board URL never needs any of these, so
+     * refuse them before a request URL (or its Referer) is built.
+     */
+    private fun requireUnambiguousAuthority(rawUrl: String) {
+        val authority = rawUrl.trim()
+            .substringAfter("://")
+            .takeWhile { it != '/' && it != '?' && it != '#' }
+        if (authority.any(::isAmbiguousAuthorityChar)) {
+            throw IllegalArgumentException("Ambiguous board URL authority")
+        }
+    }
+
+    private fun requireUnambiguousAuthority(url: Url) {
+        if (url.encodedUser != null ||
+            url.encodedPassword != null ||
+            url.host.any(::isAmbiguousAuthorityChar) ||
+            '\\' in url.encodedPath
+        ) {
+            throw IllegalArgumentException("Ambiguous board URL authority")
+        }
+    }
+
+    private fun isAmbiguousAuthorityChar(char: Char): Boolean =
+        char == '@' || char == '\\' || char == '%' || char.isWhitespace() || char.isISOControl()
 
     private fun ensureHttpScheme(url: Url) {
         val scheme = url.protocol.name.lowercase()

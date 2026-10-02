@@ -50,6 +50,7 @@ import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -117,7 +118,7 @@ internal fun PastThreadSearchNoticeDialog(
 ) {
     var doNotShowAgain by rememberSaveable { mutableStateOf(false) }
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("past_thread_search_notice", "過去スレ検索の案内を閉じる")
             onDismiss()
@@ -194,7 +195,7 @@ internal fun PastThreadSearchNoticeDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -211,7 +212,7 @@ internal fun PastThreadSearchDialog(
         analyticsFieldLabel = "過去スレ検索"
     )
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("past_thread_search", "過去スレ検索を閉じる")
             onDismiss()
@@ -269,7 +270,7 @@ internal fun PastThreadSearchDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -281,7 +282,7 @@ internal fun PastThreadSearchResultSheet(
     onItemSelected: (ArchiveSearchItem) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("past_thread_search_result", "過去スレ検索結果を閉じる")
             onDismiss()
@@ -371,7 +372,7 @@ internal fun PastThreadSearchResultSheet(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable

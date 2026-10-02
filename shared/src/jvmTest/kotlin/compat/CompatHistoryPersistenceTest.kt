@@ -35,4 +35,31 @@ class CompatHistoryPersistenceTest {
             assertEquals(listOf("2"), store.history.first().map { it.threadNo })
         } finally { store.close(); directory.deleteRecursively() }
     }
+
+    @Test fun modernImportKeepsUpdateTimeAndRepeatsWithoutWriting() = runBlocking {
+        val directory = Files.createTempDirectory("history-import").toFile()
+        val fs = JvmFileSystem(directory)
+        val store = DesktopCompatibilityStore(fs)
+        try {
+            store.initialize()
+            val key = compatBoardKey("https://may.2chan.net/b/")
+            store.upsertBoard(CompatBoard(key, "虹裏", "https://may.2chan.net/b/", "https://may.2chan.net/b/", 0))
+            fun modern(id: Int, visited: Long) = com.valoser.futacha.shared.model.ThreadHistoryEntry(
+                threadId = id.toString(), boardId = "may", title = "スレ$id", titleImageUrl = "",
+                boardName = "虹裏", boardUrl = "https://may.2chan.net/b/", lastVisitedEpochMillis = visited, replyCount = 1)
+            val url = "https://may.2chan.net/b/res/1.htm"
+            store.recordHistoryVisit(CompatHistoryEntry(url, url, key, "虹裏", "1", "スレ1",
+                contentUpdatedAtEpochMillis = 150, lastVisitedEpochMillis = 100))
+            assertEquals(1, store.importModernHistory(listOf(modern(1, 500))))
+            val imported = store.history.first().single()
+            assertEquals(500L, imported.lastVisitedEpochMillis)
+            assertEquals(150L, imported.contentUpdatedAtEpochMillis)
+
+            // Entries the 200-item limit trims are not counted (or written) again.
+            val large = (0 until 1_000).map { index -> modern(10_000 + index, 1_000L + index) }
+            assertTrue(store.importModernHistory(large) > 0)
+            assertEquals(0, store.importModernHistory(large))
+            assertTrue(store.history.first().size <= 200)
+        } finally { store.close(); directory.deleteRecursively() }
+    }
 }

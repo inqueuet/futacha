@@ -12,6 +12,7 @@ import io.ktor.http.CookieEncoding
 import io.ktor.http.Url
 import io.ktor.util.date.GMTDate
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -146,7 +147,7 @@ class PersistentCookieStorage(
                 saveSnapshot = snapshotIfPersistingLocked(transactionId, targetCookies)
             }
         }
-        saveSnapshot?.let { persistSnapshot(it) }
+        saveSnapshot?.let { persistSnapshotBestEffort(it, "storing a received cookie") }
     }
 
     override suspend fun get(requestUrl: Url): List<Cookie> {
@@ -182,7 +183,7 @@ class PersistentCookieStorage(
                 )
             }
         }
-        saveSnapshot?.let { persistSnapshot(it) }
+        saveSnapshot?.let { persistSnapshotBestEffort(it, "purging expired cookies") }
         return result
     }
 
@@ -215,7 +216,7 @@ class PersistentCookieStorage(
                 candidates.isNotEmpty()
             }
         }
-        saveSnapshot?.let { persistSnapshot(it) }
+        saveSnapshot?.let { persistSnapshotBestEffort(it, "purging expired cookies") }
         return result
     }
 
@@ -232,7 +233,7 @@ class PersistentCookieStorage(
             }
             cookies.values.sortedWith(compareBy({ it.domain }, { it.name }))
         }
-        saveSnapshot?.let { persistSnapshot(it) }
+        saveSnapshot?.let { persistSnapshotBestEffort(it, "purging expired cookies") }
         return result
     }
 
@@ -277,22 +278,22 @@ class PersistentCookieStorage(
             saveSnapshot = ensureLoadedLocked()
             transactionCoordinator.begin(cookies)
         }
-        saveSnapshot?.let { persistSnapshot(it) }
-        val result = try {
-            withContext(CookieTransactionContext(transactionId)) {
-                block()
-            }
+        return try {
+            saveSnapshot?.let { persistSnapshotBestEffort(it, "loading cookies") }
+            val result = withContext(CookieTransactionContext(transactionId)) { block() }
+            persistTransactionBestEffort(transactionId, "successful request")
+            result
         } catch (t: Throwable) {
-            rollbackTransaction(transactionId)
+            withContext(NonCancellable) { rollbackTransaction(transactionId) }
             throw t
         }
-        persistTransactionBestEffort(transactionId, "successful request")
-        return result
     }
 
     /**
      * Run [block] while staging cookie changes; persist staged cookies even when the
-     * block fails. Cancellation still rolls back so aborted work does not write state.
+     * block fails or is cancelled. Staged cookies only come from responses the
+     * server already sent: a post the server accepted just before the user left
+     * the screen must still keep its posttime/ptmt cookies.
      */
     suspend fun <T> commitEvenOnFailure(block: suspend () -> T): T {
         val inheritedTransactionId = coroutineContext[CookieTransactionContext]?.id
@@ -304,8 +305,8 @@ class PersistentCookieStorage(
             saveSnapshot = ensureLoadedLocked()
             transactionCoordinator.begin(cookies)
         }
-        saveSnapshot?.let { persistSnapshot(it) }
         try {
+            saveSnapshot?.let { persistSnapshotBestEffort(it, "loading cookies") }
             val result = withContext(CookieTransactionContext(transactionId)) {
                 block()
             }
@@ -313,7 +314,9 @@ class PersistentCookieStorage(
             return result
         } catch (t: Throwable) {
             if (t is CancellationException) {
-                rollbackTransaction(transactionId)
+                withContext(NonCancellable) {
+                    persistTransactionBestEffort(transactionId, "cancelled request")
+                }
             } else if (t is Exception) {
                 persistTransactionBestEffort(transactionId, "failed request")
             } else {
@@ -431,7 +434,12 @@ class PersistentCookieStorage(
             val stagedValue = stagedSnapshot[key]
             if (baseValue == stagedValue) return@forEach
             if (stagedValue == null) {
-                cookies.remove(key)
+                // The transaction dropped the cookie (often only an expiry purge of
+                // its copy). Keep a value another request stored meanwhile.
+                val current = cookies[key]
+                if (current == null || current == baseValue) {
+                    cookies.remove(key)
+                }
             } else {
                 cookies[key] = stagedValue
             }
@@ -453,6 +461,25 @@ class PersistentCookieStorage(
     private suspend fun encodeSnapshot(snapshot: StoredCookieFile): String {
         return withContext(AppDispatchers.parsing) {
             json.encodeToString(snapshot)
+        }
+    }
+
+    /**
+     * Cookie file writes triggered while serving a request must not fail that
+     * request: the in-memory jar stays authoritative and the next mutation
+     * retries the write (see [hasUnpersistedSnapshotLocked]).
+     */
+    private suspend fun persistSnapshotBestEffort(snapshot: StoredCookieFile, context: String) {
+        try {
+            persistSnapshot(snapshot)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Logger.e(
+                "PersistentCookieStorage",
+                "Failed to persist cookies after $context; retaining in-memory state",
+                error
+            )
         }
     }
 

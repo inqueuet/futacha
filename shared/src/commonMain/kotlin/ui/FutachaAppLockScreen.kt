@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,6 +29,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -39,6 +42,14 @@ import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import com.valoser.futacha.shared.util.saturatingEpochAdd
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
+
+/**
+ * Whether the app content is shown, as of the last composition. Use it to hide
+ * UI (dialogs, sheets); code that acts on commands or runs in coroutines must
+ * read [LocalFutachaAppLockHolder] instead, because Android pauses
+ * recomposition after ON_STOP and this value then stays `true` (C-1).
+ */
+internal val LocalFutachaAppUnlocked = androidx.compose.runtime.staticCompositionLocalOf { true }
 
 private const val APP_LOCK_MAX_FAILURES_BEFORE_WAIT = 5
 private const val APP_LOCK_FAILURE_WAIT_MILLIS = 15_000L
@@ -215,5 +226,100 @@ internal fun FutachaAppLockLoadingScreen(
         contentAlignment = Alignment.Center
     ) {
         CircularProgressIndicator()
+    }
+}
+
+internal enum class FutachaAppLockGate { Loading, Error, Locked, Unlocked }
+
+internal fun resolveFutachaAppLockGate(
+    storedHash: String?,
+    isUnlockedForSession: Boolean,
+    loadingSentinel: String,
+    errorSentinel: String
+): FutachaAppLockGate = when {
+    storedHash == loadingSentinel -> FutachaAppLockGate.Loading
+    // Fail closed: an unreadable lock state must not reveal the app.
+    storedHash == errorSentinel -> FutachaAppLockGate.Error
+    storedHash != null && !isUnlockedForSession -> FutachaAppLockGate.Locked
+    else -> FutachaAppLockGate.Unlocked
+}
+
+@Composable
+internal fun FutachaAppLockGateContent(
+    gate: FutachaAppLockGate,
+    passwordHash: String,
+    onUnlocked: () -> Unit,
+    onRetry: () -> Unit
+) {
+    when (gate) {
+        FutachaAppLockGate.Loading -> FutachaAppLockLoadingScreen()
+        FutachaAppLockGate.Error -> FutachaAppLockLoadErrorScreen(onRetry = onRetry)
+        FutachaAppLockGate.Locked -> {
+            LaunchedEffect(Unit) {
+                AnalyticsTracker.screen("app_lock")
+            }
+            FutachaAppLockScreen(
+                passwordHash = passwordHash,
+                onUnlocked = onUnlocked
+            )
+        }
+        FutachaAppLockGate.Unlocked -> Unit
+    }
+}
+
+/**
+ * Covers the still-composed app while it is relocked.  The in-window surface
+ * hides the app (and blocks its input) in the same frame the lock engages; the
+ * full-screen dialog window is created afterwards, so it is stacked above any
+ * dialog, sheet or menu window the app already had open.
+ */
+@Composable
+internal fun FutachaAppLockOverlay(content: @Composable () -> Unit) {
+    Surface(modifier = Modifier.fillMaxSize()) {}
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            content()
+        }
+    }
+}
+
+@Composable
+internal fun FutachaAppLockLoadErrorScreen(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 420.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp)
+            )
+            Text(
+                text = "起動ロックの設定を読み込めませんでした。",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            OutlinedButton(onClick = onRetry) {
+                Text("再試行")
+            }
+        }
     }
 }

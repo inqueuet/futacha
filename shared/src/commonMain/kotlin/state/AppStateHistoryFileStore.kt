@@ -54,8 +54,7 @@ internal class AppStateHistoryFileStore(
         get() = snapshotState.value
         set(value) { snapshotState.value = value }
     private var cachedManifest: AppStateHistoryFileManifest? = null
-    private var hasMembershipBackup = false
-    private var cachedEntriesByKey: Map<String, ThreadHistoryEntry> = emptyMap()
+    private val cachedEntriesByKey = HashMap<String, ThreadHistoryEntry>()
     private val manifestEntryByIdentity = mutableMapOf<String, AppStateHistoryFileManifestEntry>()
     private var legacyHistoryCleared = false
 
@@ -172,7 +171,8 @@ internal class AppStateHistoryFileStore(
                 Logger.e(tag, "Failed to decode split history entry '${entry.key}'", error)
             }.getOrNull()?.also { entriesByKey[entry.key] = it }
         }
-        cachedEntriesByKey = entriesByKey
+        cachedEntriesByKey.clear()
+        cachedEntriesByKey.putAll(entriesByKey)
         return snapshot
     }
 
@@ -185,49 +185,34 @@ internal class AppStateHistoryFileStore(
         fileSystem.createDirectory(HISTORY_FILE_STORE_ENTRIES_DIR).getOrThrow()
 
         val previousManifest = cachedManifest ?: readManifestOrNull()
-        val previousKeys = previousManifest?.orderedEntries.orEmpty().map { it.key }
-        val previousEntriesByKey = cachedEntriesByKey
-        val nextEntriesByKey = mutableMapOf<String, ThreadHistoryEntry>()
-        val manifestEntries = history
-            .mapIndexedNotNull { index, entry ->
-                val identity = historyEntryIdentity(entry).ifBlank {
-                    buildFallbackHistoryIdentity(index, entry)
-                }
-                val descriptor = manifestEntryByIdentity.getOrPut(identity) {
-                    AppStateHistoryFileManifestEntry(historyFileKey(identity), identity)
-                }
-                val key = descriptor.key
-                nextEntriesByKey[key] = entry
-                val path = historyEntryPath(key)
-                // The common scroll path changes one history row at a time.
-                // Reuse known-equal entries instead of serializing the entire
-                // history list merely to rediscover that all other hashes are
-                // unchanged.
-                if (previousEntriesByKey[key] != entry || cachedEntryContentHashes[key] == null) {
-                    val encoded = json.encodeToString(ThreadHistoryEntry.serializer(), entry)
-                    require(encoded.encodeToByteArray().size.toLong() <= HISTORY_FILE_STORE_MAX_ENTRY_BYTES) {
-                        "History entry is too large"
-                    }
-                    val contentHash = fnv1a64Hex(encoded)
-                    if (cachedEntryContentHashes[key] != contentHash &&
-                        (cachedEntryContentHashes[key] != null || readCurrentEntryHash(path) != contentHash)) {
-                        fileSystem.writeString(path, encoded)
-                            .onFailure {
-                                // A failed write may leave the file partially written;
-                                // forget the known hash so the next write re-checks disk.
-                                cachedEntryContentHashes.remove(key)
-                            }
-                            .getOrThrow()
-                    }
-                    cachedEntryContentHashes[key] = contentHash
-                }
-                descriptor
+        val previousEntries = previousManifest?.orderedEntries.orEmpty()
+        // One pass: resolve keys, write changed entries and compare the order.
+        // A typical change touches one row, so everything else is a reference
+        // comparison instead of repeated full-list mapping and set building.
+        val activeKeys = HashSet<String>(history.size * 2)
+        val manifestEntries = ArrayList<AppStateHistoryFileManifestEntry>(history.size)
+        var orderUnchanged = previousManifest != null
+        history.forEachIndexed { index, entry ->
+            val identity = historyEntryIdentity(entry).ifBlank {
+                buildFallbackHistoryIdentity(index, entry)
             }
-            .distinctBy { it.key }
+            val descriptor = manifestEntryByIdentity.getOrPut(identity) {
+                AppStateHistoryFileManifestEntry(historyFileKey(identity), identity)
+            }
+            val key = descriptor.key
+            writeHistoryEntryIfChanged(key, entry)
+            if (activeKeys.add(key)) {
+                if (orderUnchanged && previousEntries.getOrNull(manifestEntries.size)?.key != key) {
+                    orderUnchanged = false
+                }
+                manifestEntries += descriptor
+            }
+        }
+        orderUnchanged = orderUnchanged && manifestEntries.size == previousEntries.size
+        val previousKeys = if (orderUnchanged) activeKeys else previousEntries.mapTo(HashSet()) { it.key }
+        val membershipChanged = !orderUnchanged && previousKeys != activeKeys
 
-        val nextKeys = manifestEntries.map { it.key }
-        val shouldWriteManifest = history.isEmpty() || previousManifest == null || previousKeys != nextKeys
-        if (shouldWriteManifest) {
+        if (history.isEmpty() || !orderUnchanged) {
             val nextManifest = AppStateHistoryFileManifest(
                 revision = (previousManifest?.revision ?: 0L) + 1L,
                 orderedEntries = manifestEntries
@@ -237,37 +222,70 @@ internal class AppStateHistoryFileStore(
                 "History manifest is too large"
             }
             fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_PATH, encodedManifest).getOrThrow()
-            // Reordering can recover using the previous order. Membership changes
-            // still update both copies so deletions cannot resurrect on recovery.
-            val membershipChanged = previousKeys.toSet() != nextKeys.toSet()
-            val backupWrite = if (history.isEmpty() || previousManifest == null || membershipChanged || !hasMembershipBackup) {
-                fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest)
-            } else Result.success(Unit)
-            hasMembershipBackup = backupWrite.isSuccess
+            cachedManifest = nextManifest
             if (history.isEmpty()) {
                 // A stale backup is a recovery source. Clearing is not durable
                 // until both manifests explicitly point at the empty set.
-                backupWrite.getOrThrow()
+                fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest).getOrThrow()
             } else {
-                backupWrite.onFailure { error ->
-                    Logger.w(tag, "Failed to update split history manifest backup: ${error.message}")
-                }
+                updateManifestBackup(encodedManifest)
             }
-            cachedManifest = nextManifest
         }
 
         if (history.isEmpty()) {
             deleteAllHistoryEntryFiles()
-        } else {
-            deleteStaleHistoryEntries(
-                previousKeys = previousKeys.toSet(),
-                activeKeys = manifestEntries.mapTo(mutableSetOf()) { it.key }
-            )
+            cachedEntriesByKey.clear()
+        } else if (membershipChanged) {
+            deleteStaleHistoryEntries(previousKeys = previousKeys, activeKeys = activeKeys)
         }
         cachedSnapshot = history.toList()
-        cachedEntriesByKey = nextEntriesByKey
-        manifestEntryByIdentity.keys.retainAll(manifestEntries.mapTo(HashSet()) { it.identity })
+        if (manifestEntryByIdentity.size != manifestEntries.size) {
+            manifestEntryByIdentity.keys.retainAll(manifestEntries.mapTo(HashSet()) { it.identity })
+        }
         _changes.value = _changes.value + 1L
+    }
+
+    /**
+     * Writes [entry] unless the file already holds it. [cachedEntriesByKey] is
+     * updated per entry, right after its file is known to match, so a failure
+     * part-way never claims content that is not on disk.
+     */
+    private suspend fun writeHistoryEntryIfChanged(key: String, entry: ThreadHistoryEntry) {
+        if (cachedEntriesByKey[key] == entry && cachedEntryContentHashes[key] != null) return
+        val path = historyEntryPath(key)
+        val encoded = json.encodeToString(ThreadHistoryEntry.serializer(), entry)
+        require(encoded.encodeToByteArray().size.toLong() <= HISTORY_FILE_STORE_MAX_ENTRY_BYTES) {
+            "History entry is too large"
+        }
+        val contentHash = fnv1a64Hex(encoded)
+        if (cachedEntryContentHashes[key] != contentHash &&
+            (cachedEntryContentHashes[key] != null || readCurrentEntryHash(path) != contentHash)) {
+            cachedEntriesByKey.remove(key)
+            fileSystem.writeString(path, encoded)
+                .onFailure {
+                    // A failed write may leave the file partially written;
+                    // forget the known hash so the next write re-checks disk.
+                    cachedEntryContentHashes.remove(key)
+                }
+                .getOrThrow()
+        }
+        cachedEntryContentHashes[key] = contentHash
+        cachedEntriesByKey[key] = entry
+    }
+
+    /**
+     * Points the backup at the manifest just written. Writes are atomic
+     * (a temporary file renamed over the target), so a hard link keeps this
+     * version even after the next manifest replaces the primary, without
+     * writing the whole manifest a second time. Providers without links copy.
+     */
+    private suspend fun updateManifestBackup(encodedManifest: String) {
+        val linked = fileSystem.linkOrCopy(HISTORY_FILE_STORE_MANIFEST_PATH, HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH)
+        if (linked.isSuccess) return
+        Logger.w(tag, "Failed to link split history manifest backup: ${linked.exceptionOrNull()?.message}")
+        fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest).onFailure { error ->
+            Logger.w(tag, "Failed to update split history manifest backup: ${error.message}")
+        }
     }
 
     private suspend fun readCurrentEntryHash(path: String): String? {
@@ -286,6 +304,7 @@ internal class AppStateHistoryFileStore(
                     Logger.w(tag, "Failed to delete stale split history entry '$key': ${error.message}")
                 }
                 cachedEntryContentHashes.remove(key)
+                cachedEntriesByKey.remove(key)
             }
     }
 

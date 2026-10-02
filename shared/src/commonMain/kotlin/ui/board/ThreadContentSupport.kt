@@ -191,6 +191,30 @@ internal fun resolveThreadLazyListIndexForPost(
     return (countThreadContentItemsBeforePosts(page, embeddedHtml, hasSummary) + postIndex).coerceAtLeast(0)
 }
 
+/**
+ * The list row of [postId] in the displayed layout (filtered, sorted, tree
+ * ordered, AI summary rows ahead of the posts). A post the layout hides jumps to
+ * the next displayed post after it in thread order, else the last displayed
+ * one. Null when no layout has been reported yet.
+ */
+internal fun resolveThreadLazyListIndexForDisplayedPost(
+    postId: String?,
+    allPosts: List<Post>,
+    layout: ThreadDisplayedPostsLayout
+): Int? {
+    if (postId == null || layout.posts.isEmpty()) return null
+    val before = layout.itemsBeforePosts.coerceAtLeast(0)
+    val displayedIndex = layout.posts.indexOfFirst { it.id == postId }
+    if (displayedIndex >= 0) return before + displayedIndex
+    val threadOrder = allPosts.withIndex().associate { (index, post) -> post.id to index }
+    val targetOrder = threadOrder[postId] ?: return null
+    val following = layout.posts.withIndex()
+        .filter { (_, post) -> (threadOrder[post.id] ?: -1) > targetOrder }
+        .minByOrNull { (_, post) -> threadOrder.getValue(post.id) }
+        ?.index
+    return before + (following ?: layout.posts.lastIndex)
+}
+
 internal data class ThreadPostListFingerprint(
     val size: Int,
     val firstPostId: String?,

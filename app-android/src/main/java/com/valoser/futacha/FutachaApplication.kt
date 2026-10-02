@@ -15,6 +15,7 @@ import com.valoser.futacha.compat.AndroidExperienceProfileStore
 import com.valoser.futacha.compat.AndroidLauncherAliasManager
 import com.valoser.futacha.compat.AndroidModeSwitchCoordinator
 import com.valoser.futacha.shared.compat.ExperienceProfile
+import com.valoser.futacha.shared.compat.ModeSwitchRecoveryException
 import com.valoser.futacha.shared.compat.compatForegroundPolicyEnabled
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.CrashReporter
@@ -43,6 +44,7 @@ import com.valoser.futacha.shared.ui.compat.initializeCompatPostPlatformContext
 import com.valoser.futacha.shared.ui.board.AndroidVideoPlaybackCache
 import com.valoser.futacha.shared.version.initializeVersionCheckerContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -69,6 +71,7 @@ private const val LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS =
 private const val STARTUP_TEMP_CLEANUP_DELAY_MILLIS = 15_000L
 private const val STARTUP_ARCHIVE_REPORT_DELAY_MILLIS = 15_000L
 private const val STARTUP_STRICT_MODE_DELAY_MILLIS = 3_000L
+private val STARTUP_PROFILE_RECOVERY_RETRY_DELAYS_MILLIS = longArrayOf(0L, 250L, 1_000L)
 private const val PROFILE_ALIAS_SETTLE_DELAY_MILLIS = 1_500L
 
 class FutachaApplication : Application() {
@@ -132,7 +135,9 @@ class FutachaApplication : Application() {
     val watchSyncManager: WatchSyncManager
         get() = requireMainProcessValue("watchSyncManager", watchSyncManagerValue)
 
-    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+        com.valoser.futacha.shared.util.Logger.e("FutachaApplication", "Application task failed", error)
+    })
 
     // Alias changes are followed by a delayed root relaunch. Keep only the
     // newest request; an old delayed job must never bring a stale MainActivity
@@ -145,6 +150,48 @@ class FutachaApplication : Application() {
 
     private val networkServicesErrorValue = MutableStateFlow<String?>(null)
     val networkServicesError: StateFlow<String?> = networkServicesErrorValue.asStateFlow()
+
+    private val profileRecoveryCompleteValue = MutableStateFlow(true)
+
+    /**
+     * False while a mode switch interrupted by the previous process is being
+     * completed. MainActivity waits for it, so the profile cannot change under
+     * a screen the user is already using (M-3).
+     */
+    val profileRecoveryComplete: StateFlow<Boolean> = profileRecoveryCompleteValue.asStateFlow()
+
+    private val profileRecoveryFailureValue = MutableStateFlow<ModeSwitchRecoveryException?>(null)
+
+    /**
+     * Set when that startup recovery failed even after retrying (M4-1). The
+     * journal stays, so commits keep being refused; MainActivity tells the user
+     * to restart, and the next launch or switch attempt recovers again.
+     */
+    val profileRecoveryFailure: StateFlow<ModeSwitchRecoveryException?> = profileRecoveryFailureValue.asStateFlow()
+
+    fun acknowledgeProfileRecoveryFailure() {
+        profileRecoveryFailureValue.value = null
+    }
+
+    /**
+     * Recovery is idempotent (it re-reads the journal), so a transient
+     * SharedPreferences commit failure is retried before the UI is shown.
+     * Retrying later under a live UI could change the profile beneath it (M-3).
+     */
+    private suspend fun recoverInterruptedProfileSwitch(): ModeSwitchRecoveryException? {
+        var lastFailure: Throwable? = null
+        for (retryDelayMillis in STARTUP_PROFILE_RECOVERY_RETRY_DELAYS_MILLIS) {
+            delay(retryDelayMillis)
+            val failure = modeSwitchCoordinator.recoverIfNeeded().exceptionOrNull() ?: return null
+            lastFailure = failure
+            com.valoser.futacha.shared.util.Logger.e(
+                "FutachaApplication",
+                "Failed to reconcile experience profile",
+                failure
+            )
+        }
+        return ModeSwitchRecoveryException(requireNotNull(lastFailure))
+    }
 
     private val startedMainActivitiesValue = MutableStateFlow(0)
 
@@ -203,6 +250,17 @@ class FutachaApplication : Application() {
             profileStore = experienceProfileStore,
             aliasReconciler = AndroidLauncherAliasManager(applicationContext)
         )
+        // Already loaded by the store's constructor; no extra disk read here.
+        if (experienceProfileStore.readJournal() != null) {
+            profileRecoveryCompleteValue.value = false
+            applicationScope.launch {
+                try {
+                    profileRecoveryFailureValue.value = recoverInterruptedProfileSwitch()
+                } finally {
+                    profileRecoveryCompleteValue.value = true
+                }
+            }
+        }
         applicationScope.launch {
             compatibilityStore.ensureInitialized()
             compatibilityStore.recoverStaleArchiveReports(System.currentTimeMillis())
@@ -212,13 +270,6 @@ class FutachaApplication : Application() {
             // compact devices, so leave the UI a quiet startup window.
             delay(STARTUP_ARCHIVE_REPORT_DELAY_MILLIS)
             ArchiveReportWorker.enqueueStartup(applicationContext)
-            modeSwitchCoordinator.recoverIfNeeded().onFailure { error ->
-                com.valoser.futacha.shared.util.Logger.e(
-                    "FutachaApplication",
-                    "Failed to reconcile experience profile",
-                    error
-                )
-            }
         }
 
         applicationScope.launch {
@@ -336,7 +387,8 @@ class FutachaApplication : Application() {
                             generation,
                             commit
                         )
-                    }
+                    },
+                    startedMainActivities = startedMainActivities
                 )
                 imageTransportValue = images
                 httpClientValue = client
@@ -366,7 +418,12 @@ class FutachaApplication : Application() {
 
         applicationScope.launch {
             if (!awaitNetworkServicesReady()) return@launch
-            experienceProfileStore.activeProfile.collect { profile ->
+            // The generation is part of the key: a rolled-back switch keeps the
+            // profile but must restart the sync it quiesced. The persisted pair is
+            // read because the two flows update one after the other.
+            combine(experienceProfileStore.activeProfile, experienceProfileStore.generation) { _, _ ->
+                experienceProfileStore.readActiveProfile() to experienceProfileStore.readGeneration()
+            }.distinctUntilChanged().collect { (profile, _) ->
                 if (profile == ExperienceProfile.FUTACHA) watchSyncManager.start()
                 else watchSyncManager.stopAndAwait()
             }
@@ -392,8 +449,15 @@ class FutachaApplication : Application() {
                     appStateStore.isBackgroundRefreshEnabled,
                     appStateStore.isWatchAlertEnabled,
                     compatibilityStore.preferences,
-                    experienceProfileStore.activeProfile
-                ) { backgroundEnabled, watchAlertEnabled, compatPreferences, activeProfile ->
+                    experienceProfileStore.activeProfile,
+                    // A rolled-back switch keeps the profile but cancelled this work;
+                    // the new generation re-enqueues it.
+                    experienceProfileStore.generation
+                ) { backgroundEnabled, watchAlertEnabled, compatPreferences, _, _ ->
+                    // The two profile flows update one after the other; the persisted
+                    // pair avoids enqueuing twice for one switch.
+                    val activeProfile = experienceProfileStore.readActiveProfile()
+                    val generation = experienceProfileStore.readGeneration()
                     val enabled = when (activeProfile) {
                         ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled ||
                             com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
@@ -406,10 +470,10 @@ class FutachaApplication : Application() {
                                 watchWords
                         }
                     }
-                    activeProfile to enabled
+                    Triple(activeProfile, generation, enabled)
                 }
                     .distinctUntilChanged()
-                    .onEach { (_, enabled) ->
+                    .onEach { (_, _, enabled) ->
                         if (enabled) {
                             val profileGeneration = experienceProfileStore.readGeneration()
                             HistoryRefreshWorker.enqueuePeriodic(workManager, profileGeneration)

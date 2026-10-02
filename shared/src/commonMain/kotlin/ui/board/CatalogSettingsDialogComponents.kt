@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 private const val DIALOG_MIN_CATALOG_GRID_COLUMNS = 2
 private const val DIALOG_MAX_CATALOG_GRID_COLUMNS = 8
@@ -37,7 +38,7 @@ internal fun CatalogSettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("catalog_settings", "カタログ設定メニューを閉じる")
             onDismiss()
@@ -86,7 +87,7 @@ internal fun CatalogSettingsSheet(
                     .fillMaxWidth().clickable(enabled = tool.enabled) { onDismiss(); tool.action() })
             }
         }
-    }
+    } }
 }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -120,7 +121,7 @@ internal fun WatchWordsSheet(
     val boardWords = boardWatchWordsOverride ?: effectiveBoardWatchWords
     val isBoardOverridden = boardWatchWordsOverride != null
 
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("watch_words", "監視ワード設定を閉じる")
             onDismiss()
@@ -169,7 +170,8 @@ internal fun WatchWordsSheet(
                 },
                 onRemoveWord = onRemoveGlobalWord,
                 emptyMessage = "共通の監視ワードは登録されていません",
-                enabled = isLoaded
+                enabled = isLoaded,
+                modifier = Modifier.weight(1f, fill = false)
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -222,12 +224,18 @@ internal fun WatchWordsSheet(
                 } else {
                     "共通の監視ワードを継承しています"
                 },
-                enabled = isLoaded
+                enabled = isLoaded,
+                modifier = Modifier.weight(1f, fill = false)
             )
         }
-    }
+    } }
 }
 
+/**
+ * Both sections take at most half of the sheet's remaining height (the board
+ * header between them stays fixed) and their lists scroll inside it, so a long
+ * common list never pushes the board section off-screen.
+ */
 @Composable
 private fun WatchWordsSection(
     title: String,
@@ -238,10 +246,11 @@ private fun WatchWordsSection(
     onAddWord: () -> Unit,
     onRemoveWord: (String) -> Unit,
     emptyMessage: String,
-    enabled: Boolean
+    enabled: Boolean,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Column {
@@ -299,6 +308,7 @@ private fun WatchWordsSection(
         } else {
             LazyColumn(
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = 72.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -336,7 +346,7 @@ internal fun DisplayStyleDialog(
     onGridColumnsSelected: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("catalog_display_style", "カタログ表示方法を閉じる")
             onDismiss()
@@ -406,5 +416,5 @@ internal fun DisplayStyleDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }

@@ -11,7 +11,7 @@ actual object TextEncoding {
 
     actual fun encodeToShiftJis(text: String): ByteArray {
         // Replace unmappable characters so Futaba accepts the payload instead of failing.
-        return text
+        return canonicalCp932Text(text)
             .toByteArray(shiftJis)
     }
 

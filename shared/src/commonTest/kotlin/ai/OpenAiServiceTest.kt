@@ -12,6 +12,9 @@ import kotlin.test.*
 internal class MemoryAiStorage : AiConnectionStorage {
     var credentials: String? = null
     var cache: String? = null
+    var usage: String? = null
+    override fun readUsage() = usage
+    override fun writeUsage(value: String) { usage = value }
     override fun read() = credentials
     override fun write(value: String) { credentials = value }
     override fun readCache() = cache
@@ -24,7 +27,10 @@ class OpenAiServiceTest {
         messageHtml = text, imageUrl = "https://example.invalid/private.jpg", thumbnailUrl = null, mail = "送信しないメール"
     )
     private suspend fun store(storage: MemoryAiStorage = MemoryAiStorage()): AiConnectionStore =
-        AiConnectionStore(storage).also {
+        AiConnectionStore(storage, run {
+            var now = 0L
+            OpenAiRequestQueue({ now }, { now += it }, { 0L })
+        }).also {
             it.load()
             it.save(AiProvider.DEVICE, AiProvider.OPENAI, "gpt-4.1-mini", "test-only-key")
         }
@@ -60,6 +66,25 @@ class OpenAiServiceTest {
             }
         }
     }.toString()
+
+    @Test fun moderationExcludesQuotedLinesButKeepsAuthoredReply() = runBlocking {
+        val store = store()
+        var calls = 0
+        val service = OpenAiService(store, store.state.value, HttpClient(MockEngine { request ->
+            calls++
+            val texts = Json.parseToJsonElement((request.body as TextContent).text).jsonObject["input"]!!.jsonArray
+            assertEquals(listOf("通常の返答"), texts.map { it.jsonPrimitive.content })
+            respond(moderationResponse(1))
+        }))
+        val results = service.classifyPosts(PostModerationInput("t", listOf(
+            post(1, "&#62;引用内容<br>＞引用だけ"),
+            post(2, "&gt;引用内容<br>通常の返答")
+        ))).getOrThrow()
+        assertEquals(1, calls)
+        assertEquals(2, results.size)
+        assertTrue(results.none { it.shouldHide })
+        service.close()
+    }
 
     @Test fun summarySendsAll1000PostsAndFullBodiesWithoutPrivateMetadata() = runBlocking {
         val store = store()
@@ -104,7 +129,7 @@ class OpenAiServiceTest {
             assertEquals(posts.map { it.id }.toSet(), first.map { it.postId }.toSet())
             assertTrue(first.all { it.shouldHide })
             service.classifyPosts(PostModerationInput("t", posts + post(101))).getOrThrow()
-            assertEquals(listOf(32, 32, 32, 4, 1), sizes)
+            assertEquals(List(50) { 2 } + 1, sizes)
         } finally { service.close() }
     }
 
@@ -222,7 +247,7 @@ class OpenAiServiceTest {
     @Test fun changingProviderWhileRequestRunsDiscardsTheOldResponse() = runBlocking {
         val store = store()
         val service = OpenAiService(store, store.state.value, HttpClient(MockEngine {
-            store.save(AiProvider.DEVICE, AiProvider.OPENAI, "gpt-4.1-mini")
+            store.save(AiProvider.DEVICE, AiProvider.DEVICE, "gpt-4.1-mini")
             respond(summaryResponse())
         }))
         try {

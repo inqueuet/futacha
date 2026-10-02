@@ -6,6 +6,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.PromptInfoAction
@@ -344,6 +345,15 @@ internal fun CompatSettingsScreen(
     var referenceVersionMessage by remember(path) { mutableStateOf<String?>(null) }
     var infoDialog by remember(path) { mutableStateOf<String?>(null) }
     var transientNotice by remember(path) { mutableStateOf<String?>(null) }
+    /** Best effort: a failed date write must not turn a finished restore into an error. */
+    suspend fun recordCompatBackupDate(kind: String) {
+        val key = compatBackupDatePreferenceKey(kind) ?: return
+        val timestamp = formatCompatBackupTimestamp(Clock.System.now().toEpochMilliseconds())
+        runSuspendCatchingPreservingCancellation { store.savePreference(key, timestamp) }
+            .onSuccess { backupDates = backupDates + (key to timestamp) }
+            .onFailure { failure -> Logger.e("CompatSettings", "Failed to record backup date", failure) }
+    }
+
     fun launchSettingsSafely(block: suspend () -> Unit) {
         scope.launch {
             try {
@@ -417,9 +427,13 @@ internal fun CompatSettingsScreen(
         onImageSelected = { selected ->
             if (backupInProgress) return@rememberAttachmentPickerLauncher
             val backupKind = restoreBackupKind
+            val currentBoards = boards
             backupInProgress = true
             launchSettingsSafely {
-                val result = runSuspendCatchingPreservingCancellation {
+              try {
+                // Decoding/validating a backup of up to 2MB and the restore
+                // itself must not run on the UI thread.
+                val result = withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val raw = selected.bytes.decodeToString()
                     if (backupKind == "ng") {
                         val currentPayload = runCatching { decodeCompatWatchNgBackup(raw) }
@@ -439,7 +453,7 @@ internal fun CompatSettingsScreen(
                             importCompatLegacyBackupData(
                                 store = store,
                                 backups = listOf(decodeCompatLegacyBackup(raw)),
-                                boards = boards
+                                boards = currentBoards
                             )
                         }
                     } else {
@@ -451,18 +465,16 @@ internal fun CompatSettingsScreen(
                         )
                         compatBackupSuccessMessage(backupKind, report)
                     }
-                }
-                result.onSuccess {
-                    compatBackupDatePreferenceKey(backupKind)?.let { key ->
-                        val timestamp = formatCompatBackupTimestamp(Clock.System.now().toEpochMilliseconds())
-                        store.savePreference(key, timestamp)
-                        backupDates = backupDates + (key to timestamp)
-                    }
-                }
+                } }
+                if (result.isSuccess) recordCompatBackupDate(backupKind)
                 backupMessage = result.getOrElse { error ->
                     compatBackupFailureMessage(backupKind, error)
                 }
+              } finally {
+                // A failure after the restore (e.g. saving the date) must not
+                // leave the restore buttons disabled.
                 backupInProgress = false
+              }
             }
         }
     )
@@ -487,22 +499,25 @@ internal fun CompatSettingsScreen(
     val backupDirectoryPicker = rememberDirectoryPickerLauncher(
         onDirectorySelected = { location ->
             if (backupInProgress) return@rememberDirectoryPickerLauncher
+            val kind = restoreBackupKind
+            val currentBoards = boards
             backupInProgress = true
             launchSettingsSafely {
-                val result = runSuspendCatchingPreservingCancellation {
-                    val payload = if (restoreBackupKind == "save_settings") {
+              try {
+                val result = withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
+                    val payload = if (kind == "save_settings") {
                         encodeCompatSettingsBackup(
                             decodeCompatSettingsBackup(store.exportSettingsBackup()).settingsOnly()
                         )
-                    } else if (restoreBackupKind == "save_ng") {
+                    } else if (kind == "save_ng") {
                         encodeCompatWatchNgBackup(
                             decodeCompatSettingsBackup(store.exportSettingsBackup())
                         )
-                    } else if (restoreBackupKind == "legacy") {
-                        importCompatLegacyBackup(store, fileSystem, location, boards)
+                    } else if (kind == "legacy") {
+                        importCompatLegacyBackup(store, fileSystem, location, currentBoards)
                     } else {
                         val fs = fileSystem ?: error("ファイルシステムを利用できません")
-                        val (raw, isDedicatedWordFile) = if (restoreBackupKind == "ng") {
+                        val (raw, isDedicatedWordFile) = if (kind == "ng") {
                             runSuspendCatchingPreservingCancellation {
                                 fs.readCompatBackupTextWithLimit(
                                     location,
@@ -528,7 +543,7 @@ internal fun CompatSettingsScreen(
                                 MAX_COMPAT_SETTINGS_BACKUP_BYTES.toLong()
                             ) to false
                         }
-                        val importPayload = if (restoreBackupKind == "ng") {
+                        val importPayload = if (kind == "ng") {
                             encodeCompatSettingsBackup(
                                 if (isDedicatedWordFile) {
                                     decodeCompatWatchNgBackup(raw)
@@ -544,34 +559,30 @@ internal fun CompatSettingsScreen(
                             // The NG-only shape contains the watch-word
                             // preference, but no board/tab/general settings.
                             restoreUserSettings = true,
-                            restoreNgRules = restoreBackupKind == "ng"
+                            restoreNgRules = kind == "ng"
                         )
-                        compatBackupSuccessMessage(restoreBackupKind, report)
+                        compatBackupSuccessMessage(kind, report)
                     }
-                    if (restoreBackupKind == "save_settings") {
+                    if (kind == "save_settings") {
                         fileSystem?.writeString(location, COMPAT_SETTINGS_BACKUP_FILE_NAME, payload)?.getOrThrow()
                             ?: error("ファイルシステムを利用できません")
-                        compatBackupSuccessMessage(restoreBackupKind)
-                    } else if (restoreBackupKind == "save_ng") {
+                        compatBackupSuccessMessage(kind)
+                    } else if (kind == "save_ng") {
                         fileSystem?.writeString(location, COMPAT_WATCH_NG_BACKUP_FILE_NAME, payload)?.getOrThrow()
                             ?: error("ファイルシステムを利用できません")
-                        compatBackupSuccessMessage(restoreBackupKind)
-                    } else if (restoreBackupKind == "legacy") {
+                        compatBackupSuccessMessage(kind)
+                    } else if (kind == "legacy") {
                         payload
                     } else null
-                }
-                result.onSuccess {
-                    compatBackupDatePreferenceKey(restoreBackupKind)?.let { key ->
-                        val timestamp = formatCompatBackupTimestamp(Clock.System.now().toEpochMilliseconds())
-                        store.savePreference(key, timestamp)
-                        backupDates = backupDates + (key to timestamp)
-                    }
-                }
+                } }
+                if (result.isSuccess) recordCompatBackupDate(kind)
                 val message = result.getOrElse { error ->
-                    compatBackupFailureMessage(restoreBackupKind, error)
+                    compatBackupFailureMessage(kind, error)
                 }
                 backupMessage = message
+              } finally {
                 backupInProgress = false
+              }
             }
         }
     )
@@ -1018,7 +1029,7 @@ internal fun CompatSettingsScreen(
         }
     }
     if (confirmThreadCacheClear) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (!threadCacheClearInProgress) confirmThreadCacheClear = false },
             title = { Text("スレッドキャッシュのクリア") },
             text = { Text("保存済みのスレッド本文を削除します。タブ、履歴、下書き、元に戻すための一時データは削除されません。") },
@@ -1049,11 +1060,11 @@ internal fun CompatSettingsScreen(
                     onClick = { confirmThreadCacheClear = false }
                 ) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     directoryMenuEntry?.let { entry ->
         val isDownload = entry.preferenceKey == "dummyDownloadDir"
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { directoryMenuEntry = null },
             title = { Text(if (isDownload) "ダウンロード" else "手書き") },
             text = {
@@ -1080,10 +1091,10 @@ internal fun CompatSettingsScreen(
                     TextButton(onClick = { directoryMenuEntry = null }) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
     if (confirmImageCacheClear) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (!imageCacheClearInProgress) confirmImageCacheClear = false },
             title = { Text("画像キャッシュのクリア") },
             text = { Text("読み込み済みの画像キャッシュを削除します。保存した画像やスレッド本文は削除されません。") },
@@ -1120,10 +1131,10 @@ internal fun CompatSettingsScreen(
                     onClick = { confirmImageCacheClear = false }
                 ) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (confirmAttachmentClear) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (!attachmentClearInProgress) confirmAttachmentClear = false },
             title = { Text("その他のクリア") },
             text = { Text("投稿画面で一時保存された添付ファイルを削除します。編集中の下書きから添付を再利用できなくなります。") },
@@ -1149,10 +1160,10 @@ internal fun CompatSettingsScreen(
                     onClick = { confirmAttachmentClear = false }
                 ) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (confirmArchiveReportClear) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { confirmArchiveReportClear = false },
             title = { Text("通知データを削除") },
             text = {
@@ -1172,10 +1183,10 @@ internal fun CompatSettingsScreen(
             dismissButton = {
                 TextButton(onClick = { confirmArchiveReportClear = false }) { Text("キャンセル") }
             }
-        )
+        ) }
     }
     if (archiveReportInfoOpen) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { archiveReportInfoOpen = false },
             title = { Text("閲覧スレ通知について") },
             text = {
@@ -1190,10 +1201,10 @@ internal fun CompatSettingsScreen(
             confirmButton = {
                 TextButton(onClick = { archiveReportInfoOpen = false }) { Text("閉じる") }
             }
-        )
+        ) }
     }
     if (cacheEndpointDialogOpen) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { cacheEndpointDialogOpen = false },
             title = { Text("キャッシュサーバー接続先") },
             text = {
@@ -1223,7 +1234,7 @@ internal fun CompatSettingsScreen(
                 }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { cacheEndpointDialogOpen = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     if (cacheWarningOpen) {
         CompatCacheServerWarningDialog(
@@ -1235,27 +1246,27 @@ internal fun CompatSettingsScreen(
         )
     }
     if (backupMessage != null) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { backupMessage = null },
             title = { Text("バックアップ") },
             text = { Text(backupMessage.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = { backupMessage = null }) { Text("閉じる") }
             }
-        )
+        ) }
     }
     if (referenceVersionMessage != null) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { referenceVersionMessage = null },
             text = { Text(referenceVersionMessage.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = { referenceVersionMessage = null }) { Text("閉じる") }
             }
-        )
+        ) }
     }
     if (infoDialog != null) {
         val title = infoDialog.orEmpty()
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { infoDialog = null },
             title = { Text(title) },
             text = if (title == "バージョン") {
@@ -1267,11 +1278,11 @@ internal fun CompatSettingsScreen(
                 }
             } else null,
             confirmButton = { TextButton(onClick = { infoDialog = null }) { Text("閉じる") } }
-        )
+        ) }
     }
     if (modeDialog) {
         var selected by remember { mutableStateOf(profileController.activeProfile) }
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { modeDialog = false },
             title = { Text("モード") },
             text = {
@@ -1302,7 +1313,7 @@ internal fun CompatSettingsScreen(
                 }) { Text("切り替える") }
             },
             dismissButton = { TextButton(onClick = { modeDialog = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     editingEntry?.let { entry ->
         // The dialog occupies the same Compose slot for every preference.
@@ -1326,7 +1337,7 @@ internal fun CompatSettingsScreen(
             entry.preferenceKey,
             savedValues[entry.preferenceKey] ?: entry.summary
         )
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { editingEntry = null },
             title = { Text(compatPreferenceDialogTitle(entry)) },
             text = {
@@ -1419,10 +1430,10 @@ internal fun CompatSettingsScreen(
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { editingEntry = null }) { Text("キャンセル") } }
-        )
+        ) }
     }
     if (cacheLocationChangeInProgress) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = {},
             title = { Text("変更中") },
             text = {
@@ -1435,11 +1446,11 @@ internal fun CompatSettingsScreen(
                 }
             },
             confirmButton = {}
-        )
+        ) }
     }
     if (ptmtDialogOpen) {
         val repository = cookieRepository
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             modifier = Modifier.testTag("compat-ptmt-dialog"),
             onDismissRequest = { ptmtDialogOpen = false },
             title = { Text("ptmtクッキーの編集") },
@@ -1558,10 +1569,10 @@ internal fun CompatSettingsScreen(
                     ) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
     if (customFontDialogOpen) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { customFontDialogOpen = false },
             title = { Text("カスタムフォント") },
             confirmButton = {
@@ -1593,7 +1604,7 @@ internal fun CompatSettingsScreen(
                     TextButton(onClick = { customFontDialogOpen = false }) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
     LaunchedEffect(transientNotice) {
         if (transientNotice == null) return@LaunchedEffect
@@ -1601,7 +1612,7 @@ internal fun CompatSettingsScreen(
         transientNotice = null
     }
     transientNotice?.let { notice ->
-        Popup(
+        FutachaAppLockAwareWindow { Popup(
             alignment = Alignment.BottomCenter,
             offset = IntOffset(0, -96),
             properties = PopupProperties(focusable = false)
@@ -1615,7 +1626,7 @@ internal fun CompatSettingsScreen(
             ) {
                 Text(notice, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
             }
-        }
+        } }
     }
     backgroundAlwaysNotice?.let { entry ->
         val message = if (entry.preferenceKey == "backgroundThreadExistCheck") {
@@ -1626,14 +1637,14 @@ internal fun CompatSettingsScreen(
             "カタログからレス数を取得して更新分を履歴やツールバーに反映させます\n" +
                 "常に確認する場合は通信量などに十分注意してください"
         }
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { backgroundAlwaysNotice = null },
             title = { Text("注意事項") },
             text = { Text(message) },
             confirmButton = {
                 TextButton(onClick = { backgroundAlwaysNotice = null }) { Text("OK") }
             }
-        )
+        ) }
     }
 }
 
@@ -1641,7 +1652,7 @@ internal fun CompatSettingsScreen(
 internal fun CompatCacheServerWarningDialog(
     onConfirm: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         // sample/1.apk explicitly disables both Back and outside dismissal.
         onDismissRequest = {},
         title = { Text("確認") },
@@ -1652,7 +1663,7 @@ internal fun CompatCacheServerWarningDialog(
             )
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("OK") } }
-    )
+    ) }
 }
 
 @Composable

@@ -617,4 +617,89 @@ class OriginalMediaStoreTest {
             assertEquals(3, calls.get(), "An oversized body must not trigger repeated downloads")
         } finally { fixture.finish(); downloader.close(); client.close() }
     }
+
+    /** Delays opening cached revisions so a test can act while a load reads the cache. */
+    private class SlowRevisionCache(private val delegate: DiskCache) : DiskCache by delegate {
+        @Volatile var slowMillis = 0L
+        override fun openSnapshot(key: String): DiskCache.Snapshot? =
+            delegate.openSnapshot(key).also { if (key.startsWith("asset-") && slowMillis > 0) Thread.sleep(slowMillis) }
+    }
+
+    private fun slowFixture(directory: java.io.File, downloader: OriginalMediaDownloader): Pair<Fixture, () -> SlowRevisionCache?> {
+        var cache: SlowRevisionCache? = null
+        val fixture = Fixture(directory = directory, downloader = downloader, decorateCache = {
+            SlowRevisionCache(it).also { created -> cache = created }
+        })
+        return fixture to { cache }
+    }
+
+    @Test fun cancelledCacheHitKeepsTheStoredOriginal(): Unit = runBlocking {
+        val calls = AtomicInteger()
+        val downloader = OriginalMediaDownloader { _, sink -> calls.incrementAndGet(); sink.writeUtf8("data"); info(4) }
+        val first = Fixture(downloader = downloader)
+        try {
+            first.store.acquire(request).close()
+            first.store.closeAndAwait()
+            val (second, cache) = slowFixture(first.directory, downloader)
+            try {
+                withTimeout(5000) {
+                    second.store.sizeBytes() // opens the cache
+                    cache()!!.slowMillis = 400
+                    val scrolledAway = async(Dispatchers.Default) { second.store.acquire(request.copy(allowNetwork = false)) }
+                    delay(100)
+                    scrolledAway.cancelAndJoin()
+                    cache()!!.slowMillis = 0
+                }
+                // Previously the cancelled load deleted the cached revision it had just opened.
+                second.store.acquire(request.copy(allowNetwork = false)).use {
+                    assertTrue(it.fromCache)
+                    assertEquals("data", it.readAt(0, 4).decodeToString())
+                }
+                assertEquals(1, calls.get())
+            } finally { second.store.closeAndAwait() }
+        } finally { first.finish() }
+    }
+
+    @Test fun concurrentCacheOnlyReadersShareOneDiskRead(): Unit = runBlocking {
+        val downloader = OriginalMediaDownloader { _, sink -> sink.writeUtf8("data"); info(4) }
+        val first = Fixture(downloader = downloader)
+        try {
+            first.store.acquire(request).close()
+            first.store.closeAndAwait()
+            val (second, cache) = slowFixture(first.directory, downloader)
+            try {
+                withTimeout(5000) {
+                    second.store.sizeBytes()
+                    cache()!!.slowMillis = 300
+                    val a = async(Dispatchers.Default) { second.store.acquire(request.copy(allowNetwork = false)) }
+                    delay(50)
+                    // Joining while the first reader was still reading used to fail.
+                    val b = async(Dispatchers.Default) { second.store.acquire(request.copy(allowNetwork = false)) }
+                    a.await().use { assertEquals("data", it.readAt(0, 4).decodeToString()) }
+                    b.await().use { assertEquals("data", it.readAt(0, 4).decodeToString()) }
+                }
+            } finally { second.store.closeAndAwait() }
+        } finally { first.finish() }
+    }
+
+    @Test fun cacheOnlyMissWithNothingToImportCreatesNoCacheEntry(): Unit = runBlocking {
+        val cachedCalls = AtomicInteger()
+        val fixture = Fixture(downloader = object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo =
+                error("a cache-only request must not download")
+            override suspend fun downloadCached(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo? {
+                cachedCalls.incrementAndGet()
+                return null
+            }
+            override suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean = false
+        })
+        try {
+            repeat(3) {
+                assertFailsWith<OriginalMediaNotCached> { fixture.store.acquire(request.copy(allowNetwork = false)) }
+            }
+            assertEquals(0, cachedCalls.get(), "no editor is opened for a certain miss")
+            val journal = java.io.File(fixture.directory, "journal")
+            assertFalse(journal.exists() && journal.readText().contains("DIRTY"), "a miss must not journal an entry")
+        } finally { fixture.finish() }
+    }
 }

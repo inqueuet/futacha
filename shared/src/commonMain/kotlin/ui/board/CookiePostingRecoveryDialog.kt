@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 private val postingCookieNames = setOf("posttime", "ptmt")
 
@@ -91,7 +92,7 @@ internal fun CookiePostingRecoveryDialog(
         is CookiePostingRecoveryDialogState.Ready -> currentState.guidance
     }
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("cookie_recovery", "Cookie復旧案内を閉じる")
             onDismiss()
@@ -117,5 +118,5 @@ internal fun CookiePostingRecoveryDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }

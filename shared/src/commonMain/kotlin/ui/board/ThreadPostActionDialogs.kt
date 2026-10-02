@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -55,7 +56,7 @@ internal fun ThreadPostActionSheet(
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     var showReportConfirmation by remember(post.id) { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("post_action_sheet_dismiss", "投稿メニューを閉じる")
             onDismiss()
@@ -148,8 +149,8 @@ internal fun ThreadPostActionSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
-    }
-    if (showReportConfirmation) {
+    } }
+    if (showReportConfirmation) FutachaAppLockAwareWindow {
         AlertDialog(
             onDismissRequest = { showReportConfirmation = false },
             title = { Text("不適切な投稿を通報") },
@@ -188,7 +189,7 @@ internal fun DeleteByUserDialog(
         onTextChange = onPasswordChange,
         analyticsFieldLabel = "本人削除キー"
     )
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("delete_by_user_dismiss", "本人削除を閉じる")
             onDismiss()
@@ -250,5 +251,5 @@ internal fun DeleteByUserDialog(
                 }
             }
         }
-    )
+    ) }
 }

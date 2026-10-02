@@ -7,6 +7,11 @@ import platform.AVFoundation.AVPlayerItemFailedToPlayToEndTimeNotification
 import platform.AVFoundation.AVPlayerItemDidPlayToEndTimeNotification
 import platform.AVFoundation.AVPlayerRateDidChangeNotification
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.audio.IosPlaybackAudioLease
+import com.valoser.futacha.shared.audio.acquireIosPlaybackAudioSession
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -94,6 +99,47 @@ internal actual fun NativePlatformVideoPlayer(
     val currentControlsCallback by rememberUpdatedState(onControlsVisibilityChanged)
     val currentMediaInfoCallback by rememberUpdatedState(onMediaInfoKnown)
     val currentErrorCallback by rememberUpdatedState(onPlaybackError)
+    var sourceReady by remember(videoUrl) { mutableStateOf(false) }
+    LaunchedEffect(videoUrl) {
+        val path = NSURL.URLWithString(videoUrl)?.takeIf { it.fileURL }?.path
+        // Resolving a remembered bookmark is a file-system round trip: never on the main thread (G4-5).
+        val directory = path?.let { com.valoser.futacha.shared.util.resolveBookmarkedMediaDirectory(it) }
+        val started = directory?.startAccessingSecurityScopedResource() == true
+        try {
+            sourceReady = directory == null || started
+            if (!sourceReady) {
+                currentErrorCallback(VideoPlaybackError("saved_folder_permission", "保存フォルダへのアクセス権を取得できませんでした"))
+                currentCallback(VideoPlayerState.Error)
+            }
+            awaitCancellation()
+        } finally { if (started) directory?.stopAccessingSecurityScopedResource() }
+    }
+    // Held while this player is shown and released on dispose, so other apps'
+    // audio resumes afterwards; muted playback mixes instead of interrupting
+    // it. A session that cannot be activated (e.g. during a call) is logged
+    // by the coordinator and does not block playback (G-4).
+    var audioLease by remember(videoUrl) { mutableStateOf<IosPlaybackAudioLease?>(null) }
+    val mixWithOthers = normalizeVideoPlayerVolume(volume, isMuted) <= 0f
+    val currentMixWithOthers by rememberUpdatedState(mixWithOthers)
+    LaunchedEffect(videoUrl) {
+        var lease: IosPlaybackAudioLease? = null
+        try {
+            // Assigned inside the block: a cancelled caller discards withContext's result.
+            withContext(NonCancellable + AppDispatchers.io) {
+                lease = acquireIosPlaybackAudioSession(currentMixWithOthers)
+            }
+            audioLease = lease
+            awaitCancellation()
+        } finally {
+            audioLease = null
+            lease?.let { held -> withContext(NonCancellable + AppDispatchers.io) { held.close() } }
+        }
+    }
+    LaunchedEffect(audioLease, mixWithOthers) {
+        val lease = audioLease ?: return@LaunchedEffect
+        withContext(AppDispatchers.io) { lease.updateMixWithOthers(mixWithOthers) }
+    }
+    if (audioLease == null || !sourceReady) { Box(modifier); return }
     DisposableEffect(videoUrl) {
         logVideoPlaybackEnvironment(videoUrl, resolveIosVideoPlaybackBackend(videoUrl).name)
         onDispose { }

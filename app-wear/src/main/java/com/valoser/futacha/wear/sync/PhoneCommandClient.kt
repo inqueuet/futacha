@@ -10,6 +10,8 @@ import androidx.core.content.ContextCompat
 import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import com.valoser.futacha.shared.ai.FUTACHA_AI_WATCH_RELAY_PARAMETER
+import com.valoser.futacha.shared.ai.FUTACHA_AI_WATCH_RELAY_WEAR_OS
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.buildFutachaAiDeepLink
 import com.valoser.futacha.shared.watch.WATCH_COMMAND_KEY
@@ -63,16 +65,18 @@ class PhoneCommandClient(
             boardUrl = boardUrl,
             commandId = commandId
         )
-        openDeepLinkOnPhoneOrFallback(
+        sendOpenCommandAndBringPhoneAppToFront(
+            command = command,
             deepLink = buildFutachaAiDeepLink(
                 action = FutachaAiAction.OpenBoard,
                 parameters = mapOf(
                     "boardId" to boardId,
                     "boardUrl" to boardUrl,
-                    "commandId" to commandId
+                    "commandId" to commandId,
+                    FUTACHA_AI_WATCH_RELAY_PARAMETER to FUTACHA_AI_WATCH_RELAY_WEAR_OS
                 )
             ),
-            fallback = { sendCommand(command, onNotConnected) }
+            onNotConnected = onNotConnected
         )
     }
 
@@ -90,17 +94,19 @@ class PhoneCommandClient(
             threadId = threadId,
             commandId = commandId
         )
-        openDeepLinkOnPhoneOrFallback(
+        sendOpenCommandAndBringPhoneAppToFront(
+            command = command,
             deepLink = buildFutachaAiDeepLink(
                 action = FutachaAiAction.OpenThread,
                 parameters = mapOf(
                     "boardId" to boardId,
                     "boardUrl" to boardUrl,
                     "threadId" to threadId,
-                    "commandId" to commandId
+                    "commandId" to commandId,
+                    FUTACHA_AI_WATCH_RELAY_PARAMETER to FUTACHA_AI_WATCH_RELAY_WEAR_OS
                 )
             ),
-            fallback = { sendCommand(command, onNotConnected) }
+            onNotConnected = onNotConnected
         )
     }
 
@@ -158,17 +164,27 @@ class PhoneCommandClient(
         )
     }
 
-    private fun openDeepLinkOnPhoneOrFallback(
+    /**
+     * C4-3: the command itself always goes over the Data Layer, which only this
+     * watch app can send and the phone runs as a watch command (allowed while
+     * "AIアプリ操作" is OFF). The `futacha://ai` link (same commandId, marked as
+     * a watch relay) only brings the phone app to the front so the command is
+     * picked up; any web page can open such a link, so the phone does not let
+     * the link itself bypass the setting. When the link is allowed, both
+     * arrive and the phone runs the commandId once.
+     */
+    private fun sendOpenCommandAndBringPhoneAppToFront(
+        command: WatchCommand,
         deepLink: String,
-        fallback: () -> Unit
+        onNotConnected: () -> Unit
     ) {
+        sendCommand(command, onNotConnected)
+        bringPhoneAppToFront(deepLink)
+    }
+
+    /** Best effort: the command itself was already sent over the Data Layer. */
+    private fun bringPhoneAppToFront(deepLink: String) {
         val completed = AtomicBoolean(false)
-        val fallbackStarted = AtomicBoolean(false)
-        val fallbackOnce = {
-            if (fallbackStarted.compareAndSet(false, true)) {
-                fallback()
-            }
-        }
         val intent = Intent(Intent.ACTION_VIEW).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
             data = Uri.parse(deepLink)
@@ -176,22 +192,14 @@ class PhoneCommandClient(
         val future = runCatching {
             remoteActivityHelper.startRemoteActivity(intent, null)
         }.getOrElse { error ->
-            Log.w(
-                TAG,
-                "Failed to request remote activity; falling back to DataItem (${error.javaClass.simpleName})"
-            )
-            fallback()
+            Log.w(TAG, "Failed to request remote activity (${error.javaClass.simpleName})")
             return
         }
         future.addListener(
             {
                 completed.set(true)
                 runCatching { future.get() }.onFailure { error ->
-                    Log.w(
-                        TAG,
-                        "Remote activity request failed; falling back to DataItem (${error.javaClass.simpleName})"
-                    )
-                    fallbackOnce()
+                    Log.w(TAG, "Remote activity request failed (${error.javaClass.simpleName})")
                 }
             },
             mainExecutor
@@ -199,12 +207,11 @@ class PhoneCommandClient(
         mainHandler.postDelayed(
             {
                 if (completed.compareAndSet(false, true)) {
-                    Log.w(TAG, "Remote activity request timed out; falling back to DataItem")
+                    Log.w(TAG, "Remote activity request timed out")
                     future.cancel(true)
-                    fallbackOnce()
                 }
             },
-            WATCH_REMOTE_ACTIVITY_FALLBACK_TIMEOUT_MILLIS
+            WATCH_REMOTE_ACTIVITY_TIMEOUT_MILLIS
         )
     }
 
@@ -303,6 +310,6 @@ class PhoneCommandClient(
         private const val TAG = "PhoneCommandClient"
         private const val WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
         private const val WATCH_MESSAGE_FALLBACK_TIMEOUT_MILLIS = 10_000L
-        private const val WATCH_REMOTE_ACTIVITY_FALLBACK_TIMEOUT_MILLIS = 10_000L
+        private const val WATCH_REMOTE_ACTIVITY_TIMEOUT_MILLIS = 10_000L
     }
 }

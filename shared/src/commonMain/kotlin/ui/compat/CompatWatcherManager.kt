@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -55,7 +56,7 @@ internal fun CompatWatcherManager(
             finally { busy = false }
         }
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = { actionJob?.cancel(); onDismiss() },
         title = { Text("巡回管理") },
         text = {
@@ -149,5 +150,5 @@ internal fun CompatWatcherManager(
             }
         },
         confirmButton = { TextButton(onClick = { actionJob?.cancel(); onDismiss() }) { Text(if (busy) "中止して閉じる" else "閉じる") } }
-    )
+    ) }
 }

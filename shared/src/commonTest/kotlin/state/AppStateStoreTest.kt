@@ -26,6 +26,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -435,8 +436,11 @@ class AppStateStoreTest {
         assertEquals(0, files.readCount, "Unchanged manifest and known entry hashes stay in memory")
         val restarted = AppStateStore(storage, AppStateHistoryFileStore(files, json, "restart"), json)
         assertEquals(listOf("222", "111"), restarted.history.first().map { it.threadId })
+        files.backupLinkCount = 0
         store.removeHistoryEntry(first)
-        assertEquals(1, files.backupWriteCount)
+        // T-4: the deletion updates the backup without writing the manifest twice.
+        assertEquals(0, files.backupWriteCount)
+        assertEquals(1, files.backupLinkCount)
         files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
         val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
         assertEquals(listOf("222"), recovered.history.first().map { it.threadId })
@@ -458,6 +462,42 @@ class AppStateStoreTest {
         val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
         assertEquals(listOf("222", "333", "111"), recovered.history.first().map { it.threadId })
         store.close(); recovered.close()
+    }
+
+    @Test
+    fun addingHistoryEntryWritesTheManifestOnceAndKeepsACurrentBackup() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        store.setHistory((1..50).map { historyEntry(threadId = "$it") })
+        files.entryWriteCount = 0
+        files.manifestWriteCount = 0
+        files.backupWriteCount = 0
+        files.backupLinkCount = 0
+
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "999"))
+
+        assertEquals(1, files.entryWriteCount, "only the added entry is written")
+        assertEquals(1, files.manifestWriteCount)
+        assertEquals(0, files.backupWriteCount, "the backup is not a second full manifest write")
+        assertEquals(1, files.backupLinkCount)
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("999") + (1..50).map { "$it" }, recovered.history.first().map { it.threadId })
+        store.close(); recovered.close()
+    }
+
+    @Test
+    fun persistedSelfPostFlagsReuseTheHistoryListWhenNothingChanges() {
+        val history = listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222"))
+        assertSame(history, applyPersistedSelfPostFlags(history, emptyMap()))
+        assertSame(history, applyPersistedSelfPostFlags(history, mapOf("other::333" to listOf("1"))))
+        val boardId = history[1].boardId
+        val scopedKey = if (boardId.isBlank()) "222" else "$boardId::222"
+        val marked = applyPersistedSelfPostFlags(history, mapOf(scopedKey to listOf("5")))
+        assertEquals(listOf(false, true), marked.map { it.hasSelfPost })
+        assertSame(history[0], marked[0])
+        assertEquals(listOf(false, false), history.map { it.hasSelfPost })
     }
 
     @Test
@@ -1180,8 +1220,21 @@ private class CountingHistoryFileSystem(
     var entryWriteCount = 0
     var manifestWriteCount = 0
     var backupWriteCount = 0
+    var backupLinkCount = 0
+    /** Fails the next backup update: its link and the copy written instead. */
     var failNextBackupWrite = false
     var readCount = 0
+
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> {
+        if (toPath == "private/history_store/manifest.json.backup") {
+            backupLinkCount += 1
+            if (failNextBackupWrite) {
+                delegate.delete(toPath)
+                return Result.failure(IllegalStateException("backup link failed"))
+            }
+        }
+        return delegate.linkOrCopy(fromPath, toPath)
+    }
 
     override suspend fun readString(path: String): Result<String> {
         readCount += 1

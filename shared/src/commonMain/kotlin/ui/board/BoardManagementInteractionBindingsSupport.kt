@@ -81,6 +81,37 @@ internal data class BoardManagementBoardListCallbacks(
     val onReorder: (boards: List<BoardSummary>) -> Unit = {}
 )
 
+/**
+ * A board list produced by one edit on the list the screen showed, carrying the
+ * edit itself. Rapid ↑↓, pin and rename taps reach the store before the screen
+ * shows the previous result; the store re-applies [apply] to its latest list
+ * ([applyBoardListUpdate]) so no earlier edit is overwritten by a stale list.
+ */
+internal class BoardListEdit(
+    preview: List<BoardSummary>,
+    val apply: (List<BoardSummary>) -> List<BoardSummary>
+) : List<BoardSummary> by preview
+
+internal fun boardListEdit(
+    shown: List<BoardSummary>,
+    apply: (List<BoardSummary>) -> List<BoardSummary>
+): BoardListEdit = BoardListEdit(apply(shown), apply)
+
+/** The list to store for [update] given the store's [latest] list. */
+internal fun applyBoardListUpdate(latest: List<BoardSummary>, update: List<BoardSummary>): List<BoardSummary> =
+    if (update is BoardListEdit) update.apply(latest) else update
+
+/**
+ * A dragged order applied to the latest list: boards keep their latest name and
+ * pin, a board deleted meanwhile stays deleted and one added meanwhile is kept
+ * at the end.
+ */
+internal fun reorderBoardSummariesLike(latest: List<BoardSummary>, order: List<BoardSummary>): List<BoardSummary> {
+    val position = order.withIndex().associate { (index, board) -> board.id to index }
+    val (ordered, added) = latest.partition { it.id in position }
+    return ordered.sortedBy { position.getValue(it.id) } + added
+}
+
 internal fun mutateBoardManagementOverlayState(
     currentOverlayState: () -> BoardManagementOverlayState,
     setOverlayState: (BoardManagementOverlayState) -> Unit,
@@ -178,18 +209,32 @@ internal fun buildBoardManagementInteractionBindingsBundle(
             }
         },
         onPinClick = { boards, index ->
-            boardInputs.onBoardsReordered(toggleBoardSummaryPinned(boards, index))
+            boards.getOrNull(index)?.id?.let { boardId ->
+                boardInputs.onBoardsReordered(boardListEdit(boards) { latest ->
+                    toggleBoardSummaryPinned(latest, latest.indexOfFirst { it.id == boardId })
+                })
+            }
         },
         onMoveUp = { boards, index ->
-            boardInputs.onBoardsReordered(moveBoardSummary(boards, index, moveUp = true))
+            boards.getOrNull(index)?.id?.let { boardId ->
+                boardInputs.onBoardsReordered(boardListEdit(boards) { latest ->
+                    moveBoardSummary(latest, latest.indexOfFirst { it.id == boardId }, moveUp = true)
+                })
+            }
         },
         onMoveDown = { boards, index ->
-            boardInputs.onBoardsReordered(moveBoardSummary(boards, index, moveUp = false))
+            boards.getOrNull(index)?.id?.let { boardId ->
+                boardInputs.onBoardsReordered(boardListEdit(boards) { latest ->
+                    moveBoardSummary(latest, latest.indexOfFirst { it.id == boardId }, moveUp = false)
+                })
+            }
         },
         onRename = { boards, boardId, name ->
-            boardInputs.onBoardsReordered(renameBoardSummary(boards, boardId, name))
+            boardInputs.onBoardsReordered(boardListEdit(boards) { latest -> renameBoardSummary(latest, boardId, name) })
         },
-        onReorder = boardInputs.onBoardsReordered
+        onReorder = { order ->
+            boardInputs.onBoardsReordered(boardListEdit(order) { latest -> reorderBoardSummariesLike(latest, order) })
+        }
     )
     return BoardManagementInteractionBindingsBundle(
         historyDrawerCallbacks = historyDrawerCallbacks,

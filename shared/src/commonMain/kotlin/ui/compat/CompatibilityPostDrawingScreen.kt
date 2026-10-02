@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,9 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -92,6 +91,8 @@ fun CompatPostDrawingScreen(
     val strokes = remember { mutableStateListOf<CompatDrawingStroke>() }
     val redoStrokes = remember { mutableStateListOf<CompatDrawingStroke>() }
     val currentPoints = remember { mutableStateListOf<CompatDrawingPoint>() }
+    // Finished strokes are drawn from a bitmap; only the active one is live (E-12).
+    val strokeCache = remember { CompatDrawingStrokeCache() }
     var mainBrush by remember {
         mutableStateOf(CompatDrawingBrush(COMPAT_DRAWING_MAIN_COLOR_ARGB, COMPAT_DRAWING_MAIN_SIZE))
     }
@@ -224,31 +225,9 @@ fun CompatPostDrawingScreen(
                         )
                     }
             ) {
-                fun drawStroke(stroke: CompatDrawingStroke) {
-                    val points = stroke.points
-                    if (points.size == 1) {
-                        drawCircle(
-                            color = Color(stroke.colorArgb),
-                            radius = stroke.widthPx / 2f,
-                            center = Offset(points[0].x, points[0].y)
-                        )
-                    } else {
-                        for (index in 1 until points.size) {
-                            val from = points[index - 1]
-                            val to = points[index]
-                            drawLine(
-                                color = Color(stroke.colorArgb),
-                                start = Offset(from.x, from.y),
-                                end = Offset(to.x, to.y),
-                                strokeWidth = stroke.widthPx,
-                                cap = StrokeCap.Round
-                            )
-                        }
-                    }
-                }
-                strokes.forEach(::drawStroke)
+                strokeCache.draw(this, strokes)
                 if (currentPoints.isNotEmpty()) {
-                    drawStroke(
+                    drawCompatDrawingStroke(
                         CompatDrawingStroke(
                             Color(activeBrush.colorArgb).toArgb(),
                             activeBrush.widthPx,
@@ -286,7 +265,7 @@ fun CompatPostDrawingScreen(
         )
     }
     if (clearConfirm) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { clearConfirm = false },
             title = { Text("確認") },
             text = { Text("最初の状態に戻します\n本当によろしいですか？") },
@@ -299,10 +278,10 @@ fun CompatPostDrawingScreen(
                 }) { Text("クリアー") }
             },
             dismissButton = { TextButton(onClick = { clearConfirm = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     if (saveConfirm) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { saveConfirm = false },
             title = { Text("確認") },
             text = { Text("添付画像として保存します\n本当によろしいですか？") },
@@ -327,10 +306,10 @@ fun CompatPostDrawingScreen(
                 }) { Text("保存する") }
             },
             dismissButton = { TextButton(onClick = { saveConfirm = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
     if (closeConfirm) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { closeConfirm = false },
             title = { Text("確認") },
             text = { Text("画像が保存されていません\n本当によろしいですか？") },
@@ -338,7 +317,7 @@ fun CompatPostDrawingScreen(
                 TextButton(onClick = { closeConfirm = false; onBack() }) { Text("送信画面に戻る") }
             },
             dismissButton = { TextButton(onClick = { closeConfirm = false }) { Text("キャンセル") } }
-        )
+        ) }
     }
 }
 
@@ -369,7 +348,7 @@ internal fun CompatDrawingPaletteDialog(
         if (selected == 0) publish(main = updated) else publish(sub = updated)
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    FutachaAppLockAwareWindow { Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier.fillMaxWidth().wrapContentHeight(),
             color = compatibilityPopupSurface(LocalCompatibilityPalette.current),
@@ -491,7 +470,7 @@ internal fun CompatDrawingPaletteDialog(
                 )
             }
         }
-    }
+    } }
 
     if (pickerOpen) {
         CompatDrawingPresetPicker(
@@ -531,7 +510,7 @@ private fun CompatDrawingPresetPicker(
     onDismiss: () -> Unit,
     onSelected: (Long) -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    FutachaAppLockAwareWindow { Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier.fillMaxWidth().wrapContentHeight(),
             color = compatibilityPopupSurface(LocalCompatibilityPalette.current),
@@ -555,7 +534,7 @@ private fun CompatDrawingPresetPicker(
                 }
             }
         }
-    }
+    } }
 }
 
 private fun compatDrawingArgb(red: Int, green: Int, blue: Int): Long =

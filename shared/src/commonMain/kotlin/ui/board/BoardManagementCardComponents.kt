@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsSessionContextId
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun BoardSummaryCard(
@@ -71,7 +72,7 @@ internal fun DeleteBoardDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("board_delete", "板の削除確認を閉じる", boardCardAnalyticsParams(board))
             onDismiss()
@@ -102,7 +103,7 @@ internal fun DeleteBoardDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }
 
 @Composable

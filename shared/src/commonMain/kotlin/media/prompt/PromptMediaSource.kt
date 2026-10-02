@@ -115,18 +115,24 @@ class PromptMediaSource(
             val generation = epoch
             val job = scope.launch(start = CoroutineStart.LAZY) {
                 try {
+                    // Only a timeout (a busy device) is retried later. A reader that hit its size
+                    // budget returns the same partial result every time (e.g. a ComfyUI workflow in
+                    // a PNG), so keep what it collected instead of discarding it and re-parsing
+                    // every cooldown.
+                    var timedOut = false
                     val result = parsing.withPermit {
                         if (!gate.isCurrent(permit)) return@launch
                         try {
                             withTimeoutOrNull(parseTimeoutMillis) { input.read() }
-                                ?: GenerationMetadata(coverage = MetadataCoverage.BUDGET_EXCEEDED)
+                                ?: run {
+                                    timedOut = true
+                                    GenerationMetadata(coverage = MetadataCoverage.BUDGET_EXCEEDED)
+                                }
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { GenerationMetadata(coverage = MetadataCoverage.SOURCE_UNAVAILABLE) }
                     }
                     mutex.withLock {
-                        if (generation == epoch && gate.isCurrent(permit) &&
-                            result.coverage == MetadataCoverage.BUDGET_EXCEEDED
-                        ) {
+                        if (generation == epoch && gate.isCurrent(permit) && timedOut) {
                             // A busy device must not hide the prompt of this original for good.
                             results.remove(identity)
                             budgetExceeded.remove(identity)

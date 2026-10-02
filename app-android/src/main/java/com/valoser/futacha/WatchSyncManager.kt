@@ -39,6 +39,7 @@ import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchSnapshotBuilder
 import com.valoser.futacha.shared.watch.WatchThreadKey
 import com.valoser.futacha.shared.watch.WatchThreadSummary
+import com.valoser.futacha.shared.watch.ThreadReadAloudRemoteControl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
@@ -94,7 +96,9 @@ class WatchSyncManager(
         } else {
             false
         }
-    }
+    },
+    /** Number of started MainActivity instances; null keeps the old "queue immediately" behavior. */
+    private val startedMainActivities: kotlinx.coroutines.flow.StateFlow<Int>? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val snapshotBuilder = WatchSnapshotBuilder()
@@ -125,6 +129,17 @@ class WatchSyncManager(
     private var readAloudCollectorJob: Job? = null
     private val watchRefreshJobLock = Any()
     private var watchRefreshJob: Job? = null
+    // One ordered consumer for command payloads: a coroutine per payload let a
+    // stop overtake the start sent before it (D5/C-14).
+    private val commandPayloads = Channel<ByteArray>(capacity = WATCH_COMMAND_PAYLOAD_QUEUE_CAPACITY)
+    private val isCommandConsumerStarted = AtomicBoolean(false)
+    private val lastQueuedPlaybackCommandElapsedMillis = AtomicLong(Long.MIN_VALUE)
+    private val uiCommandQueue = WatchUiCommandQueue(
+        scope = scope,
+        startedActivities = startedMainActivities,
+        enqueue = { command, maxAgeMillis -> FutachaAiCommandBridge.enqueue(command, maxAgeMillis = maxAgeMillis) },
+        nowElapsedMillis = SystemClock::elapsedRealtime
+    )
 
     fun start() {
         if (!isModernProfileActive()) return
@@ -378,17 +393,37 @@ class WatchSyncManager(
 
     fun handleCommandPayload(payload: ByteArray) {
         if (!isModernProfileActive() || payload.isEmpty() || payload.size > WATCH_COMMAND_PAYLOAD_MAX_BYTES) return
-        scope.launch {
-            val command = runCatching {
-                withContext(Dispatchers.Default) {
-                    json.decodeFromString(WatchCommand.serializer(), payload.decodeToString())
-                }
-            }.getOrNull() ?: return@launch
-            if (isDuplicateCommand(command)) {
-                return@launch
-            }
-            handleCommand(command)
+        ensureCommandConsumer()
+        if (commandPayloads.trySend(payload).isFailure) {
+            Logger.w(TAG, "Dropped watch command because the command queue is full")
         }
+    }
+
+    private fun ensureCommandConsumer() {
+        if (!isCommandConsumerStarted.compareAndSet(false, true)) return
+        scope.launch {
+            for (payload in commandPayloads) {
+                try {
+                    processCommandPayload(payload)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    Logger.w(TAG, "Watch command failed: ${error::class.simpleName.orEmpty()}")
+                }
+            }
+        }
+    }
+
+    private suspend fun processCommandPayload(payload: ByteArray) {
+        val command = runCatching {
+            withContext(Dispatchers.Default) {
+                json.decodeFromString(WatchCommand.serializer(), payload.decodeToString())
+            }
+        }.getOrNull() ?: return
+        if (isDuplicateCommand(command)) {
+            return
+        }
+        handleCommand(command)
     }
 
     fun handleSnapshotAckPayload(payload: ByteArray) {
@@ -399,7 +434,7 @@ class WatchSyncManager(
         }
     }
 
-    private fun handleCommand(command: WatchCommand) {
+    private suspend fun handleCommand(command: WatchCommand) {
         when (command.type) {
             WatchCommandType.Refresh -> {
                 handleRefreshCommand()
@@ -414,10 +449,18 @@ class WatchSyncManager(
                 enqueueThreadActionCommand(command, FutachaAiAction.StartThreadReadAloud)
             }
             WatchCommandType.PauseReadAloudOnPhone -> {
-                enqueueThreadActionCommand(command, FutachaAiAction.PauseThreadReadAloud)
+                handlePlaybackReductionCommand(
+                    command,
+                    ThreadReadAloudRemoteControl.Command.Pause,
+                    FutachaAiAction.PauseThreadReadAloud
+                )
             }
             WatchCommandType.StopReadAloudOnPhone -> {
-                enqueueThreadActionCommand(command, FutachaAiAction.StopThreadReadAloud)
+                handlePlaybackReductionCommand(
+                    command,
+                    ThreadReadAloudRemoteControl.Command.Stop,
+                    FutachaAiAction.StopThreadReadAloud
+                )
             }
             WatchCommandType.NextReadAloudOnPhone -> {
                 enqueueThreadActionCommand(command, FutachaAiAction.NextThreadReadAloud)
@@ -509,7 +552,7 @@ class WatchSyncManager(
         val boardId = command.boardId?.takeIf { it.isNotBlank() }
         val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() }
         if (boardId == null && boardUrl == null) return
-        val accepted = FutachaAiCommandBridge.enqueue(
+        enqueueWhenUiStarted(
             FutachaAiCommand(
                 action = FutachaAiAction.OpenBoard,
                 parameters = buildMap {
@@ -520,10 +563,64 @@ class WatchSyncManager(
                 source = "wear-os"
             )
         )
-        if (accepted) {
+    }
+
+    /**
+     * Pause/stop act now on the thread screen that is still composed (also in
+     * the background or behind the app lock) instead of waiting for the UI
+     * (C-4/D7). They are queued as well only when a queued start/seek could
+     * otherwise run after them, which keeps the watch's order.
+     */
+    private suspend fun handlePlaybackReductionCommand(
+        command: WatchCommand,
+        remoteCommand: ThreadReadAloudRemoteControl.Command,
+        action: FutachaAiAction
+    ) {
+        val boardId = command.boardId?.takeIf { it.isNotBlank() } ?: return
+        val threadId = command.threadId?.takeIf { it.isNotBlank() } ?: return
+        val handled = withContext(Dispatchers.Main.immediate) {
+            ThreadReadAloudRemoteControl.dispatch(remoteCommand, boardId, command.boardUrl, threadId)
+        }
+        val hasRecentQueuedPlayback = isWithinWatchUiCommandMaxAge(
+            queuedElapsedMillis = lastQueuedPlaybackCommandElapsedMillis.get(),
+            nowElapsedMillis = SystemClock.elapsedRealtime()
+        )
+        if (!handled && !hasRecentQueuedPlayback) {
+            // No screen of that thread exists, so nothing of it is playing.
+            return
+        }
+        if (hasRecentQueuedPlayback) {
+            enqueueThreadActionCommand(command, action)
+        }
+    }
+
+    /**
+     * Enqueue synchronously in receive order. The command expires after
+     * [WATCH_UI_COMMAND_MAX_AGE_MILLIS]: when no started activity picks it up
+     * soon (background start blocked, app locked), it must not open a thread or
+     * start reading hours later (C-4). It reaches the app's collector only once
+     * an activity has started, because that collector also runs in the
+     * background (C4-1).
+     */
+    private fun enqueueWhenUiStarted(aiCommand: FutachaAiCommand) {
+        if (!uiCommandQueue.submit(aiCommand)) {
+            Logger.w(TAG, "Dropped watch command because AI command queue is full: action=${aiCommand.action.id}")
+            return
+        }
+        if (aiCommand.action == FutachaAiAction.StartThreadReadAloud ||
+            aiCommand.action == FutachaAiAction.NextThreadReadAloud ||
+            aiCommand.action == FutachaAiAction.PreviousThreadReadAloud
+        ) {
+            lastQueuedPlaybackCommandElapsedMillis.set(SystemClock.elapsedRealtime())
+        }
+        // Opening the UI is a best-effort navigation aid; Android may block a
+        // background activity start, and the queued command then expires.
+        val isUiStarted = (startedMainActivities?.value ?: 0) > 0
+        if (!isUiStarted && (aiCommand.action == FutachaAiAction.OpenThread ||
+                aiCommand.action == FutachaAiAction.OpenBoard ||
+                aiCommand.action == FutachaAiAction.StartThreadReadAloud)
+        ) {
             openMainActivity()
-        } else {
-            Logger.w(TAG, "Dropped watch open-board command because AI command queue is full")
         }
     }
 
@@ -538,7 +635,7 @@ class WatchSyncManager(
         val boardId = command.boardId?.takeIf { it.isNotBlank() } ?: return
         val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() } ?: return
         val threadId = command.threadId?.takeIf { it.isNotBlank() } ?: return
-        val accepted = FutachaAiCommandBridge.enqueue(
+        enqueueWhenUiStarted(
             FutachaAiCommand(
                 action = action,
                 parameters = mapOf(
@@ -552,21 +649,16 @@ class WatchSyncManager(
                 source = "wear-os"
             )
         )
-        if (accepted) {
-            openMainActivity()
-        } else {
-            Logger.w(TAG, "Dropped watch thread command because AI command queue is full: action=${action.id}")
-        }
     }
 
-    private fun openMainActivity() {
+    private fun openMainActivity(): Boolean {
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        runCatching {
+        return runCatching {
             context.startActivity(intent)
         }.onFailure { error ->
             Logger.w(TAG, "Failed to open MainActivity from watch command: ${error.message}")
-        }
+        }.isSuccess
     }
 
     private suspend fun sendCurrentSnapshot(includePreviewThreadPages: Boolean) {
@@ -680,17 +772,13 @@ class WatchSyncManager(
 
     private suspend fun sendSnapshot(snapshot: WatchSnapshot) {
         if (!canUseWearDataLayer()) return
-        val encoded = json.encodeToString(WatchSnapshot.serializer(), snapshot)
-        val payload = encoded.encodeToByteArray()
-        if (payload.size > WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) {
-            Logger.w(
-                TAG,
-                "Dropped watch snapshot because payload is too large: ${payload.size} bytes"
-            )
-            return
-        }
-        val ackId = nextSnapshotAckId(snapshot)
-        registerPendingSnapshotAck(ackId, snapshot)
+        // Leave room for DataMap's keys and acknowledgement envelope too.
+        val encoded = com.valoser.futacha.shared.watch.encodeWatchSnapshotWithinPayload(
+            snapshot, WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES - 1_024
+        ) { json.encodeToString(WatchSnapshot.serializer(), it) } ?: return
+        val delivered = json.decodeFromString(WatchSnapshot.serializer(), encoded)
+        val ackId = nextSnapshotAckId(delivered)
+        registerPendingSnapshotAck(ackId, delivered)
         val request = PutDataMapRequest.create(WATCH_SNAPSHOT_PATH).apply {
             dataMap.putString(WATCH_SNAPSHOT_KEY, encoded)
             dataMap.putString(WATCH_SNAPSHOT_ACK_KEY, ackId)
@@ -964,6 +1052,7 @@ class WatchSyncManager(
         private const val WATCH_PREVIEW_THREAD_LIMIT = 8
         private const val WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
         private const val WATCH_COMMAND_ID_MAX_BYTES = 128
+        private const val WATCH_COMMAND_PAYLOAD_QUEUE_CAPACITY = 64
         private const val WATCH_SNAPSHOT_ACK_PAYLOAD_MAX_BYTES = 128
         private const val WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES = 96 * 1024
         private const val WATCH_PENDING_SNAPSHOT_ACK_MAX_COUNT = 8
@@ -989,4 +1078,17 @@ class WatchSyncManager(
         private const val WATCH_REFRESH_MAX_THREADS_PER_RUN = 60
         private const val WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN = 2
     }
+}
+
+/** How long a watch command waiting for the phone UI stays valid (C-4). */
+internal const val WATCH_UI_COMMAND_MAX_AGE_MILLIS = 60_000L
+
+/** Whether a start/seek queued at [queuedElapsedMillis] may still be run by the UI. */
+internal fun isWithinWatchUiCommandMaxAge(
+    queuedElapsedMillis: Long,
+    nowElapsedMillis: Long,
+    maxAgeMillis: Long = WATCH_UI_COMMAND_MAX_AGE_MILLIS
+): Boolean {
+    if (queuedElapsedMillis == Long.MIN_VALUE || queuedElapsedMillis > nowElapsedMillis) return false
+    return nowElapsedMillis - queuedElapsedMillis <= maxAgeMillis
 }

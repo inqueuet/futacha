@@ -21,6 +21,19 @@ public abstract class ComposeSelectionGuardFactory
     private static final String GUARD = "com/valoser/futacha/text/SafeTextClassification";
     private static final String WITH_CONTEXT =
             "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;";
+    /** The Foundation Android version whose bytecode both call sites were verified against. */
+    public static final String VERIFIED_FOUNDATION_ANDROID_VERSION = "1.13.0-alpha02";
+
+    /** A renamed target class is never visited, so the per-class count check cannot see it.
+     * Bind registration to the verified pin so a dependency change fails the build instead.
+     */
+    public static void requireVerifiedFoundation(String strictVersion) {
+        if (!VERIFIED_FOUNDATION_ANDROID_VERSION.equals(strictVersion)) {
+            throw new IllegalStateException("Compose selection guard was verified against Foundation Android "
+                    + VERIFIED_FOUNDATION_ANDROID_VERSION + " but composeFoundationGuard is strictly '"
+                    + strictVersion + "'. Re-verify both call sites, then update this constant.");
+        }
+    }
 
     @Override public boolean isInstrumentable(ClassData data) {
         return IMPL.equals(data.getClassName()) || SUGGEST.equals(data.getClassName());

@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -63,7 +64,7 @@ internal fun FutachaTabsDialog(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "閉じたタブの記録を読み込めませんでした" }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("タブ一覧 (${tabs.size})") }, text = {
+    FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("タブ一覧 (${tabs.size})") }, text = {
         Column {
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             message?.let { Text(it) }
@@ -93,8 +94,8 @@ internal fun FutachaTabsDialog(
                 } }) { Text("元に戻す") }
             }
         }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
-    selected?.let { tab ->
+    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
+    selected?.let { tab -> FutachaAppLockAwareWindow {
         AlertDialog(onDismissRequest = { selected = null }, title = { Text("タブを整理") }, text = {
             Column {
                 Row {
@@ -117,7 +118,7 @@ internal fun FutachaTabsDialog(
                 }
             }
         }, confirmButton = { TextButton(onClick = { selected = null }) { Text("キャンセル") } })
-    }
+    } }
 }
 
 @Composable
@@ -131,7 +132,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
     LaunchedEffect(watcher, refresh, features.preferences) {
         watcher.load().onSuccess { snapshot = it }.onFailure { message = it.message }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("巡回結果") }, text = {
+    FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("巡回結果") }, text = {
         Column {
             snapshot.message?.let { Text(it) }
             message?.let { Text(it) }
@@ -157,9 +158,9 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
             TextButton(onClick = { managing = true }) { Icon(Icons.Filled.Settings, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("巡回管理") }
             TextButton(onClick = { refresh++ }) { Text("保存済み結果を再読込") }
         }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
-    if (managing) CompatWatcherManager(features.store, features.repository,
+    }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
+    if (managing) FutachaAppLockAwareWindow { CompatWatcherManager(features.store, features.repository,
         onDismiss = { managing = false; refresh++ }, onResultsChanged = { refresh++ },
         onOpenExternal = if (isAndroid()) watcher::openManager else null,
-        onOpenHelp = { managing = false; onDismiss(); features.openSettings("help") })
+        onOpenHelp = { managing = false; onDismiss(); features.openSettings("help") }) }
 }

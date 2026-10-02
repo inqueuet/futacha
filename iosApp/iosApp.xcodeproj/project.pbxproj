@@ -321,6 +321,13 @@
 			);
 			target = A46D3815533677F7187C07A8 /* iosApp */;
 		};
+		F7A1C010F7A1C010F7A1C010 /* Exceptions for "watchApp" folder in "watchApp" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				FutabaWatch.mobileprovision,
+			);
+			target = F7A1C006F7A1C006F7A1C006 /* watchApp */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -344,6 +351,9 @@
 		};
 		F7A1C002F7A1C002F7A1C002 /* watchApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F7A1C010F7A1C010F7A1C010 /* Exceptions for "watchApp" folder in "watchApp" target */,
+			);
 			path = watchApp;
 			sourceTree = "<group>";
 		};
@@ -2659,9 +2669,9 @@
 				00A73916B012CA183BB8B211 /* Resources */,
 				F7A1C00DF7A1C00DF7A1C00D /* Embed Watch Content */,
 				1F5F9DF70AF8B3644A4B637F /* Normalize shared framework plist */,
+				DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */,
 				8D6BAA2E9D694307A68438BF /* Strip shared framework bitcode */,
 				422462CBE098294768EFA5F6 /* Generate shared dSYM */,
-				DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */,
 				BBD78EC28F655FC94925BE11 /* [CP] Copy Pods Resources */,
 				C4A51E71C4A51E71C4A51E71 /* Upload Crashlytics dSYMs */,
 			);
@@ -2817,7 +2827,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "SHARED_BINARY=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/shared.framework/shared\"\nSHARED_DSYM=\"${DWARF_DSYM_FOLDER_PATH}/shared.framework.dSYM\"\nDSYMUTIL_STDERR=\"${DERIVED_FILE_DIR}/shared-dsymutil.stderr\"\n\nif [ ! -f \"$SHARED_BINARY\" ]; then\n  exit 0\nfi\n\nrm -rf \"$SHARED_DSYM\"\nif ! /usr/bin/dsymutil \"$SHARED_BINARY\" -o \"$SHARED_DSYM\" 2> \"$DSYMUTIL_STDERR\"; then\n  cat \"$DSYMUTIL_STDERR\" >&2\n  exit 1\nfi\nif [ -s \"$DSYMUTIL_STDERR\" ]; then\n  grep -v \"unable to open object file: No such file or directory\" \"$DSYMUTIL_STDERR\" >&2 || true\nfi\n";
+			shellScript = "set -eu\nSHARED_BINARY=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/shared.framework/shared\"\nSHARED_DSYM=\"${DWARF_DSYM_FOLDER_PATH}/shared.framework.dSYM\"\n# Gradle links the framework with full DWARF and writes this dSYM before the\n# Release binary is stripped (`strip -S -x`), so dsymutil on the embedded copy\n# would produce an empty dSYM. Prefer the Gradle dSYM when its UUIDs match.\nGRADLE_DSYM=\"${PODS_ROOT}/../../shared/build/cocoapods/framework/shared.framework.dSYM\"\nDSYMUTIL_STDERR=\"${DERIVED_FILE_DIR}/shared-dsymutil.stderr\"\n\nif [ ! -f \"$SHARED_BINARY\" ]; then\n  exit 0\nfi\n\nmkdir -p \"${DWARF_DSYM_FOLDER_PATH}\" \"${DERIVED_FILE_DIR}\"\nrm -rf \"$SHARED_DSYM\"\n\nmacho_uuids() {\n  xcrun dwarfdump --uuid \"$1\" 2>/dev/null | awk '$1 == \"UUID:\" { print $2 }' | sort\n}\n\nBINARY_UUIDS=\"$(macho_uuids \"$SHARED_BINARY\")\"\nif [ -n \"$BINARY_UUIDS\" ] && [ -d \"$GRADLE_DSYM\" ] && [ \"$(macho_uuids \"$GRADLE_DSYM\")\" = \"$BINARY_UUIDS\" ]; then\n  /usr/bin/ditto \"$GRADLE_DSYM\" \"$SHARED_DSYM\"\n  exit 0\nfi\n\n# Fallback for an unstripped binary that still carries a debug map.\nif /usr/bin/nm -ap \"$SHARED_BINARY\" 2>/dev/null | grep -q \" OSO \"; then\n  if ! /usr/bin/dsymutil \"$SHARED_BINARY\" -o \"$SHARED_DSYM\" 2> \"$DSYMUTIL_STDERR\"; then\n    cat \"$DSYMUTIL_STDERR\" >&2\n    exit 1\n  fi\n  if [ -s \"$DSYMUTIL_STDERR\" ]; then\n    grep -v \"unable to open object file: No such file or directory\" \"$DSYMUTIL_STDERR\" >&2 || true\n  fi\n  exit 0\nfi\n\necho \"warning: shared.framework.dSYM was not generated: no UUID-matching Gradle dSYM at $GRADLE_DSYM and the embedded binary has no debug map.\"\n";
 			showEnvVarsInLog = 0;
 		};
 		72B0DAAC4C9472F932C30E48 /* [CP] Check Pods Manifest.lock */ = {
@@ -2859,7 +2869,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "SHARED_BINARY=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/shared.framework/shared\"\n\nif [ ! -f \"$SHARED_BINARY\" ]; then\n  mkdir -p \"${DERIVED_FILE_DIR}\"\n  echo \"SKIPPED\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n  exit 0\nfi\n\nxcrun bitcode_strip \"$SHARED_BINARY\" -r -o \"$SHARED_BINARY\"\nmkdir -p \"${DERIVED_FILE_DIR}\"\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			shellScript = "set -eu\nSHARED_FRAMEWORK=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/shared.framework\"\nSHARED_BINARY=\"$SHARED_FRAMEWORK/shared\"\nmkdir -p \"${DERIVED_FILE_DIR}\"\n\nif [ ! -f \"$SHARED_BINARY\" ]; then\n  echo \"SKIPPED\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n  exit 0\nfi\n\n# Runs after [CP] Embed Pods Frameworks so it edits the copy that ships. Kotlin/Native\n# no longer emits bitcode; only rewrite (and then re-sign) a binary that still has it.\nif /usr/bin/otool -l \"$SHARED_BINARY\" | grep -q \"segname __LLVM\"; then\n  xcrun bitcode_strip \"$SHARED_BINARY\" -r -o \"$SHARED_BINARY\"\n  if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ] && [ \"${CODE_SIGNING_REQUIRED:-}\" != \"NO\" ] && [ \"${CODE_SIGNING_ALLOWED:-}\" != \"NO\" ]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" ${OTHER_CODE_SIGN_FLAGS:-} --preserve-metadata=identifier,entitlements \"$SHARED_FRAMEWORK\"\n  fi\nfi\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
 		BBD78EC28F655FC94925BE11 /* [CP] Copy Pods Resources */ = {
@@ -2893,7 +2903,6 @@
 				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
 				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
 				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist",
 				"${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}",
 				"${DWARF_DSYM_FOLDER_PATH}/shared.framework.dSYM",
 			);
@@ -2902,7 +2911,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/FirebaseCrashlytics/run\" -gsp \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n";
+			shellScript = "set -eu\nGOOGLE_SERVICE_PLIST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  echo \"note: Skipping Crashlytics dSYM upload for the Debug configuration.\"\n  exit 0\nfi\n# GoogleService-Info.plist is git-ignored; checkouts without it still build.\nif [ ! -f \"$GOOGLE_SERVICE_PLIST\" ]; then\n  echo \"warning: Skipping Crashlytics dSYM upload: $GOOGLE_SERVICE_PLIST is missing.\"\n  exit 0\nfi\n\n\"${PODS_ROOT}/FirebaseCrashlytics/run\" -gsp \"$GOOGLE_SERVICE_PLIST\"\n";
 			showEnvVarsInLog = 0;
 		};
 		DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */ = {
@@ -3044,7 +3053,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 192;
+				CURRENT_PROJECT_VERSION = 193;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
@@ -3067,7 +3076,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.1;
+				MARKETING_VERSION = 12.2;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3088,7 +3097,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 192;
+				CURRENT_PROJECT_VERSION = 193;
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(TEAM_ID)";
@@ -3110,7 +3119,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.1;
+				MARKETING_VERSION = 12.2;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3221,7 +3230,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 192;
+				CURRENT_PROJECT_VERSION = 193;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3234,7 +3243,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.1;
+				MARKETING_VERSION = 12.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).watch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -3258,7 +3267,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 192;
+				CURRENT_PROJECT_VERSION = 193;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3271,7 +3280,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.1;
+				MARKETING_VERSION = 12.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).watch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

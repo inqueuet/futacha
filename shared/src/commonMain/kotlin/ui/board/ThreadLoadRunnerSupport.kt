@@ -66,8 +66,17 @@ internal data class ThreadLoadExecutionResult(
     val page: ThreadPage,
     val embeddedHtml: List<com.valoser.futacha.shared.model.EmbeddedHtmlContent> = emptyList(),
     val usedOffline: Boolean,
-    val nextThreadUrlOverride: String?
+    val nextThreadUrlOverride: String?,
+    /**
+     * The page is an archive copy of a dead thread (archive fallback, or a
+     * later load of the inqueuet URL it switched to). It does not prove the
+     * thread alive and may hold fewer posts than a local copy.
+     */
+    val fromArchive: Boolean = false
 )
+
+/** The remote load did not answer within its budget; offline/archive fallbacks apply. */
+internal class ThreadLoadTimeoutException(message: String) : Exception(message)
 
 internal fun buildThreadLoadRunnerCallbacks(
     repository: BoardRepository,
@@ -102,8 +111,10 @@ internal fun buildThreadLoadRunnerCallbacks(
 
     return ThreadLoadRunnerCallbacks(
         supplementRemote = { result ->
-            if (result.usedOffline || repository !is FutachaSharedBoardRepository) result else {
-                val source = result.nextThreadUrlOverride ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
+            if (result.usedOffline || result.fromArchive || repository !is FutachaSharedBoardRepository) result else {
+                // An archive result already merged the archive providers.
+                val source = result.nextThreadUrlOverride?.let(::resolveFutabaSourceUrlFromArchiveUrl)
+                    ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
                 runSuspendCatchingPreservingCancellation {
                     val supplemented = repository.supplement(source, ThreadPageContent(result.page, result.embeddedHtml))
                     result.copy(page = supplemented.page, embeddedHtml = supplemented.embeddedHtml)
@@ -206,17 +217,19 @@ internal suspend fun performThreadLoadWithOfflineFallback(
                 )
             ) {
                 is ThreadRemoteFetchRequest.ByUrl -> callbacks.loadRemoteByUrl(fetchRequest.url)
+                    .let { it to isInqueuetArchiveThreadUrl(fetchRequest.url) }
                 is ThreadRemoteFetchRequest.ByBoard -> callbacks.loadRemoteByBoard(
                     fetchRequest.boardUrl,
                     fetchRequest.threadId
-                )
+                ) to false
             }
-        } ?: throw IllegalStateException("Thread load timed out after ${config.remoteLoadTimeoutMillis}ms")
+        } ?: throw ThreadLoadTimeoutException("Thread load timed out after ${config.remoteLoadTimeoutMillis}ms")
         return ThreadLoadExecutionResult(
-            page = content.page,
-            embeddedHtml = content.embeddedHtml,
+            page = content.first.page,
+            embeddedHtml = content.first.embeddedHtml,
             usedOffline = false,
-            nextThreadUrlOverride = config.threadUrlOverride
+            nextThreadUrlOverride = config.threadUrlOverride,
+            fromArchive = content.second
         )
     } catch (e: CancellationException) {
         throw e
@@ -259,7 +272,8 @@ internal suspend fun performThreadLoadWithOfflineFallback(
                 page = archiveDecision.page,
                 embeddedHtml = archiveDecision.embeddedHtml,
                 usedOffline = false,
-                nextThreadUrlOverride = archiveDecision.threadUrl ?: config.threadUrlOverride
+                nextThreadUrlOverride = archiveDecision.threadUrl ?: config.threadUrlOverride,
+                fromArchive = true
             )
             is ThreadLoadPostArchiveDecision.Fail -> throw archiveDecision.error
             ThreadLoadPostArchiveDecision.TryOffline -> {

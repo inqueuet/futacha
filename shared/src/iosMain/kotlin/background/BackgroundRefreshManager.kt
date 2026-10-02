@@ -11,13 +11,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.util.AppDispatchers
+import platform.BackgroundTasks.BGAppRefreshTaskRequest
 import platform.BackgroundTasks.BGProcessingTaskRequest
 import platform.BackgroundTasks.BGTask
 import platform.BackgroundTasks.BGTaskScheduler
 import platform.Foundation.NSDate
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
-import platform.Foundation.NSLog
+import com.valoser.futacha.shared.util.logToSystem
 import platform.Foundation.NSThread
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
@@ -26,21 +27,23 @@ import kotlin.coroutines.coroutineContext
 
 /**
  * Minimal BGTask scheduler helper. Note: actual execution timing is controlled by iOS.
+ * Submits a BGAppRefresh request (the one iOS runs periodically) and a BGProcessing
+ * request (longer runtime, rarely run); whichever starts runs the shared single-flight refresh.
  */
 @OptIn(ExperimentalForeignApi::class)
 object BackgroundRefreshManager {
-    private const val TASK_ID = "com.valoser.futacha.refresh"
     private const val SCHEDULE_BACKOFF_MILLIS = 60_000L
     private const val MIN_REFRESH_INTERVAL_SECONDS = 15 * 60.0
     private const val MAX_SCHEDULE_RETRY_ATTEMPTS = 12
-    private var registered = false
+    private val registeredKinds = mutableSetOf<BackgroundRefreshTaskKind>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var isEnabled = false
-    private var executeBlock: (suspend () -> Unit)? = null
+    /** Receives the kind of the running task: BGAppRefresh gets about 30 s, BGProcessing minutes. */
+    private var executeBlock: (suspend (BackgroundRefreshTaskKind) -> Unit)? = null
     private var activeTaskJob: Job? = null
     private var retryScheduleJob: Job? = null
     private var nextScheduleAllowedAtMillis: Long = 0L
-    private var hasPendingRefreshRequest: Boolean = false
+    private val submitBookkeeping = BackgroundRefreshSubmitBookkeeping()
     private var scheduleRetryAttempts: Int = 0
     private var configurationGeneration: Long = 0L
 
@@ -52,34 +55,30 @@ object BackgroundRefreshManager {
 
     private fun registerAtLaunchOnMain() {
         if (!isSupported()) return
-        if (!isTaskIdentifierPermitted()) {
-            NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
-            return
-        }
-        NSLog("Registering BGTask at launch for $TASK_ID")
+        logToSystem("Registering BGTasks at launch")
         registerIfNeeded()
     }
 
-    fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
+    internal fun configure(enabled: Boolean, onExecute: suspend (BackgroundRefreshTaskKind) -> Unit) {
         runOnMain {
             configureOnMain(enabled, onExecute)
         }
     }
 
-    private fun configureOnMain(enabled: Boolean, onExecute: suspend () -> Unit) {
+    private fun configureOnMain(enabled: Boolean, onExecute: suspend (BackgroundRefreshTaskKind) -> Unit) {
         configurationGeneration += 1L
-        NSLog("BGTask configure(enabled=$enabled)")
+        logToSystem("BGTask configure(enabled=$enabled)")
         isEnabled = enabled
         executeBlock = onExecute
         if (enabled) {
             scheduleRetryAttempts = 0
         }
         if (!isSupported()) {
-            NSLog("BGTask not supported on this OS")
+            logToSystem("BGTask not supported on this OS")
             return
         }
-        if (enabled && !isTaskIdentifierPermitted()) {
-            NSLog("BGTask identifier '$TASK_ID' is not permitted in Info.plist")
+        if (enabled && BackgroundRefreshTaskKind.entries.none(::isTaskIdentifierPermitted)) {
+            logToSystem("No BGTask identifier is permitted in Info.plist")
             isEnabled = false
             return
         }
@@ -92,43 +91,49 @@ object BackgroundRefreshManager {
     }
 
     private fun registerIfNeeded() {
-        if (registered) {
-            NSLog("BGTask already registered for $TASK_ID")
+        BackgroundRefreshTaskKind.entries.forEach(::registerIfNeeded)
+    }
+
+    private fun registerIfNeeded(kind: BackgroundRefreshTaskKind) {
+        val taskId = kind.identifier
+        if (kind in registeredKinds) {
+            logToSystem("BGTask already registered for $taskId")
             return
         }
-        if (!isTaskIdentifierPermitted()) {
-            NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
+        if (!isTaskIdentifierPermitted(kind)) {
+            logToSystem("Skipping BGTask registration: '$taskId' is not listed in BGTaskSchedulerPermittedIdentifiers")
             return
         }
-        registered = BGTaskScheduler.sharedScheduler().registerForTaskWithIdentifier(
-            identifier = TASK_ID,
+        val registered = BGTaskScheduler.sharedScheduler().registerForTaskWithIdentifier(
+            identifier = taskId,
             usingQueue = null
         ) { task: BGTask? ->
             if (task != null) {
-                handleTask(task)
+                handleTask(task, kind)
             } else {
-                NSLog("BGTask registration callback received null task for $TASK_ID")
+                logToSystem("BGTask registration callback received null task for $taskId")
             }
         }
         if (!registered) {
-            NSLog("Failed to register BGTask for $TASK_ID")
+            logToSystem("Failed to register BGTask for $taskId")
         } else {
-            NSLog("Registered BGTask for $TASK_ID")
+            registeredKinds += kind
+            logToSystem("Registered BGTask for $taskId")
         }
     }
 
-    private fun handleTask(task: BGTask) {
-        NSLog("BGTask handler invoked for $TASK_ID")
+    private fun handleTask(task: BGTask, kind: BackgroundRefreshTaskKind) {
+        logToSystem("BGTask handler invoked for ${kind.identifier}")
         // BGTaskScheduler invokes this on a system background queue; hop to main
         // so all manager state stays main-confined like configure()/cancel().
         runOnMain {
-            handleTaskOnMain(task)
+            handleTaskOnMain(task, kind)
         }
     }
 
-    private fun handleTaskOnMain(task: BGTask) {
+    private fun handleTaskOnMain(task: BGTask, kind: BackgroundRefreshTaskKind) {
         val taskGeneration = configurationGeneration
-        hasPendingRefreshRequest = false
+        submitBookkeeping.markStarted(kind)
         var taskCompleted = false
         val completeTask: (Boolean) -> Unit = { success ->
             dispatch_async(dispatch_get_main_queue()) {
@@ -145,13 +150,17 @@ object BackgroundRefreshManager {
         }
         val runningJob = activeTaskJob
         if (runningJob?.isActive == true) {
-            NSLog("BGTask skipped: previous task is still running")
+            // The other kind's task is running the same refresh: never run it twice.
+            logToSystem("BGTask ${kind.identifier} skipped: previous task is still running")
             completeTask(true)
             if (isEnabled) {
                 scheduleRefresh()
             }
             return
         }
+        // Submit the next request before the work, as Apple recommends: when iOS
+        // expires or kills this task, a request of this kind is still scheduled (H4-6).
+        scheduleRefresh()
         val job = scope.launch {
             try {
                 if (!isEnabled) {
@@ -160,22 +169,22 @@ object BackgroundRefreshManager {
                 }
                 val block = executeBlock
                 if (block == null) {
-                    NSLog("BGTask execution skipped: callback is null")
+                    logToSystem("BGTask execution skipped: callback is null")
                     completeTask(false)
                     return@launch
                 }
-                NSLog("BGTask execution started")
+                logToSystem("BGTask execution started for ${kind.identifier}")
                 withContext(AppDispatchers.io) {
-                    block()
+                    block(kind)
                 }
-                NSLog("BGTask execution finished successfully")
+                logToSystem("BGTask execution finished successfully")
                 completeTask(true)
             } catch (e: CancellationException) {
-                NSLog("BGTask execution cancelled: ${e.message}")
+                logToSystem("BGTask execution cancelled: ${e.message}")
                 completeTask(false)
                 throw e
             } catch (t: Throwable) {
-                NSLog("BGTask execution failed: ${t.message}")
+                logToSystem("BGTask execution failed: ${t.message}")
                 completeTask(false)
             } finally {
                 if (activeTaskJob === coroutineContext[Job]) {
@@ -189,66 +198,67 @@ object BackgroundRefreshManager {
         activeTaskJob = job
         // Expiration handler: cancel work if iOS cuts us off
         task.expirationHandler = {
-            NSLog("BGTask expired; cancelling active job")
+            logToSystem("BGTask expired; cancelling active job")
             job.cancel(CancellationException("BGTask expired"))
             completeTask(false)
         }
     }
 
     private fun scheduleRefresh() {
+        val kindsToSubmit = submitBookkeeping.kindsToSubmit(permittedKinds(), configurationGeneration)
         when (
             val action = resolveBackgroundRefreshScheduleAction(
                 enabled = isEnabled,
-                hasPendingRefreshRequest = hasPendingRefreshRequest,
+                hasPendingRefreshRequest = kindsToSubmit.isEmpty(),
                 nextScheduleAllowedAtMillis = nextScheduleAllowedAtMillis,
                 nowEpochMillis = currentEpochMillis()
             )
         ) {
             BackgroundRefreshScheduleAction.SkipDisabled -> {
-                NSLog("BGTask schedule skipped: manager is disabled")
+                logToSystem("BGTask schedule skipped: manager is disabled")
                 return
             }
             BackgroundRefreshScheduleAction.SkipPending -> {
-                NSLog("BGTask schedule skipped: refresh request is already pending")
+                logToSystem("BGTask schedule skipped: refresh request is already pending")
                 return
             }
             is BackgroundRefreshScheduleAction.DelayRetry -> {
-                NSLog("BGTask schedule delayed by ${action.delayMillis}ms due to backoff")
+                logToSystem("BGTask schedule delayed by ${action.delayMillis}ms due to backoff")
                 scheduleRetryAttempt(action.delayMillis)
                 return
             }
             BackgroundRefreshScheduleAction.SubmitNow -> {
-                NSLog("BGTask schedule submitting request now")
+                logToSystem("BGTask schedule submitting request now")
             }
         }
-        hasPendingRefreshRequest = true
         val scheduleGeneration = configurationGeneration
+        submitBookkeeping.markQueued(kindsToSubmit, scheduleGeneration)
         dispatch_async(dispatch_get_main_queue()) {
+            submitBookkeeping.finishQueued(kindsToSubmit, scheduleGeneration)
             if (!isEnabled || configurationGeneration != scheduleGeneration) {
-                hasPendingRefreshRequest = false
                 return@dispatch_async
             }
-            val request = BGProcessingTaskRequest(TASK_ID).apply {
-                requiresNetworkConnectivity = true
-                requiresExternalPower = false
-                earliestBeginDate = NSDate(
-                    timeIntervalSinceReferenceDate = NSDate().timeIntervalSinceReferenceDate +
-                        MIN_REFRESH_INTERVAL_SECONDS
-                )
-            }
-            runCatching {
-                val submitted = BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
-                if (!submitted) {
-                    throw IllegalStateException("submitTaskRequest returned false")
+            var failure: Throwable? = null
+            kindsToSubmit.forEach { kind ->
+                runCatching {
+                    val submitted = BGTaskScheduler.sharedScheduler().submitTaskRequest(createRequest(kind), null)
+                    if (!submitted) {
+                        throw IllegalStateException("submitTaskRequest returned false")
+                    }
+                    submitBookkeeping.markSubmitted(kind)
+                    logToSystem("BGTask request submitted successfully for ${kind.identifier}")
+                }.onFailure {
+                    logToSystem("BGTask schedule failed for ${kind.identifier}: ${it.message}")
+                    failure = it
                 }
-                NSLog("BGTask request submitted successfully for $TASK_ID")
+            }
+            if (failure == null) {
                 nextScheduleAllowedAtMillis = 0L
                 scheduleRetryAttempts = 0
                 retryScheduleJob?.cancel()
                 retryScheduleJob = null
-            }.onFailure {
-                NSLog("BGTask schedule failed: ${it.message}")
-                hasPendingRefreshRequest = false
+            } else run {
+                // The retry submits only the kinds that failed; the others stay pending.
                 val failureState = resolveBackgroundRefreshSubmitFailureState(
                     failureNowEpochMillis = currentEpochMillis(),
                     currentRetryAttempts = scheduleRetryAttempts,
@@ -258,15 +268,30 @@ object BackgroundRefreshManager {
                 nextScheduleAllowedAtMillis = failureState.nextScheduleAllowedAtMillis
                 scheduleRetryAttempts = failureState.nextRetryAttempts
                 if (!failureState.shouldScheduleRetry) {
-                    NSLog(
+                    logToSystem(
                         "BGTask schedule retry limit reached ($MAX_SCHEDULE_RETRY_ATTEMPTS); waiting for next explicit enable/event"
                     )
-                    return@onFailure
+                    return@run
                 }
                 scheduleRetryAttempt(failureState.retryDelayMillis)
             }
         }
     }
+
+    private fun createRequest(kind: BackgroundRefreshTaskKind) = when (kind) {
+        BackgroundRefreshTaskKind.APP_REFRESH -> BGAppRefreshTaskRequest(kind.identifier).apply {
+            earliestBeginDate = earliestRefreshDate()
+        }
+        BackgroundRefreshTaskKind.PROCESSING -> BGProcessingTaskRequest(kind.identifier).apply {
+            requiresNetworkConnectivity = true
+            requiresExternalPower = false
+            earliestBeginDate = earliestRefreshDate()
+        }
+    }
+
+    private fun earliestRefreshDate() = NSDate(
+        timeIntervalSinceReferenceDate = NSDate().timeIntervalSinceReferenceDate + MIN_REFRESH_INTERVAL_SECONDS
+    )
 
     private fun scheduleRetryAttempt(delayMillis: Long) {
         if (
@@ -277,12 +302,12 @@ object BackgroundRefreshManager {
                 hasActiveRetryJob = retryScheduleJob?.isActive == true
             )
         ) {
-            NSLog(
+            logToSystem(
                 "BGTask retry scheduling skipped (enabled=$isEnabled, retryAttempts=$scheduleRetryAttempts, hasActiveRetry=${retryScheduleJob?.isActive == true})"
             )
             return
         }
-        NSLog("BGTask retry scheduled in ${normalizeBackgroundRefreshRetryDelay(delayMillis)}ms")
+        logToSystem("BGTask retry scheduled in ${normalizeBackgroundRefreshRetryDelay(delayMillis)}ms")
         val retryGeneration = configurationGeneration
         retryScheduleJob = scope.launch {
             delay(normalizeBackgroundRefreshRetryDelay(delayMillis))
@@ -301,7 +326,7 @@ object BackgroundRefreshManager {
 
     private fun cancelOnMain() {
         configurationGeneration += 1L
-        NSLog("Cancelling BGTask manager state for $TASK_ID")
+        logToSystem("Cancelling BGTask manager state")
         isEnabled = false
         executeBlock = null
         activeTaskJob?.cancel(CancellationException("Background refresh disabled"))
@@ -309,10 +334,12 @@ object BackgroundRefreshManager {
         retryScheduleJob?.cancel(CancellationException("Background refresh retry disabled"))
         retryScheduleJob = null
         nextScheduleAllowedAtMillis = 0L
-        hasPendingRefreshRequest = false
+        submitBookkeeping.clear()
         scheduleRetryAttempts = 0
         if (!isSupported()) return
-        BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
+        BackgroundRefreshTaskKind.entries.forEach {
+            BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(it.identifier)
+        }
     }
 
     private fun runOnMain(block: () -> Unit) {
@@ -331,11 +358,17 @@ object BackgroundRefreshManager {
         }
     }
 
-    private fun isTaskIdentifierPermitted(): Boolean {
+    private fun isTaskIdentifierPermitted(kind: BackgroundRefreshTaskKind): Boolean {
         val value = NSBundle.mainBundle.objectForInfoDictionaryKey("BGTaskSchedulerPermittedIdentifiers")
         val identifiers = value as? List<*> ?: return false
-        return identifiers.any { it as? String == TASK_ID }
+        return identifiers.any { it as? String == kind.identifier }
     }
+
+    /** Kinds that can be submitted: permitted in Info.plist and registered at launch. */
+    private fun permittedKinds(): Set<BackgroundRefreshTaskKind> =
+        BackgroundRefreshTaskKind.entries.filterTo(mutableSetOf()) {
+            isTaskIdentifierPermitted(it) && it in registeredKinds
+        }
 
     private fun currentEpochMillis(): Long =
         Clock.System.now().toEpochMilliseconds()

@@ -32,7 +32,8 @@ internal class OpenAiFailure(
     message: String,
     val inputTooLarge: Boolean = false,
     val retryableRateLimit: Boolean = false,
-    val retryAfterMillis: Long? = null
+    val retryAfterMillis: Long? = null,
+    val status: Int? = null
 ) : Exception(message)
 
 internal class OpenAiService(
@@ -109,9 +110,11 @@ internal class OpenAiService(
         require(input.posts.map { it.id }.distinct().size == input.posts.size) { "重複したレス番号は判定できません。" }
         store.analysisMutex.withLock {
             try {
-                val parts = input.posts.map { ModerationPart(it.id, openAiPostText(it)) }
+                val parts = input.posts.map { ModerationPart(it.id, openAiPostText(it).lineSequence().filterNot { line ->
+                    line.trimStart().startsWith('>') || line.trimStart().startsWith('＞')
+                }.joinToString("\n")) }
                 require(parts.sumOf { it.text.length.toLong() } <= 8_000_000) { "本文が大きすぎます。判定は完了していません。" }
-                val results = moderate(parts, RequestBudget(), 0)
+                val results = moderate(parts, RequestBudget(256), 0)
                 ensureCurrent()
                 results.groupBy { it.postId }.map { (id, values) ->
                     values.firstOrNull { it.shouldHide } ?: PostModerationResult(id, false)
@@ -132,9 +135,37 @@ internal class OpenAiService(
             }
         }
         if (pending.isEmpty()) return cached
+        // Identical bodies in one viewport consume only one input, even before caching.
+        val unique = pending.distinctBy { it.cacheKey }
+        if (unique.size != pending.size) {
+            val firstByKey = unique.associateBy { it.cacheKey }
+            // A split body yields several results per id; keep all so any HIDE survives the merge.
+            val decisions = moderate(unique, budget, depth).groupBy { it.postId }
+            return cached + pending.flatMap { part ->
+                decisions.getValue(firstByKey.getValue(part.cacheKey).id).map { it.copy(postId = part.id) }
+            }
+        }
         // Cache lookup precedes batching, so only missing bodies consume requests.
-        if (pending.size > 32) {
-            return cached + pending.chunked(32).flatMap { moderate(it, budget, depth) }
+        val tokenEstimate = pending.sumOf { estimateModerationTokens(it.text).toLong() }
+        if (pending.size > 32 || tokenEstimate > OPENAI_MODERATION_BATCH_TOKENS) {
+            if (pending.size > 1) {
+                val batches = mutableListOf<List<ModerationPart>>()
+                var batch = mutableListOf<ModerationPart>()
+                var tokens = 0
+                for (part in pending) {
+                    val cost = estimateModerationTokens(part.text)
+                    if (batch.isNotEmpty() && (batch.size == 32 || tokens + cost > OPENAI_MODERATION_BATCH_TOKENS)) {
+                        batches += batch; batch = mutableListOf(); tokens = 0
+                    }
+                    batch += part; tokens += cost
+                }
+                if (batch.isNotEmpty()) batches += batch
+                return cached + batches.flatMap { moderate(it, budget, depth) }
+            }
+            val part = pending.single()
+            val (a, b) = splitAiText(part.text)
+            return cached + moderate(listOf(part.copy(text = a)), budget, depth + 1) +
+                moderate(listOf(part.copy(text = b)), budget, depth + 1)
         }
         val generated = try {
             budget.use()
@@ -171,33 +202,58 @@ internal class OpenAiService(
             .distinct().sorted()
     }.getOrThrow()
 
-    private suspend fun request(path: String, body: JsonObject?): JsonObject = store.requestQueue.execute {
-        requestOnce(path, body)
+    private suspend fun request(path: String, body: JsonObject?): JsonObject {
+        val moderation = path == "moderations"
+        val estimated = if (moderation) body?.get("input")?.jsonArray.orEmpty()
+            .sumOf { estimateModerationTokens(it.jsonPrimitive.content) } else 0
+        return store.executeRequest(connection.revision, estimated, moderation) { id, key ->
+            ensureCurrent()
+            requestOnce(path, body, id, key)
+        }
     }
 
-    private suspend fun requestOnce(path: String, body: JsonObject?): JsonObject {
+    private suspend fun requestOnce(path: String, body: JsonObject?, credentialId: String, key: String): JsonObject {
         ensureCurrent()
-        val key = store.apiKey(connection.revision)
         return client.prepareRequest("https://api.openai.com/v1/$path") {
             method = if (body == null) HttpMethod.Get else HttpMethod.Post
             header(HttpHeaders.Authorization, "Bearer $key")
             if (body != null) { contentType(ContentType.Application.Json); setBody(body.toString()) }
         }.execute { response ->
         // Bound the decoded response as well as Content-Length; never log server bodies.
+        val declared = response.contentLength()
+        if (declared != null && declared > OPENAI_MAX_RESPONSE_BYTES) {
+            response.bodyAsChannel().cancel(null)
+            throw OpenAiFailure("OpenAIの応答が大きすぎます。解析は完了していません。")
+        }
         val channel = response.bodyAsChannel()
-        val buffer = ByteArray(4_000_001)
+        // Sized by Content-Length when known, otherwise grown on demand up to the limit.
+        var buffer = ByteArray(((declared ?: 0L) + 1).coerceIn(16_384L, OPENAI_MAX_RESPONSE_BYTES + 1L).toInt())
         var size = 0
         try {
-            while (size < buffer.size) {
+            while (true) {
+                if (size == buffer.size) {
+                    if (buffer.size > OPENAI_MAX_RESPONSE_BYTES) break
+                    buffer = buffer.copyOf(minOf(buffer.size * 2L, OPENAI_MAX_RESPONSE_BYTES + 1L).toInt())
+                }
                 val count = channel.readAvailable(buffer, size, buffer.size - size)
                 if (count < 0) break
                 size += count
             }
         } finally { channel.cancel(null) }
-        if (size > 4_000_000) throw OpenAiFailure("OpenAIの応答が大きすぎます。解析は完了していません。")
+        if (size > OPENAI_MAX_RESPONSE_BYTES) throw OpenAiFailure("OpenAIの応答が大きすぎます。解析は完了していません。")
         val root = runCatching { json.parseToJsonElement(buffer.decodeToString(0, size)).jsonObject }.getOrNull()
+        // "error" may be a string or null in proxies/unusual responses: never let it throw here.
+        val error = root?.get("error") as? JsonObject
+        val code = (error?.get("code") as? JsonPrimitive)?.contentOrNull
+        val errorType = (error?.get("type") as? JsonPrimitive)?.contentOrNull
+        val permanentCodes = setOf("insufficient_quota", "billing_hard_limit_reached", "billing_not_active", "usage_limit_reached", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "credit_balance_exhausted")
+        if (closed) throw CancellationException("AI connection changed")
+        val permanentQuota = code in permanentCodes || errorType in permanentCodes
+        // Recorded even if unrelated settings changed meanwhile; only a removed key is ignored.
+        store.recordResponse(credentialId, path == "moderations", response.status.value, response.headers, permanentQuota)
+        // A response from an obsolete configuration cannot be used as a result.
+        ensureCurrent()
         if (response.status.value !in 200..299) {
-            val code = root?.get("error")?.jsonObject?.get("code")?.jsonPrimitive?.contentOrNull
             val tooLarge = response.status.value == 413 || code in setOf("context_length_exceeded", "string_above_max_length", "array_above_max_length", "too_many_inputs", "input_too_long")
             val message = when (response.status.value) {
                 401 -> "OpenAIのAPIキーを確認してください。"
@@ -206,11 +262,9 @@ internal class OpenAiService(
                 400, 404 -> "選択したモデル・APIの対応状況または入力容量を確認してください。"
                 else -> "OpenAIとの通信に失敗しました（HTTP ${response.status.value}）。"
             }
-            val errorType = root?.get("error")?.jsonObject?.get("type")?.jsonPrimitive?.contentOrNull
-            val permanent = setOf("insufficient_quota", "billing_hard_limit_reached", "billing_not_active", "usage_limit_reached")
             throw OpenAiFailure(message, tooLarge,
-                retryableRateLimit = response.status.value == 429 && code !in permanent && errorType !in permanent,
-                retryAfterMillis = openAiRetryAfterMillis(response.headers[HttpHeaders.RetryAfter]))
+                retryableRateLimit = response.status.value == 429 && !permanentQuota,
+                retryAfterMillis = openAiRetryAfterMillis(response.headers[HttpHeaders.RetryAfter]), status = response.status.value)
         }
         ensureCurrent()
         root ?: throw OpenAiFailure("OpenAIの応答を読み取れませんでした。")
@@ -228,11 +282,13 @@ internal class OpenAiService(
     catch (_: Exception) { Result.failure(OpenAiFailure("OpenAIの解析に失敗しました。通信・接続設定を確認してください。")) }
 }
 
+private const val OPENAI_MAX_RESPONSE_BYTES = 4_000_000
+
 private data class ModerationPart(val id: String, val text: String) {
-    val cacheKey get() = aiDigest("moderation-all-category-scores-v3|$OPENAI_MODERATION_MODEL|$text")
+    /** Computed once per part: the SHA-256 is used for cache lookup, dedupe and storage. */
+    val cacheKey = aiDigest("moderation-all-category-scores-v3|$OPENAI_MODERATION_MODEL|$text")
 }
-private class RequestBudget {
-    private var remaining = 32
+private class RequestBudget(private var remaining: Int = 32) {
     fun use() { if (remaining-- <= 0) throw OpenAiFailure("分割処理の上限に達しました。全文の解析は完了していません。") }
 }
 

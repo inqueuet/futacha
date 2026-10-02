@@ -119,7 +119,8 @@ private suspend fun transcodeDesktopAudio(input: String, output: String) = corou
         result.toString()
     }
     try {
-        withTimeout(15 * 60_000L) { while (process.isAlive) delay(50) }
+        // A timeout is a failed export, not a cancellation; the caller deletes the partial audio (B-9).
+        withTimeoutOrNull(15 * 60_000L) { while (process.isAlive) delay(50) } ?: error("音声の変換が時間内に終わりませんでした")
         check(process.exitValue() == 0) { "音声を書き出せませんでした: ${log.await().takeLast(500)}" }
         log.await()
         Unit

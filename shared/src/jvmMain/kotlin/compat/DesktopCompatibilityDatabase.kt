@@ -77,8 +77,7 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
     /** Upserts hashes and trims the table to its bound, least recently used first. */
     fun writeImagePhashes(entries: Map<String, String>, usedAtMillis: Long) {
         if (entries.isEmpty()) return
-        val db = open(); db.autoCommit = false
-        try {
+        inTransaction { db ->
             db.prepareStatement("INSERT OR REPLACE INTO compat_image_phash VALUES(?,?,?)").use { s ->
                 entries.forEach { (key, phash) ->
                     s.setString(1, bounded(key, 4096)); s.setString(2, bounded(phash, 64)); s.setLong(3, usedAtMillis)
@@ -92,28 +91,23 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
                         "LIMIT (SELECT COUNT(*) FROM compat_image_phash) - $IMAGE_PHASH_CACHE_TRIM_TO)"
                 )
             }
-            db.commit()
-        } catch (error: Throwable) {
-            runCatching { db.rollback() }
-            throw error
-        } finally {
-            db.autoCommit = true
         }
     }
 
     fun writePayload(payload: String, updatedAtMillis: Long) {
         bounded(payload, MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES)
-        val db = open(); db.autoCommit = false
-        try {
+        inTransaction { db ->
             db.prepareStatement("INSERT OR REPLACE INTO compat_state VALUES(1,?,?)").use { s ->
                 s.setString(1, payload); s.setLong(2, updatedAtMillis); s.executeUpdate()
             }
             db.createStatement().use { s ->
                 s.executeUpdate("DELETE FROM compat_scroll_anchor"); s.executeUpdate("DELETE FROM compat_snapshot_access")
             }
-            db.commit()
-        } catch (failure: Throwable) { db.rollback(); throw failure }
-        finally { db.autoCommit = true }
+        }
+    }
+    private inline fun inTransaction(block: (Connection) -> Unit) {
+        val db = open()
+        runDesktopDatabaseTransaction(db, discard = { if (connection === db) connection = null }, block = block)
     }
     fun close() { connection?.close(); connection = null }
     suspend fun deleteStorage() {
@@ -124,4 +118,42 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
         require(value.toByteArray(Charsets.UTF_8).size <= limit) { "Compatibility database value is too large" }
         return value
     }
+}
+
+/**
+ * Commits [block] atomically. sqlite-jdbc commits the open transaction when
+ * auto-commit is re-enabled, so after a failed rollback the connection is
+ * closed instead (SQLite discards the uncommitted transaction on close) and
+ * the original failure is rethrown with the rollback failure suppressed.
+ */
+internal inline fun runDesktopDatabaseTransaction(
+    db: Connection,
+    noinline discard: () -> Unit,
+    block: (Connection) -> Unit
+) {
+    db.autoCommit = false
+    try {
+        block(db)
+        db.commit()
+    } catch (failure: Throwable) {
+        try {
+            db.rollback()
+        } catch (rollbackFailure: Throwable) {
+            failure.addSuppressed(rollbackFailure)
+            discard()
+            runCatching { db.close() }.exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
+        restoreAutoCommitOrDiscard(db, discard)?.let(failure::addSuppressed)
+        throw failure
+    }
+    restoreAutoCommitOrDiscard(db, discard)?.let { throw it }
+}
+
+/** A connection whose auto-commit cannot be restored may hold an open transaction; drop it. */
+internal fun restoreAutoCommitOrDiscard(db: Connection, discard: () -> Unit): Throwable? {
+    val failure = runCatching { db.autoCommit = true }.exceptionOrNull() ?: return null
+    discard()
+    runCatching { db.close() }.exceptionOrNull()?.let(failure::addSuppressed)
+    return failure
 }

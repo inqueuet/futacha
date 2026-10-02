@@ -670,6 +670,47 @@ class HttpBoardApiTest {
     }
 
     @Test
+    fun deleteByUser_reportsRejectionReturnedWithHttp200() = runBlocking {
+        // Previously any 200 counted as a successful deletion.
+        val api = createApi { _ -> htmlResponse("削除キーが違います") }
+
+        try {
+            val error = assertFailsWith<NetworkException> {
+                api.deleteByUser(
+                    board = "https://may.2chan.net/b/",
+                    threadId = "555",
+                    postId = "321",
+                    password = "wrong",
+                    imageOnly = false
+                )
+            }
+
+            assertTrue(error.message!!.contains("本人削除に失敗しました"), error.message)
+            assertTrue(error.message!!.contains("削除キーが違います"), error.message)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun requestDeletion_reportsRejectionAndAcceptsEmptyBody() = runBlocking {
+        var body = "<html><body><font color=red>既に依頼済みです</font></body></html>"
+        val api = createApi { _ -> htmlResponse(body) }
+
+        try {
+            val error = assertFailsWith<NetworkException> {
+                api.requestDeletion("https://may.2chan.net/b/", "777", "123", "110")
+            }
+            assertTrue(error.message!!.contains("既に依頼済みです"), error.message)
+
+            body = ""
+            api.requestDeletion("https://may.2chan.net/b/", "777", "123", "110")
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
     fun voteSaidane_acceptsNumericResponseBody() = runBlocking {
         lateinit var capturedRequest: HttpRequestData
         val api = createApi { request ->

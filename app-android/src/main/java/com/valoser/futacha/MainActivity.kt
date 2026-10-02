@@ -114,16 +114,17 @@ class MainActivity : ComponentActivity() {
                 thread = intent?.futabaThreadDeepLinkOrNull()
             )
         }
-        val durableThreadDeepLink = app?.experienceProfileStore?.readPendingThreadNavigation(
-            app.experienceProfileStore.readActiveProfile()
-        )?.boundedPlatformDeepLinkOrNull()
-        pendingDeepLinks = if (restoredDeepLinks.thread != null) {
-            restoredDeepLinks
+        if (app == null || app.profileRecoveryComplete.value) {
+            applyDurableThreadDeepLink(app, restoredDeepLinks)
         } else {
-            restoredDeepLinks.copy(thread = durableThreadDeepLink)
+            // The pending navigation is stored for the profile an interrupted switch
+            // was heading to; read it once that switch has been recovered (M-3).
+            pendingDeepLinks = restoredDeepLinks
+            lifecycleScope.launch {
+                app.profileRecoveryComplete.first { it }
+                applyDurableThreadDeepLink(app, pendingDeepLinks)
+            }
         }
-        pendingThreadBoardRegistrationApproved = durableThreadDeepLink != null &&
-            pendingDeepLinks.thread == durableThreadDeepLink
         enableEdgeToEdge()
         setContent {
             val profileStore = remember(app) { app?.experienceProfileStore }
@@ -141,10 +142,23 @@ class MainActivity : ComponentActivity() {
             var profileSwitchInProgress by remember { mutableStateOf(false) }
             var profileSessionActive by remember { mutableStateOf(true) }
             var profileSwitchError by remember { mutableStateOf<String?>(null) }
+            var profileSwitchFailureNotice by remember { mutableStateOf<String?>(null) }
+            val profileRecoveryComplete = app?.profileRecoveryComplete?.collectAsState()?.value ?: true
+            val profileRecoveryFailure = app?.profileRecoveryFailure?.collectAsState()?.value
+            androidx.compose.runtime.LaunchedEffect(profileRecoveryFailure) {
+                // Startup could not finish an interrupted switch, so nothing was
+                // rolled back and commits stay refused: advise a restart (M4-1).
+                if (profileRecoveryFailure != null && app?.experienceProfileStore?.readJournal() != null) {
+                    profileSwitchFailureNotice = profileSwitchFailureMessage(profileRecoveryFailure, rolledBack = false)
+                }
+            }
             var pendingWatchAlertPermissionSession by remember {
                 mutableStateOf<ExperienceProfileSessionToken?>(null)
             }
             var watchAlertPermissionResultMessage by remember { mutableStateOf<String?>(null) }
+            // These dialogs sit outside FutachaApp, so they would open above its
+            // lock overlay; hide (not dismiss) them until the app is unlocked (C-2).
+            var isFutachaAppUnlocked by remember { mutableStateOf(false) }
             val fileSystem = remember(app) {
                 app?.fileSystem ?: createFileSystem(applicationContext)
             }
@@ -266,7 +280,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            val profileUiController = ExperienceProfileUiController(
+            // Remembered: a new instance (fresh lambdas) on every recomposition of
+            // this scope, e.g. each app-lock change, replaced the static local
+            // and recomposed all of FutachaApp (M4-4).
+            val profileUiController = remember(
+                app, profileStore, activeProfile, profileGeneration, profileSessionActive,
+                profileSwitchInProgress, profileSwitchError, stateStore, profileScope
+            ) { ExperienceProfileUiController(
                     isAvailable = app != null,
                     activeProfile = activeProfile,
                     sessionGeneration = profileGeneration,
@@ -283,7 +303,10 @@ class MainActivity : ComponentActivity() {
                         if (target == activeProfile || profileSwitchInProgress) return@switchRequest
                         profileSwitchInProgress = true
                         profileSessionActive = false
+                        val switchThreadNavigation = profileSwitchThreadNavigation(application)
                         profileScope.launch {
+                            // The link stored for the target profile; removed again if the switch fails (M-6).
+                            var switchThreadUrl: String? = null
                             try {
                                 profileSwitchError = null
                             // Make the cross-profile dataset authoritative before
@@ -306,13 +329,9 @@ class MainActivity : ComponentActivity() {
                                     mergeCompatibilityHistory(currentHistory, compatHistory, mergedBoards)
                                 }
                             }
-                            pendingDeepLinks.thread?.let { threadUrl ->
-                                withContext(Dispatchers.IO) {
-                                    application.experienceProfileStore.savePendingThreadNavigation(
-                                        url = threadUrl,
-                                        target = target
-                                    )
-                                }
+                            switchThreadUrl = pendingDeepLinks.thread
+                            withContext(Dispatchers.IO) {
+                                switchThreadNavigation.beforeSwitch(switchThreadUrl, target)
                             }
                             application.modeSwitchCoordinator.switchTo(
                                 target = target,
@@ -340,7 +359,17 @@ class MainActivity : ComponentActivity() {
                                 )
                                 finish()
                             }.onFailure { error ->
+                                withContext(Dispatchers.IO) {
+                                    // Kept when the rollback failed: the next launch completes the switch (M4-2).
+                                    switchThreadNavigation.afterFailedSwitch(switchThreadUrl, error)
+                                }
                                 profileSwitchError = error.message ?: "モードを切り替えられませんでした"
+                                // The coordinator rolled the switch back unless that failed too,
+                                // or recovering an earlier interrupted switch failed (M4-1).
+                                profileSwitchFailureNotice = profileSwitchFailureMessage(
+                                    error,
+                                    rolledBack = error.suppressed.isEmpty()
+                                )
                                 profileSessionActive = true
                             }
                             } catch (cancelled: CancellationException) {
@@ -351,18 +380,26 @@ class MainActivity : ComponentActivity() {
                                     "Profile switch failed before commit",
                                     failure
                                 )
+                                withContext(Dispatchers.IO) {
+                                    switchThreadNavigation.afterFailedSwitch(switchThreadUrl)
+                                }
                                 profileSwitchError = failure.message ?: "モードを切り替えられませんでした"
+                                profileSwitchFailureNotice = profileSwitchFailureMessage(failure, rolledBack = true)
                                 profileSessionActive = true
                             } finally {
                                 profileSwitchInProgress = false
                             }
                         }
                     }
-                )
+                ) }
+            // Without FutachaApp on screen there is no lock overlay to stay under.
+            val isFutachaAppShown = profileSessionActive && profileRecoveryComplete &&
+                !(app != null && networkServicesError != null)
+            val mayShowActivityDialogs = isFutachaAppUnlocked || !isFutachaAppShown
             CompositionLocalProvider(
                 LocalExperienceProfileUiController provides profileUiController
             ) {
-                if (profileSessionActive) {
+                if (profileSessionActive && profileRecoveryComplete) {
                     fun commitWatchAlertSettingIfCurrent(
                         enabled: Boolean,
                         session: ExperienceProfileSessionToken
@@ -464,10 +501,11 @@ class MainActivity : ComponentActivity() {
                             onCurrentThreadChanged = {},
                             experienceProfile = activeProfile,
                             compatibilityStore = app?.compatibilityStore,
-                            onExitApplication = { finish() }
+                            onExitApplication = { finish() },
+                            onAppUnlockedChanged = { unlocked -> isFutachaAppUnlocked = unlocked }
                         )
                     }
-                    pendingWatchAlertPermissionSession?.let { session ->
+                    pendingWatchAlertPermissionSession?.takeIf { isFutachaAppUnlocked }?.let { session ->
                         AlertDialog(
                             onDismissRequest = { pendingWatchAlertPermissionSession = null },
                             title = { Text("通知を許可") },
@@ -500,7 +538,7 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    watchAlertPermissionResultMessage?.let { message ->
+                    watchAlertPermissionResultMessage?.takeIf { isFutachaAppUnlocked }?.let { message ->
                         AlertDialog(
                             onDismissRequest = { watchAlertPermissionResultMessage = null },
                             title = { Text("通知は有効になっていません") },
@@ -526,7 +564,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (isFlexibleUpdateDownloaded) {
+            profileSwitchFailureNotice?.takeIf { mayShowActivityDialogs }?.let { message ->
+                val dismissProfileSwitchFailureNotice = {
+                    profileSwitchFailureNotice = null
+                    app?.acknowledgeProfileRecoveryFailure()
+                    Unit
+                }
+                AlertDialog(
+                    onDismissRequest = dismissProfileSwitchFailureNotice,
+                    title = { Text("モードを切り替えられませんでした") },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = dismissProfileSwitchFailureNotice) { Text("OK") }
+                    }
+                )
+            }
+            if (isFlexibleUpdateDownloaded && mayShowActivityDialogs) {
                 AlertDialog(
                     onDismissRequest = {
                         isFlexibleUpdateDownloaded = false
@@ -571,11 +624,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun profileSwitchThreadNavigation(app: FutachaApplication) = ProfileSwitchThreadNavigation(
+        save = { url, target ->
+            app.experienceProfileStore.savePendingThreadNavigation(url = url, target = target)
+        },
+        clear = { expectedUrl ->
+            // A failed cleanup must not fail (or mask the result of) the switch.
+            runCatching { app.experienceProfileStore.clearPendingThreadNavigation(expectedUrl) }
+                .onFailure { error ->
+                    com.valoser.futacha.shared.util.Logger.e(
+                        "MainActivity",
+                        "Failed to clear pending thread navigation",
+                        error
+                    )
+                }
+        }
+    )
+
+    private fun applyDurableThreadDeepLink(app: FutachaApplication?, base: PendingPlatformDeepLinks) {
+        val durableThreadDeepLink = app?.experienceProfileStore?.readPendingThreadNavigation(
+            app.experienceProfileStore.readActiveProfile()
+        )?.boundedPlatformDeepLinkOrNull()
+        pendingDeepLinks = if (base.thread != null) {
+            base
+        } else {
+            base.copy(thread = durableThreadDeepLink)
+        }
+        pendingThreadBoardRegistrationApproved = durableThreadDeepLink != null &&
+            pendingDeepLinks.thread == durableThreadDeepLink
+    }
+
     override fun onResume() {
         super.onResume()
         if (::inAppUpdateController.isInitialized) {
             inAppUpdateController.resumeUpdateIfNeeded()
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // API 37 closes the visible task when a launcher alias changes, so an
+        // icon selected in settings is applied once the app is off screen (G-12).
+        com.valoser.futacha.shared.util.applyDeferredAppIconVariantOnStop(this)
     }
 
     override fun onDestroy() {
@@ -667,6 +757,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        fun profileSwitchFailureMessage(error: Throwable, rolledBack: Boolean): String =
+            com.valoser.futacha.shared.compat.modeSwitchFailureMessage(error, rolledBack)
+
         const val KEY_HAS_PENDING_DEEP_LINK_SNAPSHOT = "pending_deep_link_snapshot"
         const val KEY_PENDING_AI_DEEP_LINK = "pending_ai_deep_link"
         const val KEY_PENDING_THREAD_DEEP_LINK = "pending_thread_deep_link"

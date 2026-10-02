@@ -1,6 +1,43 @@
 import Foundation
 import WatchConnectivity
 
+/// Allowed lead of the newest accepted snapshot's iPhone timestamp over the
+/// Watch clock; matches WATCH_SNAPSHOT_MAX_FUTURE_SKEW_MILLIS of the shared
+/// Kotlin protocol.
+let watchSnapshotMaxFutureSkewMillis: Int64 = 5 * 60 * 1000
+
+/// Whether `incomingGeneratedAtMillis` may replace the newest accepted
+/// snapshot. Older snapshots (a delayed applicationContext replay) are still
+/// dropped, but a stored timestamp dated further ahead of the clock than the
+/// allowed skew no longer blocks later updates: one future-dated snapshot
+/// (iPhone clock set ahead, then corrected) made the Watch discard every
+/// update, also after a restart since it is persisted (C-11). Incoming
+/// snapshots are not rejected for their own date, so an iPhone whose clock
+/// runs ahead of the Watch keeps syncing as before.
+func shouldAcceptWatchSnapshot(
+    currentGeneratedAtMillis: Int64?,
+    incomingGeneratedAtMillis: Int64,
+    nowMillis: Int64,
+    maxFutureSkewMillis: Int64 = watchSnapshotMaxFutureSkewMillis
+) -> Bool {
+    guard let current = currentGeneratedAtMillis else {
+        return true
+    }
+    if nowMillis >= 0, maxFutureSkewMillis >= 0 {
+        let latestPlausibleMillis = nowMillis > Int64.max - maxFutureSkewMillis
+            ? Int64.max
+            : nowMillis + maxFutureSkewMillis
+        if current > latestPlausibleMillis {
+            return true
+        }
+    }
+    return incomingGeneratedAtMillis >= current
+}
+
+private func currentEpochMillis() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
+}
+
 final class WatchSnapshotStore: NSObject, ObservableObject {
     static let shared = WatchSnapshotStore()
 
@@ -165,7 +202,11 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
             }
             do {
                 let snapshot = try self.decoder.decode(WatchSnapshot.self, from: data)
-                if let latest = self.latestGeneratedAtMillis, snapshot.generatedAtMillis < latest {
+                guard shouldAcceptWatchSnapshot(
+                    currentGeneratedAtMillis: self.latestGeneratedAtMillis,
+                    incomingGeneratedAtMillis: snapshot.generatedAtMillis,
+                    nowMillis: currentEpochMillis()
+                ) else {
                     return
                 }
                 if self.shouldKeepCurrentSnapshot(insteadOf: snapshot) {
@@ -228,6 +269,8 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
             guard let snapshot = try? self.decoder.decode(WatchSnapshot.self, from: data) else {
                 return
             }
+            // Shown even when dated ahead of the clock: decodeAndStore no longer
+            // lets such a value block newer snapshots (C-11).
             if let latest = self.latestGeneratedAtMillis, snapshot.generatedAtMillis <= latest {
                 return
             }
@@ -242,7 +285,11 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
     }
 
     private func shouldKeepCurrentSnapshot(insteadOf snapshot: WatchSnapshot) -> Bool {
-        snapshot.threads.isEmpty && hasStoredNonEmptySnapshot
+        // A snapshot with neither boards nor threads comes from an iPhone app that has
+        // not loaded its state yet; keep the stored one. A newer snapshot that still
+        // lists boards is authoritative even without threads (the history was cleared),
+        // otherwise the Watch kept showing deleted threads indefinitely.
+        snapshot.threads.isEmpty && snapshot.boards.isEmpty && hasStoredNonEmptySnapshot
     }
 
     private func setReachable(_ value: Bool) {

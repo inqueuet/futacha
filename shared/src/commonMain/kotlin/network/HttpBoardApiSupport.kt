@@ -144,6 +144,7 @@ private const val POSTING_FAILURE_SCAN_MAX_LINES = 256
 private const val CHRENC_NEARBY_SCAN_WINDOW = 4096
 private const val CHRENC_FALLBACK_SCAN_MAX_BYTES = 512 * 1024
 private const val INPUT_TAG_SCAN_LIMIT = 768
+private const val INPUT_NAME_OCCURRENCE_SCAN_LIMIT = 64
 private val NUMERIC_ENTITY_REGEX = Regex("""&#(x?[0-9a-fA-F]+);""")
 private const val COOKIE_RESET_RECOVERY_GUIDANCE =
     "今回の投稿試行で投稿用 Cookie が保存された可能性があります。Cookie を保持したままもう一度投稿してください。残り秒数が表示された場合は、その時間まで待ってください"
@@ -202,6 +203,57 @@ internal fun extractHttpBoardApiServerError(body: String): String? {
         return status?.take(POSTING_FAILURE_DETAIL_MAX_CHARS)?.let { "status=$it" }
     }
     return extractHttpBoardApiHumanReadableErrorLine(normalized)
+}
+
+private val SHORT_FORM_FAILURE_KEYWORDS = listOf(
+    "違います",
+    "見つかりません",
+    "ありません",
+    "できません",
+    "失敗",
+    "エラー",
+    "error",
+    "不正",
+    "既に",
+    "すでに",
+    "規制",
+    "拒否",
+    "無効",
+    "禁止"
+)
+private val SHORT_FORM_SUCCESS_BODIES = setOf("ok", "success", "1")
+private val SHORT_FORM_PAGE_MARKERS = listOf("class=\"thre\"", "class=thre", "<blockquote")
+private const val SHORT_FORM_FAILURE_SCAN_MAX_LINES = 20
+
+/**
+ * The server's reason when a 200 response to a deletion form (本人削除 / del
+ * 依頼, sent with responsemode=ajax) reports a failure, or null for success.
+ * Conservative: only a short text naming a failure counts; an empty body,
+ * "ok", JSON with an ok status, a thread page or unrecognised text is a success.
+ */
+internal fun extractHttpBoardApiShortFormFailure(body: String?): String? {
+    val trimmed = body?.take(POSTING_FAILURE_SCAN_MAX_CHARS)?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.lowercase() in SHORT_FORM_SUCCESS_BODIES) return null
+    if (looksLikeHttpBoardApiJson(trimmed)) {
+        if (isHttpBoardApiJsonStatusOk(trimmed)) return null
+        return extractHttpBoardApiServerError(trimmed)
+    }
+    // A full page (for example the thread after a non-ajax redirect) contains
+    // form labels and posts that would match the keywords below.
+    if (SHORT_FORM_PAGE_MARKERS.any { trimmed.contains(it, ignoreCase = true) }) return null
+    val lines = httpBoardApiHumanReadableLines(trimmed)
+        .take(SHORT_FORM_FAILURE_SCAN_MAX_LINES)
+        .toList()
+    if (lines.size == 1 && lines.single().lowercase() in SHORT_FORM_SUCCESS_BODIES) return null
+    val failureIndex = lines.indexOfFirst { line ->
+        SHORT_FORM_FAILURE_KEYWORDS.any { keyword -> line.contains(keyword, ignoreCase = true) }
+    }
+    if (failureIndex < 0) return null
+    return lines.drop(failureIndex)
+        .take(2)
+        .joinToString(" ")
+        .take(POSTING_FAILURE_DETAIL_MAX_CHARS)
 }
 
 internal fun summarizeHttpBoardApiResponse(body: String): String {
@@ -524,14 +576,23 @@ internal fun parseHttpBoardApiInputValue(
     fallbackScanMaxBytes: Int = CHRENC_FALLBACK_SCAN_MAX_BYTES
 ): String? {
     if (html.isBlank() || inputName.isBlank()) return null
-    val nameIndex = html.indexOf(inputName, ignoreCase = true)
-    val scanTarget = if (nameIndex >= 0) {
+    // The name also appears in scripts and text (for example "location.hash")
+    // before the form, so look around every occurrence, not just the first.
+    var nameIndex = html.indexOf(inputName, ignoreCase = true)
+    var scannedOccurrences = 0
+    while (nameIndex >= 0 && scannedOccurrences < INPUT_NAME_OCCURRENCE_SCAN_LIMIT) {
         val start = (nameIndex - 1024).coerceAtLeast(0)
         val end = (nameIndex + nearbyScanWindow).coerceAtMost(html.length)
-        html.substring(start, end)
-    } else {
-        html.take(fallbackScanMaxBytes)
+        findHttpBoardApiInputValueIn(html.substring(start, end), inputName)?.let { return it }
+        scannedOccurrences += 1
+        // The window already covered the next nearbyScanWindow characters.
+        nameIndex = html.indexOf(inputName, startIndex = end.coerceAtLeast(nameIndex + 1), ignoreCase = true)
     }
+    if (scannedOccurrences > 0 && nameIndex < 0) return null
+    return findHttpBoardApiInputValueIn(html.take(fallbackScanMaxBytes), inputName)
+}
+
+private fun findHttpBoardApiInputValueIn(scanTarget: String, inputName: String): String? {
     var searchStart = 0
     while (searchStart < scanTarget.length) {
         val tagStart = scanTarget.indexOf("<input", startIndex = searchStart, ignoreCase = true)

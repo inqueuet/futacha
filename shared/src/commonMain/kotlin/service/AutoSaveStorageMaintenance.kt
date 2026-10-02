@@ -57,6 +57,8 @@ internal object AutoSaveRetentionRegistry {
 internal fun buildTrimmedHistoryAutoSavePurger(
     fileSystem: FileSystem
 ): suspend (List<ThreadHistoryEntry>) -> Unit {
+    // A separate instance is safe: purge cutoffs are shared by every instance of the
+    // root, so a save running elsewhere is discarded instead of re-indexing the thread.
     val repository by lazy { SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY) }
     return { entries -> purgeAutoSavesOfTrimmedHistory(repository, entries) }
 }

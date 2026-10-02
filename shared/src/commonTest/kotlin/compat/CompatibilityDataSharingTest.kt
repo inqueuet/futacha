@@ -72,7 +72,54 @@ class CompatibilityDataSharingTest {
             sortOrder = 0
         )
         val synchronized = synchronizeModernBoardsFromCompatibility(modern, listOf(compat))
-        assertEquals(listOf("other", "may"), synchronized.map(BoardSummary::id))
+        // The tutorial fixture is dropped and the non-Futaba board keeps its
+        // place after the Futaba board instead of being moved to the front.
+        assertEquals(listOf("may", "other"), synchronized.map(BoardSummary::id))
+    }
+
+    @Test
+    fun compatibilitySynchronizationKeepsModernPinsCategoriesAndInterleavedOrder() {
+        val modern = listOf(
+            BoardSummary("img", "img", "雑談", "https://img.2chan.net/b/", "画像", pinned = true),
+            BoardSummary("custom", "custom", "外部", "https://example.org/custom", "外部板"),
+            BoardSummary("may", "mayb", "二次元", "https://may.2chan.net/b/futaba.php", "may説明"),
+            BoardSummary("other", "other", "外部", "https://example.net/other", "")
+        )
+        fun compat(url: String, name: String, order: Int) = CompatBoard(
+            key = compatBoardKey(url),
+            name = name,
+            canonicalUrl = url,
+            originalUrl = url,
+            sortOrder = order
+        )
+
+        // Unchanged compatibility state (as produced from this modern list) is a no-op.
+        assertEquals(
+            modern,
+            synchronizeModernBoardsFromCompatibility(modern, modernBoardsToCompatibility(modern))
+        )
+
+        // としあき(仮) reordered the Futaba boards, renamed one and added a new one.
+        val synchronized = synchronizeModernBoardsFromCompatibility(
+            modern,
+            listOf(
+                compat("https://may.2chan.net/b/", "may改名", 0),
+                compat("https://img.2chan.net/b/", "img", 1),
+                compat("https://dat.2chan.net/b/", "dat", 2)
+            )
+        )
+        assertEquals(listOf("may", "custom", "img", "other", compatBoardKey("https://dat.2chan.net/b/")),
+            synchronized.map(BoardSummary::id))
+        val may = synchronized.first { it.id == "may" }
+        assertEquals("may改名", may.name)
+        assertEquals("二次元", may.category)
+        assertEquals("may説明", may.description)
+        val img = synchronized.first { it.id == "img" }
+        assertEquals(true, img.pinned)
+        assertEquals("雑談", img.category)
+        assertEquals("画像", img.description)
+        assertEquals(modern[1], synchronized[1])
+        assertEquals(modern[3], synchronized[3])
     }
 
     @Test
@@ -230,5 +277,75 @@ class CompatibilityDataSharingTest {
             "<a href=\"other/fu7199371.png\">fu7199371.png</a><br>本文",
             snapshot.toThreadPage("123").posts.single().messageHtml
         )
+    }
+
+    private val importBoardUrl = "https://may.2chan.net/b/"
+
+    private fun importModern(id: Int, visited: Long, replies: Int = 1) = ThreadHistoryEntry(
+        threadId = id.toString(),
+        boardId = "may",
+        title = "スレ$id",
+        titleImageUrl = "",
+        boardName = "虹裏",
+        boardUrl = importBoardUrl,
+        lastVisitedEpochMillis = visited,
+        replyCount = replies
+    )
+
+    private fun importPlan(
+        modern: List<ThreadHistoryEntry>,
+        current: List<CompatHistoryEntry>,
+        tombstones: Map<String, Long> = emptyMap()
+    ) = planModernHistoryImport(
+        modernHistory = modern,
+        current = current,
+        knownBoardKeys = setOf(compatBoardKey(importBoardUrl)),
+        tombstoneAt = tombstones::get,
+        historyLimit = 200,
+        retain = { entries ->
+            val sorted = entries.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
+            if (sorted.size > 200) sorted.take(190) else sorted
+        }
+    )
+
+    @Test
+    fun historyImportKeepsCompatibilityUpdateTimeSeparateFromViewTime() {
+        val compat = assertNotNull(importModern(1, 100L).toCompatHistoryEntry()).copy(
+            originalUrl = "http://may.2chan.net/b/res/1.htm",
+            contentUpdatedAtEpochMillis = 150L,
+            lastVisitedEpochMillis = 100L,
+            scrollAnchor = ScrollAnchor(fallbackIndex = 7)
+        )
+        val written = importPlan(listOf(importModern(1, 500L, replies = 9)), listOf(compat)).single()
+        // The view time and metadata are shared, the update time is not (11.4).
+        assertEquals(500L, written.lastVisitedEpochMillis)
+        assertEquals(150L, written.contentUpdatedAtEpochMillis)
+        assertEquals(9, written.replyCount)
+        assertEquals(compat.originalUrl, written.originalUrl)
+        assertEquals(compat.scrollAnchor, written.scrollAnchor)
+        // Importing the same history again writes nothing.
+        assertEquals(emptyList<CompatHistoryEntry>(), importPlan(listOf(importModern(1, 500L, replies = 9)), listOf(written)))
+    }
+
+    @Test
+    fun historyImportWritesOnlyChangedRowsThatSurviveTheLimit() {
+        val modern = (0 until 5_000).map { index -> importModern(100_000 + index, 10_000L + index) }.shuffled()
+        val first = importPlan(modern, emptyList())
+        assertEquals(
+            (104_999 downTo 104_800).map { "${importBoardUrl}res/$it.htm" },
+            first.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis).map(CompatHistoryEntry::canonicalUrl)
+        )
+        // Older entries the limit would trim are not written, so a repeated
+        // import is a no-op instead of rewriting the history.
+        assertEquals(emptyList<CompatHistoryEntry>(), importPlan(modern, first))
+        val newer = importModern(200_000, 99_999L)
+        assertEquals(listOf("200000"), importPlan(modern + newer, first).map(CompatHistoryEntry::threadNo))
+    }
+
+    @Test
+    fun historyImportDoesNotResurrectDeletedEntries() {
+        val url = "${importBoardUrl}res/1.htm"
+        assertEquals(emptyList<CompatHistoryEntry>(), importPlan(listOf(importModern(1, 100L)), emptyList(), mapOf(url to 100L)))
+        assertEquals(listOf(url), importPlan(listOf(importModern(1, 101L)), emptyList(), mapOf(url to 100L)).map { it.canonicalUrl })
     }
 }

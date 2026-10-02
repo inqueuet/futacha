@@ -28,6 +28,9 @@ internal suspend fun loadSavedThreadsSnapshot(
                 totalSize = index.totalSize
             )
         })
+    } catch (timeout: TimeoutCancellationException) {
+        // withTimeout's own expiry is a failure, not a caller cancellation.
+        Result.failure(timeout)
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: Throwable) {
@@ -51,6 +54,9 @@ internal suspend fun deleteSavedThreadAndReload(
                 totalSize = index.totalSize
             )
         })
+    } catch (timeout: TimeoutCancellationException) {
+        // withTimeout's own expiry is a failure, not a caller cancellation.
+        Result.failure(timeout)
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: Throwable) {

@@ -13,8 +13,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class CatalogWatchAlertRefresherTest {
     @Test
@@ -213,6 +215,50 @@ class CatalogWatchAlertRefresherTest {
 
         assertEquals(0, result.matches.size)
     }
+
+    @Test
+    fun refresh_deliversMatchesOnceWhenTheCheckCompletes() = runBlocking {
+        val (store, repository) = twoBoardWatchFixture()
+        val delivered = mutableListOf<List<String>>()
+
+        val result = CatalogWatchAlertRefresher(store, repository, Dispatchers.Default, maxConcurrency = 1)
+            .refresh(onMatchesFound = { matches -> delivered += matches.map { it.threadId } })
+
+        // One call per run keeps one summary notification.
+        assertEquals(listOf(listOf("100", "200")), delivered)
+        assertEquals(listOf("100", "200"), result.matches.map { it.threadId })
+    }
+
+    @Test
+    fun refresh_deliversMatchesFoundBeforeATimeoutCutsTheCheckOff() = runBlocking {
+        val (store, repository) = twoBoardWatchFixture()
+        repository.hangingBoards += "https://jun.2chan.net/jun/futaba.php"
+        val delivered = mutableListOf<List<String>>()
+
+        val result = withTimeoutOrNull(1_000L) {
+            CatalogWatchAlertRefresher(store, repository, Dispatchers.Default, maxConcurrency = 1)
+                .refresh(onMatchesFound = { matches -> delivered += matches.map { it.threadId } })
+        }
+
+        // Notifying only from the result dropped the first board's match (Z4).
+        assertNull(result)
+        assertEquals(listOf(listOf("100")), delivered)
+    }
+
+    private suspend fun twoBoardWatchFixture(): Pair<AppStateStore, FakeCatalogWatchRepository> {
+        val first = watchBoard()
+        val second = watchBoard(id = "jun", name = "二次元実況", url = "https://jun.2chan.net/jun/futaba.php")
+        val store = AppStateStore(FakePlatformStateStorage()).apply {
+            setBoards(listOf(first, second))
+            setHistory(emptyList())
+            setWatchWords(listOf("cat"))
+        }
+        val repository = FakeCatalogWatchRepository().apply {
+            catalogs[first.url to CatalogMode.New] = listOf(catalogItem(id = "100", title = "cat"))
+            catalogs[second.url to CatalogMode.New] = listOf(catalogItem(id = "200", title = "cat"))
+        }
+        return store to repository
+    }
 }
 
 private fun watchBoard(
@@ -243,12 +289,15 @@ private fun catalogItem(
 private class FakeCatalogWatchRepository : BoardRepository {
     val catalogs = mutableMapOf<Pair<String, CatalogMode>, List<CatalogItem>>()
     val calls = mutableListOf<Pair<String, CatalogMode>>()
+    /** Catalog requests of these boards never finish. */
+    val hangingBoards = mutableSetOf<String>()
     private val callsMutex = Mutex()
 
     override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
         callsMutex.withLock {
             calls += board to mode
         }
+        if (board in hangingBoards) kotlinx.coroutines.awaitCancellation()
         return catalogs[board to mode].orEmpty()
     }
 

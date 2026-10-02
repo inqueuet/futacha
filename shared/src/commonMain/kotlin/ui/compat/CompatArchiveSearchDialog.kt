@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -170,7 +171,10 @@ internal fun CompatArchiveSearchDialog(
                     error = "一致する過去スレが見つかりません"
                 }
             } catch (cancellation: CancellationException) {
-                throw cancellation
+                // A timeout inside the search is reported like any failure.
+                val timeout = cancellation.compatTimeoutFailureOrThrow("過去ログ検索がタイムアウトしました")
+                error = timeout.message
+                fetchedResults = mergeCompatArchiveSearchItems(emptyList(), localHistory, archiveScope)
             } catch (failure: Throwable) {
                 error = failure.message ?: "過去ログ検索に失敗しました"
                 fetchedResults = mergeCompatArchiveSearchItems(emptyList(), localHistory, archiveScope)
@@ -181,7 +185,7 @@ internal fun CompatArchiveSearchDialog(
     }
 
     if (noticeVisible) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("過去ログ検索の注意") },
             text = {
@@ -208,11 +212,11 @@ internal fun CompatArchiveSearchDialog(
                 }) { Text("検索へ進む") }
             },
             dismissButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }
-        )
+        ) }
         return
     }
 
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("過去スレ検索") },
@@ -324,5 +328,5 @@ internal fun CompatArchiveSearchDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }
-    )
+    ) }
 }

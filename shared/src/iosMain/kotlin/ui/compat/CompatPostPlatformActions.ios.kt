@@ -24,6 +24,9 @@ import kotlinx.coroutines.NonCancellable
 import platform.AVFoundation.AVPlayer
 import platform.AVFAudio.AVAudioEngine
 import platform.AVFAudio.AVAudioSession
+import com.valoser.futacha.shared.audio.IosPlaybackAudioLease
+import com.valoser.futacha.shared.audio.acquireIosPlaybackAudioSession
+import com.valoser.futacha.shared.audio.iosAudioSessionCoordinator
 import platform.AVKit.AVPlayerViewController
 import platform.CoreGraphics.CGPointMake
 import platform.CoreGraphics.CGRectMake
@@ -35,6 +38,7 @@ import platform.CoreGraphics.CGColorSpaceRelease
 import platform.CoreGraphics.CGContextDrawImage
 import platform.CoreGraphics.CGContextRelease
 import platform.CoreGraphics.CGImageAlphaInfo
+import platform.CoreGraphics.CGImageGetAlphaInfo
 import platform.CoreGraphics.CGImageRelease
 import platform.CoreGraphics.kCGBitmapByteOrder32Little
 import platform.Foundation.*
@@ -43,6 +47,7 @@ import platform.UIKit.UIBezierPath
 import platform.UIKit.UIColor
 import platform.UIKit.UIImage
 import platform.UIKit.UIImageJPEGRepresentation
+import platform.UIKit.UIImageOrientation
 import platform.UIKit.UIImagePNGRepresentation
 import platform.UIKit.UIGraphicsBeginImageContextWithOptions
 import platform.UIKit.UIGraphicsEndImageContext
@@ -57,6 +62,8 @@ import platform.Speech.SFSpeechRecognizer
 import platform.posix.memcpy
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
+import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
+import platform.darwin.dispatch_get_global_queue
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -107,6 +114,18 @@ internal actual suspend fun compressCompatPostImage(
         require(maxBytes > 0) { "画像サイズの上限が不正です" }
         require(attachment.bytes.isNotEmpty()) { "画像データが空です" }
         require(attachment.bytes.size <= COMPAT_IOS_ENCODED_IMAGE_MAX_BYTES) { "画像データが大きすぎます" }
+        val format = detectCompatPostImageFormat(attachment.bytes)
+        // GIF/PNG/WebP keep animation and transparency when only metadata has
+        // to go, the stored pixels are already upright and they fit (U-1).
+        val orientation = compatExifOrientationTransform(
+            if (format == CompatPostImageFormat.GIF) 1 else readIosEncodedImageSize(attachment.bytes)?.orientation ?: 1
+        )
+        compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+            return@runSuspendCatchingPreservingCancellation ImageData(
+                bytes = sanitized,
+                fileName = compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension))
+            )
+        }
         val original = UIImage.imageWithData(attachment.bytes.toNSData())
             ?: error("画像を読み込めませんでした")
         require(original.size.useContents { width > 0.0 && height > 0.0 }) { "画像を読み込めませんでした" }
@@ -125,9 +144,25 @@ internal actual suspend fun compressCompatPostImage(
         } else {
             original
         }
-        var quality = 0.92
         var encoded: ByteArray? = null
+        var extension = "jpg"
+        if (image.hasCompatAlpha()) {
+            // Keep transparency as PNG when it fits; JPEG would turn it black.
+            // PNG ignores UIImage.imageOrientation, so draw the pixels upright first.
+            image = autoreleasepool { image.uprightCompatImage() }
+            coroutineContext.ensureActive()
+            encoded = autoreleasepool {
+                UIImagePNGRepresentation(image)?.toByteArrayOrNull(maxBytes.toLong())
+            }
+            if (encoded != null) {
+                extension = "png"
+            } else {
+                image = autoreleasepool { image.flattenedCompatOnWhite() }
+            }
+        }
+        var quality = 0.92
         for (iteration in 0 until 18) {
+            if (encoded != null) break
             coroutineContext.ensureActive()
             val candidate = autoreleasepool {
                 val candidateData = UIImageJPEGRepresentation(image, quality)
@@ -151,9 +186,8 @@ internal actual suspend fun compressCompatPostImage(
             }
         }
         val bytes = requireNotNull(encoded) { "上限以内に圧縮できませんでした" }
-        val stem = attachment.fileName.substringBeforeLast('.', attachment.fileName).ifBlank { "attachment" }
         coroutineContext.ensureActive()
-        ImageData(bytes = bytes, fileName = "$stem.jpg")
+        ImageData(bytes = bytes, fileName = compatPostSanitizedFileName(attachment.fileName, extension))
     }
 }
 
@@ -275,6 +309,7 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
     return { attachment ->
         scope.launch {
             var unownedPreviewPath: String? = null
+            var unownedAudioLease: IosPlaybackAudioLease? = null
             try {
                 val extension = attachment.fileName.substringAfterLast('.', "mp4")
                     .lowercase().ifBlank { "mp4" }
@@ -292,9 +327,16 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                     target
                 }
                 unownedPreviewPath = path
+                // Playback category, not a PlayAndRecord left by voice input
+                // (receiver output); released when the preview closes (G-4).
+                withContext(NonCancellable + AppDispatchers.io) {
+                    unownedAudioLease = acquireIosPlaybackAudioSession(mixWithOthers = false)
+                }
+                val audioLease = requireNotNull(unownedAudioLease)
                 dispatch_async(dispatch_get_main_queue()) {
                     val presenter = currentIosPresentationController()
                     if (presenter == null) {
+                        releaseCompatPreviewAudioLease(audioLease)
                         NSFileManager.defaultManager.removeItemAtPath(path, error = null)
                         currentError.value("動画プレビューを表示できません")
                         return@dispatch_async
@@ -306,6 +348,7 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                         object : UIViewController(nibName = null, bundle = null) {
                             override fun viewDidDisappear(animated: Boolean) {
                                 super.viewDidDisappear(animated)
+                                releaseCompatPreviewAudioLease(audioLease)
                                 NSFileManager.defaultManager.removeItemAtPath(path, error = null)
                             }
                         }.apply {
@@ -332,6 +375,7 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                             override fun viewDidDisappear(animated: Boolean) {
                                 this.player = null
                                 super.viewDidDisappear(animated)
+                                releaseCompatPreviewAudioLease(audioLease)
                                 NSFileManager.defaultManager.removeItemAtPath(path, error = null)
                             }
                         }.apply { this.player = player }
@@ -339,15 +383,18 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                     presenter.presentViewController(controller, animated = true, completion = null)
                 }
                 // The presented controller (or the presenter-unavailable branch)
-                // now owns deletion of the temporary file.
+                // now owns deletion of the temporary file and the audio lease.
                 unownedPreviewPath = null
+                unownedAudioLease = null
             } catch (cancelled: CancellationException) {
+                unownedAudioLease?.let(::releaseCompatPreviewAudioLease)
                 val target = unownedPreviewPath
                 if (target != null) withContext(NonCancellable + AppDispatchers.io) {
                     NSFileManager.defaultManager.removeItemAtPath(target, error = null)
                 }
                 throw cancelled
             } catch (error: Throwable) {
+                unownedAudioLease?.let(::releaseCompatPreviewAudioLease)
                 unownedPreviewPath?.let { target ->
                     withContext(AppDispatchers.io) {
                         NSFileManager.defaultManager.removeItemAtPath(target, error = null)
@@ -357,6 +404,11 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
             }
         }
     }
+}
+
+/** Deactivating the audio session can block, so it is kept off the main thread. */
+private fun releaseCompatPreviewAudioLease(lease: IosPlaybackAudioLease) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) { lease.close() }
 }
 
 @Composable
@@ -386,6 +438,33 @@ private fun UIImage.scaled(width: Int, height: Int): UIImage {
     }
 }
 
+private fun UIImage.hasCompatAlpha(): Boolean = when (CGImageGetAlphaInfo(CGImage)) {
+    CGImageAlphaInfo.kCGImageAlphaNone,
+    CGImageAlphaInfo.kCGImageAlphaNoneSkipFirst,
+    CGImageAlphaInfo.kCGImageAlphaNoneSkipLast -> false
+    else -> CGImage != null
+}
+
+/** Redraws into an up-oriented image; UIKit applies imageOrientation while drawing. */
+private fun UIImage.uprightCompatImage(): UIImage {
+    if (imageOrientation == UIImageOrientation.UIImageOrientationUp) return this
+    return size.useContents { scaled(max(1, width.roundToInt()), max(1, height.roundToInt())) }
+}
+
+/** Composites transparent pixels onto white so JPEG does not render them black. */
+private fun UIImage.flattenedCompatOnWhite(): UIImage {
+    val (width, height) = size.useContents { width to height }
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(width, height), true, 1.0)
+    return try {
+        UIColor.whiteColor.setFill()
+        UIGraphicsGetCurrentContext()?.let { CGContextFillRect(it, CGRectMake(0.0, 0.0, width, height)) }
+        drawInRect(CGRectMake(0.0, 0.0, width, height))
+        UIGraphicsGetImageFromCurrentImageContext() ?: this
+    } finally {
+        UIGraphicsEndImageContext()
+    }
+}
+
 private fun colorFromArgb(color: Int): UIColor = UIColor.colorWithRed(
     red = ((color ushr 16) and 0xff) / 255.0,
     green = ((color ushr 8) and 0xff) / 255.0,
@@ -399,10 +478,15 @@ private class IosCompatSpeechSession {
     private var engine: AVAudioEngine? = null
     private var request: SFSpeechAudioBufferRecognitionRequest? = null
     private var task: platform.Speech.SFSpeechRecognitionTask? = null
+    private var generation = 0L
+    private var latestText = ""
+    private var recordingSession: Long? = null
 
     fun toggle(onResult: (String) -> Unit, onError: (String) -> Unit) {
         if (engine?.running == true) {
+            val text = latestText
             stop()
+            if (text.isNotBlank()) onResult(text)
             return
         }
         when (SFSpeechRecognizer.authorizationStatus().value) {
@@ -421,6 +505,7 @@ private class IosCompatSpeechSession {
     }
 
     fun stop() {
+        generation += 1
         engine?.inputNode?.removeTapOnBus(0u)
         engine?.stop()
         request?.endAudio()
@@ -428,12 +513,28 @@ private class IosCompatSpeechSession {
         task = null
         request = null
         engine = null
+        latestText = ""
+        recordingSession?.let { session ->
+            // Back to playback (and let other apps resume) so a later preview
+            // is not routed to the receiver in PlayAndRecord (G-4). Restoring the
+            // category can block, so like the other releases it runs off the main
+            // thread; the session token keeps it from ending a newer voice input (E4-3).
+            recordingSession = null
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                iosAudioSessionCoordinator.endRecording(session)
+            }
+        }
     }
 
     private fun requestMicrophoneThenStart(onResult: (String) -> Unit, onError: (String) -> Unit) {
+        val requestedGeneration = generation
         AVAudioSession.sharedInstance().requestRecordPermission { allowed ->
-            if (allowed) start(onResult, onError)
-            else onError("マイクを許可してください。許可しない場合はキーボード入力を利用できます")
+            dispatch_async(dispatch_get_main_queue()) {
+                if (generation == requestedGeneration) {
+                    if (allowed) start(onResult, onError)
+                    else onError("マイクを許可してください。許可しない場合はキーボード入力を利用できます")
+                }
+            }
         }
     }
 
@@ -443,34 +544,47 @@ private class IosCompatSpeechSession {
             return
         }
         stop()
+        recordingSession = iosAudioSessionCoordinator.beginRecordingSession() ?: run {
+            onError("マイク入力を準備できませんでした。キーボード入力を利用してください")
+            return
+        }
+        val activeGeneration = generation
         val nextRequest = SFSpeechAudioBufferRecognitionRequest().apply {
-            // The post form appends a recognition result to the comment.  Do
-            // not emit interim text repeatedly, or each partial phrase would
-            // be appended as a separate line.
-            shouldReportPartialResults = false
+            // Keep partial text for manual stop, but append it only once when
+            // recognition finishes or the user stops recording.
+            shouldReportPartialResults = true
         }
         val nextEngine = AVAudioEngine()
         val input = nextEngine.inputNode
         val format = input.outputFormatForBus(0u)
+        if (format.sampleRate <= 0.0 || format.channelCount == 0u) {
+            stop()
+            onError("マイク入力を利用できません。キーボード入力を利用してください")
+            return
+        }
         input.installTapOnBus(0u, bufferSize = 1_024u, format = format) { buffer, _ ->
             buffer?.let(nextRequest::appendAudioPCMBuffer)
         }
         task = recognizer.recognitionTaskWithRequest(nextRequest) { result, error ->
-            if (result?.isFinal() == true) {
-                result.bestTranscription.formattedString
-                    .takeIf { text -> text.isNotBlank() }
-                    ?.let(onResult)
-                stop()
-            }
-            if (error != null) {
-                stop()
-                onError("音声認識に失敗しました: ${error.localizedDescription}")
+            dispatch_async(dispatch_get_main_queue()) {
+                if (generation == activeGeneration) {
+                    result?.bestTranscription?.formattedString?.let { latestText = it }
+                    if (result?.isFinal() == true) {
+                        val text = latestText
+                        stop()
+                        if (text.isNotBlank()) onResult(text)
+                    } else if (error != null) {
+                        stop()
+                        onError("音声認識に失敗しました: ${error.localizedDescription}")
+                    }
+                }
             }
         }
         if (!nextEngine.startAndReturnError(null)) {
             input.removeTapOnBus(0u)
             task?.cancel()
             task = null
+            stop()
             onError("マイク入力を開始できませんでした。キーボード入力を利用してください")
             return
         }

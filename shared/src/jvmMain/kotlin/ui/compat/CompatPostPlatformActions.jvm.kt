@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.runtime.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.ui.Modifier
@@ -19,6 +20,10 @@ import java.awt.RenderingHints
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.geom.Path2D
+import java.awt.geom.AffineTransform
+import org.jetbrains.skia.Codec
+import org.jetbrains.skia.Data
+import org.jetbrains.skia.EncodedOrigin
 import kotlinx.coroutines.*
 import com.valoser.futacha.shared.compat.CompatImagePhash
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
@@ -62,7 +67,7 @@ internal actual fun rememberCompatSpeechRecognizer(
                 if (session == id) session = null
             }
         }
-        AlertDialog(onDismissRequest = { session = null }, title = { Text("音声入力") }, text = {
+        FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { session = null }, title = { Text("音声入力") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(when { finishing -> "認識結果を確定しています…"; recording -> "話してください（最大60秒）"; else -> "音声認識とマイクの許可を確認しています…" })
                 if (transcript.isNotBlank()) Text(transcript.takeLast(2000))
@@ -76,7 +81,7 @@ internal actual fun rememberCompatSpeechRecognizer(
                     catch (failure: Exception) { errorCallback(failure.message ?: "停止できませんでした"); session = null }
                 }
             }) { Text("入力する") }
-        }, dismissButton = { TextButton(onClick = { session = null }) { Text("キャンセル") } })
+        }, dismissButton = { TextButton(onClick = { session = null }) { Text("キャンセル") } }) }
     }
     return { if (session == null) { recording = false; finishing = false; transcript = ""; session = UUID.randomUUID().toString() } }
 }
@@ -92,20 +97,77 @@ internal actual suspend fun compressCompatPostImage(
     maxBytes: Int
 ): Result<ImageData> = withContext(Dispatchers.IO) { runSuspendCatchingPreservingCancellation {
     require(maxBytes > 0)
-    val image = requireNotNull(ImageIO.read(ByteArrayInputStream(attachment.bytes))) { "画像を読み込めません" }
+    // ImageIO ignores the EXIF orientation; read it like the image editor does so phone
+    // photos are not posted sideways once the metadata is dropped (U-1, N4-2).
+    val format = detectCompatPostImageFormat(attachment.bytes)
+    val orientation = compatExifOrientationTransform(if (format == CompatPostImageFormat.GIF) 1 else readCompatPostEncodedOrigin(attachment.bytes))
+    // GIF/PNG/WebP keep animation and transparency when only metadata has to go.
+    compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+        return@runSuspendCatchingPreservingCancellation ImageData(sanitized, compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension)))
+    }
+    val image = ImageIO.read(ByteArrayInputStream(attachment.bytes)) ?: run {
+        // ImageIO cannot decode WebP; send it upright-as-stored rather than failing as before the orientation check.
+        compatPostLosslessSanitizedImage(attachment.bytes, format, CompatImageOrientation(0, false), maxBytes)?.let { sanitized ->
+            return@runSuspendCatchingPreservingCancellation ImageData(sanitized, compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension)))
+        }
+        error("画像を読み込めません")
+    }
     require(image.width.toLong() * image.height <= 32_000_000) { "画像が大きすぎます" }
+    val swap = orientation.rotationDegrees % 180 != 0
+    val uprightWidth = if (swap) image.height else image.width
+    val uprightHeight = if (swap) image.width else image.height
+    fun render(width: Int, height: Int, type: Int): BufferedImage {
+        val out = BufferedImage(width, height, type)
+        val g = out.createGraphics()
+        try {
+            if (type == BufferedImage.TYPE_INT_RGB) { g.color = Color.WHITE; g.fillRect(0, 0, width, height) }
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            g.scale(width.toDouble() / uprightWidth, height.toDouble() / uprightHeight)
+            g.transform(compatPostOrientationTransform(orientation, image.width.toDouble(), image.height.toDouble()))
+            g.drawImage(image, 0, 0, null)
+        } finally { g.dispose() }
+        return out
+    }
+    if (image.colorModel.hasAlpha() && image.width <= 2048 && image.height <= 2048) {
+        // Keep transparency as PNG when it fits; the JPEG path below flattens onto white.
+        val upright = if (orientation.isIdentity) image else render(uprightWidth, uprightHeight, BufferedImage.TYPE_INT_ARGB)
+        val png = ByteArrayOutputStream().also { ImageIO.write(upright, "png", it) }.toByteArray()
+        if (png.size <= maxBytes) return@runSuspendCatchingPreservingCancellation ImageData(png, compatPostSanitizedFileName(attachment.fileName, "png"))
+    }
     var scale = minOf(1.0, 2048.0 / maxOf(image.width, image.height))
     for (attempt in 0 until 8) {
         ensureActive()
-        val resized = BufferedImage(maxOf(1, (image.width * scale).toInt()), maxOf(1, (image.height * scale).toInt()), BufferedImage.TYPE_INT_RGB)
-        val g = resized.createGraphics()
-        try { g.color = Color.WHITE; g.fillRect(0, 0, resized.width, resized.height); g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR); g.drawImage(image, 0, 0, resized.width, resized.height, null) } finally { g.dispose() }
+        val resized = render(maxOf(1, (uprightWidth * scale).toInt()), maxOf(1, (uprightHeight * scale).toInt()), BufferedImage.TYPE_INT_RGB)
         val bytes = ByteArrayOutputStream().also { ImageIO.write(resized, "jpg", it) }.toByteArray()
-        if (bytes.size <= maxBytes) return@runSuspendCatchingPreservingCancellation ImageData(bytes, attachment.fileName.substringBeforeLast('.') + ".jpg")
+        if (bytes.size <= maxBytes) return@runSuspendCatchingPreservingCancellation ImageData(bytes, compatPostSanitizedFileName(attachment.fileName, "jpg"))
         scale *= .7
     }
     error("指定サイズまで画像を圧縮できませんでした")
 } }
+
+/** EXIF Orientation (1-8) as Skia's codec reads it from the header; 1 when unknown or unreadable. */
+internal fun readCompatPostEncodedOrigin(bytes: ByteArray): Int = runCatching {
+    Data.makeFromBytes(bytes).use { data -> Codec.makeFromData(data).use { codec ->
+        when (codec.encodedOrigin) {
+            EncodedOrigin.TOP_RIGHT -> 2; EncodedOrigin.BOTTOM_RIGHT -> 3; EncodedOrigin.BOTTOM_LEFT -> 4
+            EncodedOrigin.LEFT_TOP -> 5; EncodedOrigin.RIGHT_TOP -> 6; EncodedOrigin.RIGHT_BOTTOM -> 7
+            EncodedOrigin.LEFT_BOTTOM -> 8; else -> 1
+        }
+    } }
+}.getOrDefault(1)
+
+/** Maps raw pixel coordinates ([width] x [height]) to upright ones: rotate clockwise, then mirror. */
+internal fun compatPostOrientationTransform(orientation: CompatImageOrientation, width: Double, height: Double): AffineTransform {
+    val rotation = when (orientation.rotationDegrees) {
+        90 -> AffineTransform(0.0, 1.0, -1.0, 0.0, height, 0.0)
+        180 -> AffineTransform(-1.0, 0.0, 0.0, -1.0, width, height)
+        270 -> AffineTransform(0.0, -1.0, 1.0, 0.0, 0.0, width)
+        else -> AffineTransform()
+    }
+    if (!orientation.mirrorHorizontally) return rotation
+    val uprightWidth = if (orientation.rotationDegrees % 180 != 0) height else width
+    return AffineTransform(-1.0, 0.0, 0.0, 1.0, uprightWidth, 0.0).apply { concatenate(rotation) }
+}
 
 internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? = runCatching {
     if (bytes.isEmpty()) return@runCatching null
@@ -177,7 +239,7 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
             // The player below may still be releasing VLC; delete once it let go (Windows cannot delete open files).
             finally { withContext(NonCancellable + Dispatchers.IO) { owned?.let(DesktopVideoFiles::delete) } }
         }
-        Dialog(onDismissRequest = { attachment = null }) {
+        FutachaAppLockAwareWindow { Dialog(onDismissRequest = { attachment = null }) {
             Surface {
                 Column(Modifier.widthIn(max = 800.dp).fillMaxWidth().padding(16.dp)) {
                     Text(selected.fileName)
@@ -190,7 +252,7 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                     TextButton(onClick = { attachment = null }, modifier = Modifier.align(Alignment.End)) { Text("閉じる") }
                 }
             }
-        }
+        } }
     } }
     return { attachment = it }
 }

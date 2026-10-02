@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -764,7 +765,7 @@ internal fun CompatMainScreen(
         )
     }
     deletingBoard?.let { board ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { deletingBoard = null },
             title = { Text("板の削除") },
             text = { Text("本当によろしいですか？") },
@@ -778,7 +779,7 @@ internal fun CompatMainScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { deletingBoard = null }) { Text("キャンセル") } }
-        )
+        ) }
     }
 }
 
@@ -792,7 +793,7 @@ private fun CompatMainOverflowPopup(
     // emulator density this is the equivalent of a zero-dp Compose popup
     // offset; the previous negative offset made the menu touch the status bar.
     val topInset = with(LocalDensity.current) { 0.dp.roundToPx() }
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         alignment = Alignment.TopEnd,
         offset = IntOffset(0, topInset),
         properties = PopupProperties(focusable = true),
@@ -825,7 +826,7 @@ private fun CompatMainOverflowPopup(
             }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -835,7 +836,7 @@ private fun CompatModeDialog(
     onSwitch: (ExperienceProfile) -> Unit
 ) {
     var selected by remember { mutableStateOf(activeProfile) }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("モード") },
         text = {
@@ -862,5 +863,5 @@ private fun CompatModeDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
 }

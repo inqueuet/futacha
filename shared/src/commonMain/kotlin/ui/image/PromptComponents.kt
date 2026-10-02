@@ -29,6 +29,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun PromptSettingsSection() {
@@ -246,7 +247,7 @@ private fun PromptInfoDialog(metadata: GenerationMetadata, onDismiss: () -> Unit
     if (!LocalPromptContentVisible.current || !LocalMediaFeatureSettings.current.promptDisplayEnabled) return
     val gate = LocalMediaFeatureGate.current ?: return
     var candidate by remember(metadata) { mutableIntStateOf(0) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("生成情報") },
+    FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("生成情報") },
         confirmButton = { TextButton(onClick = onDismiss, colors = promptTextButtonColors()) { Text("閉じる") } },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
@@ -296,7 +297,7 @@ private fun PromptInfoDialog(metadata: GenerationMetadata, onDismiss: () -> Unit
                     }
                 }
             }
-        })
+        }) }
 }
 
 internal expect fun promptClipEntry(value: String): ClipEntry

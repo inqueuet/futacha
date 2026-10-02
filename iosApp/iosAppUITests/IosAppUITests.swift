@@ -1,4 +1,5 @@
 import XCTest
+import Network
 
 /**
  * Simulator-level smoke coverage for the native scene host.  Kotlin/Native
@@ -3965,6 +3966,40 @@ final class IosAppUITests: XCTestCase {
             0,
             "Issue #78 regressed in the saved HTML viewer."
         )
+    }
+
+    /// S-3: a saved page opened from Files must not reach the network (IP and
+    /// viewing time), while its local images keep loading.
+    func testSavedHtmlViewerBlocksRemoteRequestsAndKeepsLocalImages() throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let remoteRequest = expectation(description: "remote request from the saved page")
+        remoteRequest.isInverted = true
+        remoteRequest.assertForOverFulfill = false
+        let ready = expectation(description: "listener ready")
+        listener.newConnectionHandler = { connection in
+            remoteRequest.fulfill()
+            connection.cancel()
+        }
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { ready.fulfill() }
+        }
+        listener.start(queue: .global())
+        defer { listener.cancel() }
+        wait(for: [ready], timeout: 10)
+        let port = try XCTUnwrap(listener.port?.rawValue)
+
+        let app = makeApplication()
+        app.launchArguments.append("-futacha.issue78.saved_html_fixture")
+        app.launchEnvironment["FUTACHA_SAVED_HTML_REMOTE_PROBE"] = "http://127.0.0.1:\(port)"
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["保存済みスレ"].waitForExistence(timeout: 20))
+        let probe = app.staticTexts["savedHtml.localProbe"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 15))
+        XCTAssertEqual(probe.label, "local=1", "A saved thread's local image no longer loads.")
+        // The fixture's meta refresh fires after one second.
+        wait(for: [remoteRequest], timeout: 4)
+        XCTAssertTrue(app.navigationBars["保存済みスレ"].exists)
     }
 
     /// Opt-in device smoke test for the cold, real-network thread path.

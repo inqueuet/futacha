@@ -101,6 +101,9 @@ internal suspend fun VideoEditSource.export(
     try {
         return useFile { input ->
             validateVideoEditDocument(document, info)
+            // Decide preservability before the encoder writes anything (B-6).
+            requirePreservableVideoMetadata(input)
+            currentCoroutineContext().ensureActive(); checkActive()
             val target = input.substringBeforeLast('/') + "/edited-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(0, Int.MAX_VALUE).toString(36)}.mp4"
             output = target
             exportDeviceVideo(context, input, info, document, target, onProgress)

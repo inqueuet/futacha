@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.media.*
 import com.valoser.futacha.shared.media.analysis.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.LocalMediaFeatureGate
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.*
@@ -23,14 +24,18 @@ internal val LocalAnalysisModelStore = staticCompositionLocalOf<ModelStore?> { n
 internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
     val store = LocalAnalysisModelStore.current ?: return
     val gate = LocalMediaFeatureGate.current ?: return
-    val permit = remember(store, gate, feature) { gate.permit(feature) } ?: return
+    // Follow the gate: a permit captured once went stale after the feature was toggled
+    // and every later download or import with it was rejected until the dialog reopened.
+    val permits = remember(gate, feature) { gate.permits(feature) }
+    val livePermit by permits.collectAsState(initial = remember(gate, feature) { gate.permit(feature) })
+    val permit = livePermit ?: return
     val scope = rememberCoroutineScope()
     // Verified this session (downloaded or imported, both hash the file).
     var installed by remember { mutableStateOf<Set<AnalysisModel>>(emptySet()) }
     // Right size on disk; the content is verified when a session uses it. Opening
     // the dialog used to hash every installed model (about 69 MB in total).
-    var present by remember { mutableStateOf<Set<AnalysisModel>>(emptySet()) }
-    var checking by remember { mutableStateOf(true) }
+    var present by remember(store, permit) { mutableStateOf<Set<AnalysisModel>>(emptySet()) }
+    var checking by remember(store, permit) { mutableStateOf(true) }
     var running by remember { mutableStateOf<AnalysisModel?>(null) }
     var importing by remember { mutableStateOf(false) }
     var job by remember { mutableStateOf<Job?>(null) }
@@ -50,7 +55,7 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
         finally { checking = false }
     }
     fun cancel() { cancelling = true; if (importing) picker.cancel() else job?.cancel() }
-    AlertDialog(onDismissRequest = { if (checking) onDismiss() else if (busy) cancel() else onDismiss() }, title = { Text("自動編集用モデル") },
+    FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { if (checking) onDismiss() else if (busy) cancel() else onDismiss() }, title = { Text("自動編集用モデル") },
         text = {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("analysis-model-dialog"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("導入したモデルで端末内の画像・動画を解析します。画像や動画は送信しません。モデルなしでも手動編集は使えます。")
@@ -63,9 +68,10 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
                         Text("${spec.license}・約${(spec.distribution.bytes / 1_000_000f).roundToInt()}MB", style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { openUrl(spec.page) }, enabled = !busy) { Text("配布元・ライセンスを確認") }
                         Text(
-                            when (spec.id) {
-                                in installed -> "導入済み（検証済み）"
-                                in present -> "導入済み（使用時に内容を検証）"
+                            when {
+                                checking -> "確認中…"
+                                spec.id in installed -> "導入済み（検証済み）"
+                                spec.id in present -> "導入済み（使用時に内容を検証）"
                                 else -> "未導入"
                             },
                             modifier = Modifier.testTag("analysis-model-state-${spec.id.name}")
@@ -105,13 +111,13 @@ internal fun AnalysisModelDialog(feature: MediaFeature, onDismiss: () -> Unit) {
             }
         }, confirmButton = { TextButton(onClick = { if (busy) cancel() else onDismiss() }, enabled = !checking && !cancelling) {
             Text(if (busy) "取消" else "閉じる")
-        } })
+        } }) }
 }
 
 @Composable
 internal fun DetectionOptionsDialog(settings: DetectionSettings, onSettingsChanged: (DetectionSettings) -> Unit, onModels: () -> Unit, onDismiss: () -> Unit, onDetect: (DetectionSettings) -> Unit, video: Boolean = false) {
     val prefix = if (video) "video" else "image"
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (video) "動画の自動検出" else "画像の自動検出") }, text = {
+    FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text(if (video) "動画の自動検出" else "画像の自動検出") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()).testTag("$prefix-detection-options")) {
             Text(if (video) "性器の候補を各コマで検出し、追尾します。見逃しや誤検出があるため、解析後に区間全体を確認し、必要な枠を修正してください。"
                 else "性器の候補を検出します。見逃しや誤検出があるため、解析後に画像全体を確認し、必要な枠を修正してください。")
@@ -131,7 +137,7 @@ internal fun DetectionOptionsDialog(settings: DetectionSettings, onSettingsChang
             if (settings.contours) Text("輪郭用の2モデルが必要です。抽出できない候補は枠全体を残します。", style = MaterialTheme.typography.bodySmall)
         }
     }, confirmButton = { TextButton(enabled = settings.models.isNotEmpty(), modifier = Modifier.testTag("$prefix-detection-start"), onClick = { onDetect(settings.validated()) }) { Text("解析を開始") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("戻る") } })
+        dismissButton = { TextButton(onClick = onDismiss) { Text("戻る") } }) }
 }
 
 @Composable

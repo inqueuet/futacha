@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun QuoteSelectionDialog(
@@ -61,7 +62,7 @@ internal fun QuoteSelectionDialog(
             mapOf("selection_count_bucket" to analyticsCountBucket(selectedIds.size))
         )
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("quote_selection_dismiss", "引用選択を閉じる")
             onDismiss()
@@ -182,5 +183,5 @@ internal fun QuoteSelectionDialog(
                 }
             }
         }
-    )
+    ) }
 }

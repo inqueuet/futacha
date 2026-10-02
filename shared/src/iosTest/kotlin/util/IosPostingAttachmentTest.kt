@@ -31,6 +31,20 @@ class IosPostingAttachmentTest {
         }
     }
 
+    @Test fun pickerReadsEveryByteAcrossReadChunksAndRejectsEmptyFiles() {
+        val path = NSTemporaryDirectory() + NSUUID().UUIDString + ".png"
+        // Not a multiple of the 64KB read chunk, with position-dependent content.
+        val bytes = ByteArray(3 * 64 * 1024 + 123) { (it * 31 + it / 7).toByte() }
+        try {
+            assertTrue(bytes.asData().writeToFile(path, atomically = true))
+            val result = assertNotNull(loadPickedMediaFromUrl(NSURL.fileURLWithPath(path), false, "image.png"))
+            assertContentEquals(bytes, result.bytes)
+            assertNull(loadPickedMediaFromUrl(NSURL.fileURLWithPath(path), false, "image.png", bytes.size.toLong() - 1))
+            assertTrue(NSData().writeToFile(path, atomically = true))
+            assertNull(loadPickedMediaFromUrl(NSURL.fileURLWithPath(path), false, "image.png"))
+        } finally { NSFileManager.defaultManager.removeItemAtPath(path, null) }
+    }
+
     @Test fun wildcardDocumentsAllowVideoAndBackupDataAlongsideImages() {
         assertEquals(listOf(UTTypeData), documentContentTypesForMimeType("*/*"))
         assertEquals(listOf(UTTypeData), documentContentTypesForMimeType("application/octet-stream"))

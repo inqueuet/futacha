@@ -8,6 +8,9 @@ import io.ktor.http.Url
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -192,6 +195,65 @@ class PersistentCookieStorageTest {
         }
         assertEquals(original.message, thrown.message)
         assertTrue(storage.listCookies().any { it.name == "failure_cookie" })
+    }
+
+    @Test
+    fun cookieFileWriteFailureDoesNotFailTheRequest() = runBlocking {
+        val delegate = InMemoryFileSystem()
+        val fileSystem = ToggleFailingWriteFileSystem(delegate)
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+        fileSystem.failWrites = true
+
+        // Previously the disk error escaped from addCookie and failed the HTTP call.
+        storage.addCookie(
+            Url("https://dec.2chan.net/b/"),
+            Cookie(name = "cxyl", value = "abc", domain = ".2chan.net", path = "/")
+        )
+
+        assertEquals(listOf("cxyl"), storage.get(Url("https://dec.2chan.net/b/")).map { it.name })
+    }
+
+    @Test
+    fun commitEvenOnFailure_keepsCookiesReceivedBeforeCancellation() = runBlocking {
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val received = CompletableDeferred<Unit>()
+        val post = launch {
+            storage.commitEvenOnFailure {
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(name = "posttime", value = "123", domain = ".2chan.net", path = "/")
+                )
+                received.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        received.await()
+        post.cancelAndJoin()
+
+        assertTrue(storage.listCookies().any { it.name == "posttime" && it.value == "123" })
+    }
+
+    @Test
+    fun transactionDroppingACookieKeepsAValueStoredMeanwhileOutsideIt() = runBlocking {
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val url = Url("https://dec.2chan.net/b/")
+        storage.addCookie(url, Cookie(name = "cxyl", value = "old", domain = ".2chan.net", path = "/"))
+        val dropped = CompletableDeferred<Unit>()
+        val refreshed = CompletableDeferred<Unit>()
+
+        val transaction = async {
+            storage.commitEvenOnFailure {
+                storage.removeCookie("2chan.net", "/", "cxyl")
+                dropped.complete(Unit)
+                refreshed.await()
+            }
+        }
+        dropped.await()
+        storage.addCookie(url, Cookie(name = "cxyl", value = "new", domain = ".2chan.net", path = "/"))
+        refreshed.complete(Unit)
+        transaction.await()
+
+        assertEquals(listOf("new"), storage.listCookies().filter { it.name == "cxyl" }.map { it.value })
     }
 
     @Test

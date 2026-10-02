@@ -83,6 +83,12 @@ fun interface OriginalMediaDownloader {
     /** Optional migration of verified legacy original bytes, without any network request. */
     suspend fun downloadCached(request: OriginalMediaRequest, sink: BufferedSink): OriginalMediaInfo? = null
 
+    /**
+     * False only when [downloadCached] certainly has nothing for [request]. A
+     * cache-only miss then ends without creating (and journaling) a cache entry.
+     */
+    suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean = true
+
     /** Called after the failed file is discarded. At most two retries are allowed. */
     suspend fun retryAfter(retry: Int, failure: Throwable): Boolean = false
 }
@@ -297,7 +303,9 @@ class OriginalMediaStore(
                 current = null
             }
             // Cache-only consumers cannot join an operation that would start network traffic.
-            if (current != null && !frozen.allowNetwork && current.asset == null) {
+            // The key separates them already; another cache-only reader is safe to join,
+            // since it only reads the disk (two of them used to fail each other).
+            if (current != null && !frozen.allowNetwork && current.request.allowNetwork && current.asset == null) {
                 throw IOException("Original media is not yet available offline")
             }
             (current ?: Entry(key, diskKey, frozen, generation).also { created ->
@@ -371,11 +379,18 @@ class OriginalMediaStore(
 
     private suspend fun load(entry: Entry): Asset {
         var pending: Asset? = null
+        // Only a revision this load created and no pointer references may be deleted
+        // on failure. A cached or committed original belongs to the cache: removing it
+        // when a scrolled-away request was cancelled erased the user's stored original.
+        var pendingOwned = false
         try {
             val disk = cache.await()
             pending = mutex.withLock {
                 ensureCurrentLocked(entry)
                 readCached(disk, entry)
+            }
+            if (pending == null && !entry.request.allowNetwork && !downloader.mayHaveCached(entry.request)) {
+                throw OriginalMediaNotCached()
             }
             if (pending == null) {
                 var retries = 0
@@ -417,6 +432,7 @@ class OriginalMediaStore(
                         val snapshot = editor.commitAndOpenSnapshot()
                             ?: throw IOException("Cannot retain the downloaded original")
                         pending = Asset(snapshot, disk, result, revision, fromCache = fromLegacyCache)
+                        pendingOwned = true
                         mutex.withLock {
                             ensureCurrentLocked(entry)
                             if (!result.cacheable) {
@@ -433,6 +449,7 @@ class OriginalMediaStore(
                                 }
                                 disk.fileSystem.write(pointer.metadata) { writeUtf8("original-media-v1") }
                                 pointer.commit()
+                                pendingOwned = false
                                 persistedUrlEvents.tryEmit(entry.request.url)
                                 onPersisted(entry.request.url)
                             } catch (failure: Throwable) {
@@ -443,11 +460,14 @@ class OriginalMediaStore(
                     } catch (failure: Throwable) {
                         runCatching { editor.abort() }
                         val failedAsset = pending
+                        val ownedRevision = failedAsset == null || pendingOwned
                         pending = null
+                        pendingOwned = false
                         if (failedAsset != null) {
                             cleanupIo("close failed original media snapshot") { failedAsset.snapshot.close() }
                         }
-                        val discarded = cleanupIo("remove failed original media") { disk.remove(revision) }
+                        // A revision already referenced by the committed pointer stays.
+                        val discarded = !ownedRevision || cleanupIo("remove failed original media") { disk.remove(revision) }
                         // Keep the original failure and do not retry if its file could not be discarded.
                         if (!discarded || !downloading || failure is CancellationException || failure is OriginalMediaNotCached ||
                             entry.playbackRequested.value || retries >= 2 || !downloader.retryAfter(retries++, failure)
@@ -476,13 +496,14 @@ class OriginalMediaStore(
                         readInto = reader::readOriginalMediaPrefixInto
                     )
                     pending = null
+                    pendingOwned = false
                 }
             }
         } finally {
             withContext(NonCancellable) {
                 pending?.let {
                     cleanupIo("close pending original media snapshot") { it.snapshot.close() }
-                    cleanupIo("remove pending original media") { it.disk.remove(it.identity) }
+                    if (pendingOwned) cleanupIo("remove pending original media") { it.disk.remove(it.identity) }
                 }
             }
         }

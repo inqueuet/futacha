@@ -13,9 +13,14 @@ internal object TrackingNative {
                       sceneCut: Boolean, output: FloatArray): Int
 }
 
+// A missing bridge is an UnsatisfiedLinkError (later NoClassDefFoundError), which the editors'
+// `catch (Exception)` never saw; report it as an ordinary failure (B-13).
+private fun createNativeTracker(): Long = try { TrackingNative.create() }
+    catch (failure: LinkageError) { throw IllegalStateException("追尾ライブラリを読み込めません", failure) }
+
 /** The same sparse LK tracker, thresholds and cumulative polygon as iOS/desktop. */
 internal actual class OpticalFlowTracker actual constructor() : AutoCloseable {
-    private var pointer = TrackingNative.create().also { check(it != 0L) { "追尾ライブラリを読み込めません" } }
+    private var pointer = createNativeTracker().also { check(it != 0L) { "追尾ライブラリを読み込めません" } }
 
     actual fun seed(frame: AnalysisFrame, region: MosaicBounds) {
         check(pointer != 0L); validateTrackingFrame(frame)

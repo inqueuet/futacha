@@ -23,6 +23,41 @@ val hasReleaseSigningConfig = releaseSigningStoreFile != null &&
     !releaseSigningStorePassword.isNullOrBlank() &&
     !releaseSigningKeyAlias.isNullOrBlank() &&
     !releaseSigningKeyPassword.isNullOrBlank()
+// Android Studio's "Generate Signed Bundle / APK" passes the keystore as
+// -Pandroid.injected.signing.*; AGP then signs the requested variant with it,
+// overriding the build script's signingConfig (K4-1).
+val hasInjectedSigningConfig = listOf(
+    "android.injected.signing.store.file",
+    "android.injected.signing.store.password",
+    "android.injected.signing.key.alias",
+    "android.injected.signing.key.password"
+).all { !providers.gradleProperty(it).orNull.isNullOrBlank() }
+
+// An unsigned release AAB can never be uploaded, so a scheduled release bundle
+// fails before any task runs when signing is missing. Unsigned release APKs stay
+// buildable because R8/verification runs use them; those only get a warning so a
+// missing signing setup is never silent. The check reads the resolved task graph,
+// so every spelling (bundle, build, bR, app-android:bundleRelease, ...) is covered
+// (K4-2).
+gradle.taskGraph.whenReady {
+    if (hasReleaseSigningConfig || hasInjectedSigningConfig) return@whenReady
+    val scheduledReleaseTasks = allTasks
+        .filter { it.project == project }
+        .map { it.name }
+        .filter {
+            it == "bundleRelease" || it == "signReleaseBundle" ||
+                it == "packageRelease" || it == "assembleRelease"
+        }
+    if (scheduledReleaseTasks.isEmpty()) return@whenReady
+    val message = "${project.path}: release signing is not configured (FUTACHA_RELEASE_STORE_FILE, " +
+        "FUTACHA_RELEASE_STORE_PASSWORD, FUTACHA_RELEASE_KEY_ALIAS, FUTACHA_RELEASE_KEY_PASSWORD " +
+        "in local.properties, Gradle properties or the environment, or Android Studio's " +
+        "-Pandroid.injected.signing.* properties)."
+    if ("bundleRelease" in scheduledReleaseTasks || "signReleaseBundle" in scheduledReleaseTasks) {
+        throw GradleException("$message Refusing to build an unsigned release AAB.")
+    }
+    logger.warn("WARNING: $message The release APK will be unsigned.")
+}
 
 // Compose Multiplatform 1.11.1 generates accessors for the new AGP 9.3 KMP
 // library target, but its generated common resources are not added to the
@@ -99,8 +134,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 202
-        versionName = "12.1"
+        versionCode = 203
+        versionName = "12.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -198,6 +233,10 @@ tasks.matching { it.name == "extractReleaseNativeSymbolTables" }.configureEach {
         result.result.get().assertNormalExitValue()
     }
 }
+
+com.valoser.futacha.instrumentation.ComposeSelectionGuardFactory.requireVerifiedFoundation(
+    libs.androidx.compose.foundation.guarded.get().versionConstraint.strictVersion
+)
 
 androidComponents {
     onVariants(selector().all()) { variant ->
@@ -309,7 +348,6 @@ dependencies {
     implementation(libs.androidx.compose.material.icons)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.coil.compose)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
     implementation(libs.play.services.tasks)

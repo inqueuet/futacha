@@ -9,6 +9,46 @@ import okio.ByteString.Companion.encodeUtf8
 import kotlin.test.*
 
 class ModelDownloadTransportTest {
+    @Test fun resumeUsesValidatedRangeAndOnlyAppendsRemainingBytes() = runBlocking {
+        using(handler = { request ->
+            assertEquals("bytes=2-", request.headers[HttpHeaders.Range])
+            respond("del", HttpStatusCode.PartialContent, headersOf(
+                HttpHeaders.ContentRange to listOf("bytes 2-4/5"), HttpHeaders.ContentLength to listOf("3")))
+        }) { downloader ->
+            val sink = Buffer().writeUtf8("mo")
+            downloader.resumeDownload(spec, sink, 2L)
+            assertEquals("model", sink.readUtf8())
+        }
+        using(handler = { respond("wrong", HttpStatusCode.PartialContent,
+            headersOf(HttpHeaders.ContentRange, "bytes 0-4/5")) }) { downloader ->
+            val sink = Buffer().writeUtf8("mo")
+            assertFails { downloader.resumeDownload(spec, sink, 2L) }
+            assertEquals("mo", sink.readUtf8())
+        }
+    }
+
+    @Test fun resumedResponsesThatCannotContinueThePartialRequestARestart() = runBlocking {
+        for (response in listOf<MockRequestHandler>(
+            { respond("", HttpStatusCode.RequestedRangeNotSatisfiable, headersOf(HttpHeaders.ContentRange, "bytes */5")) },
+            { respond("del", HttpStatusCode.PartialContent, headersOf(HttpHeaders.ContentRange, "bytes 2-4/9")) },
+            { respond("del", HttpStatusCode.PartialContent, headersOf(
+                HttpHeaders.ContentRange to listOf("bytes 2-4/5"), HttpHeaders.ContentLength to listOf("4"))) },
+            { respond("del", HttpStatusCode.PartialContent, headersOf(
+                HttpHeaders.ContentRange to listOf("bytes 2-4/5"), HttpHeaders.ContentEncoding to listOf("gzip"))) }
+        )) {
+            using(handler = response) { downloader ->
+                val sink = Buffer().writeUtf8("mo")
+                assertFailsWith<ModelResumeUnavailableException> { downloader.resumeDownload(spec, sink, 2L) }
+                assertEquals("mo", sink.readUtf8())
+            }
+        }
+        // Transient server failures keep the partial for a later resume.
+        using(handler = { respond("", HttpStatusCode.ServiceUnavailable) }) { downloader ->
+            val failure = assertFails { downloader.resumeDownload(spec, Buffer(), 2L) }
+            assertFalse(failure is ModelResumeUnavailableException)
+        }
+    }
+
     private val spec = ModelDistribution("https://model.test/model", 5, "model".encodeUtf8().sha256().hex())
     private suspend fun using(handler: MockRequestHandler, block: suspend (KtorModelDownloader) -> Unit) {
         KtorModelDownloader(HttpClient(MockEngine(handler)) { configureModelDownloads() }).use { block(it) }

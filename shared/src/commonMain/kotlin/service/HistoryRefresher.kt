@@ -97,7 +97,8 @@ class HistoryRefresher(
     private val maxConcurrency: Int = 4,
     private val autoSaveMaxConcurrency: Int = 1,
     private val threadFetchTimeoutMillis: Long = DEFAULT_THREAD_FETCH_TIMEOUT_MILLIS,
-    private val maxAutoSavesPerRefresh: Int = DEFAULT_MAX_AUTO_SAVES_PER_REFRESH
+    private val maxAutoSavesPerRefresh: Int = DEFAULT_MAX_AUTO_SAVES_PER_REFRESH,
+    private val cursorNamespace: String? = null
     // Caller owns repository lifecycle
 ) {
     class RefreshAlreadyRunningException :
@@ -112,6 +113,10 @@ class HistoryRefresher(
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
     private var historyRefreshCursor = 0
+    private val historyRefreshCursorPath = cursorNamespace?.let {
+        require(it.matches(Regex("[a-zA-Z0-9_-]{1,40}")))
+        "private/history_refresh_cursor_$it.json"
+    } ?: HISTORY_REFRESH_CURSOR_PATH
     private var historyRefreshCursorLoaded = false
     private var persistedHistoryRefreshCursor: PersistedHistoryRefreshCursor? = null
     private val threadValidators = HistoryThreadValidatorCache()
@@ -170,6 +175,7 @@ class HistoryRefresher(
         var totalThreadsInRun = 0
         var publishedDetailedError = false
         var flushOnExit: (suspend (Boolean) -> Boolean)? = null
+        var rewindCursorOnAbort: (suspend () -> Unit)? = null
         var autoSaveParentJob: Job? = null
         try {
             val boards = boardsSnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
@@ -249,6 +255,22 @@ class HistoryRefresher(
             }
             val deferredForBudget = mutableListOf<ThreadHistoryEntry>()
             val deferredMutex = Mutex()
+            // The window cursor moved past the whole window before any fetch. A
+            // run cut off (BGTask expiry, timeout) or aborted moves it back to the
+            // first thread it did not finish, so those are not skipped for a cycle.
+            val finishedIdentities = HashSet<String>()
+            rewindCursorOnAbort = {
+                val unfinished = deferredMutex.withLock {
+                    val deferredIdentities = deferredForBudget.mapTo(HashSet()) { historyEntryIdentity(it) }
+                    history.filter { entry ->
+                        val identity = historyEntryIdentity(entry)
+                        identity !in finishedIdentities || identity in deferredIdentities
+                    }
+                }
+                if (unfinished.isNotEmpty()) {
+                    rewindHistoryRefreshCursor(fullHistory, unfinished)
+                }
+            }
             val stats = HistoryRefreshRunStats()
             val errors = HistoryRefreshErrorTracker(
                 maxErrorsToTrack = 100
@@ -316,6 +338,7 @@ class HistoryRefresher(
                                 boardById = boardById,
                                 boardByBaseUrl = boardByBaseUrl
                             )
+                            deferredMutex.withLock { finishedIdentities += historyEntryIdentity(entry) }
                         }
                     }
                     try {
@@ -426,6 +449,7 @@ class HistoryRefresher(
                 )
             }
         } catch (e: CancellationException) {
+            withContext(NonCancellable) { rewindCursorOnAbort?.invoke() }
             bestEffortHistoryRefreshFlushOnAbort(
                 flush = flushOnExit,
                 reason = "cancelled",
@@ -434,6 +458,7 @@ class HistoryRefresher(
             )
             throw e
         } catch (error: Throwable) {
+            withContext(NonCancellable) { rewindCursorOnAbort?.invoke() }
             bestEffortHistoryRefreshFlushOnAbort(
                 flush = flushOnExit,
                 reason = "failed: ${error.message.orEmpty()}",
@@ -536,11 +561,11 @@ class HistoryRefresher(
             val fs = fileSystem
             if (fs != null) {
                 persistedHistoryRefreshCursor = runSuspendCatchingPreservingCancellation {
-                    if (!fs.exists(HISTORY_REFRESH_CURSOR_PATH)) return@runSuspendCatchingPreservingCancellation null
-                    require(fs.getFileSize(HISTORY_REFRESH_CURSOR_PATH) in 0L..HISTORY_REFRESH_CURSOR_MAX_BYTES)
+                    if (!fs.exists(historyRefreshCursorPath)) return@runSuspendCatchingPreservingCancellation null
+                    require(fs.getFileSize(historyRefreshCursorPath) in 0L..HISTORY_REFRESH_CURSOR_MAX_BYTES)
                     archiveSearchJson.decodeFromString(
                         PersistedHistoryRefreshCursor.serializer(),
-                        fs.readString(HISTORY_REFRESH_CURSOR_PATH).getOrThrow()
+                        fs.readString(historyRefreshCursorPath).getOrThrow()
                     )
                 }.onFailure { error ->
                     Logger.w(HISTORY_REFRESH_TAG, "Ignoring unreadable history refresh cursor: ${error.message}")
@@ -571,9 +596,9 @@ class HistoryRefresher(
         if (next == persistedHistoryRefreshCursor) return
         withContext(NonCancellable) {
             runSuspendCatchingPreservingCancellation {
-                fs.createDirectory(HISTORY_REFRESH_CURSOR_PATH.substringBeforeLast('/')).getOrThrow()
+                fs.createDirectory(historyRefreshCursorPath.substringBeforeLast('/')).getOrThrow()
                 fs.writeString(
-                    HISTORY_REFRESH_CURSOR_PATH,
+                    historyRefreshCursorPath,
                     archiveSearchJson.encodeToString(PersistedHistoryRefreshCursor.serializer(), next)
                 ).getOrThrow()
                 persistedHistoryRefreshCursor = next

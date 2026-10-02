@@ -38,6 +38,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 internal fun threadImageSearchTargets(imageUrl: String): List<CompatImageSearchTarget> =
     CompatImageSearchTarget.entries.filter { target ->
@@ -105,14 +106,14 @@ internal fun ThreadImageSearchDialog(
 
     val searchResult = result
     if (searchResult != null) {
-        CompatReverseImageSearchScreen(
+        FutachaAppLockAwareWindow { CompatReverseImageSearchScreen(
             result = searchResult,
             cookieRepository = cookieRepository,
             onClose = { result = null },
             onOpenExternal = openUrl
-        )
+        ) }
     } else {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("画像検索") },
             text = {
@@ -149,6 +150,6 @@ internal fun ThreadImageSearchDialog(
                     Text(if (pendingTarget != null) "キャンセル" else "閉じる")
                 }
             }
-        )
+        ) }
     }
 }

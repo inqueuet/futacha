@@ -12,8 +12,7 @@ import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.service.buildThreadStorageLockKey
-import com.valoser.futacha.shared.service.withSeedStorageLock
-import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.service.withIndexedSeedStorageLock
 import kotlinx.coroutines.CancellationException
 
 private const val THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS = 1_200
@@ -88,9 +87,6 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
     return ThreadAutoSaveRunnerCallbacks(
         saveThread = { config, onInitialSavedThread ->
             val stableStorageId = buildThreadStorageId(config.boardId, config.threadId)
-            val seedStorageId = runSuspendCatchingPreservingCancellation {
-                resolveIndexedStorageId(config.threadId, config.boardId)
-            }.getOrNull()
             // The auto-save size cap must not evict the thread being saved (and shown).
             AutoSaveRetentionRegistry.retain(config.threadId, config.boardId) {
                 ThreadStorageLockRegistry.withStorageLock(
@@ -99,7 +95,12 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
                         baseDirectory = AUTO_SAVE_DIRECTORY
                     )
                 ) {
-                    withSeedStorageLock(seedStorageId, stableStorageId) {
+                    // The seed is resolved under the locks, so a background run cannot
+                    // replace or delete it between resolving and seeding (G-21).
+                    withIndexedSeedStorageLock(
+                        resolveSeedStorageId = { resolveIndexedStorageId(config.threadId, config.boardId) },
+                        stableStorageId = stableStorageId
+                    ) { seedStorageId ->
                         saveService.saveThread(
                             threadId = config.threadId,
                             boardId = config.boardId,
@@ -137,12 +138,30 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
     )
 }
 
+/** A media reference that is not a remote URL: a saved file or content URI of a local copy. */
+internal fun isLocalThreadMediaReference(url: String?): Boolean {
+    val value = url?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    if (value.startsWith("//")) return false
+    return !value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)
+}
+
+internal fun threadPostsReferenceLocalMedia(posts: List<Post>): Boolean {
+    return posts.any { isLocalThreadMediaReference(it.imageUrl) || isLocalThreadMediaReference(it.thumbnailUrl) }
+}
+
+internal class ThreadAutoSaveLocalCopyException :
+    IllegalStateException("Auto-save skipped: the page references local media of a saved copy")
+
 internal suspend fun performThreadAutoSave(
     config: ThreadAutoSaveRunnerConfig,
     callbacks: ThreadAutoSaveRunnerCallbacks,
     onInitialSavedThread: suspend (SavedThread) -> Unit = {}
 ): ThreadAutoSaveRunResult {
-    val saveResult = try {
+    // A page built from a local copy lists saved file paths as its media. Saving
+    // it would request those paths as URLs, fail, and prune the saved files.
+    val saveResult = if (threadPostsReferenceLocalMedia(config.posts)) {
+        Result.failure(ThreadAutoSaveLocalCopyException())
+    } else try {
         callbacks.saveThread(config, onInitialSavedThread)
     } catch (error: CancellationException) {
         throw error

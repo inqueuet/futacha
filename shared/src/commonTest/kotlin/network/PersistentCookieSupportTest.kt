@@ -93,6 +93,18 @@ class PersistentCookieSupportTest {
                 now
             )
         )
+        assertTrue(
+            shouldDeletePersistentCookie(
+                Cookie(name = "a", value = "1", maxAge = -1),
+                now
+            )
+        )
+        assertFalse(
+            shouldDeletePersistentCookie(
+                Cookie(name = "a", value = "1"),
+                now
+            )
+        )
         assertEquals(
             6_000L,
             resolvePersistentCookieExpiresAt(

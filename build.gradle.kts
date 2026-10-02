@@ -581,15 +581,38 @@ tasks.register("verifyReleaseReadiness") {
         require(parsed.keys == requiredIds) {
             "Release evidence matrix mismatch; missing=${requiredIds - parsed.keys}, unexpected=${parsed.keys - requiredIds}"
         }
-        val dirtyPaths = ProcessBuilder("git", "status", "--porcelain")
-            .directory(rootProject.projectDir)
-            .start().inputStream.bufferedReader().use { it.readText().trim() }
+        // A failing git command must fail the gate; an empty stdout is not "clean" (K-6).
+        // Only stdout is the result: git warnings on stderr must not read as dirty
+        // paths or a different SHA. stderr is drained concurrently so a chatty git
+        // cannot block on a full pipe, and is reported when the command fails.
+        fun git(vararg args: String): String {
+            val process = try {
+                ProcessBuilder(listOf("git") + args)
+                    .directory(rootProject.projectDir)
+                    .start()
+            } catch (error: java.io.IOException) {
+                throw GradleException("git ${args.joinToString(" ")} could not be started: ${error.message}", error)
+            }
+            var errorOutput = ""
+            val errorReader = Thread {
+                errorOutput = process.errorStream.bufferedReader().use { it.readText().trim() }
+            }.apply { isDaemon = true; start() }
+            val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+            val exitCode = process.waitFor()
+            errorReader.join()
+            if (exitCode != 0) {
+                throw GradleException(
+                    "git ${args.joinToString(" ")} failed with exit code $exitCode: " +
+                        errorOutput.ifEmpty { output }
+                )
+            }
+            return output
+        }
+        val dirtyPaths = git("status", "--porcelain")
         require(dirtyPaths.isEmpty()) {
             "Release evidence is only valid for a clean worktree; commit or remove pending changes first"
         }
-        val currentSha = ProcessBuilder("git", "rev-parse", "HEAD")
-            .directory(rootProject.projectDir)
-            .start().inputStream.bufferedReader().use { it.readText().trim() }
+        val currentSha = git("rev-parse", "HEAD")
         parsed.forEach { (matrixId, columns) ->
             require(columns[1].matches(Regex("[0-9a-f]{40}"))) {
                 "$matrixId build_sha must be a full 40-character lowercase Git SHA"

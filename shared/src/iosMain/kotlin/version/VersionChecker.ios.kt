@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.StoreKit.SKPaymentQueue
+import platform.UIKit.UIDevice
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -30,7 +31,8 @@ private data class AppStoreLookupResponse(
 private data class AppStoreLookupResult(
     val version: String,
     val currentVersionReleaseDate: String? = null,
-    val trackViewUrl: String? = null
+    val trackViewUrl: String? = null,
+    val minimumOsVersion: String? = null
 )
 
 /** iOS update checker backed by the public App Store listing. */
@@ -70,6 +72,16 @@ class IosVersionChecker(
             val listing = json.decodeFromString<AppStoreLookupResponse>(body).results.firstOrNull()
                 ?: return null
             if (!isNewerVersion(currentVersion, listing.version)) return null
+            // A release that raised the minimum iOS version cannot be installed on this
+            // device. Never show a non-dismissable prompt the user cannot act on.
+            val deviceOsVersion = runCatching { UIDevice.currentDevice.systemVersion }.getOrNull()
+            if (isOsVersionAtLeast(deviceOsVersion, listing.minimumOsVersion) == false) {
+                Logger.i(
+                    TAG,
+                    "Skipping update prompt: ${listing.version} requires iOS ${listing.minimumOsVersion} (device $deviceOsVersion)"
+                )
+                return null
+            }
 
             val releaseEpochMillis = listing.currentVersionReleaseDate
                 ?.let { date -> runCatching { Instant.parse(date).toEpochMilliseconds() }.getOrNull() }

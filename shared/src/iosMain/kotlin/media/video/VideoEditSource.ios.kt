@@ -87,7 +87,9 @@ internal actual suspend fun inspectDeviceVideo(path: String): VideoEditInfo = wi
 private fun firstDecodedVideoTimestamp(asset: AVURLAsset, track: AVAssetTrack): Long {
     val reader = AVAssetReader(asset, null)
     val output = AVAssetReaderTrackOutput(track, mapOf(cfVideoString(kCVPixelBufferPixelFormatTypeKey) to kCVPixelFormatType_32BGRA.toInt()))
-    output.alwaysCopiesSampleData = false; reader.addOutput(output)
+    output.alwaysCopiesSampleData = false
+    require(reader.canAddOutput(output)) { "動画の先頭フレームを読み取れません" }
+    reader.addOutput(output)
     check(reader.startReading()) { "動画の先頭フレームを読み取れません" }
     try {
         val sample = requireNotNull(output.copyNextSampleBuffer()) { "動画の先頭フレームを読み取れません" }

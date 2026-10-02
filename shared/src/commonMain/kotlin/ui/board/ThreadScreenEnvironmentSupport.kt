@@ -37,7 +37,7 @@ internal fun buildThreadScreenEnvironmentBundle(
     repositories: ThreadScreenEnvironmentBundle? = null
 ): ThreadScreenEnvironmentBundle {
     val activeRepository = repository ?: FakeBoardRepository()
-    val effectiveBoardUrl = resolveEffectiveBoardUrl(resolvedThreadUrlOverride, board.url)
+    val effectiveBoardUrl = resolveThreadScreenEffectiveBoardUrl(resolvedThreadUrlOverride, board.url)
     fun normalizeHistoryBoardUrl(url: String): String = runCatching {
         BoardUrlResolver.resolveBoardBaseUrl(url)
     }.getOrElse { url }

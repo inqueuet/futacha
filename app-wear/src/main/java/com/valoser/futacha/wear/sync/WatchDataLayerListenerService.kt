@@ -140,10 +140,12 @@ class WatchDataLayerListenerService : WearableListenerService() {
     }
 
     private fun sendSnapshotAck(ackId: String) {
+        // Urgent: a non-urgent item may wait up to 30 minutes for the next
+        // sync, leaving the phone waiting for the receipt (C-10).
         val request = PutDataMapRequest.create(WATCH_SNAPSHOT_ACK_PATH).apply {
             dataMap.putString(WATCH_SNAPSHOT_ACK_KEY, ackId)
             dataMap.putLong(WATCH_UPDATED_AT_KEY, System.currentTimeMillis())
-        }.asPutDataRequest()
+        }.asPutDataRequest().setUrgent()
         Wearable.getDataClient(applicationContext)
             .putDataItem(request)
             .addOnFailureListener {

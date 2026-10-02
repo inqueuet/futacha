@@ -41,6 +41,7 @@ import kotlin.math.pow
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 /**
  * 保存済みスレッド一覧画面
@@ -60,6 +61,7 @@ fun SavedThreadsScreen(
     var totalSize by remember(repository) { mutableStateOf(0L) }
     var loadError by remember(repository) { mutableStateOf<String?>(null) }
     var deleteConfirmTarget by remember(repository) { mutableStateOf<SavedThread?>(null) }
+    var deletingThread by remember(repository) { mutableStateOf<SavedThread?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -77,6 +79,16 @@ fun SavedThreadsScreen(
                 totalSize = snapshot.totalSize
             }
             return true
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            // A timeout from loadSavedThreadsSnapshot is a load failure, not a
+            // cancellation of this screen; treat it like any other error.
+            val message = buildSavedThreadsLoadErrorMessage(e)
+            if (showAsScreenError) {
+                loadError = message
+            } else {
+                snackbarHostState.showSnackbar(message)
+            }
+            return false
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -220,7 +232,7 @@ fun SavedThreadsScreen(
 
         // 削除確認ダイアログ
         deleteConfirmTarget?.let { thread ->
-            AlertDialog(
+            FutachaAppLockAwareWindow { AlertDialog(
                 onDismissRequest = {
                     AnalyticsTracker.uiControl("saved_thread_delete_dismiss", "保存済みスレッド削除を閉じる")
                     deleteConfirmTarget = null
@@ -231,25 +243,34 @@ fun SavedThreadsScreen(
                 },
                 confirmButton = {
                     TextButton(
+                        enabled = deletingThread == null,
                         onClick = {
+                            // Close the dialog first (showSnackbar suspends for
+                            // seconds) and ignore repeated taps while deleting.
+                            if (deletingThread != null) return@TextButton
                             AnalyticsTracker.uiControl(
                                 "saved_thread_delete_confirm",
                                 "保存済みスレッドを削除",
                                 savedThreadAnalyticsContext(thread)
                             )
+                            deletingThread = thread
+                            deleteConfirmTarget = null
                             coroutineScope.launch {
-                                val deleteOutcome = resolveSavedThreadsDeleteUiOutcome(
-                                    deleteSavedThreadAndReload(
-                                    repository = repository,
-                                    thread = thread
-                                )
-                                )
+                                val deleteOutcome = try {
+                                    resolveSavedThreadsDeleteUiOutcome(
+                                        deleteSavedThreadAndReload(
+                                            repository = repository,
+                                            thread = thread
+                                        )
+                                    )
+                                } finally {
+                                    deletingThread = null
+                                }
                                 deleteOutcome.updatedSnapshot?.let { snapshot ->
                                     threads = snapshot.threads
                                     totalSize = snapshot.totalSize
                                 }
                                 snackbarHostState.showSnackbar(deleteOutcome.message)
-                                deleteConfirmTarget = null
                             }
                         }
                     ) {
@@ -264,7 +285,7 @@ fun SavedThreadsScreen(
                         Text("キャンセル")
                     }
                 }
-            )
+            ) }
         }
     }
     }

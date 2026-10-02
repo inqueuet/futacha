@@ -58,9 +58,8 @@ internal class MacOnDeviceAiService(
     }
 
     override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> = result {
-        val allowedIds = input.posts.map { it.id }.toSet()
         buildPostModerationSourceChunks(input).flatMap { source ->
-            parsePostModerationResponse(generate("moderation", source)).values.filter { it.postId in allowedIds }
+            parsePostModerationBatchResponse(generate("moderation", source), source)
         }.distinctBy { it.postId }
     }
 

@@ -17,6 +17,11 @@ private object CpuOrtEnvironment {
     val value: OrtEnvironment = OrtEnvironment.getEnvironment("futacha-offline-editing").apply { setTelemetry(false) }
 }
 
+// A missing or unloadable ONNX Runtime is a LinkageError (UnsatisfiedLinkError, then
+// ExceptionInInitializerError/NoClassDefFoundError), which callers catching Exception never saw (B-13).
+private fun ortEnvironment(): OrtEnvironment = try { CpuOrtEnvironment.value }
+    catch (failure: LinkageError) { throw IllegalStateException("解析ライブラリを読み込めません", failure) }
+
 internal actual fun createInferenceTensor(shape: List<Long>): InferenceTensor = JvmInferenceTensor(shape.toList())
 
 private data class JvmTensorData(val buffer: FloatBuffer, val tensor: OnnxTensor)
@@ -25,7 +30,7 @@ private class JvmInferenceTensor(override val shape: List<Long>) : InferenceTens
     val resource: InferenceResource<JvmTensorData>
     init {
         val buffer = ByteBuffer.allocateDirect(size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        val tensor = OnnxTensor.createTensor(CpuOrtEnvironment.value, buffer, shape.toLongArray())
+        val tensor = OnnxTensor.createTensor(ortEnvironment(), buffer, shape.toLongArray())
         resource = InferenceResource(JvmTensorData(buffer, tensor)) { it.tensor.close() }
     }
     override fun write(values: FloatArray) {
@@ -48,7 +53,7 @@ internal actual fun openCpuInferenceSession(path: String): CpuInferenceSession {
         options.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
         options.addConfigEntry("session.intra_op.allow_spinning", "0")
         options.addConfigEntry("session.inter_op.allow_spinning", "0")
-        CpuOrtEnvironment.value.createSession(path, options)
+        ortEnvironment().createSession(path, options)
     }
     try { return JvmCpuSession(session, session.inputNames.toSet(), session.outputNames.toSet()) }
     catch (failure: Throwable) { session.close(); throw failure }

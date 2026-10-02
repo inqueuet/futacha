@@ -6,6 +6,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.PromptInfoAction
@@ -118,7 +119,6 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -137,8 +137,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
@@ -300,7 +298,8 @@ internal fun CompatViewerScreen(
     var reverseSearchResult by remember { mutableStateOf<CompatImageSearchResult?>(null) }
     var topOverflowOpen by remember { mutableStateOf(false) }
     var toolbarOverflowOpen by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
+    val messageState = remember { CompatResultMessageState() }
+    var message by messageState
 
     fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
         scope.launchCompatScreenAction("CompatViewer", { failure ->
@@ -338,7 +337,6 @@ internal fun CompatViewerScreen(
     val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
         message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
     }
-    var lastSavedFile by remember { mutableStateOf<Pair<com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation?>?>(null) }
     val manualSaveLocation = parseCompatSaveLocation(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
@@ -446,7 +444,9 @@ internal fun CompatViewerScreen(
                 }
             }
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            Logger.e("CompatViewer", "Media list load timed out", cancelled.compatTimeoutFailureOrThrow())
+            message = "画像一覧を読み込めませんでした"
+            loadedPosts = emptyList()
         } catch (failure: Throwable) {
             Logger.e("CompatViewer", "Media list load failed", failure)
             message = "画像一覧を読み込めませんでした"
@@ -521,8 +521,9 @@ internal fun CompatViewerScreen(
     }
     fun saveCurrentNow(mediaUrl: String, shareAfterSave: Boolean, selectedLocation: SaveLocation?) {
         if (isSaving) return
+        // Claim the guard before the coroutine is dispatched (E-13).
+        isSaving = true
         launchScreenAction {
-            isSaving = true
             try {
                 val saver = mediaSaver
                 val fs = fileSystem
@@ -546,8 +547,8 @@ internal fun CompatViewerScreen(
                                     fs.resolveSavedFile(selectedLocation ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
                                 )
                             } else {
-                                lastSavedFile = saved to selectedLocation
                                 message = compatMediaSaveCompletionMessage(saved, fs, selectedLocation)
+                                messageState.attach(CompatSaveResultAction.Share(saved, selectedLocation))
                             }
                         }
                         .onFailure {
@@ -930,34 +931,53 @@ internal fun CompatViewerScreen(
                 alpha = (1f - abs(renderedVerticalOffset) / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f)
             }.pointerInput(posts, canDismissVertically) {
                 if (canDismissVertically) {
-                    detectVerticalDragGestures(
-                        onDragStart = {
-                            verticalResetJob?.cancel()
-                            verticalDismissAnimating = false
-                            verticalVelocityTracker.resetTracking()
-                        },
-                        onVerticalDrag = { change, amount ->
-                            change.consume()
-                            verticalVelocityTracker.addPosition(change.uptimeMillis, change.position)
-                            verticalRawOffset += amount
-                        },
-                        onDragEnd = {
-                            val velocity = verticalVelocityTracker.calculateVelocity().y
-                            val viewportHeight = size.height.toFloat()
-                            if (shouldDismissCompatViewer(verticalRawOffset, velocity, viewportHeight)) {
-                                val direction = if (verticalRawOffset < 0f) -1f else 1f
-                                val startOffset = verticalRawOffset
-                                verticalDismissAnimating = true
-                                verticalResetJob = launchScreenAction {
-                                    Animatable(startOffset).animateTo(
-                                        targetValue = direction * viewportHeight,
-                                        animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
-                                    ) { verticalRawOffset = value }
-                                    // The APK's dismiss callback runs after the
-                                    // dismissal animation reaches the outside.
-                                    onBack()
+                    // A list change restarts this detector mid-drag without
+                    // onDragEnd/onDragCancel; the page then stayed offset and
+                    // translucent (E-9). Settle such an abandoned drag here.
+                    var dragInProgress = false
+                    try {
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                dragInProgress = true
+                                verticalResetJob?.cancel()
+                                verticalDismissAnimating = false
+                                verticalVelocityTracker.resetTracking()
+                            },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                verticalVelocityTracker.addPosition(change.uptimeMillis, change.position)
+                                verticalRawOffset += amount
+                            },
+                            onDragEnd = {
+                                dragInProgress = false
+                                val velocity = verticalVelocityTracker.calculateVelocity().y
+                                val viewportHeight = size.height.toFloat()
+                                if (shouldDismissCompatViewer(verticalRawOffset, velocity, viewportHeight)) {
+                                    val direction = if (verticalRawOffset < 0f) -1f else 1f
+                                    val startOffset = verticalRawOffset
+                                    verticalDismissAnimating = true
+                                    verticalResetJob = launchScreenAction {
+                                        Animatable(startOffset).animateTo(
+                                            targetValue = direction * viewportHeight,
+                                            animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
+                                        ) { verticalRawOffset = value }
+                                        // The APK's dismiss callback runs after the
+                                        // dismissal animation reaches the outside.
+                                        onBack()
+                                    }
+                                } else {
+                                    val startOffset = verticalRawOffset
+                                    verticalResetJob = launchScreenAction {
+                                        Animatable(startOffset).animateTo(
+                                            targetValue = 0f,
+                                            animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
+                                        ) { verticalRawOffset = value }
+                                        verticalDismissAnimating = false
+                                    }
                                 }
-                            } else {
+                            },
+                            onDragCancel = {
+                                dragInProgress = false
                                 val startOffset = verticalRawOffset
                                 verticalResetJob = launchScreenAction {
                                     Animatable(startOffset).animateTo(
@@ -967,18 +987,13 @@ internal fun CompatViewerScreen(
                                     verticalDismissAnimating = false
                                 }
                             }
-                        },
-                        onDragCancel = {
-                            val startOffset = verticalRawOffset
-                            verticalResetJob = launchScreenAction {
-                                Animatable(startOffset).animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
-                                ) { verticalRawOffset = value }
-                                verticalDismissAnimating = false
-                            }
+                        )
+                    } finally {
+                        if (dragInProgress && !verticalDismissAnimating) {
+                            verticalResetJob?.cancel()
+                            verticalRawOffset = 0f
                         }
-                    )
+                    }
                 }
             }
         ) { page ->
@@ -1203,7 +1218,7 @@ internal fun CompatViewerScreen(
         val dimensions = mediaUrl?.let(mediaDimensions::get)
         val videoInfo = mediaUrl?.let(videoMediaInfo::get)
         val isVideo = mediaUrl?.let(::isCompatVideoMediaUrl) == true
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { infoOpen = false },
             title = { Text(if (isVideo) "動画情報" else "画像情報") },
             text = {
@@ -1233,24 +1248,24 @@ internal fun CompatViewerScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { infoOpen = false }) { Text("閉じる") } }
-        )
+        ) }
     }
     message?.let { current ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { message = null },
             text = { Text(current) },
-            confirmButton = { TextButton(onClick = { message = null; lastSavedFile = null }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } },
             dismissButton = {
-                lastSavedFile?.let { (saved, location) ->
+                (messageState.action as? CompatSaveResultAction.Share)?.let { action ->
                     TextButton(onClick = {
                         launchScreenAction {
-                            val path = requireNotNull(fileSystem).resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
-                            share("", if (saved.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                            val path = requireNotNull(fileSystem).resolveSavedFile(action.location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), action.file.relativePath).getOrThrow()
+                            share("", if (action.file.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
                         }
                     }) { Text("共有") }
                 }
             }
-        )
+        ) }
     }
     reverseSearchResult?.let { result ->
         CompatReverseImageSearchScreen(
@@ -1288,12 +1303,10 @@ private fun CompatViewerImagePage(
     val imageLoader = LocalFutachaImageLoader.current
     var localTransform by remember(mediaUrl) { mutableStateOf(viewerTransform) }
     var gestureActive by remember(mediaUrl) { mutableStateOf(false) }
-    val zoomScale = localTransform.scale
-    val zoomTranslation = localTransform.translation
-    val latestViewerTransform by rememberUpdatedState(localTransform)
+    // Read localTransform only in the layer, gesture and semantics blocks:
+    // a composition read recomposed this whole page for every pinch (E-11).
     var displayMode by remember(mediaUrl) { mutableStateOf(0) }
-    val thumbnailUrl = post?.thumbnailUrl
-        ?.takeIf { it.isNotBlank() && it != mediaUrl }
+    val thumbnailUrl = compatViewerThumbnailFallbackUrl(post?.thumbnailUrl, mediaUrl)
     LaunchedEffect(resetKey, mediaUrl) {
         displayMode = 0
     }
@@ -1318,7 +1331,7 @@ private fun CompatViewerImagePage(
         }
         val requestSize = viewportSize
         val thumbnailRequest = remember(platformContext, mediaUrl, thumbnailUrl, requestSize, reloadSuffix) {
-            val url = (thumbnailUrl ?: mediaUrl)?.plus(reloadSuffix)
+            val url = thumbnailUrl?.plus(reloadSuffix)
             url?.let {
                 ImageRequest.Builder(platformContext)
                     .data(it)
@@ -1406,10 +1419,11 @@ private fun CompatViewerImagePage(
                 // graphicsLayer's lambda is snapshot-aware and updates the
                 // render layer without recomposing the pager for every move.
                 if (isCurrentPage) {
-                    scaleX = zoomScale
-                    scaleY = zoomScale
-                    translationX = zoomTranslation.x
-                    translationY = zoomTranslation.y
+                    val transform = localTransform
+                    scaleX = transform.scale
+                    scaleY = transform.scale
+                    translationX = transform.translation.x
+                    translationY = transform.translation.y
                 }
                 this.alpha = alpha
             }
@@ -1432,7 +1446,7 @@ private fun CompatViewerImagePage(
                         // rereading the captured value for every event would
                         // otherwise apply every pinch delta to scale=1 and
                         // lose the transform before the next frame.
-                        var gestureTransform = latestViewerTransform
+                        var gestureTransform = localTransform
                         gestureActive = true
                         var ownsGesture = gestureTransform.scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD
                         var lastWasZoomed = gestureTransform.scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD
@@ -1526,12 +1540,7 @@ private fun CompatViewerImagePage(
                 },
                 onLongClick = onLongClick
             )
-            .semantics {
-                if (isCurrentPage) {
-                    stateDescription = "拡大率 ${(zoomScale * 100f).toInt()}% " +
-                        "位置 ${(zoomTranslation.x).toInt()},${(zoomTranslation.y).toInt()}"
-                }
-            }
+            .compatViewerZoomSemantics(isCurrentPage) { localTransform }
 
         // Keep pointer handling on one transparent parent. The active painter
         // below changes from preview to original without changing this node,
@@ -1624,7 +1633,7 @@ private fun ViewerToolbarOverflowDialog(
     // navigation inset; the old 60dp value was clipped/overlapped on Android
     // 11 devices (#33).
     val bottomInset = with(LocalDensity.current) { 96.dp.roundToPx() }
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         alignment = Alignment.BottomEnd,
         offset = IntOffset(0, -bottomInset),
         properties = PopupProperties(focusable = true),
@@ -1673,7 +1682,7 @@ private fun ViewerToolbarOverflowDialog(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable

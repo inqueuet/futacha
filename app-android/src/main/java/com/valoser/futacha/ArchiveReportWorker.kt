@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_CONFIG_HOLD_MILLIS
@@ -23,6 +24,7 @@ import com.valoser.futacha.shared.compat.NormalizedArchiveThread
 import com.valoser.futacha.shared.compat.archiveReportNetworkFailureDisposition
 import com.valoser.futacha.shared.compat.buildArchiveReportPayload
 import com.valoser.futacha.shared.compat.classifyArchiveReportResponse
+import com.valoser.futacha.shared.network.MainThreadSafeResponseCloseInterceptor
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.util.saturatingEpochAdd
@@ -42,6 +44,7 @@ import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
@@ -93,8 +96,12 @@ class ArchiveReportWorker(
             throw cancellation
         } catch (error: Exception) {
             Logger.w(TAG, "Archive report worker failed before the current batch was finalized")
-            runSuspendCatchingPreservingCancellation { scheduleNextDue(store) }
-            Result.retry()
+            // A scheduled retry already covers the outbox. Result.retry() as well would keep
+            // this work unfinished through its backoff, and work appended behind it would
+            // wait for that backoff on top of its own delay.
+            val scheduled = runSuspendCatchingPreservingCancellation { scheduleNextDue(store) }
+                .getOrDefault(false)
+            if (scheduled) Result.success() else Result.retry()
         } finally {
             client.close()
         }
@@ -203,10 +210,12 @@ class ArchiveReportWorker(
         processBatch(store, sender, ArchiveReportOutboxBatch(second, original.attemptCount), splitDepth + 1)
     }
 
-    private suspend fun scheduleNextDue(store: CompatibilityStore) {
-        val next = store.archiveReportNextAttemptAt() ?: return
-        if (next == Long.MAX_VALUE) return
-        enqueueRetry(applicationContext, next)
+    /** Schedules the retry work for the outbox's next due row; false when nothing is due. */
+    private suspend fun scheduleNextDue(store: CompatibilityStore): Boolean {
+        val next = store.archiveReportNextAttemptAt() ?: return false
+        if (next == Long.MAX_VALUE) return false
+        enqueueRetry(applicationContext, next, calledFromRetryWork = RETRY_WORK_TAG in tags)
+        return true
     }
 
     companion object {
@@ -216,6 +225,7 @@ class ArchiveReportWorker(
         private const val URGENT_WORK_NAME = "archive_report_urgent"
         private const val STARTUP_WORK_NAME = "archive_report_startup"
         private const val RETRY_WORK_NAME = "archive_report_retry"
+        private const val RETRY_WORK_TAG = "archive_report_retry_work"
         private const val MAX_BATCHES_PER_RUN = 8
         private const val MAX_SPLIT_DEPTH = 5
 
@@ -236,12 +246,17 @@ class ArchiveReportWorker(
             WorkManager.getInstance(context).cancelAllWorkByTag(WORK_TAG)
         }
 
-        private fun enqueueRetry(context: Context, nextAttemptAt: Long) {
+        private suspend fun enqueueRetry(context: Context, nextAttemptAt: Long, calledFromRetryWork: Boolean) {
+            val retryWorkRunning = !calledFromRetryWork && runSuspendCatchingPreservingCancellation {
+                WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(RETRY_WORK_NAME).first()
+                    .any { it.state == WorkInfo.State.RUNNING }
+            }.getOrDefault(false)
             enqueue(
                 context,
                 RETRY_WORK_NAME,
                 (nextAttemptAt - System.currentTimeMillis()).coerceAtLeast(0L),
-                ExistingWorkPolicy.APPEND_OR_REPLACE
+                archiveReportRetryWorkPolicy(calledFromRetryWork, retryWorkRunning),
+                extraTag = RETRY_WORK_TAG
             )
         }
 
@@ -249,17 +264,34 @@ class ArchiveReportWorker(
             context: Context,
             uniqueName: String,
             delayMillis: Long,
-            policy: ExistingWorkPolicy
+            policy: ExistingWorkPolicy,
+            extraTag: String? = null
         ) {
             val request = OneTimeWorkRequestBuilder<ArchiveReportWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
                 .addTag(WORK_TAG)
+                .apply { extraTag?.let(::addTag) }
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(uniqueName, policy, request)
         }
     }
 }
+
+/**
+ * Policy for the single retry work, whose delay is always computed from the outbox's
+ * earliest due row. Appending to a pending retry (the old policy) chained the new
+ * delay behind the old one, and behind its backoff, so the waits added up. The new
+ * wake-up replaces the pending one instead; only a retry that another run finds
+ * running is appended to, so its batches are not cancelled midway (it then replaces
+ * that follower when it schedules its own next run).
+ */
+internal fun archiveReportRetryWorkPolicy(
+    calledFromRetryWork: Boolean,
+    retryWorkRunning: Boolean
+): ExistingWorkPolicy =
+    if (!calledFromRetryWork && retryWorkRunning) ExistingWorkPolicy.APPEND_OR_REPLACE
+    else ExistingWorkPolicy.REPLACE
 
 internal data class ArchiveReportHttpResult(
     val status: Int,
@@ -359,6 +391,8 @@ internal fun createArchiveReportHttpClient(): HttpClient = HttpClient(OkHttp) {
     }
     engine {
         config {
+            // KTOR-9773: keep a main-thread cancellation from closing the TLS socket there.
+            addInterceptor(MainThreadSafeResponseCloseInterceptor)
             followRedirects(false)
             followSslRedirects(false)
             retryOnConnectionFailure(false)

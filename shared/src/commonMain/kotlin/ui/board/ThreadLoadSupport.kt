@@ -12,14 +12,15 @@ internal sealed interface ThreadUiState {
     data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
     data class Success(
         val page: ThreadPage,
-        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
+        val isArchived: Boolean = false
     ) : ThreadUiState
 }
 
 internal fun buildThreadInitialLoadErrorMessage(error: Throwable, statusCode: Int?): String {
     val message = error.message
     return when {
-        message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
+        isThreadLoadTimeout(error) -> "タイムアウト: サーバーが応答しません"
         statusCode == 404 -> "スレッドが見つかりません (404)"
         statusCode == 410 -> "スレッドは削除済みです (410)"
         statusCode != null && statusCode >= 500 -> "サーバーエラー ($statusCode)"
@@ -82,7 +83,8 @@ internal fun buildThreadInitialLoadUiOutcome(
     board: BoardSummary,
     overrideThreadUrl: String?,
     usedOffline: Boolean,
-    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
+    fromArchive: Boolean = false
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
@@ -92,10 +94,11 @@ internal fun buildThreadInitialLoadUiOutcome(
         threadTitle = threadTitle,
         board = board,
         overrideThreadUrl = overrideThreadUrl,
-        confirmAlive = !usedOffline
+        // An archive copy is served because the thread is gone (404/410).
+        confirmAlive = !usedOffline && !fromArchive
     )
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState,
+        uiState = successState.uiState.copy(isArchived = fromArchive),
         historyEntry = successState.historyEntry
     )
 }
@@ -135,7 +138,8 @@ internal fun buildThreadManualRefreshUiOutcome(
     board: BoardSummary,
     overrideThreadUrl: String?,
     usedOffline: Boolean,
-    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
+    fromArchive: Boolean = false
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
@@ -145,10 +149,10 @@ internal fun buildThreadManualRefreshUiOutcome(
         threadTitle = threadTitle,
         board = board,
         overrideThreadUrl = overrideThreadUrl,
-        confirmAlive = !usedOffline
+        confirmAlive = !usedOffline && !fromArchive
     )
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState,
+        uiState = successState.uiState.copy(isArchived = fromArchive),
         historyEntry = successState.historyEntry,
         snackbarMessage = buildThreadRefreshSuccessMessage(usedOffline)
     )
@@ -389,8 +393,21 @@ internal fun Throwable.statusCodeOrNull(): Int? {
     return null
 }
 
+/** A load timeout, typed ([ThreadLoadTimeoutException]) or by message ("timeout" / "timed out"). */
+internal fun isThreadLoadTimeout(error: Throwable): Boolean {
+    var current: Throwable? = error
+    while (current != null) {
+        if (current is ThreadLoadTimeoutException) return true
+        val message = current.message?.take(8 * 1024)?.lowercase().orEmpty()
+        if (message.contains("timeout") || message.contains("timed out")) return true
+        current = current.cause
+    }
+    return false
+}
+
 internal fun isOfflineFallbackCandidate(error: Throwable): Boolean {
     if (error.statusCodeOrNull() != null) return true
+    if (isThreadLoadTimeout(error)) return true
     var current: Throwable? = error
     while (current != null) {
         if (current is NetworkException) return true
@@ -432,4 +449,34 @@ internal fun shouldPreferOfflineFallbackAfterLocalStale(
 ): Boolean {
     return config.preferOfflineFallbackAfterLocalStale &&
         fallbackState.shouldTryOfflineFallback && !fallbackState.shouldTryArchiveFallback
+}
+
+/**
+ * Reconciles an archive copy of a dead thread with the page on screen, so posts
+ * the archive lacks do not vanish (and an auto-save cannot drop them with their
+ * media). A local copy on screen wins on shared post ids, since its media are
+ * the saved files, and the result stays a local copy that auto-save skips.
+ * Over a remote page, the archive wins and the screen only fills its gaps.
+ */
+internal fun reconcileArchiveLoadWithVisiblePage(
+    result: ThreadLoadExecutionResult,
+    expectedThreadId: String,
+    visiblePage: ThreadPage?,
+    visibleIsLocalCopy: Boolean
+): ThreadLoadExecutionResult {
+    if (!result.fromArchive || result.usedOffline) return result
+    val visible = visiblePage
+        ?.takeIf { it.threadId == expectedThreadId && it.posts.isNotEmpty() }
+        ?: return result
+    if (visibleIsLocalCopy) {
+        return result.copy(
+            page = com.valoser.futacha.shared.ui.compat.mergeCompatThreadPages(visible, listOf(result.page)),
+            usedOffline = true
+        )
+    }
+    val archiveIds = result.page.posts.mapTo(HashSet()) { it.id }
+    if (visible.posts.all { it.id in archiveIds }) return result
+    return result.copy(
+        page = com.valoser.futacha.shared.ui.compat.mergeCompatThreadPages(result.page, listOf(visible))
+    )
 }

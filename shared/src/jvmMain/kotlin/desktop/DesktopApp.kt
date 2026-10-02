@@ -25,7 +25,25 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
+
+/**
+ * Syncs `profile.pending`, then renames it over [file]. The rename retries while a Windows
+ * scanner briefly holds the profile, so a switch whose data already synchronized is not
+ * reported as failed for a transient sharing violation (N4-3).
+ */
+internal fun writeDesktopProfileFile(
+    file: File,
+    target: ExperienceProfile,
+    generation: Long,
+    move: (java.nio.file.Path, java.nio.file.Path, Array<out java.nio.file.CopyOption>) -> Unit =
+        { source, destination, options -> Files.move(source, destination, *options) }
+) {
+    val temp = File(file.parentFile, "profile.pending")
+    temp.outputStream().use { output ->
+        output.write("${target.persistedValue}\n$generation\n".toByteArray()); output.fd.sync()
+    }
+    moveReplacingWithRetry(temp.toPath(), file.toPath(), move)
+}
 
 class DesktopAppGraph(val environment: DesktopEnvironment) {
     val fileSystem = createFileSystem(environment)
@@ -82,11 +100,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
                     stateStore.updateHistory { mergeCompatibilityHistory(it, history, boards) }
                 }
                 val next = nextExperienceProfileGeneration(generation)
-                val temp = File(profileFile.parentFile, "profile.pending")
-                temp.outputStream().use { output ->
-                    output.write("${target.persistedValue}\n$next\n".toByteArray()); output.fd.sync()
-                }
-                Files.move(temp.toPath(), profileFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                writeDesktopProfileFile(profileFile, target, next)
                 profile = target; generation = next
             }
         } finally { switching = false }
@@ -162,7 +176,9 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
      * Each step is bounded and runs even if an earlier one fails or times out:
      * a video VLC never released must not keep the HTTP client, cookies, the
      * database and the single-instance lock open (the host's overall limit would
-     * otherwise cut all of them off).
+     * otherwise cut all of them off). A step blocked in a synchronous call (VLC's
+     * release, a SQLite or file close) ignores cancellation, so it runs detached and
+     * is abandoned at its limit instead of holding up the remaining steps (T4-4).
      */
     suspend fun close() = withContext(Dispatchers.IO) {
         closeStep("history refresher", 2_000) { refresher.close() }
@@ -171,16 +187,29 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         closeStep("HTTP client", 1_000) { httpClient.close() }
         closeStep("cookies", 1_000) { cookies.close() }
         closeStep("compatibility database", 1_000) { compatibility.close() }
-        closeStep("video runtime", 1_000) { com.valoser.futacha.shared.ui.board.DesktopVlc.release() }
+        // DesktopVlc.release() itself waits up to 3 s for libVLC; keep that budget.
+        closeStep("video runtime", 3_500) { com.valoser.futacha.shared.ui.board.DesktopVlc.release() }
         closeStep("environment", 1_000) { environment.closeAndAwait() }
     }
 
-    private suspend fun closeStep(name: String, timeoutMillis: Long, step: suspend () -> Unit) {
-        try {
-            if (withTimeoutOrNull(timeoutMillis) { step() } == null) Logger.w("DesktopShutdown", "$name did not close within ${timeoutMillis}ms")
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { Logger.e("DesktopShutdown", "Failed to close $name", failure) }
-    }
+    private suspend fun closeStep(name: String, timeoutMillis: Long, step: suspend () -> Unit) =
+        runDesktopCloseStep(name, timeoutMillis, step)
+}
+
+/** One bounded shutdown step; see [DesktopAppGraph.close]. */
+internal suspend fun runDesktopCloseStep(name: String, timeoutMillis: Long, step: suspend () -> Unit) {
+    val running = CoroutineScope(Dispatchers.IO).async { step() }
+    try {
+        if (withTimeoutOrNull(timeoutMillis) { running.await() } == null) {
+            running.cancel()
+            Logger.w("DesktopShutdown", "$name did not close within ${timeoutMillis}ms")
+        }
+    } catch (cancelled: CancellationException) {
+        running.cancel()
+        currentCoroutineContext().ensureActive()
+        // The step cancelled itself; the remaining steps still run.
+        Logger.w("DesktopShutdown", "$name was cancelled while closing")
+    } catch (failure: Exception) { Logger.e("DesktopShutdown", "Failed to close $name", failure) }
 }
 
 @Composable

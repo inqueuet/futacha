@@ -31,7 +31,9 @@ internal data class FutachaNavigationCallbacks(
 internal fun buildFutachaNavigationCallbacks(
     currentBoards: () -> List<BoardSummary>,
     currentNavigationState: () -> FutachaNavigationState,
-    setNavigationState: (FutachaNavigationState) -> Unit
+    setNavigationState: (FutachaNavigationState) -> Unit,
+    /** Called with the board name when the target board is not registered in ふたちゃ. */
+    onUnregisteredBoard: (String) -> Unit = {}
 ): FutachaNavigationCallbacks {
     return FutachaNavigationCallbacks(
         onHistoryEntrySelected = { entry ->
@@ -46,10 +48,13 @@ internal fun buildFutachaNavigationCallbacks(
                     "title_has_url" to analyticsTextHasUrl(entry.title)
                 )
             )
-            resolveHistoryEntrySelection(entry, currentBoards())?.let { selection ->
+            val selection = resolveHistoryEntrySelection(entry, currentBoards())
+            if (selection != null) {
                 setNavigationState(
                     applyFutachaThreadSelection(currentNavigationState(), selection)
                 )
+            } else {
+                onUnregisteredBoard(entry.boardName)
             }
         },
         onSavedThreadSelected = { thread ->
@@ -57,10 +62,13 @@ internal fun buildFutachaNavigationCallbacks(
                 "saved_thread_selected",
                 mapOf("post_count_bucket" to analyticsCountBucket(thread.postCount))
             )
-            resolveSavedThreadSelection(thread, currentBoards())?.let { selection ->
+            val selection = resolveSavedThreadSelection(thread, currentBoards())
+            if (selection != null) {
                 setNavigationState(
                     selectSavedThread(currentNavigationState(), selection)
                 )
+            } else {
+                onUnregisteredBoard(thread.boardName)
             }
         },
         onCatalogThreadSelected = { threadId, title, replies, thumbnailUrl, threadUrl ->
@@ -152,4 +160,9 @@ internal fun buildFutachaNavigationCallbacks(
             }
         }
     )
+}
+
+internal fun buildFutachaUnregisteredBoardMessage(boardName: String): String {
+    val label = boardName.trim().takeIf { it.isNotEmpty() }?.let { "「$it」" } ?: "この板"
+    return "${label}はふたちゃに登録されていないため開けません。板一覧に追加するか、としあき(仮)モードで開いてください。"
 }

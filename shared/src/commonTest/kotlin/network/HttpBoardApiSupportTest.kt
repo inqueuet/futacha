@@ -17,6 +17,28 @@ import kotlin.test.assertTrue
 
 class HttpBoardApiSupportTest {
     @Test
+    fun createThreadPrefersRedirectedThreadUrlOverLinksInItsPage() {
+        assertEquals(
+            "123",
+            resolveHttpBoardApiPostResponseOrThrow(
+                mode = HttpBoardApiPostResponseMode.CREATE_THREAD,
+                responseBody = """<a href="res/999.htm">other</a>""",
+                logTag = "test",
+                redirectedRequestUrl = "https://may.2chan.net/b/res/123.htm"
+            )
+        )
+        assertEquals(
+            "999",
+            resolveHttpBoardApiPostResponseOrThrow(
+                mode = HttpBoardApiPostResponseMode.CREATE_THREAD,
+                responseBody = """<a href="res/999.htm">other</a>""",
+                logTag = "test",
+                redirectedRequestUrl = null
+            )
+        )
+    }
+
+    @Test
     fun postResponseHelpers_extractThreadIds_fromHtmlAndJson() {
         assertEquals(
             "123456",
@@ -312,6 +334,9 @@ class HttpBoardApiSupportTest {
 
     @Test
     fun runtimeHelpers_handleRetryRefererFileNameAndContentType() {
+        assertTrue(shouldRetryHttpBoardApiRequest(httpBoardApiResponseReadStalled("body")))
+        assertTrue(shouldRetryHttpBoardApiRequest(httpBoardApiResponseReadStalled("head")))
+        assertFalse(shouldRetryHttpBoardApiRequest(NetworkException("Response size exceeds maximum allowed")))
         assertTrue(shouldRetryHttpBoardApiRequest(HttpRequestTimeoutException("timeout", null)))
         assertFalse(shouldRetryHttpBoardApiRequest(Exception(CancellationException("cancelled"))))
 
@@ -655,5 +680,61 @@ class HttpBoardApiSupportTest {
         }.exceptionOrNull()
         assertEquals(2, attempts)
         assertTrue(failure is NetworkException, "was $failure")
+    }
+    @Test
+    fun retry_overallBudgetBoundsAllAttemptsTogether() = runBlocking {
+        var attempts = 0
+        val failure = runCatching {
+            withHttpBoardApiRetry(
+                logTag = "HttpBoardApiSupportTest",
+                requestAttemptTimeoutMillis = 10_000L,
+                maxAttempts = 2,
+                initialDelayMillis = 0L,
+                overallBudgetMillis = 50L
+            ) {
+                attempts += 1
+                awaitCancellation()
+            }
+        }.exceptionOrNull()
+        // The first attempt used the whole budget, so no second attempt starts.
+        assertEquals(1, attempts)
+        assertTrue(failure is NetworkException, "was $failure")
+    }
+
+    @Test
+    fun shortFormFailure_detectsOnlyExplicitRejections() {
+        assertNull(extractHttpBoardApiShortFormFailure(null))
+        assertNull(extractHttpBoardApiShortFormFailure(""))
+        assertNull(extractHttpBoardApiShortFormFailure(" ok \n"))
+        assertNull(extractHttpBoardApiShortFormFailure("""{"status":"ok"}"""))
+        assertNull(extractHttpBoardApiShortFormFailure("削除しました"))
+        // A thread page contains form labels such as 削除キー and arbitrary posts.
+        assertNull(
+            extractHttpBoardApiShortFormFailure(
+                "<html><form>削除キー</form><div class=\"thre\"><blockquote>エラーが出ない</blockquote></div></html>"
+            )
+        )
+        assertEquals("削除キーが違います", extractHttpBoardApiShortFormFailure("削除キーが違います"))
+        assertEquals(
+            "記事が見つかりません",
+            extractHttpBoardApiShortFormFailure(
+                "<html><body><font color=red size=5><b>記事が見つかりません<br></b></font></body></html>"
+            )
+        )
+        assertEquals(
+            "already",
+            extractHttpBoardApiShortFormFailure("""{"status":"error","message":"already"}""")
+        )
+    }
+
+    @Test
+    fun inputValue_isFoundWhenItsNameAppearsEarlierInAScript() {
+        val html = buildString {
+            append("<script>if (location.hash) { scroll(); }</script>")
+            append(" ".repeat(8_000))
+            append("<input type=\"hidden\" name=\"hash\" value=\"abc123\">")
+        }
+
+        assertEquals("abc123", parseHttpBoardApiInputValue(html, "hash"))
     }
 }

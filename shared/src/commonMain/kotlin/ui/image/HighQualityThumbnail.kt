@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.painter.Painter
 import coil3.ImageLoader
@@ -14,18 +15,21 @@ import coil3.PlatformContext
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
+import coil3.compose.asPainter
+import coil3.memory.MemoryCache
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Precision
 import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.media.source.OriginalMediaNotCached
 import com.valoser.futacha.shared.media.source.isSharedOriginalImageUrl
 import com.valoser.futacha.shared.ui.compat.compatPreferenceValue
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
@@ -74,6 +78,10 @@ internal const val HIGH_QUALITY_THUMBNAIL_MIN_SHRUNK_EDGE_PX = 240
  * viewer's originals or spend tens of MB on thumbnails.
  */
 internal const val HIGH_QUALITY_THUMBNAIL_MAX_NETWORK_BYTES = 4L * 1024L * 1024L
+
+/** A slot must stay composed this long before its original is requested. */
+internal const val HIGH_QUALITY_THUMBNAIL_SETTLE_MILLIS = 200L
+internal const val HIGH_QUALITY_THUMBNAIL_RETRY_DELAY_MILLIS = 5_000L
 
 data class HighQualityThumbnailPlan(
     val url: String,
@@ -140,6 +148,7 @@ internal fun buildHighQualityThumbnailRequest(
     plan: HighQualityThumbnailPlan
 ): ImageRequest = ImageRequest.Builder(platformContext)
     .data(plan.url)
+    .memoryCacheKey(highQualityThumbnailMemoryKey(plan))
     .size(plan.widthPx, plan.heightPx)
     // Never enlarge a small original; a smaller decode is drawn to the slot.
     .precision(Precision.INEXACT)
@@ -155,7 +164,11 @@ internal fun buildHighQualityThumbnailRequest(
     )
     .skipArchiveImageFallback()
     .apply { if (!plan.allowAnimation) staticImageDecoding() }
+    .boundedOriginalDecoding()
     .build()
+
+internal fun highQualityThumbnailMemoryKey(plan: HighQualityThumbnailPlan): String =
+    "futacha#high-quality:${plan.widthPx}x${plan.heightPx}:${plan.allowAnimation}:${plan.url}"
 
 /**
  * Forces a single still frame so an animated original never starts playing
@@ -163,6 +176,13 @@ internal fun buildHighQualityThumbnailRequest(
  * leave the request unchanged.
  */
 internal expect fun ImageRequest.Builder.staticImageDecoding(): ImageRequest.Builder
+
+/**
+ * Decodes the original straight to the slot size. Platforms whose decoder
+ * already subsamples while decoding (Android) leave the request unchanged; the
+ * Skia decoder on iOS decodes the full-resolution image before scaling it.
+ */
+internal expect fun ImageRequest.Builder.boundedOriginalDecoding(): ImageRequest.Builder
 
 /** Provided by the app for both modes; tests and previews keep plain thumbnails. */
 val LocalHighQualityThumbnailMode = compositionLocalOf { HighQualityThumbnailMode.OFF }
@@ -199,23 +219,66 @@ internal fun rememberHighQualityThumbnailOverride(
 ): Painter? {
     if (plan == null || !thumbnailReady) return null
     val platformContext = LocalPlatformContext.current
+    val cachedImage = imageLoader.memoryCache?.get(MemoryCache.Key(highQualityThumbnailMemoryKey(plan)))?.image
+    if (cachedImage != null) return remember(cachedImage, platformContext) {
+        cachedImage.asPainter(platformContext)
+    }
     val originals = LocalOriginalMediaSource.current
+    // Counted before the first request can miss. Waiting for the event only after
+    // the failure was observed lost a save that finished while the cache-only
+    // request was still reading the disk.
+    var persistedCount by remember(plan, originals) { mutableIntStateOf(0) }
+    LaunchedEffect(plan, originals) {
+        originals?.persistedUrls?.collect { if (it == plan.url) persistedCount += 1 }
+    }
+    // A fling composes and leaves slots within a few frames; probing each one for
+    // its original then competes with decoding the thumbnails being scrolled to.
+    var settled by remember(plan) { mutableStateOf(false) }
+    LaunchedEffect(plan) {
+        delay(HIGH_QUALITY_THUMBNAIL_SETTLE_MILLIS)
+        settled = true
+    }
+    if (!settled) return null
     var attempt by remember(plan) { mutableIntStateOf(0) }
-    val request = remember(platformContext, plan, attempt) {
-        buildHighQualityThumbnailRequest(platformContext, plan).newBuilder()
-            // A distinct request per attempt; an identical one would not re-run.
-            .memoryCacheKeyExtra(HIGH_QUALITY_ATTEMPT_KEY, attempt.toString())
-            .build()
+    var persistedCountAtAttempt by remember(plan, originals) { mutableIntStateOf(0) }
+    var transientRetried by remember(plan) { mutableStateOf(false) }
+    val request = remember(platformContext, plan) {
+        buildHighQualityThumbnailRequest(platformContext, plan)
     }
     val painter = rememberAsyncImagePainter(model = request, imageLoader = imageLoader)
+    LaunchedEffect(painter, attempt) {
+        if (attempt > 0) painter.restart()
+    }
     val state by painter.state.collectAsState()
+    val failure = (state as? AsyncImagePainter.State.Error)?.result?.throwable
     val failed = state is AsyncImagePainter.State.Error
-    LaunchedEffect(originals, plan, attempt, failed) {
-        if (!failed || originals == null) return@LaunchedEffect
-        originals.persistedUrls.first { it == plan.url }
-        attempt += 1
+    LaunchedEffect(plan, attempt, failed, persistedCount) {
+        if (!failed) return@LaunchedEffect
+        if (persistedCount != persistedCountAtAttempt) {
+            persistedCountAtAttempt = persistedCount
+            attempt += 1
+            return@LaunchedEffect
+        }
+        // One delayed retry after an interrupted transfer or a busy cache; a plain
+        // miss or a missing file waits for the original to be stored instead.
+        if (!transientRetried && isTransientHighQualityFailure(failure)) {
+            delay(HIGH_QUALITY_THUMBNAIL_RETRY_DELAY_MILLIS)
+            transientRetried = true
+            persistedCountAtAttempt = persistedCount
+            attempt += 1
+        }
     }
     return painter.takeIf { state is AsyncImagePainter.State.Success }
 }
 
-private const val HIGH_QUALITY_ATTEMPT_KEY = "futacha#high-quality-attempt"
+internal fun isTransientHighQualityFailure(failure: Throwable?): Boolean {
+    if (failure == null || isMissingImage(failure)) return false
+    var cause: Throwable? = failure
+    repeat(16) {
+        val current = cause ?: return true
+        if (current is kotlinx.coroutines.CancellationException ||
+            current is OriginalMediaNotCached || current is ImageNotCachedException) return false
+        cause = current.cause.takeUnless { it === current }
+    }
+    return true
+}

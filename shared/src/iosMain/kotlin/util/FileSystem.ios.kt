@@ -94,6 +94,26 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    // The legacy NSFileHandle seekToEndOfFile / truncateFileAtOffset raise an
+    // Objective-C exception on I/O errors, which terminates the process. Use
+    // POSIX calls that report failures through errno instead.
+    private fun seekFileHandleToEnd(fileHandle: NSFileHandle) {
+        if (platform.posix.lseek(fileHandle.fileDescriptor, 0, platform.posix.SEEK_END) < 0L) {
+            throw Exception("Failed to seek file: errno ${platform.posix.errno}")
+        }
+    }
+
+    private fun truncateFileHandle(fileHandle: NSFileHandle) {
+        val descriptor = fileHandle.fileDescriptor
+        while (platform.posix.ftruncate(descriptor, 0) != 0) {
+            if (platform.posix.errno == platform.posix.EINTR) continue
+            throw Exception("Failed to truncate file: errno ${platform.posix.errno}")
+        }
+        if (platform.posix.lseek(descriptor, 0, platform.posix.SEEK_SET) < 0L) {
+            throw Exception("Failed to seek file: errno ${platform.posix.errno}")
+        }
+    }
+
     private fun closeFileHandle(fileHandle: NSFileHandle) {
         memScoped {
             val error = alloc<ObjCObjectVar<NSError?>>()
@@ -593,7 +613,7 @@ class IosFileSystem : FileSystem {
                 ?: throw Exception("Failed to open file for append: $absolutePath")
 
             try {
-                fileHandle.seekToEndOfFile()
+                seekFileHandleToEnd(fileHandle)
                 var written = 0
                 bytes.usePinned { pinned ->
                     while (written < bytes.size) {
@@ -633,6 +653,9 @@ class IosFileSystem : FileSystem {
                 }
             }
 
+            // A hard link taken over from another save generation (linkOrCopy) must not be
+            // truncated in place, which would also damage the other generation (G4-6).
+            platform.posix.unlink(absolutePath)
             val created = fileManager.createFileAtPath(absolutePath, contents = null, attributes = null)
             if (!created && !fileManager.fileExistsAtPath(absolutePath)) {
                 throw Exception("Failed to create file for stream write: $absolutePath")
@@ -642,7 +665,7 @@ class IosFileSystem : FileSystem {
                 ?: throw Exception("Failed to open file for stream write: $absolutePath")
 
             try {
-                fileHandle.truncateFileAtOffset(0u)
+                truncateFileHandle(fileHandle)
                 var totalWritten = 0L
                 val sink = object : FileWriteSink {
                     override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {

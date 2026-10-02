@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -49,6 +49,7 @@ import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,9 +65,12 @@ internal fun ThreadImageGallery(
     val attachmentItems = remember(posts) {
         buildThreadAttachmentGalleryItems(posts)
     }
+    val attachmentItemKeys = remember(attachmentItems) {
+        buildThreadGalleryItemKeys(attachmentItems)
+    }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("thread_gallery", "添付一覧を閉じる")
             onDismiss()
@@ -113,10 +117,10 @@ internal fun ThreadImageGallery(
                         .fillMaxWidth()
                         .heightIn(max = 600.dp)
                 ) {
-                    items(
+                    itemsIndexed(
                         items = attachmentItems,
-                        key = { item -> "${item.post.id}:${item.targetUrl}" }
-                    ) { item ->
+                        key = { index, _ -> attachmentItemKeys[index] }
+                    ) { _, item ->
                         GalleryAttachmentItem(
                             item = item,
                             thumbnailMode = thumbnailMode,
@@ -142,7 +146,7 @@ internal fun ThreadImageGallery(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
-    }
+    } }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -287,5 +291,24 @@ private fun GalleryAttachmentItem(
                 }
             }
         }
+    }
+}
+
+/**
+ * Lazy grid keys for [items]. A thread can list the same post twice (for
+ * example a merged or re-fetched page); duplicate keys crash the grid, so
+ * repeats get an occurrence suffix while the first keeps its stable key.
+ */
+internal fun buildThreadGalleryItemKeys(items: List<ThreadAttachmentGalleryItem>): List<String> {
+    val used = HashSet<String>(items.size * 2)
+    return items.map { item ->
+        val base = "${item.post.id}:${item.targetUrl}"
+        var key = base
+        var occurrence = 0
+        while (!used.add(key)) {
+            occurrence += 1
+            key = "$base#$occurrence"
+        }
+        key
     }
 }

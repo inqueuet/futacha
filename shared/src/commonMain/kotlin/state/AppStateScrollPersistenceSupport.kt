@@ -4,8 +4,11 @@ import com.valoser.futacha.shared.analytics.CrashReporter
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -18,6 +21,27 @@ internal fun CoroutineScope.launchHistoryScrollPersistence(block: suspend Corout
     } catch (error: Exception) {
         Logger.e("ScrollPersistence", "Failed to save thread reading position", error)
         CrashReporter.recordNonFatal(error, keys = mapOf("operation" to "history_scroll_persistence"))
+    }
+}
+
+/**
+ * Final reading-position save used when a thread screen is disposed (D11).
+ * The UI scope is usually being cancelled at that moment, so the write starts
+ * undispatched (a cancelled job still begins executing) and runs under
+ * [NonCancellable] so the last position actually reaches storage.
+ */
+internal fun CoroutineScope.launchFinalHistoryScrollPersistence(
+    block: suspend CoroutineScope.() -> Unit
+): Job = launch(start = CoroutineStart.UNDISPATCHED) {
+    withContext(NonCancellable) {
+        try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Logger.e("ScrollPersistence", "Failed to save final thread reading position", error)
+            CrashReporter.recordNonFatal(error, keys = mapOf("operation" to "history_scroll_persistence_final"))
+        }
     }
 }
 

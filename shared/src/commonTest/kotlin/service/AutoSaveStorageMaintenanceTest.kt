@@ -127,4 +127,22 @@ class AutoSaveStorageMaintenanceTest {
         assertFalse(files.exists("$AUTO_SAVE_DIRECTORY/${dropped.storageId}"))
         assertTrue(files.exists("$AUTO_SAVE_DIRECTORY/${buildThreadStorageId("b", "2")}"))
     }
+
+    @Test
+    fun trimmedHistoryPurgeIsSeenByASaveRunningInTheAppRepository() = runBlocking {
+        val files = InMemoryFileSystem()
+        // The app's repository, where the screen / background save publishes.
+        val appRepository = SavedThreadRepository(files, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val purgeTrimmed = buildTrimmedHistoryAutoSavePurger(files)
+        appRepository.addWithFolder(files, AUTO_SAVE_DIRECTORY, thread("1", savedAt = 100L))
+        // A save of thread 1 that started before the trim finishes after it.
+        val running = thread("1", savedAt = 200L).copy(storageId = "b__1_s200_x")
+        files.writeString("$AUTO_SAVE_DIRECTORY/${running.storageId}/metadata.json", "{}").getOrThrow()
+
+        purgeTrimmed(listOf(historyEntry("1", 100L)))
+
+        assertTrue(appRepository.addThreadToIndex(running).isFailure)
+        assertTrue(appRepository.getAllThreads().isEmpty())
+        assertFalse(files.exists("$AUTO_SAVE_DIRECTORY/${running.storageId}"))
+    }
 }

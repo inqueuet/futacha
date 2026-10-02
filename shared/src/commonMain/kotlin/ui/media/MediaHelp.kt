@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.valoser.futacha.shared.ui.compat.CompatLicenseScreen
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 internal val mediaHelpSections = listOf(
     "使い始めるには" to "設定にある「プロンプト・AIラベルを表示」「画像編集を有効にする」「動画編集を有効にする」は、それぞれ独立しており、初期状態はすべてOFFです。使いたい機能だけONにしてください。",
@@ -39,7 +40,7 @@ internal fun MediaHelpButton() {
         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)) {
         Text("メディア機能の使い方・ライセンス")
     }
-    if (open) Dialog(onDismissRequest = { if (licenses) licenses = false else open = false }, properties = mediaEditorDialogProperties()) {
+    if (open) FutachaAppLockAwareWindow { Dialog(onDismissRequest = { if (licenses) licenses = false else open = false }, properties = mediaEditorDialogProperties()) {
         Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
             if (licenses) CompatLicenseScreen(onBack = { licenses = false })
             else Scaffold(topBar = {
@@ -58,5 +59,5 @@ internal fun MediaHelpButton() {
                 }
             }
         }
-    }
+    } }
 }

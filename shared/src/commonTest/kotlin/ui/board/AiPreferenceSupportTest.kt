@@ -104,10 +104,11 @@ class AiPreferenceSupportTest {
             "スレ本文の一番上に要約欄を表示します。",
             threadSummarySettingDescription(available)
         )
-        assertEquals(
-            "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。",
-            aiPostFilterSettingDescription(available)
-        )
+        val description = aiPostFilterSettingDescription(available)
+        assertTrue(description.contains("前後8件"))
+        assertTrue(description.contains("最大8件"))
+        assertTrue(description.contains("キャッシュ"))
+        assertTrue(description.contains("引用部分は除外"))
     }
 
     @Test

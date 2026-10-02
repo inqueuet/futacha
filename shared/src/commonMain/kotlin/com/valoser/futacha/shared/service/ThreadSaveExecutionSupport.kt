@@ -146,7 +146,8 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
     downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>,
     enforceBudget: (Long) -> Unit,
     /** Called after every chunk with all media stored so far (seeded and downloaded). */
-    onChunkApplied: suspend (Map<String, ThreadSaveLocalFileInfo>) -> Unit = {}
+    onChunkApplied: suspend (Map<String, ThreadSaveLocalFileInfo>) -> Unit = {},
+    shouldContinueDownloading: () -> Boolean = { true }
 ): ThreadSaveMediaDownloadBatchResult {
     val accumulator = ThreadSaveMediaDownloadAccumulator(
         urlToPathMap = createUrlToPathMap().also { it.putAll(initialSeed.urlToPathMap) },
@@ -167,16 +168,18 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
         checkBudget = {
             enforceBudget(accumulator.totalSizeBytes)
         },
-        downloadMedia = downloadMedia
+        downloadMedia = downloadMedia,
+        shouldContinueDownloading = shouldContinueDownloading
     )
 
-    plan.scheduledItems.chunked(chunkSize).forEach { itemChunk ->
+    chunks@ for (itemChunk in plan.scheduledItems.chunked(chunkSize)) {
         coroutineContext.ensureActive()
         yield()
         enforceBudget(accumulator.totalSizeBytes)
 
-        itemChunk.chunked(maxParallelDownloads).forEach { itemBatch ->
+        for (itemBatch in itemChunk.chunked(maxParallelDownloads)) {
             coroutineContext.ensureActive()
+            if (!shouldContinueDownloading()) break@chunks
             val nextProgressIndex = processedMediaCount + 1
             val results = executeThreadSaveMediaBatch(
                 itemBatch = itemBatch,
@@ -201,7 +204,7 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
         mediaCounts = accumulator.mediaCounts,
         totalSizeBytes = accumulator.totalSizeBytes,
         downloadFailureCount = accumulator.downloadFailureCount,
-        skippedMediaCount = plan.skippedMediaCount
+        skippedMediaCount = plan.skippedMediaCount + plan.scheduledItems.size - processedMediaCount
     )
 }
 

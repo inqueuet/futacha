@@ -32,6 +32,7 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 
 internal const val DEFAULT_CATALOG_GRID_COLUMNS_VALUE = 5
 internal const val MIN_CATALOG_GRID_COLUMNS_VALUE = 2
@@ -240,6 +241,24 @@ internal fun decodeThreadPostImageSizeValue(raw: String?): ThreadPostImageSize {
     }.getOrNull() ?: ThreadPostImageSize.Small
 }
 
+/**
+ * Decodes a stored menu layout entry by entry, so one value written by a newer
+ * version (an unknown id or placement) drops only that entry; normalization then
+ * restores just the missing items instead of resetting the whole layout.
+ * Returns null when the value is not a JSON array at all.
+ */
+private fun <T> decodeListDroppingUnreadableEntries(
+    raw: String,
+    json: Json,
+    serializer: KSerializer<List<T>>
+): List<T>? {
+    val array = runCatching { json.parseToJsonElement(raw) as? JsonArray }.getOrNull() ?: return null
+    return array.mapNotNull { element ->
+        runCatching { json.decodeFromJsonElement(serializer, JsonArray(listOf(element))).singleOrNull() }
+            .getOrNull()
+    }
+}
+
 internal fun decodeThreadMenuConfigValue(
     raw: String?,
     json: Json,
@@ -248,10 +267,9 @@ internal fun decodeThreadMenuConfigValue(
     if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
         return defaultThreadMenuConfig()
     }
-    return runCatching {
-        json.decodeFromString(serializer, raw)
-    }.map(::normalizeThreadMenuConfig)
-        .getOrDefault(defaultThreadMenuConfig())
+    return decodeListDroppingUnreadableEntries(raw, json, serializer)
+        ?.let(::normalizeThreadMenuConfig)
+        ?: defaultThreadMenuConfig()
 }
 
 internal fun decodeThreadSettingsMenuConfigValue(
@@ -262,10 +280,9 @@ internal fun decodeThreadSettingsMenuConfigValue(
     if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
         return defaultThreadSettingsMenuConfig()
     }
-    return runCatching {
-        json.decodeFromString(serializer, raw)
-    }.map(::normalizeThreadSettingsMenuConfig)
-        .getOrDefault(defaultThreadSettingsMenuConfig())
+    return decodeListDroppingUnreadableEntries(raw, json, serializer)
+        ?.let(::normalizeThreadSettingsMenuConfig)
+        ?: defaultThreadSettingsMenuConfig()
 }
 
 internal fun decodeThreadMenuEntriesValue(
@@ -276,10 +293,9 @@ internal fun decodeThreadMenuEntriesValue(
     if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
         return defaultThreadMenuEntries()
     }
-    return runCatching {
-        json.decodeFromString(serializer, raw)
-    }.map(::normalizeThreadMenuEntries)
-        .getOrDefault(defaultThreadMenuEntries())
+    return decodeListDroppingUnreadableEntries(raw, json, serializer)
+        ?.let(::normalizeThreadMenuEntries)
+        ?: defaultThreadMenuEntries()
 }
 
 internal fun decodeCatalogNavEntriesValue(
@@ -290,10 +306,9 @@ internal fun decodeCatalogNavEntriesValue(
     if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
         return defaultCatalogNavEntries()
     }
-    return runCatching {
-        json.decodeFromString(serializer, raw)
-    }.map(::normalizeCatalogNavEntries)
-        .getOrDefault(defaultCatalogNavEntries())
+    return decodeListDroppingUnreadableEntries(raw, json, serializer)
+        ?.let(::normalizeCatalogNavEntries)
+        ?: defaultCatalogNavEntries()
 }
 
 internal fun mergeSelfPostIdentifierMap(

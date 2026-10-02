@@ -759,6 +759,77 @@ class IosExperienceProfileStoreTest {
     }
 
     @Test
+    fun failedSwitchRollsBackSoCommitsAndTheNextSwitchProceed() = runBlocking {
+        val suiteName = "com.valoser.futacha.tests.rollback.${NSUUID().UUIDString()}"
+        val defaults = requireNotNull(NSUserDefaults(suiteName = suiteName))
+        defaults.removePersistentDomainForName(suiteName)
+        try {
+            val store = IosExperienceProfileStore(defaults)
+            var failIcon = true
+            val reconciled = mutableListOf<ExperienceProfile>()
+            val coordinator = IosModeSwitchCoordinator(store) { profile, _ ->
+                reconciled += profile
+                if (failIcon && profile == ExperienceProfile.TOSHIAKI_COMPAT) error("icon")
+            }
+
+            assertTrue(coordinator.switchTo(ExperienceProfile.TOSHIAKI_COMPAT, AppIconVariant.Current).isFailure)
+
+            // Previously the journal stayed: every commit gate refused work until relaunch,
+            // and the next launch silently completed the failed switch.
+            assertNull(store.readJournal())
+            assertEquals(ExperienceProfile.FUTACHA, store.readActiveProfile())
+            assertEquals(2L, store.readGeneration())
+            assertTrue(store.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, 2L))
+            assertEquals(ExperienceProfile.FUTACHA, coordinator.recoverIfNeeded().getOrThrow())
+
+            failIcon = false
+            assertEquals(3L, coordinator.switchTo(ExperienceProfile.TOSHIAKI_COMPAT, AppIconVariant.Current).getOrThrow())
+            assertEquals(ExperienceProfile.TOSHIAKI_COMPAT, store.readActiveProfile())
+            assertEquals(
+                listOf(ExperienceProfile.TOSHIAKI_COMPAT, ExperienceProfile.FUTACHA, ExperienceProfile.TOSHIAKI_COMPAT),
+                reconciled
+            )
+        } finally {
+            defaults.removePersistentDomainForName(suiteName)
+        }
+    }
+
+    @Test
+    fun switchReportsAFailedEarlierRecoveryAsNotRolledBack() = runBlocking {
+        val suiteName = "com.valoser.futacha.tests.recoveryfailure.${NSUUID().UUIDString()}"
+        val defaults = requireNotNull(NSUserDefaults(suiteName = suiteName))
+        defaults.removePersistentDomainForName(suiteName)
+        try {
+            val store = IosExperienceProfileStore(defaults)
+            store.beginSwitchWithCommitBarrier(
+                from = ExperienceProfile.FUTACHA,
+                to = ExperienceProfile.TOSHIAKI_COMPAT
+            )
+            var failIcon = true
+            val coordinator = IosModeSwitchCoordinator(store) { _, _ ->
+                if (failIcon) error("icon")
+            }
+
+            val failure = requireNotNull(
+                coordinator.switchTo(ExperienceProfile.FUTACHA, AppIconVariant.Current).exceptionOrNull()
+            )
+
+            // The interrupted switch could not be finished and nothing was rolled back:
+            // the dialog must advise a restart, not "現在のモードのまま使用できます" (M4-1).
+            assertTrue(failure is ModeSwitchRecoveryException)
+            assertTrue(modeSwitchFailureMessage(failure).startsWith("アプリを再起動してください。"))
+            assertTrue(store.readJournal() != null)
+
+            failIcon = false
+            assertEquals(1L, coordinator.switchTo(ExperienceProfile.TOSHIAKI_COMPAT, AppIconVariant.Current).getOrThrow())
+            assertNull(store.readJournal())
+            assertEquals(ExperienceProfile.TOSHIAKI_COMPAT, store.readActiveProfile())
+        } finally {
+            defaults.removePersistentDomainForName(suiteName)
+        }
+    }
+
+    @Test
     fun recoveryCommitsInterruptedJournalToRequestedProfile() = runBlocking {
         val suiteName = "com.valoser.futacha.tests.recovery.${NSUUID().UUIDString()}"
         val defaults = requireNotNull(NSUserDefaults(suiteName = suiteName))

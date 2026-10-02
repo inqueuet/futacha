@@ -11,7 +11,10 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.PersistentCookieStorage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -22,11 +25,96 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DefaultBoardRepositoryTest {
+    @Test
+    fun authenticationRetryRefreshesExistingCookies() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(io.ktor.http.Url(board), io.ktor.http.Cookie(
+            name = "posttime", value = "stale", domain = ".2chan.net", path = "/"))
+        var refreshed = false
+        val delegate = FakeBoardApi(onFetchCatalogSetup = { refreshed = true })
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                if (!refreshed) throw NetworkException("forbidden", 403)
+                return delegate.fetchThread(board, threadId)
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage))
+        repository.getThread(board, "123")
+        assertTrue(refreshed)
+        assertEquals(1, delegate.fetchCatalogSetupCalls)
+        assertEquals(1, delegate.fetchThreadCalls)
+    }
+
+    @Test
+    fun persistentAuthFailureDoesNotRepostCatalogSetupOnEveryRequest() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(io.ktor.http.Url(board), io.ktor.http.Cookie(
+            name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/"))
+        val delegate = FakeBoardApi()
+        var threadCalls = 0
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                threadCalls += 1
+                throw NetworkException("forbidden", 403)
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage))
+
+        repeat(3) { assertFailsWith<NetworkException> { repository.getThread(board, "123") } }
+        // One fresh setup that did not help; later refreshes report the 403 directly.
+        assertEquals(1, delegate.fetchCatalogSetupCalls)
+        assertEquals(4, threadCalls)
+
+        repository.invalidateCookies(board)
+        assertFailsWith<NetworkException> { repository.getThread(board, "123") }
+        assertEquals(2, delegate.fetchCatalogSetupCalls)
+    }
+
+    @Test
+    fun authRetryOfAThreadKeepsTheBoardsCatalogLayout() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val delegate = FakeBoardApi(onFetchCatalogSetup = {
+            storage.addCookie(
+                io.ktor.http.Url(boardUrl),
+                io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+            )
+        })
+        var forbidden = true
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                if (forbidden) {
+                    forbidden = false
+                    throw NetworkException("forbidden", 403)
+                }
+                return delegate.fetchThread(board, threadId)
+            }
+        }
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+        repository.getThread(boardUrl, "123")
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+
+        // The refresh re-posted the board's own layout, so the next catalog needs no setup.
+        assertEquals(listOf(100, 100), delegate.fetchCatalogSetupSettings.map { it.rows })
+    }
+
     @Test
     fun catalogCountMismatchSavesRawHtmlAndReturnsVisibleWarning() = runBlocking {
         val html = """
@@ -1016,6 +1104,67 @@ class DefaultBoardRepositoryTest {
         assertTrue(enriched.message!!.contains("保存済み情報は削除せず"))
         assertFalse(enriched.message!!.contains("Cookie が古い"))
         assertFalse(enriched.message!!.contains("posttime と ptmt を削除"))
+    }
+
+    @Test
+    fun layoutIndependentRequestDoesNotWaitForAnInFlightCatalogSetup() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val globalLock = Mutex()
+        val boardLocks = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
+        val failures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+        val initializedBoards = mutableSetOf(board)
+        val setupStarted = CompletableDeferred<Unit>()
+        val releaseSetup = CompletableDeferred<Unit>()
+        var independentSetups = 0
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(board),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+
+        // A catalog layout change re-posts catset and holds the per-board lock.
+        val catalogSetup = launch {
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = initializedBoards,
+                cookieRepository = CookieRepository(storage),
+                boardInitMutex = globalLock,
+                boardInitializationMutexes = boardLocks,
+                cookieSetupFailures = failures,
+                requireSetup = { true },
+                fetchCatalogSetup = {
+                    setupStarted.complete(Unit)
+                    releaseSetup.await()
+                }
+            )
+        }
+        setupStarted.await()
+
+        suspend fun independentRequest(cookieRepository: CookieRepository?) = withTimeout(2_000L) {
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = initializedBoards,
+                cookieRepository = cookieRepository,
+                boardInitMutex = globalLock,
+                boardInitializationMutexes = boardLocks,
+                cookieSetupFailures = failures,
+                layoutIndependent = true,
+                maxSetupWaitMillis = 50L,
+                fetchCatalogSetup = { independentSetups += 1 }
+            )
+        }
+
+        // Existing cookies: proceeds at once. Without them: waits only briefly.
+        independentRequest(CookieRepository(storage))
+        globalLock.withLock { initializedBoards.remove(board) }
+        independentRequest(cookieRepository = null)
+        assertEquals(0, independentSetups)
+
+        releaseSetup.complete(Unit)
+        catalogSetup.join()
+        assertTrue(boardLocks.isEmpty())
     }
 
     @Test

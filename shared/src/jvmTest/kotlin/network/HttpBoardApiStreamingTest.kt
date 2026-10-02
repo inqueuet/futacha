@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.network
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.prepareGet
 import io.ktor.http.HttpStatusCode
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.writeFully
@@ -10,10 +11,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.io.IOException
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -81,6 +84,44 @@ class HttpBoardApiStreamingTest {
             withTimeout(10_000) {
                 assertFailsWith<NetworkException> { get(client, request(HttpBoardApiTextReadMode.BODY), maxBytes = 256 * 1024) }
             }
+        } finally { client.close() }
+    }
+
+    @Test
+    fun readBudgetExpiryIsANetworkFailureNotACancellation(): Unit = runBlocking {
+        // A body that keeps trickling never trips the idle timeout, only the total budget.
+        val client = endlessClient("") { channel ->
+            while (true) {
+                channel.writeFully(byteArrayOf('a'.code.toByte()))
+                channel.flush()
+                delay(20)
+            }
+        }
+        try {
+            val failure = withTimeout(5_000) {
+                client.prepareGet("https://example.com/slow").execute { response ->
+                    runCatching { readBoundedHttpResponseBytes(response, 1_000_000, totalTimeoutMillis = 200L) }
+                        .exceptionOrNull()
+                }
+            }
+            assertTrue(failure is NetworkException, "was $failure")
+            assertTrue(failure.cause is IOException, "cause was ${failure.cause}")
+        } finally { client.close() }
+    }
+
+    @Test
+    fun prefixReadReturnsCompleteLinesFromAnEndlessBody(): Unit = runBlocking {
+        val line = "<input type=\"hidden\" name=\"chrenc\" value=\"文字\">\n".encodeToByteArray()
+        val client = endlessClient("") { channel -> while (true) { channel.writeFully(line); channel.flush() } }
+        try {
+            val prefix = withTimeout(5_000) {
+                client.prepareGet("https://may.2chan.net/b/res/1.htm").execute { response ->
+                    readHttpBoardApiResponsePrefixAsString(response, 1_000, 256, 3, 10L, 5_000L)
+                }
+            }
+            assertTrue(prefix.length <= 1_000)
+            assertTrue(prefix.endsWith("\n"), prefix)
+            assertTrue(prefix.lines().filter { it.isNotEmpty() }.all { it == line.decodeToString().trimEnd() }, prefix)
         } finally { client.close() }
     }
 }

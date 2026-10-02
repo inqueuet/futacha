@@ -104,6 +104,8 @@ class ExampleInstrumentedTest {
         assertFalse(Manifest.permission.WRITE_EXTERNAL_STORAGE in permissions)
         assertFalse(Manifest.permission.VIBRATE in permissions)
         assertFalse("Advertising ID permission must stay removed", "com.google.android.gms.permission.AD_ID" in permissions)
+        assertFalse("android.permission.ACCESS_ADSERVICES_AD_ID" in permissions)
+        assertFalse("android.permission.ACCESS_ADSERVICES_ATTRIBUTION" in permissions)
         assertFalse(
             "Reference ad-only Activity must not be restored",
             packageInfo.activities.orEmpty().any { it.name == "com.google.android.gms.ads.AdActivity" }

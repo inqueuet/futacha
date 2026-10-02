@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.compat.stableCompatHash
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.TextEncoding
+import com.valoser.futacha.shared.util.sanitizeForShiftJis
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -44,7 +46,16 @@ internal suspend fun uploadCompatUps(
         url = COMPAT_UPS_ENDPOINT,
         formData = formData {
             append("mode", "reg")
-            append("com", "${comment.take(1000)} $token$appVersion")
+            // up2 is a Shift_JIS page: a plain String part is sent as UTF-8
+            // and the comment was garbled. Encode it like the board forms do.
+            append(
+                "com",
+                compatUpsShiftJisCommentBytes("${comment.take(1000)} $token$appVersion"),
+                Headers.build {
+                    append(HttpHeaders.ContentDisposition, "form-data; name=\"com\"")
+                    append(HttpHeaders.ContentType, "text/plain; charset=Shift_JIS")
+                }
+            )
             append("pass", deleteKey)
             append(
                 "up",
@@ -83,6 +94,10 @@ internal suspend fun uploadCompatUps(
     findCompatUpsUploadedFileName(indexBody, token)
         ?: error("アップロードしたファイルが見つかりません")
 }
+
+/** Shift_JIS bytes of the uploader comment; characters outside Shift_JIS become numeric references. */
+internal fun compatUpsShiftJisCommentBytes(comment: String): ByteArray =
+    TextEncoding.encodeToShiftJis(sanitizeForShiftJis(comment).sanitizedText)
 
 internal fun isCompatUpsUploadSizeAllowed(size: Int): Boolean = size in 1..COMPAT_UPS_MAX_BYTES
 

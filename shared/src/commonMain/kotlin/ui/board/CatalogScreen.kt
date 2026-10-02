@@ -240,8 +240,12 @@ private fun CatalogScreenContent(
             snackbarHostState.showSnackbar(warning.reason)
         }
     }
+    // Local mode changes still being written: the store then emits the
+    // intermediate values, which briefly reverted a quickly changed mode.
+    val pendingCatalogModeWrites = remember { mutableIntStateOf(0) }
     LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes, persistentBindings.isCatalogModeLoaded) {
         if (!persistentBindings.isCatalogModeLoaded) return@LaunchedEffect
+        if (hasSyncedCatalogMode && pendingCatalogModeWrites.intValue > 0) return@LaunchedEffect
         resolveCatalogModeSyncValue(
             boardId = board?.id,
             persistedCatalogModes = persistentBindings.persistedCatalogModes
@@ -332,7 +336,11 @@ private fun CatalogScreenContent(
                 }
             },
             catalogGridState = catalogGridState,
-            catalogListState = catalogListState
+            catalogListState = catalogListState,
+            onCatalogModeWriteStarted = { pendingCatalogModeWrites.intValue += 1 },
+            onCatalogModeWriteFinished = {
+                pendingCatalogModeWrites.intValue = (pendingCatalogModeWrites.intValue - 1).coerceAtLeast(0)
+            }
         ),
         runtimeInputs = CatalogScreenRuntimeInputs(
             coroutineScope = coroutineScope,
@@ -465,8 +473,12 @@ private fun CatalogScreenContent(
     val initialLoadBindings = interactionHandles.initialLoadBindings
     val createThreadBindings = interactionHandles.createThreadBindings
     val historyDrawerCallbacks = interactionHandles.historyDrawerCallbacks
-    LaunchedEffect(args.aiCommand) {
+    val aiCommandAppLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(args.aiCommand)) {
         val command = args.aiCommand ?: return@LaunchedEffect
+        // Same guard as ThreadScreen: the parent withdraws a command handed over
+        // just before the lock and hands it back after the unlock (C-1).
+        if (aiCommandAppLock?.isUnlocked == false) return@LaunchedEffect
         var didConsume = true
         when (command.action) {
             FutachaAiAction.RefreshCurrentBoard,

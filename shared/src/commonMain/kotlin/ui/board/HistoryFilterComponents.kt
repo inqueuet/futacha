@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,7 +43,7 @@ internal fun HistoryFilterSheet(
     onApply: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    FutachaAppLockAwareWindow { ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -165,7 +166,7 @@ internal fun HistoryFilterSheet(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -324,7 +325,7 @@ internal fun HistoryBatchDeleteConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("履歴を一括削除") },
         text = {
@@ -346,5 +347,5 @@ internal fun HistoryBatchDeleteConfirmationDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }

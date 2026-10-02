@@ -19,6 +19,7 @@ actual fun getAiConnectionStore(platformContext: Any?): AiConnectionStore = conn
 
 internal class AndroidAiConnectionStorage(context: Context) : AiConnectionStorage {
     private val file = AtomicFile(File(context.noBackupFilesDir, "openai-connection.enc"))
+    private val usageFile = AtomicFile(File(context.noBackupFilesDir, "openai-usage-v1.json"))
     private val cacheFile = AtomicFile(File(context.cacheDir, "openai-analysis-v1.json"))
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -31,7 +32,7 @@ internal class AndroidAiConnectionStorage(context: Context) : AiConnectionStorag
     override fun read(): String? {
         if (!file.baseFile.exists()) return null
         val bytes = file.readFully()
-        check(bytes.size in 29..8192)
+        check(bytes.size in 29..(MAX_AI_CREDENTIAL_BYTES + 28))
         return Cipher.getInstance("AES/GCM/NoPadding").run {
             init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
             doFinal(bytes.copyOfRange(12, bytes.size)).decodeToString()
@@ -41,6 +42,8 @@ internal class AndroidAiConnectionStorage(context: Context) : AiConnectionStorag
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         writeAtomic(file, cipher.iv + cipher.doFinal(value.encodeToByteArray()))
     }
+    override fun readUsage(): String? = if (usageFile.baseFile.exists() && usageFile.baseFile.length() <= 100_000) usageFile.readFully().decodeToString() else null
+    override fun writeUsage(value: String) = writeAtomic(usageFile, value.encodeToByteArray())
     override fun readCache(): String? = if (cacheFile.baseFile.exists() && cacheFile.baseFile.length() <= 4_000_000) cacheFile.readFully().decodeToString() else null
     override fun writeCache(value: String) = writeAtomic(cacheFile, value.encodeToByteArray())
     private fun writeAtomic(target: AtomicFile, value: ByteArray) {

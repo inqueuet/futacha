@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,7 +56,7 @@ internal fun ThreadSettingsSheet(
     val visibleItems = remember(menuEntries) {
         resolveThreadSettingsMenuEntries(menuEntries)
     }
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("thread_settings_sheet_dismiss", "スレッド設定メニューを閉じる")
             onDismiss()
@@ -104,7 +105,7 @@ internal fun ThreadSettingsSheet(
                 }
             }
         }
-    }
+    } }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,7 +126,7 @@ internal fun ThreadFilterSheet(
         onTextChange = onKeywordChange,
         analyticsFieldLabel = "レスフィルターキーワード"
     )
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("thread_filter_dismiss", "レスフィルターを閉じる")
             onDismiss()
@@ -245,7 +246,7 @@ internal fun ThreadFilterSheet(
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -297,7 +298,7 @@ internal fun ReadAloudControlSheet(
         sliderValue = controlState.sliderValue
     }
 
-    ModalBottomSheet(
+    FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("read_aloud_sheet", "読み上げプレーヤーを閉じる")
             onDismiss()
@@ -410,5 +411,5 @@ internal fun ReadAloudControlSheet(
                 }
             }
         }
-    }
+    } }
 }

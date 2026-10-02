@@ -46,6 +46,34 @@ class IosOriginalMediaAssetTest {
         } finally { FileSystem.SYSTEM.delete(file, mustExist = false) }
     }
 
+    @Test fun copyFallbackForAnotherVolumeStopsWhenThePlayerIsCancelled() = runBlocking {
+        val fs = FileSystem.SYSTEM
+        val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("local-video-copy-${Random.nextLong()}")
+        fs.createDirectories(directory)
+        val source = directory.resolve("source.webm")
+        val size = 8L * 1024 * 1024
+        fs.write(source) { write(ByteArray(size.toInt())) }
+        var reads = 0
+        try {
+            val job = launch(Dispatchers.Default) {
+                val copying = this
+                val counting = object : okio.ForwardingFileSystem(fs) {
+                    override fun source(file: okio.Path): okio.Source = object : okio.ForwardingSource(fs.source(file)) {
+                        override fun read(sink: okio.Buffer, byteCount: Long): Long {
+                            if (++reads == 2) copying.cancel()
+                            return super.read(sink, byteCount)
+                        }
+                    }
+                }
+                IosLocalVideoDocument.copyCancellably(counting, source, directory.resolve("video.webm"))
+            }
+            job.join()
+            assertTrue(job.isCancelled)
+            assertTrue(reads <= 3, "The copy must stop at the next chunk, not run to the end ($reads reads)")
+            assertTrue(requireNotNull(fs.metadata(directory.resolve("video.webm")).size) < size)
+        } finally { fs.deleteRecursively(directory, mustExist = false) }
+    }
+
     @Test fun localWebmDocumentUsesAHardLinkAndLastViewPinOwnsCleanup() = nativeTest {
         val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("webkit-file-${Random.nextLong()}")
         val bytes = VideoPlaybackFixtures.webm()

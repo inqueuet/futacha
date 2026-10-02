@@ -69,7 +69,8 @@ class ThreadImageSearchTest {
         val client = HttpClient(MockEngine { withTimeout(1) { delay(100); error("unreachable") } })
         try {
             val error = searchThreadImage(client, imageUrl, CompatImageSearchTarget.LENS_FILE).exceptionOrNull()
-            assertEquals("画像検索がタイムアウトしました", error?.message)
+            // The provider now reports its own timeout; either message must surface instead of a pending search.
+            assertTrue(error?.message.orEmpty().contains("タイムアウトしました"), error?.message)
         } finally { client.close() }
     }
 }

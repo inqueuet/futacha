@@ -26,12 +26,15 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     // FIX: Activity ContextではなくApplicationContextを使用してメモリリークを防止
     private val appContext = (platformContext as? Context)?.applicationContext
         ?: throw IllegalArgumentException("TextSpeaker requires an Android Context")
-    private val initState = CompletableDeferred<Unit>()
     private val lock = Any()
+    // Replaced with a fresh deferred after a failed or timed-out initialization so a
+    // slow engine (common on first boot) does not disable read-aloud until restart.
+    private var initState = CompletableDeferred<Unit>()
     private val engineThread = HandlerThread("FutachaTextToSpeech").apply { start() }
     private val engineHandler = Handler(engineThread.looper)
     private val continuations = mutableMapOf<String, CancellableContinuation<Unit>>()
     private var tts: TextToSpeech? = null
+    private var activeUtteranceId: String? = null
     @Volatile
     private var closed = false
     private var initializationRequested = false
@@ -48,23 +51,38 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
      * created only after the first speak request. A dedicated Looper keeps a
      * slow or broken engine binder from blocking Compose and its watchdog.
      */
-    private fun requestInitialization() {
+    private fun requestInitialization(): CompletableDeferred<Unit> {
+        val state: CompletableDeferred<Unit>
+        var staleEngine: TextToSpeech? = null
         synchronized(lock) {
-            if (initializationRequested || closed) return
+            if (closed) return initState
+            if (initializationRequested && initState.isCancelled) {
+                staleEngine = tts
+                tts = null
+                initState = CompletableDeferred()
+                initializationRequested = false
+            }
+            if (initializationRequested) return initState
             initializationRequested = true
+            state = initState
+        }
+        staleEngine?.let { engine ->
+            engineHandler.post { runCatching { engine.shutdown() } }
         }
         engineHandler.post {
+            val initState = state
             if (closed) {
                 initState.completeExceptionally(CancellationException("TextSpeaker は既に閉じられています"))
                 return@post
             }
+            var createdEngine: TextToSpeech? = null
             val created = runCatching {
                 TextToSpeech(appContext) { status ->
                     // Even if an engine invokes its callback during construction,
                     // posting one turn guarantees the created instance has been
                     // installed (or closed) before it is inspected.
                     engineHandler.post {
-                        val engine = synchronized(lock) { tts }
+                        val engine = synchronized(lock) { tts?.takeIf { it === createdEngine } }
                         if (status == TextToSpeech.SUCCESS && engine != null) {
                             val result = engine.setLanguage(Locale.JAPAN)
                             if (result in TextToSpeech.LANG_AVAILABLE..TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
@@ -81,8 +99,9 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                 initState.completeExceptionally(error)
                 return@post
             }
+            createdEngine = created
             val keepEngine = synchronized(lock) {
-                if (closed) false else {
+                if (closed || this.initState !== state || state.isCompleted) false else {
                     tts = created
                     true
                 }
@@ -106,10 +125,13 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                     replaceWith = ReplaceWith("onError(utteranceId, TextToSpeech.ERROR)", "android.speech.tts.TextToSpeech")
                 )
                 override fun onError(utteranceId: String?) {
+                    invalidateEngine(created, utteranceId)
                     handleUtteranceResult(utteranceId, IOException("読み上げ中にエラーが発生しました"))
                 }
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
+                    if (errorCode == TextToSpeech.ERROR_SERVICE || errorCode == TextToSpeech.ERROR_OUTPUT ||
+                        errorCode == TextToSpeech.ERROR_SYNTHESIS) invalidateEngine(created, utteranceId)
                     handleUtteranceResult(
                         utteranceId,
                         IOException("読み上げ中にエラーが発生しました (code: $errorCode)")
@@ -124,18 +146,20 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                 }
             })
         }
+        return state
     }
 
     private suspend fun awaitTts(): TextToSpeech {
-        requestInitialization()
+        val state = requestInitialization()
         try {
-            withTimeout(INITIALIZATION_TIMEOUT_MILLIS) { initState.await() }
+            withTimeout(INITIALIZATION_TIMEOUT_MILLIS) { state.await() }
         } catch (timeout: TimeoutCancellationException) {
             val failure = IOException("TextToSpeech の初期化がタイムアウトしました", timeout)
-            initState.completeExceptionally(failure)
+            // Fails only this attempt; the next request starts a new initialization.
+            state.completeExceptionally(failure)
             throw failure
         }
-        return synchronized(lock) { tts }
+        return synchronized(lock) { tts.takeIf { initState === state } }
             ?: throw IOException("TextToSpeech の初期化に失敗しました")
     }
 
@@ -166,11 +190,19 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                         continuations[utteranceId] = continuation
                     }
                     continuation.invokeOnCancellation {
-                        synchronized(lock) {
-                            continuations.remove(utteranceId)
+                        synchronized(lock) { continuations.remove(utteranceId) }
+                        engineHandler.post {
+                            val shouldStop = synchronized(lock) {
+                                if (activeUtteranceId == utteranceId) {
+                                    activeUtteranceId = null
+                                    true
+                                } else false
+                            }
+                            if (shouldStop) runCatching { engine.stop() }
                         }
                     }
                     engineHandler.post {
+                        if (!continuation.isActive) return@post
                         if (closed) {
                             handleUtteranceResult(
                                 utteranceId,
@@ -181,13 +213,22 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                         val params = Bundle().apply {
                             putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
                         }
+                        val maySpeak = synchronized(lock) {
+                            if (!continuation.isActive) false else {
+                                activeUtteranceId = utteranceId
+                                true
+                            }
+                        }
+                        if (!maySpeak) return@post
                         val speakResult = runCatching {
                             engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
                         }.getOrElse { error ->
+                            invalidateEngine(engine, utteranceId)
                             handleUtteranceResult(utteranceId, error)
                             return@post
                         }
                         if (speakResult == TextToSpeech.ERROR) {
+                            invalidateEngine(engine, utteranceId)
                             handleUtteranceResult(utteranceId, IOException("読み上げの開始に失敗しました"))
                         }
                     }
@@ -204,12 +245,12 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     }
 
     actual fun close() {
-        val engine = synchronized(lock) {
+        val (engine, state) = synchronized(lock) {
             closed = true
-            tts.also { tts = null }
+            (tts to initState).also { tts = null }
         }
-        if (!initState.isCompleted) {
-            initState.completeExceptionally(CancellationException("TextSpeaker を閉じました"))
+        if (!state.isCompleted) {
+            state.completeExceptionally(CancellationException("TextSpeaker を閉じました"))
         }
         cancelPending(CancellationException("TextSpeaker を閉じました"))
         engineHandler.post {
@@ -218,12 +259,25 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
     }
 
+    private fun invalidateEngine(engine: TextToSpeech, utteranceId: String?) {
+        val stale = synchronized(lock) {
+            if (tts !== engine || activeUtteranceId != utteranceId) null else {
+                tts = null
+                initState = CompletableDeferred()
+                initializationRequested = false
+                engine
+            }
+        } ?: return
+        engineHandler.post { runCatching { stale.shutdown() } }
+    }
+
     private fun handleUtteranceResult(utteranceId: String?, error: Throwable?) {
         if (utteranceId == null) {
             Logger.w("TextSpeaker", "Received callback with null utteranceId")
             return
         }
         val continuation = synchronized(lock) {
+            if (activeUtteranceId == utteranceId) activeUtteranceId = null
             continuations.remove(utteranceId)
         }
         if (continuation == null) {
@@ -247,6 +301,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private fun handleUtteranceStopped(utteranceId: String?) {
         if (utteranceId == null) return
         val continuation = synchronized(lock) {
+            if (activeUtteranceId == utteranceId) activeUtteranceId = null
             continuations.remove(utteranceId)
         }
         continuation?.cancel(CancellationException("読み上げが停止されました"))

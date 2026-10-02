@@ -11,6 +11,12 @@ import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.FileWriteSink
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
@@ -20,6 +26,367 @@ import kotlin.test.assertTrue
 
 class SavedThreadRepositoryTest {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
+
+    private companion object {
+        /** G4-1: the marker lives in the private files area, not beside a public root. */
+        const val PURGE_MARKER = "private/.autosaved_threads.purge-cutoff"
+        const val LEGACY_PURGE_MARKER = ".autosaved_threads.purge-cutoff"
+    }
+
+    @Test fun purgeMarkerIsKeptInThePrivateFilesArea() = runBlocking {
+        assertEquals(PURGE_MARKER, savedThreadPurgeMarkerPath("autosaved_threads"))
+        assertEquals("private/.imported_threads.purge-cutoff", savedThreadPurgeMarkerPath("imported_threads/"))
+        assertEquals("private/a/.b.purge-cutoff", savedThreadPurgeMarkerPath("a/b"))
+        // Already private or absolute roots keep their sibling.
+        assertEquals("private/x/.y.purge-cutoff", savedThreadPurgeMarkerPath("private/x/y"))
+        assertEquals("/data/.root.purge-cutoff", savedThreadPurgeMarkerPath("/data/root"))
+
+        val files = InMemoryFileSystem()
+        val failing = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        files.writeString("autosaved_threads/b__1/metadata.json", json.encodeToString(savedMetadata("1", "b", "b__1"))).getOrThrow()
+        files.writeString(LEGACY_PURGE_MARKER, "1\nstale").getOrThrow()
+        assertTrue(SavedThreadRepository(failing, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists(PURGE_MARKER))
+        // A new purge supersedes and removes a marker an older build left in the public folder.
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+    }
+
+    @Test fun legacyPurgeMarkerIsMovedAndHonouredOnce() = runBlocking {
+        val files = InMemoryFileSystem()
+        val storageId = buildThreadStorageId("b", "123")
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId))
+        ).getOrThrow()
+        // Left by an older build whose purge was interrupted, beside the root.
+        files.writeString(LEGACY_PURGE_MARKER, "${afterNowMillis()}\n$storageId").getOrThrow()
+
+        val restarted = SavedThreadRepository(object : FileSystem by files {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(!files.exists("autosaved_threads/$storageId"))
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+    }
+
+    @Test fun interruptedPurgeResumeDoesNotBlockReadsOrSaves() = runBlocking {
+        val files = InMemoryFileSystem()
+        val releaseDeletes = CompletableDeferred<Unit>()
+        val deleteStarted = CompletableDeferred<Unit>()
+        val slowDeletes = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path.startsWith("autosaved_threads/gone")) {
+                    deleteStarted.complete(Unit)
+                    releaseDeletes.await()
+                }
+                return files.deleteRecursively(path)
+            }
+        }
+        val goneIds = (1..3).map { "gone$it" }
+        goneIds.forEach { id ->
+            files.writeString("autosaved_threads/$id/metadata.json", json.encodeToString(savedMetadata(id, "b", id))).getOrThrow()
+        }
+        val liveId = buildThreadStorageId("b", "live")
+        files.writeString(
+            "autosaved_threads/$liveId/metadata.json",
+            json.encodeToString(savedMetadata("live", "b", liveId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+        files.writeString(PURGE_MARKER, (listOf(afterNowMillis().toString()) + goneIds).joinToString("\n")).getOrThrow()
+
+        val restarted = SavedThreadRepository(slowDeletes, "autosaved_threads")
+        withTimeout(5_000L) {
+            // G4-2: the first read returns while the leftovers are still being deleted.
+            assertEquals("live", restarted.loadThreadMetadata("live", "b").getOrThrow().threadId)
+            deleteStarted.await()
+            // Leftovers are hidden at once, and saves are not held up by the deletion.
+            assertTrue(restarted.loadThreadMetadata("gone2", "b").isFailure)
+            restarted.addThreadToIndex(savedThread("new", "b", "b__new", afterNowMillis(), 1L)).getOrThrow()
+        }
+        assertTrue(files.exists("autosaved_threads/gone2/metadata.json"))
+        releaseDeletes.complete(Unit)
+        restarted.awaitInterruptedPurgeResume()
+        goneIds.forEach { assertTrue(!files.exists("autosaved_threads/$it")) }
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertEquals(listOf("new"), restarted.getAllThreads().map { it.threadId })
+    }
+
+    @Test fun lateResumeOfAnOlderPurgeKeepsTheNewerMarker() = runBlocking {
+        val files = InMemoryFileSystem()
+        val releaseDeletes = CompletableDeferred<Unit>()
+        val deleteStarted = CompletableDeferred<Unit>()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path == "autosaved_threads/old") {
+                    deleteStarted.complete(Unit)
+                    releaseDeletes.await()
+                }
+                // The new purge's whole-root delete fails, leaving its marker.
+                if (path == "autosaved_threads") return Result.failure(IllegalStateException("storage failure"))
+                return files.deleteRecursively(path)
+            }
+        }
+        files.writeString("autosaved_threads/old/metadata.json", json.encodeToString(savedMetadata("old", "b", "old"))).getOrThrow()
+        files.writeString(PURGE_MARKER, "${afterNowMillis()}\nold").getOrThrow()
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        withTimeout(5_000L) {
+            assertTrue(repo.loadThreadMetadata("old", "b").isFailure)
+            deleteStarted.await()
+        }
+
+        // A new purge starts while the resume of the old one is still deleting.
+        files.writeString("autosaved_threads/newer/metadata.json", json.encodeToString(savedMetadata("newer", "b", "newer"))).getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").purgeAllStorage().isFailure)
+        val newerMarker = files.readString(PURGE_MARKER).getOrThrow()
+        releaseDeletes.complete(Unit)
+        repo.awaitInterruptedPurgeResume()
+
+        // G4-3: the late resume neither rewrote nor deleted the newer purge's marker.
+        assertEquals(newerMarker, files.readString(PURGE_MARKER).getOrThrow())
+        assertTrue("newer" in newerMarker)
+        assertTrue(repo.loadThreadMetadata("newer", "b").isFailure)
+    }
+
+    @Test fun partialDeletionBackupCannotResurrectDeletedThreads() = runBlocking {
+        val files = InMemoryFileSystem()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (path.endsWith("keep")) Result.failure(IllegalStateException("busy"))
+                else files.deleteRecursively(path)
+        }
+        val repo = SavedThreadRepository(fs, "saved_threads")
+        repo.addThreadToIndex(savedThread("1", "b", "gone", 1L, 10L)).getOrThrow()
+        repo.addThreadToIndex(savedThread("2", "b", "keep", 1L, 10L)).getOrThrow()
+        files.writeString("saved_threads/gone/media", "one").getOrThrow()
+        files.writeString("saved_threads/keep/media", "two").getOrThrow()
+        assertTrue(repo.deleteAllThreads().isFailure)
+        files.writeString("saved_threads/index.json", "{broken").getOrThrow()
+        assertEquals(listOf("2"), SavedThreadRepository(fs, "saved_threads").getAllThreads().map { it.threadId })
+    }
+
+    @Test fun purgeFailureStillClearsPrimaryAndRecoveryIndexes() = runBlocking {
+        val files = InMemoryFileSystem()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        repo.addThreadToIndex(savedThread("1", "b", "one", 1L, 10L)).getOrThrow()
+        assertTrue(repo.purgeAllStorage().isFailure)
+        files.writeString("autosaved_threads/index.json", "{broken").getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").getAllThreads().isEmpty())
+    }
+
+    @Test fun purgeContinuesAfterAFileCountChunkLimit() = runBlocking {
+        val files = InMemoryFileSystem()
+        var attempts = 0
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (++attempts == 1) Result.failure(IllegalStateException("Too many files while deleting file tree item"))
+                else files.deleteRecursively(path)
+        }
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        files.writeString("autosaved_threads/orphan/media", "one").getOrThrow()
+        repo.purgeAllStorage().getOrThrow()
+        assertEquals(2, attempts)
+        assertTrue(!files.exists("autosaved_threads/orphan/media"))
+        assertTrue(repo.getAllThreads().isEmpty())
+    }
+
+    @Test fun interruptedPurgeKeepsDeletedThreadsOutOfRecoveryAfterRestart() = runBlocking {
+        val files = InMemoryFileSystem()
+        var failDeletes = true
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (failDeletes) Result.failure(IllegalStateException("storage failure"))
+                else files.deleteRecursively(path)
+        }
+        files.writeString(
+            "autosaved_threads/b__123/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", "b__123"))
+        ).getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists("autosaved_threads/b__123/metadata.json"))
+
+        // A new instance stands for the app after a restart.
+        val restarted = SavedThreadRepository(fs, "autosaved_threads")
+        assertEquals(0, restarted.recoverUnindexedThreads().getOrThrow())
+        assertTrue(restarted.loadIndex().threads.isEmpty())
+
+        failDeletes = false
+        restarted.purgeAllStorage().getOrThrow()
+        assertTrue(!files.exists(PURGE_MARKER))
+    }
+
+    @Test fun interruptedPurgeIsFinishedAfterRestartInsteadOfServingDeletedThreads() = runBlocking {
+        val files = InMemoryFileSystem()
+        // The whole-root delete fails (e.g. the OS file limit); single folders still delete.
+        val beforeRestart = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (path == "autosaved_threads") Result.failure(IllegalStateException("storage failure"))
+                else files.deleteRecursively(path)
+        }
+        val deletedId = buildThreadStorageId("b", "123")
+        val laterId = buildThreadStorageId("b", "456")
+        files.writeString(
+            "autosaved_threads/$deletedId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", deletedId))
+        ).getOrThrow()
+        files.writeString("autosaved_threads/index.json.1.all-delete.backup", "{}").getOrThrow()
+        assertTrue(SavedThreadRepository(beforeRestart, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists("autosaved_threads/$deletedId/metadata.json"))
+        // Saved after the failed purge: never part of it.
+        files.writeString(
+            "autosaved_threads/$laterId/metadata.json",
+            json.encodeToString(savedMetadata("456", "b", laterId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+
+        // A new file system object stands for a new process: no in-memory purge state.
+        val restarted = SavedThreadRepository(object : FileSystem by files {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        // The leftovers are deleted in the background (G4-2).
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(!files.exists("autosaved_threads/$deletedId"))
+        assertTrue(!files.exists("autosaved_threads/index.json.1.all-delete.backup"))
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertEquals("456", restarted.loadThreadMetadata("456", "b").getOrThrow().threadId)
+    }
+
+    @Test fun undeletableLeftoverOfAPurgeStaysHiddenUntilSavedAgain() = runBlocking {
+        val files = InMemoryFileSystem()
+        val failing = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        val storageId = buildThreadStorageId("b", "123")
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId))
+        ).getOrThrow()
+        val repo = SavedThreadRepository(failing, "autosaved_threads")
+        assertTrue(repo.loadThreadMetadata("123", "b").isSuccess)
+        assertTrue(repo.purgeAllStorage().isFailure)
+        assertTrue(repo.loadThreadMetadata("123", "b").isFailure)
+
+        val restarted = SavedThreadRepository(object : FileSystem by failing {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(files.exists(PURGE_MARKER))
+
+        // The thread saved again into the same folder after the purge is shown.
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+        assertEquals("123", restarted.loadThreadMetadata("123", "b").getOrThrow().threadId)
+    }
+
+    @Test fun purgeThroughAnotherInstanceDiscardsASaveStartedBeforeIt() = runBlocking {
+        val files = InMemoryFileSystem()
+        val app = SavedThreadRepository(files, "autosaved_threads")
+        val cleanup = SavedThreadRepository(files, "autosaved_threads")
+        val startedBeforePurge = savedThread("123", "b", "b__123_s1_x", 1L, 10L)
+        files.writeString("autosaved_threads/b__123_s1_x/metadata.json", "{}").getOrThrow()
+
+        cleanup.purgeIndexedThreadStorage("123", "b").getOrThrow()
+
+        assertTrue(app.addThreadToIndex(startedBeforePurge).isFailure)
+        assertTrue(app.loadIndex().threads.isEmpty())
+        assertTrue(!files.exists("autosaved_threads/b__123_s1_x"))
+        // A save started afterwards is indexed as usual.
+        files.writeString("autosaved_threads/b__123_s1_x/metadata.json", "{}").getOrThrow()
+        app.addThreadToIndex(startedBeforePurge.copy(savedAt = afterNowMillis())).getOrThrow()
+        assertEquals(listOf("123"), cleanup.loadIndex().threads.map { it.threadId })
+    }
+
+    private fun afterNowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds() + 1_000L
+
+    @Test fun replacementCleanupDeletesWithoutHoldingTheIndexLock() = runBlocking {
+        val files = InMemoryFileSystem()
+        val deleting = CompletableDeferred<Unit>()
+        val releaseDelete = CompletableDeferred<Unit>()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path.endsWith("old_generation")) {
+                    deleting.complete(Unit)
+                    releaseDelete.await()
+                }
+                return files.deleteRecursively(path)
+            }
+        }
+        val repository = SavedThreadRepository(fs, "saved_threads")
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        repository.addThreadToIndex(old).getOrThrow()
+        val replacing = async {
+            repository.addThreadToIndex(old.copy(storageId = "new_generation", savedAt = 200L)).getOrThrow()
+        }
+        deleting.await()
+        // Index readers are not blocked by the slow delete of the old generation.
+        assertEquals("new_generation", withTimeout(2_000L) { repository.resolveIndexedStorageId("123", "b") })
+        releaseDelete.complete(Unit)
+        replacing.await()
+        assertTrue(!files.exists("saved_threads/old_generation/metadata.json"))
+    }
+
+    @Test
+    fun replacementCleanupKeepsGenerationRepublishedWhileWaitingForStorageLock() = runBlocking {
+        val files = InMemoryFileSystem()
+        val first = SavedThreadRepository(files, "saved_threads")
+        val second = SavedThreadRepository(files, "saved_threads")
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        val fresh = old.copy(storageId = "new_generation", savedAt = 200L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        files.writeString("saved_threads/new_generation/metadata.json", "{}").getOrThrow()
+        first.addThreadToIndex(old).getOrThrow()
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch {
+            ThreadStorageLockRegistry.withStorageLock(first.storageLockKey("old_generation")) {
+                acquired.complete(Unit)
+                release.await()
+            }
+        }
+        acquired.await()
+        val replacing = async { first.addThreadToIndex(fresh).getOrThrow() }
+        withTimeout(5_000L) {
+            while (second.resolveIndexedStorageId("123", "b") != "new_generation") delay(5)
+        }
+        second.addThreadToIndex(old.copy(savedAt = 300L)).getOrThrow()
+        release.complete(Unit)
+        holder.join()
+        replacing.await()
+        assertEquals("old_generation", first.resolveIndexedStorageId("123", "b"))
+        assertTrue(files.exists("saved_threads/old_generation/metadata.json"))
+    }
+
+    @Test
+    fun cleanupContinuesAfterCallerLockWaitExpires() = runBlocking {
+        val files = InMemoryFileSystem()
+        val repository = SavedThreadRepository(files, "saved_threads")
+        repository.replacedStorageCleanupWaitMillis = 20L
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        repository.addThreadToIndex(old).getOrThrow()
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch {
+            ThreadStorageLockRegistry.withStorageLock(repository.storageLockKey("old_generation")) {
+                acquired.complete(Unit)
+                release.await()
+            }
+        }
+        acquired.await()
+        repository.addThreadToIndex(old.copy(storageId = "new_generation", savedAt = 200L)).getOrThrow()
+        assertTrue(files.exists("saved_threads/old_generation"))
+        release.complete(Unit)
+        holder.join()
+        withTimeout(5_000L) { while (files.exists("saved_threads/old_generation")) delay(5) }
+        assertEquals("new_generation", repository.resolveIndexedStorageId("123", "b"))
+    }
 
     @Test
     fun loadIndex_repairsDuplicateStorageEntriesAndTotalSize() = runBlocking {

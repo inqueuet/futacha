@@ -131,6 +131,46 @@ private fun normalizeBoardUrlForIdentity(value: String): String {
         .lowercase()
 }
 
+private const val INQUEUET_ARCHIVE_HOST_SUFFIX = ".inqueuet.com"
+
+/** True for an inqueuet archive copy of a thread (`https://may.inqueuet.com/b/res/1.htm`). */
+internal fun isInqueuetArchiveThreadUrl(url: String?): Boolean {
+    val candidate = url?.trim()?.takeIf { it.contains("://") } ?: return false
+    return runCatching {
+        val parsed = Url(candidate)
+        parsed.host.lowercase().endsWith(INQUEUET_ARCHIVE_HOST_SUFFIX) &&
+            parsed.encodedPath.contains("/res/", ignoreCase = true)
+    }.getOrDefault(false)
+}
+
+/**
+ * Maps an inqueuet archive thread URL back to the Futaba thread it copies, so
+ * the board identity (auto-save folder, history, effective board) stays on
+ * `2chan.net`. Other URLs are returned unchanged.
+ */
+internal fun resolveFutabaSourceUrlFromArchiveUrl(url: String): String {
+    if (!isInqueuetArchiveThreadUrl(url)) return url
+    return runCatching {
+        val parsed = Url(url.trim())
+        val server = parsed.host.substringBefore('.').takeIf { it.isNotBlank() } ?: return url
+        "https://$server.2chan.net${parsed.encodedPath}"
+    }.getOrDefault(url)
+}
+
+/**
+ * The board URL the thread screen works with. An archive override maps back to
+ * its Futaba source, and an override on the selected board keeps [boardUrl]: a
+ * load that only switches the thread URL (archive fallback) must not change the
+ * effective board, which keys the initial load and names the auto-save board.
+ */
+internal fun resolveThreadScreenEffectiveBoardUrl(threadUrlOverride: String?, boardUrl: String): String {
+    val sourceOverride = threadUrlOverride?.let(::resolveFutabaSourceUrlFromArchiveUrl)
+    val resolved = resolveEffectiveBoardUrl(sourceOverride, boardUrl)
+    if (resolved == boardUrl) return boardUrl
+    val resolvedKey = normalizeBoardUrlForOfflineLookup(resolved)
+    return if (resolvedKey != null && resolvedKey == normalizeBoardUrlForOfflineLookup(boardUrl)) boardUrl else resolved
+}
+
 /**
  * Resolve the effective board URL from a thread URL override or fallback board URL
  */

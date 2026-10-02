@@ -1252,9 +1252,7 @@ private fun CompatMessageText(
                             // glyph on some Android text engines. Recover the
                             // complete line so a >>No link remains tappable
                             // even when its annotation range misses that edge.
-                            val lineStart = message.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)) + 1
-                            val lineEnd = message.indexOf('\n', offset).takeIf { it >= 0 } ?: message.length
-                            compatQuoteQueryForLine(message.substring(lineStart, lineEnd))
+                            compatQuoteQueryForLine(compatMessageLineAtOffset(message, offset))
                                 ?.let(onQuoteClick)
                                 ?: onClick()
                         }

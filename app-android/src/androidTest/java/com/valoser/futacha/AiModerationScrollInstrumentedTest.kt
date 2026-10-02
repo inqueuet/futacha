@@ -50,7 +50,12 @@ class AiModerationScrollInstrumentedTest {
     private var service: OnDeviceAiService? = null
     private val requests = CopyOnWriteArrayList<List<Int>>()
     private val boardUrl = "https://may.2chan.net/b/"
-    private val source = ThreadPage("1001", "スクロール判定確認", "END", null, (1..160).map { n ->
+    private var hybridModel = false
+    private var hybridHttpCalls = 0
+    private var localModel = false
+    private var liveScores = false
+    private var forceRateLimit = false
+    private var source = ThreadPage("1001", "スクロール判定確認", "END", null, (1..160).map { n ->
         Post("${1000 + n}", n - 1, "としあき", null, "09/29 00:00",
             messageHtml = "POST-${n.toString().padStart(3, '0')}<br>表示周辺の判定確認<br>テスト本文",
             imageUrl = null, thumbnailUrl = null)
@@ -83,14 +88,34 @@ class AiModerationScrollInstrumentedTest {
                 override fun write(value: String) { this.value = value }
             }).also {
                 it.load()
-                it.save(AiProvider.DEVICE, AiProvider.OPENAI, "gpt-4.1-mini", "test-only-scroll-key")
+                it.save(AiProvider.DEVICE, AiProvider.OPENAI, "gpt-4.1-mini", "test-only-scroll-key",
+                    moderationThreshold = if (liveScores) 0.5f else 0.7f)
             }
         }
-        val ai = OpenAiService(connection, connection.state.value, HttpClient(MockEngine { request ->
+        val ai = if (localModel) object : OnDeviceAiService {
+            override suspend fun getAvailability() = AiAvailability(true, supportsPostModeration = true)
+            override suspend fun summarizeThread(input: ThreadSummaryInput) = Result.failure<ThreadSummary>(IllegalStateException("unused"))
+            override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> {
+                assertTrue(input.contextText.contains("スレ題:"))
+                assertTrue(input.posts.size in 1..8)
+                val numbers = input.posts.map { it.id.toInt() - 1000 }
+                requests += numbers
+                // Native inference runs off the Compose test clock, as HTTP already does below.
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { delay(80) }
+                return Result.success(input.posts.map { PostModerationResult(it.id, it.id == "1060", if (hybridModel) "明確な妨害" else "端末AI: 明確な妨害") })
+            }
+        }.also { service = it } else OpenAiService(connection, connection.state.value, HttpClient(MockEngine { request ->
             assertEquals("/v1/moderations", request.url.encodedPath)
             val texts = Json.parseToJsonElement((request.body as TextContent).text).jsonObject["input"]!!.jsonArray
             val numbers = texts.map { Regex("POST-(\\d+)").find(it.jsonPrimitive.content)!!.groupValues[1].toInt() }
             requests += numbers
+            if (forceRateLimit) return@MockEngine respond("""{"error":{"type":"invalid_request_error","message":"Too Many Requests"}}""",
+                io.ktor.http.HttpStatusCode.TooManyRequests, io.ktor.http.headersOf("Retry-After", "17419"))
+            if (liveScores) {
+                val recorded = Json.parseToJsonElement(instrumentation.context.assets.open("openai-moderation-2026-09-30.json")
+                    .bufferedReader().use { it.readText() }).jsonObject["results"]!!.jsonArray
+                return@MockEngine respond(buildJsonObject { put("results", JsonArray(numbers.map { recorded[if (it == 60) 4 else 0] })) }.toString())
+            }
             delay(80)
             respond(buildJsonObject {
                 putJsonArray("results") {
@@ -104,6 +129,12 @@ class AiModerationScrollInstrumentedTest {
                 }
             }.toString())
         })).also { service = it }
+        val selectedAi = if (hybridModel) HybridModerationService(ai, OpenAiService(connection, connection.state.value,
+            HttpClient(MockEngine {
+                hybridHttpCalls++
+                respond("""{"error":{"type":"invalid_request_error","message":"Too Many Requests"}}""",
+                    io.ktor.http.HttpStatusCode.TooManyRequests, io.ktor.http.headersOf("Retry-After", "17419"))
+            }))).also { service = it } else ai
         runBlocking {
             settings.setThreadSummaryModeEnabled(false)
             settings.setAiPostFilterEnabled(true)
@@ -118,7 +149,7 @@ class AiModerationScrollInstrumentedTest {
         } else null
         rule.runOnUiThread {
             rule.activity.setContent {
-                CompositionLocalProvider(LocalFutachaImageLoader provides images, LocalFutachaAiService provides ai) {
+                CompositionLocalProvider(LocalFutachaImageLoader provides images, LocalFutachaAiService provides selectedAi) {
                     MaterialTheme {
                         if (compatibility != null) {
                             CompatibilityApp(store = compatibility, repository = repository, stateStore = settings,
@@ -128,7 +159,7 @@ class AiModerationScrollInstrumentedTest {
                                 history = emptyList(), threadId = "1001", threadTitle = "判定確認", initialReplyCount = 160,
                                 repository = repository,
                                 preferencesState = ScreenPreferencesState("12.0", isAiPostFilterEnabled = true,
-                                    aiAvailability = AiAvailability(true, supportsPostModeration = true, externalModeration = true),
+                                    aiAvailability = AiAvailability(true, supportsPostModeration = true, externalModeration = !localModel || hybridModel),
                                     threadDisplayMode = if (tree) ThreadDisplayMode.Tree else ThreadDisplayMode.Flat),
                                 onBack = {})
                         }
@@ -141,6 +172,79 @@ class AiModerationScrollInstrumentedTest {
     @Test fun futachaFlatScrollRunsModerationWithoutProgressPanel() = verifyScroll(false, false)
     @Test fun futachaTreeScrollRunsModerationWithoutProgressPanel() = verifyScroll(false, true)
     @Test fun compatScrollRunsModerationWithoutProgressPanel() = verifyScroll(true, false)
+
+    @Test fun localFlatBatchesCacheAroundViewport() { localModel = true; verifyScroll(false, false) }
+    @Test fun localTreeBatchesCacheAroundViewport() { localModel = true; verifyScroll(false, true) }
+    @Test fun localCompatBatchesCacheAroundViewport() { localModel = true; verifyScroll(true, false) }
+
+    @Test fun hybridFlatKeepsLocalHidingWhenOpenAiReturns429() = verifyHybrid429(false, false)
+    @Test fun hybridTreeKeepsLocalHidingWhenOpenAiReturns429() = verifyHybrid429(false, true)
+    @Test fun hybridCompatKeepsLocalHidingWhenOpenAiReturns429() = verifyHybrid429(true, false)
+
+    private fun verifyHybrid429(compat: Boolean, tree: Boolean) {
+        localModel = true
+        hybridModel = true
+        open(compat, tree)
+        val list = rule.onNodeWithTag(if (compat) "compat-thread-list" else "thread-content-list")
+        rule.waitUntil(20_000) { requests.isNotEmpty() }
+        list.performScrollToIndex(58)
+        rule.waitUntil(20_000) { requests.flatten().contains(60) }
+        SystemClock.sleep(1_000)
+        assertModeratedPostHidden(compat)
+        assertEquals(1, hybridHttpCalls)
+        assertNoProgressPanel()
+        screenshot("hybrid-429-" + if (compat) "compat" else if (tree) "tree" else "flat")
+        list.performScrollToIndex(140)
+        SystemClock.sleep(1_000)
+        list.performScrollToIndex(58)
+        SystemClock.sleep(1_000)
+        assertModeratedPostHidden(compat)
+        assertEquals(1, hybridHttpCalls)
+    }
+
+    @Test fun recordedLiveApiScoresReachCollapseAndManualReveal() {
+        liveScores = true
+        verifyScroll(false, false)
+        rule.onNodeWithTag("thread-content-list").performScrollToIndex(58)
+        rule.onNodeWithText(if (localModel) "No.1060: 端末AI:" else "No.1060: OpenAI:", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("表示", substring = false).performClick()
+        rule.onNodeWithText("POST-060", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun copyPasteFlatCollapsesDuring429ButQuoteRemainsVisible() = verifyCopyPaste(false, false)
+    @Test fun copyPasteTreeCollapsesDuring429ButQuoteRemainsVisible() = verifyCopyPaste(false, true)
+    @Test fun copyPasteCompatHidesDuring429ButQuoteRemainsVisible() = verifyCopyPaste(true, false)
+
+    private fun verifyCopyPaste(compat: Boolean, tree: Boolean) {
+        forceRateLimit = true
+        val copied = "POST-010 この文章は同文再投稿の画面確認用です。引用返信は許可しながら重複した本文だけを折りたたみます。"
+        source = source.copy(posts = source.posts.map { post -> post.copy(messageHtml = when (post.id) {
+            "1010", "1060" -> copied
+            "1061" -> "&gt;$copied<br>POST-061 これは許可される通常の引用返信です"
+            else -> post.messageHtml
+        }) })
+        open(compat, tree)
+        val list = rule.onNodeWithTag(if (compat) "compat-thread-list" else "thread-content-list")
+        rule.waitUntil(20_000) { requests.isNotEmpty() }
+        list.performScrollToIndex(58)
+        SystemClock.sleep(1_000)
+        rule.onNodeWithText("POST-061", substring = true).assertIsDisplayed()
+        if (compat) rule.onNodeWithTag("compat-thread-post-1060").assertDoesNotExist()
+        else rule.onNodeWithText("No.1060: コピペ候補", substring = true).assertIsDisplayed()
+        assertNoProgressPanel()
+        screenshot("copy-paste-" + if (compat) "compat" else if (tree) "tree" else "flat")
+        list.performScrollToIndex(140)
+        list.performScrollToIndex(58)
+        SystemClock.sleep(500)
+        if (compat) rule.onNodeWithTag("compat-thread-post-1060").assertDoesNotExist()
+        else {
+            rule.onNodeWithText("No.1060: コピペ候補", substring = true).assertIsDisplayed()
+            rule.onNodeWithText("表示", substring = false).performClick()
+            rule.onNodeWithText(copied, substring = false).assertIsDisplayed()
+        }
+        rule.onNodeWithText("POST-061", substring = true).assertIsDisplayed()
+        assertEquals("429 cooldown must stop additional HTTP calls", 1, requests.size)
+    }
 
     private fun verifyScroll(compat: Boolean, tree: Boolean) {
         open(compat, tree)
@@ -189,7 +293,7 @@ class AiModerationScrollInstrumentedTest {
         val allSent = requests.flatten()
         assertEquals("Unchanged bodies must not be sent twice", allSent.size, allSent.toSet().size)
         assertTrue("Scrolling must not classify the unvisited middle of the thread", 100 !in allSent)
-        assertTrue(requests.all { it.size in 1..32 })
+        assertTrue(requests.all { it.size in 1..(if (localModel) 8 else 32) })
         assertNoProgressPanel()
         println("AI_SCROLL_PROOF compat=$compat tree=$tree requestBatches=$requests")
         println("AI_HIDDEN_CACHE_PROOF compat=$compat tree=$tree returns=2 hidden=true additionalRequests=${requests.size - beforeReturn}")
@@ -200,7 +304,7 @@ class AiModerationScrollInstrumentedTest {
         if (compat) {
             rule.onNodeWithTag("compat-thread-post-1060").assertDoesNotExist()
         } else {
-            rule.onNodeWithText("No.1060: OpenAI:", substring = true).assertIsDisplayed()
+            rule.onNodeWithText(if (localModel) "No.1060: 端末AI:" else "No.1060: OpenAI:", substring = true).assertIsDisplayed()
         }
         rule.onAllNodesWithText("POST-060", substring = true).assertCountEquals(0)
     }

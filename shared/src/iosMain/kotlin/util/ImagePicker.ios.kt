@@ -7,6 +7,9 @@ import com.valoser.futacha.shared.model.MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.BooleanVar
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.convert
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
@@ -38,6 +41,8 @@ import platform.darwin.dispatch_get_global_queue
 import platform.darwin.dispatch_get_main_queue
 import platform.posix.memcpy
 import kotlin.concurrent.AtomicReference
+import kotlin.native.runtime.GC
+import kotlin.native.runtime.NativeRuntimeApi
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
@@ -183,6 +188,36 @@ private fun resolvedIosPath(path: String): String {
     return NSString.create(string = standardized).stringByResolvingSymlinksInPath
 }
 
+/*
+ * Picked files are read with read(2) straight into Kotlin memory. A chunk from
+ * NSFileHandle.readDataUpToLength is an NSData that stays alive until Kotlin's
+ * GC collects its wrapper, and these off-heap bytes never make the GC run, so
+ * the chunks of a whole attachment piled up beside the copy (G16; see
+ * IosFileSystem for the same issue with video imports).
+ *
+ * Returns the bytes read, 0 at end of file, or -1 on a read error.
+ */
+private fun readPickedFileInto(fileHandle: NSFileHandle, target: CPointer<ByteVar>, length: Int): Int {
+    while (true) {
+        val count = platform.posix.read(fileHandle.fileDescriptor, target, length.convert())
+        if (count >= 0) return count.toInt()
+        if (platform.posix.errno != platform.posix.EINTR) return -1
+    }
+}
+
+/** True when the file still has data after its declared size (or cannot be read further). */
+private fun hasMorePickedFileBytes(fileHandle: NSFileHandle): Boolean {
+    val probe = ByteArray(1)
+    return probe.usePinned { pinned -> readPickedFileInto(fileHandle, pinned.addressOf(0), 1) } != 0
+}
+
+private fun closePickedFileHandle(fileHandle: NSFileHandle) {
+    memScoped {
+        val closeError = alloc<ObjCObjectVar<NSError?>>()
+        fileHandle.closeAndReturnError(closeError.ptr)
+    }
+}
+
 internal fun loadPickedMediaFromUrl(
     url: NSURL,
     isVideo: Boolean,
@@ -229,37 +264,27 @@ private fun readPickedMediaBytesFromFileUrl(
     var totalRead = 0
 
     try {
-        memScoped {
-            val readError = alloc<ObjCObjectVar<NSError?>>()
-            while (true) {
-                // readDataOfLength throws ObjC NSException on I/O errors, which
-                // Kotlin/Native cannot catch; use the error-returning variant.
-                readError.value = null
-                val chunk = fileHandle.readDataUpToLength(PICKED_MEDIA_READ_CHUNK_BYTES.toULong(), error = readError.ptr)
-                if (chunk == null) {
-                    Logger.w(
-                        "ImagePicker.ios",
-                        "Failed to read $mediaLabel: ${readError.value?.localizedDescription}"
-                    )
-                    return null
-                }
-                val chunkLength = chunk.length.toInt()
-                if (chunkLength <= 0) break
-                if (totalRead + chunkLength > expectedSize) {
-                    Logger.w("ImagePicker.ios", "Selected $mediaLabel exceeded declared file size while reading")
-                    return null
-                }
-                output.usePinned { pinned ->
-                    memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
-                }
-                totalRead += chunkLength
+        while (totalRead < expectedSize) {
+            val count = output.usePinned { pinned ->
+                readPickedFileInto(
+                    fileHandle,
+                    pinned.addressOf(totalRead),
+                    minOf(PICKED_MEDIA_READ_CHUNK_BYTES, expectedSize - totalRead)
+                )
             }
+            if (count < 0) {
+                Logger.w("ImagePicker.ios", "Failed to read $mediaLabel: errno ${platform.posix.errno}")
+                return null
+            }
+            if (count == 0) break
+            totalRead += count
+        }
+        if (totalRead == expectedSize && hasMorePickedFileBytes(fileHandle)) {
+            Logger.w("ImagePicker.ios", "Selected $mediaLabel exceeded declared file size while reading")
+            return null
         }
     } finally {
-        memScoped {
-            val closeError = alloc<ObjCObjectVar<NSError?>>()
-            fileHandle.closeAndReturnError(closeError.ptr)
-        }
+        closePickedFileHandle(fileHandle)
     }
 
     if (totalRead <= 0 || totalRead > maxBytes) {
@@ -275,51 +300,41 @@ private fun readPickedMediaBytesFromUnknownSizeFileUrl(
     maxBytes: Long
 ): ByteArray? {
     val path = url.path ?: return null
-    val output = ByteArray(maxBytes.toInt())
+    val output = okio.Buffer()
     val fileHandle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+    val chunk = ByteArray(PICKED_MEDIA_READ_CHUNK_BYTES)
     var totalRead = 0
 
     try {
-        memScoped {
-            val readError = alloc<ObjCObjectVar<NSError?>>()
-            while (true) {
-                readError.value = null
-                val chunk = fileHandle.readDataUpToLength(PICKED_MEDIA_READ_CHUNK_BYTES.toULong(), error = readError.ptr)
-                if (chunk == null) {
-                    Logger.w(
-                        "ImagePicker.ios",
-                        "Failed to read $mediaLabel: ${readError.value?.localizedDescription}"
-                    )
-                    return null
-                }
-                val chunkLength = chunk.length.toInt()
-                if (chunkLength <= 0) break
-                if (totalRead + chunkLength > maxBytes) {
-                    Logger.w(
-                        "ImagePicker.ios",
-                        "Selected $mediaLabel is too large: ${(totalRead + chunkLength) / 1024}KB " +
-                            "(max: ${maxBytes / 1024}KB)"
-                    )
-                    return null
-                }
-                output.usePinned { pinned ->
-                    memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
-                }
-                totalRead += chunkLength
+        while (true) {
+            val count = chunk.usePinned { pinned ->
+                readPickedFileInto(fileHandle, pinned.addressOf(0), chunk.size)
             }
+            if (count < 0) {
+                Logger.w("ImagePicker.ios", "Failed to read $mediaLabel: errno ${platform.posix.errno}")
+                return null
+            }
+            if (count == 0) break
+            if (totalRead + count > maxBytes) {
+                Logger.w(
+                    "ImagePicker.ios",
+                    "Selected $mediaLabel is too large: ${(totalRead + count) / 1024}KB " +
+                        "(max: ${maxBytes / 1024}KB)"
+                )
+                return null
+            }
+            output.write(chunk, 0, count)
+            totalRead += count
         }
     } finally {
-        memScoped {
-            val closeError = alloc<ObjCObjectVar<NSError?>>()
-            fileHandle.closeAndReturnError(closeError.ptr)
-        }
+        closePickedFileHandle(fileHandle)
     }
 
     if (totalRead <= 0) {
         Logger.w("ImagePicker.ios", "Selected $mediaLabel payload is empty")
         return null
     }
-    return output.copyOf(totalRead)
+    return output.readByteArray()
 }
 
 /**
@@ -545,32 +560,27 @@ private fun readPickedFileBytesUpTo(
     val handle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
     var totalRead = 0
     try {
-        memScoped {
-            val readError = alloc<ObjCObjectVar<NSError?>>()
-            while (true) {
-                readError.value = null
-                val chunk = handle.readDataUpToLength(PICKED_MEDIA_READ_CHUNK_BYTES.toULong(), error = readError.ptr)
-                if (chunk == null) {
-                    Logger.w("ImagePicker.ios", "Failed to read $fileLabel: ${readError.value?.localizedDescription}")
-                    return null
-                }
-                val chunkLength = chunk.length.toInt()
-                if (chunkLength <= 0) break
-                if (totalRead + chunkLength > capacity || totalRead + chunkLength > maxBytes) {
-                    Logger.w("ImagePicker.ios", "Selected $fileLabel exceeded its ${maxBytes / 1024}KB limit")
-                    return null
-                }
-                output.usePinned { pinned ->
-                    memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
-                }
-                totalRead += chunkLength
+        while (totalRead < capacity) {
+            val count = output.usePinned { pinned ->
+                readPickedFileInto(
+                    handle,
+                    pinned.addressOf(totalRead),
+                    minOf(PICKED_MEDIA_READ_CHUNK_BYTES, capacity - totalRead)
+                )
             }
+            if (count < 0) {
+                Logger.w("ImagePicker.ios", "Failed to read $fileLabel: errno ${platform.posix.errno}")
+                return null
+            }
+            if (count == 0) break
+            totalRead += count
+        }
+        if (totalRead == capacity && hasMorePickedFileBytes(handle)) {
+            Logger.w("ImagePicker.ios", "Selected $fileLabel exceeded its ${maxBytes / 1024}KB limit")
+            return null
         }
     } finally {
-        memScoped {
-            val closeError = alloc<ObjCObjectVar<NSError?>>()
-            handle.closeAndReturnError(closeError.ptr)
-        }
+        closePickedFileHandle(handle)
     }
     if (totalRead <= 0) {
         Logger.w("ImagePicker.ios", "Selected $fileLabel payload is empty")
@@ -682,29 +692,11 @@ private fun pickFromPhotoLibrary(
                         }
                         return@loadDataRepresentationForTypeIdentifier
                     }
-                    val dataLength = data.length.toLong()
-                    if (!isPickedImagePayloadSizeValid(dataLength, maxBytes)) {
-                        Logger.w(
-                            "ImagePicker.ios",
-                            if (dataLength > maxBytes) {
-                                "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${maxBytes / 1024}KB)"
-                            } else {
-                                "Selected $logLabel payload is empty"
-                            }
-                        )
-                        dispatch_async(dispatch_get_main_queue()) {
-                            complete(null, failed = true)
-                        }
-                        return@loadDataRepresentationForTypeIdentifier
-                    }
-
-                    val bytes = ByteArray(dataLength.toInt())
-                    bytes.usePinned { pinned ->
-                        memcpy(pinned.addressOf(0), data.bytes, data.length)
-                    }
-
-                    val selected = buildPickedImageData(bytes, null, dataFileName, maxBytes)
+                    val selected = copyPickedProviderData(data, logLabel, dataFileName, maxBytes)
+                    // Runs after this callback returned, when only the Kotlin
+                    // wrapper still keeps the provider's NSData alive.
                     dispatch_async(dispatch_get_main_queue()) {
+                        releasePickedProviderData()
                         complete(selected, failed = selected == null)
                     }
                 }
@@ -732,6 +724,46 @@ private fun pickFromPhotoLibrary(
     }) {
         complete(null, failed = true)
     }
+}
+
+/**
+ * Copies a provider payload that came only as NSData. The one copy into
+ * Kotlin memory is unavoidable, but the size is checked before it and nothing
+ * else keeps a reference to [data], so it can be freed right after (G16).
+ */
+private fun copyPickedProviderData(
+    data: NSData,
+    logLabel: String,
+    fileName: String,
+    maxBytes: Long
+): ImageData? {
+    val dataLength = data.length.toLong()
+    if (!isPickedImagePayloadSizeValid(dataLength, maxBytes)) {
+        Logger.w(
+            "ImagePicker.ios",
+            if (dataLength > maxBytes) {
+                "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${maxBytes / 1024}KB)"
+            } else {
+                "Selected $logLabel payload is empty"
+            }
+        )
+        return null
+    }
+    val bytes = ByteArray(dataLength.toInt())
+    bytes.usePinned { pinned ->
+        memcpy(pinned.addressOf(0), data.bytes, data.length)
+    }
+    return buildPickedImageData(bytes, null, fileName, maxBytes)
+}
+
+/**
+ * The provider's NSData is off-heap memory that Kotlin's GC does not count,
+ * so its wrapper (and the whole payload) could otherwise stay alive beside
+ * the copy until an unrelated collection. Ask for one now.
+ */
+@OptIn(NativeRuntimeApi::class)
+private fun releasePickedProviderData() {
+    GC.schedule()
 }
 
 private suspend fun pickFromPhotoLibrary(

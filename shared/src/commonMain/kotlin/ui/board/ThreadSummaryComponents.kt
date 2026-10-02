@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -18,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.ai.ThreadSummary
@@ -30,6 +32,11 @@ internal sealed interface ThreadSummaryUiState {
     data class Unavailable(val message: String) : ThreadSummaryUiState
 }
 
+internal val THREAD_SUMMARY_CARD_ELEVATION = 2.dp
+
+/** Supporting text, not a divider: `outline` falls to about 3.5:1 on the card (AGENTS.md needs 4.5:1). */
+internal fun threadSummaryProviderLabelColor(colors: ColorScheme): Color = colors.onSurfaceVariant
+
 @Composable
 internal fun ThreadSummaryCard(
     state: ThreadSummaryUiState,
@@ -40,7 +47,7 @@ internal fun ThreadSummaryCard(
             .fillMaxWidth()
             .padding(horizontal = 12.dp),
         shape = MaterialTheme.shapes.medium,
-        tonalElevation = 2.dp
+        tonalElevation = THREAD_SUMMARY_CARD_ELEVATION
     ) {
         when (state) {
             ThreadSummaryUiState.Loading -> {
@@ -117,7 +124,7 @@ internal fun ThreadSummaryCard(
                     Text(
                         text = state.summary.providerLabel,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
+                        color = threadSummaryProviderLabelColor(MaterialTheme.colorScheme)
                     )
                 }
             }

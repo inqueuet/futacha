@@ -13,6 +13,12 @@ fun compatBoardDefaultSubjectPreferenceKey(boardKey: String): String =
 fun compatBoardDefaultNamePreferenceKey(boardKey: String): String =
     "compat.board_default.$boardKey.name"
 
+/** Every per-board learned-default key, for moving them when a board key is corrected. */
+fun compatBoardDefaultPreferenceKeys(boardKey: String): List<String> = listOf(
+    compatBoardDefaultSubjectPreferenceKey(boardKey),
+    compatBoardDefaultNamePreferenceKey(boardKey)
+)
+
 fun normalizeCompatBoardDefaultText(raw: String?): String =
     raw.orEmpty().replace(Regex("<[^>]*>"), "").trim { it.isWhitespace() || it == '　' }
 

@@ -51,6 +51,56 @@ internal fun selectAndroidInAppUpdateKind(
     }
 }
 
+internal enum class AndroidInAppUpdateAction {
+    SHOW_DOWNLOADED,
+    AWAIT_FLEXIBLE_DOWNLOAD,
+    RESUME_IMMEDIATE,
+    START_NEW,
+    NONE
+}
+
+private fun isFlexibleDownloadActive(installStatus: Int): Boolean =
+    installStatus == InstallStatus.PENDING ||
+        installStatus == InstallStatus.DOWNLOADING ||
+        installStatus == InstallStatus.INSTALLING
+
+/**
+ * Decides what an update check does with Play's state (G-9).
+ *
+ * Play reports a flexible download started by an earlier screen or process as
+ * a developer-triggered update in progress, the same as an interrupted
+ * immediate flow. Resuming it as immediate replaced the background download
+ * with the full-screen flow, so a flow recorded as flexible is left to finish
+ * and reports through the install listener instead.
+ */
+internal fun resolveAndroidInAppUpdateAction(
+    installStatus: Int,
+    updateAvailability: Int,
+    flexibleFlowRecorded: Boolean,
+    allowStartingNewUpdate: Boolean
+): AndroidInAppUpdateAction = when {
+    installStatus == InstallStatus.DOWNLOADED -> AndroidInAppUpdateAction.SHOW_DOWNLOADED
+    updateAvailability == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS ->
+        if (flexibleFlowRecorded) {
+            if (isFlexibleDownloadActive(installStatus)) AndroidInAppUpdateAction.AWAIT_FLEXIBLE_DOWNLOAD
+            else AndroidInAppUpdateAction.NONE
+        } else {
+            AndroidInAppUpdateAction.RESUME_IMMEDIATE
+        }
+    updateAvailability == UpdateAvailability.UPDATE_AVAILABLE && isFlexibleDownloadActive(installStatus) ->
+        AndroidInAppUpdateAction.AWAIT_FLEXIBLE_DOWNLOAD
+    allowStartingNewUpdate && updateAvailability == UpdateAvailability.UPDATE_AVAILABLE ->
+        AndroidInAppUpdateAction.START_NEW
+    else -> AndroidInAppUpdateAction.NONE
+}
+
+/** The started flow is persisted per offered version: a new process must not resume a flexible flow as immediate. */
+internal fun encodeInAppUpdateFlowRecord(kind: AndroidInAppUpdateKind, availableVersionCode: Int): String =
+    "${kind.name}:$availableVersionCode"
+
+internal fun isFlexibleInAppUpdateFlowRecordFor(record: String?, availableVersionCode: Int): Boolean =
+    record == encodeInAppUpdateFlowRecord(AndroidInAppUpdateKind.FLEXIBLE, availableVersionCode)
+
 /** Owns the Android-only Google Play in-app update lifecycle. */
 internal class AndroidInAppUpdateController(
     private val activity: ComponentActivity,
@@ -63,6 +113,10 @@ internal class AndroidInAppUpdateController(
     private var pendingCheckAllowsOptionalUpdate = true
     private var flowInFlight = false
 
+    // Created with the Activity so the file is loaded before Play's callbacks read it.
+    private val flowRecordPreferences = activity.applicationContext
+        .getSharedPreferences(FLOW_RECORD_PREFERENCES, android.content.Context.MODE_PRIVATE)
+
     private val installStateListener = InstallStateUpdatedListener { state ->
         when (state.installStatus()) {
             InstallStatus.DOWNLOADED -> {
@@ -71,7 +125,10 @@ internal class AndroidInAppUpdateController(
             }
             InstallStatus.CANCELED,
             InstallStatus.FAILED,
-            InstallStatus.INSTALLED -> flowInFlight = false
+            InstallStatus.INSTALLED -> {
+                flowInFlight = false
+                clearFlowRecord()
+            }
         }
     }
 
@@ -107,8 +164,19 @@ internal class AndroidInAppUpdateController(
     private fun onUpdateFlowResult(resultCode: Int) {
         if (resultCode != Activity.RESULT_OK) {
             flowInFlight = false
+            clearFlowRecord()
             Logger.w(TAG, "In-app update flow ended with result code $resultCode")
         }
+    }
+
+    private fun recordFlow(kind: AndroidInAppUpdateKind, info: AppUpdateInfo) {
+        flowRecordPreferences.edit()
+            .putString(KEY_STARTED_FLOW, encodeInAppUpdateFlowRecord(kind, info.availableVersionCode()))
+            .apply()
+    }
+
+    private fun clearFlowRecord() {
+        flowRecordPreferences.edit().remove(KEY_STARTED_FLOW).apply()
     }
 
     fun completeFlexibleUpdate() {
@@ -128,17 +196,29 @@ internal class AndroidInAppUpdateController(
         appUpdateManager.appUpdateInfo
             .addOnSuccessListener { info ->
                 updateCheckInFlight = false
-                when {
-                    info.installStatus() == InstallStatus.DOWNLOADED -> {
+                val installStatus = info.installStatus()
+                if (installStatus == InstallStatus.CANCELED || installStatus == InstallStatus.FAILED) {
+                    clearFlowRecord()
+                }
+                val action = resolveAndroidInAppUpdateAction(
+                    installStatus = installStatus,
+                    updateAvailability = info.updateAvailability(),
+                    flexibleFlowRecorded = isFlexibleInAppUpdateFlowRecordFor(
+                        flowRecordPreferences.getString(KEY_STARTED_FLOW, null),
+                        info.availableVersionCode()
+                    ),
+                    allowStartingNewUpdate = allowStartingNewUpdate
+                )
+                when (action) {
+                    AndroidInAppUpdateAction.SHOW_DOWNLOADED -> {
                         flowInFlight = false
                         onFlexibleUpdateDownloaded()
                     }
-                    info.updateAvailability() ==
-                        UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS ->
-                        resumeImmediateUpdate(info)
-                    allowStartingNewUpdate &&
-                        info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE ->
-                        startNewUpdate(info, allowOptionalUpdate)
+                    // The registered install listener reports the finished download.
+                    AndroidInAppUpdateAction.AWAIT_FLEXIBLE_DOWNLOAD -> Unit
+                    AndroidInAppUpdateAction.RESUME_IMMEDIATE -> resumeImmediateUpdate(info)
+                    AndroidInAppUpdateAction.START_NEW -> startNewUpdate(info, allowOptionalUpdate)
+                    AndroidInAppUpdateAction.NONE -> Unit
                 }
                 runPendingNewUpdateCheck()
             }
@@ -190,6 +270,7 @@ internal class AndroidInAppUpdateController(
             AndroidInAppUpdateKind.IMMEDIATE -> AppUpdateType.IMMEDIATE
         }
         flowInFlight = true
+        recordFlow(kind, info)
         runCatching {
             appUpdateManager.startUpdateFlow(
                 info,
@@ -198,12 +279,14 @@ internal class AndroidInAppUpdateController(
             )
         }.onFailure { error ->
             flowInFlight = false
+            clearFlowRecord()
             Logger.w(TAG, "Could not start $kind in-app update: ${error.message}")
         }.onSuccess { resultTask ->
             resultTask
                 .addOnSuccessListener(::onUpdateFlowResult)
                 .addOnFailureListener { error ->
                     flowInFlight = false
+                    clearFlowRecord()
                     Logger.w(TAG, "$kind in-app update failed: ${error.message}")
                 }
         }
@@ -211,5 +294,7 @@ internal class AndroidInAppUpdateController(
 
     private companion object {
         const val TAG = "AndroidInAppUpdate"
+        const val FLOW_RECORD_PREFERENCES = "in_app_update"
+        const val KEY_STARTED_FLOW = "started_flow"
     }
 }

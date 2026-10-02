@@ -192,6 +192,42 @@ internal suspend fun markDefaultBoardRepositoryBoardInitialized(
     }
 }
 
+/** How long an auth error that a cookie refresh did not cure skips further refreshes. */
+internal const val DEFAULT_BOARD_REPOSITORY_AUTH_REFRESH_COOLDOWN_MILLIS = 10 * 60_000L
+
+/**
+ * Limits the catalog-setup POST that an auth error triggers. A board that keeps
+ * answering 403 after a fresh setup would otherwise re-POST (and rewrite its
+ * layout cookie) on every refresh; within [cooldownMillis] of such an
+ * unsuccessful refresh the error is reported without another setup. Any
+ * success for the board, or an explicit invalidation, lifts the limit.
+ */
+internal class DefaultBoardRepositoryAuthRefreshLimiter(
+    private val cooldownMillis: Long = DEFAULT_BOARD_REPOSITORY_AUTH_REFRESH_COOLDOWN_MILLIS,
+    private val nowMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() }
+) {
+    private val mutex = Mutex()
+    private val unresolvedRefreshes = mutableMapOf<String, Long>()
+
+    suspend fun mayRefresh(board: String): Boolean = mutex.withLock {
+        val recordedAt = unresolvedRefreshes[board] ?: return@withLock true
+        if (isWithinEpochInterval(nowMillis(), recordedAt, cooldownMillis.coerceAtLeast(1L) - 1L)) {
+            false
+        } else {
+            unresolvedRefreshes.remove(board)
+            true
+        }
+    }
+
+    suspend fun recordUnresolved(board: String) = mutex.withLock {
+        unresolvedRefreshes[board] = nowMillis()
+    }
+
+    suspend fun clear(board: String) {
+        mutex.withLock { unresolvedRefreshes.remove(board) }
+    }
+}
+
 internal fun isDefaultBoardRepositoryLikelyCookieAuthFailure(error: Exception): Boolean {
     val statusCode = (error as? NetworkException)?.statusCode
     if (statusCode == 401 || statusCode == 403) return true

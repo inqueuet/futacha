@@ -62,7 +62,9 @@ internal fun isRepeatedPersistentCookie(existing: StoredCookie, received: Stored
 
 internal fun shouldDeletePersistentCookie(cookie: Cookie, now: Long): Boolean {
     val maxAgeSeconds = cookie.maxAge
-    if (maxAgeSeconds == 0) return true
+    // RFC 6265 5.2.2: a Max-Age of zero or less expires the cookie at once.
+    // Treating a negative value as "no expiry" kept a deleted cookie forever.
+    if (maxAgeSeconds != null && maxAgeSeconds <= 0) return true
     val expiresAt = cookie.expires?.timestamp
     return expiresAt != null && expiresAt <= now
 }

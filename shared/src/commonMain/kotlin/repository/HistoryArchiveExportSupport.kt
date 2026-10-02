@@ -34,7 +34,10 @@ data class HistoryArchiveExportResult(
     val partialPayloadCount: Int,
     // History entries left out because the archive holds at most
     // MAX_HISTORY_ARCHIVE_ENTRIES (the oldest by last visit are dropped).
-    val omittedEntryCount: Int = 0
+    val omittedEntryCount: Int = 0,
+    // Saved files that existed but could not be copied into the archive. The source
+    // still holds them, so "export then clear" must not delete it.
+    val failedCopyCount: Int = 0
 )
 
 suspend fun exportHistoryArchive(
@@ -59,6 +62,7 @@ suspend fun exportHistoryArchive(
             "archive_${request.exportedAtEpochMillis}"
         })
         val archiveDirectory = "$archiveBaseDirectory/$archiveId"
+        sweepAbandonedHistoryArchives(fileSystem, archiveBaseDirectory, request.exportedAtEpochMillis)
         require(!fileSystem.exists(archiveDirectory)) {
             "History archive already exists: $archiveId"
         }
@@ -67,6 +71,7 @@ suspend fun exportHistoryArchive(
 
         val exportedEntries = mutableListOf<HistoryArchiveEntry>()
         var copiedFileCount = 0
+        var totalFailedCopyCount = 0
         var plannedFileCount = 0L
         request.historyEntries.forEach { historyEntry ->
             coroutineContext.ensureActive()
@@ -113,6 +118,7 @@ suspend fun exportHistoryArchive(
                     kind = sourceFile.kind
                 )
             }
+            totalFailedCopyCount += failedCopyCount
             exportedEntries += buildCopiedHistoryArchiveEntry(
                 plannedEntry = planned?.plan?.archiveEntry
                     ?: buildHistoryOnlyArchiveEntry(historyEntry, archiveId),
@@ -154,7 +160,8 @@ suspend fun exportHistoryArchive(
                 },
                 partialPayloadCount = exportedEntries.count {
                     it.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
-                }
+                },
+                failedCopyCount = totalFailedCopyCount
             )
         )
     } catch (e: CancellationException) {
@@ -169,8 +176,57 @@ suspend fun exportHistoryArchive(
 private suspend fun cleanupIncompleteHistoryArchive(fileSystem: FileSystem, directory: String?) {
     val target = directory ?: return
     withContext(NonCancellable) {
-        withTimeoutOrNull(5_000L) {
+        // A failed export can hold thousands of copied media files; five seconds left
+        // most of a large one behind. Whatever still remains is swept by a later export.
+        withTimeoutOrNull(HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS) {
             fileSystem.deleteRecursively(target)
+        }
+    }
+}
+
+private const val HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS = 60_000L
+private const val HISTORY_ARCHIVE_ABANDONED_AGE_MILLIS = 60L * 60L * 1000L
+private const val HISTORY_ARCHIVE_MAX_SWEPT_PER_EXPORT = 8
+private val HISTORY_ARCHIVE_TIMESTAMPED_NAME = Regex("^(?:history|archive)_([0-9]{10,15})$")
+
+/**
+ * The epoch encoded in an archive folder name, when it is a folder this app creates
+ * ("history_<millis>" / "archive_<millis>"). Other folders are never swept.
+ */
+internal fun historyArchiveFolderEpochMillis(name: String): Long? =
+    HISTORY_ARCHIVE_TIMESTAMPED_NAME.matchEntire(name.trim().trim('/'))?.groupValues?.get(1)?.toLongOrNull()
+
+/** An app-named archive without a manifest, older than an hour, was left by a killed export. */
+internal fun isAbandonedHistoryArchive(name: String, hasManifest: Boolean, nowEpochMillis: Long): Boolean {
+    if (hasManifest) return false
+    val createdAt = historyArchiveFolderEpochMillis(name) ?: return false
+    return createdAt <= nowEpochMillis - HISTORY_ARCHIVE_ABANDONED_AGE_MILLIS
+}
+
+private suspend fun sweepAbandonedHistoryArchives(
+    fileSystem: FileSystem,
+    archiveBaseDirectory: String,
+    nowEpochMillis: Long
+) {
+    val names = runCatching {
+        fileSystem.listFiles(archiveBaseDirectory)
+            .asSequence()
+            .map { it.trim().trim('/').substringAfterLast('/') }
+            .filter { historyArchiveFolderEpochMillis(it) != null }
+            .take(1_000)
+            .toList()
+    }.getOrNull().orEmpty()
+    var swept = 0
+    for (name in names) {
+        if (swept >= HISTORY_ARCHIVE_MAX_SWEPT_PER_EXPORT) break
+        coroutineContext.ensureActive()
+        // Unknown is treated as complete so a read error never deletes an archive.
+        val hasManifest = runCatching { fileSystem.exists("$archiveBaseDirectory/$name/manifest.json") }
+            .getOrDefault(true)
+        if (!isAbandonedHistoryArchive(name, hasManifest, nowEpochMillis)) continue
+        swept++
+        withTimeoutOrNull(HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS) {
+            fileSystem.deleteRecursively("$archiveBaseDirectory/$name")
         }
     }
 }

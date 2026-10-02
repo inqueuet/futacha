@@ -10,8 +10,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.util.ImageData
-import com.valoser.futacha.shared.util.TextEncoding
-import com.valoser.futacha.shared.util.sanitizeForShiftJis
+import com.valoser.futacha.shared.util.shiftJisSanitizedByteCount
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -244,8 +243,7 @@ internal fun compatPostShiftJisByteCount(comment: String): Int {
     // The multipart sender escapes characters unavailable in Shift_JIS (including emoji)
     // as numeric character references before encoding. Count that actual wire payload so
     // the legacy 1000-byte warning does not under-report an emoji-heavy post.
-    val wireText = sanitizeForShiftJis(crlf).sanitizedText
-    return TextEncoding.encodeToShiftJis(wireText).size
+    return shiftJisSanitizedByteCount(crlf)
 }
 
 internal fun compatPostLineCount(comment: String, emptyIsOneLine: Boolean = true): Int {

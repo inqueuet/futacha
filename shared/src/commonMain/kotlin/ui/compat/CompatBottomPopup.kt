@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -44,7 +45,7 @@ internal fun CompatBottomPopup(
             .coerceAtLeast(1)
             .toDp()
     }
-    Popup(
+    FutachaAppLockAwareWindow { Popup(
         alignment = alignment,
         offset = IntOffset(0, -bottomInset),
         properties = PopupProperties(focusable = true),
@@ -68,5 +69,5 @@ internal fun CompatBottomPopup(
                 content = content
             )
         }
-    }
+    } }
 }

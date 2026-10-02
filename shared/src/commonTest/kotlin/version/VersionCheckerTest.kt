@@ -69,4 +69,16 @@ class VersionCheckerTest {
         assertFalse(isNewerVersion("1.0.0", "1.0.0+build-999"))
         assertTrue(isNewerVersion("1.0.0+local-1", "1.0.1+build-1"))
     }
+
+    @Test
+    fun isOsVersionAtLeast_comparesDottedNumericVersions() {
+        assertEquals(true, isOsVersionAtLeast("18.2", "18.2"))
+        assertEquals(true, isOsVersionAtLeast("18.2.1", "18.2"))
+        assertEquals(true, isOsVersionAtLeast("26.0", "18.2"))
+        assertEquals(false, isOsVersionAtLeast("18.1.9", "18.2"))
+        assertEquals(false, isOsVersionAtLeast("17", "17.0.1"))
+        assertEquals(null, isOsVersionAtLeast("18.2", null))
+        assertEquals(null, isOsVersionAtLeast("18.2", "abc"))
+        assertEquals(null, isOsVersionAtLeast("", "18.2"))
+    }
 }

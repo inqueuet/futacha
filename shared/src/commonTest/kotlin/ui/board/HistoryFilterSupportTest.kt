@@ -119,6 +119,37 @@ class HistoryFilterSupportTest {
         assertEquals(1, changedSort.activeSettingCount)
     }
 
+    @Test
+    fun titleSortDescendingBreaksTiesByLatestVisitAndIgnoresCase() {
+        val history = listOf(
+            entry("1", title = "Abc", visitedAt = 100),
+            entry("2", title = "abc", visitedAt = 300),
+            entry("3", title = "Xyz", visitedAt = 200)
+        )
+
+        val result = applyHistoryViewSettings(
+            history,
+            HistoryViewSettings(sortOption = HistorySortOption.Title)
+        )
+
+        assertEquals(listOf("3", "2", "1"), result.map { it.threadId })
+    }
+
+    @Test
+    fun drawerViewReusesBoardOptionsWhenOnlySettingsChange() {
+        val history = listOf(
+            entry("1", title = "ねこ", visitedAt = 100, boardId = "img"),
+            entry("2", title = "いぬ", visitedAt = 200, boardId = "may")
+        )
+        val first = buildHistoryDrawerView(history, HistoryViewSettings.Default)
+        val filtered = buildHistoryDrawerView(history, HistoryViewSettings(titleQuery = "ねこ"), first)
+
+        assertTrue(first.boardFilterOptions === filtered.boardFilterOptions)
+        assertEquals(listOf("1"), filtered.displayedHistory.map { it.threadId })
+        val refreshed = buildHistoryDrawerView(history.take(1), filtered.settings, filtered)
+        assertEquals(listOf("img"), refreshed.boardFilterOptions.map { it.key })
+    }
+
     private fun entry(
         threadId: String,
         title: String,

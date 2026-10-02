@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
@@ -32,9 +34,13 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -213,6 +219,59 @@ class HistoryRefresherTest {
         newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 1)
 
         assertEquals(listOf("1", "2"), repository.fetchedThreadIds)
+    }
+
+    @Test
+    fun refresh_cancelledRunStartsTheNextRunAtTheFirstUnfinishedThread() = runBlocking {
+        val board = boardSummary()
+        val entries = (1..5).map { historyEntry(threadId = "$it") }
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(entries)
+        val secondFetchStarted = CompletableDeferred<Unit>()
+        val repository = FakeHistoryBoardRepository().apply {
+            entries.forEach {
+                threadPages[board.url to it.threadId] = threadPage(
+                    threadId = it.threadId,
+                    boardTitle = "board",
+                    titleLine = "title",
+                    thumbnailUrl = "thumb",
+                    replyCount = 1
+                )
+            }
+        }
+        // The second fetch hangs until the run is cancelled, like an iOS BGTask expiry.
+        repository.onGetThread = {
+            if (repository.fetchedThreadIds.size == 2 && !secondFetchStarted.isCompleted) {
+                secondFetchStarted.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val fileSystem = InMemoryFileSystem()
+        fun newRefresher() = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            fileSystem = fileSystem,
+            maxConcurrency = 1
+        )
+
+        val run = launch {
+            newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 3)
+        }
+        secondFetchStarted.await()
+        run.cancelAndJoin()
+        // The window was 1..3: one finished, one was cut off, one never started.
+        val (finished, cutOff) = repository.fetchedThreadIds.toList()
+        assertEquals(setOf("1", "2"), setOf(finished, cutOff))
+
+        // A new process starts at the first unfinished thread of that window
+        // instead of after it (4, 5, 1), so 3 and the cut-off one are not skipped.
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 3)
+        val next = repository.fetchedThreadIds.drop(2)
+        val expectedStart = if (finished == "1") 1 else 0
+        // Fetches start concurrently, so only the window's members are fixed, not their order.
+        assertEquals(3, next.size)
+        assertEquals(entries.drop(expectedStart).take(3).map { it.threadId }.toSet(), next.toSet())
     }
 
     @Test
@@ -517,6 +576,232 @@ class HistoryRefresherTest {
     }
 
     @Test
+    fun refresh_continuesAPartialAutoSaveWithoutNewReplies() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g5-continue"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag = HttpConditionalValidators(etag = "\"g5\"", lastModified = null)
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = textOnlyThreadPage(threadId)
+            responseValidators = etag
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        val first = autoSaves.getAllThreads().single()
+        // The media budget ran out: the generation was published with media missing.
+        autoSaves.updateThread(first.copy(incompleteMediaCount = 3, status = SaveStatus.PARTIAL)).getOrThrow()
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val continued = autoSaves.getAllThreads().single()
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+
+        // Same reply count, yet the second refresh fetched the whole page and saved again;
+        // the completed generation then lets the third answer from the conditional path.
+        assertEquals(listOf(null, null, etag), repository.receivedValidators)
+        assertTrue(continued.storageId != first.storageId)
+        assertEquals(0, continued.incompleteMediaCount)
+        assertEquals(continued.storageId, autoSaves.getAllThreads().single().storageId)
+        assertTrue(store.history.first().single().hasAutoSave)
+    }
+
+    @Test
+    fun refresh_stopsContinuingWhenMissingMediaKeepsFailing() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g5-stalled"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag = HttpConditionalValidators(etag = "\"g5s\"", lastModified = null)
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = textOnlyThreadPage(threadId)
+            responseValidators = etag
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        // A continuation that leaves as much missing as before made no progress: the index
+        // marks the generation stalled, as a Worker/BGTask in another process left it.
+        val first = autoSaves.getAllThreads().single()
+        autoSaves.updateThread(
+            first.copy(
+                incompleteMediaCount = 2,
+                status = SaveStatus.PARTIAL,
+                autoSaveContinuationStalledAtMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            )
+        ).getOrThrow()
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+
+        // Not re-saved on every refresh: the unchanged page is answered conditionally.
+        assertEquals(listOf(null, etag), repository.receivedValidators)
+        assertEquals(first.storageId, autoSaves.getAllThreads().single().storageId)
+    }
+
+    @Test
+    fun refresh_newRepliesKeepAStalledContinuationFromSavingTwice() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g44-stalled"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag1 = HttpConditionalValidators(etag = "\"g44-1\"", lastModified = null)
+        val etag2 = HttpConditionalValidators(etag = "\"g44-2\"", lastModified = null)
+        fun page(replyCount: Int) = threadPage(
+            threadId = threadId,
+            boardTitle = "board",
+            titleLine = "title",
+            thumbnailUrl = "https://may.2chan.net/b/thumb/${threadId}s.jpg",
+            replyCount = replyCount
+        )
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = page(1)
+            responseValidators = etag1
+        }
+        fun newRefresher() = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createMissingMediaClient(),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        val refresher = newRefresher()
+        // The thread's media can never be fetched (404).
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        val first = autoSaves.getAllThreads().single()
+        assertTrue(first.incompleteMediaCount > 0)
+        assertEquals(0L, first.autoSaveContinuationStalledAtMillis)
+        // One continuation without progress marks the indexed generation stalled.
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val stalled = autoSaves.getAllThreads().single()
+        assertTrue(stalled.storageId != first.storageId)
+        assertTrue(stalled.autoSaveContinuationStalledAtMillis > 0L)
+
+        // A new reply is saved once and keeps the stall: missing media did not decrease.
+        repository.threadPages[board.url to threadId] = page(2)
+        repository.responseValidators = etag2
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val afterReply = autoSaves.getAllThreads().single()
+        assertTrue(afterReply.storageId != stalled.storageId)
+        assertEquals(stalled.autoSaveContinuationStalledAtMillis, afterReply.autoSaveContinuationStalledAtMillis)
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        // G4-4: no second save for the same reply, also in a new process (a new refresher).
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        assertEquals(listOf(null, null, etag1, etag2, null), repository.receivedValidators)
+        assertEquals(afterReply.storageId, autoSaves.getAllThreads().single().storageId)
+    }
+
+    @Test
+    fun refresh_newReplySaveTakesTheSlotOfAContinuation() = runBlocking {
+        val board = boardSummary()
+        val continuedId = "h43-cont"
+        val repliedId = "h43-new"
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val partial = SavedThread(
+            threadId = continuedId,
+            boardId = "b",
+            boardName = "board",
+            title = "title",
+            storageId = "b__${continuedId}_gen0",
+            thumbnailPath = null,
+            savedAt = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+            postCount = 1,
+            imageCount = 1,
+            videoCount = 0,
+            totalSize = 1L,
+            status = SaveStatus.PARTIAL,
+            incompleteMediaCount = 1
+        )
+        autoSaves.addThreadToIndex(partial).getOrThrow()
+        val continuedEntry = historyEntry(threadId = continuedId).copy(hasAutoSave = true)
+        val repliedEntry = historyEntry(threadId = repliedId)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(continuedEntry, repliedEntry))
+        val continuationStarted = CompletableDeferred<Unit>()
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to continuedId] = threadPage(
+                threadId = continuedId,
+                boardTitle = "board",
+                titleLine = "title",
+                thumbnailUrl = "https://may.2chan.net/b/thumb/${continuedId}s.jpg",
+                replyCount = 1
+            )
+            threadPages[board.url to repliedId] = textOnlyThreadPage(repliedId)
+            // The thread with new replies is fetched only once the continuation holds the only slot.
+            onGetThreadFor = { threadId -> if (threadId == repliedId) continuationStarted.await() }
+        }
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                addHandler { request ->
+                    when {
+                        continuedId in request.url.toString() -> {
+                            continuationStarted.complete(Unit)
+                            awaitCancellation()
+                        }
+                        "/src/" in request.url.encodedPath || "/thumb/" in request.url.encodedPath ->
+                            respond("", HttpStatusCode.NotFound)
+                        else -> threadHtmlResponse("<html><body>thread html</body></html>")
+                    }
+                }
+            }
+        )
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = HttpClient(engine),
+            fileSystem = fileSystem,
+            maxConcurrency = 2,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        withTimeout(30_000L) {
+            refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(continuedEntry, repliedEntry))
+        }
+
+        // H4-3: the thread with new replies got the slot; the continuation is left for later.
+        val indexed = autoSaves.getAllThreads().associateBy { it.threadId }
+        assertTrue(repliedId in indexed)
+        assertEquals(partial.storageId, indexed.getValue(continuedId).storageId)
+        assertTrue(store.history.first().single { it.threadId == repliedId }.hasAutoSave)
+        // The cancelled continuation left no generation folder behind.
+        assertTrue(fileSystem.listFiles(AUTO_SAVE_DIRECTORY).none { continuedId in it })
+    }
+
+    @Test
     fun refresh_autoSavesThreadAndMarksHistoryEntry() = runBlocking {
         val board = boardSummary()
         val entry = historyEntry(threadId = "777")
@@ -802,6 +1087,7 @@ private class FakeHistoryBoardRepository : BoardRepository {
     var getThreadCalls = 0
     var getThreadByUrlCalls = 0
     var onGetThread: suspend () -> Unit = {}
+    var onGetThreadFor: suspend (threadId: String) -> Unit = {}
     /** Validators the fake server sends; a request echoing them gets 304. */
     var responseValidators: HttpConditionalValidators? = null
     val receivedValidators = mutableListOf<HttpConditionalValidators?>()
@@ -828,6 +1114,7 @@ private class FakeHistoryBoardRepository : BoardRepository {
         getThreadCalls += 1
         fetchedThreadIds += threadId
         onGetThread()
+        onGetThreadFor(threadId)
         threadErrors[board to threadId]?.let { throw it }
         return threadPages[board to threadId] ?: error("Missing thread for $board/$threadId")
     }
@@ -905,6 +1192,22 @@ private fun createThreadHtmlClient(
     return HttpClient(engine)
 }
 
+/** Thread HTML is served; every image and thumbnail answers 404. */
+private fun createMissingMediaClient(): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { request ->
+                if ("/src/" in request.url.encodedPath || "/thumb/" in request.url.encodedPath) {
+                    respond("", HttpStatusCode.NotFound)
+                } else {
+                    threadHtmlResponse("<html><body>thread html</body></html>")
+                }
+            }
+        }
+    )
+    return HttpClient(engine)
+}
+
 private fun createFailingArchiveClient(
     message: String
 ): HttpClient {
@@ -977,6 +1280,26 @@ private fun historyEntry(
         replyCount = 1
     )
 }
+
+private fun textOnlyThreadPage(threadId: String): ThreadPage = ThreadPage(
+    threadId = threadId,
+    boardTitle = "board",
+    expiresAtLabel = null,
+    deletedNotice = null,
+    posts = listOf(
+        Post(
+            id = "1",
+            author = "author",
+            subject = null,
+            timestamp = "24/01/01(月)00:00:00",
+            messageHtml = "title<br>rest",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
+    ),
+    isTruncated = false,
+    truncationReason = null
+)
 
 private fun threadPage(
     threadId: String,

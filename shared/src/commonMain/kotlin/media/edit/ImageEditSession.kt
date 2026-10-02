@@ -52,7 +52,9 @@ internal class ImageEditSession private constructor(
                 // Downsample large inputs without enlarging small device images.
                 .data(input.image.bytes).size(IMAGE_EDIT_MAX_EDGE).scale(Scale.FIT).precision(Precision.INEXACT)
                 .memoryCachePolicy(CachePolicy.DISABLED).diskCachePolicy(CachePolicy.DISABLED)
-                .networkCachePolicy(CachePolicy.DISABLED).build()
+                .networkCachePolicy(CachePolicy.DISABLED)
+                // Never allocate the full-resolution bitmap of a huge image first (B-8).
+                .boundedImageEditDecoding(input.image.bytes).build()
             val result = loader.execute(request)
             if (result is ErrorResult) throw result.throwable
             val image = (result as SuccessResult).image

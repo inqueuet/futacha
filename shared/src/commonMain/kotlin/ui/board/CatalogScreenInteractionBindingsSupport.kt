@@ -67,7 +67,9 @@ internal data class CatalogScreenMutationInputs(
     val setLocalCatalogGridColumns: (Int) -> Unit,
     val currentCatalogDisplayStyle: () -> CatalogDisplayStyle,
     val catalogGridState: LazyGridState,
-    val catalogListState: LazyListState
+    val catalogListState: LazyListState,
+    val onCatalogModeWriteStarted: () -> Unit = {},
+    val onCatalogModeWriteFinished: () -> Unit = {}
 )
 
 internal data class CatalogScreenRuntimeInputs(
@@ -177,7 +179,9 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
         setLocalCatalogGridColumns = mutationInputs.setLocalCatalogGridColumns,
         currentCatalogDisplayStyle = mutationInputs.currentCatalogDisplayStyle,
         catalogGridState = mutationInputs.catalogGridState,
-        catalogListState = mutationInputs.catalogListState
+        catalogListState = mutationInputs.catalogListState,
+        onCatalogModeWriteStarted = mutationInputs.onCatalogModeWriteStarted,
+        onCatalogModeWriteFinished = mutationInputs.onCatalogModeWriteFinished
     )
     val runtimeBindings = buildCatalogScreenRuntimeBindingsBundle(
         coroutineScope = runtimeInputs.coroutineScope,

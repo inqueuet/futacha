@@ -31,7 +31,9 @@ internal class DesktopCompatibilityStore(
     private val nowMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() }
 ) : CompatibilityStore {
     private val mutex = Mutex()
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    // Lenient so a downgrade (unknown fields or enum values written by a newer
+    // build) still reads the profile instead of discarding it.
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; coerceInputValues = true }
     private val database = DesktopCompatibilityDatabase(fileSystem)
     // Only read during the one-time migration from builds which stored this
     // profile as JSON.  New writes are committed exclusively through SQLite.
@@ -64,7 +66,7 @@ internal class DesktopCompatibilityStore(
             val repairedBoards = repairBoards(state.boards)
             val validBoardKeys = repairedBoards.mapTo(mutableSetOf(), CompatBoard::key)
             val validTabs = state.tabs.filter { it.boardKey in validBoardKeys }
-            val repairedTabs = if (validTabs.size > MAX_TABS) trimTabs(validTabs) else validTabs
+            val repairedTabs = if (validTabs.size > MAX_TABS) trimTabs(validTabs, state.workspace.activeTabKey) else validTabs
             val validHistory = state.history.filter { it.boardKey in validBoardKeys }
             val repairedHistory = if (validHistory.size > MAX_HISTORY) trimHistory(validHistory) else validHistory
             // Move image hashes stored as preferences by older versions into
@@ -225,25 +227,25 @@ internal class DesktopCompatibilityStore(
     override suspend fun importModernHistory(
         modernHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>
     ): Int = mutate {
-        val boardKeys = it.boards.mapTo(mutableSetOf(), CompatBoard::key)
-        val existing = it.history.associateBy(CompatHistoryEntry::canonicalUrl)
-        var changed = 0
-        val next = it.history.toMutableList()
-        modernHistory.mapNotNull { entry -> entry.toCompatHistoryEntry() }
-            .filter { entry -> entry.boardKey in boardKeys }
-            .forEach { entry ->
-                val tombstone = it.historyTombstones[entry.canonicalUrl]
-                if (tombstone != null && entry.lastVisitedEpochMillis <= tombstone) return@forEach
-                val old = existing[entry.canonicalUrl]
-                val durable = mergeCompatHistoryEntry(entry, old, recordVisit = true)
-                if (old != durable) {
-                    next.removeAll { candidate -> candidate.canonicalUrl == entry.canonicalUrl }
-                    next += durable
-                    changed++
-                }
-            }
-        if (changed > 0) state = it.copy(history = trimHistory(next), historyTombstones = it.historyTombstones - next.map { entry -> entry.canonicalUrl }.toSet())
-        changed
+        // Only rows which change and survive trimming are written; the
+        // compatibility update time is kept (see planModernHistoryImport).
+        val writes = planModernHistoryImport(
+            modernHistory = modernHistory,
+            current = it.history,
+            knownBoardKeys = it.boards.mapTo(mutableSetOf(), CompatBoard::key),
+            tombstoneAt = { url -> it.historyTombstones[url] },
+            historyLimit = HISTORY_LIMIT_TRIGGER,
+            retain = { entries -> trimHistory(entries) }
+        )
+        if (writes.isEmpty()) return@mutate 0
+        val next = LinkedHashMap<String, CompatHistoryEntry>()
+        it.history.forEach { entry -> next[entry.canonicalUrl] = entry }
+        writes.forEach { entry -> next[entry.canonicalUrl] = entry }
+        state = it.copy(
+            history = trimHistory(next.values.toList()),
+            historyTombstones = it.historyTombstones - writes.mapTo(mutableSetOf(), CompatHistoryEntry::canonicalUrl)
+        )
+        writes.size
     }
 
     override suspend fun upsertBoard(board: CompatBoard) = mutate {
@@ -314,7 +316,7 @@ internal class DesktopCompatibilityStore(
             replaceHistory(it.history, mergeCompatHistoryEntry(entry, current, recordVisit = true))
         } ?: it.history
         state = it.copy(
-            tabs = trimTabs(nextTabs),
+            tabs = trimTabs(nextTabs, tab.key),
             history = trimHistory(nextHistory),
             historyTombstones = historyEntry?.let { entry -> it.historyTombstones - entry.canonicalUrl } ?: it.historyTombstones,
             workspace = it.workspace.copy(activeTabKey = tab.key, generation = it.workspace.generation + 1)
@@ -386,7 +388,10 @@ internal class DesktopCompatibilityStore(
             tabs.add(closed.originalIndex.coerceIn(0, tabs.size), closed.tab)
         }
         state = it.copy(
-            tabs = trimTabs(tabs),
+            tabs = trimTabs(
+                tabs,
+                durable.selectedTabKey?.takeIf { key -> tabs.any { tab -> tab.key == key } } ?: it.workspace.activeTabKey
+            ),
             workspace = it.workspace.copy(
                 activeTabKey = durable.selectedTabKey?.takeIf { key -> tabs.any { tab -> tab.key == key } }
                     ?: it.workspace.activeTabKey,
@@ -735,7 +740,7 @@ internal class DesktopCompatibilityStore(
                 tabs = current.tabs.filter { tab -> tab.boardKey in boardKeys },
                 history = current.history.filter { entry -> entry.boardKey in boardKeys },
                 catalogPreferences = current.catalogPreferences.filter { pref -> pref.boardKey in boardKeys },
-                preferences = current.preferences,
+                preferences = compatBackupExportPreferences(current.preferences),
                 ngRules = current.ngRules,
                 workspace = current.workspace,
                 toolbars = current.toolbars.map { toolbar ->
@@ -761,7 +766,17 @@ internal class DesktopCompatibilityStore(
         val boardKeys = nextBoards.mapTo(mutableSetOf(), CompatBoard::key)
         val nextTabs = if (restoreUserSettings) backup.tabs.filter { tab -> tab.boardKey in boardKeys }
             .fold(it.tabs) { all, tab -> replaceTab(all, tab) } else it.tabs
-        val tabKeys = nextTabs.mapTo(mutableSetOf(), CompatTab::key)
+        val untrimmedTabKeys = nextTabs.mapTo(mutableSetOf(), CompatTab::key)
+        // Same order as Android: settle the restored active tab first so the
+        // normal tab trim keeps it and favourites; NG scopes see the kept tabs.
+        val nextWorkspace = backup.workspace?.takeIf { restoreUserSettings }?.let { restored ->
+            restored.copy(
+                activeTabKey = restored.activeTabKey?.takeIf { key -> untrimmedTabKeys.contains(key) },
+                catalogHostBoardKey = restored.catalogHostBoardKey?.takeIf { key -> boardKeys.contains(key) }
+            )
+        } ?: it.workspace
+        val trimmedTabs = trimCompatTabs(nextTabs, nextWorkspace.activeTabKey)
+        val tabKeys = trimmedTabs.mapTo(mutableSetOf(), CompatTab::key)
         val nextHistory = if (restoreUserSettings) backup.history.filter { entry -> entry.boardKey in boardKeys }
             .fold(it.history) { all, entry -> replaceHistory(all, entry) } else it.history
         val validRules = if (restoreNgRules) backup.ngRules.filter { rule ->
@@ -791,25 +806,30 @@ internal class DesktopCompatibilityStore(
                 ToolbarRecord::surface
             )
         } else it.toolbars
+        val keptHistory = trimHistory(nextHistory)
         state = it.copy(
             boards = nextBoards,
-            tabs = trimTabs(nextTabs),
-            history = trimHistory(nextHistory),
+            tabs = trimmedTabs,
+            history = keptHistory,
             preferences = nextPreferences,
             catalogPreferences = nextCatalogPrefs,
             ngRules = nextRules,
             toolbars = nextToolbars,
-            workspace = if (restoreUserSettings) backup.workspace.copy(
-                activeTabKey = backup.workspace.activeTabKey?.takeIf { key -> tabKeys.contains(key) },
-                catalogHostBoardKey = backup.workspace.catalogHostBoardKey?.takeIf { key -> boardKeys.contains(key) }
-            ) else it.workspace,
+            workspace = nextWorkspace,
             historyTombstones = if (restoreUserSettings) it.historyTombstones - backup.history.map { entry -> entry.canonicalUrl }.toSet() else it.historyTombstones
         )
         enforceSnapshotQuotaLocked()
         CompatSettingsBackupImportReport(
             boardsImported = if (restoreUserSettings) backup.boards.size else 0,
-            tabsImported = if (restoreUserSettings) backup.tabs.count { tab -> tab.boardKey in boardKeys } else 0,
-            historyImported = if (restoreUserSettings) backup.history.count { entry -> entry.boardKey in boardKeys } else 0,
+            // The restored records still kept after the normal limits (P4-4).
+            tabsImported = if (restoreUserSettings) countCompatRestoredKept(
+                backup.tabs.filter { tab -> tab.boardKey in boardKeys }.map(CompatTab::key),
+                tabKeys
+            ) else 0,
+            historyImported = if (restoreUserSettings) countCompatRestoredKept(
+                backup.history.filter { entry -> entry.boardKey in boardKeys }.map(CompatHistoryEntry::canonicalUrl),
+                keptHistory.mapTo(mutableSetOf(), CompatHistoryEntry::canonicalUrl)
+            ) else 0,
             preferencesImported = if (restoreUserSettings) backup.preferences.size else 0,
             ngRulesImported = validRules.size,
             toolbarsImported = if (restoreUserSettings) backup.toolbars.size else 0
@@ -1085,7 +1105,17 @@ internal class DesktopCompatibilityStore(
                 .getOrNull()
         }
         if (databasePayload != null && databaseState == null) {
-            database.deleteStorage()
+            // Never delete the database for an undecodable payload: keep a copy
+            // first (or fail initialization when that is impossible) and leave
+            // the stored row untouched until the next real write replaces it.
+            val backupPath = preserveUnreadableCompatibilityPayload(fileSystem, databasePayload)
+            Logger.e("DesktopCompatibilityStore", "Starting from an empty profile; unreadable payload kept at $backupPath")
+            // Tell the user instead of silently starting empty (P4-1); the
+            // data folder is reachable on desktop, so name the full path.
+            val folder = java.io.File(fileSystem.resolveAbsolutePath(backupPath)).absoluteFile.parent
+            postUnreadableCompatibilityPayloadNotice(fileSystem, backupPath, location = "フォルダ「$folder」")
+        } else {
+            restorePendingUnreadableCompatibilityPayloadNotice(fileSystem)
         }
         suspend fun readLegacyState(path: String): PersistedCompatibilityState? {
             if (!fileSystem.exists(path)) return null
@@ -1322,10 +1352,9 @@ internal class DesktopCompatibilityStore(
     private fun <T, K> replaceBy(items: List<T>, value: T, key: (T) -> K): List<T> =
         items.filterNot { item -> key(item) == key(value) } + value
 
-    private fun trimTabs(items: List<CompatTab>): List<CompatTab> {
-        val sorted = items.sortedByDescending(CompatTab::insertedAtEpochMillis)
-        return if (sorted.size > TAB_LIMIT_TRIGGER) sorted.take(TAB_LIMIT_AFTER_TRIM) else sorted
-    }
+    // Same rule as Android: favourites and the active tab are never trimmed.
+    private fun trimTabs(items: List<CompatTab>, activeTabKey: String?): List<CompatTab> =
+        trimCompatTabs(items, activeTabKey)
 
     private fun trimHistory(items: List<CompatHistoryEntry>): List<CompatHistoryEntry> {
         val sorted = items.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
@@ -1374,6 +1403,7 @@ private data class PersistedCompatibilityState(
     val history: List<CompatHistoryEntry> = emptyList(),
     val workspace: CompatWorkspaceRecord = CompatWorkspaceRecord(),
     val preferences: Map<String, String> = emptyMap(),
+    @Serializable(with = LenientCompatNgRuleListSerializer::class)
     val ngRules: List<CompatNgRule> = emptyList(),
     val replyDrafts: List<CompatReplyDraft> = emptyList(),
     val buildDrafts: List<CompatBuildDraft> = emptyList(),

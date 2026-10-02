@@ -12,7 +12,25 @@ struct SavedHtmlDocument: Identifiable {
 final class SavedHtmlDocumentStore: ObservableObject {
     static let shared = SavedHtmlDocumentStore()
     @Published var document: SavedHtmlDocument?
+    /// Published by Compose (MainViewController) once the lock state is resolved
+    /// and the app is unlocked. The saved-HTML sheet is presented outside
+    /// Compose, so it must not appear over (or instead of) the app lock (H7).
+    @Published private(set) var isAppUnlocked = false
     private var securityScopedURL: URL?
+    private var appLockObserver: NSObjectProtocol?
+
+    private init() {
+        appLockObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("com.valoser.futacha.app-lock"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let unlocked = (notification.userInfo?["unlocked"] as? NSNumber)?.boolValue ?? false
+            if self?.isAppUnlocked != unlocked {
+                self?.isAppUnlocked = unlocked
+            }
+        }
+    }
 
     @discardableResult
     func openIfSupported(_ url: URL) -> Bool {
@@ -55,24 +73,82 @@ private enum SavedHtmlUITestFixture {
         didOpen = true
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("issue78-saved-thread.htm")
+        // A local 1x1 PNG (must still load) and, when the UI test supplies a
+        // listener, remote references the regex rewrite misses (must never load).
+        let probeImage = url.deletingLastPathComponent().appendingPathComponent("other/local-probe.png")
+        try? FileManager.default.createDirectory(
+            at: probeImage.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? Data(base64Encoded: localProbePng)?.write(to: probeImage)
+        let remote = ProcessInfo.processInfo.environment["FUTACHA_SAVED_HTML_REMOTE_PROBE"].map { base in
+            """
+            <img src=\(base)/unquoted.png><img srcset="\(base)/srcset.png 1x">
+            <link rel=stylesheet href=\(base)/style.css><style>@import "\(base)/import.css";</style>
+            <video poster=\(base)/poster.png></video><meta http-equiv="refresh" content="1;url=\(base)/refresh">
+            """
+        } ?? ""
         let html = """
-        <html><head><meta charset="UTF-8"></head><body>
+        <!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>
         <a target=_blank href="other/fu7199371.png">fu7199371.png</a><span
           id="preview" onclick="previewImg('preview','other/fu7199371.png')">[見る]</span><br>保存本文
+        <img id="futacha-local-probe" src="other/local-probe.png">\(remote)
         </body></html>
         """
         guard (try? html.write(to: url, atomically: true, encoding: .utf8)) != nil else { return }
         _ = SavedHtmlDocumentStore.shared.openIfSupported(url)
     }
+
+    static var isActive: Bool {
+        ProcessInfo.processInfo.arguments.contains("-futacha.issue78.saved_html_fixture")
+    }
+
+    private static let localProbePng =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 }
 #endif
 
+/// Blocks every request that is not local (S-3). Compiled once; the store keeps
+/// the compiled list across launches under this identifier.
+private enum SavedHtmlContentBlocker {
+    private static let identifier = "futacha.saved-html.local-only.v1"
+    private static let rules = """
+    [
+      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
+      {"trigger": {"url-filter": "^file:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^data:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^blob:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^about:"}, "action": {"type": "ignore-previous-rules"}}
+    ]
+    """
+    @MainActor private static var compiled: WKContentRuleList?
+
+    @MainActor static func ruleList() async -> WKContentRuleList? {
+        if let compiled { return compiled }
+        guard let store = WKContentRuleListStore.default() else { return nil }
+        let list: WKContentRuleList? = await withCheckedContinuation { continuation in
+            store.compileContentRuleList(
+                forIdentifier: identifier,
+                encodedContentRuleList: rules
+            ) { list, error in
+                if let error { NSLog("Saved HTML content blocker failed: %@", String(describing: error)) }
+                continuation.resume(returning: list)
+            }
+        }
+        compiled = list
+        return list
+    }
+}
+
 private struct SavedHtmlWebView: UIViewRepresentable {
     let url: URL
+    /// DEBUG fixture only: reports whether the local probe image loaded.
+    var onLocalProbe: ((String) -> Void)? = nil
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         private var worker: Task<String?, Never>?
         private var loadTask: Task<Void, Never>?
+        var onLocalProbe: ((String) -> Void)?
 
         func load(_ url: URL, into view: WKWebView) {
             cancel()
@@ -82,7 +158,12 @@ private struct SavedHtmlWebView: UIViewRepresentable {
             self.worker = worker
             loadTask = Task { @MainActor [weak view] in
                 let html = await worker.value
+                // The rule list must be in place before the page's first request.
+                let blocker = await SavedHtmlContentBlocker.ruleList()
                 guard !Task.isCancelled, let view else { return }
+                if let blocker {
+                    view.configuration.userContentController.add(blocker)
+                }
                 view.loadHTMLString(
                     html ?? "<html><meta charset='UTF-8'><body>保存ファイルを読み込めませんでした。</body></html>",
                     baseURL: url.deletingLastPathComponent()
@@ -95,6 +176,25 @@ private struct SavedHtmlWebView: UIViewRepresentable {
             worker?.cancel()
         }
 
+        /// Links, meta refresh and form posts may only stay on local content.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            decisionHandler(SavedHtmlDocumentLoader.isLocalURL(navigationAction.request.url) ? .allow : .cancel)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let onLocalProbe else { return }
+            // App-injected script runs although page JavaScript is disabled.
+            webView.evaluateJavaScript(
+                "(function(){var i=document.getElementById('futacha-local-probe');return i&&i.complete?i.naturalWidth:-1})()"
+            ) { result, _ in
+                onLocalProbe("local=\((result as? NSNumber)?.intValue ?? -1)")
+            }
+        }
+
         deinit { cancel() }
     }
 
@@ -105,7 +205,11 @@ private struct SavedHtmlWebView: UIViewRepresentable {
         let preferences = WKWebpagePreferences()
         preferences.allowsContentJavaScript = false
         configuration.defaultWebpagePreferences = preferences
+        // No cookies or caches shared with other web views.
+        configuration.websiteDataStore = .nonPersistent()
         let view = WKWebView(frame: .zero, configuration: configuration)
+        context.coordinator.onLocalProbe = onLocalProbe
+        view.navigationDelegate = context.coordinator
         context.coordinator.load(url, into: view)
         return view
     }
@@ -122,10 +226,25 @@ private struct SavedHtmlWebView: UIViewRepresentable {
 private struct SavedHtmlDocumentView: View {
     let document: SavedHtmlDocument
     @Environment(\.dismiss) private var dismiss
+    @State private var localProbe = ""
+
+    private var probeHandler: ((String) -> Void)? {
+        #if DEBUG
+        if SavedHtmlUITestFixture.isActive {
+            return { value in DispatchQueue.main.async { localProbe = value } }
+        }
+        #endif
+        return nil
+    }
 
     var body: some View {
         NavigationStack {
-            SavedHtmlWebView(url: document.url)
+            SavedHtmlWebView(url: document.url, onLocalProbe: probeHandler)
+                .overlay(alignment: .bottomLeading) {
+                    if !localProbe.isEmpty {
+                        Text(localProbe).font(.caption2).accessibilityIdentifier("savedHtml.localProbe")
+                    }
+                }
                 .navigationTitle("保存済みスレ")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -288,7 +407,7 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(item: $savedHtmlStore.document, onDismiss: savedHtmlStore.sheetDismissed) { document in
+        .sheet(item: presentedSavedHtmlDocument, onDismiss: savedHtmlStore.sheetDismissed) { document in
             SavedHtmlDocumentView(document: document)
         }
         .onAppear {
@@ -296,6 +415,26 @@ struct ContentView: View {
             SavedHtmlUITestFixture.openIfRequested()
 #endif
         }
+    }
+
+    /// The pending document is held while the EULA is unaccepted or the app is
+    /// locked and presented once Compose reports the app unlocked. A dismissal
+    /// forced by locking keeps the document so it reappears after unlocking;
+    /// only a dismissal while presentable clears it.
+    private var canPresentSavedHtml: Bool {
+        acceptedEulaVersion == ugcEulaCurrentVersion && !isUiTestEulaOverrideActive &&
+            savedHtmlStore.isAppUnlocked
+    }
+
+    private var presentedSavedHtmlDocument: Binding<SavedHtmlDocument?> {
+        Binding(
+            get: { canPresentSavedHtml ? savedHtmlStore.document : nil },
+            set: { newValue in
+                if newValue != nil || canPresentSavedHtml {
+                    savedHtmlStore.document = newValue
+                }
+            }
+        )
     }
 
     @ViewBuilder

@@ -667,6 +667,7 @@ internal suspend fun collectCompatImagePhashes(
     batchTimeoutMillis: Long = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
     requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
     publishEvery: Int = 16,
+    onComputed: (String, String) -> Unit = { _, _ -> },
     onPartial: (Map<String, String>) -> Unit = {}
 ): Map<String, String> {
     val found = linkedMapOf<String, String>()
@@ -677,6 +678,7 @@ internal suspend fun collectCompatImagePhashes(
                 fetchCompatImagePhash(httpClient, url).getOrNull()
             } ?: return@forEach
             found[id] = phash
+            onComputed(id, phash)
             if (++sincePublish >= publishEvery) {
                 sincePublish = 0
                 onPartial(found.toMap())

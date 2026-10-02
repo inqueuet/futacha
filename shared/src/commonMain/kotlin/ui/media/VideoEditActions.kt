@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.image.*
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 internal val LocalLaunchDeviceVideoEditor = staticCompositionLocalOf<(() -> Unit)?> { null }
 private class ActiveVideoEditor(val source: VideoEditSource, val finished: CompletableDeferred<Unit>)
@@ -47,8 +48,8 @@ internal fun DeviceVideoEditingHost(fileSystem: FileSystem?, stateStore: AppStat
     if (enabled && fileSystem != null) active?.let { editor ->
         key(editor) { VideoEditorDialog(editor.source, fileSystem, stateStore, ::close) }
     }
-    if (enabled) error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("動画を開けませんでした") },
-        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) }
+    if (enabled) error?.let { message -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { error = null }, title = { Text("動画を開けませんでした") },
+        text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } }) } }
 }
 
 @Composable

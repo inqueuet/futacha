@@ -173,15 +173,21 @@ class MainActivitySmokeTest {
             rule.onNodeWithText("判定カテゴリを選択（4 / 13）").performScrollTo().performClick()
             rule.onNodeWithTag("openai-category-sexual").performScrollTo().performClick()
             rule.onNodeWithText("閉じる").performClick()
-            rule.onNodeWithTag("openai-api-key").performScrollTo().performTextInput("test-only-ui-key")
+            rule.onNodeWithTag("openai-api-management-open").performScrollTo().performClick()
+            rule.onNodeWithTag("api-add").performClick()
+            rule.onNodeWithTag("api-name").performTextInput("画面テスト")
+            rule.onNodeWithTag("openai-api-key").performTextInput("test-only-ui-key")
             rule.onNodeWithTag("openai-api-key").performImeAction()
+            rule.onNodeWithTag("api-editor-save").performClick()
+            rule.waitUntil(10_000) { store.state.value.hasApiKey }
+            rule.onNodeWithTag("api-management-close").performClick()
             rule.onNodeWithTag("openai-moderation-threshold").performScrollTo()
                 .performSemanticsAction(SemanticsActions.SetProgress) { it(0.9f) }
             rule.onNodeWithTag("openai-moderation-auto-hide").performScrollTo().performClick()
             rule.onNodeWithText("AI設定を保存").performScrollTo().assertIsNotEnabled()
             rule.onNodeWithTag("ai-cloud-consent").performScrollTo().performClick()
             rule.onNodeWithText("AI設定を保存").performScrollTo().performClick()
-            rule.waitUntil(10_000) { store.state.value.hasApiKey }
+            rule.waitUntil(10_000) { store.state.value.moderationProvider == AiProvider.OPENAI }
             assertEquals(AiProvider.DEVICE, store.state.value.summaryProvider)
             assertEquals(AiProvider.OPENAI, store.state.value.moderationProvider)
             assertEquals(0.9f, store.state.value.moderationThreshold)
@@ -190,7 +196,10 @@ class MainActivitySmokeTest {
             val encrypted = File(app.noBackupFilesDir, "openai-connection.enc").readBytes()
             assertTrue(encrypted.isNotEmpty())
             org.junit.Assert.assertFalse(encrypted.decodeToString().contains("test-only-ui-key"))
-            rule.onNodeWithText("APIキーを削除").performScrollTo().performClick()
+            rule.onNodeWithTag("openai-api-management-open").performScrollTo().performClick()
+            val registeredId = store.state.value.apiKeys.single().id
+            rule.onNodeWithTag("api-delete-$registeredId").performScrollTo().performClick()
+            rule.onNodeWithTag("api-delete-confirm").performClick()
             rule.waitUntil(10_000) { !store.state.value.hasApiKey }
             assertEquals(AiProvider.DEVICE, store.state.value.moderationProvider)
             rule.onNodeWithTag("openai-api-key").assertDoesNotExist()

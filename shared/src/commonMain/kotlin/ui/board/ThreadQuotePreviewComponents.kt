@@ -26,6 +26,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadPostImageSize
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 @Composable
 internal fun QuotePreviewDialog(
@@ -38,7 +39,7 @@ internal fun QuotePreviewDialog(
     postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     compactHeader: Boolean = false
 ) {
-    Dialog(
+    FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("quote_preview", "引用プレビューを閉じる")
             onDismiss()
@@ -138,5 +139,5 @@ internal fun QuotePreviewDialog(
                 }
             }
         }
-    }
+    } }
 }

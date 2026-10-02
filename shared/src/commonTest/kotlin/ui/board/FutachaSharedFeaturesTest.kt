@@ -14,6 +14,14 @@ class FutachaSharedFeaturesTest {
     private fun rule(kind: CompatNgKind, scope: String, value: String) =
         CompatNgRule(compatNgRuleId(kind, scope, value), kind, scope, value, 1L)
 
+    @Test fun missingSharedSaveLocationMigratesOnlyInitiallyAndResetsAfterwards() {
+        val custom = SaveLocation.TreeUri("content://chosen/tree/folder")
+        assertEquals(custom, resolveFutachaSharedSaveLocation(null, true, custom))
+        assertEquals(SaveLocation.Path(com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT),
+            resolveFutachaSharedSaveLocation(null, false, custom))
+        assertEquals(custom, resolveFutachaSharedSaveLocation("tree:content://chosen/tree/folder", false, SaveLocation.Path("old")))
+    }
+
     @Test fun noSharedFilteringRetainsTheExistingPageAndPostList() {
         val original = page(post("1"), post("2"))
         val result = projectFutachaThread(original, original, context, emptyList(), emptyMap())

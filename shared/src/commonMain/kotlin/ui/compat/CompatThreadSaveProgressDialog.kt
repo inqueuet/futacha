@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,7 +29,7 @@ fun CompatThreadSaveProgressDialog(
     } else if (progress.total > 0) {
         (progress.current.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f)
     } else 0f
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         modifier = Modifier.testTag("compat-thread-save-progress-dialog"),
         onDismissRequest = {},
         properties = DialogProperties(
@@ -63,7 +64,7 @@ fun CompatThreadSaveProgressDialog(
                 Text("キャンセル")
             }
         }
-    )
+    ) }
 }
 
 internal fun compatThreadSaveProgressItem(progress: SaveProgress, cancelRequested: Boolean): String =

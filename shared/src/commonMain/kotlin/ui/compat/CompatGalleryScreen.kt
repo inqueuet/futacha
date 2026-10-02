@@ -6,6 +6,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.PromptInfoAction
@@ -296,10 +297,9 @@ internal fun CompatGalleryScreen(
     var batchSaveCancelRequested by remember { mutableStateOf(false) }
     var batchSaveJob by remember { mutableStateOf<Job?>(null) }
     var savingMediaKey by remember { mutableStateOf<String?>(null) }
-    var failedBatchMediaKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var lastBatchSaveFormat by remember { mutableStateOf<CompatGalleryBatchSaveFormat?>(null) }
     var batchRetryAttempt by remember { mutableStateOf(0) }
-    var message by remember { mutableStateOf<String?>(null) }
+    val messageState = remember { CompatResultMessageState() }
+    var message by messageState
 
     fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
         scope.launchCompatScreenAction("CompatGallery", { failure ->
@@ -329,7 +329,6 @@ internal fun CompatGalleryScreen(
     val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
         message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
     }
-    var lastSavedFile by remember { mutableStateOf<Pair<com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation?>?>(null) }
     val manualSaveLocation = parseCompatSaveLocation(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
@@ -403,7 +402,8 @@ internal fun CompatGalleryScreen(
                 }
             }
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            Logger.e("CompatGallery", "Media list load timed out", cancelled.compatTimeoutFailureOrThrow())
+            message = "画像一覧を読み込めませんでした"
         } catch (failure: Throwable) {
             Logger.e("CompatGallery", "Media list load failed", failure)
             message = "画像一覧を読み込めませんでした"
@@ -421,40 +421,42 @@ internal fun CompatGalleryScreen(
             initialPositionRestored = true
         }
     }
-    LaunchedEffect(posts) {
-        val availableKeys = posts.mapTo(mutableSetOf(), ::compatMediaIdentity)
-        selectedMediaKeys = selectedMediaKeys.intersect(availableKeys)
+    // Selection is by media identity, which repeats when a thread lists the
+    // same media twice; counts and 全選択/全解除 compare against unique keys.
+    val allMediaKeys = remember(posts) { posts.mapTo(mutableSetOf(), ::compatMediaIdentity) }
+    LaunchedEffect(allMediaKeys) {
+        selectedMediaKeys = selectedMediaKeys.intersect(allMediaKeys)
     }
     fun savePostNow(post: CompatPostSnapshot, selectedLocation: SaveLocation?) {
         if (savingMediaKey != null || batchSaveJob != null) return
+        val saver = mediaSaver
+        if (saver == null) {
+            message = "保存機能を初期化できませんでした"
+            return
+        }
+        val mediaUrl = resolveCompatViewerMediaUrl(post)
+        if (mediaUrl == null) {
+            message = "保存するメディアがありません"
+            return
+        }
+        // Claim the guard before the coroutine is dispatched, so a second tap
+        // in the same frame cannot start another save (E-13).
+        savingMediaKey = compatMediaIdentity(post)
         launchScreenAction {
-            val saver = mediaSaver
-            if (saver == null) {
-                message = "保存機能を初期化できませんでした"
-                return@launchScreenAction
-            }
-            val key = compatMediaIdentity(post)
-            val mediaUrl = resolveCompatViewerMediaUrl(post)
-            if (mediaUrl == null) {
-                message = "保存するメディアがありません"
-                return@launchScreenAction
-            }
-            savingMediaKey = key
             try {
-                message = saver.saveMedia(
+                val result = saver.saveMedia(
                     mediaUrl,
                     tab.boardKey,
                     tab.threadNo,
                     baseSaveLocation = selectedLocation,
                     storageDirectoryOverride = "",
                     useTypeSubdirectory = false
-                ).fold(
-                    onSuccess = {
-                        lastSavedFile = it to selectedLocation
-                        compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation)
-                    },
+                )
+                message = result.fold(
+                    onSuccess = { compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) },
                     onFailure = { it.toCompatUserMessage("メディアを保存できませんでした") }
                 )
+                result.getOrNull()?.let { messageState.attach(CompatSaveResultAction.Share(it, selectedLocation)) }
             } finally {
                 savingMediaKey = null
             }
@@ -462,6 +464,11 @@ internal fun CompatGalleryScreen(
     }
     fun savePost(post: CompatPostSnapshot) {
         withSaveDestination { savePostNow(post, it) }
+    }
+    fun attachBatchRetry(format: CompatGalleryBatchSaveFormat, failedMediaKeys: Set<String>) {
+        if (failedMediaKeys.isNotEmpty()) {
+            messageState.attach(CompatSaveResultAction.RetryFailed(format, failedMediaKeys))
+        }
     }
     fun startBatchSaveNow(
         targets: List<CompatPostSnapshot>,
@@ -479,8 +486,6 @@ internal fun CompatGalleryScreen(
         }
         batchSaveFormatDialog = false
         batchSaveCancelRequested = false
-        failedBatchMediaKeys = emptySet()
-        lastBatchSaveFormat = format
         if (!isRetry) batchRetryAttempt = 0 else batchRetryAttempt += 1
         batchSaveJob = launchScreenAction {
             val failedUrls = mutableSetOf<String>()
@@ -496,7 +501,12 @@ internal fun CompatGalleryScreen(
                                 threadId = tab.threadNo,
                                 baseSaveLocation = selectedLocation,
                                 baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                fileNameSuffix = batchRetryAttempt.takeIf { isRetry }?.let { "retry$it" },
+                                // A selection must never replace the whole-thread
+                                // ZIP (or an earlier selection) of the same thread.
+                                fileNameSuffix = compatSelectionZipFileSuffix(
+                                    Clock.System.now().toEpochMilliseconds(),
+                                    batchRetryAttempt.takeIf { isRetry }
+                                ),
                                 onProgress = { current, total, item, itemBytes, itemTotalBytes ->
                                     batchProtectionProgress.value = SaveProgress(
                                         SavePhase.DOWNLOADING,
@@ -553,24 +563,32 @@ internal fun CompatGalleryScreen(
                     }
                 }
                 message = message.orEmpty() + "\n保存先: " + manualSaveDestinationLabel(requireNotNull(fileSystem), selectedLocation)
-                failedBatchMediaKeys = targetByUrl.asSequence()
+                val failedMediaKeys = targetByUrl.asSequence()
                     .filter { it.first in failedUrls }
                     .map { compatMediaIdentity(it.second) }
                     .toSet()
-                if (failedBatchMediaKeys.isEmpty()) {
+                attachBatchRetry(format, failedMediaKeys)
+                if (failedMediaKeys.isEmpty()) {
                     selectedMediaKeys = emptySet()
                     saveMode = false
                 }
             } catch (cancelled: CancellationException) {
-                message = if (succeeded > 0) {
-                    "キャンセルしました\n${succeeded}件のメディアをここまで保存しました"
+                if (cancelled.isCompatInternalTimeout()) {
+                    // An internal timeout is a failed save, not a user cancel.
+                    message = IllegalStateException(COMPAT_ACTION_TIMEOUT_MESSAGE, cancelled)
+                        .toCompatUserMessage("一括保存できませんでした")
+                    attachBatchRetry(format, targetByUrl.mapTo(mutableSetOf()) { compatMediaIdentity(it.second) })
                 } else {
-                    "キャンセルしました"
+                    message = if (succeeded > 0) {
+                        "キャンセルしました\n${succeeded}件のメディアをここまで保存しました"
+                    } else {
+                        "キャンセルしました"
+                    }
+                    throw cancelled
                 }
-                throw cancelled
             } catch (failure: Throwable) {
-                failedBatchMediaKeys = targetByUrl.mapTo(mutableSetOf()) { compatMediaIdentity(it.second) }
                 message = failure.toCompatUserMessage("一括保存できませんでした")
+                attachBatchRetry(format, targetByUrl.mapTo(mutableSetOf()) { compatMediaIdentity(it.second) })
             } finally {
                 batchProtectionProgress.value = null
                 batchSaveCancelRequested = false
@@ -752,7 +770,7 @@ internal fun CompatGalleryScreen(
                     Column(Modifier.padding(start = 16.dp)) {
                         Text("画像一覧")
                         Text(
-                            if (saveMode) "${selectedMediaKeys.size}/${posts.size}件選択" else "${posts.size}枚",
+                            if (saveMode) "${selectedMediaKeys.size}/${allMediaKeys.size}件選択" else "${posts.size}枚",
                             fontSize = 12.sp
                         )
                     }
@@ -768,14 +786,14 @@ internal fun CompatGalleryScreen(
                 actions = {
                     if (saveMode) {
                         TextButton(onClick = {
-                            selectedMediaKeys = if (selectedMediaKeys.size == posts.size) {
+                            selectedMediaKeys = if (compatGalleryAllSelected(selectedMediaKeys, allMediaKeys)) {
                                 emptySet()
                             } else {
-                                posts.mapTo(mutableSetOf(), ::compatMediaIdentity)
+                                allMediaKeys
                             }
                         }) {
                             Text(
-                                if (selectedMediaKeys.size == posts.size) "全解除" else "全選択",
+                                if (compatGalleryAllSelected(selectedMediaKeys, allMediaKeys)) "全解除" else "全選択",
                                 color = SecondaryChromeContent
                             )
                         }
@@ -894,7 +912,7 @@ internal fun CompatGalleryScreen(
         }
     }
     if (batchSaveFormatDialog) {
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { batchSaveFormatDialog = false },
             title = { Text("一括保存") },
             text = { Text("選択した${selectedMediaKeys.size}件の画像・動画を保存します") },
@@ -917,7 +935,7 @@ internal fun CompatGalleryScreen(
                     TextButton(onClick = { batchSaveFormatDialog = false }) { Text("キャンセル") }
                 }
             }
-        )
+        ) }
     }
     batchSaveProgress?.let { progress ->
         CompatThreadSaveProgressDialog(
@@ -1023,28 +1041,27 @@ internal fun CompatGalleryScreen(
         )
     }
     message?.let { current ->
-        AlertDialog(
+        FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { message = null },
             text = { Text(current) },
             confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } },
             dismissButton = {
-                lastSavedFile?.let { (saved, location) ->
-                    TextButton(onClick = {
+                when (val action = messageState.action) {
+                    is CompatSaveResultAction.Share -> TextButton(onClick = {
                         launchScreenAction {
-                            val path = requireNotNull(fileSystem).resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
-                            share("", if (saved.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                            val path = requireNotNull(fileSystem).resolveSavedFile(action.location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), action.file.relativePath).getOrThrow()
+                            share("", if (action.file.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
                         }
                     }) { Text("共有") }
-                }
-                if (failedBatchMediaKeys.isNotEmpty() && lastBatchSaveFormat != null) {
-                    TextButton(onClick = {
-                        val retryTargets = posts.filter { compatMediaIdentity(it) in failedBatchMediaKeys }
+                    is CompatSaveResultAction.RetryFailed -> TextButton(onClick = {
+                        val retryTargets = posts.filter { compatMediaIdentity(it) in action.mediaKeys }
                         message = null
-                        lastBatchSaveFormat?.let { startBatchSave(retryTargets, it, isRetry = true) }
+                        startBatchSave(retryTargets, action.format, isRetry = true)
                     }) { Text("失敗分を再試行") }
+                    null -> Unit
                 }
             }
-        )
+        ) }
     }
     reverseSearchResult?.let { result ->
         CompatReverseImageSearchScreen(
@@ -1204,7 +1221,7 @@ fun CompatAscii2dRegistrationDialog(
     onInvalid: () -> Unit = {}
 ) {
     var endpoint by remember(initialEndpoint) { mutableStateOf(initialEndpoint) }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("詳細画像検索の設定") },
         text = {
@@ -1235,5 +1252,30 @@ fun CompatAscii2dRegistrationDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-    )
+    ) }
+}
+
+/** Whether every distinct media of the gallery is selected (duplicates share one key). */
+internal fun compatGalleryAllSelected(selected: Set<String>, allMediaKeys: Set<String>): Boolean =
+    selected.containsAll(allMediaKeys)
+
+/** File-name suffix of a gallery selection ZIP: `selected_yyyyMMdd-HHmmss[_retryN]`. */
+internal fun compatSelectionZipFileSuffix(
+    nowEpochMillis: Long,
+    retryAttempt: Int?,
+    timeZone: TimeZone = TimeZone.currentSystemDefault()
+): String {
+    val local = kotlin.time.Instant.fromEpochMilliseconds(nowEpochMillis).toLocalDateTime(timeZone)
+    fun Int.two() = toString().padStart(2, '0')
+    return buildString {
+        append("selected_")
+        append(local.year.toString().padStart(4, '0'))
+        append(local.monthNumber.two())
+        append(local.dayOfMonth.two())
+        append('-')
+        append(local.hour.two())
+        append(local.minute.two())
+        append(local.second.two())
+        if (retryAttempt != null) append("_retry").append(retryAttempt)
+    }
 }

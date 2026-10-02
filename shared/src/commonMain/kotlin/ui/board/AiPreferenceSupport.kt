@@ -37,8 +37,8 @@ internal fun aiPostFilterSettingDescription(aiAvailability: AiAvailability): Str
         return "アルファ版のため現在は画面上から有効化できません。"
     }
     return if (isAiPostFilterFeatureAvailable(aiAvailability)) {
-        if (aiAvailability.externalModeration) "OpenAI Moderationで選択カテゴリと閾値に基づいて候補を判定します。自動折りたたみは詳細設定で変更できます。連投やスレの文脈から荒らしを判断する機能ではありません。"
-        else "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。"
+        if (aiAvailability.externalModeration) "OpenAI Moderationで選択カテゴリと閾値に基づいて候補を判定します。自動折りたたみは詳細設定で変更できます。同文再投稿と本文内の反復は端末側でも判定します。引用があるレスはコピペ判定から除外します。OpenAI単独ではスレの文脈を判定しません。端末内AIとの併用では文脈も参考にします。"
+        else "表示中と前後8件を、本文量に応じて最大8件ずつ端末内で判定します。スレ題・先頭投稿・直前の会話を参考にし、引用部分は除外します。不明なレスは表示を維持します。判定結果は画面内にキャッシュし、本文・参考の会話・設定が変わると再判定します。"
     } else {
         aiAvailability.unavailableReason ?: "誤判定対策を含めた判定モデル接続後に有効化されます。"
     }

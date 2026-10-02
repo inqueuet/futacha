@@ -79,6 +79,23 @@ internal fun buildFutachaHistoryArchiveExportKeptHistoryMessage(
         "1回に保存できるのは${MAX_HISTORY_ARCHIVE_ENTRIES}件までで、閲覧が古い${omittedEntryCount}件が含まれないため、履歴は削除していません"
 }
 
+internal fun buildFutachaHistoryArchiveExportCopyFailedKeptHistoryMessage(
+    entryCount: Int,
+    archiveDirectory: String,
+    failedCopyCount: Int
+): String {
+    return "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)。" +
+        "保存済みのファイル${failedCopyCount}件を書き出せなかったため、履歴は削除していません"
+}
+
+internal fun buildFutachaHistoryArchiveExportChangedKeptHistoryMessage(
+    entryCount: Int,
+    archiveDirectory: String
+): String {
+    return "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)。" +
+        "書き出し中に履歴が追加・更新されたため、履歴は削除していません"
+}
+
 internal fun buildFutachaHistoryArchiveImportMessage(result: AppHistoryArchiveImportResult): String {
     val importedCount = result.archiveImport.importedHistoryEntries.size
     val merge = result.merge
@@ -131,6 +148,22 @@ internal suspend fun exportAllFutachaHistoryArchiveThenClear(
             entryCount = result.manifest.entryCount,
             archiveDirectory = result.archiveDirectory,
             omittedEntryCount = result.omittedEntryCount
+        )
+    }
+    if (result.failedCopyCount > 0) {
+        // Clearing deletes the saved bodies and media; the archive lacks some of them.
+        return buildFutachaHistoryArchiveExportCopyFailedKeptHistoryMessage(
+            entryCount = result.manifest.entryCount,
+            archiveDirectory = result.archiveDirectory,
+            failedCopyCount = result.failedCopyCount
+        )
+    }
+    // Clearing removes the whole history; entries added or revisited while the archive
+    // was written are not in it and would be lost.
+    if (!isHistoryCoveredByArchive(stateStore.historyValue(), result.manifest)) {
+        return buildFutachaHistoryArchiveExportChangedKeptHistoryMessage(
+            entryCount = result.manifest.entryCount,
+            archiveDirectory = result.archiveDirectory
         )
     }
     clearHistory()
@@ -336,6 +369,19 @@ private suspend fun loadBoundedHistoryArchiveManifest(
 
 private suspend fun AppStateStore.historyValue(): List<ThreadHistoryEntry> {
     return history.first()
+}
+
+/** Whether every current entry is in [manifest] with the same visit time. */
+internal fun isHistoryCoveredByArchive(
+    currentHistory: List<ThreadHistoryEntry>,
+    manifest: HistoryArchiveManifest
+): Boolean {
+    val archived = manifest.entries.associate { entry ->
+        buildHistoryIdentityKey(entry.historyEntry) to entry.historyEntry.lastVisitedEpochMillis
+    }
+    return currentHistory.all { entry ->
+        archived[buildHistoryIdentityKey(entry)]?.let { it >= entry.lastVisitedEpochMillis } == true
+    }
 }
 
 private fun buildHistoryIdentityKey(entry: ThreadHistoryEntry): String {

@@ -15,6 +15,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.*
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.CancellationException
@@ -112,6 +113,8 @@ internal fun FutachaCatalogFeatureHost(
         val hadLatest = latest != null
         latest = success
         if (!wasRestoring) {
+            // Scroll before the (up to 5 s) liveness probes below, not after them.
+            if (hadLatest && features.value("catalog", "catalogReloadScrollTop") == "ON") onScrollTop()
             try {
                 val now = Clock.System.now().toEpochMilliseconds()
                 mode.sharedCatalogSort()?.let { sort ->
@@ -120,16 +123,23 @@ internal fun FutachaCatalogFeatureHost(
                     val requestedCount = features.intValue("catalog", "catalogThreadSize", 100..3000) ?: 300
                     val activeDropped = if (trackDropped && stored != null) {
                         val candidates = diffCompatCatalogGenerations(success.content.items, stored.items, requestedCount, true).vanishedWithin.take(64)
-                        withTimeoutOrNull(5_000) { buildSet {
-                            candidates.forEach { if (repository.probeThreadExists(it.threadUrl)) add(it.id) }
-                        } }.orEmpty()
+                        // Keep what was confirmed before a timeout; threads left
+                        // unprobed are unknown, so they are not recorded as deleted.
+                        val confirmedAlive = mutableSetOf<String>()
+                        var probed = 0
+                        withTimeoutOrNull(5_000) {
+                            candidates.forEach {
+                                if (repository.probeThreadExists(it.threadUrl)) confirmedAlive.add(it.id)
+                                probed += 1
+                            }
+                        }
+                        confirmedAlive + candidates.drop(probed).map { it.id }
                     } else emptySet()
                     if (withContext(AppDispatchers.parsing) { stored?.items != success.content.items }) features.store.saveCatalogSnapshot(
                         CompatCatalogSnapshot(boardKey, sort, now, now, success.content.items),
                         trackDropped = trackDropped, requestedThreadCount = requestedCount, activeDroppedThreadIds = activeDropped)
                     dropped = features.store.loadDroppedCatalogItems(boardKey)
                 }
-                if (hadLatest && features.value("catalog", "catalogReloadScrollTop") == "ON") onScrollTop()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { message = "カタログ履歴を保存できませんでした" }
         }
@@ -274,21 +284,21 @@ internal fun FutachaCatalogFeatureHost(
             else -> state.copy(content = state.content.copy(items = projected))
         })
     }
-    if (undoOpen) AlertDialog(onDismissRequest = { undoOpen = false }, title = { Text("更新前のカタログ") }, text = {
+    if (undoOpen) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { undoOpen = false }, title = { Text("更新前のカタログ") }, text = {
         Column { previous.forEachIndexed { index, snapshot -> TextButton(onClick = {
             restoring = true; onRestore(snapshot); undoOpen = false
         }) { Text("${index + 1}回前 (${snapshot.content.items.size}スレ)") } } }
-    }, confirmButton = { TextButton(onClick = { undoOpen = false }) { Text("閉じる") } })
+    }, confirmButton = { TextButton(onClick = { undoOpen = false }) { Text("閉じる") } }) }
     if (ngOpen) FutachaNgManagementDialog(features, boardKey, null, board.name, onDismiss = { ngOpen = false })
-    if (searchOpen) CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, boardUrl,
-        localHistory = features.store.history.collectAsState(emptyList()).value, onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) })
-    if (droppedOpen) Dialog(onDismissRequest = { droppedOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    if (searchOpen) FutachaAppLockAwareWindow { CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, boardUrl,
+        localHistory = features.store.history.collectAsState(emptyList()).value, onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) }) }
+    if (droppedOpen) FutachaAppLockAwareWindow { Dialog(onDismissRequest = { droppedOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         CompatDroppedCatalogScreen(board.name, dropped, { droppedOpen = false }, { droppedOpen = false; onOpenThread(it) }, {
             features.store.deleteDroppedCatalogItems(boardKey, CompatCatalogDroppedClass.DIE)
             dropped = features.store.loadDroppedCatalogItems(boardKey)
         })
-    }
-    selected?.let { item -> AlertDialog(onDismissRequest = { selected = null }, title = { Text(item.title.orEmpty()) }, text = {
+    } }
+    selected?.let { item -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { selected = null }, title = { Text(item.title.orEmpty()) }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             TextButton(onClick = { selected = null; onOpenThread(item) }) { Text("スレッドを開く") }
             TextButton(onClick = { addTab(item) }) { Text("タブに追加") }
@@ -296,11 +306,11 @@ internal fun FutachaCatalogFeatureHost(
             if (item.fullImageUrl != null || item.thumbnailUrl != null) TextButton(onClick = { imageNg = item; selected = null }) { Text("NG画像に登録") }
             TextButton(onClick = { requestDeletion(item) }) { Text("DEL依頼を送信") }
         }
-    }, confirmButton = { TextButton(onClick = { selected = null }) { Text("閉じる") } }) }
+    }, confirmButton = { TextButton(onClick = { selected = null }) { Text("閉じる") } }) } }
     imageNg?.let { item -> FutachaImageNgRegistration(features, boardKey, CompatImageNgSource.CATALOG,
         item.fullImageUrl ?: item.thumbnailUrl.orEmpty(), item.title.orEmpty(), { imageNg = null }) }
-    message?.let { text -> AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
-        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) }
+    message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }
 
 internal class FutachaCatalogProjection(

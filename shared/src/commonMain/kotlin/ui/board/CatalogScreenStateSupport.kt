@@ -87,7 +87,7 @@ internal fun rememberCatalogScreenPersistentBindings(
     val boardWatchWordsState = stateStore?.observedBoardWatchWords?.collectPreferenceAsState(initial = null)
     val lastUsedDeleteKeyState = stateStore?.observedLastUsedDeleteKey?.collectPreferenceAsState(initial = "")
     var fallbackDeleteKey by rememberSaveable(saveableKey) { mutableStateOf("") }
-    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectPreferenceAsState(initial = false)
+    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectPreferenceAsState(initial = true)
         ?: remember { mutableStateOf(false) }
     val isPastThreadSearchNoticeHidden by stateStore?.isPastThreadSearchNoticeHidden?.collectPreferenceAsState(initial = false)
         ?: remember { mutableStateOf(false) }

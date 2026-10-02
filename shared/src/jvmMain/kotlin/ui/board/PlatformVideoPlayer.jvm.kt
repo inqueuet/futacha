@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.ui.graphics.asComposeImageBitmap
+import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.runtime.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -18,6 +19,7 @@ import com.valoser.futacha.shared.media.video.*
 import com.valoser.futacha.shared.media.edit.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.player.base.*
 import uk.co.caprica.vlcj.player.base.State as VlcState
@@ -141,6 +143,7 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
                     val image = frameConverter.convert(buffers[0], width, height)
                     hasFrame.set(true)
                     if (!closed.get()) frameChanged(image, width, height)
+                    else runCatching { image.asSkiaBitmap().close() }
                 } catch (_: Exception) { failed.set(true) }
             }
         }
@@ -209,8 +212,21 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     onStateChanged: (VideoPlayerState) -> Unit, onVideoSizeKnown: (Int, Int) -> Unit, areControlsVisible: Boolean,
     onControlsVisibilityChanged: (Boolean) -> Unit, volume: Float, isMuted: Boolean,
     onMediaInfoKnown: (VideoMediaInfo) -> Unit, onPlaybackError: (VideoPlaybackError) -> Unit, editing: VideoEditPlayback?) {
-    val frameFlow = remember(videoUrl, playback, editing) { MutableStateFlow<Triple<ImageBitmap, Int, Int>?>(null) }
-    val frame by frameFlow.collectAsState()
+    val mailbox = remember(videoUrl, playback, editing) { DesktopVideoFrameMailbox() }
+    val frames = remember(mailbox) { DesktopVideoFramePresentation() }
+    var frame by remember(mailbox) { mutableStateOf<DesktopVideoFrame?>(null) }
+    LaunchedEffect(mailbox) { mailbox.version.collect { mailbox.take()?.let {
+        frames.accept(it)
+        frame = it
+    } } }
+    // Each frame owns a native Skia bitmap (about 8MB at 1080p). Close the shown frame
+    // once composition has switched to the next one (or left); waiting for GC grew memory
+    // by roughly 250MB/s during playback.
+    val composedFrame = frame
+    SideEffect { frames.displayed(composedFrame) }
+    DisposableEffect(mailbox) {
+        onDispose { frames.close(); mailbox.clear() }
+    }
     var session by remember(videoUrl, playback, editing) { mutableStateOf<DesktopVideoSession?>(null) }
     var position by remember { mutableStateOf(0L) }
     var duration by remember { mutableStateOf(0L) }
@@ -224,7 +240,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     val info by rememberUpdatedState(onMediaInfoKnown)
     val currentVolume by rememberUpdatedState(volume)
     val currentMuted by rememberUpdatedState(isMuted)
-    LaunchedEffect(frame?.second, frame?.third) { frame?.let { size(it.second, it.third); state(VideoPlayerState.Ready) } }
+    LaunchedEffect(frame?.width, frame?.height) { frame?.let { size(it.width, it.height); state(VideoPlayerState.Ready) } }
     LaunchedEffect(videoUrl, playback, editing) {
         var lease: OriginalMediaStore.Lease? = null
         var pin: OriginalMediaPlayback? = null
@@ -250,7 +266,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                 }
                 ensureActive()
                 openedPath = File(path).absolutePath.also(DesktopVideoFiles::opened)
-                owned = DesktopVideoSession { image, w, h -> frameFlow.value = Triple(image, w, h) }
+                owned = DesktopVideoSession { image, w, h -> mailbox.publish(DesktopVideoFrame(image, w, h)) }
                 owned!!.play(path)
                 session = owned
             }
@@ -274,7 +290,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                 }
                 if (duration > 0 && duration != announcedDuration) {
                     announcedDuration = duration
-                    info(VideoMediaInfo(width = frame?.second, height = frame?.third, durationMillis = duration))
+                    info(VideoMediaInfo(width = frame?.width, height = frame?.height, durationMillis = duration))
                 }
                 editing?.position(position * 1000)
                 if (active.ended.get()) { editing?.ended(); playing = false }
@@ -284,7 +300,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
         catch (failure: Throwable) {
             error(VideoPlaybackError("desktop_video", failure.message ?: "動画を再生できませんでした")); state(VideoPlayerState.Error)
         } finally {
-            session = null; editing?.pausePlayer = null; frameFlow.value = null
+            session = null; editing?.pausePlayer = null; frame = null; mailbox.clear()
             withContext(NonCancellable + Dispatchers.IO) {
                 val releasedFiles = {
                     openedPath?.let(DesktopVideoFiles::closed)
@@ -297,7 +313,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     }
     Column(modifier) {
         Box(Modifier.weight(1f).fillMaxWidth().clickable { onControlsVisibilityChanged(!areControlsVisible) }, contentAlignment = Alignment.Center) {
-            frame?.let { Image(it.first, "動画", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+            frame?.let { Image(it.image, "動画", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
         }
         if (areControlsVisible && editing == null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { session?.let { active -> scope.launch(Dispatchers.IO) {
@@ -320,6 +336,52 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
             Text("${(dragFraction?.let { (duration * it).toLong() } ?: position) / 1000}/${duration / 1000}秒")
         }
     }
+}
+
+/** One decoded frame; [close] frees its native pixels once nothing can draw it. */
+internal class DesktopVideoFrame(val image: ImageBitmap, val width: Int, val height: Int) {
+    private val closed = AtomicBoolean(false)
+    fun close() {
+        if (closed.compareAndSet(false, true)) runCatching { image.asSkiaBitmap().close() }
+    }
+}
+
+/** At most one drawn frame and one waiting frame, including while minimized. */
+internal class DesktopVideoFramePresentation : AutoCloseable {
+    private var shown: DesktopVideoFrame? = null
+    private var pending: DesktopVideoFrame? = null
+
+    fun accept(frame: DesktopVideoFrame) {
+        pending?.takeIf { it !== shown }?.close()
+        pending = frame
+    }
+
+    fun displayed(frame: DesktopVideoFrame?) {
+        shown?.takeIf { it !== frame }?.close()
+        shown = frame
+    }
+
+    override fun close() {
+        pending?.close()
+        shown?.close()
+        pending = null
+        shown = null
+    }
+}
+
+/**
+ * Hands frames from VLC's display thread to the UI. A frame replaced before the
+ * UI took it was never composed, so it is closed right away.
+ */
+internal class DesktopVideoFrameMailbox {
+    private val pending = java.util.concurrent.atomic.AtomicReference<DesktopVideoFrame?>(null)
+    val version = MutableStateFlow(0L)
+    fun publish(frame: DesktopVideoFrame) {
+        pending.getAndSet(frame)?.close()
+        version.update { it + 1 }
+    }
+    fun take(): DesktopVideoFrame? = pending.getAndSet(null)
+    fun clear() { pending.getAndSet(null)?.close() }
 }
 
 /**

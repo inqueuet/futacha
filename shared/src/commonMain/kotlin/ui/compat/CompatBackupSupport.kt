@@ -168,6 +168,16 @@ import com.valoser.futacha.shared.compat.CompatBuildDraft
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
 import com.valoser.futacha.shared.compat.CompatSettingsBackupImportReport
+import com.valoser.futacha.shared.compat.CompatSettingsBackup
+import com.valoser.futacha.shared.compat.CompatToolbarBackup
+import com.valoser.futacha.shared.compat.CompatToolbarBackupItem
+import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_RULES
+import com.valoser.futacha.shared.compat.isCompatNgScopeValid
+import com.valoser.futacha.shared.compat.isValidCompatNgRule
+import com.valoser.futacha.shared.compat.requireValidCompatPreference
+import com.valoser.futacha.shared.compat.validateCompatSettingsBackup
+import com.valoser.futacha.shared.compat.validateCompatToolbar
+import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.compat.appliesToThreadImage
 import com.valoser.futacha.shared.compat.compatThreadImageNgScopeKey
 import com.valoser.futacha.shared.compat.CompatImagePhash
@@ -362,99 +372,159 @@ internal suspend fun importCompatLegacyBackupData(
 ): String {
     require(backups.isNotEmpty()) { "旧版バックアップが空です" }
     val now = Clock.System.now().toEpochMilliseconds()
-    backups.flatMap { it.boards }.distinctBy { it.canonicalUrl }.forEach { legacyBoard ->
-        store.upsertBoard(
-            CompatBoard(
-                key = compatBoardKey(legacyBoard.canonicalUrl),
-                name = legacyBoard.name,
-                canonicalUrl = legacyBoard.canonicalUrl,
-                originalUrl = legacyBoard.originalUrl,
-                sortOrder = legacyBoard.sortOrder
-            )
-        )
-    }
-    val availableBoards = (boards + backups.flatMap { it.boards }.map { legacyBoard ->
+    val legacyBoards = backups.flatMap { it.boards }.distinctBy { it.canonicalUrl }.map { legacyBoard ->
         CompatBoard(
             key = compatBoardKey(legacyBoard.canonicalUrl),
-            name = legacyBoard.name,
+            name = legacyBoard.name.take(200),
             canonicalUrl = legacyBoard.canonicalUrl,
             originalUrl = legacyBoard.originalUrl,
             sortOrder = legacyBoard.sortOrder
         )
-    }).distinctBy(CompatBoard::key)
-    applyCompatLegacyPortableSettings(
+    }.filter { it.canonicalUrl.length <= 500 && it.originalUrl.length <= 500 }
+    val availableBoards = (boards + legacyBoards).distinctBy(CompatBoard::key)
+    val catalogSort = backups.asSequence().mapNotNull { it.catalogSort }.firstOrNull()
+    val catalogPreferences = if (catalogSort == null) {
+        emptyList()
+    } else {
+        availableBoards.map { board -> store.loadCatalogPreference(board.key).copy(sort = catalogSort) }
+    }
+    val existingRuleIds = store.ngRules.first().mapTo(mutableSetOf(), CompatNgRule::id)
+    val plan = buildCompatLegacyRestorePlan(
         backups = backups,
         availableBoards = availableBoards,
-        savePreference = store::savePreference,
-        loadCatalogPreference = store::loadCatalogPreference,
-        saveCatalogPreference = store::saveCatalogPreference,
-        saveToolbar = store::saveToolbar
+        catalogPreferences = catalogPreferences,
+        existingNgRuleIds = existingRuleIds,
+        nowEpochMillis = now
     )
-
-    // CatalogExtract belongs to the board recorded by the legacy APK. Never
-    // copy it into the current app's global watch-word preference: doing so
-    // silently widens a board-scoped rule to every board (#54).
-    var catalogExtractImported = 0
-    buildCompatLegacyCatalogExtractRules(backups, availableBoards, now).forEach { rule ->
-        if (store.upsertNgRule(rule)) catalogExtractImported++
-    }
-
-    var catalogNgImported = 0
-    backups.flatMap { it.catalogNgWords }.forEach { entry ->
-        legacyCatalogRuleScopes(entry.boardUrl, availableBoards).forEach { boardKey ->
-            val value = entry.word.trim().lowercase()
-            if (value.isBlank()) return@forEach
-            if (store.upsertNgRule(
-                    CompatNgRule(
-                        id = compatNgRuleId(CompatNgKind.CATALOG_IGNORE, boardKey, value),
-                        kind = CompatNgKind.CATALOG_IGNORE,
-                        scopeKey = boardKey,
-                        normalizedValue = value,
-                        createdAtEpochMillis = now
-                    )
-                )
-            ) catalogNgImported++
-        }
-    }
-
-    // The old database allowed a thread NG rule to be attached to a board,
-    // while the compatibility model attaches thread rules to tabs. A global
-    // rule is the only lossless choice during import and behaves like the old
-    // app until the user narrows it from the NG dialog.
-    var threadNgImported = 0
-    backups.flatMap { it.threadNgHeaders }.forEach { entry ->
-        val value = entry.word.trim().lowercase()
-        if (value.isBlank()) return@forEach
-        if (store.upsertNgRule(
-                CompatNgRule(
-                    id = compatNgRuleId(CompatNgKind.THREAD_REFUSE, "*", value),
-                    kind = CompatNgKind.THREAD_REFUSE,
-                    scopeKey = "*",
-                    normalizedValue = value,
-                    createdAtEpochMillis = now
-                )
-            )
-        ) threadNgImported++
-    }
-    backups.flatMap { it.threadNgWords }.forEach { entry ->
-        val value = entry.word.trim().lowercase()
-        if (value.isBlank()) return@forEach
-        if (store.upsertNgRule(
-                CompatNgRule(
-                    id = compatNgRuleId(CompatNgKind.THREAD_IGNORE, "*", value),
-                    kind = CompatNgKind.THREAD_IGNORE,
-                    scopeKey = "*",
-                    normalizedValue = value,
-                    createdAtEpochMillis = now
-                )
-            )
-        ) threadNgImported++
-    }
+    // Everything is decoded and validated above before the first write. The
+    // old per-item path saved each preference and NG rule separately (each a
+    // full state rewrite on iOS/desktop), which could freeze for minutes and
+    // left a half-restored state when one item failed. Boards go first in one
+    // batch because the NG scopes are checked against them; the rest is one
+    // store transaction.
+    if (legacyBoards.isNotEmpty()) store.upsertBoards(legacyBoards)
+    store.importSettingsBackup(
+        encodeCompatSettingsBackup(plan.backup),
+        restoreUserSettings = true,
+        restoreNgRules = true
+    )
 
     val settingCount = backups.filter { it.fileType == "setting" }.sumOf { it.preferences.size }
     val watchCount = backups.sumOf { it.catalogWatchWords.size }
     return "旧版バックアップを復元しました（設定${settingCount}件、監視${watchCount}件、" +
-        "抽出${catalogExtractImported}件、カタログNG${catalogNgImported}件、スレNG${threadNgImported}件）"
+        "抽出${plan.catalogExtractCount}件、カタログNG${plan.catalogNgCount}件、スレNG${plan.threadNgCount}件）"
+}
+
+internal data class CompatLegacyRestorePlan(
+    val backup: CompatSettingsBackup,
+    val catalogExtractCount: Int,
+    val catalogNgCount: Int,
+    val threadNgCount: Int
+)
+
+/**
+ * Pure conversion of legacy backups into one validated settings payload.
+ * Throws before anything is written when a value cannot be stored.
+ */
+internal fun buildCompatLegacyRestorePlan(
+    backups: List<CompatLegacyBackupData>,
+    availableBoards: List<CompatBoard>,
+    catalogPreferences: List<CompatCatalogPreference>,
+    existingNgRuleIds: Set<String>,
+    nowEpochMillis: Long
+): CompatLegacyRestorePlan {
+    val boardKeys = availableBoards.mapTo(mutableSetOf(), CompatBoard::key)
+    // CatalogExtract belongs to the board recorded by the legacy APK. Never
+    // copy it into the current app's global watch-word preference: doing so
+    // silently widens a board-scoped rule to every board (#54).
+    val catalogExtractRules = buildCompatLegacyCatalogExtractRules(backups, availableBoards, nowEpochMillis)
+    val catalogNgRules = backups.flatMap { it.catalogNgWords }.flatMap { entry ->
+        val value = entry.word.trim().lowercase()
+        if (value.isBlank()) return@flatMap emptyList()
+        legacyCatalogRuleScopes(entry.boardUrl, availableBoards).map { boardKey ->
+            CompatNgRule(
+                id = compatNgRuleId(CompatNgKind.CATALOG_IGNORE, boardKey, value),
+                kind = CompatNgKind.CATALOG_IGNORE,
+                scopeKey = boardKey,
+                normalizedValue = value,
+                createdAtEpochMillis = nowEpochMillis
+            )
+        }
+    }
+    // The old database allowed a thread NG rule to be attached to a board,
+    // while the compatibility model attaches thread rules to tabs. A global
+    // rule is the only lossless choice during import and behaves like the old
+    // app until the user narrows it from the NG dialog.
+    fun threadRules(entries: List<CompatLegacyScopedWord>, kind: CompatNgKind) = entries.mapNotNull { entry ->
+        val value = entry.word.trim().lowercase()
+        if (value.isBlank()) return@mapNotNull null
+        CompatNgRule(
+            id = compatNgRuleId(kind, "*", value),
+            kind = kind,
+            scopeKey = "*",
+            normalizedValue = value,
+            createdAtEpochMillis = nowEpochMillis
+        )
+    }
+    val threadNgRules = threadRules(backups.flatMap { it.threadNgHeaders }, CompatNgKind.THREAD_REFUSE) +
+        threadRules(backups.flatMap { it.threadNgWords }, CompatNgKind.THREAD_IGNORE)
+
+    // Same acceptance as CompatibilityStore.upsertNgRule: valid size, a scope
+    // that exists, and no new rule beyond the NG limit.
+    var room = (MAX_COMPAT_NG_RULES - existingNgRuleIds.size).coerceAtLeast(0)
+    val acceptedIds = mutableSetOf<String>()
+    fun accept(rules: List<CompatNgRule>): List<CompatNgRule> = rules.filter { rule ->
+        if (!isValidCompatNgRule(rule) ||
+            !isCompatNgScopeValid(rule.kind, rule.scopeKey, boardKeys, emptySet()) ||
+            !acceptedIds.add(rule.id)
+        ) return@filter false
+        if (rule.id in existingNgRuleIds) return@filter true
+        if (room == 0) {
+            acceptedIds.remove(rule.id)
+            return@filter false
+        }
+        room--
+        true
+    }
+    val acceptedExtract = accept(catalogExtractRules)
+    val acceptedCatalogNg = accept(catalogNgRules)
+    val acceptedThreadNg = accept(threadNgRules)
+
+    val preferences = backups.flatMap { it.preferences.entries }
+        .distinctBy { it.key }
+        .associate { (key, value) -> key to value }
+    preferences.forEach { (key, value) ->
+        require(key.startsWith("compat.")) { "バックアップの設定キーが不正です" }
+        requireValidCompatPreference(key, value)
+    }
+    val toolbars = CompatToolbarSurface.entries.mapNotNull { surface ->
+        backups.asSequence()
+            .mapNotNull { backup -> backup.toolbars[surface] }
+            .firstOrNull()
+            ?.takeIf { items -> items.size <= 64 && validateCompatToolbar(surface, items) }
+            ?.let { items ->
+                CompatToolbarBackup(
+                    surface = surface.name,
+                    items = items.map { CompatToolbarBackupItem(it.key, it.position, it.active) }
+                )
+            }
+    }
+    val backup = CompatSettingsBackup(
+        exportedAtEpochMillis = nowEpochMillis,
+        catalogPreferences = catalogPreferences.filter { it.boardKey in boardKeys },
+        preferences = preferences,
+        ngRules = acceptedExtract + acceptedCatalogNg + acceptedThreadNg,
+        // A legacy restore never carries navigation state.
+        workspace = null,
+        toolbars = toolbars
+    )
+    validateCompatSettingsBackup(backup)
+    return CompatLegacyRestorePlan(
+        backup = backup,
+        catalogExtractCount = acceptedExtract.size,
+        catalogNgCount = acceptedCatalogNg.size,
+        threadNgCount = acceptedThreadNg.size
+    )
 }
 
 /**

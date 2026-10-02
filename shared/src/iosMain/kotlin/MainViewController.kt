@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -21,8 +23,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.TimeMark
-import kotlin.time.TimeSource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.CompositionLocalProvider
@@ -33,11 +33,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.window.ComposeUIViewController
 import com.valoser.futacha.shared.background.BackgroundRefreshManager
+import com.valoser.futacha.shared.background.IOS_WATCH_REFRESH_PLAN
+import com.valoser.futacha.shared.background.IosBackgroundRefreshPlan
+import com.valoser.futacha.shared.background.IosBackgroundRefreshStage
+import com.valoser.futacha.shared.background.iosBackgroundRefreshPlanFor
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.decodeAiQueryValue
+import com.valoser.futacha.shared.ai.FutachaAiCommandArrivals
+import com.valoser.futacha.shared.compat.modeSwitchFailureMessage
 import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
 import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
 import com.valoser.futacha.shared.ai.threadIdParameter
@@ -64,6 +71,9 @@ import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
 import com.valoser.futacha.shared.ui.IosReviewCompliance
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
+import com.valoser.futacha.shared.ui.consumePlatformAiCommand
+import com.valoser.futacha.shared.ui.enqueuePlatformAiCommand
+import com.valoser.futacha.shared.ui.PLATFORM_AI_COMMAND_QUEUE_MAX
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -106,12 +116,14 @@ import com.valoser.futacha.shared.watch.WatchReadAloudStatusStore
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchSnapshotBuilder
 import com.valoser.futacha.shared.watch.WatchThreadKey
+import com.valoser.futacha.shared.watch.encodeWatchSnapshotWithinPayload
 import platform.Foundation.NSLock
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
+import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSUserDefaults
 import platform.UIKit.UIViewController
-import platform.UserNotifications.UNAuthorizationOptionAlert
-import platform.UserNotifications.UNAuthorizationOptionSound
 import platform.UserNotifications.UNMutableNotificationContent
 import platform.UserNotifications.UNNotificationRequest
 import platform.UserNotifications.UNNotificationSound
@@ -119,7 +131,6 @@ import platform.UserNotifications.UNUserNotificationCenter
 import com.valoser.futacha.shared.version.createVersionChecker
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -221,10 +232,6 @@ private object IosAppGraph {
     }
 }
 
-private const val IOS_BG_MAX_THREADS_PER_RUN = 40
-private const val IOS_BG_AUTO_SAVE_BUDGET_MILLIS = 90 * 1000L
-private const val IOS_BG_MAX_AUTO_SAVES_PER_RUN = 2
-private const val IOS_BG_REFRESH_TIMEOUT_MILLIS = 9 * 60 * 1000L
 private const val IOS_BG_REPOSITORY_CLOSE_TIMEOUT_MILLIS = 2_000L
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_COMPAT_MANUAL_HISTORY_REFRESH_TIMEOUT_MILLIS = 60_000L
@@ -236,7 +243,9 @@ private const val IOS_BACKGROUND_TASK_ENABLED_DECISION_KEY = "background_task_en
 private const val IOS_WATCH_PREVIEW_THREAD_LIMIT = 8
 private const val IOS_WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
 private const val IOS_WATCH_COMMAND_ID_MAX_BYTES = 128
-private const val IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES = 128 * 1024
+// WatchConnectivity rejects application contexts / messages above about 64KB; keep
+// headroom for the dictionary wrapper and trim the snapshot to fit.
+private const val IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES = 60 * 1024
 private const val IOS_WATCH_METADATA_LOAD_TIMEOUT_MILLIS = 1_000L
 private const val IOS_WATCH_HANDLED_COMMAND_ID_MAX_COUNT = 128
 private const val IOS_THREAD_DEEP_LINK_MAX_CHARS = 64 * 1024
@@ -250,6 +259,12 @@ private object IosThreadDeepLinkBridge {
     private val links = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
 
     fun submit(raw: String): Boolean {
+        // S4-3: a `futacha://ai` link (also open_thread / open_thread_url) is
+        // left to the AI command path (SwiftUI falls back to it when this
+        // returns false), where the "AIアプリ操作" setting, the URL host check
+        // and the lock rules apply in both modes. Routed as a plain thread link
+        // it bypassed them.
+        if (isIosFutachaAiLink(raw)) return false
         val normalized = normalizeIosThreadDeepLink(raw) ?: return false
         return links.tryEmit(normalized)
     }
@@ -273,16 +288,24 @@ private object IosBoardDeepLinkBridge {
 /** Called from SwiftUI's `onOpenURL` for both cold and warm launches. */
 fun submitIosThreadDeepLink(raw: String): Boolean = IosThreadDeepLinkBridge.submit(raw)
 
+/** Whether [raw] is a `futacha://ai` command link (S4-3). */
+internal fun isIosFutachaAiLink(raw: String): Boolean {
+    val trimmed = raw.trim()
+    val prefix = "futacha://ai"
+    if (!trimmed.startsWith(prefix, ignoreCase = true)) return false
+    val next = trimmed.getOrNull(prefix.length) ?: return true
+    return next == '?' || next == '/' || next == '#'
+}
+
 internal fun normalizeIosThreadDeepLink(raw: String): String? {
     if (raw.length > IOS_THREAD_DEEP_LINK_MAX_CHARS) return null
     val trimmed = raw.trim()
-    if (canonicalizeThreadUrl(trimmed) != null) return trimmed
-    // `futacha://ai?action=open_thread` is normally dispatched through the
-    // single-consumer AI command channel. Compatibility mode intentionally
-    // has a separate workspace, though, so routing a concrete thread target
-    // here prevents an iOS custom URL (or Watch handoff) from being consumed
-    // by the modern-only command receiver. Other AI actions keep their normal
-    // confirmation and command handling path.
+    // Emit the canonical `https://<official host>/...` form, never the raw
+    // value: only that string is known to name the host it was checked for (S4-1).
+    canonicalizeThreadUrl(trimmed)?.let { return it.canonicalUrl }
+    // App links never reach this branch any more: `futacha://ai` links take the
+    // AI command path so the AIアプリ操作 setting applies (S4-3). It remains for
+    // direct callers that already hold an open_thread command URL.
     parseFutachaAiDeepLink(trimmed, source = "ios-thread-deep-link")
         ?.takeIf {
             it.action == FutachaAiAction.OpenThread ||
@@ -290,7 +313,7 @@ internal fun normalizeIosThreadDeepLink(raw: String): String? {
         }
         ?.let(::resolveIosAiThreadTarget)
         ?.let { target ->
-            if (canonicalizeThreadUrl(target) != null) return target
+            canonicalizeThreadUrl(target)?.let { return it.canonicalUrl }
         }
     val withoutFragment = trimmed.substringBefore('#')
     val prefix = "futacha://thread"
@@ -308,7 +331,7 @@ internal fun normalizeIosThreadDeepLink(raw: String): String? {
         ?.let(::decodeIosThreadDeepLinkComponent)
         ?.trim()
         ?: return null
-    return value.takeIf { canonicalizeThreadUrl(it) != null }
+    return canonicalizeThreadUrl(value)?.canonicalUrl
 }
 
 private fun resolveIosAiThreadTarget(command: FutachaAiCommand): String? {
@@ -349,24 +372,32 @@ private object IosWatchSnapshotBridge {
     private val previousReplyCounts = mutableMapOf<WatchThreadKey, Int>()
     private val handledCommandIdsLock = NSLock()
     private val handledCommandIds = LinkedHashSet<String>()
-    private val refreshJobLock = NSLock()
-    private var refreshJob: Job? = null
-    private var lastRefreshStartedAt: TimeMark? = null
+    private val refreshController = IosWatchRefreshController(scope) {
+        val httpClient = IosAppGraph.acquireHttpClient()
+        try {
+            runIosBackgroundRefresh(
+                stateStore = IosAppGraph.stateStore,
+                httpClient = httpClient,
+                fileSystem = IosAppGraph.fileSystem,
+                autoSaveRepo = IosAppGraph.autoSavedThreadRepository,
+                cookieRepository = IosAppGraph.cookieRepository,
+                // A background task of about 30 s that also sends the snapshot (H4-1).
+                plan = IOS_WATCH_REFRESH_PLAN
+            )
+        } finally {
+            IosAppGraph.releaseHttpClient()
+        }
+    }
 
     fun requestSnapshotJson(completion: (String?) -> Unit) {
         scope.launch {
             val encoded = runSuspendCatchingPreservingCancellation {
                 val snapshot = buildSnapshot()
-                val snapshotJson = json.encodeToString(WatchSnapshot.serializer(), snapshot)
-                val payloadBytes = snapshotJson.encodeToByteArray().size
-                if (payloadBytes > IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) {
-                    Logger.w(
-                        "IosWatchSnapshotBridge",
-                        "Dropped watch snapshot because payload is too large: $payloadBytes bytes"
-                    )
+                encodeWatchSnapshotWithinPayload(snapshot, IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) { candidate ->
+                    json.encodeToString(WatchSnapshot.serializer(), candidate)
+                } ?: run {
+                    Logger.w("IosWatchSnapshotBridge", "Dropped watch snapshot because it cannot fit the payload limit")
                     null
-                } else {
-                    snapshotJson
                 }
             }.getOrElse { error ->
                 Logger.w("IosWatchSnapshotBridge", "Failed to build watch snapshot: ${error.message}")
@@ -459,45 +490,11 @@ private object IosWatchSnapshotBridge {
      * [IOS_WATCH_REFRESH_MIN_INTERVAL], like Android's WatchSyncManager, so a
      * repeatedly tapped "更新" cannot hammer the boards.
      */
-    private fun startWatchRefreshIfAllowed(): IosWatchRefreshDecision {
-        refreshJobLock.lock()
-        try {
-            val decision = resolveIosWatchRefreshDecision(
-                isRefreshRunning = refreshJob?.isActive == true,
-                elapsedSinceLastStart = lastRefreshStartedAt?.elapsedNow(),
-                minInterval = IOS_WATCH_REFRESH_MIN_INTERVAL
-            )
-            if (decision != IosWatchRefreshDecision.Start) return decision
-            lastRefreshStartedAt = TimeSource.Monotonic.markNow()
-            val nextJob = scope.launch(start = CoroutineStart.LAZY) {
-                val httpClient = IosAppGraph.acquireHttpClient()
-                try {
-                    runIosBackgroundRefresh(
-                        stateStore = IosAppGraph.stateStore,
-                        httpClient = httpClient,
-                        fileSystem = IosAppGraph.fileSystem,
-                        autoSaveRepo = IosAppGraph.autoSavedThreadRepository,
-                        cookieRepository = IosAppGraph.cookieRepository,
-                        maxThreadsPerRun = 40,
-                        autoSaveBudgetMillis = 60_000L
-                    )
-                } finally {
-                    IosAppGraph.releaseHttpClient()
-                    refreshJobLock.lock()
-                    try {
-                        if (refreshJob === coroutineContext[Job]) refreshJob = null
-                    } finally {
-                        refreshJobLock.unlock()
-                    }
-                }
-            }
-            refreshJob = nextJob
-            nextJob.start()
-            return decision
-        } finally {
-            refreshJobLock.unlock()
-        }
-    }
+    private fun startWatchRefreshIfAllowed(): IosWatchRefreshDecision = refreshController.startIfAllowed()
+
+    fun invokeWhenRefreshIdle(onIdle: () -> Unit) = refreshController.invokeWhenIdle(onIdle)
+
+    fun cancelRefresh() = refreshController.cancel()
 
     private fun enqueueIosWatchThreadAction(
         command: WatchCommand,
@@ -609,6 +606,21 @@ fun markIosWatchSnapshotDelivered(snapshotJson: String) {
     IosWatchSnapshotBridge.markSnapshotDelivered(snapshotJson)
 }
 
+/**
+ * Calls [onIdle] on the main thread once the Watch-requested refresh (if any)
+ * has finished, so Swift can end the background task it holds for it.
+ */
+fun invokeWhenIosWatchRefreshIdle(onIdle: () -> Unit) {
+    IosWatchSnapshotBridge.invokeWhenRefreshIdle {
+        dispatch_async(dispatch_get_main_queue()) { onIdle() }
+    }
+}
+
+/** Ends the Watch-requested refresh when iOS takes back its background time. */
+fun cancelIosWatchRefresh() {
+    IosWatchSnapshotBridge.cancelRefresh()
+}
+
 fun handleIosWatchCommandJson(commandJson: String): Boolean {
     return IosWatchSnapshotBridge.handleCommandJson(commandJson)
 }
@@ -673,7 +685,7 @@ fun registerIosBackgroundRefreshTask() {
             ExperienceProfile.TOSHIAKI_COMPAT ||
             (lastScreenDecision ?: true)
     Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabledAtLaunch=$enabledAtLaunch)")
-    BackgroundRefreshManager.configure(enabledAtLaunch) {
+    BackgroundRefreshManager.configure(enabledAtLaunch) { kind ->
         val httpClient = IosAppGraph.acquireHttpClient()
         try {
             runIosBackgroundRefresh(
@@ -681,7 +693,8 @@ fun registerIosBackgroundRefreshTask() {
                 httpClient = httpClient,
                 fileSystem = IosAppGraph.fileSystem,
                 autoSaveRepo = IosAppGraph.autoSavedThreadRepository,
-                cookieRepository = IosAppGraph.cookieRepository
+                cookieRepository = IosAppGraph.cookieRepository,
+                plan = iosBackgroundRefreshPlanFor(kind)
             )
         } finally {
             IosAppGraph.releaseHttpClient()
@@ -791,9 +804,13 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         var profileSwitchInProgress by remember { mutableStateOf(false) }
         var profileSessionActive by remember { mutableStateOf(true) }
         var profileSwitchError by remember { mutableStateOf<String?>(null) }
+        // The rollback gives the old profile a new generation, so the inline
+        // settings error is rebuilt away; this notice survives it (M-2).
+        var profileSwitchFailureNotice by remember { mutableStateOf<String?>(null) }
+        var isFutachaAppUnlocked by remember { mutableStateOf(false) }
         var platformThreadDeepLink by remember { mutableStateOf<String?>(null) }
         var platformBoardDeepLink by remember { mutableStateOf<String?>(null) }
-        var platformAiCommand by remember { mutableStateOf<FutachaAiCommand?>(null) }
+        var platformAiCommandQueue by remember { mutableStateOf<List<FutachaAiCommand>>(emptyList()) }
         LaunchedEffect(Unit) {
             IosThreadDeepLinkBridge.stream().collect { raw ->
                 platformThreadDeepLink = raw
@@ -808,11 +825,24 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         // it at the profile root and injects each command into the active
         // profile, so compatibility mode cannot lose commands to the modern
         // screen collector.
+        // Commands are queued and the active profile receives the head; a
+        // single slot let a second command overwrite one not yet consumed.
+        // While the queue is full (e.g. Shortcuts piling up behind the app
+        // lock) stop taking commands from the bridge instead of letting
+        // enqueuePlatformAiCommand drop the oldest one silently. The bridge
+        // channel then fills and further Shortcuts/Siri requests are refused
+        // at enqueue time, so the caller is told "not accepted" (C-12).
         LaunchedEffect(Unit) {
-            FutachaAiCommandBridge.commands.collect { command ->
-                platformAiCommand = command
+            while (true) {
+                snapshotFlow { platformAiCommandQueue.size }.first { it < PLATFORM_AI_COMMAND_QUEUE_MAX }
+                val queued = FutachaAiCommandBridge.receiveQueued()
+                // Keep the bridge enqueue time so a command waiting behind the
+                // queue head is aged from its real arrival (C-12).
+                FutachaAiCommandArrivals.record(queued.command, queued.enqueuedAt)
+                platformAiCommandQueue = enqueuePlatformAiCommand(platformAiCommandQueue, queued.command)
             }
         }
+        val platformAiCommand = platformAiCommandQueue.firstOrNull()
         val sharedRepository = remember(httpClient, cookieRepository, stateStore) {
             val api = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
             DefaultBoardRepository(
@@ -861,7 +891,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 modeSwitchCoordinator.recoverIfNeeded().getOrThrow()
                 val boards = stateStore.boards.first()
                 compatibilityStore.bootstrapBoardsIfNeeded(boards)
-                compatibilityStore.importModernHistory(stateStore.history.first())
+                // The modern history import runs after the first frame (below):
+                // reading up to 20k history files kept the screen blank for seconds.
                 if (compatibilityStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF") {
                     val startupProfile = profileStore.readActiveProfile()
                     val startupGeneration = profileStore.readGeneration()
@@ -879,6 +910,34 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 Logger.e("MainViewController", "Failed to initialize iOS compatibility profile", error)
                 initializationError = error.message ?: "互換モードの初期化に失敗しました"
             }
+        }
+        LaunchedEffect(initializationComplete, stateStore, compatibilityStore) {
+            if (!initializationComplete) return@LaunchedEffect
+            // Like Android, copy the modern history in the background. The
+            // import is idempotent and serialized by the store; a mode switch
+            // to compatibility imports again before it commits, and the
+            // compat -> modern merge below converges with it in either order.
+            runSuspendCatchingPreservingCancellation {
+                compatibilityStore.importModernHistory(stateStore.history.first())
+            }.onFailure { error ->
+                Logger.e("MainViewController", "Failed to import modern history into the compatibility store", error)
+            }
+        }
+        // Background refreshes only check notification permission (G-10), so
+        // ask here, while the app is visible, once a watch notification is on.
+        val isAppForeground = rememberIosApplicationActive()
+        LaunchedEffect(initializationComplete, isAppForeground, stateStore, compatibilityStore) {
+            if (!initializationComplete || !isAppForeground) return@LaunchedEffect
+            combine(stateStore.isWatchAlertEnabled, compatibilityStore.preferences) { futachaAlerts, preferences ->
+                iosWatchNotificationsWanted(futachaAlerts, preferences)
+            }
+                .distinctUntilChanged()
+                .collect { wanted ->
+                    if (wanted) {
+                        runSuspendCatchingPreservingCancellation { requestIosNotificationAuthorizationIfUndetermined() }
+                            .onFailure { Logger.w("MainViewController", "Notification permission check failed: ${it.message}") }
+                    }
+                }
         }
         LaunchedEffect(initializationComplete, stateStore, compatibilityStore, activeProfile) {
             if (!initializationComplete) return@LaunchedEffect
@@ -1078,7 +1137,13 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     )
                 }
             }
-            val profileController = ExperienceProfileUiController(
+            // Remembered: a new instance (fresh lambdas) on every recomposition of
+            // this scope, e.g. each app-lock change, replaced the static local
+            // and recomposed all of FutachaApp (M4-4).
+            val profileController = remember(
+                activeProfile, profileGeneration, profileSessionActive, profileSwitchInProgress,
+                profileSwitchError, profileStore, stateStore, compatibilityStore, modeSwitchCoordinator, profileScope
+            ) { ExperienceProfileUiController(
                 isAvailable = true,
                 activeProfile = activeProfile,
                 sessionGeneration = profileGeneration,
@@ -1125,13 +1190,14 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         } catch (error: Throwable) {
                             Logger.e("MainViewController", "iOS profile switch failed", error)
                             profileSwitchError = error.message ?: "モードを切り替えられませんでした"
+                            profileSwitchFailureNotice = modeSwitchFailureMessage(error)
                             profileSessionActive = true
                         } finally {
                             profileSwitchInProgress = false
                         }
                     }
                 }
-            )
+            ) }
             key(activeProfile, profileGeneration) {
                 CompositionLocalProvider(
                     LocalExperienceProfileUiController provides profileController,
@@ -1163,9 +1229,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         },
                         platformAiCommand = platformAiCommand,
                         onPlatformAiCommandConsumed = { consumed ->
-                            if (platformAiCommand === consumed) {
-                                platformAiCommand = null
-                            }
+                            FutachaAiCommandArrivals.forget(consumed)
+                            platformAiCommandQueue = consumePlatformAiCommand(platformAiCommandQueue, consumed)
                         },
                         consumeAiCommandBridge = false,
                         onArchiveReportEnqueued = { sendableCount ->
@@ -1182,9 +1247,26 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             )
                             else IosArchiveReportScheduler.cancel()
                         },
-                        onExitApplication = { profileController.requestSwitch(ExperienceProfile.FUTACHA) }
+                        onExitApplication = { profileController.requestSwitch(ExperienceProfile.FUTACHA) },
+                        // ContentView.swift presents saved HTML only while unlocked.
+                        onAppUnlockedChanged = { unlocked ->
+                            isFutachaAppUnlocked = unlocked
+                            publishIosAppUnlockedState(unlocked)
+                        }
                     )
                 }
+            }
+            // Outside FutachaApp, so gated on its lock state here (C-2): hidden,
+            // not dismissed, while the lock screen is shown.
+            profileSwitchFailureNotice?.takeIf { isFutachaAppUnlocked }?.let { message ->
+                AlertDialog(
+                    onDismissRequest = { profileSwitchFailureNotice = null },
+                    title = { Text("モードを切り替えられませんでした") },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = { profileSwitchFailureNotice = null }) { Text("OK") }
+                    }
+                )
             }
         } else if (initializationError != null) {
             // Every step above is idempotent, so a retry simply runs them again
@@ -1240,7 +1322,7 @@ private fun configureIosBackgroundRefresh(
         "MainViewController",
         "configureIosBackgroundRefresh(enabled=$enabled, hasFileSystem=${fileSystem != null}, hasAutoSaveRepo=${autoSaveRepo != null})"
     )
-    BackgroundRefreshManager.configure(enabled) {
+    BackgroundRefreshManager.configure(enabled) { kind ->
         val managedHttpClient = IosAppGraph.acquireHttpClient()
         try {
             runIosBackgroundRefresh(
@@ -1248,7 +1330,8 @@ private fun configureIosBackgroundRefresh(
                 httpClient = managedHttpClient,
                 fileSystem = fileSystem,
                 autoSaveRepo = autoSaveRepo,
-                cookieRepository = IosAppGraph.cookieRepository
+                cookieRepository = IosAppGraph.cookieRepository,
+                plan = iosBackgroundRefreshPlanFor(kind)
             )
         } finally {
             IosAppGraph.releaseHttpClient()
@@ -1269,10 +1352,7 @@ private suspend fun runIosBackgroundRefresh(
     fileSystem: com.valoser.futacha.shared.util.FileSystem?,
     autoSaveRepo: SavedThreadRepository?,
     cookieRepository: CookieRepository?,
-    maxThreadsPerRun: Int = IOS_BG_MAX_THREADS_PER_RUN,
-    autoSaveBudgetMillis: Long = IOS_BG_AUTO_SAVE_BUDGET_MILLIS,
-    maxAutoSavesPerRun: Int = IOS_BG_MAX_AUTO_SAVES_PER_RUN,
-    refreshTimeoutMillis: Long = IOS_BG_REFRESH_TIMEOUT_MILLIS
+    plan: IosBackgroundRefreshPlan
 ) {
     if (!iosBackgroundRefreshRunMutex.tryLock()) {
         Logger.d("BackgroundRefresh", "iOS background refresh already running; skipping duplicate run")
@@ -1285,10 +1365,7 @@ private suspend fun runIosBackgroundRefresh(
             fileSystem = fileSystem,
             autoSaveRepo = autoSaveRepo,
             cookieRepository = cookieRepository,
-            maxThreadsPerRun = maxThreadsPerRun,
-            autoSaveBudgetMillis = autoSaveBudgetMillis,
-            maxAutoSavesPerRun = maxAutoSavesPerRun,
-            refreshTimeoutMillis = refreshTimeoutMillis
+            plan = plan
         )
     } finally {
         iosBackgroundRefreshRunMutex.unlock()
@@ -1301,11 +1378,10 @@ private suspend fun runIosBackgroundRefreshLocked(
     fileSystem: com.valoser.futacha.shared.util.FileSystem?,
     autoSaveRepo: SavedThreadRepository?,
     cookieRepository: CookieRepository?,
-    maxThreadsPerRun: Int,
-    autoSaveBudgetMillis: Long,
-    maxAutoSavesPerRun: Int,
-    refreshTimeoutMillis: Long
+    plan: IosBackgroundRefreshPlan
 ) {
+    val maxThreadsPerRun = plan.maxThreadsPerRun
+    val refreshTimeoutMillis = plan.totalTimeoutMillis
     val profileStore = IosAppGraph.experienceProfileStore
     val activeProfile = profileStore.readActiveProfile()
     val expectedGeneration = profileStore.readGeneration()
@@ -1334,7 +1410,8 @@ private suspend fun runIosBackgroundRefreshLocked(
         autoSavedThreadRepository = autoSaveRepo,
         httpClient = httpClient,
         fileSystem = fileSystem,
-        maxConcurrency = 2
+        maxConcurrency = 2,
+        cursorNamespace = "background"
     )
     try {
         if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
@@ -1363,24 +1440,13 @@ private suspend fun runIosBackgroundRefreshLocked(
             }
             withTimeout(refreshTimeoutMillis) {
                 if (updateAllowed || existenceAllowed || watchWordsEnabled) {
-                    val watchResult = refreshCompatTabsInBackground(
-                        store = store,
-                        repository = repo,
-                        maxTabs = maxThreadsPerRun,
-                        checkUpdates = updateAllowed,
-                        checkExistence = existenceAllowed,
-                        checkWatchWords = watchWordsEnabled,
-                        commitGate = { commit ->
-                            profileStore.runIfGenerationCurrent(
-                                ExperienceProfile.TOSHIAKI_COMPAT,
-                                expectedGeneration,
-                                commit
-                            )
-                        }
-                    )
-                    if (preferences[com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY] != "OFF" &&
-                        profileStore.isGenerationCommitAllowed(ExperienceProfile.TOSHIAKI_COMPAT, expectedGeneration)) {
-                        val matches = watchResult.newWatchMatches.map { match ->
+                    suspend fun notifyRecordedWatchMatches(
+                        recorded: List<com.valoser.futacha.shared.compat.CompatWatchMatch>
+                    ) {
+                        if (preferences[com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY] == "OFF" ||
+                            !profileStore.isGenerationCommitAllowed(ExperienceProfile.TOSHIAKI_COMPAT, expectedGeneration)
+                        ) return
+                        val matches = recorded.map { match ->
                             com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
                                 threadId = match.history.threadNo,
                                 boardId = match.history.boardKey,
@@ -1394,6 +1460,30 @@ private suspend fun runIosBackgroundRefreshLocked(
                         }
                         notifyNewIosWatchAlertMatches(matches)
                     }
+                    refreshCompatTabsInBackground(
+                        store = store,
+                        repository = repo,
+                        maxTabs = maxThreadsPerRun,
+                        checkUpdates = updateAllowed,
+                        checkExistence = existenceAllowed,
+                        checkWatchWords = watchWordsEnabled,
+                        commitGate = { commit ->
+                            profileStore.runIfGenerationCurrent(
+                                ExperienceProfile.TOSHIAKI_COMPAT,
+                                expectedGeneration,
+                                commit
+                            )
+                        },
+                        // A short run stops each phase in time to save its
+                        // progress and the check times below (H4-1).
+                        budgetMillis = plan.compatRefreshBudgetMillis,
+                        updateBudgetMillis = plan.compatUpdateBudgetMillis,
+                        existenceBudgetMillis = plan.compatExistenceBudgetMillis,
+                        watchCheckBudgetMillis = plan.compatWatchCheckBudgetMillis,
+                        // Recording marks a match as seen; notify before the BGTask
+                        // deadline can cancel the later phases.
+                        onWatchMatchesRecorded = { recorded -> notifyRecordedWatchMatches(recorded) }
+                    )
                     if (updateAllowed || existenceAllowed) {
                         val completedAt = compatForegroundLastCheckStoredValue(
                             kotlin.time.Clock.System.now().toEpochMilliseconds()
@@ -1422,11 +1512,14 @@ private suspend fun runIosBackgroundRefreshLocked(
                         expectedGeneration
                     )
                 ) {
-                    IosArchiveReportScheduler.processNow(store) {
-                        profileStore.isGenerationCommitAllowed(
-                            ExperienceProfile.TOSHIAKI_COMPAT,
-                            expectedGeneration
-                        )
+                    // Each sent batch is saved; an unfinished one is retried later.
+                    withIosBackgroundStageTimeout(plan.archiveReportTimeoutMillis, "archive report") {
+                        IosArchiveReportScheduler.processNow(store) {
+                            profileStore.isGenerationCommitAllowed(
+                                ExperienceProfile.TOSHIAKI_COMPAT,
+                                expectedGeneration
+                            )
+                        }
                     }
                 }
             }
@@ -1444,31 +1537,37 @@ private suspend fun runIosBackgroundRefreshLocked(
             return
         }
         Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$maxThreadsPerRun, watchAlert=$watchAlertEnabled)")
-        withTimeout(refreshTimeoutMillis) {
-            if (sharedFeaturesEnabled) {
-                com.valoser.futacha.shared.compat.refreshSharedFeatures(archiveStore, repo, isCompatWifiConnected(null),
-                    maxTabs = maxThreadsPerRun, onNewMatches = { matches ->
-                        val alerts = matches.map { match -> com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
-                            threadId = match.history.threadNo, boardId = match.history.boardKey,
-                            boardName = match.history.boardName, boardUrl = match.history.originalUrl.substringBefore("/res/"),
-                            title = match.history.title, titleImageUrl = match.history.thumbnailUrl.orEmpty(),
-                            replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
-                        notifyNewIosWatchAlertMatches(alerts)
-                    }, commitGate = { commit ->
-                        profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
-                    },
-                    // Leave most of the short iOS window for the history refresh below.
-                    budgetMillis = refreshTimeoutMillis / 3)
-            }
-            if (backgroundEnabled) {
-                // A foreground history refresh may hold HistoryRefresher's
-                // process lock. Skip only this step: the watch alert and
-                // archive report steps below are independent of it.
-                try {
+        suspend fun runSharedFeatures() {
+            if (!sharedFeaturesEnabled) return
+            // Budgeted, so it returns in time to save its check times.
+            com.valoser.futacha.shared.compat.refreshSharedFeatures(archiveStore, repo, isCompatWifiConnected(null),
+                maxTabs = maxThreadsPerRun, onNewMatches = { matches ->
+                    val alerts = matches.map { match -> com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
+                        threadId = match.history.threadNo, boardId = match.history.boardKey,
+                        boardName = match.history.boardName, boardUrl = match.history.originalUrl.substringBefore("/res/"),
+                        title = match.history.title, titleImageUrl = match.history.thumbnailUrl.orEmpty(),
+                        replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
+                    notifyNewIosWatchAlertMatches(alerts)
+                }, commitGate = { commit ->
+                    profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
+                },
+                budgetMillis = plan.sharedFeaturesBudgetMillis)
+        }
+        suspend fun runHistory() {
+            if (!backgroundEnabled) return
+            // A foreground history refresh may hold HistoryRefresher's
+            // process lock. Skip only this step: the watch alert and
+            // archive report steps are independent of it.
+            try {
+                // Cut off, the refresher keeps what it saved and starts the
+                // next run at the first thread it did not finish.
+                withIosBackgroundStageTimeout(plan.historyTimeoutMillis, "history refresh") {
                     refresher.refresh(
-                        autoSaveBudgetMillis = autoSaveBudgetMillis,
+                        autoSaveBudgetMillis = plan.autoSaveBudgetMillis,
                         maxThreadsPerRun = maxThreadsPerRun,
-                        maxAutoSavesPerRun = maxAutoSavesPerRun,
+                        maxAutoSavesPerRun = plan.maxAutoSavesPerRun,
+                        threadFetchTimeoutMillisOverride = plan.threadFetchTimeoutMillis,
+                        runBudgetMillis = plan.historyRunBudgetMillis,
                         historyCommitGate = { commit ->
                             profileStore.runIfGenerationCurrent(
                                 ExperienceProfile.FUTACHA,
@@ -1484,35 +1583,55 @@ private suspend fun runIosBackgroundRefreshLocked(
                             )
                         }
                     )
-                } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
-                    Logger.d("BackgroundRefresh", "History refresh already running; skipping only the history step")
                 }
+            } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+                Logger.d("BackgroundRefresh", "History refresh already running; skipping only the history step")
             }
-            if (watchAlertEnabled && profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)) {
-                try {
-                    val result = CatalogWatchAlertRefresher(
+        }
+        suspend fun runWatchAlerts() {
+            if (!watchAlertEnabled || !profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)) return
+            try {
+                // Nothing is marked seen until notified. A cut-off check still
+                // notifies what it found; the rest is redone next run.
+                val result = withIosBackgroundStageTimeout(plan.watchAlertTimeoutMillis, "watch alert") {
+                    CatalogWatchAlertRefresher(
                         stateStore = stateStore,
                         repository = repo,
                         dispatcher = AppDispatchers.io
-                    ).refresh()
-                    val newMatches = notifyNewIosWatchAlertMatches(result.matches)
-                    if (newMatches.isNotEmpty()) {
-                        Logger.d("BackgroundRefresh", "Detected ${newMatches.size} iOS watch alert match(es)")
-                    }
-                    if (result.failureCount > 0) {
-                        Logger.w("BackgroundRefresh", "iOS watch alert partial failures: ${result.failureCount}")
-                    }
-                } catch (e: CatalogWatchAlertRefresher.RefreshAlreadyRunningException) {
-                    Logger.d("BackgroundRefresh", "Catalog watch alert refresh already running; skipping only that step")
+                    ).refresh(onMatchesFound = { matches ->
+                        val newMatches = notifyNewIosWatchAlertMatches(matches)
+                        if (newMatches.isNotEmpty()) {
+                            Logger.d("BackgroundRefresh", "Detected ${newMatches.size} iOS watch alert match(es)")
+                        }
+                    })
+                } ?: return
+                if (result.failureCount > 0) {
+                    Logger.w("BackgroundRefresh", "iOS watch alert partial failures: ${result.failureCount}")
                 }
+            } catch (e: CatalogWatchAlertRefresher.RefreshAlreadyRunningException) {
+                Logger.d("BackgroundRefresh", "Catalog watch alert refresh already running; skipping only that step")
             }
-            if (archiveReportEnabled && profileStore.isGenerationCommitAllowed(
+        }
+        suspend fun runArchiveReports() {
+            if (!archiveReportEnabled || !profileStore.isGenerationCommitAllowed(
                     ExperienceProfile.FUTACHA,
                     expectedGeneration
                 )
-            ) {
+            ) return
+            // Each sent batch is saved; an unfinished one is retried later.
+            withIosBackgroundStageTimeout(plan.archiveReportTimeoutMillis, "archive report") {
                 IosArchiveReportScheduler.processNow(archiveStore) {
                     profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)
+                }
+            }
+        }
+        withTimeout(refreshTimeoutMillis) {
+            plan.stageOrder.forEach { stage ->
+                when (stage) {
+                    IosBackgroundRefreshStage.SHARED_FEATURES -> runSharedFeatures()
+                    IosBackgroundRefreshStage.HISTORY -> runHistory()
+                    IosBackgroundRefreshStage.WATCH_ALERTS -> runWatchAlerts()
+                    IosBackgroundRefreshStage.ARCHIVE_REPORTS -> runArchiveReports()
                 }
             }
         }
@@ -1536,22 +1655,31 @@ private suspend fun runIosBackgroundRefreshLocked(
     }
 }
 
-private suspend fun notifyIosWatchAlertMatches(matches: List<CatalogWatchAlertMatch>) {
-    if (matches.isEmpty()) return
-    val center = UNUserNotificationCenter.currentNotificationCenter()
-    val granted = suspendCancellableCoroutine { continuation ->
-        center.requestAuthorizationWithOptions(
-            options = UNAuthorizationOptionAlert or UNAuthorizationOptionSound
-        ) { isGranted, error ->
-            if (error != null) {
-                Logger.w("BackgroundRefresh", "Failed to request iOS notification authorization: ${error.localizedDescription}")
-            }
-            if (continuation.isActive) {
-                continuation.resume(error == null && isGranted)
-            }
-        }
+/**
+ * Runs one stage of a background run within [timeoutMillis] (null: no cap of
+ * its own), so a stage that overruns leaves time for the later ones (H4-1).
+ */
+private suspend fun <T> withIosBackgroundStageTimeout(
+    timeoutMillis: Long?,
+    stage: String,
+    block: suspend () -> T
+): T? {
+    if (timeoutMillis == null) return block()
+    var finished = false
+    val result = withTimeoutOrNull(timeoutMillis) { block().also { finished = true } }
+    if (!finished) {
+        Logger.w("BackgroundRefresh", "iOS background $stage stage stopped after ${timeoutMillis}ms")
     }
-    if (!granted) return
+    return result
+}
+
+/**
+ * Schedules one notification for [matches]; true once iOS accepted it. Runs
+ * only with authorization already granted: background work never prompts.
+ */
+private suspend fun postIosWatchAlertNotification(matches: List<CatalogWatchAlertMatch>): Boolean {
+    if (matches.isEmpty()) return false
+    val center = UNUserNotificationCenter.currentNotificationCenter()
     val first = matches.first()
     val title = if (matches.size == 1) {
         "監視ワードに一致しました"
@@ -1573,43 +1701,41 @@ private suspend fun notifyIosWatchAlertMatches(matches: List<CatalogWatchAlertMa
         content = content,
         trigger = null
     )
-    suspendCancellableCoroutine { continuation ->
-        center.addNotificationRequest(request) { notificationError ->
-            if (notificationError != null) {
-                Logger.w("BackgroundRefresh", "Failed to post iOS watch alert notification: ${notificationError.localizedDescription}")
-            }
-            if (continuation.isActive) {
-                continuation.resume(Unit)
+    // Bounded: the caller holds the ledger lock and runs this without cancellation.
+    return withTimeoutOrNull(IOS_WATCH_ALERT_POST_TIMEOUT_MILLIS) {
+        suspendCancellableCoroutine { continuation ->
+            center.addNotificationRequest(request) { notificationError ->
+                if (notificationError != null) {
+                    Logger.w("BackgroundRefresh", "Failed to post iOS watch alert notification: ${notificationError.localizedDescription}")
+                }
+                if (continuation.isActive) {
+                    continuation.resume(notificationError == null)
+                }
             }
         }
-    }
+    } ?: false
 }
 
 /**
- * Guards the read → record → notify update of the single NSUserDefaults
- * ledger shared by every watch notification path (ふたちゃ catalog alerts,
- * shared-feature patrol and the compatibility refresh).
+ * Shared by every watch notification path (ふたちゃ catalog alerts,
+ * shared-feature patrol and the compatibility refresh), so they update the
+ * single NSUserDefaults ledger one at a time.
  */
-private val iosWatchAlertNotificationMutex = Mutex()
+private val iosWatchAlertNotifications = IosWatchAlertNotificationDispatcher(
+    isAuthorized = ::isIosNotificationAuthorized,
+    filterNew = ::filterNewIosWatchAlertMatches,
+    markNotified = ::markIosWatchAlertMatchesNotified,
+    post = ::postIosWatchAlertNotification
+)
 
 /**
- * Notifies only the matches not yet in the ledger and returns them. The
- * ledger is written before the notification is posted, so an expired task
- * can lose one notification but never repeat it.
+ * Notifies only the matches not yet in the ledger and returns them. Without
+ * notification permission nothing is recorded, so the matches are notified
+ * once permission is granted (see [IosWatchAlertNotificationDispatcher]).
  */
 private suspend fun notifyNewIosWatchAlertMatches(
     matches: List<CatalogWatchAlertMatch>
-): List<CatalogWatchAlertMatch> {
-    if (matches.isEmpty()) return emptyList()
-    return iosWatchAlertNotificationMutex.withLock {
-        val fresh = filterNewIosWatchAlertMatches(matches)
-        if (fresh.isNotEmpty()) {
-            markIosWatchAlertMatchesNotified(fresh)
-            notifyIosWatchAlertMatches(fresh)
-        }
-        fresh
-    }
-}
+): List<CatalogWatchAlertMatch> = iosWatchAlertNotifications.notifyNew(matches)
 
 private fun filterNewIosWatchAlertMatches(
     matches: List<CatalogWatchAlertMatch>
@@ -1636,3 +1762,15 @@ private fun markIosWatchAlertMatchesNotified(matches: List<CatalogWatchAlertMatc
 }
 
 private const val IOS_NOTIFIED_WATCH_ALERT_ENTRIES_KEY = "watch_alert_notified_match_entries"
+private const val IOS_WATCH_ALERT_POST_TIMEOUT_MILLIS = 10_000L
+
+private const val IOS_APP_LOCK_NOTIFICATION = "com.valoser.futacha.app-lock"
+
+/** Lets the SwiftUI host gate UI it presents outside Compose behind the app lock. */
+private fun publishIosAppUnlockedState(unlocked: Boolean) {
+    NSNotificationCenter.defaultCenter.postNotificationName(
+        aName = IOS_APP_LOCK_NOTIFICATION,
+        `object` = null,
+        userInfo = mapOf("unlocked" to unlocked)
+    )
+}

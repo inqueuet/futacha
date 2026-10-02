@@ -37,6 +37,23 @@ class DesktopAiConnectionStorageTest {
         } finally { credentials.delete(); directory.deleteRecursively() }
     }
 
+    @Test fun macKeychainStoresAndReloadsMaximumApiPool() = runBlocking {
+        assumeTrue(DesktopPlatform.isMac)
+        val directory = Files.createTempDirectory("futacha-key-pool-test").toFile()
+        val credentials = MacAiCredentials("test-pool-" + UUID.randomUUID())
+        try {
+            val storage = DesktopAiConnectionStorage(credentials, File(directory, "cache.json"))
+            val store = AiConnectionStore(storage).also { it.load() }
+            repeat(MAX_OPENAI_KEYS) { store.saveApiKey(null, "API $it", "test-$it-" + "x".repeat(1000)) }
+            assertTrue(credentials.read()!!.encodeToByteArray().size > 8192)
+            val reopened = AiConnectionStore(storage).also { it.load() }
+            assertNull(reopened.state.value.storageError)
+            assertEquals(MAX_OPENAI_KEYS, reopened.state.value.apiKeys.size)
+            assertEquals("test-0-" + "x".repeat(1000), reopened.apiKey(reopened.state.value.revision))
+            assertTrue(directory.walkTopDown().none { it.isFile })
+        } finally { credentials.delete(); directory.deleteRecursively() }
+    }
+
     @Test fun windowsDpapiRoundTripRejectsTamperingAndNeverWritesPlaintext() {
         assumeTrue(DesktopPlatform.isWindows)
         val directory = Files.createTempDirectory("futacha-dpapi-test").toFile()

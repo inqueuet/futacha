@@ -63,3 +63,92 @@ class CompatPlatformAiTargetsTest {
         assertNull(resolvePlatformAiCatalogSort(command()))
     }
 }
+
+class CompatPlatformAiThreadRouteTest {
+    private val may = CompatBoard("may", "may二次元", "https://may.2chan.net/b/", "https://may.2chan.net/b/", 0)
+    private val activeUrl = "https://may.2chan.net/b/res/123.htm"
+    private val active = CompatTab(
+        key = com.valoser.futacha.shared.compat.compatTabKey(activeUrl), canonicalUrl = activeUrl, originalUrl = activeUrl,
+        boardKey = "may", boardName = "may二次元", threadNo = "123", title = "", insertedAtEpochMillis = 0L,
+        contentUpdatedAtEpochMillis = 0L
+    )
+    private val workspace = CompatibilityWorkspaceState(
+        host = CompatHost.ThreadWorkspace(com.valoser.futacha.shared.compat.CompatThreadOrigin.MAIN),
+        activeTabKey = active.key,
+        tabs = listOf(active)
+    )
+
+    private fun command(vararg parameters: Pair<String, String>) =
+        FutachaAiCommand(FutachaAiAction.ScrollThreadToTop, parameters.toMap())
+
+    @Test fun commandWithoutThreadTargetsTheActiveTab() {
+        assertEquals(CompatPlatformAiThreadRoute.Active(active), resolvePlatformAiThreadRoute(command(), workspace, listOf(may)))
+        assertNull(resolvePlatformAiThreadRoute(command(), CompatibilityWorkspaceState(), listOf(may)))
+    }
+
+    @Test fun namedActiveThreadIsDeliveredInPlaceAndOthersAreOpened() {
+        assertEquals(
+            CompatPlatformAiThreadRoute.Active(active),
+            resolvePlatformAiThreadRoute(command("threadId" to "123"), workspace, listOf(may))
+        )
+        assertEquals(
+            CompatPlatformAiThreadRoute.Active(active),
+            resolvePlatformAiThreadRoute(command("url" to activeUrl), workspace, listOf(may))
+        )
+        val other = assertIs<CompatPlatformAiThreadRoute.Open>(
+            resolvePlatformAiThreadRoute(command("threadId" to "456"), workspace, listOf(may))
+        )
+        assertEquals("https://may.2chan.net/b/res/456.htm", other.thread.canonicalUrl)
+        assertEquals(may, other.board)
+    }
+
+    @Test fun unresolvableNamedThreadDoesNotFallBackToTheActiveTab() {
+        assertNull(resolvePlatformAiThreadRoute(command("threadId" to "12a"), workspace, listOf(may)))
+        assertTrue(platformAiCommandNamesThread(command("threadId" to "12a")))
+        assertFalse(platformAiCommandNamesThread(command("query" to "x")))
+    }
+
+    @Test fun deliveryGuardRunsEachDeliveryOnce() {
+        val guard = CompatPlatformAiDeliveryGuard()
+        val next = FutachaAiCommand(FutachaAiAction.NextSearchResult)
+        assertTrue(guard.claim(next))
+        assertFalse(guard.claim(next), "an effect restart must not advance the search twice")
+        // An equal but separate delivery (a second tap) still runs.
+        assertTrue(guard.claim(FutachaAiCommand(FutachaAiAction.NextSearchResult)))
+    }
+
+    // C4-6: draft_reply leaves its values in the target thread's stored draft.
+    @Test fun replyDraftMergesCommandValuesIntoTheStoredDraft() {
+        val stored = com.valoser.futacha.shared.compat.CompatReplyDraft(
+            tabKey = "t", name = "old", comment = "old body", attachmentUri = "file:a", deleteKey = "k", updatedAtEpochMillis = 1L
+        )
+        val draft = FutachaAiCommand(
+            FutachaAiAction.DraftReply,
+            mapOf("comment" to "こんにちは", "email" to "sage", "threadId" to "123")
+        )
+        val merged = assertNotNull(compatPlatformAiReplyDraft(draft, "t", stored, 9L))
+        assertEquals("こんにちは", merged.comment)
+        assertEquals("sage", merged.email)
+        assertEquals("old", merged.name)
+        assertEquals("file:a", merged.attachmentUri)
+        assertEquals("k", merged.deleteKey)
+        assertEquals(9L, merged.updatedAtEpochMillis)
+        val fresh = assertNotNull(compatPlatformAiReplyDraft(draft, "t", null, 9L))
+        assertEquals("t", fresh.tabKey)
+        assertEquals("こんにちは", fresh.comment)
+        // Without draft values the stored draft is left alone.
+        assertNull(compatPlatformAiReplyDraft(FutachaAiCommand(FutachaAiAction.DraftReply, mapOf("threadId" to "1")), "t", stored, 9L))
+    }
+
+    // C4-6: a draft_reply naming another thread opens that thread (not the active tab).
+    @Test fun draftReplyNamingAnotherThreadRoutesToThatThread() {
+        val route = resolvePlatformAiThreadRoute(
+            FutachaAiCommand(FutachaAiAction.DraftReply, mapOf("url" to "https://may.2chan.net/b/res/77.htm")),
+            workspace,
+            listOf(may)
+        )
+        val open = assertIs<CompatPlatformAiThreadRoute.Open>(route)
+        assertEquals("77", open.thread.threadNo)
+        assertEquals(may, open.board)
+    }
+}

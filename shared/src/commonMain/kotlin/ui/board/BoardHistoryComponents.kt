@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
@@ -63,6 +64,8 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreviewEntry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -126,6 +129,7 @@ internal fun HistoryDrawerContent(
     var importSelectionState by remember {
         mutableStateOf<HistoryImportSelectionState>(HistoryImportSelectionState.Hidden)
     }
+    val importPreviewLoad = remember { LatestOnlyLoad() }
     val sharedViewSettingsBinding = LocalHistoryViewSettingsBinding.current
     var localViewSettings by rememberSaveable(stateSaver = HistoryViewSettings.Saver) {
         mutableStateOf(HistoryViewSettings.Default)
@@ -141,10 +145,9 @@ internal fun HistoryDrawerContent(
     var draftViewSettings by remember { mutableStateOf(HistoryViewSettings.Default) }
     var isFilterSheetVisible by remember { mutableStateOf(false) }
     var isBatchDeleteConfirmationVisible by remember { mutableStateOf(false) }
-    val boardFilterOptions = remember(shownHistory) { buildHistoryBoardFilterOptions(shownHistory) }
-    val displayedHistory = remember(shownHistory, appliedViewSettings) {
-        applyHistoryViewSettings(shownHistory, appliedViewSettings)
-    }
+    val historyView = rememberHistoryDrawerView(shownHistory, appliedViewSettings, isVisible)
+    val boardFilterOptions = historyView.boardFilterOptions
+    val displayedHistory = historyView.displayedHistory
     val activeViewLabels = remember(appliedViewSettings, boardFilterOptions) {
         buildHistoryViewSummaryLabels(appliedViewSettings, boardFilterOptions)
     }
@@ -264,20 +267,11 @@ internal fun HistoryDrawerContent(
                     isExportSelectionVisible = true
                 } else {
                     importSelectionState = HistoryImportSelectionState.Loading
-                    coroutineScope.launch {
-                        importSelectionState = try {
-                            val preview = onLoadImportPreview()
-                            if (preview == null || preview.entries.isEmpty()) {
-                                HistoryImportSelectionState.Error("選択できる履歴アーカイブがありません")
-                            } else {
-                                HistoryImportSelectionState.Ready(preview)
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            HistoryImportSelectionState.Error(e.message ?: "履歴アーカイブを読み込めませんでした")
-                        }
-                    }
+                    importPreviewLoad.start(
+                        scope = coroutineScope,
+                        load = { loadHistoryImportSelectionState(onLoadImportPreview) },
+                        onResult = { importSelectionState = it }
+                    )
                 }
             }
         )
@@ -296,6 +290,9 @@ internal fun HistoryDrawerContent(
         HistoryImportSelectionState.Hidden -> Unit
         HistoryImportSelectionState.Loading -> {
             HistoryImportLoadingDialog(onDismiss = {
+                // Closing the loading dialog abandons the load, so a late
+                // preview or error never reopens a dialog the user closed.
+                importPreviewLoad.cancel()
                 importSelectionState = HistoryImportSelectionState.Hidden
             })
         }
@@ -325,7 +322,7 @@ internal fun HistoryDrawerContent(
                 countHistoryViewSettingsMatches(history, draftViewSettings)
             }
         }
-        HistoryFilterSheet(
+        FutachaAppLockAwareWindow { HistoryFilterSheet(
             totalCount = history.size,
             filteredCount = filteredCount,
             settings = draftViewSettings,
@@ -337,10 +334,10 @@ internal fun HistoryDrawerContent(
                 isFilterSheetVisible = false
             },
             onDismiss = { isFilterSheetVisible = false }
-        )
+        ) }
     }
     if (isBatchDeleteConfirmationVisible) {
-        HistoryBatchDeleteConfirmationDialog(
+        FutachaAppLockAwareWindow { HistoryBatchDeleteConfirmationDialog(
             totalCount = history.size,
             visibleCount = displayedHistory.size,
             hasHiddenEntries = displayedHistory.size != history.size,
@@ -350,7 +347,7 @@ internal fun HistoryDrawerContent(
                 onBatchDeleteClick()
             },
             onDismiss = { isBatchDeleteConfirmationVisible = false }
-        )
+        ) }
     }
     }
     if (bodyTextSize != null) {
@@ -545,6 +542,50 @@ private enum class HistoryArchiveAction {
     Import
 }
 
+private suspend fun loadHistoryImportSelectionState(
+    loadPreview: suspend () -> FutachaHistoryArchivePreview?
+): HistoryImportSelectionState = try {
+    val preview = loadPreview()
+    if (preview == null || preview.entries.isEmpty()) {
+        HistoryImportSelectionState.Error("選択できる履歴アーカイブがありません")
+    } else {
+        HistoryImportSelectionState.Ready(preview)
+    }
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    HistoryImportSelectionState.Error(e.message ?: "履歴アーカイブを読み込めませんでした")
+}
+
+/**
+ * Runs one load at a time on the caller's (main) scope. [cancel] or a newer
+ * [start] cancels the running load and drops its result even if the load
+ * finished without reaching a cancellation point, so a stale result never
+ * overwrites newer UI state.
+ */
+internal class LatestOnlyLoad {
+    private var job: Job? = null
+    private var generation = 0L
+
+    fun <T> start(scope: CoroutineScope, load: suspend () -> T, onResult: (T) -> Unit) {
+        cancel()
+        val token = generation
+        job = scope.launch {
+            val result = load()
+            if (token == generation) {
+                job = null
+                onResult(result)
+            }
+        }
+    }
+
+    fun cancel() {
+        generation += 1
+        job?.cancel()
+        job = null
+    }
+}
+
 private sealed interface HistoryImportSelectionState {
     data object Hidden : HistoryImportSelectionState
     data object Loading : HistoryImportSelectionState
@@ -563,7 +604,7 @@ private fun HistoryArchiveActionDialog(
     val title = if (action == HistoryArchiveAction.Export) "履歴エクスポート" else "履歴インポート"
     val allLabel = if (action == HistoryArchiveAction.Export) "すべてエクスポート" else "すべてインポート"
     val selectedLabel = if (action == HistoryArchiveAction.Export) "選択してエクスポート" else "選択してインポート"
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("history_archive_dialog", "履歴アーカイブ選択を閉じる")
             onDismiss()
@@ -608,7 +649,7 @@ private fun HistoryArchiveActionDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }
 
 @Composable
@@ -622,7 +663,7 @@ private fun HistoryExportSelectionDialog(
     var selectedKeys by remember {
         mutableStateOf(history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey))
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("history_export_selection", "履歴エクスポート選択を閉じる")
             onDismiss()
@@ -701,7 +742,7 @@ private fun HistoryExportSelectionDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }
 
 @Composable
@@ -751,7 +792,7 @@ private fun HistoryEntrySelectionRow(
 
 @Composable
 private fun HistoryImportLoadingDialog(onDismiss: () -> Unit) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("history_import_loading", "履歴インポート読み込みを閉じる")
             onDismiss()
@@ -775,7 +816,7 @@ private fun HistoryImportLoadingDialog(onDismiss: () -> Unit) {
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }
 
 @Composable
@@ -783,7 +824,7 @@ private fun HistoryImportErrorDialog(
     message: String,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("history_import_error", "履歴インポートエラーを閉じる")
             onDismiss()
@@ -798,7 +839,7 @@ private fun HistoryImportErrorDialog(
                 Text("OK")
             }
         }
-    )
+    ) }
 }
 
 @Composable
@@ -810,7 +851,7 @@ private fun HistoryImportSelectionDialog(
     var selectedSnapshotIds by remember(preview) {
         mutableStateOf(preview.entries.mapTo(linkedSetOf()) { it.snapshotId })
     }
-    AlertDialog(
+    FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("history_import_selection", "履歴インポート選択を閉じる")
             onDismiss()
@@ -890,7 +931,7 @@ private fun HistoryImportSelectionDialog(
                 Text("閉じる")
             }
         }
-    )
+    ) }
 }
 
 @Composable
@@ -1127,6 +1168,77 @@ private fun HistoryEntryCard(
 }
 
 /** Keeps the last list shown while the drawer is closed; see HistoryDrawerContent.isVisible. */
+/** The drawer's filtered and sorted list and board choices, with the inputs they came from. */
+internal class HistoryDrawerView(
+    val history: List<ThreadHistoryEntry>,
+    val settings: HistoryViewSettings,
+    val boardFilterOptions: List<HistoryBoardFilterOption>,
+    val displayedHistory: List<ThreadHistoryEntry>
+)
+
+internal fun buildHistoryDrawerView(
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    previous: HistoryDrawerView? = null
+): HistoryDrawerView = HistoryDrawerView(
+    history = history,
+    settings = settings,
+    boardFilterOptions = previous?.takeIf { it.history === history }?.boardFilterOptions
+        ?: buildHistoryBoardFilterOptions(history),
+    displayedHistory = applyHistoryViewSettings(history, settings)
+)
+
+/**
+ * A history refresh publishes a new list many times, and filtering/sorting up
+ * to 20k entries took 100-300 ms on the main thread each time. The drawer is
+ * composed on every board/catalog/thread screen even while closed, so the
+ * view is built on [AppDispatchers.parsing]; it is built in place only when
+ * the drawer is shown before that first build finished, so it never opens
+ * empty. Later inputs are built off Main while the previous list stays shown.
+ */
+@Composable
+private fun rememberHistoryDrawerView(
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    isVisible: Boolean
+): HistoryDrawerView {
+    val cache = remember { HistoryDrawerViewCache() }
+    val produced by produceState<HistoryDrawerView?>(null, history, settings) {
+        val current = value ?: cache.view
+        value = if (current != null && current.history === history && current.settings == settings) {
+            current
+        } else {
+            withContext(AppDispatchers.parsing) { buildHistoryDrawerView(history, settings, current) }
+        }
+        cache.view = null
+    }
+    return resolveHistoryDrawerView(produced, cache, history, settings, isVisible)
+}
+
+/** The first view built in place, shared with the background build so it is not built twice. */
+internal class HistoryDrawerViewCache {
+    var view: HistoryDrawerView? = null
+}
+
+/**
+ * The drawer's view for this frame: the latest background result, else one
+ * built in place only while the drawer is shown, else an empty placeholder
+ * for the closed (invisible) drawer.
+ */
+internal fun resolveHistoryDrawerView(
+    produced: HistoryDrawerView?,
+    cache: HistoryDrawerViewCache,
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    isVisible: Boolean,
+    build: (List<ThreadHistoryEntry>, HistoryViewSettings) -> HistoryDrawerView = { h, s -> buildHistoryDrawerView(h, s) }
+): HistoryDrawerView {
+    produced?.let { return it }
+    cache.view?.let { return it }
+    if (!isVisible) return HistoryDrawerView(emptyList(), settings, emptyList(), emptyList())
+    return build(history, settings).also { cache.view = it }
+}
+
 internal class HistoryDrawerSnapshotHolder {
     private var shown: List<ThreadHistoryEntry>? = null
 

@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.media.edit.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.media.MediaFeature
+import com.valoser.futacha.shared.media.mediaEditorFailureMessage
 import com.valoser.futacha.shared.media.analysis.*
 import com.valoser.futacha.shared.media.video.model.MosaicMaskTool
 import com.valoser.futacha.shared.ui.image.*
@@ -93,7 +95,7 @@ internal fun ImageEditorDialog(
             session = opened; loading = false
             awaitCancellation()
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { error = failure.message ?: "画像を読み込めませんでした"; loading = false }
+        catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "画像を読み込めませんでした"); loading = false }
         finally { opened?.close() }
     }
     // One collector renders each state to completion and then the newest one:
@@ -106,7 +108,7 @@ internal fun ImageEditorDialog(
             try {
                 preview = withContext(Dispatchers.Default) { imageEditBitmap(renderImageEdit(active.original, snapshot)) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "プレビューを作れませんでした" }
+            catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "プレビューを作れませんでした") }
         }
     }
     fun close() {
@@ -137,11 +139,11 @@ internal fun ImageEditorDialog(
                 history.change { snapshot.withContours(regions.map { it.id }, contours) }
                 contourTool = MosaicMaskTool.MOVE
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "輪郭を抽出できませんでした。枠は変更していません。" }
+            catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "輪郭を抽出できませんでした。枠は変更していません。") }
             finally { analysing = false; cancellingAnalysis = false; analysisProgress.value = null }
         }
     }
-    Dialog(onDismissRequest = ::close, properties = mediaEditorDialogProperties()) {
+    FutachaAppLockAwareWindow { Dialog(onDismissRequest = ::close, properties = mediaEditorDialogProperties()) {
         Surface(Modifier.fillMaxSize().testTag("image-editor")) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -160,7 +162,7 @@ internal fun ImageEditorDialog(
                                 active.checkActive(); ensureActive()
                                 if (dismissAfterResult) currentDismiss()
                             } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (failure: Exception) { error = failure.message ?: "編集結果を保存できませんでした" }
+                            catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "編集結果を保存できませんでした") }
                             finally { saving = false }
                         }
                     }, modifier = Modifier.testTag("image-editor-export")) { Text(if (saving) "処理中…" else confirmLabel) }
@@ -266,11 +268,11 @@ internal fun ImageEditorDialog(
                 }
             }
         }
-    }
-    if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("編集を終了しますか？") },
+    } }
+    if (discard) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { discard = false }, title = { Text("編集を終了しますか？") },
         text = { Text("確定していない編集は破棄されます。元の画像は変更されません。") },
         confirmButton = { TextButton(onClick = { saveJob?.cancel(); analysisJob?.cancel(); onDismiss() }) { Text("終了") } },
-        dismissButton = { TextButton(onClick = { discard = false }) { Text("編集を続ける") } })
+        dismissButton = { TextButton(onClick = { discard = false }) { Text("編集を続ける") } }) }
     if (showModels) AnalysisModelDialog(MediaFeature.IMAGE_EDITOR, onDismiss = { showModels = false })
     else if (showDetectionOptions) DetectionOptionsDialog(detectionSettings, onSettingsChanged = { detectionSettings = it }, onModels = { showModels = true },
         onDismiss = { showDetectionOptions = false }, onDetect = { options ->
@@ -292,7 +294,7 @@ internal fun ImageEditorDialog(
                         contourTool = MosaicMaskTool.MOVE
                         selected = updated.regions.firstOrNull { r -> snapshot.regions.none { it.id == r.id } }?.id ?: selected
                     } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (failure: Exception) { error = failure.message ?: "画像を解析できませんでした" }
+                    catch (failure: Throwable) { error = mediaEditorFailureMessage(failure, "画像を解析できませんでした") }
                     finally { analysing = false; cancellingAnalysis = false; analysisProgress.value = null }
                 }
             }

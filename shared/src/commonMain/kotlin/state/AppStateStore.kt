@@ -91,6 +91,10 @@ class AppStateStore internal constructor(
     private val catalogModeMutex = Mutex()
     private val selfPostIdentifiersMutex = Mutex()
     private val boardWatchWordsMutex = Mutex()
+    // Serializes read-modify-write edits of the NG / watch word lists so that
+    // two quick edits computed from the same (stale) UI snapshot cannot drop
+    // one another.  Only ever taken before boardWatchWordsMutex, never inside it.
+    private val wordListEditMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
@@ -224,20 +228,7 @@ class AppStateStore internal constructor(
         persistedHistory,
         preferenceFlows.selfPostIdentifierMapFlow
     ) { historyEntries, selfPostMap ->
-        historyEntries.map { entry ->
-            val scopedKey = if (entry.boardId.isBlank()) {
-                entry.threadId
-            } else {
-                "${entry.boardId}::${entry.threadId}"
-            }
-            val hasPersistedSelfPost = selfPostMap[scopedKey].orEmpty().isNotEmpty() ||
-                selfPostMap[entry.threadId].orEmpty().isNotEmpty()
-            if (hasPersistedSelfPost && !entry.hasSelfPost) {
-                entry.copy(hasSelfPost = true)
-            } else {
-                entry
-            }
-        }
+        applyPersistedSelfPostFlags(historyEntries, selfPostMap)
     }.distinctUntilChanged().flowOn(AppDispatchers.io)
     val observedHistory: Flow<List<ThreadHistoryEntry>> = history.shared()
 
@@ -480,6 +471,33 @@ class AppStateStore internal constructor(
     suspend fun clearBoardWatchWordsOverride(boardId: String) =
         preferenceOperations.clearBoardWatchWordsOverride(boardId)
 
+    /** Atomically re-applies [edit] to the latest stored NG headers. */
+    suspend fun updateNgHeaders(edit: (List<String>) -> List<String>) =
+        wordListEditMutex.withLock { setNgHeaders(edit(ngHeaders.first())) }
+
+    /** Atomically re-applies [edit] to the latest stored NG words. */
+    suspend fun updateNgWords(edit: (List<String>) -> List<String>) =
+        wordListEditMutex.withLock { setNgWords(edit(ngWords.first())) }
+
+    /** Atomically re-applies [edit] to the latest stored catalog NG words. */
+    suspend fun updateCatalogNgWords(edit: (List<String>) -> List<String>) =
+        wordListEditMutex.withLock { setCatalogNgWords(edit(catalogNgWords.first())) }
+
+    /** Atomically re-applies [edit] to the latest stored global watch words. */
+    suspend fun updateWatchWords(edit: (List<String>) -> List<String>) =
+        wordListEditMutex.withLock { setWatchWords(edit(watchWords.first())) }
+
+    /**
+     * Atomically re-applies [edit] to the board's watch words; without an
+     * override the global list is the starting point, as in the editor.
+     */
+    suspend fun updateBoardWatchWords(boardId: String, edit: (List<String>) -> List<String>) =
+        wordListEditMutex.withLock {
+            val normalizedBoardId = boardId.trim()
+            val base = boardWatchWords.first()[normalizedBoardId] ?: watchWords.first()
+            setBoardWatchWords(normalizedBoardId, edit(base))
+        }
+
     suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) =
         preferenceOperations.setThreadMenuConfig(config)
 
@@ -713,3 +731,31 @@ internal interface PlatformStateStorage {
 }
 
 internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage
+
+/**
+ * Marks entries that have self posts stored only in preferences. Returns
+ * [history] itself when nothing changes (the common case), so one history
+ * change does not rebuild the whole list and every entry's lookup key.
+ */
+internal fun applyPersistedSelfPostFlags(
+    history: List<ThreadHistoryEntry>,
+    selfPostMap: Map<String, List<String>>
+): List<ThreadHistoryEntry> {
+    if (selfPostMap.isEmpty()) return history
+    var updated: MutableList<ThreadHistoryEntry>? = null
+    history.forEachIndexed { index, entry ->
+        if (entry.hasSelfPost) return@forEachIndexed
+        val scopedKey = if (entry.boardId.isBlank()) {
+            entry.threadId
+        } else {
+            "${entry.boardId}::${entry.threadId}"
+        }
+        val hasPersistedSelfPost = selfPostMap[scopedKey].orEmpty().isNotEmpty() ||
+            selfPostMap[entry.threadId].orEmpty().isNotEmpty()
+        if (hasPersistedSelfPost) {
+            val target = updated ?: history.toMutableList().also { updated = it }
+            target[index] = entry.copy(hasSelfPost = true)
+        }
+    }
+    return updated ?: history
+}

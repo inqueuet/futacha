@@ -1,6 +1,9 @@
 package com.valoser.futacha.shared.media.analysis
 
 import com.valoser.futacha.shared.media.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.*
+import io.ktor.http.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -11,6 +14,131 @@ import kotlin.random.Random
 import kotlin.test.*
 
 class ModelStoreTest {
+    @Test fun interruptedTransferResumesItsPersistedBytesOnTheNextDownload() = runBlocking {
+        val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("model-resume-test-${Random.nextLong()}")
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val offsets = mutableListOf<Long>()
+        val store = ModelStore(gate, { directory }, { object : ModelDownloader {
+            override val supportsResume = true
+            override suspend fun download(distribution: ModelDistribution, sink: BufferedSink) = error("use resume")
+            override suspend fun resumeDownload(distribution: ModelDistribution, sink: BufferedSink, offset: Long) {
+                offsets += offset
+                if (offset == 0L) {
+                    sink.write(payload, 0, 3); sink.emit()
+                    throw IOException("connection lost")
+                }
+                sink.write(payload, offset.toInt(), payload.size - offset.toInt())
+            }
+        } }, models = listOf(spec()))
+        try {
+            val permit = gate.permit(MediaFeature.IMAGE_EDITOR)!!
+            assertFailsWith<IOException> { store.download(id, permit) }
+            val installed = store.download(id, permit)
+            assertEquals(listOf(0L, 3L), offsets)
+            assertContentEquals(payload, FileSystem.SYSTEM.read(installed.path) { readByteArray() })
+            assertEquals(listOf(installed.path), FileSystem.SYSTEM.list(directory))
+        } finally {
+            store.closeAndAwait()
+            FileSystem.SYSTEM.deleteRecursively(directory, mustExist = false)
+        }
+    }
+
+    @Test fun recreatedStoreWaitsForTheResumablePartialInsteadOfWritingItConcurrently() = runBlocking {
+        val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("model-resume-shared-test-${Random.nextLong()}")
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val firstWrote = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondOffsets = mutableListOf<Long>()
+        fun resuming(onResume: suspend (BufferedSink, Long) -> Unit) = object : ModelDownloader {
+            override val supportsResume = true
+            override suspend fun download(distribution: ModelDistribution, sink: BufferedSink) = error("use resume")
+            override suspend fun resumeDownload(distribution: ModelDistribution, sink: BufferedSink, offset: Long) = onResume(sink, offset)
+        }
+        val first = ModelStore(gate, { directory }, { resuming { sink, offset ->
+            sink.write(payload, offset.toInt(), 3); sink.emit(); firstWrote.complete(Unit)
+            releaseFirst.await()
+            sink.write(payload, offset.toInt() + 3, payload.size - offset.toInt() - 3)
+        } }, models = listOf(spec()))
+        // A host recreated while the first download still runs, sharing the same model directory.
+        val second = ModelStore(gate, { directory }, { resuming { sink, offset ->
+            secondOffsets += offset
+            sink.write(payload, offset.toInt(), payload.size - offset.toInt())
+        } }, models = listOf(spec()))
+        try {
+            val permit = gate.permit(MediaFeature.IMAGE_EDITOR)!!
+            withTimeout(10_000) {
+                coroutineScope {
+                    val a = async { first.download(id, permit) }
+                    firstWrote.await()
+                    val b = async { second.download(id, permit) }
+                    delay(300)
+                    assertEquals(emptyList(), secondOffsets, "The second store must not append to the partial being written")
+                    releaseFirst.complete(Unit)
+                    val installed = a.await()
+                    assertEquals(installed.path, b.await().path)
+                    assertEquals(emptyList(), secondOffsets, "The installed model is reused instead of downloaded again")
+                    assertContentEquals(payload, FileSystem.SYSTEM.read(installed.path) { readByteArray() })
+                    assertEquals(listOf(installed.path), FileSystem.SYSTEM.list(directory))
+                }
+            }
+        } finally {
+            first.closeAndAwait(); second.closeAndAwait()
+            FileSystem.SYSTEM.deleteRecursively(directory, mustExist = false)
+        }
+    }
+
+    @Test fun rejectedResumedResponseDiscardsThePartialAndRestartsFromZeroOnce() = runBlocking {
+        val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("model-resume-reject-test-${Random.nextLong()}")
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val spec = spec()
+        val partial = directory.resolve("download-${spec.distribution.sha256}.part")
+        FileSystem.SYSTEM.createDirectories(directory)
+        FileSystem.SYSTEM.write(partial) { write(payload, 0, 3) }
+        val ranges = mutableListOf<String?>()
+        val client = HttpClient(MockEngine { request ->
+            ranges += request.headers[HttpHeaders.Range]
+            if (request.headers[HttpHeaders.Range] != null) {
+                // Passes the status check but cannot continue the persisted bytes.
+                respond("x", HttpStatusCode.PartialContent, headersOf(HttpHeaders.ContentRange, "bytes 0-0/1"))
+            } else respond(payload, HttpStatusCode.OK)
+        }) { configureModelDownloads() }
+        val store = ModelStore(gate, { directory }, { KtorModelDownloader(client) }, models = listOf(spec))
+        try {
+            val installed = store.download(id, gate.permit(MediaFeature.IMAGE_EDITOR)!!)
+            assertEquals(listOf("bytes=3-", null), ranges)
+            assertContentEquals(payload, FileSystem.SYSTEM.read(installed.path) { readByteArray() })
+            assertEquals(listOf(installed.path), FileSystem.SYSTEM.list(directory))
+        } finally {
+            store.closeAndAwait()
+            FileSystem.SYSTEM.deleteRecursively(directory, mustExist = false)
+        }
+    }
+
+    @Test fun firstUseRemovesResumablePartialsOfReplacedOrLongAbandonedDownloads() = runBlocking {
+        val gate = MediaFeatureGate().apply { update(enabled) }
+        val spec = spec()
+        val foreign = "download-${"0".repeat(64)}.part"
+        val current = "download-${spec.distribution.sha256}.part"
+        for (expired in listOf(false, true)) {
+            val directory = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("model-partial-cleanup-test-${Random.nextLong()}")
+            FileSystem.SYSTEM.createDirectories(directory)
+            for (name in listOf(foreign, current, "download-user.part")) {
+                FileSystem.SYSTEM.write(directory.resolve(name)) { writeUtf8("partial") }
+            }
+            val later = if (expired) 8L * 24 * 60 * 60 * 1000 else 0L
+            val store = ModelStore(gate, { directory }, { error("no HTTP") }, models = listOf(spec),
+                now = { kotlin.time.Clock.System.now().toEpochMilliseconds() + later })
+            try {
+                assertNull(store.verified(id, gate.permit(MediaFeature.IMAGE_EDITOR)!!))
+                val expected = if (expired) setOf("download-user.part") else setOf(current, "download-user.part")
+                assertEquals(expected, FileSystem.SYSTEM.list(directory).map { it.name }.toSet())
+            } finally {
+                store.closeAndAwait()
+                FileSystem.SYSTEM.deleteRecursively(directory, mustExist = false)
+            }
+        }
+    }
+
     private val enabled = MediaFeatureSettings(imageEditorEnabled = true, videoEditorEnabled = true)
     private val id = AnalysisModel.NUDE_NET
     private val payload = "verified onnx fixture".encodeToByteArray()

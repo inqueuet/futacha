@@ -23,6 +23,25 @@ class CompatThreadFetchTest {
     private val cache = "https://cache.example"
     private val page = ThreadPage("123", "b", null, null, emptyList())
 
+    @Test fun archiveOnlyFallbackRejectsAnotherThreadWithAndWithoutArchiveLoader() = runBlocking {
+        val wrong = page.copy(threadId = "999")
+        val explicit = loadCompatThreadWithFallback(source, false, cache, archiveLoader = { wrong }) { error("live unavailable") }
+        assertTrue(explicit.isFailure)
+        val implicit = loadCompatThreadWithFallback(source, false, cache) { url ->
+            if (url == source) error("live unavailable") else wrong
+        }
+        assertTrue(implicit.isFailure)
+    }
+
+    @Test fun archiveOnlyFallbackSkipsWrongCandidateAndUsesMatchingThread() = runBlocking {
+        var candidate = 0
+        val result = loadCompatThreadWithFallback(source, false, cache, archiveLoader = {
+            if (++candidate == 1) page.copy(threadId = "999") else page
+        }) { error("live unavailable") }
+        assertEquals(page, result.getOrThrow().page)
+        assertEquals(CompatThreadFetchSource.ARCHIVE, result.getOrThrow().source)
+    }
+
     @Test
     fun coldOrEmptySnapshotAlwaysFetchesWithoutManualRefresh() {
         assertTrue(shouldFetchCompatThread(manual = false, refreshOnActivation = false, cachedPostCount = 0))
@@ -123,6 +142,31 @@ class CompatThreadFetchTest {
         assertEquals(CompatThreadFetchSource.MERGED, result.source)
         assertEquals(listOf("123", "124"), result.page.posts.map { it.id })
         assertEquals(false, result.page.isTruncated)
+    }
+
+    @Test
+    fun archivePageForAnotherThreadIsNotMergedIntoSupplement() = runBlocking {
+        val post = com.valoser.futacha.shared.model.Post(
+            id = "123", order = 0, author = "としあき", subject = null,
+            timestamp = "26/08/08(土)00:00:00", posterId = null, messageHtml = "live",
+            imageUrl = null, thumbnailUrl = null
+        )
+        val live = ThreadPage("123", "板", null, null, listOf(post))
+        val otherThread = ThreadPage(
+            "999", "板", null, null,
+            listOf(post.copy(id = "999"), post.copy(id = "1000", order = 1, messageHtml = "other"))
+        )
+        val result = loadCompatThreadWithFallback(
+            sourceUrl = source,
+            cacheEnabled = false,
+            cacheBaseUrl = null,
+            expectedReplyCount = 1,
+            archiveLoader = { otherThread },
+            loader = { live }
+        ).getOrThrow()
+
+        assertEquals(CompatThreadFetchSource.PRIMARY, result.source)
+        assertEquals(listOf("123"), result.page.posts.map { it.id })
     }
 
     @Test

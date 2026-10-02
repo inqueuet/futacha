@@ -248,7 +248,7 @@ private fun resolveThreadQuoteTargets(
     }
     // A bare leading number (">100円ショップ", ">3枚目") is only a post reference when
     // that post exists; otherwise the line is quoted text and falls through to text matching.
-    val explicitNumber = config.noReferenceRegex.find(content)?.groupValues?.getOrNull(1)
+    val explicitNumber = findThreadNoReference(content, config.noReferenceRegex, knownPostIds)
         ?: config.leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
             ?.takeIf { it in knownPostIds }
     if (explicitNumber != null) {
@@ -268,6 +268,25 @@ private fun resolveThreadQuoteTargets(
     val partialTargets = findThreadPartialLineTargets(normalized, messageLineIndex, config)
     return ThreadQuoteLineResolution(partialTargets, isExplicit = false)
 }
+
+/**
+ * A "No.123" opening the quote is always a reference. One later in the text
+ * (">これNo.123") only when that post exists: ">シャネルNo.5の香り" is quoted
+ * text and must fall through to text matching.
+ */
+private fun findThreadNoReference(
+    content: String,
+    noReferenceRegex: Regex,
+    knownPostIds: Set<String>
+): String? {
+    for (match in noReferenceRegex.findAll(content).take(MAX_NO_REFERENCE_CANDIDATES)) {
+        val number = match.groupValues.getOrNull(1) ?: continue
+        if (match.range.first == 0 || number in knownPostIds) return number
+    }
+    return null
+}
+
+private const val MAX_NO_REFERENCE_CANDIDATES = 16
 
 private fun resolveThreadMediaTargets(
     content: String,
