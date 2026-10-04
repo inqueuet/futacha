@@ -4,7 +4,7 @@ import io.ktor.client.HttpClient
 
 actual fun createVersionChecker(httpClient: HttpClient): VersionChecker {
     return object : VersionChecker {
-        override fun getCurrentVersion(): String = System.getProperty("futacha.desktop.version", "12.2")
+        override fun getCurrentVersion(): String = System.getProperty("futacha.desktop.version", "12.3")
         override suspend fun checkForUpdate(): UpdateInfo? = null
     }
 }

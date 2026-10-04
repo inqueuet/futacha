@@ -2259,6 +2259,7 @@ private fun CompatibilityAppContent(
         ) == "ON",
         customFontFamily = customFontFamily
     ) {
+    com.valoser.futacha.shared.ui.SettingsRecoveryNoticeDialog()
     if (!boardsLoaded) {
         Box(
             modifier = Modifier
@@ -3253,10 +3254,8 @@ private fun CompatibilityAppContent(
                     }
             )
         }
-        // ApplyCompatSystemBars owns the platform status-bar surface. A second
-        // Compose inset overlay here was measured as 95px on API 37 while the
-        // actual status bar is 63px, tinting the first part of the toolbar and
-        // producing the black/transparent top band visible in the drawer.
+        // The theme paints native system-bar bounds outside this drawer tree;
+        // do not add the larger Compose safe inset to the toolbar's background.
     }
     if (closeToastVisible) {
         state.pendingClose?.let { batch ->
@@ -3441,11 +3440,8 @@ private fun CompatibilityAppContent(
             confirmButton = { TextButton(onClick = { platformAiFeedback = null }) { Text("OK") } }
         ) }
     }
-    // ApplyCompatSystemBars sets the platform navigation-bar color. Do not add
-    // a Compose navigation-inset-sized box here: on Android 15+/API 35+ the
-    // reported inset can include the mandatory gesture region as well, which
-    // creates the oversized black/transparent band reported in the history
-    // drawer and catalog screenshots.
+    // System navigation is painted by the theme without reserving extra layout
+    // space here; each screen already keeps its controls above that boundary.
     }
 }
 

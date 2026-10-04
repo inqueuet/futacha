@@ -336,13 +336,6 @@ fun FutachaApp(
             devicePerformanceProfile = devicePerformanceProfile,
             resolvedStartupTheme = resolvedStartupTheme
         )
-        // Both modes: tell the user once that damaged settings were recovered (G-19).
-        FutachaTheme(
-            themeMode = resolvedStartupTheme.mode,
-            themePalette = resolvedStartupTheme.palette
-        ) {
-            SettingsRecoveryNoticeDialog()
-        }
         // Reclaims ZIP staging files left by a save that was killed (E-5).
         fileSystem?.let { fs ->
             LaunchedEffect(fs) { com.valoser.futacha.shared.service.sweepStaleZipStagingFiles(fs) }
@@ -668,6 +661,9 @@ private fun FutachaAppContent(
         themeMode = observedRuntimeState.themeMode,
         themePalette = observedRuntimeState.themePalette
     ) {
+        // Notices share the active screen's theme. A separate theme host also
+        // paints system bars, even when the notice itself has nothing to show.
+        SettingsRecoveryNoticeDialog()
         val persistedLightweightMode by produceState<Boolean?>(
             initialValue = null,
             key1 = stateStore

@@ -5635,6 +5635,64 @@ class CompatSettingsSchemaInstrumentedTest {
     }
 
     @Test
+    fun edgeToEdgeSystemBarPixelsFollowCompatibilityThemeAndNavigationPreference() {
+        rule.activity.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme {
+                    CompatibilityApp(store = store, repository = null, onExitApplication = {})
+                }
+            }
+        }
+        rule.onNodeWithContentDescription("その他").assertIsDisplayed()
+        val cases = listOf(
+            Triple("default", Color(0xFF009688), Color(0xFF009688)),
+            Triple("futaba", Color(0xFF542D24), Color(0xFF542D24)),
+            Triple("black", Color.Black, Color.Black)
+        )
+        for ((theme, statusColor, toolbarColor) in cases) {
+            for (navigationBackground in listOf(false, true)) {
+                runBlocking {
+                    store.savePreference("compat.design.designTheme", theme)
+                    store.savePreference("compat.design.designNavigationBar", if (navigationBackground) "ON" else "OFF")
+                }
+                val navigationColor = if (!navigationBackground) toolbarColor else if (theme == "black") Color.Black
+                    else if (theme == "futaba") Color(0xFFFFFFEE) else Color(0xFFE6E6E6)
+                rule.waitForIdle()
+                val insets = checkNotNull(ViewCompat.getRootWindowInsets(rule.activity.window.decorView))
+                val statusHeight = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+                val navigationHeight = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+                assertTrue("status inset must be present", statusHeight > 0)
+                assertTrue("navigation inset must be present", navigationHeight > 0)
+                rule.waitUntil(5_000) {
+                    val pixels = rule.onRoot().captureToImage().toPixelMap()
+                    pixels[pixels.width / 2, statusHeight - 2] == statusColor &&
+                        pixels[pixels.width / 2, pixels.height - navigationHeight + 2] == navigationColor
+                }
+                val pixels = rule.onRoot().captureToImage().toPixelMap()
+                assertEquals("$theme must not tint the toolbar below the status bar",
+                    toolbarColor, pixels[pixels.width - 2, statusHeight + 2])
+                // Include the actual OS composition, not just the app window:
+                // platform scrims and bar colours can cover correct Compose pixels.
+                val screen = checkNotNull(androidx.test.platform.app.InstrumentationRegistry
+                    .getInstrumentation().uiAutomation.takeScreenshot())
+                try {
+                    assertEquals("$theme actual OS clock region", statusColor,
+                        Color(screen.getPixel(screen.width / 4, statusHeight - 2)))
+                    assertEquals("$theme actual OS navigation region", navigationColor,
+                        Color(screen.getPixel(screen.width / 4, screen.height - navigationHeight + 2)))
+                    if (theme == "default" && !navigationBackground) {
+                        val file = java.io.File(context.getExternalFilesDir(null), "compat-system-bars.png")
+                        file.outputStream().use { screen.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    }
+                } finally {
+                    screen.recycle()
+                }
+            }
+        }
+    }
+
+    @Test
     fun catalogBottomBarClearsCurrentSystemNavigationMode() {
         // Run this same assertion with the emulator's gestural and three-button
         // overlays. MainActivity is edge-to-edge on every supported API, so the
@@ -5671,8 +5729,28 @@ class CompatSettingsSchemaInstrumentedTest {
         }
 
         rule.onNodeWithText(boardUrl).performClick()
+        waitForContentDescriptionPresent("ナビゲーション境界確認")
         rule.onNodeWithContentDescription("ナビゲーション境界確認").assertIsDisplayed()
         assertBottomBarClearsSystemNavigation("compat-main-bottom-bar")
+        val insets = checkNotNull(ViewCompat.getRootWindowInsets(rule.activity.window.decorView))
+        val statusHeight = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+        val navigationHeight = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+        val screen = checkNotNull(androidx.test.platform.app.InstrumentationRegistry
+            .getInstrumentation().uiAutomation.takeScreenshot())
+        try {
+            val chrome = Color(0xFF009688)
+            assertEquals("catalog clock background", chrome,
+                Color(screen.getPixel(screen.width / 4, statusHeight - 2)))
+            assertEquals("catalog action bar background", chrome,
+                Color(screen.getPixel(screen.width - 2, screen.height - navigationHeight - 2)))
+            assertEquals("catalog OS navigation background", chrome,
+                Color(screen.getPixel(screen.width / 4, screen.height - navigationHeight + 2)))
+            java.io.File(context.getExternalFilesDir(null), "compat-catalog-system-bars.png").outputStream().use {
+                screen.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+        } finally {
+            screen.recycle()
+        }
         rule.onNodeWithContentDescription("リロード").assertIsDisplayed().performClick()
     }
 

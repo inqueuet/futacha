@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import platform.Foundation.NSNotificationCenter
 
@@ -27,3 +28,10 @@ internal actual fun ApplyCompatSystemBars(
         )
     }
 }
+
+@Composable
+internal actual fun CompatSystemBarBackgrounds(
+    statusBarColor: Color,
+    navigationBarColor: Color,
+    modifier: Modifier
+) = Unit

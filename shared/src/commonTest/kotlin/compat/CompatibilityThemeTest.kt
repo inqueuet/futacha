@@ -14,6 +14,8 @@ import com.valoser.futacha.shared.ui.compat.compatibilitySearchBarColors
 import com.valoser.futacha.shared.ui.compat.compatibilitySettingsCategoryColor
 import com.valoser.futacha.shared.ui.compat.compatibilityUsesDarkStatusBarIcons
 import com.valoser.futacha.shared.ui.compat.statusBarColor
+import com.valoser.futacha.shared.ui.compat.navigationBarColor
+import com.valoser.futacha.shared.ui.compat.compatibilityUsesDarkSystemBarIcons
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -101,6 +103,23 @@ class CompatibilityThemeTest {
     }
 
     @Test
+    fun osBarsContinueTheToolbarColourAndKeepReadableIcons() {
+        listOf(null, "モノクロ", "ふたば", "ブルー", "ピンク", "ブラック").forEach { theme ->
+            val palette = compatibilityPaletteFor(theme)
+            assertEquals(palette.chrome, palette.statusBarColor(), theme)
+            assertEquals(palette.chrome, palette.navigationBarColor(false), theme)
+            assertEquals(palette.background, palette.navigationBarColor(true), theme)
+            listOf(palette.statusBarColor(), palette.navigationBarColor(false), palette.navigationBarColor(true))
+                .forEach { background ->
+                    val icon = if (compatibilityUsesDarkSystemBarIcons(background)) Color.Black else Color.White
+                    val contrast = (maxOf(icon.luminance(), background.luminance()) + 0.05f) /
+                        (minOf(icon.luminance(), background.luminance()) + 0.05f)
+                    assertTrue(contrast >= 4.5f, "$theme OS icons have contrast $contrast")
+                }
+        }
+    }
+
+    @Test
     fun popupColorsFollowBlackThemeWithoutChangingLegacyLightPopup() {
         val light = compatibilityPaletteFor(null)
         val black = compatibilityPaletteFor("ブラック")
@@ -138,9 +157,9 @@ class CompatibilityThemeTest {
             assertEquals(colors.second, palette.background, name)
             assertEquals(colors.third, palette.text, name)
         }
-        assertEquals(Color(0xFF00867B), compatibilityPaletteFor(null).statusBarColor())
+        assertEquals(Color(0xFF009688), compatibilityPaletteFor(null).statusBarColor())
         assertEquals(Color(0xFF26A69A), compatibilityPaletteFor(null).accent)
-        assertEquals(Color(0xFF1E1E1E), compatibilityPaletteFor("ブラック").statusBarColor())
+        assertEquals(Color.Black, compatibilityPaletteFor("ブラック").statusBarColor())
         assertEquals(Color.White, compatibilityPaletteFor("ブラック").accent)
         assertEquals(Color.White, compatibilityPaletteFor("ブラック").inputCursor)
         assertEquals(Color(0xFF117743), compatibilityPaletteFor("ふたば").inputCursor)

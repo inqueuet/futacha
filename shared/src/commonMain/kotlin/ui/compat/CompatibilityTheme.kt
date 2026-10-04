@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -9,6 +11,7 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.MenuItemColors
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 
@@ -93,16 +96,16 @@ internal fun compatibilitySaidaneColor(
     return if (count != null && count >= threshold.coerceAtLeast(1)) palette.saidaneMax else palette.saidane
 }
 
-/** The old viewer uses a slightly darker strip behind status-bar icons. */
-internal fun CompatibilityPalette.statusBarColor(): Color = statusBarChrome ?: Color(
-        red = (chrome.red * 0.88f).coerceIn(0f, 1f),
-        green = (chrome.green * 0.88f).coerceIn(0f, 1f),
-        blue = (chrome.blue * 0.88f).coerceIn(0f, 1f),
-        alpha = chrome.alpha
-    )
+/** Extend the toolbar colour into the OS region, including the pure-black theme. */
+internal fun CompatibilityPalette.statusBarColor(): Color = chrome
+
+internal fun CompatibilityPalette.navigationBarColor(useBackground: Boolean): Color =
+    if (useBackground) background else chrome
+
+internal fun compatibilityUsesDarkSystemBarIcons(color: Color): Boolean = color.luminance() > 0.179f
 
 internal fun compatibilityUsesDarkStatusBarIcons(palette: CompatibilityPalette): Boolean =
-    palette.statusBarColor().luminance() > 0.5f
+    compatibilityUsesDarkSystemBarIcons(palette.statusBarColor())
 
 /** Keep every legacy popup on the selected theme's surface. */
 internal fun compatibilityPopupSurface(palette: CompatibilityPalette): Color =
@@ -175,12 +178,12 @@ internal fun CompatibilityProfileTheme(
     val compatSurfaceVariant = if (isBlack) palette.menuSurface else Color(0xFFF4F4F4)
     val readableUiContent = compatibilityPopupContent(palette)
     CompositionLocalProvider(LocalCompatibilityPalette provides palette) {
-        val navigationBarColor = if (navigationBarBackground) palette.background else Color.Black
+        val navigationBarColor = palette.navigationBarColor(navigationBarBackground)
         ApplyCompatSystemBars(
             statusBarColor = palette.statusBarColor(),
             navigationBarColor = navigationBarColor,
             useDarkStatusBarIcons = compatibilityUsesDarkStatusBarIcons(palette),
-            useDarkNavigationBarIcons = navigationBarColor.luminance() > 0.5f
+            useDarkNavigationBarIcons = compatibilityUsesDarkSystemBarIcons(navigationBarColor)
         )
         // The compatibility UI uses the old APK's light dialog/sheet surfaces as
         // well as its palette. Without an explicit scheme, the host app's dynamic
@@ -216,7 +219,19 @@ internal fun CompatibilityProfileTheme(
                 onError = Color.White
             ),
             typography = compatibilityTypography(customFontFamily),
-            content = content
+            content = {
+                Box(Modifier.fillMaxSize()) {
+                    content()
+                    // Android 15+ ignores Window bar colours in edge-to-edge
+                    // mode. Paint behind its glyphs without adding any inset
+                    // padding to the toolbar, drawer, or scrolling content.
+                    CompatSystemBarBackgrounds(
+                        statusBarColor = palette.statusBarColor(),
+                        navigationBarColor = navigationBarColor,
+                        modifier = Modifier.matchParentSize()
+                    )
+                }
+            }
         )
     }
 }

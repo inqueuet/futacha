@@ -126,6 +126,13 @@ class MainActivity : ComponentActivity() {
             }
         }
         enableEdgeToEdge()
+        // Android 15 can retain the decor's legacy inset fitting on recreation.
+        // Keep layout flags explicit as well as WindowCompat's modern setting.
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         setContent {
             val profileStore = remember(app) { app?.experienceProfileStore }
             val activeProfile = if (profileStore != null) {
