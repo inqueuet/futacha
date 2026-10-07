@@ -492,13 +492,23 @@ private fun ThreadScreenContent(
         setIsHistoryRefreshing = { isHistoryRefreshing = it }
     )
     var displayedPostsLayout by remember(threadId) { mutableStateOf(ThreadDisplayedPostsLayout()) }
+    var readAloudForeground by remember { mutableStateOf(true) }
+    var readAloudScrollJob by remember { mutableStateOf<Job?>(null) }
+    com.valoser.futacha.shared.ui.compat.CompatForegroundLifecycleEffect { foreground ->
+        readAloudForeground = foreground
+        if (!foreground) readAloudScrollJob?.cancel()
+    }
     val readAloudCallbacks = ThreadScreenReadAloudCallbacks(
         showMessage = showMessage,
         showOptionalMessage = showOptionalMessage,
         scrollToPostIndex = { postIndex ->
             // Segments index the displayed posts; the list has summary/notice
             // rows ahead of them.
-            lazyListState.animateScrollToItem(displayedPostsLayout.itemsBeforePosts.coerceAtLeast(0) + postIndex)
+            // A background Compose frame clock is paused. Speech must never await its animation.
+            readAloudScrollJob?.cancel()
+            if (readAloudForeground) readAloudScrollJob = coroutineScope.launch {
+                lazyListState.animateScrollToItem(displayedPostsLayout.itemsBeforePosts.coerceAtLeast(0) + postIndex)
+            }
         },
         speakText = textSpeaker::speak,
         cancelActiveReadAloud = cancelActiveReadAloud
@@ -611,13 +621,16 @@ private fun ThreadScreenContent(
     val threadReplyActionCallbacks = asyncHandles.threadReplyActionCallbacks
     val autoSaveBindings = asyncHandles.autoSaveBindings
     val manualSaveBindings = asyncHandles.manualSaveBindings
+    val choosePhotoSaveDestination = rememberPhotoSaveDestination(httpClient, fileSystem) { saveResultMessage = it }
     val singleMediaSaveBindings = asyncHandles.singleMediaSaveBindings.copy(
         savePreviewMedia = { entry ->
             if (!isManualSaveInProgress && !isSingleMediaSaveInProgress) {
                 savedFileToShare = null
-                withSaveDestination { location ->
-                    if (location == null) asyncHandles.singleMediaSaveBindings.savePreviewMedia(entry)
-                    else asyncHandles.singleMediaSaveBindings.saveToLocation(entry, location)
+                choosePhotoSaveDestination(entry.url) {
+                    withSaveDestination { location ->
+                        if (location == null) asyncHandles.singleMediaSaveBindings.savePreviewMedia(entry)
+                        else asyncHandles.singleMediaSaveBindings.saveToLocation(entry, location)
+                    }
                 }
             }
         }
@@ -684,19 +697,14 @@ private fun ThreadScreenContent(
     PlatformBackHandler {
         runtimeLifecycleBindings.onBackPressed()
     }
-    PlatformBackgroundLifecycleEffect {
-        stopReadAloud()
-        // Recomposition (and the watch status effect) is paused after ON_STOP;
-        // clear the status here so the watch does not keep showing "speaking".
-        WatchReadAloudStatusStore.clearIfMatches(
-            boardId = board.id,
-            boardUrl = effectiveBoardUrl,
-            threadId = threadId
-        )
-    }
 
     val appUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
     LaunchedEffect(appUnlocked) { if (!appUnlocked) stopReadAloud() }
+    val speechAppLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(speechAppLock) {
+        // App-lock changes must stop speech even while UI recomposition is paused.
+        speechAppLock?.sessionUnlocked?.collect { unlocked -> if (!unlocked) stopReadAloud() }
+    }
     val refreshThread = loadBindings.refreshThread
 
     // Keyed on the repository too: on Android the first frame can use the
@@ -1498,7 +1506,10 @@ private fun ThreadScreenContent(
         }, onRefresh = refreshThread,
         onOpenThread = onHistoryEntrySelected, onShowPost = scrollToPost, onClose = onBack,
         onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
-        onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) }
+        onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) },
+        effectiveBoardUrl = effectiveBoardUrl,
+        isActionInProgress = { actionInProgress },
+        setActionInProgress = { actionInProgress = it }
     ) {
     CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors) {
         MaterialTheme(
@@ -1636,64 +1647,44 @@ private fun ThreadReadAloudWatchEffects(
     currentIndex: () -> Int,
     setIndex: (Int) -> Unit
 ) {
-    val readAloudStatus = currentStatus()
-    val currentReadAloudIndex = currentIndex()
-    // Keeps the read position on the same post across refreshes and AI hiding (C-6).
     ThreadReadAloudIndexEffect(
         segments = readAloudSegments,
         currentStatus = currentStatus,
         currentIndex = currentIndex,
         onCurrentReadAloudIndexChanged = setIndex
     )
-    val watchReadAloudPlaybackState = when (readAloudStatus) {
-        is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
-        is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
-        ReadAloudStatus.Idle -> null
+    val latestSegments by rememberUpdatedState(readAloudSegments)
+    val latestStatus by rememberUpdatedState(currentStatus)
+    val latestIndex by rememberUpdatedState(currentIndex)
+    DisposableEffect(boardId, effectiveBoardUrl, threadId) {
+        onDispose { WatchReadAloudStatusStore.clearIfMatches(boardId, effectiveBoardUrl, threadId) }
     }
-    val watchReadAloudProgressBucket = remember(
-        watchReadAloudPlaybackState,
-        currentReadAloudIndex,
-        readAloudSegments.size
-    ) {
-        resolveWatchReadAloudProgressUpdateBucket(
-            playbackState = watchReadAloudPlaybackState,
-            currentIndex = currentReadAloudIndex,
-            totalPosts = readAloudSegments.size
-        )
-    }
-    LaunchedEffect(
-        boardId,
-        effectiveBoardUrl,
-        threadId,
-        watchReadAloudPlaybackState,
-        watchReadAloudProgressBucket,
-        readAloudSegments.size
-    ) {
-        if (watchReadAloudPlaybackState == null) {
-            WatchReadAloudStatusStore.clearIfMatches(
-                boardId = boardId,
-                boardUrl = effectiveBoardUrl,
-                threadId = threadId
-            )
-            return@LaunchedEffect
+    // Observe session state without waiting for a UI frame: recomposition is paused with the screen off.
+    LaunchedEffect(boardId, effectiveBoardUrl, threadId) {
+        snapshotFlow {
+            val state = when (latestStatus()) {
+                is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
+                is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
+                ReadAloudStatus.Idle -> null
+            }
+            Triple(state, resolveWatchReadAloudProgressUpdateBucket(state, latestIndex(), latestSegments.size), latestSegments.size)
+        }.collect { (state, _, count) ->
+            if (state == null) {
+                WatchReadAloudStatusStore.clearIfMatches(boardId, effectiveBoardUrl, threadId)
+            } else {
+                val segment = when (val status = latestStatus()) {
+                    is ReadAloudStatus.Speaking -> status.segment
+                    is ReadAloudStatus.Paused -> status.segment
+                    ReadAloudStatus.Idle -> null
+                }
+                WatchReadAloudStatusStore.update(WatchReadAloudStatus(
+                    boardId = boardId, boardUrl = effectiveBoardUrl, threadId = threadId,
+                    state = state, postId = segment?.postId,
+                    currentIndex = latestIndex().coerceAtLeast(0), totalPosts = count,
+                    updatedAtMillis = Clock.System.now().toEpochMilliseconds()
+                ))
+            }
         }
-        val segment = when (val status = readAloudStatus) {
-            is ReadAloudStatus.Speaking -> status.segment
-            is ReadAloudStatus.Paused -> status.segment
-            ReadAloudStatus.Idle -> null
-        }
-        WatchReadAloudStatusStore.update(
-            WatchReadAloudStatus(
-                boardId = boardId,
-                boardUrl = effectiveBoardUrl,
-                threadId = threadId,
-                state = watchReadAloudPlaybackState,
-                postId = segment?.postId,
-                currentIndex = currentReadAloudIndex.coerceAtLeast(0),
-                totalPosts = readAloudSegments.size,
-                updatedAtMillis = Clock.System.now().toEpochMilliseconds()
-            )
-        )
     }
 }
 

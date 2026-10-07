@@ -323,7 +323,8 @@ private class FakeCatalogWatchRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
     override suspend fun createThread(
         board: String,
@@ -334,7 +335,8 @@ private class FakeCatalogWatchRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
     override fun close() = Unit
     override fun closeAsync(): kotlinx.coroutines.Job = kotlinx.coroutines.Job().also { it.complete() }

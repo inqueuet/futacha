@@ -120,9 +120,9 @@ internal suspend fun getOrLoadHttpBoardApiPostingConfig(
             } catch (e: Exception) {
                 Logger.w(
                     logTag,
-                    "Failed to fetch posting config for board '$board', using non-cached Shift_JIS fallback: ${e.message}"
+                    "Posting form unavailable for board '$board'; POST cancelled"
                 )
-                fallbackHttpBoardApiPostingConfig(fallbackChrencValue)
+                throw NetworkException("投稿フォームを取得できないため送信していません。下書きを保持して再度お試しください: ${e.message}", cause = e)
             }
         }
     } finally {
@@ -166,7 +166,7 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
         }
     // This fetch precedes every post. Without a bound, the platform retry plugin
     // (up to 3 attempts x the 75 s request timeout on Android) could hold the post for
-    // minutes on a bad network; a failure here falls back to the default config instead.
+    // minutes on a bad network; a failure here must stop the post.
     return withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
         // Streamed: get() buffered the whole page (for a reply, the whole
         // thread) before the reader could bound it or stop early.
@@ -179,6 +179,7 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
         }.execute { response ->
             readHttpBoardApiPostingConfigResponse(
                 response = response,
+                expectedThreadId = threadId,
                 board = board,
                 url = url,
                 logTag = logTag,
@@ -192,6 +193,7 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
 
 private suspend fun readHttpBoardApiPostingConfigResponse(
     response: HttpResponse,
+    expectedThreadId: String?,
     board: String,
     url: String,
     logTag: String,
@@ -205,14 +207,19 @@ private suspend fun readHttpBoardApiPostingConfigResponse(
             val suffix = detail?.let { ": $it" }.orEmpty()
             throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url$suffix")
         }
-        val html = readResponseBodyAsString(response)
+        val html = extractHttpBoardApiPostingForm(readResponseBodyAsString(response))
+        val fields = parseHttpBoardApiPostingFieldNames(html)
+        if (!fields.containsAll(setOf("mode", "com", "email", "pwd", "chrenc")) ||
+            (expectedThreadId != null && parseHttpBoardApiInputValue(html, "resto") != expectedThreadId)) {
+            throw NetworkException("投稿先のフォームを確認できないため送信していません。スレッドを更新して確認してください")
+        }
         val chrencValue = parseHttpBoardApiChrencValue(html)
         val hashValue = parseHttpBoardApiInputValue(html, "hash")
         val ptuaValue = parseHttpBoardApiInputValue(html, "ptua")
         val maxFileSizeBytes = parseHttpBoardApiInputValue(html, "MAX_FILE_SIZE")?.toLongOrNull()
         val supportedExtensions = parseHttpBoardApiPostingExtensions(html)
-        if (chrencValue == null) {
-            Logger.w(logTag, "chrenc not found in posting config response for '$board'; using temporary fallback")
+        if (chrencValue.isNullOrBlank() || hashValue.isNullOrBlank() || ptuaValue.isNullOrBlank()) {
+            throw NetworkException("投稿フォームの必須情報が不足しているため送信していません")
         }
         return resolveHttpBoardApiPostingConfig(
             chrencValue = chrencValue,
@@ -221,8 +228,8 @@ private suspend fun readHttpBoardApiPostingConfigResponse(
             ptuaValue = ptuaValue,
             maxFileSizeBytes = maxFileSizeBytes,
             supportedExtensions = supportedExtensions,
-            cacheable = hashValue == null && ptuaValue == null
-        )
+            cacheable = false
+        ).copy(formFields = parseHttpBoardApiPostingFieldNames(html))
     } finally {
         // Body lifecycle is managed in readResponseBodyAsString.
     }
@@ -254,3 +261,14 @@ private fun nextHttpBoardApiRetryDelayMillis(delayMillis: Long): Long {
         (delayMillis * 2).coerceAtMost(5_000L)
     }
 }
+
+internal fun extractHttpBoardApiPostingForm(html: String): String {
+    val forms = Regex("<form\\b[^>]*>.*?</form\\s*>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    return forms.findAll(html).map { it.value }.firstOrNull {
+        parseHttpBoardApiInputValue(it, "mode") == "regist"
+    } ?: throw NetworkException("投稿フォームが見つからないため送信していません")
+}
+
+internal fun parseHttpBoardApiPostingFieldNames(html: String): Set<String> =
+    Regex("""<(?:input|textarea|select)\b[^>]*\bname\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))""", RegexOption.IGNORE_CASE)
+        .findAll(html).map { match -> match.groupValues.drop(1).first { it.isNotEmpty() } }.toSet()

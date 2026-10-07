@@ -237,6 +237,7 @@ internal fun ProvideFutachaSharedFeatures(
         LocalCompatibilityPalette provides palette
     ) {
         MaterialTheme(typography = compatibilityTypography(font, MaterialTheme.typography)) {
+        com.valoser.futacha.shared.ui.privacy.PrivacyModeHost(store, appStateStore, compatibilityMode = false) {
         Box(Modifier.fillMaxSize()) {
             content()
             if (closedBatch != null || notification != null) Snackbar(
@@ -277,6 +278,7 @@ internal fun ProvideFutachaSharedFeatures(
                     )
                 }
             } }
+        }
         }
         }
     }

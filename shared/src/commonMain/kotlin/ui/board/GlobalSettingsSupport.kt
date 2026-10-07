@@ -109,6 +109,9 @@ internal fun resolveGlobalSettingsBehaviorText(
     )
 }
 
+/** Desktop cannot pick a "preferred file manager": its picker dialog is empty and the row did nothing. */
+internal fun shouldShowPreferredFileManagerRow(isDesktopPlatform: Boolean): Boolean = !isDesktopPlatform
+
 internal fun resolveGlobalSettingsSaveText(
     isAndroidPlatform: Boolean
 ): GlobalSettingsSaveText {

@@ -54,8 +54,12 @@ import com.valoser.futacha.shared.watch.WatchPostPreview
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchThreadSummary
-import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
-import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_STALE_AGE_MILLIS
+import com.valoser.futacha.shared.watch.WatchSnapshotFreshness
+import com.valoser.futacha.shared.watch.classifyWatchSnapshotFreshness
+import com.valoser.futacha.shared.watch.isWatchReadAloudStatusFreshOnWatch
+import androidx.core.app.NotificationManagerCompat
+import com.valoser.futacha.wear.sync.WatchClockOffsetStore
+import com.valoser.futacha.wear.sync.WatchPhoneModeStore
 import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
 import com.valoser.futacha.wear.sync.PhoneCommandClient
 import com.valoser.futacha.wear.sync.WatchSnapshotStore
@@ -115,6 +119,8 @@ private fun FutachaWearApp() {
     val snapshot by WatchSnapshotStore.observe().collectAsState()
     var isPhoneReachable by remember { mutableStateOf<Boolean?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    val isPhoneUnsupported by WatchPhoneModeStore.observeUnsupported().collectAsState()
+    var notificationsBlocked by remember { mutableStateOf(false) }
 
     LaunchedEffect(context) {
         WatchSnapshotStore.loadPersisted(context.applicationContext)
@@ -128,6 +134,10 @@ private fun FutachaWearApp() {
         // composition can stay alive in the background.
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
+                // Without the permission the watch-word alerts and the read-aloud Live Update
+                // never appear; the request is made only once, so say so on screen.
+                notificationsBlocked = !NotificationManagerCompat.from(context.applicationContext)
+                    .areNotificationsEnabled()
                 if (Log.isLoggable(POLL_LOG_TAG, Log.DEBUG)) Log.d(POLL_LOG_TAG, "Checking phone reachability")
                 Wearable.getNodeClient(context.applicationContext)
                     .connectedNodes
@@ -155,7 +165,11 @@ private fun FutachaWearApp() {
         FutachaWearContent(
             snapshot = snapshot,
             isPhoneReachable = isPhoneReachable,
-            statusMessage = statusMessage,
+            statusMessage = buildWatchStatusNotice(
+                statusMessage = statusMessage,
+                isPhoneUnsupported = isPhoneUnsupported,
+                areNotificationsBlocked = notificationsBlocked
+            ),
             onRefresh = {
                 statusMessage = "スマホで更新を要求しました"
                 commandClient.requestRefresh()
@@ -217,14 +231,16 @@ private fun FutachaWearContent(
     val selectedThread = snapshot?.threads?.firstOrNull {
         it.boardId == selectedThreadKey?.boardId && it.threadId == selectedThreadKey?.threadId
     }
-    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    val clockContext = LocalContext.current.applicationContext
+    // The phone's time as far as the watch can tell: the watch clock can be minutes off.
+    var nowMillis by remember { mutableStateOf(WatchClockOffsetStore.phoneNowMillis(clockContext)) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         // Tick only while visible; refresh at once when shown again.
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                nowMillis = System.currentTimeMillis()
+                nowMillis = WatchClockOffsetStore.phoneNowMillis(clockContext)
                 delay(WATCH_NOW_TICK_MILLIS)
             }
         }
@@ -320,7 +336,10 @@ private fun WearScreenContent(
             .background(Color.Black)
     ) {
         when {
-            snapshot == null || screen == WearScreen.Empty -> EmptySnapshotView(onRequestSync = onRequestSync)
+            snapshot == null || screen == WearScreen.Empty -> EmptySnapshotView(
+                statusMessage = statusMessage,
+                onRequestSync = onRequestSync
+            )
             screen == WearScreen.Thread && selectedThread != null -> ThreadDetailView(
                 thread = selectedThread,
                 nowMillis = nowMillis,
@@ -362,6 +381,7 @@ private fun WearScreenContent(
 
 @Composable
 private fun EmptySnapshotView(
+    statusMessage: String?,
     onRequestSync: () -> Unit
 ) {
     WatchScreen {
@@ -377,6 +397,15 @@ private fun EmptySnapshotView(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
+        statusMessage?.let { message ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = message,
+                fontSize = 10.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Spacer(Modifier.height(14.dp))
         ActionRow(label = "同期を要求", onClick = onRequestSync)
     }
@@ -773,7 +802,7 @@ private fun WatchStatusText(
         Text(
             text = message,
             fontSize = 10.sp,
-            maxLines = 2,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -908,14 +937,14 @@ private fun buildReadAloudStatusLabel(
 
 private fun buildSnapshotSyncLabel(
     generatedAtMillis: Long,
-    nowMillis: Long = System.currentTimeMillis()
+    nowMillis: Long
 ): String {
     val timeLabel = formatSnapshotGeneratedAt(generatedAtMillis)
-    val ageMillis = nowMillis - generatedAtMillis
-    return if (generatedAtMillis <= 0 || ageMillis !in 0..WATCH_SNAPSHOT_STALE_AGE_MILLIS) {
-        "同期古い $timeLabel"
-    } else {
-        "同期 $timeLabel"
+    return when (classifyWatchSnapshotFreshness(generatedAtMillis, nowMillis)) {
+        WatchSnapshotFreshness.Fresh -> "同期 $timeLabel"
+        WatchSnapshotFreshness.Stale -> "同期古い $timeLabel"
+        // The snapshot is dated ahead of the watch clock: say so instead of "old".
+        WatchSnapshotFreshness.ClockSkew -> "時計ずれ $timeLabel"
     }
 }
 
@@ -928,14 +957,10 @@ private fun buildPhoneConnectionLabel(isPhoneReachable: Boolean?): String {
 }
 
 private fun WatchThreadSummary.freshReadAloudStatus(
-    nowMillis: Long = System.currentTimeMillis()
+    nowMillis: Long
 ): WatchReadAloudStatus? {
     val status = readAloudStatus ?: return null
-    val ageMillis = nowMillis - status.updatedAtMillis
-    return status.takeIf {
-        status.updatedAtMillis > 0 &&
-            ageMillis in 0..WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
-    }
+    return status.takeIf { isWatchReadAloudStatusFreshOnWatch(it.updatedAtMillis, nowMillis) }
 }
 
 private fun WatchThreadSummary.toWearThreadKey(): WearThreadKey =

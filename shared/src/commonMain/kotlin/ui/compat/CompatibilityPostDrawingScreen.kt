@@ -292,16 +292,24 @@ fun CompatPostDrawingScreen(
                     val snapshot = strokes.toList()
                     val size = canvasSize
                     scope.launch {
-                        renderCompatDrawingPng(
-                            scaleCompatDrawingStrokesForReferencePng(snapshot, size.width, size.height),
-                            Color(COMPAT_DRAWING_CANVAS_COLOR_ARGB).toArgb(),
-                            COMPAT_DRAWING_OUTPUT_WIDTH_PX,
-                            COMPAT_DRAWING_OUTPUT_HEIGHT_PX
-                        ).map { drawing ->
-                            drawing.copy(fileName = compatDrawingFileName(kotlin.time.Clock.System.now().toEpochMilliseconds()))
-                        }.onSuccess(onSaved)
-                            .onFailure { error = it.message ?: "手書き画像を保存できませんでした" }
-                        saving = false
+                        // saving must be released even when rendering or the save callback throws.
+                        try {
+                            renderCompatDrawingPng(
+                                scaleCompatDrawingStrokesForReferencePng(snapshot, size.width, size.height),
+                                Color(COMPAT_DRAWING_CANVAS_COLOR_ARGB).toArgb(),
+                                COMPAT_DRAWING_OUTPUT_WIDTH_PX,
+                                COMPAT_DRAWING_OUTPUT_HEIGHT_PX
+                            ).map { drawing ->
+                                drawing.copy(fileName = compatDrawingFileName(kotlin.time.Clock.System.now().toEpochMilliseconds()), isHandwriting = true)
+                            }.onSuccess(onSaved)
+                                .onFailure { error = it.message ?: "手書き画像を保存できませんでした" }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (failure: Throwable) {
+                            error = failure.message ?: "手書き画像を保存できませんでした"
+                        } finally {
+                            saving = false
+                        }
                     }
                 }) { Text("保存する") }
             },

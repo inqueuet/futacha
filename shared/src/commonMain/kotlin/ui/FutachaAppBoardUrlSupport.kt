@@ -20,9 +20,22 @@ internal fun BoardSummary.isMockBoard(): Boolean {
     return url.contains("example.com", ignoreCase = true)
 }
 
+// A pasted board/thread page (futaba.htm, res/123.htm) names a document inside the board directory.
+private val BOARD_URL_DOCUMENT_SUFFIX = Regex("(?i)/(?:futaba\\.html?|res/\\d+\\.html?)$")
+
+/**
+ * Turns `https://host/b/futaba.htm` or `https://host/b/res/123.htm` (query/fragment included) into the
+ * board directory `https://host/b/`. A thread's own query/fragment is dropped with it. Other URLs are returned as is.
+ */
+private fun stripBoardUrlDocument(url: String): String {
+    val path = url.substringBefore('#').substringBefore('?')
+    if (!BOARD_URL_DOCUMENT_SUFFIX.containsMatchIn(path)) return url
+    return path.replace(BOARD_URL_DOCUMENT_SUFFIX, "/")
+}
+
 internal fun normalizeBoardUrl(raw: String): String {
     val trimmed = raw.trim()
-    val withScheme = when {
+    val withScheme = stripBoardUrlDocument(when {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {
             Logger.w(
@@ -32,7 +45,7 @@ internal fun normalizeBoardUrl(raw: String): String {
             trimmed
         }
         else -> "https://$trimmed"
-    }
+    })
 
     if (withScheme.contains("futaba.php", ignoreCase = true)) {
         return withScheme

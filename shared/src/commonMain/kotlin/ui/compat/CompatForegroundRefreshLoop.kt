@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE
+import com.valoser.futacha.shared.compat.COMPAT_DEFAULT_CATALOG_THREAD_COUNT
 import com.valoser.futacha.shared.compat.COMPAT_FOREGROUND_TICK_MILLIS
 import com.valoser.futacha.shared.compat.COMPAT_THREAD_EXISTENCE_STALE_MILLIS
 import com.valoser.futacha.shared.compat.COMPAT_WATCH_INTERVAL_MILLIS
@@ -12,7 +13,7 @@ import com.valoser.futacha.shared.compat.CompatTab
 import com.valoser.futacha.shared.compat.CompatWatchMatch
 import com.valoser.futacha.shared.compat.CompatWatcherRepository
 import com.valoser.futacha.shared.compat.CompatibilityStore
-import com.valoser.futacha.shared.compat.applyCatalogReplyCount
+import com.valoser.futacha.shared.compat.CompatCatalogReplyCountUpdate
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.compat.collectCompatWatchMatches
 import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
@@ -104,19 +105,14 @@ internal suspend fun runCompatForegroundRefreshLoop(
         val watchDue = isCompatForegroundWatchDue(currentPreferences, wifiConnected, now)
         if (!plan.hasWork && !watchDue) continue
         val stored = compatForegroundLastCheckStoredValue(now)
-        persist("foreground check timestamps") {
-            store.savePreferences(buildMap {
-                if (plan.checkUpdates) put(COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE, stored)
-                if (plan.checkExistence) put(COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE, stored)
-            })
-        }
         val tabsToCheck = tabs().filterNot(CompatTab::isDead)
         // Same catalog layout as the catalog screen; a different one makes the
         // repository redo the board's catalog setup (and its Cookie) each time.
+        // Unset catalogThreadSize: the catalog screen fetches 300 threads, so do the same here.
         val catalogSettings = compatCatalogFetchSettingsFromPreferences(currentPreferences)
+            ?: compatCatalogFetchSettings(COMPAT_DEFAULT_CATALOG_THREAD_COUNT)
         suspend fun fetchCatalog(board: CompatBoard, mode: CatalogMode): List<CatalogItem> =
-            catalogSettings?.let { repository.getCatalogWithSettings(board.originalUrl, mode, it) }
-                ?: repository.getCatalog(board.originalUrl, mode)
+            repository.getCatalogWithSettings(board.originalUrl, mode, catalogSettings)
         suspend fun recordMatches(matches: List<CompatWatchMatch>) {
             if (matches.isEmpty()) return
             persist("foreground watch history refresh") {
@@ -137,18 +133,17 @@ internal suspend fun runCompatForegroundRefreshLoop(
                                 canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl?.let { it to item }
                             }.toMap()
                             val byThreadId = catalog.associateBy(CatalogItem::id)
-                            boardTabs.forEach tabLoop@{ checkedTab ->
+                            val replyCountUpdates = boardTabs.mapNotNull { checkedTab ->
                                 val item = byCanonicalUrl[checkedTab.canonicalUrl]
                                     ?: byThreadId[checkedTab.threadNo]
-                                    ?: return@tabLoop
-                                if (item.replyCount != checkedTab.replyCount) {
-                                    persist("foreground tab refresh") {
-                                        store.applyCatalogReplyCount(
-                                            checkedTab.key,
-                                            checkedTab.canonicalUrl,
-                                            item.replyCount
-                                        )
-                                    }
+                                    ?: return@mapNotNull null
+                                if (item.replyCount == checkedTab.replyCount) return@mapNotNull null
+                                CompatCatalogReplyCountUpdate(checkedTab.key, checkedTab.canonicalUrl, item.replyCount)
+                            }
+                            if (replyCountUpdates.isNotEmpty()) {
+                                // One write per board; iOS and desktop rewrite their whole state per change.
+                                persist("foreground tab refresh") {
+                                    store.applyCatalogReplyCounts(replyCountUpdates)
                                 }
                             }
                             if (watchDue) {
@@ -219,6 +214,15 @@ internal suspend fun runCompatForegroundRefreshLoop(
                         }
                 }
             }
+        }
+        // Stored only once the pass has finished. Written first, a pass cancelled by leaving this
+        // screen (image viewer, post form, settings) still counted as done and the next check was
+        // postponed by the whole 5/15-minute interval.
+        persist("foreground check timestamps") {
+            store.savePreferences(buildMap {
+                if (plan.checkUpdates) put(COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE, stored)
+                if (plan.checkExistence) put(COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE, stored)
+            })
         }
     }
 }

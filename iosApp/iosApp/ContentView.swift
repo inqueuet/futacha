@@ -390,6 +390,9 @@ private final class FutachaComposeHostViewController: UIViewController {
 }
 
 struct ContentView: View {
+    /// Colour the ふたばー mode gives the strip below the Compose view (the home-indicator area).
+    /// Nil for every other mode, which keep the system background as before.
+    @State private var futaberHostBackground: Color?
     @ObservedObject private var savedHtmlStore = SavedHtmlDocumentStore.shared
     @AppStorage(ugcEulaDefaultsKey) private var acceptedEulaVersion = ""
     @State private var isUiTestEulaOverrideActive = ProcessInfo.processInfo.arguments.contains(
@@ -400,6 +403,21 @@ struct ContentView: View {
         Group {
             if acceptedEulaVersion == ugcEulaCurrentVersion && !isUiTestEulaOverrideActive {
                 composeContent
+                    .background(futaberHostBackground ?? Color.clear)
+                    .onReceive(
+                        NotificationCenter.default.publisher(
+                            for: Notification.Name("com.valoser.futacha.futaber-host-background")
+                        )
+                    ) { notification in
+                        if let info = notification.userInfo,
+                           let red = (info["red"] as? NSNumber)?.doubleValue,
+                           let green = (info["green"] as? NSNumber)?.doubleValue,
+                           let blue = (info["blue"] as? NSNumber)?.doubleValue {
+                            futaberHostBackground = Color(red: red, green: green, blue: blue)
+                        } else {
+                            futaberHostBackground = nil
+                        }
+                    }
             } else {
                 UserGeneratedContentEulaView {
                     acceptedEulaVersion = ugcEulaCurrentVersion
@@ -446,10 +464,14 @@ struct ContentView: View {
             // treatment while respecting the complete iPad safe area.
             ComposeView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Compose handles IME insets. SwiftUI keyboard avoidance would
+                // also shrink this host, lifting the post toolbar twice.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
         } else {
             ComposeView()
                 .ignoresSafeArea(.container, edges: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
         }
     }
 }

@@ -63,6 +63,12 @@ internal object CatalogHtmlParserCore {
         RegexOption.IGNORE_CASE
     )
     private val threadIdRegex = Regex("(?:^|/)res/(\\d+)\\.html?", RegexOption.IGNORE_CASE)
+    // What a real Futaba catalog page always carries even when it lists no thread (navigation to
+    // futaba.php / mode=cat, or links to threads). A maintenance, congestion or captive-portal page has none.
+    private val catalogPageMarkerRegex = Regex(
+        "cattable|mode=cat|futaba\\.php|res/\\d+\\.html?",
+        RegexOption.IGNORE_CASE
+    )
     private val trailingSRegex = Regex("(?i)s(\\.[a-zA-Z0-9]+)$")
     private val supportedMediaExtensions = FUTABA_COMPAT_MEDIA_EXTENSIONS
     private val knownTitles = mapOf(
@@ -127,6 +133,12 @@ internal object CatalogHtmlParserCore {
             }
             
             if (!foundTable) {
+                // A 200 page that is not a catalog must not become a successful "empty catalog"
+                // (callers would overwrite the saved snapshot with it). A real empty board still
+                // carries the catalog page's own markers and stays a success.
+                if (!catalogPageMarkerRegex.containsMatchIn(normalized)) {
+                    throw ParserException("カタログのHTMLとして読めませんでした（メンテナンスや混雑中のページの可能性があります）")
+                }
                 return@withContext CatalogPageContent(
                     items = emptyList(),
                     parseWarning = PageParseWarning(
@@ -291,6 +303,8 @@ internal object CatalogHtmlParserCore {
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // FIX: キャンセル例外は再スロー
+            throw e
+        } catch (e: ParserException) {
             throw e
         } catch (e: Exception) {
             Logger.e("CatalogHtmlParserCore", "Failed to parse catalog HTML: ${e.message}")

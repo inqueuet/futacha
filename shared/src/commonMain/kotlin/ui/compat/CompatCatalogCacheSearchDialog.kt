@@ -49,6 +49,7 @@ import io.ktor.http.Url
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -99,8 +100,10 @@ internal fun CompatCatalogCacheSearchDialog(
     var query by rememberSaveable { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(CompatCatalogCacheSearchMode.OR) }
     var baseResults by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
-    // Search-normalized (normalizeCompatSearchText) bodies, computed once per search.
-    var normalizedBodyTextByThreadId by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Which search terms each locally cached thread body contains. Bodies themselves are never
+    // retained (hundreds of decoded threads were ~60MB); a mode switch only needs these flags.
+    var bodyTermMatches by remember { mutableStateOf<CompatCacheBodyTermMatches>(emptyMap()) }
+    var searchedTerms by remember { mutableStateOf<List<CompatCacheSearchTerm>>(emptyList()) }
     var modeFilterJob by remember { mutableStateOf<Job?>(null) }
     var results by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
     var searchedQuery by remember { mutableStateOf("") }
@@ -113,12 +116,12 @@ internal fun CompatCatalogCacheSearchDialog(
     fun applyMode(nextMode: CompatCatalogCacheSearchMode) {
         mode = nextMode
         val base = baseResults
-        val searched = searchedQuery
-        val bodies = normalizedBodyTextByThreadId
+        val terms = searchedTerms
+        val matches = bodyTermMatches
         modeFilterJob?.cancel()
         modeFilterJob = scope.launch {
             results = withContext(AppDispatchers.parsing) {
-                filterLegacyCompatCatalogCacheNormalized(base, searched, nextMode, bodies)
+                filterLegacyCompatCatalogCacheByTermMatches(base, terms, nextMode, matches)
             }
         }
     }
@@ -133,35 +136,37 @@ internal fun CompatCatalogCacheSearchDialog(
         error = null
         scope.launch {
             try {
-                val localBodies = loadCompatCacheSearchBodyText(store, localHistory, boardKey)
+                val terms = compatCacheSearchTerms(normalized)
+                val localMatches = loadCompatCacheSearchBodyTermMatches(store, localHistory, boardKey, terms)
                 val remoteResult = httpClient?.let {
                     searchLegacyCompatCatalogCache(it, boardUrl, normalized)
                 }
                 val fetched = remoteResult?.getOrDefault(emptyList()).orEmpty()
                 val searchMode = mode
                 val (merged, filtered) = withContext(AppDispatchers.parsing) {
-                    val mergedResults = mergeCompatCacheSearchResultsNormalized(
+                    val mergedResults = mergeCompatCacheSearchResultsByTermMatches(
                         remoteResults = fetched,
                         localHistory = localHistory,
                         boardKey = boardKey,
-                        query = normalized,
-                        normalizedBodyTextByThreadId = localBodies
+                        terms = terms,
+                        bodyTermMatches = localMatches
                     )
-                    mergedResults to filterLegacyCompatCatalogCacheNormalized(
+                    mergedResults to filterLegacyCompatCatalogCacheByTermMatches(
                         mergedResults,
-                        normalized,
+                        terms,
                         searchMode,
-                        normalizedSupplementalTextById = localBodies
+                        localMatches
                     )
                 }
                 modeFilterJob?.cancel()
-                normalizedBodyTextByThreadId = localBodies
+                bodyTermMatches = localMatches
+                searchedTerms = terms
                 baseResults = merged
                 results = if (mode == searchMode) {
                     filtered
                 } else {
                     withContext(AppDispatchers.parsing) {
-                        filterLegacyCompatCatalogCacheNormalized(merged, normalized, mode, localBodies)
+                        filterLegacyCompatCatalogCacheByTermMatches(merged, terms, mode, localMatches)
                     }
                 }
                 searchedQuery = normalized
@@ -294,7 +299,7 @@ internal fun mergeCompatCacheSearchResults(
 )
 
 /** A search term with its search-normalized form, normalized once per search. */
-private class CompatCacheSearchTerm(val raw: String) {
+internal class CompatCacheSearchTerm(val raw: String) {
     val normalized: String = normalizeCompatSearchText(raw)
 }
 
@@ -338,6 +343,91 @@ internal fun mergeCompatCacheSearchResultsNormalized(
     return (remoteResults.asSequence() + localResults)
         .distinctBy(CatalogItem::id)
         .toList()
+}
+
+/** The terms of an already cleaned query ([cleanCompatCacheSearchKeyword]), each normalized once. */
+internal fun compatCacheSearchTerms(query: String): List<CompatCacheSearchTerm> =
+    cleanCompatCacheSearchKeyword(query)
+        .split(compatCatalogCacheWhitespaceRegex)
+        .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
+
+/**
+ * Per locally cached thread (by thread number), the indexes of the search terms its search-normalized
+ * body contains. Threads containing none are omitted. This is all the search needs from a body, so
+ * the bodies themselves are dropped as soon as each thread has been scanned.
+ */
+internal typealias CompatCacheBodyTermMatches = Map<String, Set<Int>>
+
+/** Whether the cached body of [threadNo] contains term [index]; an absent body behaves as the empty text. */
+private fun CompatCacheBodyTermMatches.bodyContains(
+    threadNo: String,
+    index: Int,
+    term: CompatCacheSearchTerm
+): Boolean = this[threadNo]?.contains(index) ?: term.normalized.isEmpty()
+
+internal fun compatCacheSearchTermMatchIndices(
+    snapshot: CompatThreadSnapshot,
+    terms: List<CompatCacheSearchTerm>
+): Set<Int> {
+    if (terms.isEmpty()) return emptySet()
+    val body = normalizeCompatSearchText(compatCacheSearchBodyText(snapshot))
+    return terms.indices.filterTo(HashSet()) { body.contains(terms[it].normalized) }
+}
+
+/** [mergeCompatCacheSearchResultsNormalized] driven by [bodyTermMatches] instead of the bodies. */
+internal fun mergeCompatCacheSearchResultsByTermMatches(
+    remoteResults: List<CatalogItem>,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    terms: List<CompatCacheSearchTerm>,
+    bodyTermMatches: CompatCacheBodyTermMatches
+): List<CatalogItem> {
+    val localResults = localHistory.asSequence()
+        .filter { it.boardKey == boardKey }
+        .filter { entry ->
+            if (terms.isEmpty()) return@filter true
+            val title = normalizeCompatSearchText(entry.title)
+            terms.withIndex().any { (index, term) ->
+                title.contains(term.normalized) ||
+                    entry.threadNo.contains(term.raw) ||
+                    bodyTermMatches.bodyContains(entry.threadNo, index, term)
+            }
+        }
+        .map { entry ->
+            CatalogItem(
+                id = entry.threadNo,
+                threadUrl = entry.originalUrl,
+                title = entry.title,
+                thumbnailUrl = entry.thumbnailUrl,
+                fullImageUrl = entry.thumbnailUrl,
+                replyCount = entry.replyCount
+            )
+        }
+    return (remoteResults.asSequence() + localResults)
+        .distinctBy(CatalogItem::id)
+        .toList()
+}
+
+/** [filterLegacyCompatCatalogCacheNormalized] driven by [bodyTermMatches] instead of the bodies. */
+internal fun filterLegacyCompatCatalogCacheByTermMatches(
+    items: List<CatalogItem>,
+    terms: List<CompatCacheSearchTerm>,
+    mode: CompatCatalogCacheSearchMode,
+    bodyTermMatches: CompatCacheBodyTermMatches
+): List<CatalogItem> {
+    if (terms.isEmpty()) return items
+    return items.filter { item ->
+        val title = normalizeCompatSearchText(item.title.orEmpty())
+        fun matches(index: Int): Boolean {
+            val term = terms[index]
+            return title.contains(term.normalized) ||
+                item.id.contains(term.raw) ||
+                bodyTermMatches.bodyContains(item.id, index, term)
+        }
+        if (mode == CompatCatalogCacheSearchMode.AND) terms.indices.all(::matches)
+        else terms.indices.any(::matches)
+    }
 }
 
 internal suspend fun searchLegacyCompatCatalogCache(
@@ -436,34 +526,42 @@ internal fun compatCacheSearchBodyText(snapshot: CompatThreadSnapshot): String =
         listOfNotNull(post.subject, post.author, post.messageHtml).joinToString(" ")
     }
 
-/** Search-normalized body text of the locally cached threads of [boardKey]. */
-private suspend fun loadCompatCacheSearchBodyText(
+/**
+ * Scans the locally cached threads of [boardKey] for [terms], one thread at a time per worker.
+ * Only the term flags are kept: a decoded snapshot is dropped as soon as it has been scanned, so
+ * memory stays at a couple of threads instead of every history body, and each store read lets
+ * other store users in between. Cancelling the search stops after the thread being scanned.
+ */
+private suspend fun loadCompatCacheSearchBodyTermMatches(
     store: CompatibilityStore,
     localHistory: List<CompatHistoryEntry>,
-    boardKey: String
-): Map<String, String> = coroutineScope {
-    val semaphore = Semaphore(4)
+    boardKey: String,
+    terms: List<CompatCacheSearchTerm>
+): CompatCacheBodyTermMatches = coroutineScope {
+    if (terms.isEmpty()) return@coroutineScope emptyMap()
+    val semaphore = Semaphore(2)
     localHistory.asSequence()
         .filter { it.boardKey == boardKey }
         .distinctBy(CompatHistoryEntry::canonicalUrl)
         .map { entry ->
             async {
-                val snapshot = semaphore.withPermit {
-                    runSuspendCatchingPreservingCancellation {
+                // The permit covers the scan too, so at most two decoded snapshots are alive.
+                val matched = semaphore.withPermit {
+                    val snapshot = runSuspendCatchingPreservingCancellation {
                         store.loadThreadSnapshotByCanonicalUrl(entry.canonicalUrl)
                     }.getOrNull()
-                }
-                // Join and normalize each body once, off the main thread.
-                entry.threadNo to snapshot?.let {
-                    withContext(AppDispatchers.parsing) {
-                        normalizeCompatSearchText(compatCacheSearchBodyText(it))
+                    val scanned = snapshot?.let {
+                        withContext(AppDispatchers.parsing) { compatCacheSearchTermMatchIndices(it, terms) }
                     }
+                    yield()
+                    scanned
                 }
+                entry.threadNo to matched
             }
         }
         .toList()
         .awaitAll()
-        .mapNotNull { (threadNo, body) -> body?.let { threadNo to it } }
+        .mapNotNull { (threadNo, matched) -> matched?.takeIf { it.isNotEmpty() }?.let { threadNo to it } }
         .toMap()
 }
 

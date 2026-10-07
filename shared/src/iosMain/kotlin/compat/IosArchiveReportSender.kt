@@ -23,6 +23,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -154,6 +157,11 @@ internal class IosArchiveReportOutboxProcessor(
         val now = Clock.System.now().toEpochMilliseconds()
         val result = try {
             send(payload, now)
+        } catch (_: TimeoutCancellationException) {
+            // The sender's own withTimeout expired: a network failure to retry, not a cancelled run.
+            // ensureActive() still rethrows when this run itself was cancelled.
+            currentCoroutineContext().ensureActive()
+            null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {

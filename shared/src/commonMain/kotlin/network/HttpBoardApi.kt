@@ -39,6 +39,7 @@ class HttpBoardApi(
         val imageFile: ByteArray?,
         val imageFileName: String?,
         val textOnly: Boolean,
+        val handwriting: Boolean,
         val responseMode: HttpBoardApiPostResponseMode,
         val requestFailureMessage: String,
         val responseFailureLabel: String,
@@ -50,7 +51,8 @@ class HttpBoardApi(
         val referer: String,
         val formParameters: Parameters,
         val requestFailureMessage: String,
-        val responseFailureMessage: String
+        val responseFailureMessage: String,
+        val encodedBody: String? = null
     )
 
     companion object {
@@ -146,12 +148,16 @@ class HttpBoardApi(
         )
     }
 
-    override suspend fun fetchPostingCapabilities(board: String): BoardPostingCapabilities {
-        val config = getPostingConfig(board, threadId = null)
+    override suspend fun fetchPostingCapabilities(board: String, threadId: String?): BoardPostingCapabilities {
+        val config = getPostingConfig(board, threadId = threadId)
         return resolveBoardPostingCapabilities(
             board = board,
             serverMaxFileSizeBytes = config.maxFileSizeBytes,
             serverSupportedExtensions = config.supportedExtensions
+        ).copy(
+            nameAllowed = "name" in config.formFields,
+            subjectAllowed = "sub" in config.formFields,
+            replyAttachmentsAllowed = if (threadId != null) "upfile" in config.formFields else defaultBoardPostingCapabilities(board).replyAttachmentsAllowed
         )
     }
 
@@ -434,7 +440,15 @@ class HttpBoardApi(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
-        val postingConfig = getPostingConfig(submission.board, submission.threadId)
+        val browser = client.attributes.getOrNull(PostingBrowserKey)
+        val (postingUserAgent, postingConfig) = try {
+            val agent = browser?.userAgent() ?: DEFAULT_USER_AGENT
+            val fetched = fetchPostingConfig(submission.board, submission.threadId, agent)
+            agent to if (browser != null) prepareOfficialPostingEnvironment(client, browser, referer, fetched, agent) else applyLegacyPostingEnvironment(fetched)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            throw NetworkException("投稿の準備ができないため送信していません。下書きを保持しています: ${e.message}", cause = e)
+        }
         val formData = buildHttpBoardApiPostFormData(
             logTag = TAG,
             threadId = submission.threadId,
@@ -447,7 +461,8 @@ class HttpBoardApi(
             imageFileName = submission.imageFileName,
             textOnly = submission.textOnly,
             postingConfig = postingConfig,
-            forceAjaxResponse = submission.forceAjaxResponse
+            forceAjaxResponse = submission.forceAjaxResponse,
+            handwriting = submission.handwriting
         )
         return submitHttpBoardApiBinaryForm(
             client = client,
@@ -457,7 +472,7 @@ class HttpBoardApi(
                 formData = formData,
                 failureMessage = submission.requestFailureMessage
             ),
-            userAgent = DEFAULT_USER_AGENT,
+            userAgent = postingUserAgent,
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
         ) { response ->
@@ -498,7 +513,8 @@ class HttpBoardApi(
                 referer = submission.referer,
                 formParameters = submission.formParameters,
                 failureMessage = submission.requestFailureMessage,
-                responseFailureMessage = submission.responseFailureMessage
+                responseFailureMessage = submission.responseFailureMessage,
+                encodedBody = submission.encodedBody
             ),
             userAgent = DEFAULT_USER_AGENT,
             accept = DEFAULT_ACCEPT,
@@ -553,22 +569,41 @@ class HttpBoardApi(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
+        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
+        val formFields = listOf(
+            "guid" to "on",
+            // Futaba variants exist in the wild: send both forms for compatibility.
+            "delete" to sanitizedPostId,
+            sanitizedPostId to "delete",
+            "responsemode" to "ajax",
+            "pwd" to password,
+            "onlyimgdel" to if (imageOnly) "on" else "",
+            "mode" to "usrdel"
+        )
+        // The posting form sends the key in the board's charset (Shift_JIS), so a non-ASCII key
+        // must be deleted with the same bytes. ASCII keys keep the original UTF-8 form body.
+        val encodedBody = if (password.all { it.code < 0x80 }) {
+            null
+        } else {
+            val encoding = try {
+                getPostingConfig(board, threadId).encoding
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                HttpBoardApiPostEncoding.SHIFT_JIS
+            }
+            buildHttpBoardApiFormUrlEncodedBody(formFields, encoding)
+        }
         submitShortForm(
             ShortFormSubmission(
                 url = url,
-                referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
+                referer = referer,
                 formParameters = Parameters.build {
-                    append("guid", "on")
-                    // Futaba variants exist in the wild: send both forms for compatibility.
-                    append("delete", sanitizedPostId)
-                    append(sanitizedPostId, "delete")
-                    append("responsemode", "ajax")
-                    append("pwd", password)
-                    append("onlyimgdel", if (imageOnly) "on" else "")
-                    append("mode", "usrdel")
+                    formFields.forEach { (name, value) -> append(name, value) }
                 },
                 requestFailureMessage = "Failed to delete post",
-                responseFailureMessage = "本人削除に失敗しました"
+                responseFailureMessage = "本人削除に失敗しました",
+                encodedBody = encodedBody
             )
         )
     }
@@ -582,7 +617,8 @@ class HttpBoardApi(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         return submitPost(
             PostSubmission(
@@ -596,6 +632,7 @@ class HttpBoardApi(
                 imageFile = imageFile,
                 imageFileName = imageFileName,
                 textOnly = textOnly,
+                handwriting = handwriting,
                 responseMode = HttpBoardApiPostResponseMode.CREATE_THREAD,
                 requestFailureMessage = "Failed to create thread",
                 responseFailureLabel = "スレッド作成",
@@ -614,7 +651,8 @@ class HttpBoardApi(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         return submitPost(
             PostSubmission(
@@ -628,6 +666,7 @@ class HttpBoardApi(
                 imageFile = imageFile,
                 imageFileName = imageFileName,
                 textOnly = textOnly,
+                handwriting = handwriting,
                 responseMode = HttpBoardApiPostResponseMode.REPLY,
                 requestFailureMessage = "Failed to reply to thread",
                 responseFailureLabel = "返信"
@@ -647,12 +686,12 @@ class HttpBoardApi(
         }
     }
 
-    private suspend fun fetchPostingConfig(board: String, threadId: String?): HttpBoardApiPostingConfig {
+    private suspend fun fetchPostingConfig(board: String, threadId: String?, userAgent: String = DEFAULT_USER_AGENT): HttpBoardApiPostingConfig {
         return fetchHttpBoardApiPostingConfig(
             client = client,
             board = board,
             threadId = threadId,
-            userAgent = DEFAULT_USER_AGENT,
+            userAgent = userAgent,
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
             cacheControl = "no-cache",

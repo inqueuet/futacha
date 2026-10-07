@@ -21,6 +21,7 @@ import com.valoser.futacha.shared.watch.WATCH_UPDATED_AT_KEY
 import com.valoser.futacha.shared.watch.WatchCommand
 import com.valoser.futacha.shared.watch.WatchCommandType
 import com.valoser.futacha.shared.watch.WatchThreadSummary
+import com.valoser.futacha.shared.watch.encodeWatchClockRequestPayload
 import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -38,7 +39,9 @@ class PhoneCommandClient(
     fun requestSnapshot() {
         sendMessageOrFallback(
             path = WATCH_REQUEST_SNAPSHOT_PATH,
-            payload = ByteArray(0),
+            // The watch clock: the phone answers with its own so the watch can learn the offset
+            // (an older phone build ignores the payload).
+            payload = encodeWatchClockRequestPayload(System.currentTimeMillis()),
             fallback = { putRequestDataItem(WATCH_REQUEST_SNAPSHOT_PATH) }
         )
     }
@@ -290,7 +293,9 @@ class PhoneCommandClient(
     private fun putCommandDataItem(encodedCommand: String) {
         val request = PutDataMapRequest.create(WATCH_COMMAND_PATH).apply {
             dataMap.putString(WATCH_COMMAND_KEY, encodedCommand)
-            dataMap.putLong(WATCH_UPDATED_AT_KEY, System.currentTimeMillis())
+            // The phone drops a command item older than a couple of minutes by its own clock, so
+            // stamp it with the phone's time as far as the watch knows it.
+            dataMap.putLong(WATCH_UPDATED_AT_KEY, WatchClockOffsetStore.phoneNowMillis(context.applicationContext))
         }.asPutDataRequest().setUrgent()
         Wearable.getDataClient(context.applicationContext)
             .putDataItem(request)

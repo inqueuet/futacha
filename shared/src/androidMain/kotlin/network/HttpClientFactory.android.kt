@@ -82,6 +82,10 @@ actual fun createHttpClient(
                 retryOnConnectionFailure(false)
             }
         }
+    }.also { client ->
+        (platformContext as? android.content.Context)?.applicationContext?.let {
+            client.attributes.put(PostingBrowserKey, AndroidPostingBrowser(it))
+        }
     }
 }
 

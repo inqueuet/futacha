@@ -130,6 +130,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -239,6 +240,8 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.ui.applyDesktopWheelZoom
+import com.valoser.futacha.shared.util.isDesktop
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.delay
@@ -560,10 +563,12 @@ internal fun CompatViewerScreen(
             } finally { isSaving = false }
         }
     }
+    val choosePhotoSaveDestination = com.valoser.futacha.shared.ui.board.rememberPhotoSaveDestination(httpClient, fileSystem) { message = it }
     fun saveCurrent(shareAfterSave: Boolean) {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) ?: return
         if (isSaving) return
-        withSaveDestination { saveCurrentNow(mediaUrl, shareAfterSave, it) }
+        if (shareAfterSave) withSaveDestination { saveCurrentNow(mediaUrl, true, it) }
+        else choosePhotoSaveDestination(mediaUrl) { withSaveDestination { saveCurrentNow(mediaUrl, false, it) } }
     }
     fun searchAscii2dCurrent() {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
@@ -1283,7 +1288,7 @@ internal fun CompatViewerScreen(
  * image layer, not the whole Scaffold and HorizontalPager.
  */
 @Composable
-private fun CompatViewerImagePage(
+internal fun CompatViewerImagePage(
     post: CompatPostSnapshot?,
     mediaUrl: String?,
     reloadSuffix: String,
@@ -1529,6 +1534,50 @@ private fun CompatViewerImagePage(
                     }
                 }
             }
+            .then(
+                if (isDesktop()) {
+                    // Desktop has no two-finger pinch: the mouse wheel / trackpad scroll (with or
+                    // without Ctrl) zooms around the pointer. Dragging while zoomed pans and the
+                    // double click still cycles fit / width / original (those are unchanged).
+                    Modifier.pointerInput(mediaUrl, isCurrentPage, resetKey) {
+                        if (isCurrentPage) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.type != PointerEventType.Scroll) continue
+                                    val change = event.changes.firstOrNull() ?: continue
+                                    val before = localTransform
+                                    val wheelResult = applyDesktopWheelZoom(
+                                        scale = before.scale,
+                                        translationX = before.translation.x,
+                                        translationY = before.translation.y,
+                                        scrollDeltaY = change.scrollDelta.y,
+                                        pointerX = change.position.x,
+                                        pointerY = change.position.y,
+                                        viewportWidthPx = viewportSize.width.toFloat(),
+                                        viewportHeightPx = viewportSize.height.toFloat(),
+                                        maxScale = COMPAT_VIEWER_MAX_ZOOM,
+                                        fitThreshold = COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD
+                                    ) ?: continue
+                                    val updated = CompatViewerTransform(
+                                        wheelResult.scale,
+                                        Offset(wheelResult.translationX, wheelResult.translationY)
+                                    )
+                                    localTransform = updated
+                                    val wasZoomed = before.scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD
+                                    val nowZoomed = updated.scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD
+                                    if (nowZoomed != wasZoomed) onZoomedChanged(nowZoomed)
+                                    // A wheel step is a complete gesture: persist it like a pinch's end.
+                                    onTransformChanged(updated.scale, updated.translation)
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .combinedClickable(
                 onClick = onClick,
                 onDoubleClick = {

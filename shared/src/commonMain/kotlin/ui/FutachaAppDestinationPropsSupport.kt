@@ -21,7 +21,17 @@ internal data class FutachaSavedThreadsDestinationProps(
     val repository: SavedThreadRepository,
     val onThreadClick: (SavedThread) -> Unit,
     val onBack: () -> Unit,
-    val preferencesState: ScreenPreferencesState
+    val preferencesState: ScreenPreferencesState,
+    /** The MHT files shown with the saved threads; null where files cannot be kept. */
+    val mht: FutachaMhtDestinationProps? = null
+)
+
+/** What the MHT part of the saved list needs to open a file in the thread screen as a read-only copy. */
+internal data class FutachaMhtDestinationProps(
+    val library: com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary,
+    val boards: List<BoardSummary>,
+    val screenContract: ScreenContract,
+    val dependenciesFor: (BoardSummary, com.valoser.futacha.shared.model.ThreadPage) -> ThreadScreenDependencies
 )
 
 internal data class FutachaDestinationAssemblyContext(
@@ -79,13 +89,15 @@ internal data class FutachaThreadDestinationProps(
 internal fun buildFutachaSavedThreadsDestinationProps(
     repository: SavedThreadRepository,
     navigationCallbacks: FutachaNavigationCallbacks,
-    preferencesState: ScreenPreferencesState
+    preferencesState: ScreenPreferencesState,
+    mht: FutachaMhtDestinationProps? = null
 ): FutachaSavedThreadsDestinationProps {
     return FutachaSavedThreadsDestinationProps(
         repository = repository,
         onThreadClick = navigationCallbacks.onSavedThreadSelected,
         onBack = navigationCallbacks.onSavedThreadsDismissed,
-        preferencesState = preferencesState
+        preferencesState = preferencesState,
+        mht = mht
     )
 }
 

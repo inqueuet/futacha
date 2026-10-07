@@ -7,6 +7,9 @@ import com.valoser.futacha.shared.model.threadDeletionSummary
 internal fun threadDeletionSummaryForPage(page: ThreadPage): String? = threadDeletionSummary(
     page.deletedNotice,
     page.posts.drop(1).mapNotNull { post ->
-        postDeletionKind(messageHtmlToPlainText(post.messageHtml), post.isDeleted, post.isIsolated)
+        // The plain text is only read for a deleted, not isolated, post; skip converting every other body.
+        if (!post.isDeleted && !post.isIsolated) return@mapNotNull null
+        val plainMessage = if (post.isDeleted && !post.isIsolated) messageHtmlToPlainText(post.messageHtml) else ""
+        postDeletionKind(plainMessage, post.isDeleted, post.isIsolated)
     }
 )

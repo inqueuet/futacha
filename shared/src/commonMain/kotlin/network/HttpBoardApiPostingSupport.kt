@@ -8,16 +8,11 @@ import io.ktor.client.request.forms.formData
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
-import kotlin.random.Random
-import kotlin.time.Clock
-import kotlin.time.ExperimentalTime
 
 private const val DEFAULT_UPLOAD_FILE_NAME = "upload.bin"
 private const val SHIFT_JIS_TEXT_MIME = "text/plain; charset=Shift_JIS"
 private const val UTF8_TEXT_MIME = "text/plain; charset=UTF-8"
 private const val ASCII_TEXT_MIME = "text/plain; charset=US-ASCII"
-private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
-private const val DEFAULT_PTUA_VALUE = "1341647872"
 private const val DEFAULT_MAX_FILE_SIZE_BYTES = 8_192_000L
 private val WEBP_CONTENT_TYPE = ContentType.parse("image/webp")
 private val WEBM_CONTENT_TYPE = ContentType.parse("video/webm")
@@ -32,7 +27,9 @@ internal data class HttpBoardApiPostingConfig(
     val maxFileSizeBytes: Long? = null,
     val supportedExtensions: Set<String> = emptySet(),
     val cacheable: Boolean = true,
-    val fromFallback: Boolean = false
+    val fromFallback: Boolean = false,
+    val formFields: Set<String> = emptySet(),
+    val environment: Map<String, String> = emptyMap()
 )
 
 internal fun resolveHttpBoardApiPostingConfig(
@@ -77,28 +74,44 @@ internal fun buildHttpBoardApiPostFormData(
     imageFileName: String?,
     textOnly: Boolean,
     postingConfig: HttpBoardApiPostingConfig,
-    forceAjaxResponse: Boolean = false
+    forceAjaxResponse: Boolean = false,
+    handwriting: Boolean = false
 ) = formData {
-    appendHttpBoardApiAsciiField("guid", "on")
+    if (postingConfig.fromFallback || postingConfig.hashValue.isNullOrBlank()) {
+        throw NetworkException("投稿フォームの必須情報が不足しているため送信していません")
+    }
+    fun hasField(name: String) = name in postingConfig.formFields
+    val drawing = handwriting && imageFile != null && !textOnly
+    if (drawing && !hasField("baseform")) throw NetworkException("この投稿フォームではお手書きを利用できません")
+    if (!drawing && shouldAttachHttpBoardApiImage(imageFile, textOnly) && !hasField("upfile")) {
+        throw NetworkException("この返信では通常の画像添付を利用できません。お手書きはお絵描きから選択してください")
+    }
+    if (shouldAttachHttpBoardApiImage(imageFile, textOnly) && imageFile!!.size > (postingConfig.maxFileSizeBytes ?: DEFAULT_MAX_FILE_SIZE_BYTES)) {
+        throw NetworkException("添付ファイルが投稿先のサイズ上限を超えています")
+    }
+    if (!drawing && shouldAttachHttpBoardApiImage(imageFile, textOnly) && postingConfig.supportedExtensions.isNotEmpty()) {
+        val extension = imageFileName.orEmpty().substringAfterLast('.', "").lowercase()
+        if (extension !in postingConfig.supportedExtensions) throw NetworkException("この投稿先では指定された添付形式を利用できません")
+    }
+    if (drawing && !isHttpBoardApiHandwritingPng(imageFile!!)) throw NetworkException("お手書き画像は344×135のPNGで指定してください")
+    if (hasField("guid")) appendHttpBoardApiAsciiField("guid", "on")
     appendHttpBoardApiAsciiField("mode", "regist")
     appendHttpBoardApiAsciiField(
         "MAX_FILE_SIZE",
         (postingConfig.maxFileSizeBytes ?: DEFAULT_MAX_FILE_SIZE_BYTES).toString()
     )
-    appendHttpBoardApiTextField(logTag, "name", name, postingConfig.encoding)
+    if (hasField("name")) appendHttpBoardApiTextField(logTag, "name", name, postingConfig.encoding)
     appendHttpBoardApiTextField(logTag, "email", email, postingConfig.encoding)
-    appendHttpBoardApiTextField(logTag, "sub", subject, postingConfig.encoding)
+    if (hasField("sub")) appendHttpBoardApiTextField(logTag, "sub", subject, postingConfig.encoding)
     appendHttpBoardApiTextField(logTag, "com", comment, postingConfig.encoding)
     appendHttpBoardApiTextField(logTag, "pwd", password, postingConfig.encoding)
     appendHttpBoardApiTextField(logTag, "chrenc", postingConfig.chrencValue, postingConfig.encoding)
-    appendHttpBoardApiAsciiField("js", "on")
-    appendHttpBoardApiAsciiField("baseform", "")
-    appendHttpBoardApiAsciiField("pthb", "")
-    appendHttpBoardApiAsciiField("pthc", buildHttpBoardApiClientTimestampSeed())
-    appendHttpBoardApiAsciiField("pthd", "")
-    appendHttpBoardApiAsciiField("ptua", postingConfig.ptuaValue ?: DEFAULT_PTUA_VALUE)
-    appendHttpBoardApiAsciiField("scsz", DEFAULT_SCREEN_SPEC)
-    appendHttpBoardApiAsciiField("hash", postingConfig.hashValue ?: buildHttpBoardApiClientHash())
+    for (field in listOf("js", "pthb", "pthc", "pthd", "ptua", "scsz")) {
+        if (hasField(field)) appendHttpBoardApiAsciiField(field, postingConfig.environment[field]
+            ?: when(field) { "js" -> "off"; "ptua" -> postingConfig.ptuaValue.orEmpty(); else -> "" })
+    }
+    if (hasField("baseform")) appendHttpBoardApiAsciiField("baseform", if (drawing) kotlin.io.encoding.Base64.Default.encode(imageFile!!) else "")
+    appendHttpBoardApiAsciiField("hash", postingConfig.hashValue!!)
     threadId?.let {
         appendHttpBoardApiAsciiField("resto", it)
         appendHttpBoardApiAsciiField("responsemode", "ajax")
@@ -108,7 +121,7 @@ internal fun buildHttpBoardApiPostFormData(
         }
     }
 
-    val attachImage = shouldAttachHttpBoardApiImage(imageFile, textOnly)
+    val attachImage = !drawing && shouldAttachHttpBoardApiImage(imageFile, textOnly)
     if (attachImage) {
         val safeName = sanitizeHttpBoardApiUploadFileName(imageFileName, DEFAULT_UPLOAD_FILE_NAME)
         val fileData = imageFile ?: ByteArray(0)
@@ -121,7 +134,7 @@ internal fun buildHttpBoardApiPostFormData(
             Headers.build {
                 append(
                     HttpHeaders.ContentDisposition,
-                    """form-data; name="upfile"; filename="$safeName""""
+                    """filename="$safeName""""
                 )
                 append(
                     HttpHeaders.ContentType,
@@ -135,15 +148,15 @@ internal fun buildHttpBoardApiPostFormData(
                 )
             }
         )
-    } else {
-        append("textonly", "on")
+    } else if (hasField("upfile")) {
+        if (!drawing && hasField("textonly")) append("textonly", "on")
         append(
             "upfile",
             ByteArray(0),
             Headers.build {
                 append(
                     HttpHeaders.ContentDisposition,
-                    """form-data; name="upfile"; filename="""
+                    "filename=\"\""
                 )
                 append(HttpHeaders.ContentType, ContentType.Application.OctetStream.toString())
             }
@@ -179,7 +192,6 @@ private fun FormBuilder.appendHttpBoardApiTextField(
         name,
         bytes,
         Headers.build {
-            append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
             append(HttpHeaders.ContentType, contentType)
         }
     )
@@ -190,26 +202,13 @@ private fun FormBuilder.appendHttpBoardApiAsciiField(name: String, value: String
         name,
         value,
         Headers.build {
-            append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
             append(HttpHeaders.ContentType, ASCII_TEXT_MIME)
         }
     )
 }
 
-@OptIn(ExperimentalTime::class)
-internal fun buildHttpBoardApiClientHash(
-    currentEpochMillis: Long = Clock.System.now().toEpochMilliseconds(),
-    randomByteSupplier: () -> Int = { Random.nextInt(0, 256) }
-): String {
-    val randomHex = buildString(32) {
-        repeat(16) {
-            append(randomByteSupplier().toString(16).padStart(2, '0'))
-        }
-    }
-    return "$currentEpochMillis-$randomHex"
+internal fun isHttpBoardApiHandwritingPng(bytes: ByteArray): Boolean {
+    if (bytes.size < 24 || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) return false
+    fun dimension(start: Int): Int = (start until start + 4).fold(0) { value, i -> (value shl 8) or (bytes[i].toInt() and 255) }
+    return bytes.copyOfRange(12,16).decodeToString() == "IHDR" && dimension(16) == 344 && dimension(20) == 135
 }
-
-@OptIn(ExperimentalTime::class)
-internal fun buildHttpBoardApiClientTimestampSeed(
-    currentEpochMillis: Long = Clock.System.now().toEpochMilliseconds()
-): String = currentEpochMillis.toString()

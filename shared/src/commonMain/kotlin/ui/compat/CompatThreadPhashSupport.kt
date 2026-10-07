@@ -43,6 +43,7 @@ internal suspend fun collectCompatThreadImagePhashes(
     httpClient: HttpClient?,
     store: CompatibilityStore?,
     posts: List<CompatPostSnapshot>,
+    concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY,
     onUpdate: (Map<String, String>) -> Unit
 ) {
     val client = httpClient
@@ -57,9 +58,12 @@ internal suspend fun collectCompatThreadImagePhashes(
     if (missing.isEmpty()) return
     val computed = linkedMapOf<String, String>()
     try {
-        collectCompatImagePhashes(client, missing, onComputed = { id, phash -> computed[id] = phash }) {
-            partial -> onUpdate(stored + partial)
-        }
+        collectCompatImagePhashes(
+            client, missing,
+            onComputed = { id, phash -> computed[id] = phash },
+            onPartial = { partial -> onUpdate(stored + partial) },
+            concurrency = concurrency
+        )
     } finally {
         // Even fewer than a UI publication batch must survive tab changes and cancellation.
         if (store != null && computed.isNotEmpty()) {
@@ -75,7 +79,7 @@ internal suspend fun collectCompatThreadImagePhashes(
     }
 }
 
-private suspend fun loadStoredCompatThreadImagePhashes(
+internal suspend fun loadStoredCompatThreadImagePhashes(
     store: CompatibilityStore?,
     candidates: List<Pair<String, String>>
 ): Map<String, String> {

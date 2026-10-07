@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,6 +54,7 @@ internal fun QuotePreviewDialog(
     ) {
         Surface(
             modifier = Modifier
+                .privacyWindowFilter()
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp),
             shape = MaterialTheme.shapes.medium,

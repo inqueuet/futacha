@@ -69,6 +69,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     }
 
     init {
+        synthesizer.usesApplicationAudioSession = true
         synthesizer.delegate = delegate
     }
 
@@ -199,7 +200,9 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         error: Throwable?
     ) {
         val continuation = stateLock.withLock {
-            if (activeUtterance !== utterance) {
+            // Objective-C delegate arguments can have a new Kotlin wrapper.
+            // Compare the native utterance, not Kotlin wrapper identity.
+            if (activeUtterance != utterance) {
                 null
             } else {
                 activeUtterance = null
@@ -216,7 +219,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
 
     private fun clearActiveIfMatches(utterance: AVSpeechUtterance) {
         stateLock.withLock {
-            if (activeUtterance === utterance) {
+            if (activeUtterance == utterance) {
                 activeUtterance = null
                 activeContinuation = null
             }

@@ -83,17 +83,48 @@ const val COMPAT_WATCH_NG_BACKUP_FILE_NAME = "futacha-compat-watch-ng.json"
 const val COMPAT_WATCH_WORDS_PREFERENCE_KEY = "compat.catalog.監視ワード"
 
 /**
+ * Settings that only make sense on the device that wrote them: save folders (a document
+ * tree URI, a bookmark or an absolute path) and cache locations. Restoring them on another
+ * device or OS overwrote the folder chosen there with one that cannot be opened, so saving,
+ * MHT and the saved box failed. Exports leave them out and a restore never applies them,
+ * even from an older backup that still carries them.
+ */
+val COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS = setOf(
+    "compat.storage.dummyDownloadDir",
+    "compat.storage.dummyDrawingDir",
+    "compat.storage.dummyImageCacheLocation",
+    "compat.storage.dummyCatalogImageCacheLocation"
+)
+
+/**
  * Post delete keys are passwords for deleting the user's own posts. A backup
  * file can be copied or shared, so exports leave them out; restoring an older
  * backup that still contains one keeps working.
+ *
+ * Unsent Futaber drafts are the user's unfinished post text; a settings file
+ * that gets shared must not carry them, and a restore must not bring back
+ * stale ones.
+ *
+ * The start lock's failed-attempt counter and remaining cool-down belong to
+ * this device and must not be restored from (or leak into) a backup: restoring
+ * one would lock the app, and leaving it out of an export would be no loss.
  */
 val COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS = setOf(
     "compat.common.commonPostDeleteKey",
-    "compat.lastDeleteKey"
-)
+    "compat.lastDeleteKey",
+    "compat.futaber.drafts",
+    "compat.appLock.attempts"
+) + COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS
 
 fun compatBackupExportPreferences(preferences: Map<String, String>): Map<String, String> =
     preferences.filterKeys { it !in COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS }
+
+/** Keys a restore must not apply even when an (older) backup file contains them. */
+private val COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS =
+    COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS + "compat.futaber.drafts" + "compat.appLock.attempts"
+
+fun compatBackupRestorePreferences(preferences: Map<String, String>): Map<String, String> =
+    preferences.filterKeys { it !in COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS }
 
 private val compatSettingsBackupJson = Json {
     encodeDefaults = true
@@ -123,7 +154,12 @@ fun decodeCompatSettingsBackup(raw: String): CompatSettingsBackup {
     // preferences, often thousands of them; drop it before the size check so
     // such files can still be restored.
     val decoded = compatSettingsBackupJson.decodeFromString(CompatSettingsBackup.serializer(), raw)
-        .let { backup -> backup.copy(preferences = backup.preferences.filterKeys { !isCompatImagePhashCacheKey(it) }) }
+        .let { backup ->
+            backup.copy(
+                preferences = compatBackupRestorePreferences(backup.preferences)
+                    .filterKeys { !isCompatImagePhashCacheKey(it) }
+            )
+        }
     validateCompatSettingsBackup(decoded)
     return decoded
 }

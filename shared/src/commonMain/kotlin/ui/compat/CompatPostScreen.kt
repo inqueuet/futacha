@@ -163,6 +163,7 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.size.Size
 import coil3.request.crossfade
+import com.valoser.futacha.shared.compat.takeWithoutSplittingSurrogatePair
 import com.valoser.futacha.shared.compat.CompatBoard
 import com.valoser.futacha.shared.compat.compatOwnPostMarkerSave
 import com.valoser.futacha.shared.compat.CompatCatalogPreference
@@ -265,6 +266,14 @@ private const val COMPAT_POST_NAME_MAX_CHARS = 100
 private const val COMPAT_POST_EMAIL_MAX_CHARS = 100
 private const val COMPAT_POST_SUBJECT_MAX_CHARS = 100
 private const val COMPAT_POST_COMMENT_MAX_CHARS = 10_000
+
+/**
+ * Post failures (above all the 12.4 "result unknown, check the thread before resending" text) are
+ * long and decide whether the user re-posts, so they stay until acknowledged instead of fading
+ * out like the short notices.
+ */
+internal fun compatPostFailureMessage(error: Throwable, isBuild: Boolean): String =
+    error.message?.takeIf { it.isNotBlank() } ?: if (isBuild) "スレッドを立てられませんでした" else "投稿できませんでした"
 
 @Suppress("UNUSED_PARAMETER")
 internal fun applyCompatMailPreset(email: String, preset: String, isBuild: Boolean): String = when (preset) {
@@ -489,8 +498,11 @@ internal fun CompatPostScreen(
     var initialAttachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
     var initialAttachmentLocator by remember(ownerKey) { mutableStateOf<String?>(null) }
     var draftLoaded by remember(ownerKey) { mutableStateOf(false) }
+    var savingAttachment by remember(ownerKey) { mutableStateOf(false) }
     var sending by remember(ownerKey) { mutableStateOf(false) }
     var message by remember(ownerKey) { mutableStateOf<String?>(null) }
+    // Post failures stay until acknowledged (the transient notice below fades after 2.5 s).
+    var postFailureMessage by remember(ownerKey) { mutableStateOf<String?>(null) }
 
     fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
         scope.launchCompatScreenAction("CompatPost", { failure ->
@@ -531,6 +543,7 @@ internal fun CompatPostScreen(
                         subject = subject,
                         comment = comment,
                         attachmentUri = attachmentLocator,
+                        attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
                         updatedAtEpochMillis = now
                     )
@@ -544,6 +557,7 @@ internal fun CompatPostScreen(
                         subject = subject,
                         comment = comment,
                         attachmentUri = attachmentLocator,
+                        attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
                         updatedAtEpochMillis = now
                     )
@@ -565,6 +579,7 @@ internal fun CompatPostScreen(
                         subject = build.subject,
                         comment = build.comment,
                         attachmentUri = build.attachmentUri,
+                        attachmentIsHandwriting = build.attachmentIsHandwriting,
                         deleteKey = build.deleteKey,
                         updatedAtEpochMillis = build.updatedAtEpochMillis
                     )
@@ -573,7 +588,7 @@ internal fun CompatPostScreen(
                 store.loadDraft(tab.key)
             } ?: CompatReplyDraft(tabKey = ownerKey, updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
             val restoredAttachment = draft.attachmentUri?.let { locator ->
-                fileSystem?.let { loadCompatPostAttachment(it, locator).getOrNull() }
+                fileSystem?.let { loadCompatPostAttachment(it, locator).getOrNull()?.copy(isHandwriting = draft.attachmentIsHandwriting) }
             }
             val effectiveDraft = if (draft.attachmentUri != null && restoredAttachment == null) {
                 draft.copy(attachmentUri = null)
@@ -584,9 +599,9 @@ internal fun CompatPostScreen(
                 deleteKey = effectiveDraft.deleteKey.ifBlank { storedDeleteKey }
             )
             initialDraft = draftWithStoredDeleteKey
-            if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.take(COMPAT_POST_NAME_MAX_CHARS)
-            if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.take(COMPAT_POST_EMAIL_MAX_CHARS)
-            if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.take(COMPAT_POST_SUBJECT_MAX_CHARS)
+            if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.takeWithoutSplittingSurrogatePair(COMPAT_POST_NAME_MAX_CHARS)
+            if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.takeWithoutSplittingSurrogatePair(COMPAT_POST_EMAIL_MAX_CHARS)
+            if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.takeWithoutSplittingSurrogatePair(COMPAT_POST_SUBJECT_MAX_CHARS)
             if (CompatPostDraftField.COMMENT !in editedDraftFields) {
                 replaceComment(draft.comment, TextRange(draft.comment.length), restoringDraft = true)
             }
@@ -637,9 +652,9 @@ internal fun CompatPostScreen(
                 message = "ツールバー設定を読み込めませんでした"
             }
     }
-    LaunchedEffect(repository, board.originalUrl) {
+    LaunchedEffect(repository, board.originalUrl, isBuild, tab.threadNo) {
         postingCapabilities = runSuspendCatchingPreservingCancellation {
-            repository?.getPostingCapabilities(board.originalUrl)
+            repository?.getPostingCapabilities(board.originalUrl, if (isBuild) null else tab.threadNo)
         }.getOrNull() ?: defaultBoardPostingCapabilities(board.canonicalUrl)
     }
     LaunchedEffect(name, email, subject, comment, deleteKey, attachment, attachmentLocator, draftLoaded) {
@@ -688,8 +703,9 @@ internal fun CompatPostScreen(
             return
         }
         val previousLocator = attachmentLocator
+        savingAttachment = true
         launchScreenAction {
-            persistCompatPostAttachment(localFileSystem, ownerKey, selected)
+            try { persistCompatPostAttachment(localFileSystem, ownerKey, selected)
                 .onSuccess { persistedLocator ->
                     editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
                     attachmentLocator = persistedLocator
@@ -701,6 +717,7 @@ internal fun CompatPostScreen(
                 .onFailure { error ->
                     message = "添付ファイルを一時保存できませんでした: ${error.message.orEmpty()}"
                 }
+            } finally { savingAttachment = false }
         }
     }
 
@@ -721,6 +738,10 @@ internal fun CompatPostScreen(
             }
             return
         }
+        if (!isBuild && !postingCapabilities.replyAttachmentsAllowed && !selected.isHandwriting) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+            return
+        }
         val decision = decideCompatPostAttachment(
                 attachment = selected,
                 maxBytes = attachmentLimitBytes,
@@ -734,6 +755,16 @@ internal fun CompatPostScreen(
             }
             else -> message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
         }
+    }
+
+    val clipboardPaste = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
+        onImage = { upsUploadRequested = false; acceptAttachment(it) }, onError = { message = it }
+    )
+    fun pasteImage() {
+        if (sending || savingAttachment || upsUploadInProgress || clipboardPaste.busy) return
+        if (!isBuild && !postingCapabilities.replyAttachmentsAllowed) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+        } else clipboardPaste.paste()
     }
 
     val launchAttachmentPicker = rememberAttachmentPickerLauncher(
@@ -756,6 +787,8 @@ internal fun CompatPostScreen(
         upsUploadRequested = false
         if (attachment != null) {
             clearAttachment()
+        } else if (!isBuild && !postingCapabilities.replyAttachmentsAllowed) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
         } else if (explicitChooser) {
             launchAttachmentChooser()
         } else {
@@ -785,11 +818,14 @@ internal fun CompatPostScreen(
         val validationError = postValidationError()
         if (validationError != null) {
             message = validationError
-        } else if (!sending) {
+        } else if (!sending && !savingAttachment && !clipboardPaste.busy) {
             // Claim the guard before the coroutine is dispatched, so a second
             // tap in the same frame cannot send the post twice (E-13).
             sending = true
             launchScreenAction {
+                // After a created thread the guard is kept until the screen is left, so a second
+                // tap cannot create the same thread again while the new tab is being opened.
+                var keepSendingGuard = false
                 try {
                     val currentLocator = attachmentLocator
                     if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
@@ -810,7 +846,8 @@ internal fun CompatPostScreen(
                                 password = deleteKey,
                                 imageFile = attachment?.bytes,
                                 imageFileName = attachment?.fileName,
-                                textOnly = attachment == null
+                                textOnly = attachment == null,
+                                handwriting = attachment?.isHandwriting == true
                             )
                         } else {
                             checkNotNull(repository).replyToThread(
@@ -823,7 +860,8 @@ internal fun CompatPostScreen(
                                 password = deleteKey,
                                 imageFile = attachment?.bytes,
                                 imageFileName = attachment?.fileName,
-                                textOnly = attachment == null
+                                textOnly = attachment == null,
+                                handwriting = attachment?.isHandwriting == true
                             )
                         }
                     }.onSuccess { responseId ->
@@ -857,14 +895,15 @@ internal fun CompatPostScreen(
                             }
                         }
                         if (isBuild) {
+                            keepSendingGuard = true
                             onBuildCreated(responseId)
                         } else {
                             onPostSent()
                             leave()
                         }
-                    }.onFailure { message = it.message ?: if (isBuild) "スレッドを立てられませんでした" else "投稿できませんでした" }
+                    }.onFailure { postFailureMessage = compatPostFailureMessage(it, isBuild) }
                 } finally {
-                    sending = false
+                    if (!keepSendingGuard) sending = false
                 }
             }
         }
@@ -928,6 +967,30 @@ internal fun CompatPostScreen(
             ) {
                 launchScreenAction { deleteCompatPostAttachment(fileSystem, previousLocator) }
             }
+            // Removing or replacing the initial attachment deleted its file; restoring only the
+            // in-memory bytes and the old locator would leave a post that cannot be sent.
+            val restoredInitial = attachment
+            if (fileSystem != null && restoredInitial != null && resetAttachmentLocator != null) {
+                savingAttachment = true
+                launchScreenAction {
+                    try {
+                        if (!fileSystem.exists(resetAttachmentLocator)) {
+                            persistCompatPostAttachment(fileSystem, ownerKey, restoredInitial)
+                                .onSuccess { freshLocator ->
+                                    if (attachmentLocator == resetAttachmentLocator) {
+                                        attachmentLocator = freshLocator
+                                        initialAttachmentLocator = freshLocator
+                                    }
+                                }
+                                .onFailure { error ->
+                                    message = "添付ファイルを一時保存できませんでした: ${error.message.orEmpty()}"
+                                }
+                        }
+                    } finally {
+                        savingAttachment = false
+                    }
+                }
+            }
             message = null
         },
         "discard" to { if (hasDraft()) discardConfirm = true else leave() }
@@ -984,6 +1047,7 @@ internal fun CompatPostScreen(
                                 tonalElevation = 0.dp,
                                 shadowElevation = 8.dp
                             ) {
+                                DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; pasteImage() })
                                 DropdownMenuItem(text = { Text("ツールバー編集") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onToolbarEdit() })
                                 DropdownMenuItem(text = { Text("ヘルプ") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onOpenHelp() })
                             }
@@ -1066,9 +1130,9 @@ internal fun CompatPostScreen(
                     onVideoPreview = { launchVideoPreview(selected) }
                 )
             }
-            TextField(
+            if (postingCapabilities.nameAllowed) TextField(
                 name,
-                { editedDraftFields.add(CompatPostDraftField.NAME); name = it.take(COMPAT_POST_NAME_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.NAME); name = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_NAME_MAX_CHARS) },
                 label = { Text("おなまえ", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-name-field"),
@@ -1077,7 +1141,7 @@ internal fun CompatPostScreen(
             Spacer(Modifier.height(10.dp))
             TextField(
                 email,
-                { editedDraftFields.add(CompatPostDraftField.EMAIL); email = it.take(COMPAT_POST_EMAIL_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.EMAIL); email = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_EMAIL_MAX_CHARS) },
                 label = { Text("メール", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -1110,9 +1174,9 @@ internal fun CompatPostScreen(
                     )
                 }
             }
-            TextField(
+            if (postingCapabilities.subjectAllowed) TextField(
                 subject,
-                { editedDraftFields.add(CompatPostDraftField.SUBJECT); subject = it.take(COMPAT_POST_SUBJECT_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.SUBJECT); subject = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_SUBJECT_MAX_CHARS) },
                 label = { Text("題名", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -1144,7 +1208,7 @@ internal fun CompatPostScreen(
                         if (item.key == "attach") {
                             Box(
                                 modifier = Modifier.fillMaxSize().combinedClickable(
-                                    enabled = !sending && !upsUploadInProgress,
+                                    enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
                                     onClick = { attachmentCommand() },
                                     onLongClick = { attachmentCommand(explicitChooser = true) }
                                 ),
@@ -1164,7 +1228,7 @@ internal fun CompatPostScreen(
                         } else if (item.key == "sio") {
                             Box(
                                 modifier = Modifier.fillMaxSize().combinedClickable(
-                                    enabled = !sending && !upsUploadInProgress,
+                                    enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
                                     onClick = { upsUploadCommand() },
                                     onLongClick = { upsUploadCommand(explicitChooser = true) }
                                 ),
@@ -1181,7 +1245,7 @@ internal fun CompatPostScreen(
                         } else {
                             IconButton(
                                 onClick = { resolvedPostActions[item.key]?.invoke() },
-                                enabled = !sending && !upsUploadInProgress
+                                enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy
                             ) {
                                 if (item.key == "send" && sending) {
                                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
@@ -1259,12 +1323,22 @@ internal fun CompatPostScreen(
         CompatPostImageCompressConfirmation(
             onCompress = {
                 pendingCompression = null
+                // Compression can take seconds; sending meanwhile would post without the attachment.
+                savingAttachment = true
                 launchScreenAction {
-                    compressCompatPostImage(
-                        oversizedImage,
-                        attachmentLimitBytes
-                    ).onSuccess(::persistAcceptedAttachment)
-                        .onFailure { message = "画像を圧縮できませんでした: ${it.message.orEmpty()}" }
+                    var handedOff = false
+                    try {
+                        compressCompatPostImage(
+                            oversizedImage,
+                            attachmentLimitBytes
+                        ).onSuccess {
+                            // persistAcceptedAttachment keeps/releases the guard itself when it persists.
+                            handedOff = fileSystem != null
+                            persistAcceptedAttachment(it)
+                        }.onFailure { message = "画像を圧縮できませんでした: ${it.message.orEmpty()}" }
+                    } finally {
+                        if (!handedOff) savingAttachment = false
+                    }
                 }
             },
             onCancel = { pendingCompression = null }
@@ -1341,6 +1415,13 @@ internal fun CompatPostScreen(
         }
     }
 
+    postFailureMessage?.let { failureMessage ->
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { postFailureMessage = null },
+            text = { Text(failureMessage) },
+            confirmButton = { TextButton(onClick = { postFailureMessage = null }) { Text("OK") } }
+        ) }
+    }
     if (discardConfirm) {
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { discardConfirm = false },
@@ -1401,6 +1482,8 @@ internal fun CompatPostScreen(
             surface = CompatToolbarSurface.POST,
             items = toolbarItems,
             actions = resolvedPostActions,
+            onPasteImage = ::pasteImage,
+            pasteEnabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
             onDismiss = { toolbarOverflowOpen = false }
         )
     }
@@ -1429,6 +1512,8 @@ private fun SecondaryToolbarOverflowPopup(
     surface: CompatToolbarSurface,
     items: List<CompatToolbarItem>,
     actions: Map<String, () -> Unit>,
+    onPasteImage: () -> Unit,
+    pasteEnabled: Boolean,
     onDismiss: () -> Unit
 ) {
     val inactive = items.sortedBy(CompatToolbarItem::position).filterNot(CompatToolbarItem::active)
@@ -1437,7 +1522,10 @@ private fun SecondaryToolbarOverflowPopup(
         testTag = "compat-post-toolbar-overflow-popup",
         onDismiss = onDismiss
     ) {
-        if (inactive.isEmpty()) Text("ツールバー外の操作はありません")
+        TextButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = pasteEnabled,
+            onClick = { onDismiss(); onPasteImage() }) {
+            Text("画像を貼り付け", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+        }
         inactive.forEach { item ->
             TextButton(
                 modifier = Modifier

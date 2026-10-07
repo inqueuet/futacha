@@ -51,12 +51,17 @@ class UserFeedbackPresentationInstrumentedTest {
             store.initialize()
             store.savePreference("compat.design.designTheme", theme)
             if (textOverride != null) store.savePreference("compat.design.designTextColor", textOverride)
+            // The change log opens by itself only after an update: an older version must already be recorded
+            // (an empty store just records the current version as the baseline).
+            store.savePreference("compat.commonUsedVersion", "1.0")
         }
         rule.setContent {
-            MaterialTheme { CompatibilityApp(store = store, repository = null, appVersion = "feedback", onExitApplication = {}) }
+            MaterialTheme { CompatibilityApp(store = store, repository = null, appVersion = "99.0", onExitApplication = {}) }
         }
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("更新履歴").fetchSemanticsNodes(false).isNotEmpty() }
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
-        val heading = rule.onNodeWithText("10.8").assertIsDisplayed()
+        // The newest entry is the first heading on the page; it follows the change log, not a fixed version.
+        val heading = rule.onNodeWithText(FUTACHA_CHANGE_LOG_ENTRIES.first().version).assertIsDisplayed()
         val layouts = mutableListOf<TextLayoutResult>()
         heading.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertEquals(1, layouts.size)
@@ -110,6 +115,9 @@ class UserFeedbackPresentationInstrumentedTest {
                 it.copy(imageUrl = "https://example.invalid/feedback.jpg", thumbnailUrl = "https://example.invalid/feedback.jpg")
             })))
         }
+        // Without a save folder Android first opens the system folder picker, which covers the progress shown here.
+        val saveFolder = java.io.File(context.cacheDir, "feedback-save-${System.nanoTime()}")
+        runBlocking { store.savePreference("compat.storage.dummyDownloadDir", saveFolder.absolutePath) }
         val client = io.ktor.client.HttpClient(io.ktor.client.engine.mock.MockEngine { kotlinx.coroutines.awaitCancellation() })
         try {
             rule.setContent {
@@ -133,6 +141,7 @@ class UserFeedbackPresentationInstrumentedTest {
             })
         } finally {
             client.close()
+            saveFolder.deleteRecursively()
         }
     }
 

@@ -13,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class HttpBoardApiSupportTest {
@@ -27,15 +28,14 @@ class HttpBoardApiSupportTest {
                 redirectedRequestUrl = "https://may.2chan.net/b/res/123.htm"
             )
         )
-        assertEquals(
-            "999",
+        assertFailsWith<NetworkException> {
             resolveHttpBoardApiPostResponseOrThrow(
                 mode = HttpBoardApiPostResponseMode.CREATE_THREAD,
                 responseBody = """<a href="res/999.htm">other</a>""",
                 logTag = "test",
                 redirectedRequestUrl = null
             )
-        )
+        }
     }
 
     @Test
@@ -446,7 +446,7 @@ class HttpBoardApiSupportTest {
     }
 
     @Test
-    fun postingHelpers_resolvePostingConfigAndBuildSeeds() {
+    fun postingHelpers_resolvePostingConfigWithoutInventingServerTokens() {
         assertEquals(
             HttpBoardApiPostingConfig(
                 encoding = HttpBoardApiPostEncoding.UTF8,
@@ -467,17 +467,7 @@ class HttpBoardApiSupportTest {
             ),
             fallbackHttpBoardApiPostingConfig("文字")
         )
-        assertEquals("123456", buildHttpBoardApiClientTimestampSeed(currentEpochMillis = 123456L))
-        assertEquals(
-            "42-000102030405060708090a0b0c0d0e0f",
-            buildHttpBoardApiClientHash(
-                currentEpochMillis = 42L,
-                randomByteSupplier = run {
-                    var next = 0
-                    { next++ }
-                }
-            )
-        )
+
     }
 
     @Test
@@ -526,6 +516,7 @@ class HttpBoardApiSupportTest {
             imageFileName = null,
             textOnly = true,
             postingConfig = HttpBoardApiPostingConfig(
+                formFields = setOf("name", "email", "sub", "com", "pwd", "chrenc", "js", "baseform", "pthb", "pthc", "pthd", "ptua", "scsz", "hash", "upfile", "textonly"),
                 encoding = HttpBoardApiPostEncoding.UTF8,
                 chrencValue = "UTF-8",
                 hashValue = "server-hash",
@@ -563,6 +554,7 @@ class HttpBoardApiSupportTest {
             imageFileName = "movie.webm",
             textOnly = false,
             postingConfig = HttpBoardApiPostingConfig(
+                formFields = setOf("name", "email", "sub", "com", "pwd", "chrenc", "js", "baseform", "pthb", "pthc", "pthd", "ptua", "scsz", "hash", "upfile", "textonly"),
                 encoding = HttpBoardApiPostEncoding.UTF8,
                 chrencValue = "UTF-8",
                 hashValue = "live-hash",
@@ -601,6 +593,7 @@ class HttpBoardApiSupportTest {
                     name = "", email = "", subject = "test", comment = "test", password = "1234",
                     imageFile = bytes, imageFileName = "camera.$extension", textOnly = false,
                     postingConfig = HttpBoardApiPostingConfig(
+                formFields = setOf("name", "email", "sub", "com", "pwd", "chrenc", "js", "baseform", "pthb", "pthc", "pthd", "ptua", "scsz", "hash", "upfile", "textonly"),
                         encoding = HttpBoardApiPostEncoding.UTF8, chrencValue = "UTF-8",
                         hashValue = "hash", ptuaValue = "ptua", maxFileSizeBytes = 8_192_000,
                         supportedExtensions = types.keys
@@ -630,8 +623,10 @@ class HttpBoardApiSupportTest {
             imageFileName = null,
             textOnly = true,
             postingConfig = HttpBoardApiPostingConfig(
+                formFields = setOf("name", "email", "sub", "com", "pwd", "chrenc", "js", "baseform", "pthb", "pthc", "pthd", "ptua", "scsz", "hash", "upfile", "textonly"),
                 encoding = HttpBoardApiPostEncoding.SHIFT_JIS,
                 chrencValue = "文字",
+                hashValue = "server-hash",
                 maxFileSizeBytes = 8_192_000L
             ),
             forceAjaxResponse = true

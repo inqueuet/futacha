@@ -29,6 +29,7 @@ internal fun FutachaPostToolbar(
     onImageSelected: (ImageData) -> Unit,
     onChooseImage: () -> Unit,
     onChooseVideo: () -> Unit,
+    onPasteImage: () -> Unit,
     onSubmit: () -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
@@ -88,7 +89,7 @@ internal fun FutachaPostToolbar(
     )
     fun commandEnabled(key: String): Boolean = when (key) {
         "send" -> enabled
-        "attach", "pallete" -> attachmentEnabled
+        "attach", "pallete", "reset" -> attachmentEnabled
         else -> true
     }
     fun runCommand(key: String) {
@@ -130,11 +131,13 @@ internal fun FutachaPostToolbar(
                     DropdownMenuItem(text = { Text(master.firstOrNull { it.key == item.key }?.label ?: item.key) },
                         enabled = commandEnabled(item.key), onClick = { runCommand(item.key) })
                 }
+                DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = attachmentEnabled, onClick = { overflow = false; onPasteImage() })
                 DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { overflow = false; editing = true })
                 DropdownMenuItem(text = { Text("送信・操作の設定") }, onClick = { overflow = false; features.openSettings("control") })
             }
             DropdownMenu(expanded = attachmentMenu, onDismissRequest = { attachmentMenu = false }) {
                 DropdownMenuItem(text = { Text("画像を選択") }, onClick = { attachmentMenu = false; onChooseImage() })
+                DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = attachmentEnabled, onClick = { attachmentMenu = false; onPasteImage() })
                 DropdownMenuItem(text = { Text("動画を選択") }, onClick = { attachmentMenu = false; onChooseVideo() })
             }
         }

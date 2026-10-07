@@ -67,7 +67,17 @@ data class WatchReadAloudStatus(
 @Serializable
 data class WatchReadAloudStatusUpdate(
     val status: WatchReadAloudStatus?,
-    val updatedAtMillis: Long
+    val updatedAtMillis: Long,
+    /**
+     * Identifies the phone process that sent this update. Optional: 0 (absent) from
+     * an older phone app, in which case the watch orders by [updatedAtMillis] as before.
+     */
+    val sessionId: Long = 0L,
+    /**
+     * Monotonic per-[sessionId] counter (1, 2, 3, ...; 0 = absent). Lets the watch order
+     * updates without relying on either device's clock.
+     */
+    val sequence: Long = 0L
 )
 
 @Serializable

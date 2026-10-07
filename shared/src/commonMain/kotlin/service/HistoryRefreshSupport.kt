@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.ConditionalThreadFetchResult
 import com.valoser.futacha.shared.network.HttpConditionalValidators
@@ -348,8 +349,12 @@ internal class HistoryRefreshRunProcessor(
             )
             updates.put(key, updatedEntry)
 
-            val savesNewContent = shouldAutoSaveRefreshedEntry(entry, page.posts.size)
-            if (savesNewContent || continuedIncompleteMediaCount != null) {
+            // A parse cut short must neither count as a changed reply count (it ran every
+            // refresh) nor replace a fuller save with an incomplete one.
+            val replacesFullerSave = page.replacesFullerAutoSave(indexedAutoSave?.generation)
+            val savesNewContent = !replacesFullerSave &&
+                shouldAutoSaveRefreshedEntry(entry, updatedEntry.replyCount)
+            if (!replacesFullerSave && (savesNewContent || continuedIncompleteMediaCount != null)) {
                 autoSaveLauncher.launch(
                     HistoryRefreshAutoSavePlan(
                         resolvedEntry = resolvedEntry,
@@ -424,6 +429,14 @@ internal class HistoryRefreshRunProcessor(
         return !entry.hasAutoSave || replyCount != entry.replyCount
     }
 }
+
+/**
+ * Whether auto-saving [this] (a thread page the parser may have cut short) would replace the
+ * saved generation [saved] with one that holds fewer posts. A complete page is always the
+ * current state of the thread, so only a truncated one can shrink a save.
+ */
+internal fun ThreadPage.replacesFullerAutoSave(saved: SavedThread?): Boolean =
+    isTruncated && saved != null && posts.size < saved.postCount
 
 internal fun resolveHistoryEntryBoardId(
     entry: ThreadHistoryEntry,

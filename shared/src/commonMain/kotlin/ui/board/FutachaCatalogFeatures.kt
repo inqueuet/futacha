@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
+internal val LocalFutachaCatalogReplyIndicators = compositionLocalOf<Map<String, CompatCatalogReplyIndicator>> { emptyMap() }
 internal val LocalFutachaCatalogTools = compositionLocalOf<List<FutachaThreadTool>> { emptyList() }
 internal val LocalFutachaCatalogLongPress = compositionLocalOf<((CatalogItem) -> Unit)?> { null }
 
@@ -65,6 +66,7 @@ internal fun FutachaCatalogFeatureHost(
     var dropped by remember(boardKey) { mutableStateOf<List<CompatDroppedCatalogItem>>(emptyList()) }
     var previous by remember(boardKey, mode) { mutableStateOf<List<CatalogUiState.Success>>(emptyList()) }
     var latest by remember(boardKey, mode) { mutableStateOf<CatalogUiState.Success?>(null) }
+    var replyDeltas by remember(boardKey, mode) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var restoring by remember(boardKey, mode) { mutableStateOf(false) }
     var ngOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
@@ -106,9 +108,13 @@ internal fun FutachaCatalogFeatureHost(
     }
     LaunchedEffect(state, boardKey, mode) {
         val success = state as? CatalogUiState.Success ?: return@LaunchedEffect
-        if (withContext(AppDispatchers.parsing) { success.content.items == latest?.content?.items }) return@LaunchedEffect
+        if (withContext(AppDispatchers.parsing) { success.content.items == latest?.content?.items }) {
+            replyDeltas = emptyMap()
+            return@LaunchedEffect
+        }
         val wasRestoring = restoring
         restoring = false
+        replyDeltas = emptyMap()
         if (!wasRestoring) latest?.let { previous = (listOf(it) + previous).take(4) }
         val hadLatest = latest != null
         latest = success
@@ -119,6 +125,7 @@ internal fun FutachaCatalogFeatureHost(
                 val now = Clock.System.now().toEpochMilliseconds()
                 mode.sharedCatalogSort()?.let { sort ->
                     val stored = features.store.loadCatalogSnapshot(boardKey, sort)
+                    replyDeltas = buildCompatCatalogReplyDeltas(success.content.items, stored?.items.orEmpty())
                     val trackDropped = features.value("catalog", "catalogFindThreadDeleted") == "ON"
                     val requestedCount = features.intValue("catalog", "catalogThreadSize", 100..3000) ?: 300
                     val activeDropped = if (trackDropped && stored != null) {
@@ -273,7 +280,11 @@ internal fun FutachaCatalogFeatureHost(
     }
     val currentLongPress = rememberUpdatedState(longPressHandler)
     val stableLongPress = remember { { item: CatalogItem -> currentLongPress.value(item) } }
+    val replyIndicators = remember(items, tabs, replyDeltas) {
+        buildCatalogReplyIndicators(items, tabs, replyDeltas)
+    }
     CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
+        LocalFutachaCatalogReplyIndicators provides replyIndicators,
         LocalFutachaTabStrip provides strip,
         LocalFutachaScrollRefreshEnabled provides (features.value("catalog", "catalogPullToRefresh") != "OFF"),
         LocalFutachaCatalogLongPress provides stableLongPress) {

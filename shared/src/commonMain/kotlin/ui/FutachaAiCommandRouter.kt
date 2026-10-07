@@ -25,6 +25,7 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.resolveBoardWatchWordKey
 import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.ui.board.buildAddBoardValidationState
 import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
 import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
@@ -540,9 +541,23 @@ private fun resolveAiThreadSelection(
         threadTitle = historyEntry?.title ?: command.titleParameter(),
         threadReplies = historyEntry?.replyCount,
         threadThumbnailUrl = historyEntry?.titleImageUrl,
-        threadUrl = url ?: historyEntry?.boardUrl?.let { "$it/res/$threadId.htm" },
+        threadUrl = url ?: historyEntry?.boardUrl?.let { aiHistoryThreadUrl(it, threadId) },
         isSavedThreadsVisible = false
     )
+}
+
+/**
+ * The thread URL for a history row. The history's `boardUrl` holds the thread's own URL
+ * (recordFutachaVisitedThread), so appending "/res/<id>.htm" built `.../res/1.htm/res/1.htm`.
+ * Both a thread URL and a plain board URL are accepted; anything that is not a recognised
+ * Futaba URL yields null, so the thread is fetched from the board and the id instead.
+ */
+internal fun aiHistoryThreadUrl(historyBoardUrl: String, threadId: String): String? {
+    // Everything before the first "/res/" is the board, whether the row holds the thread URL, a
+    // plain board URL or an already damaged ".../res/1.htm/res/1.htm".
+    val boardPart = historyBoardUrl.trim().substringBefore("/res/")
+    val boardBase = canonicalizeBoardUrl(boardPart) ?: return null
+    return "${boardBase}res/$threadId.htm"
 }
 
 internal const val AI_UNTRUSTED_THREAD_URL_MESSAGE =

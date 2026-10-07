@@ -123,6 +123,17 @@ class CompatibilityDataSharingTest {
     }
 
     @Test
+    fun tutorialSurvivesNormalSynchronizationButExplicitDeletionStillWins() {
+        val tutorial = BoardSummary("t", "チュートリアル", "チュートリアル", "https://www.example.com/t/futaba.php", "")
+        val key = compatBoardKey("https://img.2chan.net/t/")
+        assertEquals(setOf(key), compatibilityBoardSynchronizationKeys(listOf(tutorial)))
+        val bootstrapped = CompatBoard(key, tutorial.name, "https://img.2chan.net/t/", tutorial.url, 0)
+        assertEquals(listOf(tutorial), synchronizeModernBoardsFromCompatibility(listOf(tutorial), listOf(bootstrapped)))
+        assertEquals(emptyList(), synchronizeModernBoardsFromCompatibility(listOf(tutorial), emptyList()))
+        assertEquals(emptySet(), compatibilityBoardSynchronizationKeys(emptyList()))
+    }
+
+    @Test
     fun modernBoardConversionProvidesAuthoritativeKeysAndOrderForDeletionSync() {
         val converted = modernBoardsToCompatibility(
             listOf(

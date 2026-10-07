@@ -66,6 +66,16 @@ class CompatibilityOtherMenusTest {
     }
 
     @Test
+    fun threadSaveMenu_addsMhtOnlyWhenAskedAndKeepsTheReferenceItems() {
+        val reference = compatThreadOtherMenu(CompatOtherMenuRoute.THREAD_SAVE, true, false, 0)
+        val withMht = compatThreadOtherMenu(CompatOtherMenuRoute.THREAD_SAVE, true, false, 0, mhtEnabled = true)
+
+        assertEquals(5, reference.size)
+        assertEquals(reference, withMht.take(5))
+        assertEquals(listOf("save_mht_thumb", "save_mht_all"), withMht.drop(5).map { it.key })
+    }
+
+    @Test
     fun threadNestedMenus_matchSaveNgUrlAndExtractionContracts() {
         val save = compatThreadOtherMenu(CompatOtherMenuRoute.THREAD_SAVE, true, false, 0)
         val ng = compatThreadOtherMenu(CompatOtherMenuRoute.THREAD_NG, true, false, 0)

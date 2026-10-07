@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.COMPAT_URL_BODY_CHAR_CLASS
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.toCompatPlainText
 
@@ -11,7 +12,8 @@ internal data class CompatReadAloudBatch(
     val nextCharacterOffset: Int
 )
 
-private val compatReadAloudUrlRegex = Regex("(?i)https?://\\S+")
+// ASCII URL characters only: a full-width space or Japanese text after the URL is still read.
+private val compatReadAloudUrlRegex = Regex("(?i)https?://$COMPAT_URL_BODY_CHAR_CLASS+")
 
 private val compatReadAloudIgnoredPrefixes = listOf(
     "[",
@@ -24,8 +26,18 @@ private val compatReadAloudIgnoredPrefixes = listOf(
     "削除された記事が"
 )
 
-internal fun resolveCompatReadAloudStartIndex(requestedIndex: Int, postCount: Int): Int =
-    requestedIndex.takeIf { postCount > 0 && it in 0 until postCount } ?: 0
+/**
+ * [keepWaitingAtEnd] marks a resume of a read-aloud that was paused while waiting for new replies
+ * after speaking every one (cursor == [postCount]): it must keep waiting there. Without it a
+ * completed cursor restarts from the first reply on the next invocation.
+ */
+internal fun resolveCompatReadAloudStartIndex(
+    requestedIndex: Int,
+    postCount: Int,
+    keepWaitingAtEnd: Boolean = false
+): Int = requestedIndex.takeIf {
+    postCount > 0 && (it in 0 until postCount || (keepWaitingAtEnd && it == postCount))
+} ?: 0
 
 /**
  * Builds one post's bounded utterance without dropping the remainder of a
@@ -92,3 +104,13 @@ internal fun compatReadAloudText(post: CompatPostSnapshot): String =
         .joinToString(" ")
         .replace("好き", "スキ")
         .replace("…", "　")
+
+/** Map the displayed (possibly filtered) list back to the speech snapshot. */
+internal fun resolveCompatReadAloudVisibleIndex(
+    posts: List<CompatPostSnapshot>,
+    visiblePosts: List<CompatPostSnapshot>,
+    firstVisibleIndex: Int
+): Int {
+    val visible = visiblePosts.getOrNull(firstVisibleIndex.coerceIn(0, visiblePosts.lastIndex.coerceAtLeast(0)))
+    return posts.indexOfFirst { it.postNo == visible?.postNo }.coerceAtLeast(0)
+}

@@ -26,6 +26,9 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -150,6 +153,23 @@ internal fun buildCatalogPersistenceBindings(
     )
 }
 
+/**
+ * Rethrows [error] when it is a real cancellation. A [TimeoutCancellationException] raised by the
+ * load's own withTimeout is not one: it must be handled as a failure so the UI never stays Loading.
+ */
+private suspend fun rethrowUnlessCatalogLoadTimeout(error: Exception) {
+    if (error is TimeoutCancellationException) {
+        // The enclosing job itself may have been cancelled at the same time.
+        currentCoroutineContext().ensureActive()
+    } else if (error is CancellationException) {
+        throw error
+    }
+}
+
+private fun buildCatalogLoadFailureMessage(error: Throwable): String =
+    if (error is TimeoutCancellationException) "タイムアウト: サーバーが応答しません"
+    else buildCatalogLoadErrorMessage(error)
+
 internal data class CatalogExecutionBindings(
     val handleHistoryRefresh: () -> Unit,
     val performRefresh: () -> Unit,
@@ -223,14 +243,15 @@ internal fun buildCatalogInitialLoadBindings(
                             }
                         }
                         applyCatalog(catalog)
-                    } catch (e: CancellationException) {
-                        throw e
                     } catch (e: Exception) {
+                        // withTimeout reports its own expiry as a CancellationException. Only a real
+                        // cancellation of this load may be rethrown; the timeout must end in Error.
+                        rethrowUnlessCatalogLoadTimeout(e)
                         if (
                             !hasAppliedCatalog &&
                             shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)
                         ) {
-                            setCatalogUiState(CatalogUiState.Error(buildCatalogLoadErrorMessage(e)))
+                            setCatalogUiState(CatalogUiState.Error(buildCatalogLoadFailureMessage(e)))
                         }
                     } finally {
                         if (runningJob != null && currentCatalogLoadJob() == runningJob) {
@@ -332,7 +353,8 @@ internal fun buildCatalogCreateThreadBindings(
                             password = trimmedPassword,
                             imageFile = imageData?.bytes,
                             imageFileName = imageData?.fileName,
-                            textOnly = imageData == null
+                            textOnly = imageData == null,
+                            handwriting = imageData?.isHandwriting == true
                         )
                     }
                     AnalyticsTracker.event(
@@ -487,9 +509,8 @@ internal fun buildCatalogExecutionBindings(
                             )
                         )
                         resultMessage = buildCatalogRefreshSuccessMessage()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        rethrowUnlessCatalogLoadTimeout(e)
                         if (
                             !hasAppliedCatalog &&
                             shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)

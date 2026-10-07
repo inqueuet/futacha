@@ -493,11 +493,11 @@ private const val ASCII2D_HOST = "ascii2d.net"
 private const val ASCII2D_RESPONSE_TIMEOUT_MILLIS = 20_000L
 private const val ASCII2D_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 private val ASCII2D_RESULT_REGEX = Regex(
-    """https?://(?:[A-Za-z0-9-]+\.)*ascii2d\.net/(?:search|details)/[^\"'<>\\s]+""",
+    """https?://(?:[A-Za-z0-9-]+\.)*ascii2d\.net/(?:search|details)/[^"'<>\s]+""",
     RegexOption.IGNORE_CASE
 )
 private val ASCII2D_RELATIVE_RESULT_REGEX = Regex(
-    """/(?:search|details)/[^\"'<>\\s]+""",
+    """/(?:search|details)/[^"'<>\s]+""",
     RegexOption.IGNORE_CASE
 )
 

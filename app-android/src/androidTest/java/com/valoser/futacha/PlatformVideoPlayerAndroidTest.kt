@@ -166,7 +166,7 @@ class PlatformVideoPlayerAndroidTest {
     }
 }
 
-private fun View.findMedia3PlayerView(): View? {
+internal fun View.findMedia3PlayerView(): View? {
     if (javaClass.name == "androidx.media3.ui.PlayerView") return this
     if (this !is ViewGroup) return null
     repeat(childCount) { index ->
@@ -175,6 +175,6 @@ private fun View.findMedia3PlayerView(): View? {
     return null
 }
 
-private fun media3PlayerFromView(view: View): Any? = runCatching {
+internal fun media3PlayerFromView(view: View): Any? = runCatching {
     view.javaClass.getMethod("getPlayer").invoke(view)
 }.getOrNull()

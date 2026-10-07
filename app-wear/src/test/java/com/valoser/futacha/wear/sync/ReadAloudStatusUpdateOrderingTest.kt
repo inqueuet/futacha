@@ -50,6 +50,41 @@ class ReadAloudStatusUpdateOrderingTest {
         assertNotNull(ordering.apply(snapshot(), speaking, now))
     }
 
+    @Test
+    fun sequencedUpdatesAreOrderedWithoutAnyClock() {
+        val ordering = ReadAloudStatusUpdateOrdering()
+        // The phone clock is wildly off (hours behind and jumping back) but the sequence decides.
+        val speakingSeq = WatchReadAloudStatusUpdate(status(WatchReadAloudPlaybackState.Speaking, 1_000L), 1_000L, sessionId = 7L, sequence = 1L)
+        val stoppedSeq = WatchReadAloudStatusUpdate(status = null, updatedAtMillis = 10L, sessionId = 7L, sequence = 2L)
+        val afterStop = ordering.apply(snapshot(), stoppedSeq, now)!!
+        assertNull(afterStop.threads.single().readAloudStatus)
+        assertNull(ordering.apply(afterStop, speakingSeq, now))
+        // Duplicate delivery of the newest update still applies.
+        assertNotNull(ordering.apply(afterStop, stoppedSeq, now))
+    }
+
+    @Test
+    fun newPhoneSessionSupersedesTheOldNumbering() {
+        val ordering = ReadAloudStatusUpdateOrdering()
+        val old = WatchReadAloudStatusUpdate(status = null, updatedAtMillis = now - 1_000L, sessionId = 7L, sequence = 50L)
+        ordering.apply(snapshot(), old, now)
+        val restarted = WatchReadAloudStatusUpdate(
+            status(WatchReadAloudPlaybackState.Speaking, now - 500L), now - 500L, sessionId = 8L, sequence = 1L
+        )
+        assertNotNull(ordering.apply(snapshot(), restarted, now))
+        // Within the new session the numbering restarts at 1 and is enforced again.
+        val next = WatchReadAloudStatusUpdate(null, now, sessionId = 8L, sequence = 2L)
+        assertNotNull(ordering.apply(snapshot(), next, now))
+        assertNull(ordering.apply(snapshot(), restarted, now))
+    }
+
+    @Test
+    fun legacyUpdatesWithoutSequenceKeepTheTimestampOrdering() {
+        val ordering = ReadAloudStatusUpdateOrdering()
+        assertNotNull(ordering.apply(snapshot(), stopped, now))
+        assertNull(ordering.apply(snapshot(), speaking, now))
+    }
+
     private fun status(state: WatchReadAloudPlaybackState, updatedAt: Long) = WatchReadAloudStatus(
         boardId = "b",
         boardUrl = "https://may.2chan.net/b/",

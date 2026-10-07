@@ -12,7 +12,10 @@ data class BoardEndpoint(
 
 data class BoardPostingCapabilities(
     val maxFileSizeBytes: Long,
-    val supportedExtensions: Set<String>
+    val supportedExtensions: Set<String>,
+    val replyAttachmentsAllowed: Boolean = true,
+    val nameAllowed: Boolean = true,
+    val subjectAllowed: Boolean = true
 )
 
 private val CURRENT_FUTABA_IMAGE_EXTENSIONS = FUTABA_IMAGE_EXTENSIONS - "jpe"
@@ -35,6 +38,9 @@ fun defaultBoardPostingCapabilities(board: String): BoardPostingCapabilities {
         normalized == "http://may.2chan.net/b" ||
         normalized.startsWith("http://may.2chan.net/b/")
     return BoardPostingCapabilities(
+        replyAttachmentsAllowed = !isImgBoard,
+        nameAllowed = !isImgBoard,
+        subjectAllowed = !isImgBoard,
         maxFileSizeBytes = if (isMayB) 8_192_000L else 3_072_000L,
         supportedExtensions = if (isImgBoard) {
             CURRENT_FUTABA_IMAGE_EXTENSIONS - "webp"
@@ -66,6 +72,9 @@ internal fun resolveBoardPostingCapabilities(
         .toSet()
     return BoardPostingCapabilities(
         maxFileSizeBytes = maxBytes,
+        replyAttachmentsAllowed = fallback.replyAttachmentsAllowed,
+        nameAllowed = fallback.nameAllowed,
+        subjectAllowed = fallback.subjectAllowed,
         // The visible form list omits WebP even though current live posts use it. Do not
         // otherwise union fallback video types into a live image-only form such as img/b.
         supportedExtensions = if (normalizedServerExtensions.isEmpty()) {
@@ -86,7 +95,7 @@ interface BoardApi {
         settings: CatalogFetchSettings = CatalogFetchSettings()
     )
 
-    suspend fun fetchPostingCapabilities(board: String): BoardPostingCapabilities =
+    suspend fun fetchPostingCapabilities(board: String, threadId: String? = null): BoardPostingCapabilities =
         defaultBoardPostingCapabilities(board)
 
     suspend fun fetchCatalog(
@@ -130,7 +139,8 @@ interface BoardApi {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean = false
     ): String?
     suspend fun createThread(
         board: String,
@@ -141,6 +151,7 @@ interface BoardApi {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean = false
     ): String?
 }

@@ -7,6 +7,16 @@ import kotlin.test.assertTrue
 
 class CompatReadAloudBatchSupportTest {
     @Test
+    fun visibleStartUsesPostIdentityAfterFilteringAndClampsTheListEdge() {
+        val posts = (1..8).map { post(it.toString(), "本文$it") }
+        val visible = listOf(posts[2], posts[5], posts[7])
+        assertEquals(5, resolveCompatReadAloudVisibleIndex(posts, visible, 1))
+        assertEquals(7, resolveCompatReadAloudVisibleIndex(posts, visible, 99))
+        assertEquals(2, resolveCompatReadAloudVisibleIndex(posts, visible, -1))
+        assertEquals(0, resolveCompatReadAloudVisibleIndex(posts, emptyList(), 0))
+    }
+
+    @Test
     fun largePostIsSplitWithoutDroppingItsRemainder() {
         val body = "あ".repeat(7_100)
         val posts = listOf(post("1", body), post("2", "次のレス"))

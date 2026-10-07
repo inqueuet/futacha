@@ -33,6 +33,10 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
@@ -554,7 +558,10 @@ internal suspend fun compatImagePhashHiddenPostNos(
     httpClient: HttpClient?,
     posts: List<CompatPostSnapshot>,
     rules: List<com.valoser.futacha.shared.compat.CompatNgRule>,
-    threshold: Int
+    threshold: Int,
+    // Optional: when given, hashes already persisted (shared with the catalog and the
+    // viewer) are reused and the newly computed ones are persisted, even on cancellation.
+    store: com.valoser.futacha.shared.compat.CompatibilityStore? = null
 ): Set<String> {
     val client = httpClient ?: return emptySet()
     if (rules.isEmpty()) return emptySet()
@@ -567,7 +574,17 @@ internal suspend fun compatImagePhashHiddenPostNos(
             .distinctBy { it.second }
             .take(256)
     }
-    return collectCompatImagePhashes(client, candidates).filterValues { phash ->
+    val stored = loadStoredCompatThreadImagePhashes(store, candidates)
+    val missing = candidates.filterNot { it.first in stored }
+    val computed = linkedMapOf<String, String>()
+    if (missing.isNotEmpty()) {
+        try {
+            collectCompatImagePhashes(client, missing, onComputed = { id, phash -> computed[id] = phash })
+        } finally {
+            saveComputedCompatImagePhashes(store, missing, computed, "CompatMedia")
+        }
+    }
+    return (stored + computed).filterValues { phash ->
         rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
     }.keys
 }
@@ -628,29 +645,38 @@ internal suspend fun collectCompatImagePhashHiddenPostNos(
     val missing = candidates.filterNot { it.first in known }
     if (missing.isEmpty()) return
     val computed = linkedMapOf<String, String>()
-    var sincePublish = 0
-    withTimeoutOrNull(batchTimeoutMillis) {
-        missing.forEach { (postNo, url) ->
-            val phash = withTimeoutOrNull(requestTimeoutMillis) {
-                fetchCompatImagePhash(client, url).getOrNull()
-            } ?: return@forEach
-            computed[postNo] = phash
-            if (++sincePublish >= publishEvery) {
-                sincePublish = 0
-                onUpdate(hiddenBy(known + computed))
-            }
-        }
+    try {
+        collectCompatImagePhashesConcurrently(
+            httpClient = client,
+            candidates = missing,
+            batchTimeoutMillis = batchTimeoutMillis,
+            requestTimeoutMillis = requestTimeoutMillis,
+            publishEvery = publishEvery,
+            onComputed = { postNo, phash -> computed[postNo] = phash },
+            onPublish = { onUpdate(hiddenBy(known + computed)) }
+        )
+    } finally {
+        // Also on cancellation: hashes already computed must not be fetched again next time.
+        saveComputedCompatImagePhashes(store, missing, computed, "CompatMedia")
     }
-    if (sincePublish > 0) onUpdate(hiddenBy(known + computed))
-    if (store != null && computed.isNotEmpty()) {
-        val urlByPostNo = missing.toMap()
-        val entries = computed.mapNotNull { (postNo, phash) ->
-            urlByPostNo[postNo]?.let { compatImagePhashCachePreferenceKey(it) to phash }
-        }.toMap()
-        withContext(NonCancellable) {
-            runSuspendCatchingPreservingCancellation { store.saveImagePhashes(entries) }
-                .onFailure { Logger.e("CompatMedia", "Failed to save image hashes", it) }
-        }
+}
+
+/** Persists [computed] (id -> pHash) best-effort; safe to call from a cancelled coroutine. */
+private suspend fun saveComputedCompatImagePhashes(
+    store: com.valoser.futacha.shared.compat.CompatibilityStore?,
+    candidates: List<Pair<String, String>>,
+    computed: Map<String, String>,
+    logTag: String
+) {
+    if (store == null || computed.isEmpty()) return
+    val urlById = candidates.toMap()
+    val entries = computed.mapNotNull { (id, phash) ->
+        urlById[id]?.let { compatImagePhashCachePreferenceKey(it) to phash }
+    }.toMap()
+    if (entries.isEmpty()) return
+    withContext(NonCancellable) {
+        runSuspendCatchingPreservingCancellation { store.saveImagePhashes(entries) }
+            .onFailure { Logger.e(logTag, "Failed to save image hashes", it) }
     }
 }
 
@@ -668,25 +694,89 @@ internal suspend fun collectCompatImagePhashes(
     requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
     publishEvery: Int = 16,
     onComputed: (String, String) -> Unit = { _, _ -> },
-    onPartial: (Map<String, String>) -> Unit = {}
+    onPartial: (Map<String, String>) -> Unit = {},
+    concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY
 ): Map<String, String> {
     val found = linkedMapOf<String, String>()
-    var sincePublish = 0
-    withTimeoutOrNull(batchTimeoutMillis) {
-        candidates.forEach { (id, url) ->
-            val phash = withTimeoutOrNull(requestTimeoutMillis) {
-                fetchCompatImagePhash(httpClient, url).getOrNull()
-            } ?: return@forEach
+    collectCompatImagePhashesConcurrently(
+        httpClient = httpClient,
+        candidates = candidates,
+        batchTimeoutMillis = batchTimeoutMillis,
+        requestTimeoutMillis = requestTimeoutMillis,
+        publishEvery = publishEvery,
+        concurrency = concurrency,
+        onComputed = { id, phash ->
             found[id] = phash
             onComputed(id, phash)
-            if (++sincePublish >= publishEvery) {
-                sincePublish = 0
-                onPartial(found.toMap())
+        },
+        onPublish = { onPartial(found.toMap()) }
+    )
+    return found
+}
+
+/**
+ * Worker-slot version of the batch fetch behind [collectCompatImagePhashes]: up to
+ * [concurrency] images are fetched at the same time (the per-URL locks and the
+ * process-wide hash cache still apply), while every result is handed to [onComputed]
+ * one at a time from the calling coroutine, so callers need no locking. [onPublish]
+ * runs after every [publishEvery] results and once more at the end (also when the
+ * batch budget ran out). If the caller is cancelled, results that already arrived are
+ * still handed to [onComputed] (so callers can persist them), but nothing is published.
+ */
+internal suspend fun collectCompatImagePhashesConcurrently(
+    httpClient: HttpClient,
+    candidates: List<Pair<String, String>>,
+    batchTimeoutMillis: Long = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
+    requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
+    publishEvery: Int = 16,
+    concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY,
+    onComputed: suspend (String, String) -> Unit,
+    onPublish: suspend () -> Unit
+) {
+    if (candidates.isEmpty()) return
+    var sincePublish = 0
+    val results = Channel<Pair<String, String>>(Channel.UNLIMITED)
+    try {
+        withTimeoutOrNull(batchTimeoutMillis) {
+            coroutineScope {
+                val queue = Channel<Pair<String, String>>(Channel.UNLIMITED)
+                candidates.forEach { queue.trySend(it) }
+                queue.close()
+                val workers = List(concurrency.coerceIn(1, candidates.size)) {
+                    launch {
+                        for ((id, url) in queue) {
+                            val phash = withTimeoutOrNull(requestTimeoutMillis) {
+                                fetchCompatImagePhash(httpClient, url).getOrNull()
+                            } ?: continue
+                            results.trySend(id to phash)
+                        }
+                    }
+                }
+                launch {
+                    workers.joinAll()
+                    results.close()
+                }
+                for ((id, phash) in results) {
+                    onComputed(id, phash)
+                    if (++sincePublish >= publishEvery) {
+                        sincePublish = 0
+                        onPublish()
+                    }
+                }
+            }
+        }
+    } finally {
+        // A result that arrived while the budget ran out or the caller was cancelled
+        // is still a valid hash; do not drop it.
+        withContext(NonCancellable) {
+            while (true) {
+                val (id, phash) = results.tryReceive().getOrNull() ?: break
+                onComputed(id, phash)
+                sincePublish++
             }
         }
     }
-    if (sincePublish > 0) onPartial(found.toMap())
-    return found
+    if (sincePublish > 0) onPublish()
 }
 
 /** Resolve a viewer launch by post identity before falling back to its old index. */
@@ -1254,6 +1344,8 @@ internal suspend fun fetchCompatRemoteMediaInfo(
 private const val COMPAT_PHASH_MAX_IMAGE_BYTES = 16L * 1024L * 1024L
 private const val COMPAT_PHASH_CACHE_MAX_ENTRIES = 512
 private const val COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS = 3_000L
+// Mobile links finished only 5-10 images per 15 s batch when fetched one by one.
+internal const val COMPAT_PHASH_FETCH_CONCURRENCY = 3
 private const val COMPAT_PHASH_BATCH_TIMEOUT_MILLIS = 15_000L
 private val compatPhashCacheMutex = Mutex()
 private val compatPhashCache = LinkedHashMap<String, String>()

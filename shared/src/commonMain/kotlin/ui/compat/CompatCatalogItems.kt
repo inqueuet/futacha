@@ -623,13 +623,7 @@ internal fun CompatCatalogGridItem(
                     if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp)
                     Text(item.replyCount.toString(), fontSize = 12.sp, color = palette.text)
                     replyIndicator?.let { indicator ->
-                        Text(
-                            "+${indicator.count}",
-                            color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
-                                Color.Red
-                            } else palette.uiSecondaryText,
-                            fontSize = 12.sp
-                        )
+                        CompatNewRepliesBadge(indicator.count)
                     }
                 }
             }
@@ -684,11 +678,7 @@ internal fun CompatCatalogGridItem(
                 if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp)
                 Text(item.replyCount.toString(), fontSize = 12.sp, color = palette.text)
                 replyIndicator?.let { indicator ->
-                    Text(
-                        "+${indicator.count}",
-                        color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) Color.Red else palette.uiSecondaryText,
-                        fontSize = 12.sp
-                    )
+                    CompatNewRepliesBadge(indicator.count)
                 }
             }
         }
@@ -832,13 +822,7 @@ internal fun CompatCatalogListItem(
         Column(horizontalAlignment = Alignment.End) {
             Text(item.replyCount.toString(), fontSize = fontSize.sp, color = palette.text)
             replyIndicator?.let { indicator ->
-                Text(
-                    "+${indicator.count}",
-                    color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
-                        Color.Red
-                    } else palette.uiSecondaryText,
-                    fontSize = fontSize.sp
-                )
+                CompatNewRepliesBadge(indicator.count)
             }
         }
     }
@@ -901,4 +885,14 @@ private fun rememberCompatCatalogHighQualityPainter(
         thumbnailReady = imageState is coil3.compose.AsyncImagePainter.State.Success,
         imageLoader = imageLoader
     )
+}
+
+@Composable
+internal fun CompatNewRepliesBadge(count: Int, label: Boolean = false) {
+    if (count <= 0) return
+    Text(if (label) "新着 $count" else "+$count",
+        color = Color.White, fontSize = 12.sp, maxLines = 1,
+        modifier = Modifier.background(Color(0xFF9C2020), androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+            .padding(horizontal = 3.dp, vertical = 1.dp)
+            .semantics { contentDescription = "新着レス${count}件" })
 }

@@ -36,8 +36,23 @@ fun resolveCompatInlineUrlRoute(
     return CompatInlineUrlRoute.RegisteredThread(thread, boardKey)
 }
 
+/**
+ * Characters a URL in post text may continue with: printable ASCII except `"`, `'`, `<` and `>`.
+ * `\s` does not match the full-width space, so the former `[^\s<>"']` ran on through
+ * "https://…/1.jpg　これ" (and through full-width brackets, 。 and any following Japanese text),
+ * which broke the extension check and handed a broken URL to the browser.
+ */
+internal const val COMPAT_URL_BODY_CHAR_CLASS = "[\\x21\\x23-\\x26\\x28-\\x3B\\x3D\\x3F-\\x7E]"
+
 private val compatInlineUrlRegex = Regex(
-    """https?://[^\s<>\"']+""",
+    "https?://$COMPAT_URL_BODY_CHAR_CLASS+",
+    RegexOption.IGNORE_CASE
+)
+// 2ch-style "ttp://" / "ttps://" (leading "h" dropped to avoid auto-linking). The text stays as
+// written; only the URL handed to the browser gets the missing "h". The lookbehind keeps the
+// "ttp://" inside a normal "http://" from matching.
+private val compatSchemelessUrlRegex = Regex(
+    "(?<![A-Za-z0-9])ttps?://$COMPAT_URL_BODY_CHAR_CLASS+",
     RegexOption.IGNORE_CASE
 )
 private val compatBareApuSmallFileRegex = Regex(
@@ -73,6 +88,12 @@ fun compatInlineLinks(messageHtml: String): List<CompatInlineLink> {
         val url = normalizeCompatInlineUrl(match.value) ?: return@forEach
         val end = match.range.first + url.length
         links += CompatInlineLink(match.range.first, end, url)
+    }
+    compatSchemelessUrlRegex.findAll(plainText).take(COMPAT_INLINE_LINK_MAX_MATCHES_PER_PATTERN).forEach { match ->
+        val opened = normalizeCompatInlineUrl("h${match.value}") ?: return@forEach
+        // `opened` carries one extra leading "h"; the displayed range is the original text.
+        val end = match.range.first + opened.length - 1
+        links += CompatInlineLink(match.range.first, end, opened)
     }
 
     // up2 often displays only `fu1234567.jpg` in the post body. Keep that
@@ -150,16 +171,24 @@ private fun buildCompatSioUrl(fileName: String): String {
 }
 
 private fun normalizeCompatInlineUrl(raw: String): String? {
-    var value = HtmlEntityDecoder.decode(raw.trim())
-    if (compatInlineUrlSchemes.none { value.startsWith(it, ignoreCase = true) }) return null
+    val decoded = HtmlEntityDecoder.decode(raw.trim())
+    if (compatInlineUrlSchemes.none { decoded.startsWith(it, ignoreCase = true) }) return null
+    val value = trimCompatInlineUrlEnd(decoded)
+    return value.takeIf { it.length > "https://".length }
+}
 
-    // Do not make sentence punctuation part of the browser URL. Keep balanced
-    // parentheses because they are common in Wikipedia and documentation URLs.
+/**
+ * Do not make sentence punctuation part of the browser URL. Keep balanced
+ * parentheses because they are common in Wikipedia and documentation URLs
+ * (`.../wiki/A_(B)`), but drop a closing one that has no opener (`(see https://x/y)`).
+ */
+internal fun trimCompatInlineUrlEnd(raw: String): String {
+    var value = raw
     while (value.isNotEmpty() && value.last() in ".,!?;:、。，．！？」』".toCharArray()) {
         value = value.dropLast(1)
     }
     while (value.endsWith(")") && value.count { it == ')' } > value.count { it == '(' }) {
         value = value.dropLast(1)
     }
-    return value.takeIf { it.length > "https://".length }
+    return value
 }

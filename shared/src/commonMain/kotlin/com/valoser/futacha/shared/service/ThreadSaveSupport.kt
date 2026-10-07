@@ -296,14 +296,16 @@ internal fun replaceSavedMediaPaths(
     val normalizedBoard = boardPath.trim('/').takeIf { it.isNotEmpty() } ?: return updated
     val escapedBoard = Regex.escape(normalizedBoard)
 
+    // The host part must not span whitespace, quotes or tag ends, or one match swallows
+    // everything from the first URL to the last file name in the same run of text.
     val srcPatterns = listOf(
-        Regex("https?://[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-        Regex("//[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+        Regex("https?://[^\\s\"'<>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+        Regex("//[^\\s\"'<>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
         Regex("/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
     )
     val thumbPatterns = listOf(
-        Regex("https?://[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-        Regex("//[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+        Regex("https?://[^\\s\"'<>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+        Regex("//[^\\s\"'<>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
         Regex("/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
     )
 

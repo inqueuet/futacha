@@ -16,8 +16,10 @@ import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchThreadSummary
+import com.valoser.futacha.shared.watch.isWatchReadAloudStatusFreshOnWatch
 import com.valoser.futacha.wear.R
 import com.valoser.futacha.wear.WearMainActivity
+import com.valoser.futacha.wear.sync.WatchClockOffsetStore
 
 object ReadAloudLiveUpdateNotifier {
     private const val CHANNEL_ID = "read_aloud_live_update"
@@ -30,8 +32,9 @@ object ReadAloudLiveUpdateNotifier {
     @SuppressLint("MissingPermission")
     fun update(context: Context, snapshot: WatchSnapshot?) {
         val appContext = context.applicationContext
+        val nowMillis = WatchClockOffsetStore.phoneNowMillis(appContext)
         val activeThread = snapshot?.threads?.firstOrNull {
-            it.freshReadAloudStatus() != null
+            it.freshReadAloudStatus(nowMillis) != null
         }
         if (activeThread == null) {
             cancel(appContext)
@@ -44,7 +47,7 @@ object ReadAloudLiveUpdateNotifier {
         ensureChannel(appContext)
         NotificationManagerCompat.from(appContext).notify(
             NOTIFICATION_ID,
-            buildNotification(appContext, activeThread)
+            buildNotification(appContext, activeThread, nowMillis)
         )
     }
 
@@ -65,18 +68,19 @@ object ReadAloudLiveUpdateNotifier {
 
     private fun buildNotification(
         context: Context,
-        thread: WatchThreadSummary
-    ) = buildProgress(thread).let { progress ->
+        thread: WatchThreadSummary,
+        nowMillis: Long
+    ) = buildProgress(thread, nowMillis).let { progress ->
         NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(buildTitle(thread))
+            .setContentTitle(buildTitle(thread, nowMillis))
             .setContentText(thread.title)
             .setContentIntent(buildContentIntent(context))
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
             .apply {
-                thread.freshReadAloudStatus()?.let { status ->
-                    setTimeoutAfter(readAloudNotificationTimeoutMillis(status))
+                thread.freshReadAloudStatus(nowMillis)?.let { status ->
+                    setTimeoutAfter(readAloudNotificationTimeoutMillis(status, nowMillis))
                 }
             }
             .setOnlyAlertOnce(true)
@@ -84,7 +88,7 @@ object ReadAloudLiveUpdateNotifier {
             .setLocalOnly(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setRequestPromotedOngoing(true)
-            .setShortCriticalText(buildShortCriticalText(thread))
+            .setShortCriticalText(buildShortCriticalText(thread, nowMillis))
             .setProgress(progress.total, progress.current, false)
             .setStyle(buildProgressStyle(progress))
             .build()
@@ -98,8 +102,8 @@ object ReadAloudLiveUpdateNotifier {
             .setProgress(progress.current)
     }
 
-    private fun buildProgress(thread: WatchThreadSummary): ReadAloudProgress {
-        val status = thread.freshReadAloudStatus()
+    private fun buildProgress(thread: WatchThreadSummary, nowMillis: Long): ReadAloudProgress {
+        val status = thread.freshReadAloudStatus(nowMillis)
         val total = status?.totalPosts?.takeIf { it > 0 } ?: 100
         val current = status?.currentIndex
             ?.coerceIn(0, total - 1)
@@ -108,8 +112,8 @@ object ReadAloudLiveUpdateNotifier {
         return ReadAloudProgress(total = total, current = current)
     }
 
-    private fun buildTitle(thread: WatchThreadSummary): String {
-        val status = thread.freshReadAloudStatus()
+    private fun buildTitle(thread: WatchThreadSummary, nowMillis: Long): String {
+        val status = thread.freshReadAloudStatus(nowMillis)
         val stateLabel = when (status?.state?.name) {
             "Paused" -> "読み上げ一時停止中"
             else -> "読み上げ中"
@@ -121,8 +125,8 @@ object ReadAloudLiveUpdateNotifier {
         return listOfNotNull(stateLabel, progress).joinToString(" ")
     }
 
-    private fun buildShortCriticalText(thread: WatchThreadSummary): String {
-        val status = thread.freshReadAloudStatus() ?: return "読上げ"
+    private fun buildShortCriticalText(thread: WatchThreadSummary, nowMillis: Long): String {
+        val status = thread.freshReadAloudStatus(nowMillis) ?: return "読上げ"
         val total = status.totalPosts.takeIf { it > 0 } ?: return "読上げ"
         return "${(status.currentIndex + 1).coerceIn(1, total)}/$total"
     }
@@ -164,14 +168,10 @@ object ReadAloudLiveUpdateNotifier {
     }
 
     private fun WatchThreadSummary.freshReadAloudStatus(
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long
     ): WatchReadAloudStatus? {
         val status = readAloudStatus ?: return null
-        val ageMillis = nowMillis - status.updatedAtMillis
-        return status.takeIf {
-            status.updatedAtMillis > 0 &&
-                ageMillis in 0..WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
-            }
+        return status.takeIf { isWatchReadAloudStatusFreshOnWatch(it.updatedAtMillis, nowMillis) }
     }
 
     private data class ReadAloudProgress(

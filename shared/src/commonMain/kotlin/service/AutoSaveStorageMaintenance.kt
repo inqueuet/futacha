@@ -67,12 +67,25 @@ internal suspend fun purgeAutoSavesOfTrimmedHistory(
     repository: SavedThreadRepository,
     entries: List<ThreadHistoryEntry>
 ) {
-    entries.forEach { entry ->
+    fun identityOf(entry: ThreadHistoryEntry): Pair<String, String?> {
         val boardId = entry.boardId.trim().ifBlank {
             runCatching { BoardUrlResolver.resolveBoardSlug(entry.boardUrl) }.getOrDefault("")
         }.ifBlank { null }
-        repository.purgeIndexedThreadStorage(entry.threadId, boardId).onFailure { error ->
-            Logger.w(TAG, "Failed to delete auto-save of trimmed history ${entry.threadId}: ${error.message}")
+        return entry.threadId to boardId
+    }
+    // One index rewrite per chunk rather than per entry. A chunk that fails as a whole is
+    // retried entry by entry, so one bad folder does not keep the others from being deleted.
+    entries.chunked(TRIMMED_HISTORY_PURGE_CHUNK_SIZE).forEach { chunk ->
+        val identities = chunk.map(::identityOf)
+        repository.purgeIndexedThreadsStorage(identities).onFailure { batchError ->
+            Logger.w(TAG, "Failed to delete ${identities.size} trimmed auto-saves together, retrying one by one: ${batchError.message}")
+            identities.forEach { (threadId, boardId) ->
+                repository.purgeIndexedThreadStorage(threadId, boardId).onFailure { error ->
+                    Logger.w(TAG, "Failed to delete auto-save of trimmed history $threadId: ${error.message}")
+                }
+            }
         }
     }
 }
+
+private const val TRIMMED_HISTORY_PURGE_CHUNK_SIZE = 200

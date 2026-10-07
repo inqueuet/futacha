@@ -60,6 +60,7 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.SettingsRecoveryNotices
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.board.GlobalSettingsScreen
@@ -229,6 +230,28 @@ fun FutachaApp(
     // recomposition after ON_STOP, so command handlers read the holder (C-1).
     val appLockHolder = remember { FutachaAppLockHolder() }
     val isUnlockedForSession by appLockHolder.sessionUnlocked.collectAsState()
+    // The wrong-password counter / cool-down is kept in the shared compat store (all modes pass the
+    // same one) so a force-stop does not reset it; without a store it lives for the process only.
+    val appLockAttemptsStorage = remember(compatibilityStore) {
+        compatibilityStore?.let(::createAppLockAttemptsStorage)
+    }
+    var appLockAttemptsLoaded by remember(appLockAttemptsStorage) { mutableStateOf(appLockAttemptsStorage == null) }
+    var appLockPersistedAttempts by remember(appLockAttemptsStorage) { mutableStateOf(AppLockAttemptState()) }
+    LaunchedEffect(appLockAttemptsStorage) {
+        val storage = appLockAttemptsStorage ?: return@LaunchedEffect
+        appLockPersistedAttempts = storage.load()
+        appLockAttemptsLoaded = true
+    }
+    val appLockAttemptsScope = rememberCoroutineScope()
+    val onAppLockAttemptsChanged = remember(appLockAttemptsStorage) {
+        { state: AppLockAttemptState ->
+            val storage = appLockAttemptsStorage
+            if (storage != null) {
+                appLockAttemptsScope.launch { storage.save(state) }
+            }
+            Unit
+        }
+    }
     LaunchedEffect(startupAppLockHash) {
         if (startupAppLockHash == null) {
             appLockHolder.openSessionWithoutLock()
@@ -272,7 +295,10 @@ fun FutachaApp(
                     gate = appLockGate,
                     passwordHash = startupAppLockHash.orEmpty(),
                     onUnlocked = appLockHolder::unlockSession,
-                    onRetry = { appLockLoadAttempt += 1 }
+                    onRetry = { appLockLoadAttempt += 1 },
+                    persistedAttempts = appLockPersistedAttempts,
+                    onAttemptsChanged = onAppLockAttemptsChanged,
+                    attemptsLoaded = appLockAttemptsLoaded
                 )
             }
         }
@@ -352,7 +378,10 @@ fun FutachaApp(
                     gate = appLockGate,
                     passwordHash = startupAppLockHash.orEmpty(),
                     onUnlocked = appLockHolder::unlockSession,
-                    onRetry = { appLockLoadAttempt += 1 }
+                    onRetry = { appLockLoadAttempt += 1 },
+                    persistedAttempts = appLockPersistedAttempts,
+                    onAttemptsChanged = onAppLockAttemptsChanged,
+                    attemptsLoaded = appLockAttemptsLoaded
                 )
             }
         }
@@ -631,6 +660,63 @@ private fun FutachaAppContent(
             )
             }
         }
+        return
+    }
+    if (experienceProfile == ExperienceProfile.FUTABER) {
+        // Crash diagnostics follow the user's data-collection setting here too.
+        // Only the Futacha screen below sets it from the UI, so a Futaber launch
+        // (iOS has no Application-level hook) stayed at the disabled default.
+        // Analytics and performance stay untouched: this mode sends none.
+        val futaberTelemetryEnabled by produceState<Boolean?>(initialValue = null, stateStore) {
+            stateStore.isTelemetryCollectionEnabled.collect { value = it }
+        }
+        LaunchedEffect(futaberTelemetryEnabled) {
+            val enabled = futaberTelemetryEnabled ?: return@LaunchedEffect
+            CrashReporter.setCollectionEnabled(enabled)
+            CrashReporter.setKey("telemetry_enabled", analyticsEnabledValue(enabled))
+        }
+        // The recovery notice (a damaged settings file was restored, the app lock
+        // was released, ...) must not be lost in this mode. The host owns the
+        // theme and system bars, so a plain Material theme is used only while a
+        // notice is showing.
+        val futaberRecoveryNotice by SettingsRecoveryNotices.notice.collectAsState()
+        if (futaberRecoveryNotice != null) {
+            val dark = androidx.compose.foundation.isSystemInDarkTheme()
+            androidx.compose.material3.MaterialTheme(
+                colorScheme = if (dark) androidx.compose.material3.darkColorScheme()
+                else androidx.compose.material3.lightColorScheme()
+            ) {
+                SettingsRecoveryNoticeDialog()
+            }
+        }
+        // ふたばー shares the boards and history stored by AppStateStore with ふたちゃ.
+        com.valoser.futacha.shared.ui.futaber.FutaberRuntimeHost(
+            stateStore = stateStore,
+            boardList = boardList,
+            history = history,
+            httpClient = httpClient,
+            imageTransport = imageTransport,
+            originalMediaSession = originalMediaSession,
+            sharedRepository = sharedRepository,
+            sharedHistoryRefresher = sharedHistoryRefresher,
+            fileSystem = fileSystem,
+            cookieRepository = cookieRepository,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            compatibilityStore = compatibilityStore,
+            promptMediaSource = promptMediaSource,
+            mediaFeatureSettings = mediaFeatureSettings,
+            mediaFeatureGate = mediaFeatureGate,
+            promptPrivacyEnabled = promptPrivacyEnabled,
+            devicePerformanceProfile = devicePerformanceProfile,
+            platformContext = platformContext,
+            appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" },
+            // External links are opened here too (and consumed): a link left pending would be replayed by a later mode switch.
+            initialThreadDeepLink = platformThreadDeepLink.takeIf { isAppUnlocked },
+            onThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
+            initialBoardDeepLink = platformBoardDeepLink.takeIf { isAppUnlocked },
+            onBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
+            onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested
+        )
         return
     }
     var navigationState by rememberSaveable(stateSaver = FutachaNavigationState.Saver) {

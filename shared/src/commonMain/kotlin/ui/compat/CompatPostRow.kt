@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.board.postPressFeedback
+
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -328,6 +330,7 @@ import com.valoser.futacha.shared.compat.compatNgRuleId
 import com.valoser.futacha.shared.compat.reduceCompatibilityWorkspace
 import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
 import com.valoser.futacha.shared.compat.compatQuoteQueryForLine
+import com.valoser.futacha.shared.compat.compatQuoteQueryPostNo
 import com.valoser.futacha.shared.compat.resolveCompatQuotePosts
 import com.valoser.futacha.shared.compat.resolveCompatSelectorLongTapEffect
 import com.valoser.futacha.shared.compat.resolveCompatSelectorMenuEffect
@@ -506,8 +509,7 @@ internal fun compatPostQuotesOwnPost(
     ) return true
     return post.messageHtml.toCompatPlainTextCached().lineSequence().any { line ->
         val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
-        query.startsWith("no:", ignoreCase = true) &&
-            query.substringAfter(':').trim() in ownPostNos
+        compatQuoteQueryPostNo(query)?.let { it in ownPostNos } == true
     }
 }
 
@@ -540,9 +542,12 @@ internal fun CompatPostRow(
     onHeaderLongClick: () -> Unit = {},
     thumbnailReloadToken: Long = 0L,
     onMediaClick: () -> Unit = {},
-    onMediaLongClick: () -> Unit = {}
+    onMediaLongClick: () -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
     val palette = LocalCompatibilityPalette.current
+    val relatedTap = com.valoser.futacha.shared.ui.board.LocalRelatedPostTap.current
+    val relatedClick = { onQuoteClick("related:${post.postNo}") }
     val isOwnPost = post.postNo in ownPostNos
     val quotesOwnPost = remember(post, ownPostNos) {
         compatPostQuotesOwnPost(post, ownPostNos)
@@ -714,23 +719,24 @@ internal fun CompatPostRow(
         )
     }
     Column(
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
             .testTag("compat-thread-post-${post.postNo}")
             .combinedClickable(
                 onClick = {
-                    firstQuoteQuery?.let(onQuoteClick) ?: onClick()
+                    if (relatedTap) relatedClick() else firstQuoteQuery?.let(onQuoteClick) ?: onClick()
                 },
                 onLongClick = onLongClick
             )
             .background(if (searchHit) palette.searchResultBackground else Color.Transparent)
+            .postPressFeedback(post.postNo, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
     ) {
         newReplyCount?.takeIf { it > 0 }?.let { count ->
             CompatNewRepliesDivider(count, Modifier.testTag("compat-new-replies-divider"))
         }
         Row(
             modifier = Modifier.fillMaxWidth().combinedClickable(
-                onClick = onHeaderClick,
-                onLongClick = onHeaderLongClick
+                onClick = if (relatedTap) relatedClick else onHeaderClick,
+                onLongClick = if (relatedTap) onLongClick else onHeaderLongClick
             ),
             verticalAlignment = Alignment.Top
         ) {
@@ -1031,10 +1037,10 @@ internal fun CompatPostRow(
             post = post,
             fontSize = fontSize,
             searchRanges = searchRanges,
-            onClick = onClick,
+            onClick = if (relatedTap) relatedClick else onClick,
             onLongClick = onLongClick,
             onUrlClick = mediaAwareUrlClick,
-            onQuoteClick = onQuoteClick
+            onQuoteClick = if (relatedTap) { { relatedClick() } } else onQuoteClick
         )
         deletionSummary?.let { summary ->
             Text(
@@ -1204,6 +1210,10 @@ private fun CompatMessageText(
         }
     }
     var textLayoutResult by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
+    val latestClick by rememberUpdatedState(onClick)
+    val latestLongClick by rememberUpdatedState(onLongClick)
+    val latestQuoteClick by rememberUpdatedState(onQuoteClick)
+    val latestUrlClick by rememberUpdatedState(onUrlClick)
     BasicText(
         text = annotated,
         style = TextStyle(
@@ -1238,23 +1248,23 @@ private fun CompatMessageText(
             // exact annotated URL/quote under a real finger tap.
             .pointerInput(annotated) {
             detectTapGestures(
-                onLongPress = { onLongClick() },
+                onLongPress = { latestLongClick() },
                 onTap = { position ->
                     val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
                     annotated.getStringAnnotations("compat_quote", offset, offset)
                         .firstOrNull()
-                        ?.let { onQuoteClick(it.item) }
+                        ?.let { latestQuoteClick(it.item) }
                         ?: annotated.getStringAnnotations("compat_url", offset, offset)
                             .firstOrNull()
-                            ?.let { onUrlClick(it.item) }
+                            ?.let { latestUrlClick(it.item) }
                         ?: run {
                             // BasicText can report the caret at the end of a
                             // glyph on some Android text engines. Recover the
                             // complete line so a >>No link remains tappable
                             // even when its annotation range misses that edge.
                             compatQuoteQueryForLine(compatMessageLineAtOffset(message, offset))
-                                ?.let(onQuoteClick)
-                                ?: onClick()
+                                ?.let(latestQuoteClick)
+                                ?: latestClick()
                         }
                 }
             )
@@ -1314,9 +1324,9 @@ internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLong
         else if (tab.isExploded) Text("爆", color = Color.Red, fontSize = 13.sp)
         else if (tab.isDead) Text("落", color = Color.Red, fontSize = 13.sp)
         else if (tab.isOld) Text("古", color = Color(0xFFE65100), fontSize = 13.sp)
-        Column(Modifier.width(50.dp).testTag("compat-drawer-tab-replies-${tab.key}"), horizontalAlignment = Alignment.End) {
+        Column(Modifier.width(76.dp).testTag("compat-drawer-tab-replies-${tab.key}"), horizontalAlignment = Alignment.End) {
             Text(reply.readCount, maxLines = 1, fontSize = 16.sp, color = if (live) Color(0xFF00897B) else Color(0xFFCCCCCC))
-            Text(reply.increase, maxLines = 1, fontSize = 12.sp, color = if (live) Color.Red else Color(0xFFCCCCCC))
+            CompatNewRepliesBadge(tab.unreadCount, label = true)
         }
     }
     HorizontalDivider()

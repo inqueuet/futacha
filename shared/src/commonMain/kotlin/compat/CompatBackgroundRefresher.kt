@@ -2,9 +2,14 @@ package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings
 import com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettingsFromPreferences
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -18,6 +23,15 @@ const val COMPAT_EXISTENCE_BUDGET_MILLIS = 30_000L
 private const val WATCH_CHECK_WRITE_BATCH = 10
 /** Key of the last tab whose existence was probed; the next run continues after it. */
 const val COMPAT_BACKGROUND_EXISTENCE_CURSOR_KEY = "compat.background.existence_cursor"
+/**
+ * Key of the last board whose catalog the update phase started; the next run continues after it,
+ * so boards at the end of the list are not starved when a run's time runs out (empty = none).
+ */
+const val COMPAT_BACKGROUND_UPDATE_BOARD_CURSOR_KEY = "compat.background.update_board_cursor"
+/** Thread count the catalog screen assumes when `catalogThreadSize` is not set. */
+internal const val COMPAT_DEFAULT_CATALOG_THREAD_COUNT = 300
+/** Existence probes in flight at once; the budget and the per-probe timeout are unchanged. */
+internal const val COMPAT_EXISTENCE_PROBE_PARALLELISM = 3
 
 data class CompatBackgroundRefreshResult(
     val updatedTabs: Int = 0,
@@ -91,43 +105,91 @@ suspend fun refreshCompatTabsInBackground(
     val boards = store.boards.first()
     // Same catalog layout as the catalog screens; a different one makes the
     // repository redo the board's catalog setup on each switch.
+    // With no catalogThreadSize stored the catalog screen still fetches 300 threads, so use that
+    // layout here too instead of the repository default.
     val catalogSettings = compatCatalogFetchSettingsFromPreferences(store.preferences.first())
+        ?: compatCatalogFetchSettings(COMPAT_DEFAULT_CATALOG_THREAD_COUNT)
     suspend fun fetchCatalog(boardUrl: String, mode: CatalogMode) =
-        catalogSettings?.let { repository.getCatalogWithSettings(boardUrl, mode, it) }
-            ?: repository.getCatalog(boardUrl, mode)
+        repository.getCatalogWithSettings(boardUrl, mode, catalogSettings)
+    suspend fun loadCursor(key: String): String? = try {
+        store.loadPreference(key)?.takeIf(String::isNotBlank)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        null
+    }
 
     if (checkUpdates) {
         val updateDeadline = updateBudgetMillis?.let { TimeSource.Monotonic.markNow() + it.milliseconds }
         fun updateRemainingMillis(): Long =
             updateDeadline?.let { (-it.elapsedNow()).inWholeMilliseconds } ?: Long.MAX_VALUE
-        boards.forEach boardLoop@{ board ->
-            val boardTabs = tabs.filter { it.boardKey == board.key }
-            if (boardTabs.isEmpty()) return@boardLoop
-            try {
-                val catalog = withinBudget(updateRemainingMillis()) { fetchCatalog(board.originalUrl, CatalogMode.Catalog) }
-                    ?: run { failures++; return@boardLoop }
-                val byCanonicalUrl = catalog.mapNotNull { item ->
-                    com.valoser.futacha.shared.compat.canonicalizeThreadUrl(item.threadUrl)
-                        ?.canonicalUrl
-                        ?.let { it to item }
-                }.toMap()
-                val byThreadId = catalog.associateBy { it.id }
-                boardTabs.forEach tabLoop@{ tab ->
-                    if (remainingMillis() <= 0L) return@boardLoop
-                    val item = byCanonicalUrl[tab.canonicalUrl]
-                        ?: byThreadId[tab.threadNo]
-                        ?: return@tabLoop
-                    if (item.replyCount == tab.replyCount) return@tabLoop
-                    var changed = false
-                    val committed = commitGate {
-                        changed = store.applyCatalogReplyCount(tab.key, tab.canonicalUrl, item.replyCount)
-                    }
-                    if (committed && changed) updated++
+        // Boards are visited starting after the last one the previous run began, so a run that
+        // runs out of time does not leave the same boards at the end of the list unvisited.
+        val tabBoardKeys = tabs.mapTo(HashSet(), CompatTab::boardKey)
+        val previousBoardCursor = loadCursor(COMPAT_BACKGROUND_UPDATE_BOARD_CURSOR_KEY)
+        val orderedBoards = compatRotatedBackgroundBoards(boards, previousBoardCursor)
+            .filter { it.key in tabBoardKeys }
+        var boardCursor = previousBoardCursor
+        var startedBoards = 0
+        try {
+            orderedBoards.forEach boardLoop@{ board ->
+                val boardTabs = tabs.filter { it.boardKey == board.key }
+                if (boardTabs.isEmpty()) return@boardLoop
+                // No time left before this board started: it was not visited, so the next run starts here.
+                if (minOf(updateRemainingMillis(), remainingMillis()) <= 0L) {
+                    failures++
+                    return@boardLoop
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                failures++
+                // A board that was started counts as visited even if it times out or is cancelled,
+                // otherwise a slow board would be retried first forever.
+                boardCursor = board.key
+                startedBoards++
+                try {
+                    val catalog = withinBudget(updateRemainingMillis()) { fetchCatalog(board.originalUrl, CatalogMode.Catalog) }
+                        ?: run { failures++; return@boardLoop }
+                    // Canonicalizing every catalog URL is CPU work (thousands of items for a large
+                    // catalog); keep it off a caller that runs on the main dispatcher.
+                    val (byCanonicalUrl, byThreadId) = withContext(AppDispatchers.parsing) {
+                        catalog.mapNotNull { item ->
+                            com.valoser.futacha.shared.compat.canonicalizeThreadUrl(item.threadUrl)
+                                ?.canonicalUrl
+                                ?.let { it to item }
+                        }.toMap() to catalog.associateBy { it.id }
+                    }
+                    val replyCountUpdates = ArrayList<CompatCatalogReplyCountUpdate>()
+                    for (tab in boardTabs) {
+                        if (remainingMillis() <= 0L) break
+                        val item = byCanonicalUrl[tab.canonicalUrl]
+                            ?: byThreadId[tab.threadNo]
+                            ?: continue
+                        if (item.replyCount == tab.replyCount) continue
+                        replyCountUpdates += CompatCatalogReplyCountUpdate(tab.key, tab.canonicalUrl, item.replyCount)
+                    }
+                    if (replyCountUpdates.isNotEmpty()) {
+                        // One write for the board's tabs instead of two per tab.
+                        var changedTabs = 0
+                        val committed = commitGate {
+                            changedTabs = store.applyCatalogReplyCounts(replyCountUpdates)
+                        }
+                        if (committed) updated += changedTabs
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    failures++
+                }
+            }
+        } finally {
+            // A run that started every board needs no cursor (the next one starts from the top, as
+            // before); otherwise remember where this run stopped.
+            val next = if (startedBoards >= orderedBoards.size) null else boardCursor
+            val save = if (next != null) next != previousBoardCursor else previousBoardCursor != null
+            if (save) {
+                withContext(NonCancellable) {
+                    runCatching {
+                        commitGate { store.savePreference(COMPAT_BACKGROUND_UPDATE_BOARD_CURSOR_KEY, next.orEmpty()) }
+                    }
+                }
             }
         }
     }
@@ -152,45 +214,72 @@ suspend fun refreshCompatTabsInBackground(
             null
         }
         var cursor = previousCursor
+        var reachedEnd = false
         val completed = try {
             withinBudget(existenceBudgetMillis) {
-                compatRotatedBackgroundTabs(stale, previousCursor, maxTabs).forEach { tab ->
-                    try {
-                        val gone = withTimeoutOrNull(existenceProbeTimeoutMillis) {
-                            repository.probeThreadGone(tab.originalUrl)
-                        }
-                        if (gone == null) {
-                            // Unknown is not dead.
-                            failures++
-                        } else if (gone) {
-                            var changed = false
-                            val committed = commitGate {
-                                changed = store.updateTabIfPresent(tab.key) { current ->
-                                    // A body fetched while the probe ran proves the thread is alive.
-                                    if (current.isDead || current.contentUpdatedAtEpochMillis > tab.contentUpdatedAtEpochMillis) {
-                                        null
-                                    } else {
-                                        current.copy(isDead = true)
+                // A few probes at a time: a run is limited by time, and the probes are
+                // independent network waits. Results are applied in tab order after each
+                // group, so the cursor still only moves past tabs that were really handled.
+                compatRotatedBackgroundTabs(stale, previousCursor, maxTabs)
+                    .chunked(COMPAT_EXISTENCE_PROBE_PARALLELISM)
+                    .forEach { group ->
+                        val outcomes = coroutineScope {
+                            group.map { tab ->
+                                async {
+                                    try {
+                                        val gone = withTimeoutOrNull(existenceProbeTimeoutMillis) {
+                                            repository.probeThreadGone(tab.originalUrl)
+                                        }
+                                        when (gone) {
+                                            null -> CompatExistenceProbeOutcome.UNKNOWN
+                                            true -> CompatExistenceProbeOutcome.GONE
+                                            false -> CompatExistenceProbeOutcome.ALIVE
+                                        }
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Throwable) {
+                                        CompatExistenceProbeOutcome.FAILED
                                     }
                                 }
-                            }
-                            if (committed && changed) dead++
-                        } else {
-                            skipped++
+                            }.awaitAll()
                         }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Throwable) {
-                        failures++
+                        group.forEachIndexed { index, tab ->
+                            when (outcomes[index]) {
+                                // Unknown is not dead.
+                                CompatExistenceProbeOutcome.UNKNOWN,
+                                CompatExistenceProbeOutcome.FAILED -> failures++
+                                CompatExistenceProbeOutcome.ALIVE -> skipped++
+                                CompatExistenceProbeOutcome.GONE -> try {
+                                    var changed = false
+                                    val committed = commitGate {
+                                        changed = store.updateTabIfPresent(tab.key) { current ->
+                                            // A body fetched while the probe ran proves the thread is alive.
+                                            if (current.isDead || current.contentUpdatedAtEpochMillis > tab.contentUpdatedAtEpochMillis) {
+                                                null
+                                            } else {
+                                                current.copy(isDead = true)
+                                            }
+                                        }
+                                    }
+                                    if (committed && changed) dead++
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (_: Throwable) {
+                                    failures++
+                                }
+                            }
+                            cursor = tab.key
+                        }
                     }
-                    cursor = tab.key
-                }
+                reachedEnd = true
                 true
             } ?: false
         } finally {
-            // A run that reaches every stale tab needs no cursor (foreground refreshes).
+            // A run that reaches every stale tab needs no cursor (foreground refreshes); one that
+            // was cut short by the time budget or a cancellation remembers where it stopped even
+            // when all tabs were requested, so the next run continues there.
             val next = cursor
-            if (next != null && next != previousCursor && stale.size > maxTabs.coerceAtLeast(1)) {
+            if (next != null && next != previousCursor && (stale.size > maxTabs.coerceAtLeast(1) || !reachedEnd)) {
                 withContext(NonCancellable) {
                     runCatching {
                         commitGate { store.savePreference(COMPAT_BACKGROUND_EXISTENCE_CURSOR_KEY, next) }
@@ -279,6 +368,17 @@ suspend fun refreshCompatTabsInBackground(
 }
 
 /**
+ * [boards] in their stored order, starting after the board with key [afterKey] and wrapping
+ * around. An unknown or missing key starts from the top.
+ */
+internal fun compatRotatedBackgroundBoards(boards: List<CompatBoard>, afterKey: String?): List<CompatBoard> {
+    if (boards.isEmpty()) return boards
+    val index = afterKey?.let { key -> boards.indexOfFirst { it.key == key } } ?: -1
+    val start = if (index < 0) 0 else (index + 1) % boards.size
+    return boards.drop(start) + boards.take(start)
+}
+
+/**
  * Up to [maxTabs] of [tabs] in stable key order, starting after [afterKey] and
  * wrapping around, so successive runs cover every tab.
  */
@@ -291,6 +391,15 @@ internal fun compatRotatedBackgroundTabs(
     val start = afterKey?.let { key -> ordered.indexOfFirst { it.key > key } }?.takeIf { it >= 0 } ?: 0
     return (ordered.subList(start, ordered.size) + ordered.subList(0, start)).take(maxTabs.coerceAtLeast(1))
 }
+
+private enum class CompatExistenceProbeOutcome { GONE, ALIVE, UNKNOWN, FAILED }
+
+/** One tab's catalog reply count, applied together with the others of its board. */
+data class CompatCatalogReplyCountUpdate(
+    val tabKey: String,
+    val canonicalUrl: String,
+    val replyCount: Int
+)
 
 /**
  * Stores a catalog reply count on the current tab and history entry.
@@ -313,3 +422,7 @@ suspend fun CompatibilityStore.applyCatalogReplyCount(
     }
     return tabChanged
 }
+
+/** [applyCatalogReplyCount] for a whole catalog's worth of tabs; returns how many tabs changed. */
+suspend fun CompatibilityStore.applyCatalogReplyCountsOneByOne(updates: List<CompatCatalogReplyCountUpdate>): Int =
+    updates.count { applyCatalogReplyCount(it.tabKey, it.canonicalUrl, it.replyCount) }

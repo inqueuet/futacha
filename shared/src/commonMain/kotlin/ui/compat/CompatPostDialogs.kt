@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
@@ -664,12 +666,12 @@ internal fun CompatReplyPreviewPopup(
         Surface(
             // Leave room for the status/action bar even on compact test
             // windows and small phones; the list remains scrollable inside.
-            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).testTag("compat-quote-popup"),
+            modifier = Modifier.privacyWindowFilter().fillMaxWidth().heightIn(max = 480.dp).testTag("compat-quote-popup"),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 8.dp
         ) {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                posts.forEach { post ->
+            LazyColumn(Modifier.fillMaxWidth()) {
+                items(posts, key = { "${it.postNo}:${it.position}" }) { post ->
                     CompatPostRow(
                         post = post,
                         ownPostNos = ownPostNos,
@@ -722,9 +724,8 @@ internal fun CompatPostContextDialog(
         }
     }
     val rows = labels.zip(actions).chunked(3)
-    // ThreadContextDialogFragment is a borderless 3x3 custom Dialog (100dp x
-    // 50dp cells, no title or close button), not an AlertDialog.  Popup also
-    // gives it the APK's outside-tap dismissal semantics.
+    // Keep the familiar action grid and outside-tap dismissal, with the
+    // selected body above it so the target is clear before any action.
     FutachaAppLockAwareWindow { Popup(
         alignment = Alignment.Center,
         offset = IntOffset(0, with(LocalDensity.current) { 35.dp.roundToPx() }),
@@ -737,6 +738,8 @@ internal fun CompatPostContextDialog(
             shadowElevation = 8.dp
         ) {
             Column {
+                com.valoser.futacha.shared.ui.board.PostActionPreview(post.postNo, post.messageHtml)
+                HorizontalDivider()
                 rows.forEach { row ->
                     Row(Modifier.fillMaxWidth()) {
                         row.forEach { (label, action) ->

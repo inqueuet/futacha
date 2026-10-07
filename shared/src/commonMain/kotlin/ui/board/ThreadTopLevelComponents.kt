@@ -1,5 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.LocalPrivacyMode
+import com.valoser.futacha.shared.ui.privacy.PrivateTitle
+import com.valoser.futacha.shared.ui.privacy.privateTitleStyle
+import com.valoser.futacha.shared.ui.privacy.privateTitleAlpha
+import androidx.compose.ui.draw.alpha
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -76,6 +82,8 @@ internal fun ThreadTopBar(
     compactHeader: Boolean = false
 ) {
     val chromeColors = LocalFutachaChromeColors.current
+    val titleAppearance = LocalPrivacyMode.current?.options?.title ?: PrivateTitle.NORMAL
+    val visibleThreadTitle = if (titleAppearance == PrivateTitle.HIDDEN) "スレッド" else threadTitle
     val searchQuery = searchQueryState.value
     val focusRequester = remember { FocusRequester() }
     val searchInputState = rememberStableTextInputState(
@@ -214,11 +222,11 @@ internal fun ThreadTopBar(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = threadTitle,
-                            style = MaterialTheme.typography.titleMedium,
+                            text = visibleThreadTitle,
+                            style = privateTitleStyle(MaterialTheme.typography.titleMedium, titleAppearance),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(0.6f)
+                            modifier = Modifier.weight(0.6f).alpha(privateTitleAlpha(titleAppearance)).testTag("futacha-thread-title")
                         )
                         Text(
                             text = detailText,
@@ -232,8 +240,9 @@ internal fun ThreadTopBar(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = threadTitle,
-                            style = MaterialTheme.typography.titleLarge,
+                            text = visibleThreadTitle,
+                            style = privateTitleStyle(MaterialTheme.typography.titleLarge, titleAppearance),
+                            modifier = Modifier.alpha(privateTitleAlpha(titleAppearance)).testTag("futacha-thread-title"),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )

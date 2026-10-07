@@ -1445,7 +1445,7 @@ class ThreadScreenSaveActionLogicTest {
             posterId = "ID:abc",
             messageHtml = "一行目<br>二行目",
             imageUrl = "https://may.2chan.net/b/src/abc123.png",
-            thumbnailUrl = null
+            thumbnailUrl = "https://may.2chan.net/b/thumb/abc123s.jpg"
         )
 
         val items = buildQuoteSelectionItems(post)
@@ -1455,6 +1455,7 @@ class ThreadScreenSaveActionLogicTest {
             items.map { it.id }
         )
         assertEquals(setOf("number-12"), defaultQuoteSelectionIds(items))
+        assertEquals(listOf(">abc123.png"), items.filter { it.id.startsWith("file-") }.map { it.content })
         assertEquals(
             "既存\n>No.12\n>一行目\n",
             appendSelectedQuoteLines("既存", listOf(">No.12", ">一行目"))

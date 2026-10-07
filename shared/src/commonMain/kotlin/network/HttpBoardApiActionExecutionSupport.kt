@@ -2,11 +2,18 @@ package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogFetchSettings
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.TextEncoding
+import com.valoser.futacha.shared.util.sanitizeForShiftJis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.prepareForm
+import io.ktor.client.request.prepareRequest
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.Parameters
+import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -15,8 +22,47 @@ internal data class HttpBoardApiShortFormRequest(
     val referer: String,
     val formParameters: Parameters,
     val failureMessage: String,
-    val responseFailureMessage: String
+    val responseFailureMessage: String,
+    /** Pre-encoded application/x-www-form-urlencoded body; when set it is sent instead of [formParameters]. */
+    val encodedBody: String? = null
 )
+
+private const val FORM_URL_ENCODE_SAFE = "-._~"
+
+/**
+ * application/x-www-form-urlencoded body whose text is percent-encoded with [encoding] instead of UTF-8.
+ * ASCII-only input yields the same bytes as Ktor's formUrlEncode (space as '+').
+ */
+internal fun buildHttpBoardApiFormUrlEncodedBody(
+    fields: List<Pair<String, String>>,
+    encoding: HttpBoardApiPostEncoding
+): String {
+    fun encode(text: String): String {
+        val bytes = if (text.all { it.code < 0x80 }) {
+            text.encodeToByteArray()
+        } else when (encoding) {
+            HttpBoardApiPostEncoding.SHIFT_JIS ->
+                TextEncoding.encodeToShiftJis(sanitizeForShiftJis(text).sanitizedText)
+            HttpBoardApiPostEncoding.UTF8 -> text.encodeToByteArray()
+        }
+        val out = StringBuilder(bytes.size)
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            val c = v.toChar()
+            when {
+                v < 0x80 && (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in FORM_URL_ENCODE_SAFE) -> out.append(c)
+                v == 0x20 -> out.append('+')
+                else -> {
+                    out.append('%')
+                    out.append("0123456789ABCDEF"[v shr 4])
+                    out.append("0123456789ABCDEF"[v and 0x0F])
+                }
+            }
+        }
+        return out.toString()
+    }
+    return fields.joinToString("&") { (name, value) -> "${encode(name)}=${encode(value)}" }
+}
 
 internal suspend fun executeHttpBoardApiShortFormRequest(
     client: HttpClient,
@@ -30,7 +76,18 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
     // Streamed so the small-response reader bounds the body; submitForm()
     // buffered the whole response before it could be checked.
     val statement = try {
-        client.prepareForm(
+        if (request.encodedBody != null) {
+            client.prepareRequest(request.url) {
+                method = HttpMethod.Post
+                setBody(TextContent(request.encodedBody, ContentType.Application.FormUrlEncoded))
+                headers[HttpHeaders.UserAgent] = userAgent
+                headers[HttpHeaders.Accept] = accept
+                headers[HttpHeaders.AcceptLanguage] = acceptLanguage
+                headers[HttpHeaders.CacheControl] = "no-cache"
+                headers[HttpHeaders.Pragma] = "no-cache"
+                headers[HttpHeaders.Referrer] = request.referer
+            }
+        } else client.prepareForm(
             url = request.url,
             formParameters = request.formParameters
         ) {

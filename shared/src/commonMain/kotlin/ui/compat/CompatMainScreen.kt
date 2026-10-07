@@ -841,7 +841,7 @@ private fun CompatModeDialog(
         title = { Text("モード") },
         text = {
             Column {
-                ExperienceProfile.entries.forEach { profile ->
+                ExperienceProfile.selectableEntries.forEach { profile ->
                     Row(
                         modifier = Modifier.fillMaxWidth().clickable { selected = profile }.padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically

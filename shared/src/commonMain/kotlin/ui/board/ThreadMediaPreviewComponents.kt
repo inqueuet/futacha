@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -162,6 +164,7 @@ internal fun ThreadMediaPreviewDialogFrame(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .privacyWindowFilter()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
                 .pointerInput(navigationKey, isSwipeNavigationEnabled, swipeNavigationPadding) {

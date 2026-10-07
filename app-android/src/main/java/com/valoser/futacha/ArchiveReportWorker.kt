@@ -43,7 +43,10 @@ import io.ktor.http.contentLength
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -117,6 +120,11 @@ class ArchiveReportWorker(
         val now = System.currentTimeMillis()
         val httpResult = try {
             sender.send(payload, now)
+        } catch (_: TimeoutCancellationException) {
+            // The sender's own withTimeout expired: a network failure to retry, not a cancelled
+            // worker. ensureActive() still rethrows when this work itself was cancelled.
+            currentCoroutineContext().ensureActive()
+            null
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (_: Exception) {

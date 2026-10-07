@@ -22,7 +22,9 @@ internal fun ThreadPage.postsForFutachaSave(mode: FutachaPageSaveMode) = posts.m
 
 @Composable
 internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: ThreadPage,
-    boardKey: String, boardName: String, boardUrl: String, title: String, onDismiss: () -> Unit) {
+    boardKey: String, boardName: String, boardUrl: String, title: String, onDismiss: () -> Unit,
+    /** When set, the dialog also offers MHT (one file); [fullImages] says whether the full-size pictures are taken. */
+    onSaveMht: ((fullImages: Boolean) -> Unit)? = null) {
     val client = features.httpClient
     val fs = features.fileSystem
     if (client == null || fs == null) {
@@ -56,7 +58,12 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                 catch (failure: Exception) { message = failure.message ?: "保存できませんでした" }
                 finally { job = null }
             } }
-        }) { Text(mode.label) } } }
+        }) { Text(mode.label) } }
+            if (onSaveMht != null) {
+                TextButton(onClick = { onSaveMht(false) }) { Text("MHT（1ファイル・サムネイル）") }
+                TextButton(onClick = { onSaveMht(true) }) { Text("MHT（1ファイル・全画像）") }
+            }
+        }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
     if (job != null) FutachaAppLockAwareWindow {
         SaveProgressDialog(progress, onDismissRequest = {}, onCancelRequest = { job?.cancel() })

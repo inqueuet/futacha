@@ -11,6 +11,10 @@ private const val COMMON_PRIVACY_ALPHA_KEY = "commonPrivacyAlpha"
 private const val COMMON_PRIVACY_ALPHA_STORAGE_KEY = "compat.common.commonPrivacyAlpha"
 internal const val COMPAT_COMMON_PRIVACY_STORAGE_KEY = "compat.common.commonPrivacy"
 internal const val COMPAT_CATALOG_VIEW_MODE_STORAGE_KEY = "compat.catalog.catalogViewMode"
+internal const val THREAD_RELOAD_ON_OPEN_KEY = "catalogThreadOpenWithReload"
+
+internal fun Map<String, String>.threadReloadOnOpenEnabled(): Boolean =
+    compatPreferenceValue("catalog", THREAD_RELOAD_ON_OPEN_KEY) != "OFF"
 private const val LEGACY_CATALOG_PRIVACY_STORAGE_KEY = "compat.catalog.プライバシー"
 private const val LEGACY_THREAD_PRIVACY_STORAGE_KEY = "compat.thread.プライバシー"
 private const val COMMON_THREAD_CACHE_KEY = "commonThreadCache"

@@ -33,15 +33,17 @@ internal fun GlobalSettingsModeSection() {
         description = "現在: ${controller.activeProfile.displayName}",
         initiallyExpanded = false
     ) {
-        ExperienceProfile.entries.forEach { profile ->
+        ExperienceProfile.selectableEntries.forEach { profile ->
             ListItem(
                 headlineContent = { Text(profile.displayName) },
                 supportingContent = {
                     Text(
-                        if (profile == ExperienceProfile.FUTACHA) {
-                            "現在のふたちゃ画面と操作を使用します。"
-                        } else {
-                            "旧型タブ操作を再現した、ふたちゃ内の非公式表示モードです。元アプリや開発者との公式な関係はありません。"
+                        when (profile) {
+                            ExperienceProfile.FUTACHA -> "現在のふたちゃ画面と操作を使用します。"
+                            ExperienceProfile.TOSHIAKI_COMPAT ->
+                                "旧型タブ操作を再現した、ふたちゃ内の非公式表示モードです。元アプリや開発者との公式な関係はありません。"
+                            ExperienceProfile.FUTABER ->
+                                "手動登録の下部タブと吹き出し引用を使う、ふたちゃ内の非公式表示モードです。特定の他社アプリや開発者との公式な関係はありません。"
                         }
                     )
                 },

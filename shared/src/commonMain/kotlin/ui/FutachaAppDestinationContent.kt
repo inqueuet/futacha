@@ -6,7 +6,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -14,7 +18,11 @@ import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
+import com.valoser.futacha.shared.ui.board.FutachaMhtSection
+import com.valoser.futacha.shared.ui.board.FutachaMhtViewer
 import com.valoser.futacha.shared.ui.board.SavedThreadsScreen
+import com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtOpened
+import com.valoser.futacha.shared.ui.futaber.mht.futaberBoardForMht
 import com.valoser.futacha.shared.ui.board.ThreadScreen
 import com.valoser.futacha.shared.ui.board.stateStore
 import kotlinx.coroutines.delay
@@ -27,11 +35,30 @@ internal fun FutachaSavedThreadsDestination(
     onUnavailable: () -> Unit
 ) {
     if (props != null) {
+        val mht = props.mht
+        // An MHT file opened from the list is shown in the thread screen until the person goes back.
+        var viewing by remember(props.repository) { mutableStateOf<FutaberMhtOpened?>(null) }
+        val opened = viewing
+        if (mht != null && opened != null) {
+            // Built once per opened file: the parent builds `mht` (and its library and callbacks) again whenever the
+            // screens' inputs change, and a new set of dependencies would make the thread screen load the thread again.
+            val board = remember(opened, mht.boards) { futaberBoardForMht(opened.thread, mht.boards) }
+            val dependencies = remember(opened, board) { mht.dependenciesFor(board, opened.page) }
+            FutachaMhtViewer(
+                board = board,
+                opened = opened,
+                screenContract = mht.screenContract,
+                dependencies = dependencies,
+                onBack = { viewing = null }
+            )
+            return
+        }
         SavedThreadsScreen(
             repository = props.repository,
             onThreadClick = props.onThreadClick,
             onBack = props.onBack,
-            bodyTextSize = props.preferencesState.threadBodyTextSize
+            bodyTextSize = props.preferencesState.threadBodyTextSize,
+            extraContent = mht?.let { { FutachaMhtSection(it.library, onOpened = { file -> viewing = file }) } }
         )
         return
     }

@@ -55,6 +55,8 @@ internal fun ThreadPostActionSheet(
 ) {
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     var showReportConfirmation by remember(post.id) { mutableStateOf(false) }
+    var alsoNg by remember(post.id) { mutableStateOf(false) }
+    val delAndNg = LocalDelPostAndNg.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
@@ -69,6 +71,7 @@ internal fun ThreadPostActionSheet(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            PostActionPreview(post.id, post.messageHtml)
             Text(
                 text = "No.${post.id} の操作",
                 style = MaterialTheme.typography.titleMedium,
@@ -129,11 +132,7 @@ internal fun ThreadPostActionSheet(
                 supportingContent = { Text("掲示板管理者へ削除依頼を送信") },
                 modifier = Modifier.clickable {
                     AnalyticsTracker.uiControl("post_action_del_request", "DEL依頼を送信")
-                    if (reviewComplianceEnabled) {
-                        showReportConfirmation = true
-                    } else {
-                        onDelRequest()
-                    }
+                    showReportConfirmation = true
                 }
             )
             ListItem(
@@ -153,14 +152,21 @@ internal fun ThreadPostActionSheet(
     if (showReportConfirmation) FutachaAppLockAwareWindow {
         AlertDialog(
             onDismissRequest = { showReportConfirmation = false },
-            title = { Text("不適切な投稿を通報") },
+            title = { Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "削除依頼 No.${post.id}") },
             text = {
-                Text("No.${post.id} を不適切な投稿として、ふたば☆ちゃんねるの掲示板管理者へ通報します。")
+                Column {
+                    Text("No.${post.id} をふたば☆ちゃんねるの掲示板管理者へ削除依頼します。")
+                    if (delAndNg != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = alsoNg, onCheckedChange = { alsoNg = it })
+                        Text("このレスをNGにも登録")
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
                     showReportConfirmation = false
-                    onDelRequest()
+                    if (alsoNg && delAndNg != null) { onDismiss(); delAndNg(post) }
+                    else onDelRequest()
                 }) {
                     Text("通報する")
                 }

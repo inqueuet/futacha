@@ -86,7 +86,8 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
     }
 
     suspend fun switchTo(target: ExperienceProfile) = profileMutex.withLock {
-        if (switching || target == profile) return@withLock
+        // Desktop never offers preview or mobile-only modes (see ExperienceProfile.isSelectable).
+        if (switching || target == profile || !target.isSelectable) return@withLock
         switching = true
         try {
             withContext(Dispatchers.IO) {

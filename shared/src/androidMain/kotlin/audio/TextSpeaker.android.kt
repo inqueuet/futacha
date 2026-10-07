@@ -18,6 +18,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Job
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -34,7 +36,14 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private val engineHandler = Handler(engineThread.looper)
     private val continuations = mutableMapOf<String, CancellableContinuation<Unit>>()
     private var tts: TextToSpeech? = null
+    private var playbackLease: AutoCloseable? = null
     private var activeUtteranceId: String? = null
+    private var activeUtteranceText: String? = null
+    // Audio-focus pause: the playing utterance is stopped in the engine but its
+    // continuation stays pending, and is spoken again from the start on resume.
+    private var focusPaused = false
+    private var replay: Pair<String, String>? = null
+    private val stopsToIgnore = mutableMapOf<String, Int>()
     @Volatile
     private var closed = false
     private var initializationRequested = false
@@ -163,8 +172,31 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
             ?: throw IOException("TextToSpeech の初期化に失敗しました")
     }
 
+    private suspend fun preparePlayback() {
+        if (synchronized(lock) { playbackLease != null }) return
+        val owner = currentCoroutineContext()[Job]
+        val lease = AndroidSpeechPlaybackService.acquire(
+            appContext,
+            onStop = {
+                owner?.cancel(CancellationException("読み上げを停止しました"))
+                stop()
+            },
+            onFocusPause = ::pauseForFocus,
+            onFocusResume = ::resumeAfterFocus
+        )
+        val keep = synchronized(lock) {
+            if (closed || playbackLease != null) false else { playbackLease = lease; true }
+        }
+        if (!keep) lease.close()
+    }
+
     actual suspend fun prepare() {
-        awaitTts()
+        preparePlayback()
+        try { awaitTts() } catch (failure: Throwable) { releasePlayback(); throw failure }
+    }
+
+    private fun releasePlayback() {
+        synchronized(lock) { playbackLease.also { playbackLease = null } }?.close()
     }
 
     actual suspend fun speak(text: String) {
@@ -174,6 +206,8 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         // 初期化待ちもタイムアウト内に含める: TTSエンジンが初期化コールバックを
         // 返さない端末で speak() が永久サスペンドするのを防ぐ
         try {
+            // Capture the session job before entering the per-utterance timeout.
+            preparePlayback()
             withTimeout(calculateTextSpeakerTimeoutMillis(text)) {
                 val engine = awaitTts()
                 suspendCancellableCoroutine<Unit> { continuation ->
@@ -210,27 +244,21 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                             )
                             return@post
                         }
-                        val params = Bundle().apply {
-                            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
-                        }
+                        var deferredForFocus = false
                         val maySpeak = synchronized(lock) {
                             if (!continuation.isActive) false else {
                                 activeUtteranceId = utteranceId
+                                activeUtteranceText = text
+                                if (focusPaused) {
+                                    // Another app holds the audio focus for now: speak on resume.
+                                    replay = utteranceId to text
+                                    deferredForFocus = true
+                                }
                                 true
                             }
                         }
-                        if (!maySpeak) return@post
-                        val speakResult = runCatching {
-                            engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
-                        }.getOrElse { error ->
-                            invalidateEngine(engine, utteranceId)
-                            handleUtteranceResult(utteranceId, error)
-                            return@post
-                        }
-                        if (speakResult == TextToSpeech.ERROR) {
-                            invalidateEngine(engine, utteranceId)
-                            handleUtteranceResult(utteranceId, IOException("読み上げの開始に失敗しました"))
-                        }
+                        if (!maySpeak || deferredForFocus) return@post
+                        startUtterance(engine, utteranceId, text)
                     }
                 }
             }
@@ -239,12 +267,66 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
     }
 
+    private fun startUtterance(engine: TextToSpeech, utteranceId: String, text: String) {
+        val params = Bundle().apply {
+            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+        }
+        val speakResult = runCatching {
+            engine.setAudioAttributes(speechAudioAttributes())
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+        }.getOrElse { error ->
+            invalidateEngine(engine, utteranceId)
+            handleUtteranceResult(utteranceId, error)
+            return
+        }
+        if (speakResult == TextToSpeech.ERROR) {
+            invalidateEngine(engine, utteranceId)
+            handleUtteranceResult(utteranceId, IOException("読み上げの開始に失敗しました"))
+        }
+    }
+
+    /** A short audio-focus loss (call, prompt): silence the engine but keep the reading alive. */
+    private fun pauseForFocus() {
+        synchronized(lock) {
+            if (focusPaused || closed) return
+            focusPaused = true
+            val id = activeUtteranceId
+            val text = activeUtteranceText
+            if (id != null && text != null && continuations.containsKey(id)) {
+                replay = id to text
+                // engine.stop() reports onStop for this utterance; that is not a user stop.
+                stopsToIgnore[id] = (stopsToIgnore[id] ?: 0) + 1
+            }
+        }
+        engineHandler.post { synchronized(lock) { tts }?.stop() }
+    }
+
+    private fun resumeAfterFocus() {
+        val pending = synchronized(lock) {
+            if (!focusPaused) return
+            focusPaused = false
+            replay.also { replay = null }
+        } ?: return
+        val (utteranceId, text) = pending
+        engineHandler.post {
+            val engine = synchronized(lock) {
+                if (closed || !continuations.containsKey(utteranceId)) null else {
+                    activeUtteranceId = utteranceId
+                    tts
+                }
+            } ?: return@post
+            startUtterance(engine, utteranceId, text)
+        }
+    }
+
     actual fun stop() {
+        releasePlayback()
         cancelPending(CancellationException("ユーザーにより読み上げが停止されました"))
         engineHandler.post { synchronized(lock) { tts }?.stop() }
     }
 
     actual fun close() {
+        releasePlayback()
         val (engine, state) = synchronized(lock) {
             closed = true
             (tts to initState).also { tts = null }
@@ -278,6 +360,8 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
         val continuation = synchronized(lock) {
             if (activeUtteranceId == utteranceId) activeUtteranceId = null
+            if (replay?.first == utteranceId) replay = null
+            stopsToIgnore.remove(utteranceId)
             continuations.remove(utteranceId)
         }
         if (continuation == null) {
@@ -301,6 +385,12 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private fun handleUtteranceStopped(utteranceId: String?) {
         if (utteranceId == null) return
         val continuation = synchronized(lock) {
+            val ignored = stopsToIgnore[utteranceId] ?: 0
+            if (ignored > 0) {
+                // Our own pause for audio focus: the utterance is still wanted.
+                if (ignored == 1) stopsToIgnore.remove(utteranceId) else stopsToIgnore[utteranceId] = ignored - 1
+                return
+            }
             if (activeUtteranceId == utteranceId) activeUtteranceId = null
             continuations.remove(utteranceId)
         }
@@ -311,6 +401,11 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         val pending = synchronized(lock) {
             val copy = continuations.values.toList()
             continuations.clear()
+            // A stopped speaker must not stay paused for a focus loss that no
+            // longer concerns it, nor replay an utterance nobody waits for.
+            focusPaused = false
+            replay = null
+            stopsToIgnore.clear()
             copy
         }
         pending.forEach { it.cancel(reason) }

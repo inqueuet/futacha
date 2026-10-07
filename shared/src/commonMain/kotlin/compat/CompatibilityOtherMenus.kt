@@ -78,7 +78,9 @@ fun compatThreadOtherMenu(
     canUndoClose: Boolean,
     ngCount: Int,
     cacheEnabled: Boolean? = null,
-    activeToolbarKeys: Set<String> = emptySet()
+    activeToolbarKeys: Set<String> = emptySet(),
+    /** Offers the MHT formats in the save menu. Off by default so the reference menu stays exactly as it is. */
+    mhtEnabled: Boolean = false
 ): List<CompatOtherMenuItem> = when (route) {
     CompatOtherMenuRoute.THREAD_ROOT -> listOf(
         CompatOtherMenuItem("save", "ページを保存", CompatOtherMenuRoute.THREAD_SAVE),
@@ -106,7 +108,10 @@ fun compatThreadOtherMenu(
         CompatOtherMenuItem("save_all", "HTMLと全ての画像"),
         CompatOtherMenuItem("save_images_zip", "メディアのみ(ZIP)"),
         CompatOtherMenuItem("save_images_folder", "メディアのみ(フォルダ)")
-    )
+    ) + if (mhtEnabled) listOf(
+        CompatOtherMenuItem("save_mht_thumb", "MHT(1ファイル・サムネイル)"),
+        CompatOtherMenuItem("save_mht_all", "MHT(1ファイル・全画像)")
+    ) else emptyList()
 
     CompatOtherMenuRoute.THREAD_NG -> listOf(
         CompatOtherMenuItem("ng_refuse", "NGヘッダー"),

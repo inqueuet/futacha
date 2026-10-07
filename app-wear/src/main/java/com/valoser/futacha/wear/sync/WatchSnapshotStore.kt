@@ -62,7 +62,8 @@ object WatchSnapshotStore {
             if (shouldAcceptWatchSnapshot(
                     currentGeneratedAtMillis = current?.generatedAtMillis,
                     incomingGeneratedAtMillis = loaded.generatedAtMillis,
-                    nowMillis = System.currentTimeMillis()
+                    nowMillis = WatchClockOffsetStore.phoneNowMillis(context),
+                    tolerateIncomingClockSkew = !WatchClockOffsetStore.isCalibrated(context)
                 )
             ) {
                 snapshotState.value = loaded
@@ -119,11 +120,16 @@ object WatchSnapshotStore {
         if (!shouldAcceptWatchSnapshot(
                 currentGeneratedAtMillis = currentSnapshot?.generatedAtMillis,
                 incomingGeneratedAtMillis = snapshot.generatedAtMillis,
-                nowMillis = System.currentTimeMillis()
+                // A watch clock minutes behind the phone made every snapshot look like it came
+                // from the future; use the learned phone time, or skip that check without one.
+                nowMillis = WatchClockOffsetStore.phoneNowMillis(context),
+                tolerateIncomingClockSkew = !WatchClockOffsetStore.isCalibrated(context)
             )
         ) {
             return false
         }
+        // The phone sent a snapshot, so it is serving the watch (again).
+        WatchPhoneModeStore.setUnsupported(false)
         if (snapshot == currentSnapshot) {
             return false
         }
@@ -158,7 +164,7 @@ object WatchSnapshotStore {
             val updatedSnapshot = readAloudUpdateOrdering.apply(
                 base = baseSnapshot,
                 update = update,
-                nowMillis = System.currentTimeMillis()
+                nowMillis = WatchClockOffsetStore.phoneNowMillis(context)
             ) ?: return@withLock false
             saveLocked(context, updatedSnapshot)
         }
@@ -220,7 +226,8 @@ object WatchSnapshotStore {
                                 shouldAcceptWatchSnapshot(
                                     currentGeneratedAtMillis = latestSnapshot?.generatedAtMillis,
                                     incomingGeneratedAtMillis = snapshot.generatedAtMillis,
-                                    nowMillis = System.currentTimeMillis()
+                                    nowMillis = WatchClockOffsetStore.phoneNowMillis(context),
+                                    tolerateIncomingClockSkew = !WatchClockOffsetStore.isCalibrated(context)
                                 )
                             ) {
                                 latestSnapshot = snapshot

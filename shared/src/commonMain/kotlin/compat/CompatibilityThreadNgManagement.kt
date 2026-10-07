@@ -23,10 +23,19 @@ fun compatThreadReferenceRules(
     kind: CompatNgKind
 ): List<CompatNgRule> {
     val acceptedKinds = compatThreadReferenceKinds(kind)
-    return rules.asSequence()
+    return rules
         .filter { it.kind in acceptedKinds && (it.scopeKey == threadKey || it.scopeKey == "*") }
-        .sortedBy { normalizeCompatSearchText(compatThreadReferenceDisplayValue(it)) }
-        .toList()
+        .sortedByPrecomputedKey { normalizeCompatSearchText(compatThreadReferenceDisplayValue(it)) }
+}
+
+/**
+ * `sortedBy` evaluates its selector for both sides of every comparison; for a normalized text key
+ * that is O(n log n) normalizations. This computes each key once and sorts with the same stable
+ * ordering, so equal keys keep their original order exactly as `sortedBy` does.
+ */
+internal inline fun <T> List<T>.sortedByPrecomputedKey(key: (T) -> String): List<T> {
+    if (size < 2) return toList()
+    return map { key(it) to it }.sortedBy { it.first }.map { it.second }
 }
 
 /** Preserve the exact word typed in the reference editor while matching NFKC/case-insensitively. */
@@ -41,12 +50,24 @@ fun compatThreadReferenceDisplayValue(rule: CompatNgRule): String =
         else -> rule.normalizedValue
     }
 
+/**
+ * The first [maxLength] UTF-16 units, except that a surrogate pair straddling the limit is dropped
+ * whole: `take` kept a lone high surrogate, which is not a valid character in a stored NG word.
+ */
+internal fun String.takeWithoutSplittingSurrogatePair(maxLength: Int): String {
+    val end = maxLength.coerceIn(0, length)
+    if (end in 1 until length && this[end - 1].isHighSurrogate() && this[end].isLowSurrogate()) {
+        return substring(0, end - 1)
+    }
+    return substring(0, end)
+}
+
 /** Equivalent to ThreadNgWordUtil.cleanInput(word, 20) in 1.apk. */
 fun cleanCompatThreadReferenceWord(value: String, maxLength: Int = 20): String {
     fun String.trimReferenceEdges(): String = trim { it <= ' ' || it == '\u3000' || it.isWhitespace() }
     val trimmed = value.trimReferenceEdges()
     return if (maxLength > 0 && trimmed.length > maxLength) {
-        trimmed.take(maxLength).trimReferenceEdges()
+        trimmed.takeWithoutSplittingSurrogatePair(maxLength).trimReferenceEdges()
     } else {
         trimmed
     }

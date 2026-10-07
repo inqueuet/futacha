@@ -60,6 +60,71 @@ class CompatibilitySnapshotCacheInstrumentedTest {
     }
 
     @Test
+    fun catalogRefreshPublishesUnreadWithoutChangingHistoryReadPositionOrOpenTabs() = runBlocking {
+        val store = newStore()
+        val initial = createBoardAndTab(store, 90).copy(replyCount = 10, checkedReplyCount = 10,
+            favorite = true, scrollAnchor = ScrollAnchor("95", 20, 5, 2))
+        store.updateTab(initial)
+        store.updateScrollAnchor(initial.key, initial.scrollAnchor)
+        val history = store.history.first()
+        val snapshot = CompatCatalogSnapshot(initial.boardKey, CompatCatalogSort.CATALOG, 1, 200,
+            listOf(CatalogItem("90", initial.canonicalUrl, "title", null, null, replyCount = 15), catalogItem("91")))
+        assertTrue(store.saveCatalogSnapshot(snapshot))
+        val after = store.tabs.first().single()
+        assertEquals(initial.copy(replyCount = 15, contentUpdatedAtEpochMillis = 200), after)
+        assertEquals(5, after.unreadCount)
+        assertEquals(history, store.history.first())
+        assertTrue(store.saveCatalogSnapshot(snapshot.copy(revision = 2, fetchedAtEpochMillis = 199,
+            items = snapshot.items.map { it.copy(replyCount = 30) })))
+        assertEquals(after, store.tabs.first().single())
+        store.closeForTest()
+        openStore = null
+        assertEquals(after, newStore().tabs.first().single())
+    }
+
+    @Test
+    fun catalogSnapshotsAreBoundedAcrossBoardsDroppingTheOldestFetchedFirst() = runBlocking {
+        val store = newStore()
+        val boardKeys = (0 until 31).map { index ->
+            val url = "https://may.2chan.net/b$index/"
+            val key = compatBoardKey(url)
+            store.upsertBoard(CompatBoard(key, "b$index", url, url, index))
+            key
+        }
+        boardKeys.forEachIndexed { boardIndex, boardKey ->
+            (1..6).forEach { revision ->
+                assertTrue(
+                    store.saveCatalogSnapshot(
+                        CompatCatalogSnapshot(
+                            boardKey = boardKey,
+                            sort = CompatCatalogSort.CATALOG,
+                            revision = revision.toLong(),
+                            // Later boards are fetched later; every generation of one board is older
+                            // than the first generation of the next one.
+                            fetchedAtEpochMillis = 10_000L + boardIndex * 100L + revision,
+                            items = listOf(catalogItem("${boardIndex}0$revision"))
+                        )
+                    )
+                )
+            }
+        }
+        writableDatabase(readOnly = true).use { db ->
+            assertEquals(180, db.scalarInt("SELECT COUNT(*) FROM compat_catalog_snapshot"))
+            // Its items went with the snapshots.
+            assertEquals(
+                0,
+                db.scalarInt("SELECT COUNT(*) FROM compat_catalog_item WHERE NOT EXISTS (" +
+                    "SELECT 1 FROM compat_catalog_snapshot s WHERE s.board_key=compat_catalog_item.board_key " +
+                    "AND s.mode=compat_catalog_item.mode AND s.revision=compat_catalog_item.revision)")
+            )
+        }
+        // The six generations dropped belong to the board fetched first; the newest board is whole.
+        assertNull(store.loadCatalogSnapshot(boardKeys.first(), CompatCatalogSort.CATALOG))
+        assertEquals(6L, store.loadCatalogSnapshot(boardKeys.last(), CompatCatalogSort.CATALOG)?.revision)
+        assertEquals(1L, store.loadCatalogSnapshot(boardKeys.last(), CompatCatalogSort.CATALOG, 5)?.revision)
+    }
+
+    @Test
     fun catalogSnapshotIsAtomicNewestWinsAndKeepsSixGenerationsPerSort() = runBlocking {
         val store = newStore()
         val tab = createBoardAndTab(store, 90)

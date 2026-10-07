@@ -11,7 +11,9 @@ import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
-import com.valoser.futacha.shared.util.canonicalCp932Text
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
 
 internal fun applyNgFilters(
     page: ThreadPage,
@@ -21,16 +23,15 @@ internal fun applyNgFilters(
     precomputedLowerBodyByPost: Map<Post, String>? = null
 ): ThreadPage {
     if (!enabled) return page
-    val headerFilters = canonicalNgFilters(ngHeaders)
-    val wordFilters = canonicalNgFilters(ngWords)
-    if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
-    val lowerBodyByPost = if (wordFilters.isEmpty()) {
-        emptyMap()
-    } else {
+    val rules = CanonicalNgRules.of(ngHeaders, ngWords)
+    if (rules.isEmpty) return page
+    val lowerBodyByPost = if (rules.hasWords) {
         precomputedLowerBodyByPost ?: buildLowerBodyByPost(page.posts)
+    } else {
+        emptyMap()
     }
     val filteredPosts = page.posts.filterNot { post ->
-        matchesNgFilters(post, headerFilters, wordFilters, lowerBodyByPost)
+        rules.matches(post) { lowerBodyByPost[post] ?: "" }
     }
     return page.copy(posts = filteredPosts)
 }
@@ -141,16 +142,15 @@ private fun applyNgFiltersToIndexedPosts(
     precomputedLowerBodyByPost: Map<Post, String>?
 ): List<IndexedValue<Post>> {
     if (!enabled) return posts
-    val headerFilters = canonicalNgFilters(ngHeaders)
-    val wordFilters = canonicalNgFilters(ngWords)
-    if (headerFilters.isEmpty() && wordFilters.isEmpty()) return posts
-    val lowerBodyByPost = if (wordFilters.isEmpty()) {
-        emptyMap()
-    } else {
+    val rules = CanonicalNgRules.of(ngHeaders, ngWords)
+    if (rules.isEmpty) return posts
+    val lowerBodyByPost = if (rules.hasWords) {
         precomputedLowerBodyByPost ?: buildLowerBodyByPost(posts.map { it.value })
+    } else {
+        emptyMap()
     }
     return posts.filterNot { indexedPost ->
-        matchesNgFilters(indexedPost.value, headerFilters, wordFilters, lowerBodyByPost)
+        rules.matches(indexedPost.value) { lowerBodyByPost[indexedPost.value] ?: "" }
     }
 }
 
@@ -258,30 +258,179 @@ private val THREAD_FILTER_SAIDANE_COUNT_REGEX = Regex("""\d+""")
 
 private fun canonicalNgFilters(values: List<String>): List<String> =
     values.mapNotNull { value ->
-        value.trim().takeIf { it.isNotBlank() }?.lowercase()?.let(::canonicalCp932Text)
+        value.trim().takeIf { it.isNotBlank() }?.lowercase()?.let(::canonicalThreadSearchText)
     }
+
+/**
+ * NG rules, each canonicalized once ([canonicalThreadSearchText]) when built, so matching a post
+ * never re-normalizes a rule. The post text is canonicalized once per post, not once per rule.
+ */
+internal class CanonicalNgRules private constructor(
+    private val headers: List<String>,
+    private val words: List<String>
+) {
+    val isEmpty: Boolean get() = headers.isEmpty() && words.isEmpty()
+    val hasWords: Boolean get() = words.isNotEmpty()
+
+    fun matchesHeader(post: Post): Boolean {
+        if (headers.isEmpty()) return false
+        val headerText = canonicalThreadSearchText(buildPostHeaderText(post))
+        return headers.any { headerText.contains(it) }
+    }
+
+    /** [lowerBody] is the lowercased plain body of the post. */
+    fun matchesBody(lowerBody: String): Boolean {
+        if (words.isEmpty()) return false
+        val bodyText = canonicalThreadSearchText(lowerBody)
+        return words.any { bodyText.contains(it) }
+    }
+
+    /** The body is only produced when the header rules did not already match and there are word rules. */
+    inline fun matches(post: Post, lowerBody: () -> String): Boolean =
+        matchesHeader(post) || (hasWords && matchesBody(lowerBody()))
+
+    companion object {
+        /** Trims, lowercases and canonicalizes; blank rules are dropped. */
+        fun of(ngHeaders: List<String>, ngWords: List<String>): CanonicalNgRules =
+            CanonicalNgRules(canonicalNgFilters(ngHeaders), canonicalNgFilters(ngWords))
+
+        /** Rules used as given (only canonicalized), for callers that already normalized them. */
+        fun ofRaw(headerFilters: List<String>, wordFilters: List<String>): CanonicalNgRules =
+            CanonicalNgRules(
+                headerFilters.map(::canonicalThreadSearchText),
+                wordFilters.map(::canonicalThreadSearchText)
+            )
+    }
+}
 
 internal fun matchesNgFilters(
     post: Post,
     headerFilters: List<String>,
     wordFilters: List<String>,
     lowerBodyByPost: Map<Post, String>
-): Boolean {
-    // The post text is canonicalized once per post, not once per rule; the
-    // short rules are left as they are when already canonical (no copy).
-    if (headerFilters.isNotEmpty()) {
-        val headerText = canonicalCp932Text(buildPostHeaderText(post))
-        if (headerFilters.any { headerText.contains(canonicalCp932Text(it)) }) {
-            return true
+): Boolean = CanonicalNgRules.ofRaw(headerFilters, wordFilters)
+    .matches(post) { lowerBodyByPost[post] ?: "" }
+
+/** Checks for cancellation and lets other coroutines run once per this many posts. */
+private const val THREAD_FILTER_CANCELLATION_CHECK_INTERVAL = 64
+
+/**
+ * Same result as filtering with [CanonicalNgRules.matches], but cancellable: the rules are
+ * canonicalized once and the posts are walked with a cancellation check every
+ * [THREAD_FILTER_CANCELLATION_CHECK_INTERVAL] posts, so a superseded run stops early.
+ * [lowerBodyOf] may be backed by [ThreadPostTextCache].
+ */
+internal suspend fun <T> filterOutNgPostsCancellable(
+    items: List<T>,
+    rules: CanonicalNgRules,
+    postOf: (T) -> Post,
+    lowerBodyOf: suspend (Post) -> String
+): List<T> {
+    if (rules.isEmpty) return items
+    val kept = ArrayList<T>(items.size)
+    items.forEachIndexed { index, item ->
+        if (index % THREAD_FILTER_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        val post = postOf(item)
+        val hidden = rules.matchesHeader(post) || (rules.hasWords && rules.matchesBody(lowerBodyOf(post)))
+        if (!hidden) kept += item
+    }
+    return kept
+}
+
+/**
+ * Ids of the posts that the modern (header/word) NG rules hide, for the shared-rule projection: a post
+ * is hidden when its id is not the id of any post that [applyNgFilters] keeps (as `applyNgFilters`
+ * followed by an id comparison did). Rules are canonicalized once; bodies come from [textCache].
+ */
+internal suspend fun findNgHiddenPostIds(
+    posts: List<Post>,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    textCache: ThreadPostTextCache?
+): Set<String> {
+    val rules = CanonicalNgRules.of(ngHeaders, ngWords)
+    if (rules.isEmpty || posts.isEmpty()) return emptySet()
+    val hiddenIds = HashSet<String>()
+    val visibleIds = HashSet<String>()
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_FILTER_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        val matched = rules.matchesHeader(post) ||
+            (rules.hasWords && rules.matchesBody(ngLowerBodyOf(post, textCache)))
+        if (matched) hiddenIds += post.id else visibleIds += post.id
+    }
+    hiddenIds.removeAll(visibleIds)
+    return hiddenIds
+}
+
+private suspend fun ngLowerBodyOf(post: Post, textCache: ThreadPostTextCache?): String =
+    textCache?.get(post)?.lowerText ?: messageHtmlToPlainText(post.messageHtml).lowercase()
+
+/**
+ * [applyThreadFilterResult] for background use: identical result, but the rules are canonicalized
+ * once, bodies come from [textCache] when [precomputedLowerBodyByPost] is not given, and the walk
+ * over the posts checks for cancellation.
+ */
+internal suspend fun applyThreadFilterResultCancellable(
+    page: ThreadPage,
+    criteria: ThreadFilterCriteria,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    ngEnabled: Boolean,
+    precomputedLowerBodyByPost: Map<Post, String>? = null,
+    textCache: ThreadPostTextCache? = null
+): ThreadFilterResult {
+    val indexedPosts = page.posts.mapIndexed { index, post -> IndexedValue(index, post) }
+    val ngFiltered = if (!ngEnabled) {
+        indexedPosts
+    } else {
+        filterOutNgPostsCancellable(
+            items = indexedPosts,
+            rules = CanonicalNgRules.of(ngHeaders, ngWords),
+            postOf = { it.value },
+            lowerBodyOf = { post ->
+                if (precomputedLowerBodyByPost != null) precomputedLowerBodyByPost[post] ?: ""
+                else ngLowerBodyOf(post, textCache)
+            }
+        )
+    }
+    if (criteria.options.isEmpty()) return ThreadFilterResult(ngFiltered.map { it.index })
+    val normalizedSelfPostIdentifiers = criteria.selfPostIdentifiers
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toSet()
+    val needsLowerBodyByPost = criteria.options.any {
+        it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
+    }
+    val lowerBodyByPost = if (needsLowerBodyByPost) {
+        precomputedLowerBodyByPost ?: buildLowerBodyByPost(ngFiltered.map { it.value }, textCache)
+    } else {
+        emptyMap()
+    }
+    val threadFiltered = ArrayList<IndexedValue<Post>>(ngFiltered.size)
+    ngFiltered.forEachIndexed { index, indexedPost ->
+        if (index % THREAD_FILTER_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        if (
+            matchesThreadFilters(
+                post = indexedPost.value,
+                criteria = criteria,
+                lowerBodyByPost = lowerBodyByPost,
+                normalizedSelfPostIdentifiers = normalizedSelfPostIdentifiers
+            )
+        ) {
+            threadFiltered += indexedPost
         }
     }
-    if (wordFilters.isNotEmpty()) {
-        val bodyText = canonicalCp932Text(lowerBodyByPost[post] ?: "")
-        if (wordFilters.any { bodyText.contains(canonicalCp932Text(it)) }) {
-            return true
-        }
-    }
-    return false
+    return ThreadFilterResult(sortIndexedThreadPosts(threadFiltered, criteria.sortOption).map { it.index })
 }
 
 internal fun buildLowerBodyByPost(posts: List<Post>): Map<Post, String> {
@@ -298,7 +447,11 @@ internal suspend fun buildLowerBodyByPost(
     if (textCache == null) return buildLowerBodyByPost(posts)
     if (posts.isEmpty()) return emptyMap()
     val result = LinkedHashMap<Post, String>(posts.size)
-    posts.forEach { post ->
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_FILTER_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
         result[post] = textCache.get(post).lowerText
     }
     return result

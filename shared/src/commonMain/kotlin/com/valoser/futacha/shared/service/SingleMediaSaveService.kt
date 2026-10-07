@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.FileWriteSink
 import com.valoser.futacha.shared.util.MediaSaveSource
 import com.valoser.futacha.shared.util.withMediaSaveSource
 import com.valoser.futacha.shared.util.isSupportedMediaSaveSource
@@ -133,19 +134,29 @@ class SingleMediaSaveService(
                                 ).getOrNull()
                                 require(sourcePath != destination) { "元のファイルと保存先が同じです。別のフォルダを選んでください。" }
                             }
-                            val byteSize = streamPayloadToStorage(
+                            // A caller-chosen name is fixed per target, so a re-save lands on an
+                            // existing file. Replace it only once the new bytes are complete: a
+                            // failed or cancelled save must leave the previous file in place.
+                            val replaceLocation = if (outputFileNameOverride != null) {
+                                baseSaveLocation ?: SaveLocation.Path(baseDirectory)
+                            } else null
+                            val streamed = streamPayloadToStorage(
                                 source = source,
                                 binaryTarget = binaryTarget,
+                                replaceLocation = replaceLocation,
+                                replaceRelativePath = relativePath,
                                 startedAtMillis = startedAtMillis,
                                 declaredSize = headerContentLength,
                                 onProgress = onProgress
                             )
+                            // The location may have kept the old file and written beside it.
+                            val savedRelativePath = streamed.savedRelativePath ?: relativePath
 
                             SavedMediaFile(
-                                fileName = fileName,
-                                relativePath = relativePath,
+                                fileName = savedRelativePath.substringAfterLast('/'),
+                                relativePath = savedRelativePath,
                                 mediaType = mediaType,
-                                byteSize = byteSize,
+                                byteSize = streamed.byteSize,
                                 savedAtEpochMillis = savedAt
                             )
                         }
@@ -161,73 +172,104 @@ class SingleMediaSaveService(
         )
     }
 
+    private class StreamedPayload(val byteSize: Long, val savedRelativePath: String?)
+
+    /**
+     * Streams [source] to [binaryTarget]. With [replaceLocation] the bytes are written beside an
+     * existing file and swapped in only when complete (see writeByteStreamReplacing); otherwise
+     * the target is cleared first and written in place.
+     */
     private suspend fun streamPayloadToStorage(
         source: MediaSaveSource,
         binaryTarget: ThreadSaveBinaryWriteTarget,
+        replaceLocation: SaveLocation?,
+        replaceRelativePath: String,
         startedAtMillis: Long,
         declaredSize: Long,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit
-    ): Long {
-        cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
+    ): StreamedPayload {
+        if (replaceLocation == null) cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
         val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
         var totalBytesRead = 0L
         var zeroReadCount = 0
         var loopCount = 0L
 
-        try {
-            writeThreadSaveBinaryStream(
-                fileSystem = fileSystem,
-                target = binaryTarget,
-                writeTimeoutMillis = WRITE_TIMEOUT_MILLIS
-            ) { sink ->
-                while (true) {
-                    coroutineContext.ensureActive()
-                    val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                        source.read(buffer)
-                    } ?: throw IllegalStateException("保存に失敗しました: ストリーム読み込みがタイムアウトしました")
+        val copy: suspend (FileWriteSink) -> Unit = { sink ->
+            while (true) {
+                coroutineContext.ensureActive()
+                val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
+                    source.read(buffer)
+                } ?: throw IllegalStateException("保存に失敗しました: ストリーム読み込みがタイムアウトしました")
 
-                    if (read == -1) break
-                    if (read == 0) {
-                        zeroReadCount += 1
-                        if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                            throw IllegalStateException("保存に失敗しました: メディアストリームが停止しました")
-                        }
-                        delay(ZERO_READ_BACKOFF_MILLIS)
-                        continue
+                if (read == -1) break
+                if (read == 0) {
+                    zeroReadCount += 1
+                    if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                        throw IllegalStateException("保存に失敗しました: メディアストリームが停止しました")
                     }
+                    delay(ZERO_READ_BACKOFF_MILLIS)
+                    continue
+                }
 
-                    zeroReadCount = 0
-                    val requiredSize = totalBytesRead + read
-                    if (requiredSize > MAX_FILE_SIZE_BYTES) {
-                        throw IllegalStateException("保存に失敗しました: 実際のファイルサイズが上限を超えました")
-                    }
+                zeroReadCount = 0
+                val requiredSize = totalBytesRead + read
+                if (requiredSize > MAX_FILE_SIZE_BYTES) {
+                    throw IllegalStateException("保存に失敗しました: 実際のファイルサイズが上限を超えました")
+                }
 
-                    if (hasEpochDurationExceeded(
-                            Clock.System.now().toEpochMilliseconds(),
-                            startedAtMillis,
-                            MAX_SAVE_DURATION_MILLIS
-                        )
-                    ) {
-                        throw IllegalStateException("保存に失敗しました: 処理時間が上限を超えました")
-                    }
+                if (hasEpochDurationExceeded(
+                        Clock.System.now().toEpochMilliseconds(),
+                        startedAtMillis,
+                        MAX_SAVE_DURATION_MILLIS
+                    )
+                ) {
+                    throw IllegalStateException("保存に失敗しました: 処理時間が上限を超えました")
+                }
 
-                    sink.write(buffer, 0, read)
-                    totalBytesRead = requiredSize
-                    onProgress(totalBytesRead, declaredSize)
+                sink.write(buffer, 0, read)
+                totalBytesRead = requiredSize
+                onProgress(totalBytesRead, declaredSize)
 
-                    loopCount += 1
-                    if (loopCount % 32L == 0L) {
-                        yield()
-                    }
+                loopCount += 1
+                if (loopCount % 32L == 0L) {
+                    yield()
                 }
             }
+            // Checked inside the writer so a replacement is abandoned, not published, when the
+            // payload turns out to be empty or short.
             if (totalBytesRead <= 0L) {
                 throw IllegalStateException("保存に失敗しました: メディアファイルが空です")
             }
             check(declaredSize <= 0L || totalBytesRead == declaredSize) { "保存に失敗しました: ファイルを最後まで読み込めませんでした" }
-            return totalBytesRead
+        }
+
+        try {
+            var savedRelativePath: String? = null
+            if (replaceLocation == null) {
+                writeThreadSaveBinaryStream(
+                    fileSystem = fileSystem,
+                    target = binaryTarget,
+                    writeTimeoutMillis = WRITE_TIMEOUT_MILLIS,
+                    block = copy
+                )
+            } else {
+                savedRelativePath = fileSystem.writeByteStreamReplacing(replaceLocation, replaceRelativePath) { output ->
+                    copy(object : FileWriteSink {
+                        override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
+                                output.write(bytes, offset, length)
+                                true
+                            } ?: false
+                            check(completed) { "Save aborted: timed out while writing media chunk" }
+                        }
+                    })
+                }.getOrThrow()
+            }
+            return StreamedPayload(totalBytesRead, savedRelativePath)
         } catch (t: Throwable) {
-            cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
+            // The in-place path leaves a partial file behind; a replacement never touched the
+            // existing file, so there is nothing of the previous save to clean up.
+            if (replaceLocation == null) cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
             throw t
         }
     }

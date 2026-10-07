@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
             }
             androidx.compose.runtime.LaunchedEffect(activeProfile, app, stateStore) {
                 val compatStore = app?.compatibilityStore ?: return@LaunchedEffect
-                if (activeProfile != ExperienceProfile.TOSHIAKI_COMPAT) return@LaunchedEffect
+                if (activeProfile.usesAppStateData) return@LaunchedEffect
                 kotlinx.coroutines.flow.combine(stateStore.observedBoards, stateStore.observedHistory) { boards, history ->
                     boards to history
                 }.collect { (boards, history) ->
@@ -228,7 +228,7 @@ class MainActivity : ComponentActivity() {
                 coroutineScope {
                     launch {
                         try {
-                            if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
+                            if (!activeProfile.usesAppStateData) {
                                 var hasObservedAuthoritativeCompatBoards = false
                                 compatibilityApp.compatibilityStore.boards.collect { compatBoards ->
                                     if (compatBoards.isNotEmpty()) hasObservedAuthoritativeCompatBoards = true
@@ -320,13 +320,13 @@ class MainActivity : ComponentActivity() {
                             // the new Activity is launched.  The collectors below
                             // normally do this continuously, but a switch can
                             // race the first Flow emission on a cold start.
-                            if (target == ExperienceProfile.TOSHIAKI_COMPAT) {
+                            if (!target.usesAppStateData) {
                                 val boards = stateStore.boards.first()
                                 val history = stateStore.history.first()
                                 application.compatibilityStore.bootstrapBoardsIfNeeded(boards)
                                 application.compatibilityStore.importModernBoards(boards)
                                 application.compatibilityStore.importModernHistory(history)
-                            } else if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
+                            } else if (!activeProfile.usesAppStateData) {
                                 val compatBoards = application.compatibilityStore.boards.first()
                                 val compatHistory = application.compatibilityStore.history.first()
                                 val currentBoards = stateStore.boards.first()
@@ -344,7 +344,7 @@ class MainActivity : ComponentActivity() {
                                 target = target,
                                 preferredFutachaIcon = preferredAppIconVariant,
                                 quiesceOldProfile = {
-                                    if (activeProfile == com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA) {
+                                    if (activeProfile.usesAppStateData) {
                                         withContext(Dispatchers.IO) {
                                             HistoryRefreshWorker.cancelAndAwait(
                                                 WorkManager.getInstance(applicationContext)
@@ -414,7 +414,8 @@ class MainActivity : ComponentActivity() {
                         profileScope.launch {
                             try {
                                 if (
-                                    session.profile == ExperienceProfile.FUTACHA &&
+                                    // Futaber shares the Futacha app state, so its switch commits here too.
+                                    session.profile.usesAppStateData &&
                                     isExperienceProfileSessionCurrent(session, profileUiController)
                                 ) {
                                     stateStore.setWatchAlertEnabled(enabled)

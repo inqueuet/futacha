@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
+
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 
@@ -75,7 +77,8 @@ internal fun ThreadImageGallery(
             AnalyticsTracker.uiControl("thread_gallery", "添付一覧を閉じる")
             onDismiss()
         },
-        sheetState = sheetState
+        sheetState = sheetState,
+        modifier = Modifier.privacyWindowFilter()
     ) {
         Column(
             modifier = Modifier

@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.analytics.analyticsPresentValue
@@ -109,6 +111,9 @@ internal fun CatalogCard(
                         modifier = Modifier.fillMaxSize(),
                         fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                LocalFutachaCatalogReplyIndicators.current[item.threadUrl]?.let {
+                    CatalogNewRepliesBadge(it.count, compact = true, modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp))
                 }
                 if (countOnImage) CatalogReplyCountBadge(
                     replyCount = item.replyCount,
@@ -245,6 +250,9 @@ internal fun CatalogListItem(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End) {
+                LocalFutachaCatalogReplyIndicators.current[item.threadUrl]?.let {
+                    CatalogNewRepliesBadge(it.count)
+                }
                 Text(
                     text = "${item.replyCount}レス",
                     style = MaterialTheme.typography.bodyLarge,
@@ -301,5 +309,18 @@ private fun CatalogReplyCountBadge(
             color = Color.Black,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         )
+    }
+}
+
+@Composable
+internal fun CatalogNewRepliesBadge(count: Int, compact: Boolean = false, modifier: Modifier = Modifier) {
+    if (count <= 0) return
+    Surface(modifier = modifier.semantics { contentDescription = "新着レス${count}件" },
+        color = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        shape = RoundedCornerShape(4.dp)) {
+        Text(if (compact) "+$count" else "新着 $count", fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
     }
 }

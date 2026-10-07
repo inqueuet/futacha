@@ -164,6 +164,15 @@ fun modernBoardsToCompatibility(modernBoards: List<BoardSummary>): List<CompatBo
     }
 }
 
+/** Keys retained during synchronization, including the bundled iOS/desktop tutorial. */
+fun compatibilityBoardSynchronizationKeys(modernBoards: List<BoardSummary>): Set<String> {
+    val keys = modernBoardsToCompatibility(modernBoards).mapTo(mutableSetOf(), CompatBoard::key)
+    if (modernBoards.any { it.url == "https://www.example.com/t/futaba.php" }) {
+        keys += compatBoardKey("https://img.2chan.net/t/")
+    }
+    return keys
+}
+
 /**
  * Compatibility boards are authoritative while the legacy profile is active.
  * Replace Futaba boards (and the checked-in tutorial fixture) instead of only

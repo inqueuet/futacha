@@ -863,8 +863,12 @@ class CompatibilityCoreTest {
         )
 
         val candidates = compatPostActionCandidates(post)
-        assertEquals(listOf("No", "ID", "IP", "file", "file", "file", "mail", "本文", "本文"), candidates.map { it.label })
-        assertEquals(listOf("fu101.png", "fu101s.jpg", "fu101.webm"), candidates.filter { it.label == "file" }.map { it.value })
+        assertEquals(listOf("No", "ID", "IP", "file", "file", "mail", "本文", "本文"), candidates.map { it.label })
+        assertEquals(listOf("fu101.png", "fu101.webm"), candidates.filter { it.label == "file" }.map { it.value })
+        // Existing thumbnail-name quotations must still open their source post.
+        assertEquals(listOf(post), resolveCompatQuotePosts(listOf(post), 2, "file:fu101s.jpg"))
+        val fileIndices = candidates.indices.filter { candidates[it].label == "file" }.toSet()
+        assertEquals(">fu101.png\n>fu101.webm\n", compatQuoteSelection(candidates, fileIndices))
     }
 
     @Test

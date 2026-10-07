@@ -200,6 +200,11 @@ class FutachaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Before any profile is read: unfinished (PREVIEW) modes exist only in debuggable builds, and the
+        // mobile-only modes (ふたばー風) exist on every Android build.
+        com.valoser.futacha.shared.compat.ExperienceProfileAvailability.previewModesEnabled =
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        com.valoser.futacha.shared.compat.ExperienceProfileAvailability.mobileModesEnabled = true
         initializeAndroidPersistentLogging(applicationContext)
         initializeAndroidThreadSavePlatformProtection(this)
         initializeCompatPostPlatformContext(applicationContext)
@@ -332,7 +337,7 @@ class FutachaApplication : Application() {
                         val modernSettings = CatalogFetchSettings(
                             rows = appStateStore.catalogFetchRows.first()
                         ).normalized()
-                        if (experienceProfileStore.activeProfile.value == ExperienceProfile.TOSHIAKI_COMPAT) {
+                        if (!experienceProfileStore.activeProfile.value.usesAppStateData) {
                             val requestedThreads = compatibilityStore.loadPreference(
                                 "compat.catalog.catalogThreadSize"
                             )?.filter(Char::isDigit)?.toIntOrNull()
@@ -459,7 +464,7 @@ class FutachaApplication : Application() {
                     val activeProfile = experienceProfileStore.readActiveProfile()
                     val generation = experienceProfileStore.readGeneration()
                     val enabled = when (activeProfile) {
-                        ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled ||
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> backgroundEnabled || watchAlertEnabled ||
                             com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]

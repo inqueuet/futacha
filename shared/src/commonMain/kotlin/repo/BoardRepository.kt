@@ -45,7 +45,7 @@ sealed interface ConditionalThreadFetchResult {
 }
 
 interface BoardRepository {
-    suspend fun getPostingCapabilities(board: String): BoardPostingCapabilities =
+    suspend fun getPostingCapabilities(board: String, threadId: String? = null): BoardPostingCapabilities =
         defaultBoardPostingCapabilities(board)
     suspend fun getCatalog(
         board: String,
@@ -117,7 +117,8 @@ interface BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean = false
     ): String?
 
     suspend fun createThread(
@@ -129,7 +130,8 @@ interface BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean = false
     ): String?
 
     /**
@@ -325,8 +327,8 @@ class DefaultBoardRepository(
         )
     }
 
-    override suspend fun getPostingCapabilities(board: String): BoardPostingCapabilities =
-        withContext(AppDispatchers.io) { api.fetchPostingCapabilities(board) }
+    override suspend fun getPostingCapabilities(board: String, threadId: String?): BoardPostingCapabilities =
+        withContext(AppDispatchers.io) { api.fetchPostingCapabilities(board, threadId) }
 
     override suspend fun probeThreadExists(threadUrl: String): Boolean =
         withContext(AppDispatchers.io) { api.probeThreadExists(threadUrl) }
@@ -530,7 +532,8 @@ class DefaultBoardRepository(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
         // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
@@ -540,7 +543,7 @@ class DefaultBoardRepository(
                 cookieRepository = cookieRepository,
                 ensureCookiesInitialized = ::ensureCookiesInitialized
             ) {
-                api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+                api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly, handwriting)
             }
         }
     }
@@ -554,7 +557,8 @@ class DefaultBoardRepository(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         return withContext(AppDispatchers.io) {
             runDefaultBoardRepositoryPostingWithInitializedCookies(
@@ -562,7 +566,7 @@ class DefaultBoardRepository(
                 cookieRepository = cookieRepository,
                 ensureCookiesInitialized = ::ensureCookiesInitialized
             ) {
-                api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+                api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly, handwriting)
             }
         }
     }

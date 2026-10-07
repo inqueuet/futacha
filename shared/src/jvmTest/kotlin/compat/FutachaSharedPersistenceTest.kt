@@ -108,6 +108,8 @@ class FutachaSharedPersistenceTest {
                         CatalogItem(no, "${url}res/$no.htm", "スレ$no", null, null, replyCount = 10)
                     }
                 }
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> =
+                    getCatalog(board, mode)
             }
             val refresh = async {
                 refreshCompatTabsInBackground(store, repository, nowEpochMillis = now, checkExistence = false)

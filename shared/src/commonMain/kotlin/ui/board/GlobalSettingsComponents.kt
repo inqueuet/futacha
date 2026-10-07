@@ -501,6 +501,9 @@ internal fun GlobalSettingsDisplaySection(
     val sharedFeatures = LocalFutachaSharedFeatures.current
     return listOf(
         {
+        ThreadDisplayQuickSetting(threadDisplayMode, onThreadDisplayModeChanged)
+        },
+        {
         SharedSettingsLink("design", "フォント・タブ一覧", "フォントとタブ一覧の設定を両モードで共有します。配色はふたちゃのテーマに従います。")
         SharedSettingsLink("thread", "スレッドの表示・画像サイズ", "レスの文字・画像・NG・抽出・スクロール")
         ListItem(
@@ -644,30 +647,6 @@ internal fun GlobalSettingsDisplaySection(
             // The image size itself is the shared thread setting linked above;
             // the quality mode is shared with the compatibility network page.
             HighQualityThumbnailSetting(sharedFeatures)
-        }
-        },
-        {
-        ListItem(
-            headlineContent = { Text("スレ表示モード") },
-            supportingContent = {
-                Text(
-                    text = "現行の通常表示か、引用関係から組み立てたツリー表示を選べます。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        ThreadDisplayMode.entries.forEach { mode ->
-            GlobalSettingsRadioOptionRow(
-                label = mode.label,
-                description = when (mode) {
-                    ThreadDisplayMode.Flat -> "今までどおり時系列順で表示します。"
-                    ThreadDisplayMode.Tree -> "引用先を親にしてインデント付きで表示します。"
-                },
-                selected = threadDisplayMode == mode,
-                onClick = { onThreadDisplayModeChanged(mode) }
-            )
         }
         },
         {
@@ -973,8 +952,13 @@ internal fun GlobalSettingsSecuritySection(
     SettingsSection(
         title = "プライバシー・セキュリティ",
         icon = Icons.Rounded.Lock,
-        description = "起動ロック、Cookie、ポリシーへの導線をまとめています。"
+        description = "画面のプライバシー表示、起動ロック、Cookie、ポリシーを設定します。"
     ) {
+        LocalFutachaSharedFeatures.current?.let { features ->
+            TextButton(onClick = { features.openSettings("privacy") }, modifier = Modifier.fillMaxWidth()) {
+                Text("プライバシー表示")
+            }
+        }
         GlobalSettingsAppLockControls(
             isAppLockEnabled = isAppLockEnabled,
             onAppLockPasswordChanged = onAppLockPasswordChanged,
@@ -1009,10 +993,13 @@ internal fun GlobalSettingsSupportPurchaseSection(
         isLoading = true
         loadError = null
         coroutineScope.launch {
-            val result = purchaseClient.loadProducts()
-            products = result.getOrDefault(emptyList())
-            loadError = result.exceptionOrNull()?.message
-            isLoading = false
+            try {
+                val result = purchaseClient.loadProducts()
+                products = result.getOrDefault(emptyList())
+                loadError = result.exceptionOrNull()?.message
+            } finally {
+                isLoading = false
+            }
         }
     }
 
@@ -1062,23 +1049,27 @@ internal fun GlobalSettingsSupportPurchaseSection(
                         AnalyticsTracker.uiControl("support_purchase", "支援購入を開始")
                         coroutineScope.launch {
                             isPurchasing = true
-                            val purchaseResult = purchaseClient.purchase(product)
-                            val message = when (purchaseResult) {
-                                SupportPurchaseResult.Success -> "応援ありがとうございます"
-                                SupportPurchaseResult.Canceled -> "購入をキャンセルしました"
-                                is SupportPurchaseResult.Unavailable -> purchaseResult.message
-                                is SupportPurchaseResult.Failed -> "購入に失敗しました: ${purchaseResult.message}"
-                            }
-                            AnalyticsTracker.uiControl(
-                                "support_purchase_result",
+                            val message = try {
+                                val purchaseResult = purchaseClient.purchase(product)
+                                AnalyticsTracker.uiControl(
+                                    "support_purchase_result",
+                                    when (purchaseResult) {
+                                        SupportPurchaseResult.Success -> "支援購入が完了"
+                                        SupportPurchaseResult.Canceled -> "支援購入をキャンセル"
+                                        is SupportPurchaseResult.Unavailable -> "支援購入を利用できない"
+                                        is SupportPurchaseResult.Failed -> "支援購入に失敗"
+                                    }
+                                )
                                 when (purchaseResult) {
-                                    SupportPurchaseResult.Success -> "支援購入が完了"
-                                    SupportPurchaseResult.Canceled -> "支援購入をキャンセル"
-                                    is SupportPurchaseResult.Unavailable -> "支援購入を利用できない"
-                                    is SupportPurchaseResult.Failed -> "支援購入に失敗"
+                                    SupportPurchaseResult.Success -> "応援ありがとうございます"
+                                    SupportPurchaseResult.Canceled -> "購入をキャンセルしました"
+                                    is SupportPurchaseResult.Unavailable -> purchaseResult.message
+                                    is SupportPurchaseResult.Failed -> "購入に失敗しました: ${purchaseResult.message}"
                                 }
-                            )
-                            isPurchasing = false
+                            } finally {
+                                // Also when the purchase call is cancelled or throws: the buttons must not stay disabled.
+                                isPurchasing = false
+                            }
                             snackbarHostState.showSnackbar(message)
                         }
                     }

@@ -9,6 +9,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import platform.AVFoundation.*
 import platform.Foundation.*
 import platform.CoreMedia.CMTimeGetSeconds
@@ -55,6 +57,8 @@ private suspend fun exportPostingVideoAsMp4(attachment: ImageData, maxBytes: Lon
                     }
                 }
             } catch (timeout: TimeoutCancellationException) {
+                // A timeout of the caller cancels this coroutine too: that is a cancellation, not this conversion's own timeout.
+                currentCoroutineContext().ensureActive()
                 throw IllegalStateException("動画の変換がタイムアウトしました", timeout)
             }
             // A size-limited export must never silently attach only a prefix.

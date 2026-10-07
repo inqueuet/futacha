@@ -56,6 +56,22 @@ class CompatPostPlatformActionsTest {
     }
 
     @Test
+    fun extensionlessAttachmentNameGetsExtensionFromContent() {
+        val jpeg = byteArrayOf(-1, -40, -1, -32, 0, 0)
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0)
+        assertEquals("1000012345.jpg", compatPostAttachmentWithDetectedExtension(ImageData(jpeg, "1000012345")).fileName)
+        assertEquals("attachment.png", compatPostAttachmentWithDetectedExtension(ImageData(png, "attachment")).fileName)
+        assertEquals("trailing.gif", compatPostAttachmentWithDetectedExtension(ImageData("GIF89a....".encodeToByteArray(), "trailing.")).fileName)
+        // Existing extensions (even wrong ones), unknown content, handwriting and blank names are untouched.
+        assertEquals("photo.png", compatPostAttachmentWithDetectedExtension(ImageData(jpeg, "photo.png")).fileName)
+        assertEquals("1000012345", compatPostAttachmentWithDetectedExtension(ImageData(byteArrayOf(1, 2, 3), "1000012345")).fileName)
+        assertEquals("draw", compatPostAttachmentWithDetectedExtension(ImageData(png, "draw", isHandwriting = true)).fileName)
+        assertEquals("", compatPostAttachmentWithDetectedExtension(ImageData(jpeg, "")).fileName)
+        val fixed = compatPostAttachmentWithDetectedExtension(ImageData(ByteArray(10).also { jpeg.copyInto(it) }, "1000012345"))
+        assertEquals(CompatPostAttachmentDecision.Accept, decideCompatPostAttachment(fixed, 3_000_000))
+    }
+
+    @Test
     fun attachmentDecisionSeparatesEveryTargetErrorAndCompressionBoundary() {
         assertEquals("添付ファイルが読み込めません", ATTACHMENT_LOAD_FAILURE_MESSAGE)
         val limit = 3_000_000

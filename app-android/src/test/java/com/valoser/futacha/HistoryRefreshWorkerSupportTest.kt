@@ -14,6 +14,13 @@ import java.io.IOException
 
 class HistoryRefreshWorkerSupportTest {
     @Test
+    fun backgroundRefreshAnalytics_isSkippedOnlyForTheFutaberProfile() {
+        assertFalse(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.FUTABER))
+        assertTrue(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA))
+        assertTrue(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.TOSHIAKI_COMPAT))
+    }
+
+    @Test
     fun isRetriableBackgroundRefreshError_matchesExpectedErrorTypes() {
         val timeoutError = runCatching {
             runBlocking {

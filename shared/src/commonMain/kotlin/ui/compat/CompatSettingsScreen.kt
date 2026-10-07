@@ -292,6 +292,7 @@ internal fun CompatSettingsScreen(
     modernPresentation: Boolean = false,
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null
 ) {
+    com.valoser.futacha.shared.ui.privacy.PrivacySettingsExemption()
     val profileController = LocalExperienceProfileUiController.current
     val scope = rememberCoroutineScope()
     val groups = remember(path, appVersion, modernPresentation) {
@@ -309,6 +310,7 @@ internal fun CompatSettingsScreen(
     var savedValues by remember(path, preferences) {
         mutableStateOf(compatSettingsSavedValues(path, groups, preferences))
     }
+    var autoSaveUsageBytes by remember(path) { mutableStateOf<Long?>(null) }
     var threadCacheUsageBytes by remember(path) { mutableStateOf<Long?>(null) }
     var confirmThreadCacheClear by remember(path) { mutableStateOf(false) }
     var threadCacheClearInProgress by remember(path) { mutableStateOf(false) }
@@ -655,16 +657,20 @@ internal fun CompatSettingsScreen(
             return@LaunchedEffect
         }
         if (path == "storage") {
+            autoSaveUsageBytes = fileSystem?.let { fs ->
+                runSuspendCatchingPreservingCancellation {
+                    com.valoser.futacha.shared.repository.SavedThreadRepository(fs,
+                        baseDirectory = com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY).getTotalSize()
+                }.getOrNull()
+            }
             threadCacheUsageBytes = runSuspendCatchingPreservingCancellation {
                 store.threadSnapshotCacheUsageBytes()
             }.getOrNull()
             imageCacheUsage = withContext(AppDispatchers.io) {
-                runCatching {
-                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L) +
-                        (imageLoader.memoryCache?.size ?: 0L)
+                runSuspendCatchingPreservingCancellation {
+                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L)
                     val catalogBytes = if (catalogImageLoader === imageLoader) 0L else {
-                        (catalogImageLoader.diskCache?.size ?: 0L) +
-                            (catalogImageLoader.memoryCache?.size ?: 0L)
+                        (catalogImageLoader.diskCache?.size ?: 0L)
                     }
                     CompatImageCacheUsage(normalBytes, catalogBytes)
                 }.getOrNull()
@@ -720,6 +726,9 @@ internal fun CompatSettingsScreen(
             state = settingsListState,
             modifier = Modifier.fillMaxSize().padding(padding).testTag("compat-settings-list-$path")
         ) {
+            if (path == "privacy") item(key = "privacy-settings") {
+                com.valoser.futacha.shared.ui.privacy.PrivacySettingsControls()
+            }
             if (path == "ai") item(key = "ai-settings") { CompatAiSettingsControls(stateStore) }
             if (path == "media") item(key = "media-settings") {
                 com.valoser.futacha.shared.ui.media.DeviceImageEditorSettings()
@@ -727,6 +736,20 @@ internal fun CompatSettingsScreen(
                 com.valoser.futacha.shared.ui.media.DeviceVideoEditorSettings()
                 HorizontalDivider()
                 com.valoser.futacha.shared.ui.media.MediaHelpButton()
+            }
+            if (path == "catalog") item(key = "catalog-layout-guide") {
+                com.valoser.futacha.shared.ui.board.CatalogLayoutGuide()
+            }
+            if (path == "thread") item(key = "thread-settings-guide") {
+                Column(Modifier.padding(16.dp)) {
+                    Text(if (modernPresentation) "通常／ツリー表示は、共通設定の「スレ表示モード」で選べます。"
+                        else "「レスの表示形式」で通常／ツリー表示を選べます。")
+                    TextButton(onClick = { onNavigate("control") }) { Text("レスのタップ操作を設定") }
+                }
+            }
+            if (path == "storage") item(key = "storage-usage-guide") {
+                com.valoser.futacha.shared.ui.board.StorageUsageGuide(imageCacheUsage, threadCacheUsageBytes,
+                    attachmentCacheUsageBytes, autoSaveUsageBytes, onOpenSavedThreads)
             }
             groups.forEach { (group, entries) ->
                 item(key = "group-$group") {
@@ -1105,15 +1128,13 @@ internal fun CompatSettingsScreen(
                         imageCacheClearInProgress = true
                         launchSettingsSafely {
                             val usage = withContext(AppDispatchers.io) {
-                                runCatching {
+                                runSuspendCatchingPreservingCancellation {
                                     clearFutachaImageCaches(imageLoader, catalogImageLoader)
                                 }
-                                runCatching {
-                                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L) +
-                                        (imageLoader.memoryCache?.size ?: 0L)
+                                runSuspendCatchingPreservingCancellation {
+                                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L)
                                     val catalogBytes = if (catalogImageLoader === imageLoader) 0L else {
-                                        (catalogImageLoader.diskCache?.size ?: 0L) +
-                                            (catalogImageLoader.memoryCache?.size ?: 0L)
+                                        (catalogImageLoader.diskCache?.size ?: 0L)
                                     }
                                     CompatImageCacheUsage(normalBytes, catalogBytes)
                                 }.getOrNull()
@@ -1287,7 +1308,7 @@ internal fun CompatSettingsScreen(
             title = { Text("モード") },
             text = {
                 Column {
-                    ExperienceProfile.entries.forEach { profile ->
+                    ExperienceProfile.selectableEntries.forEach { profile ->
                         Row(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
                                 onClick = { selected = profile },
@@ -1298,7 +1319,7 @@ internal fun CompatSettingsScreen(
                             RadioButton(selected = selected == profile, onClick = { selected = profile })
                             Column(Modifier.padding(vertical = 8.dp)) {
                                 Text(profile.displayName)
-                                if (profile == ExperienceProfile.TOSHIAKI_COMPAT) {
+                                if (profile != ExperienceProfile.FUTACHA) {
                                     Text("非公式表示モード。元アプリや開発者との公式な関係はありません。", fontSize = 11.sp)
                                 }
                             }

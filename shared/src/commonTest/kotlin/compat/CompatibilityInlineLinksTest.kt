@@ -24,6 +24,22 @@ class CompatibilityInlineLinksTest {
     }
 
     @Test
+    fun ttpAndTtpsSchemesAreLinkedAndOpenWithTheMissingH() {
+        assertEquals(
+            listOf(CompatInlineLink(3, 24, "https://example.test/a")),
+            compatInlineLinks("本文 ttps://example.test/a。")
+        )
+        assertEquals(
+            listOf(CompatInlineLink(3, 22, "http://example.test/")),
+            compatInlineLinks("本文 ttp://example.test/")
+        )
+        assertEquals(
+            listOf(CompatInlineLink(3, 23, "http://example.test/")),
+            compatInlineLinks("本文 http://example.test/")
+        )
+    }
+
+    @Test
     fun anchorWithNonUrlLabelOpensItsHttpHref() {
         val html = "本文 <a href=\"https://example.test/docs?a=1&amp;b=2\">公式サイト</a>"
 

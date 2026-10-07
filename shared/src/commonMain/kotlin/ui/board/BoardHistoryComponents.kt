@@ -58,6 +58,7 @@ import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
+import com.valoser.futacha.shared.compat.toCompatHistoryEntry
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -116,6 +117,9 @@ internal fun HistoryDrawerContent(
      */
     isVisible: Boolean = true
 ) {
+    val sharedFeatures = LocalFutachaSharedFeatures.current
+    val tabs = sharedFeatures?.store?.tabs?.collectAsState(emptyList())?.value.orEmpty()
+    val tabsByUrl = remember(tabs) { tabs.associateBy { it.canonicalUrl } }
     val currentSelection = rememberUpdatedState(onHistoryEntrySelected)
     val currentDismissal = rememberUpdatedState(onHistoryEntryDismissed)
     val stableSelection = remember { { entry: ThreadHistoryEntry -> currentSelection.value(entry) } }
@@ -216,6 +220,8 @@ internal fun HistoryDrawerContent(
                 ) { entry ->
                     DismissibleHistoryEntry(
                         entry = entry,
+                        // boardUrl usually holds the thread's own URL, which canonicalizeBoardUrl rejects.
+                        tab = entry.toCompatHistoryEntry()?.canonicalUrl?.let { tabsByUrl[it] },
                         onDismissed = stableDismissal,
                         onClicked = { stableSelection(entry) }
                     )
@@ -1005,6 +1011,7 @@ internal fun buildHistoryArchivePayloadLabel(status: HistoryArchivePayloadStatus
 @Composable
 private fun DismissibleHistoryEntry(
     entry: ThreadHistoryEntry,
+    tab: com.valoser.futacha.shared.compat.CompatTab?,
     onDismissed: (ThreadHistoryEntry) -> Unit,
     onClicked: () -> Unit
 ) {
@@ -1024,7 +1031,7 @@ private fun DismissibleHistoryEntry(
         enableDismissFromEndToStart = false,
         backgroundContent = { HistoryDismissBackground() }
     ) {
-        HistoryEntryCard(entry = entry, onClick = onClicked)
+        HistoryEntryCard(entry = entry, tab = tab, onClick = onClicked)
     }
 }
 
@@ -1059,6 +1066,7 @@ private fun HistoryDismissBackground() {
 @Composable
 private fun HistoryEntryCard(
     entry: ThreadHistoryEntry,
+    tab: com.valoser.futacha.shared.compat.CompatTab?,
     onClick: () -> Unit
 ) {
     val density = LocalDensity.current
@@ -1134,8 +1142,9 @@ private fun HistoryEntryCard(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(entry.boardName.ifBlank { "板名未取得" }, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${entry.replyCount}レス", style = MaterialTheme.typography.labelMedium,
+                    Text("${maxOf(entry.replyCount, tab?.replyCount ?: 0)}レス", style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CatalogNewRepliesBadge(tab?.let { (maxOf(entry.replyCount, it.replyCount) - it.checkedReplyCount).coerceAtLeast(0) } ?: 0)
                     if (entry.hasSelfPost) Text("投稿済", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (entry.hasAutoSave) Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Folder, contentDescription = "自動保存あり", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))

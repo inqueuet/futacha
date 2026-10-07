@@ -77,6 +77,11 @@ class SavedThreadRepository(
     private val droppedEntryCleanupScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
     private val droppedEntryCleanupMutex = Mutex()
     private val scheduledDroppedEntryStorageIds = mutableSetOf<String>()
+    // storageId -> purge identity of the thread its metadata.json describes. Reading every saved
+    // thread's metadata (up to 20,000 files of up to 8 MB) on each history swipe made deleting
+    // one entry take seconds; a folder's identity never changes, so each is read once.
+    private val storageIdentityCache = HashMap<String, String>()
+    private val orphanScanMutex = Mutex()
 
     companion object {
         private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 30_000L
@@ -491,6 +496,57 @@ class SavedThreadRepository(
         }
 
     /**
+     * [purgeIndexedThreadStorage] for many threads at once: one delete operation and one index
+     * rewrite for all of them instead of one per thread. Used when history trimming drops
+     * many entries at the same time. Each identity is a (threadId, boardId) pair.
+     */
+    suspend fun purgeIndexedThreadsStorage(identities: List<Pair<String, String?>>): Result<Unit> =
+        runSuspendCatchingNonCancellation {
+            if (identities.isEmpty()) return@runSuspendCatchingNonCancellation
+            withContext(AppDispatchers.io) {
+                mutationMutex.withLock {
+                    identities.forEach { (threadId, boardId) ->
+                        recordThreadPurgeCutoff(purgeIdentityKey(threadId, boardId))
+                    }
+                }
+                val identitiesByKey = identities.groupBy { (threadId, boardId) -> purgeIdentityKey(threadId, boardId) }
+                this@SavedThreadRepository.executeSavedThreadDeleteOperation(
+                    SavedThreadDeleteOperationRequest(
+                        backupIndexPath =
+                            "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}$OPERATION_BACKUP_THREAD_DELETE_SUFFIX",
+                        deletionErrorSubjectLabel = "thread directory(s)",
+                        indexUpdateFailureMessage =
+                            "Failed to update index after deleting ${identities.size} thread(s). Index may be inconsistent.",
+                        selectThreadsToDelete = { index ->
+                            index.threads
+                                .filter { thread ->
+                                    identitiesByKey[purgeIdentityKey(thread.threadId, thread.boardId)]
+                                        ?.any { (threadId, boardId) -> isSameSavedThreadIdentity(thread, threadId, boardId) } == true
+                                }
+                                .sortedByDescending { it.savedAt }
+                        }
+                    )
+                )
+                identities
+                    .flatMap { (threadId, boardId) ->
+                        listOf(
+                            resolveSavedThreadStorageId(threadId, boardId),
+                            resolveLegacySavedThreadStorageId(threadId, boardId)
+                        )
+                    }
+                    .filter(String::isNotBlank)
+                    .distinct()
+                    .forEach { storageId ->
+                        ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                            deletePath(storageId).exceptionOrNull()?.let { error ->
+                                if (!isPathAlreadyDeleted(error)) throw error
+                            }
+                        }
+                    }
+            }
+        }
+
+    /**
      * スレッドを削除し、削除後のインデックスを返す。
      */
     suspend fun deleteThreadAndLoadIndex(threadId: String, boardId: String? = null): Result<SavedThreadIndex> =
@@ -542,6 +598,7 @@ class SavedThreadRepository(
                     val generation = state.markerMutex.withLock {
                         val generation = state.mutex.withLock {
                             state.rootCutoffMillis = cutoffMillis
+                            state.rootCutoffMark = kotlin.time.TimeSource.Monotonic.markNow()
                             state.pendingLeftovers.clear()
                             state.pendingLeftovers.addAll(leftovers)
                             state.pendingLeftoverCutoffMillis = cutoffMillis
@@ -855,12 +912,27 @@ class SavedThreadRepository(
             .also { purgeStateCache = it }
 
     private suspend fun rootPurgeCutoffMillis(): Long =
-        purgeState().let { state -> state.mutex.withLock { state.rootCutoffMillis } }
+        purgeState().let { state ->
+            state.mutex.withLock {
+                effectivePurgeCutoffMillis(
+                    state.rootCutoffMillis,
+                    state.rootCutoffMark,
+                    Clock.System.now().toEpochMilliseconds()
+                )
+            }
+        }
 
     /** Saves of [identityKey] started at or before this were deleted and must not be indexed. */
     private suspend fun purgeCutoffMillis(identityKey: String): Long = purgeState().let { state ->
         state.mutex.withLock {
-            maxOf(state.rootCutoffMillis, state.threadCutoffMillis[identityKey] ?: Long.MIN_VALUE)
+            val nowMillis = Clock.System.now().toEpochMilliseconds()
+            val threadCutoff = state.threadCutoffMillis[identityKey]?.let { cutoff ->
+                effectivePurgeCutoffMillis(cutoff, state.threadCutoffMarks[identityKey], nowMillis)
+            } ?: Long.MIN_VALUE
+            maxOf(
+                effectivePurgeCutoffMillis(state.rootCutoffMillis, state.rootCutoffMark, nowMillis),
+                threadCutoff
+            )
         }
     }
 
@@ -869,9 +941,12 @@ class SavedThreadRepository(
         state.mutex.withLock {
             state.threadCutoffMillis.remove(identityKey)
             state.threadCutoffMillis[identityKey] = Clock.System.now().toEpochMilliseconds()
+            state.threadCutoffMarks[identityKey] = kotlin.time.TimeSource.Monotonic.markNow()
             // Insertion order is cutoff order: drop the oldest.
             while (state.threadCutoffMillis.size > MAX_THREAD_PURGE_CUTOFFS) {
-                state.threadCutoffMillis.remove(state.threadCutoffMillis.keys.first())
+                val oldest = state.threadCutoffMillis.keys.first()
+                state.threadCutoffMillis.remove(oldest)
+                state.threadCutoffMarks.remove(oldest)
             }
         }
     }
@@ -1054,29 +1129,39 @@ class SavedThreadRepository(
         val targetIdentity = purgeIdentityKey(threadId, boardId)
         // Callers run on the UI scope when a history entry is swiped away, and
         // this may read thousands of metadata files. Only the identity is needed,
-        // so skip decoding every post of every saved thread.
-        return withContext(AppDispatchers.io + fileSystem.saveBatchContext()) {
-            listFilesAt("")
-                .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
-                .mapNotNullTo(linkedSetOf()) { childName ->
-                    val storageId = childName.trim().trim('/')
-                    if (storageId.isBlank()) return@mapNotNullTo null
-                    val identity = readStringAtWithLimit(
-                        "$storageId/metadata.json",
-                        MAX_SAVED_THREAD_METADATA_BYTES
-                    )
-                        .getOrNull()
-                        ?.let { encoded ->
-                            runCatching {
-                                json.decodeFromString(SavedThreadIdentityProbe.serializer(), encoded)
-                            }.getOrNull()
+        // so skip decoding every post of every saved thread, and read each folder's
+        // metadata once: later scans (and scans queued behind this one) use the cache.
+        return orphanScanMutex.withLock {
+            withContext(AppDispatchers.io + fileSystem.saveBatchContext()) {
+                val children = listFilesAt("")
+                    .take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)
+                    .map { it.trim().trim('/') }
+                    .filter { it.isNotBlank() && !it.startsWith(indexRelativePath) }
+                // Folders deleted since the last scan leave the cache.
+                storageIdentityCache.keys.retainAll(children.toSet())
+                children.mapNotNullTo(linkedSetOf()) { storageId ->
+                    val identity = storageIdentityCache[storageId] ?: run {
+                        val probed = readStringAtWithLimit(
+                            "$storageId/metadata.json",
+                            MAX_SAVED_THREAD_METADATA_BYTES
+                        )
+                            .getOrNull()
+                            ?.let { encoded ->
+                                runCatching {
+                                    json.decodeFromString(SavedThreadIdentityProbe.serializer(), encoded)
+                                }.getOrNull()
+                            }
+                            ?.takeIf { it.threadId.isNotBlank() }
+                            ?: return@mapNotNullTo null
+                        purgeIdentityKey(probed.threadId, probed.boardId).also {
+                            if (storageIdentityCache.size < MAX_ORPHAN_METADATA_SCAN_ENTRIES) {
+                                storageIdentityCache[storageId] = it
+                            }
                         }
-                        ?.takeIf { it.threadId.isNotBlank() }
-                        ?: return@mapNotNullTo null
-                    storageId.takeIf {
-                        purgeIdentityKey(identity.threadId, identity.boardId) == targetIdentity
                     }
+                    storageId.takeIf { identity == targetIdentity }
                 }
+            }
         }
     }
 

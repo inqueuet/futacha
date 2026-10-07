@@ -1,5 +1,7 @@
 import XCTest
 import Network
+import AVFAudio
+import UIKit
 
 /**
  * Simulator-level smoke coverage for the native scene host.  Kotlin/Native
@@ -630,6 +632,884 @@ final class IosAppUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "ふたばの板一覧ページから")
         ).firstMatch.exists)
+    }
+
+    /// ふたばー風モード（開発版のみ）の縦の導線。Compose の testTag は accessibilityIdentifier として公開される。
+    func testFutaberPreviewModeReachesCatalogThreadAndTabs() throws {
+        let app = makeApplication()
+        // 板の一覧は既存の試験と同じく起動引数で固定し、端末に残った状態に左右されないようにする。
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1201",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        // 初回は板一覧が開く。保存済みの板が残っていれば直接カタログが開く。
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) {
+            attach("futaber-1-drawer")
+            element("futaber-drawer-board").tap()
+        }
+        XCTAssertTrue(element("futaber-board-address").waitForExistence(timeout: 15), "The catalog title bar is missing.")
+        XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 15), "The default four-column grid is missing.")
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+        attach("futaber-2-catalog")
+
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread shows no post.")
+        XCTAssertTrue(element("futaber-thread-title").exists)
+        attach("futaber-3-thread")
+
+        // 手動登録：登録すると帯が出て、カタログへ戻っても残る。
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        element("futaber-menu-tab").tap()
+        XCTAssertTrue(element("futaber-tab").waitForExistence(timeout: 10), "The registered tab strip did not appear.")
+        attach("futaber-4-tab")
+        app.buttons["カタログへ戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("futaber-tab").exists, "The tab strip must stay on the catalog.")
+
+        // 管理画面の履歴に、今開いたスレッドが記録されている。
+        element("futaber-manage").tap()
+        XCTAssertTrue(element("futaber-history-row").waitForExistence(timeout: 10), "The history list is empty after opening a thread.")
+        attach("futaber-5-manage")
+        element("futaber-manage-close").tap()
+
+        // 後始末：登録したタブを外し、他の試験の起動状態へ影響を残さない。
+        element("futaber-tab").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 10))
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        element("futaber-menu-tab").tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futaber-tab"), handler: nil)
+        waitForExpectations(timeout: 10)
+    }
+
+    // MARK: - MHT（ふたばー風・ふたちゃ・としあき(仮)）
+
+    private func mhtAttach(_ app: XCUIApplication, _ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// ふたばー風モード：スレッドの操作メニュー「MHTで保存」→ 保存箱の「MHTファイル」→ 保存コピーとして開く → 削除。
+    func testFutaberMhtSavesListsOpensAndDeletes() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1301",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-menu-mht-save").waitForExistence(timeout: 10), "The menu has no 「MHTで保存」.")
+        element("futaber-menu-mht-save").tap()
+        XCTAssertTrue(element("futaber-mht-choose-thumbs").waitForExistence(timeout: 10), "The format choice did not appear.")
+        mhtAttach(app, "futaber-mht-1-choose")
+        element("futaber-mht-choose-thumbs").tap()
+        XCTAssertTrue(element("futaber-mht-close").waitForExistence(timeout: 60), "The save did not finish.")
+        XCTAssertTrue(element("futaber-mht-share-file").exists, "The finished dialog has no share button.")
+        mhtAttach(app, "futaber-mht-2-done")
+        element("futaber-mht-close").tap()
+
+        app.buttons["カタログへ戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
+        element("futaber-manage").tap()
+        element("futaber-manage-category-SavedBox").tap()
+        XCTAssertTrue(element("futaber-mht-row").waitForExistence(timeout: 15), "The MHT file is not listed in the saved box.")
+        mhtAttach(app, "futaber-mht-3-box")
+        element("futaber-mht-row").tap()
+        XCTAssertTrue(element("futaber-offline-notice").waitForExistence(timeout: 20), "The saved copy did not open.")
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        mhtAttach(app, "futaber-mht-4-opened")
+        app.buttons["カタログへ戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
+
+        // 後始末：保存したMHTを消し、次の試験に残さない。
+        element("futaber-manage").tap()
+        element("futaber-manage-category-SavedBox").tap()
+        XCTAssertTrue(element("futaber-mht-row").waitForExistence(timeout: 15))
+        element("futaber-manage-edit").tap()
+        element("futaber-manage-delete").tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futaber-mht-row"), handler: nil)
+        waitForExpectations(timeout: 20)
+    }
+
+    /// ふたばー風モードでMHTを1つ保存して返る（他モードの一覧・読み取りの試験に使う。MHTのライブラリは3モード共通）。
+    private func saveOneMhtInFutaberMode() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1302",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        element("futaber-thread-menu").tap()
+        element("futaber-menu-mht-save").tap()
+        element("futaber-mht-choose-thumbs").tap()
+        XCTAssertTrue(element("futaber-mht-close").waitForExistence(timeout: 60), "The MHT save did not finish.")
+        element("futaber-mht-close").tap()
+        app.terminate()
+    }
+
+    /// ふたちゃ：ふたばー風モードで保存したMHTが保存済みスレッドの「MHTファイル」欄に並び、読み取り専用で開け、削除できる。
+    func testFutachaListsAndOpensAnMhtFileReadOnly() throws {
+        try saveOneMhtInFutaberMode()
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "futacha",
+            "-experience.profile_generation", "1304",
+            "-commonUsedVersion", Self.alreadyReadChangeLogVersion,
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        XCTAssertTrue(app.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 20), "The board list did not appear.")
+        app.buttons["メニュー"].firstMatch.tap()
+        let saved = app.staticTexts["保存済み"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        saved.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 20), "The MHT file is not listed.")
+        XCTAssertTrue(app.buttons["ファイルを開く"].firstMatch.exists, "The import button is missing.")
+        mhtAttach(app, "futacha-mht-1-list")
+        element("futacha-mht-row").tap()
+        // 読み取り専用のビューア：スレッドが出て、MHTの一覧は消える。
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futacha-mht-row"), handler: nil)
+        waitForExpectations(timeout: 20)
+        XCTAssertTrue(element("futacha-thread-content").waitForExistence(timeout: 20), "The viewer did not show the thread.")
+        mhtAttach(app, "futacha-mht-2-viewer")
+
+        // 後始末：一覧へ戻って削除。
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 15))
+        element("futacha-mht-delete").tap()
+        element("futacha-mht-delete-confirm").tap()
+        expectation(for: gone, evaluatedWith: element("futacha-mht-row"), handler: nil)
+        waitForExpectations(timeout: 20)
+    }
+
+    /// ふたちゃ：実在の板（may）の読み取りだけで、保存形式にMHTが出る。チュートリアル板は2chの板として扱われず共有機能が無いため、実板を使う。
+    /// 通信が使えない時は飛ばす。この試験はMHTの保存を実行しない。
+    func testFutachaSaveFormatOffersMhtOnALiveBoard() throws { try verifyFutachaLiveMht(save: false) }
+
+    /// ふたちゃ：実在の板（may）のスレッドをMHTで実際に保存する（サムネイルのみ。読み取りの通信だけ）。
+    /// 保存完了→保存済みスレッドの「MHTファイル」欄に並ぶ→読み取り専用で開く→削除、まで確かめる。
+    func testFutachaSavesALiveThreadAsMhtListsAndOpensIt() throws { try verifyFutachaLiveMht(save: true) }
+
+    private func verifyFutachaLiveMht(save: Bool) throws {
+        let app = makeApplication()
+        let boards = [["id": "may-b", "name": "may", "category": "may",
+            "url": "https://may.2chan.net/b/futaba.php", "description": "may"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futacha",
+            "-experience.profile_generation", "1305",
+            "-commonUsedVersion", Self.alreadyReadChangeLogVersion,
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        // この試験は板一覧を実在板だけに置き換える。他の試験（としあき(仮)のチュートリアル板など）へ残さないよう、終了時に戻す。
+        defer {
+            app.terminate()
+            let restore = makeApplication()
+            let tutorial = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+                "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+            if let data = try? JSONEncoder().encode(tutorial), let text = String(data: data, encoding: .utf8),
+               let quoted = try? JSONEncoder().encode(text), let argument = String(data: quoted, encoding: .utf8) {
+                restore.launchArguments += [
+                    "-experience.active_profile", "futacha",
+                    "-experience.profile_generation", "1306",
+                    "-commonUsedVersion", Self.alreadyReadChangeLogVersion,
+                    "-update_check_enabled", "false",
+                    "-boards_json", argument
+                ]
+                restore.launch()
+                _ = restore.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 20)
+                restore.terminate()
+            }
+        }
+        app.launch()
+        let board = app.staticTexts["may"].firstMatch
+        guard board.waitForExistence(timeout: 20) else { throw XCTSkip("The board list did not appear.") }
+        board.tap()
+        // カタログの読み込み（通信）を待ち、最初のスレッドの辺りをタップする。
+        let deadline = Date().addingTimeInterval(45)
+        while Date() < deadline && app.buttons.count < 8 { Thread.sleep(forTimeInterval: 1) }
+        guard app.buttons.count >= 8 else { throw XCTSkip("The live catalog did not load (no network).") }
+        Thread.sleep(forTimeInterval: 2)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3)).tap()
+        XCTAssertTrue(app.otherElements["futacha-thread-content"].waitForExistence(timeout: 45), "The live thread did not open.")
+        let settings = app.buttons.matching(NSPredicate(format: "label == %@", "設定"))
+            .allElementsBoundByIndex.filter { $0.isHittable }.max { $0.frame.minY < $1.frame.minY }
+        XCTAssertNotNil(settings, "The thread action-bar settings command is missing.")
+        settings?.tap()
+        XCTAssertTrue(app.staticTexts["設定メニュー"].waitForExistence(timeout: 10))
+        let choose = app.buttons["形式を選んでスレッド保存"].firstMatch
+        // 一覧は画面より長いので、シートの中ほどから上へ引いて必要な行まで送る。
+        for _ in 0..<10 where !(choose.exists && choose.isHittable) {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            from.press(forDuration: 0.1, thenDragTo: to)
+        }
+        XCTAssertTrue(choose.waitForExistence(timeout: 5), app.debugDescription)
+        Thread.sleep(forTimeInterval: 1.0) // 慣性スクロールが止まってから押す
+        choose.tap()
+        if !app.buttons["MHT（1ファイル・サムネイル）"].firstMatch.waitForExistence(timeout: 4), choose.exists, choose.isHittable { choose.tap() }
+        XCTAssertTrue(app.buttons["MHT（1ファイル・サムネイル）"].firstMatch.waitForExistence(timeout: 10), "The save dialog does not offer MHT.\n" + app.debugDescription)
+        XCTAssertTrue(app.buttons["MHT（1ファイル・全画像）"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["保存形式"].exists)
+        mhtAttach(app, "futacha-mht-live-format")
+        guard save else { return }
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        app.buttons["MHT（1ファイル・サムネイル）"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["MHTの保存が完了しました"].waitForExistence(timeout: 240), "The live MHT save did not finish.\n" + app.debugDescription)
+        mhtAttach(app, "futacha-mht-live-done")
+        element("futacha-mht-close").tap()
+
+        // 板一覧へは、保存を終えたアプリを起動し直して戻る（ふたちゃは起動時に板一覧から始まる。カタログにも「メニュー」があり、戻る操作では判別しにくい）。
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["may"].firstMatch.waitForExistence(timeout: 20), "The board list did not appear after relaunch.")
+        app.buttons["メニュー"].firstMatch.tap()
+        let saved = app.staticTexts["保存済み"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5), app.debugDescription)
+        saved.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 20), "The saved live thread is not listed.")
+        mhtAttach(app, "futacha-mht-live-list")
+        element("futacha-mht-row").tap()
+        XCTAssertTrue(element("futacha-thread-content").waitForExistence(timeout: 30), "The viewer did not show the saved thread.")
+        mhtAttach(app, "futacha-mht-live-viewer")
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 15))
+        element("futacha-mht-delete").tap()
+        element("futacha-mht-delete-confirm").tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futacha-mht-row"), handler: nil)
+        waitForExpectations(timeout: 20)
+    }
+
+    /// としあき(仮)：保存メニューにMHTがあり、保存済みスレッドの「MHTファイル」欄から開くとタブになる。
+    func testToshiakiMhtSavesListsOpensAndDeletes() {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1303",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        board.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 15))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 15))
+
+        element("compat-toolbar-command-other").tap()
+        let page = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "ページを保存")).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 10), app.debugDescription)
+        page.tap()
+        let item = app.buttons["MHT(1ファイル・サムネイル)"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 10), "The save menu does not offer MHT.\n" + app.debugDescription)
+        XCTAssertTrue(app.buttons["MHT(1ファイル・全画像)"].firstMatch.exists)
+        mhtAttach(app, "toshiaki-mht-1-menu")
+        item.tap()
+        XCTAssertTrue(app.staticTexts["MHTの保存が完了しました"].waitForExistence(timeout: 60), "The MHT save did not finish.")
+        mhtAttach(app, "toshiaki-mht-2-done")
+        element("futacha-mht-close").tap()
+
+        // 板一覧へ戻り、その他 → 保存済みスレッド。
+        XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15))
+        app.buttons["その他"].firstMatch.tap()
+        let saved = app.staticTexts["保存済みスレッド"].firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        saved.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 20), "The MHT file is not listed.")
+        mhtAttach(app, "toshiaki-mht-3-list")
+        element("futacha-mht-row").tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 20), "The MHT file did not open as a thread.")
+        mhtAttach(app, "toshiaki-mht-4-opened")
+
+        // 後始末：ファイルを消す（開いたタブは次の試験が板一覧まで戻るので残してよい）。
+        _ = compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15)
+        app.buttons["その他"].firstMatch.tap()
+        app.staticTexts["保存済みスレッド"].firstMatch.tap()
+        XCTAssertTrue(element("futacha-mht-row").waitForExistence(timeout: 15))
+        element("futacha-mht-delete").tap()
+        element("futacha-mht-delete-confirm").tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futacha-mht-row"), handler: nil)
+        waitForExpectations(timeout: 20)
+    }
+
+    private func futaberTutorialApp(generation: String) throws -> XCUIApplication {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", generation,
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        return app
+    }
+
+    /// ふたばー風：カタログ検索に語を入れると「過去ログから検索」が出て、押すと結果のシートが開く（丸みのあるアイコンの下部バーも操作できる）。
+    func testFutaberCatalogSearchOffersTheArchiveSearch() throws {
+        let app = try futaberTutorialApp(generation: "1403")
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        mhtAttach(app, "futaber-catalog-rounded-icons")
+        XCTAssertTrue(element("futaber-search").waitForExistence(timeout: 10))
+        element("futaber-search").tap()
+        let field = element("futaber-search-field")
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "The search field did not open.")
+        field.tap()
+        field.typeText("テスト")
+        let pill = element("futaber-archive-search")
+        XCTAssertTrue(pill.waitForExistence(timeout: 10), "The archive search entry did not appear.")
+        mhtAttach(app, "futaber-archive-pill")
+        pill.tap()
+        let sheetTitle = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "過去ログ検索「テスト」")).firstMatch
+        XCTAssertTrue(sheetTitle.waitForExistence(timeout: 10), "The archive search sheet did not open.")
+        mhtAttach(app, "futaber-archive-sheet")
+    }
+
+    /// ふたばー風：スレッドの画像の長押しは、レスのメニューではなく画像だけのメニュー（画像検索・画像NG）を開く。
+    func testFutaberPictureLongPressOpensItsOwnMenu() throws {
+        let app = try futaberTutorialApp(generation: "1402")
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        // 画像のあるレスまで送る。
+        let picture = element("futaber-post-image")
+        for _ in 0..<10 where !(picture.exists && picture.isHittable) { app.swipeUp() }
+        Thread.sleep(forTimeInterval: 0.8) // スクロールの慣性が止まってから押す
+        XCTAssertTrue(picture.exists, "The thread shows no picture.")
+        picture.press(forDuration: 1.0)
+        XCTAssertTrue(element("futaber-action-image-search").waitForExistence(timeout: 10), "The picture menu did not open.")
+        XCTAssertTrue(element("futaber-action-image-ng").exists)
+        XCTAssertFalse(element("futaber-action-quote").exists, "The post menu opened instead of the picture menu.")
+        mhtAttach(app, "futaber-picture-menu")
+        element("futaber-action-image-search").tap()
+        XCTAssertTrue(app.staticTexts["検索先を選択してください。URL方式は画像URL、File方式は画像を検索先へ送信します。"].firstMatch.waitForExistence(timeout: 10), "The image search dialog did not open.")
+        mhtAttach(app, "futaber-picture-search")
+    }
+
+    /// ふたばー風の設定：共有ページ（保存先・キャッシュ）、ヘルプ、起動ロック、アプリアイコン、バージョンが並び、開ける。
+    func testFutaberSettingsOfferSharedPagesHelpLockAndIcon() throws {
+        let app = try futaberTutorialApp(generation: "1401")
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        // 行は縦に長い一覧の中にある。見えるまで、まず下へ、行き過ぎていたら上へ送る。
+        func reveal(_ identifier: String) -> XCUIElement {
+            let target = element(identifier)
+            for _ in 0..<8 where !(target.exists && target.isHittable) { app.swipeUp() }
+            for _ in 0..<12 where !(target.exists && target.isHittable) { app.swipeDown() }
+            Thread.sleep(forTimeInterval: 0.8) // スクロールの慣性が止まってから押す
+            return target
+        }
+        // 共有ページ（またはヘルプ）を開く。開かなければ、もう1度だけ押す。
+        func openSharedPage(_ identifier: String) -> Bool {
+            reveal(identifier).tap()
+            if app.buttons["戻る"].firstMatch.waitForExistence(timeout: 5) { return true }
+            reveal(identifier).tap()
+            return app.buttons["戻る"].firstMatch.waitForExistence(timeout: 8)
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-open-settings").waitForExistence(timeout: 20))
+        element("futaber-open-settings").tap()
+        XCTAssertTrue(element("futaber-settings").waitForExistence(timeout: 10))
+        for id in ["storage", "network", "background", "backup", "image-search", "media", "privacy", "ai", "help", "changelog", "license"] {
+            XCTAssertTrue(reveal("futaber-settings-row-\(id)").exists, "The settings row \(id) is missing.")
+        }
+        mhtAttach(app, "futaber-settings-more-rows")
+
+        // 共有の設定ページ（ふたちゃ・としあき(仮)と同じ値）。
+        // 共有ページには「戻る」がある（この設定画面の戻りは「‹ 設定」）。
+        XCTAssertTrue(openSharedPage("futaber-settings-row-storage"), "The shared page did not open.\n" + app.debugDescription)
+        XCTAssertTrue(app.staticTexts["保存先"].firstMatch.waitForExistence(timeout: 10), "The shared storage page did not open.")
+        mhtAttach(app, "futaber-settings-storage-page")
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futaber-settings").waitForExistence(timeout: 10))
+
+        // ヘルプ。
+        XCTAssertTrue(openSharedPage("futaber-settings-row-help"), "The help page did not open.\n" + app.debugDescription)
+        mhtAttach(app, "futaber-settings-help-page")
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(element("futaber-settings").waitForExistence(timeout: 10))
+
+        // 起動ロック：入力の検証だけ（設定はしない）。
+        reveal("futaber-settings-row-app-lock").tap()
+        XCTAssertTrue(element("futaber-lock-password").waitForExistence(timeout: 10))
+        element("futaber-lock-password").tap()
+        element("futaber-lock-password").typeText("abc")
+        mhtAttach(app, "futaber-settings-lock-dialog")
+        app.buttons["キャンセル"].firstMatch.tap()
+
+        // アプリアイコンの選択画面とバージョン表示。
+        reveal("futaber-settings-row-app-icon").tap()
+        XCTAssertTrue(element("futaber-settings-row-app-icon-Current").waitForExistence(timeout: 10))
+        app.buttons["‹ 設定"].firstMatch.tap()
+        XCTAssertTrue(reveal("futaber-settings-detail-version").exists)
+
+        // 拡張機能（元のアプリに無いもの。既定はすべてオフ）の設定ページ。
+        reveal("futaber-settings-row-extras").tap()
+        // 各スイッチは行全体が1つの要素（ラベルとスイッチは1つにまとまる）なので、識別子で探す。
+        XCTAssertTrue(element("futaber-settings-switch-ext-tree").waitForExistence(timeout: 10), "The extensions page did not open.")
+        XCTAssertTrue(element("futaber-settings-switch-ext-history").exists)
+        mhtAttach(app, "futaber-settings-extras-page")
+        app.buttons["‹ 設定"].firstMatch.tap()
+    }
+
+    /// 実在板（may）で：長押しの「スレッドをNG」でカタログから隠れ、設定の NGスレッド から外せる。更新ボタンの長押しも開く。
+    /// 通信が使えない時は飛ばす。実スレッドの読み取りだけで、投稿や削除はしない。
+    func testFutaberCatalogNgThreadOnALiveBoardAndRefreshLongPress() throws {
+        let app = makeApplication()
+        let boards = [["id": "may-b", "name": "may", "category": "may",
+            "url": "https://may.2chan.net/b/futaba.php", "description": "may"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber", "-experience.profile_generation", "1402",
+            "-update_check_enabled", "false", "-boards_json", boardArgument
+        ]
+        // 板一覧を実在板だけに置き換えるので、終了時にチュートリアル板へ戻す。
+        defer {
+            app.terminate()
+            let restore = makeApplication()
+            let tutorial = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+                "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+            if let data = try? JSONEncoder().encode(tutorial), let text = String(data: data, encoding: .utf8),
+               let quoted = try? JSONEncoder().encode(text), let argument = String(data: quoted, encoding: .utf8) {
+                restore.launchArguments += [
+                    "-experience.active_profile", "futacha", "-experience.profile_generation", "1403",
+                    "-commonUsedVersion", Self.alreadyReadChangeLogVersion, "-update_check_enabled", "false",
+                    "-boards_json", argument
+                ]
+                restore.launch()
+                _ = restore.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 20)
+                restore.terminate()
+            }
+        }
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 20) { element("futaber-drawer-board").tap() }
+        guard element("futaber-catalog-item").waitForExistence(timeout: 60) else { throw XCTSkip("The live catalog did not load (no network).") }
+
+        // 更新ボタンの長押し：戻る先も消えたスレもまだ無いが、シートは開く。
+        element("futaber-refresh").press(forDuration: 1.0)
+        XCTAssertTrue(element("futaber-action-catalog-back").waitForExistence(timeout: 10), "The refresh long-press sheet did not open.")
+        XCTAssertTrue(element("futaber-action-catalog-dropped").exists)
+        mhtAttach(app, "futaber-live-refresh-long-press")
+        element("futaber-action-cancel").tap()
+
+        // 長押しの「スレッドをNG」。
+        element("futaber-catalog-item").press(forDuration: 1.0)
+        XCTAssertTrue(element("futaber-action-ng-thread").waitForExistence(timeout: 10))
+        mhtAttach(app, "futaber-live-catalog-ng-thread-sheet")
+        element("futaber-action-ng-thread").tap()
+        Thread.sleep(forTimeInterval: 2)
+
+        // 設定 > NG > NGスレッド に1件。外すと0件に戻る。
+        element("futaber-open-settings").tap()
+        XCTAssertTrue(element("futaber-settings").waitForExistence(timeout: 10))
+        element("futaber-settings-row-ng").tap()
+        let detail = element("futaber-settings-detail-ng-catalog-threads")
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        XCTAssertEqual(detail.label, "1", "The NG thread was not registered.")
+        element("futaber-settings-row-ng-catalog-threads").tap()
+        XCTAssertTrue(element("futaber-ng-delete").waitForExistence(timeout: 10))
+        mhtAttach(app, "futaber-live-ng-threads-list")
+        element("futaber-ng-delete").tap()
+        XCTAssertTrue(element("futaber-ng-empty").waitForExistence(timeout: 10))
+    }
+
+    /// ふたばー風モードの画像一覧とビューア（共有画面）。操作メニューから開き、戻ってスレッドへ帰る。
+    func testFutaberGalleryAndViewerOpenFromTheThreadMenuAndReturn() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1202",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func galleryItems() -> XCUIElementQuery {
+            app.descendants(matching: .any).matching(identifier: "futaber-gallery-item")
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) {
+            element("futaber-drawer-board").tap()
+        }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread shows no post.")
+
+        element("futaber-thread-gallery").tap()
+        XCTAssertTrue(element("futaber-media").waitForExistence(timeout: 15), "The gallery did not open.")
+        XCTAssertTrue(galleryItems().firstMatch.waitForExistence(timeout: 20), "The gallery lists no image.")
+        attach("futaber-ios-gallery")
+
+        galleryItems().firstMatch.tap()
+        XCTAssertTrue(element("futaber-viewer-info").waitForExistence(timeout: 20), "The viewer did not open.")
+        attach("futaber-ios-viewer")
+
+        // ビューアの一覧ボタン → 一覧 → 一覧の戻る → スレッド。
+        element("futaber-viewer-grid").tap()
+        XCTAssertTrue(galleryItems().firstMatch.waitForExistence(timeout: 10), "Back from the viewer must return to the gallery.")
+        element("futaber-gallery-close").tap()
+        XCTAssertTrue(element("futaber-thread-list").waitForExistence(timeout: 10), "Back from the gallery must return to the thread.")
+        XCTAssertFalse(element("futaber-media").exists)
+    }
+
+    /// ふたばー風モードの目視確認用の巡回。各画面を撮影し、要素が無い場合は止まらず次へ進む（判定は最後の1か所だけ）。
+    func testFutaberExploratoryWalkCapturesEveryScreen() throws {
+        // 手動確認用の巡回。長く、途中で止まると設定を残すため、通常の実行には含めない。
+        // 実行するときは TEST_RUNNER_FUTABER_WALK=1 を付ける。
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["FUTABER_WALK"] == "1", "Set TEST_RUNNER_FUTABER_WALK=1 to run the walk.")
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1303",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        var missing: [String] = []
+        /// 要素を待ってタップする。無ければ記録して続ける。
+        func tap(_ identifier: String, timeout: TimeInterval = 10) {
+            let target = element(identifier)
+            if target.waitForExistence(timeout: timeout) { target.tap() } else { missing.append(identifier) }
+        }
+        func tapText(_ label: String, timeout: TimeInterval = 10) {
+            let target = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
+            if target.waitForExistence(timeout: timeout) { target.tap() } else { missing.append("text:" + label) }
+        }
+        func settle(_ seconds: TimeInterval = 1.0) { Thread.sleep(forTimeInterval: seconds) }
+
+        // 板一覧 → カタログ
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) {
+            attach("w01-drawer")
+            element("futaber-drawer-board").tap()
+        }
+        _ = element("futaber-catalog-item").waitForExistence(timeout: 15)
+        settle(); attach("w02-catalog")
+        tap("futaber-display-style"); settle(0.6); attach("w02b-style-menu")
+        tap("futaber-style-row1"); settle(1.0); attach("w02c-list-style")
+        tap("futaber-display-style"); settle(0.4)
+        tap("futaber-style-grid4"); settle(0.6)
+        tap("futaber-sort"); settle(0.6); attach("w02d-sort-menu")
+        tap("futaber-sort-Catalog"); settle(0.6)
+        // カタログの行の長押し → アクションシート
+        if element("futaber-catalog-item").exists {
+            element("futaber-catalog-item").press(forDuration: 1.0); settle(0.8); attach("w02e-catalog-sheet")
+            if element("futaber-action-cancel").exists { tap("futaber-action-cancel"); settle(0.4) } else { missing.append("catalog-sheet") }
+        }
+
+        // スレッド
+        tap("futaber-catalog-item")
+        _ = element("futaber-post").waitForExistence(timeout: 15)
+        settle(); attach("w03-thread")
+        // レスの長押し → シート（引用・コピー・そうだね・削除・通報）
+        if element("futaber-post").exists {
+            element("futaber-post").press(forDuration: 1.0); settle(0.8); attach("w03c-post-sheet")
+            if element("futaber-action-cancel").exists { tap("futaber-action-cancel"); settle(0.4) } else { missing.append("post-sheet") }
+        }
+        // 返信数をタップして吹き出し → 入れ子 → すべて閉じる
+        let replyCount = element("futaber-reply-count")
+        func visibleInList() -> Bool {
+            guard replyCount.exists else { return false }
+            let frame = replyCount.frame
+            return frame.minY > 130 && frame.maxY < app.frame.height - 170
+        }
+        for _ in 0..<30 where !visibleInList() {
+            // 小さく引き上げて、押せる位置に来るまで進める。
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.62))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.45))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            settle(0.3)
+        }
+        if visibleInList() {
+            replyCount.tap(); settle(0.8); attach("w03b-reply-bubble")
+            tap("futaber-quote-close-all"); settle(0.5)
+        } else { missing.append("futaber-reply-count") }
+
+        // 操作メニュー（全項目）
+        tap("futaber-thread-menu")
+        _ = element("futaber-operation-menu").waitForExistence(timeout: 10)
+        settle(); attach("w04-operation-menu")
+
+        // お気に入りに追加 → メニューの表示が変わる
+        tap("futaber-menu-favorite")
+        settle(0.5)
+        tap("futaber-thread-menu")
+        settle(); attach("w05-menu-after-favorite")
+        // 閉じる（メニューの外：画面上部）
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+        settle(0.5)
+
+        // 画像一覧（下部バー）→ 閉じる
+        tap("futaber-thread-gallery")
+        _ = element("futaber-gallery").waitForExistence(timeout: 15)
+        settle(2.0); attach("w05b-gallery")
+        let walkGalleryItem = app.descendants(matching: .any).matching(identifier: "futaber-gallery-item").firstMatch
+        if walkGalleryItem.exists {
+            walkGalleryItem.tap(); settle(2.0); attach("w05b2-viewer")
+            if element("futaber-viewer-grid").exists { tap("futaber-viewer-grid"); settle(0.8) } else { missing.append("viewer-grid") }
+        }
+        tap("futaber-gallery-close")
+        settle(0.8)
+
+        // タブに追加 → 帯
+        tap("futaber-thread-menu"); tap("futaber-menu-tab"); settle(1.0); attach("w05c-tab-strip")
+        if element("futaber-tab").exists {
+            element("futaber-tab").press(forDuration: 1.0); settle(0.8); attach("w05d-tab-sheet")
+            if element("futaber-action-tab-cancel").exists { tap("futaber-action-tab-cancel"); settle(0.4) } else { missing.append("tab-sheet") }
+        }
+
+        // MHTで保存 → 形式の選択 → 完了の案内（共有／とじる）
+        tap("futaber-thread-menu"); tap("futaber-menu-mht-save")
+        if element("futaber-mht-choose-thumbs").waitForExistence(timeout: 10) {
+            attach("w05e-mht-choose")
+            tap("futaber-mht-choose-thumbs")
+            if element("futaber-mht-close").waitForExistence(timeout: 30) {
+                attach("w05f-mht-done"); tap("futaber-mht-close"); settle(0.6)
+            } else { missing.append("mht-done") }
+        } else { missing.append("mht-choose") }
+
+        // 保存 → 形式 → HTMLのみ
+        tap("futaber-thread-menu")
+        tap("futaber-menu-save")
+        settle(); attach("w06-save-format")
+        tapText("HTMLのみ")
+        let done = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "保存先")).firstMatch
+        if done.waitForExistence(timeout: 60) { attach("w07-save-done") } else { missing.append("save-done") }
+        tapText("閉じる")
+        settle(0.5)
+
+        // 書き込み画面
+        tap("futaber-thread-menu")
+        tap("futaber-menu-write")
+        _ = element("futaber-post-comment").waitForExistence(timeout: 10)
+        settle(); attach("w08-write-screen")
+        let comment = element("futaber-post-comment")
+        if comment.exists { comment.tap(); comment.typeText("確認用の下書き") }
+        settle(); attach("w09-write-typed")
+        tap("futaber-post-close")
+        settle(0.5)
+
+        // 管理画面：保存箱 → 通知 → お気に入り → 履歴 → タブ
+        tap("futaber-manage")
+        settle(); attach("w10-manage-default")
+        tap("futaber-manage-category-SavedBox"); settle(1.5); attach("w11-manage-saved-box")
+        tap("futaber-manage-category-Notifications"); settle(); attach("w12-manage-notifications")
+        tap("futaber-watch-manage"); settle(1.5); attach("w13-watcher-manager")
+        tapText("閉じる"); settle(0.5)
+        tap("futaber-manage-category-Favorites"); settle(); attach("w14-manage-favorites")
+        tap("futaber-manage-category-Tabs"); settle(); attach("w15-manage-tabs")
+
+        // 保存箱から保存コピーを開く
+        tap("futaber-manage-category-SavedBox"); settle(1.5)
+        tap("futaber-saved-row")
+        _ = element("futaber-offline-notice").waitForExistence(timeout: 10)
+        settle(1.5); attach("w16-saved-copy")
+        // 保存コピーから戻ると元のスレッド、もう一度戻るとカタログ。
+        app.buttons["カタログへ戻る"].firstMatch.tap()
+        settle(0.8)
+        attach("w16b-after-copy")
+        if app.buttons["カタログへ戻る"].firstMatch.exists { app.buttons["カタログへ戻る"].firstMatch.tap() }
+        settle(0.8)
+
+        // 設定：暗いテーマ
+        _ = element("futaber-open-settings").waitForExistence(timeout: 10)
+        tap("futaber-open-settings")
+        settle(); attach("w17-settings")
+        tap("futaber-settings-row-thread"); settle(0.6); attach("w17b-settings-thread")
+        tap("futaber-settings-back"); settle(0.4)
+        tap("futaber-settings-row-theme"); settle(0.6); attach("w17c-settings-theme")
+        tap("futaber-settings-back"); settle(0.4)
+        tap("futaber-settings-row-ng"); settle(0.6); attach("w17d-settings-ng")
+        tap("futaber-settings-row-ng-res-words"); settle(0.6); attach("w17e-settings-ng-list")
+        tap("futaber-settings-back"); tap("futaber-settings-back"); settle(0.4)
+        tap("futaber-settings-row-theme"); settle(0.6)
+        tap("futaber-settings-row-theme-dark"); settle(0.5)
+        tap("futaber-settings-back"); tap("futaber-settings-done"); settle()
+        attach("w18-catalog-dark")
+        tap("futaber-catalog-item")
+        _ = element("futaber-post").waitForExistence(timeout: 10)
+        settle(); attach("w19-thread-dark")
+        tap("futaber-thread-menu"); settle(); attach("w20-menu-dark")
+
+        // 後始末：タブを外し、お気に入りを解除し、テーマを端末の設定へ戻す。
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap(); settle(0.5)
+        tap("futaber-thread-menu"); tap("futaber-menu-tab"); settle(0.5)
+        tap("futaber-thread-menu"); tap("futaber-menu-favorite"); settle(0.5)
+        app.buttons["カタログへ戻る"].firstMatch.tap(); settle(0.8)
+        tap("futaber-open-settings"); settle(0.8)
+        tap("futaber-settings-row-theme"); tap("futaber-settings-row-theme-system"); settle(0.5)
+        tap("futaber-settings-back"); tap("futaber-settings-done")
+
+        // 見つからなかった要素は最後にまとめて報告する。
+        XCTAssertTrue(missing.isEmpty, "Elements not found during the walk: \(missing)")
+    }
+
+    /// 返信数をタップすると返信先の吹き出しが開き、下部バーが「閉じる」だけになる（iOSの実操作）。
+    func testFutaberReplyCountOpensTheBubbleAndTheBarOnlyCloses() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1304",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+
+        let replyCount = element("futaber-reply-count")
+        // 下部バーの裏にある要素も「押せる」と報告されるため、リストの見える範囲に入るまで進める。
+        func visibleInList() -> Bool {
+            guard replyCount.exists else { return false }
+            let frame = replyCount.frame
+            return frame.minY > 130 && frame.maxY < app.frame.height - 170
+        }
+        for _ in 0..<30 where !visibleInList() {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.62))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.45))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertTrue(visibleInList(), "No reply count could be reached.")
+        attach("bubble-1-before")
+        replyCount.tap()
+        let opened = element("futaber-quote-card").waitForExistence(timeout: 8)
+        attach("bubble-2-after")
+        if !opened { add(XCTAttachment(string: app.debugDescription)) }
+        XCTAssertTrue(opened, "The reply bubble did not open.")
+        XCTAssertTrue(element("futaber-quote-close-all").waitForExistence(timeout: 5), "The bar must only close the bubbles.")
+        element("futaber-quote-close-all").tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element("futaber-quote-card"), handler: nil)
+        waitForExpectations(timeout: 8)
     }
 
     func testToshiakiCompatibilityProfileReachesForeground() {
@@ -2297,11 +3177,52 @@ final class IosAppUITests: XCTestCase {
         )
     }
 
-    func testFutachaThreadExposesReadAloudPlaybackControls() {
+    func testFutachaThreadExposesReadAloudPlaybackControls() throws {
+        try verifyFutachaReadAloudControls(backgroundPlayback: false)
+    }
+
+    func testFutachaSpeechAdvancesInBackground() throws {
+#if targetEnvironment(simulator)
+        // Probe Apple's engine independently: some Simulator runtimes lack Japanese voice resources.
+        let synthesizer = AVSpeechSynthesizer()
+        let finished = XCTestExpectation(description: "Native Japanese voice can speak")
+        let delegate = SpeechProbeDelegate(finished: finished)
+        synthesizer.delegate = delegate
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback)
+        try session.setActive(true)
+        let utterance = AVSpeechUtterance(string: "テスト")
+        utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
+        synthesizer.speak(utterance)
+        let result = XCTWaiter.wait(for: [finished], timeout: 15)
+        synthesizer.stopSpeaking(at: .immediate)
+        try session.setActive(false, options: .notifyOthersOnDeactivation)
+        withExtendedLifetime(delegate) {}
+        guard result == .completed else {
+            throw XCTSkip("The Simulator's native Japanese speech engine did not finish a short utterance; verify background audio on a runtime with working voice assets or an iPhone.")
+        }
+#endif
+        try verifyFutachaReadAloudControls(backgroundPlayback: true)
+    }
+
+    private final class SpeechProbeDelegate: NSObject, AVSpeechSynthesizerDelegate {
+        let finished: XCTestExpectation
+        init(finished: XCTestExpectation) { self.finished = finished }
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+            finished.fulfill()
+        }
+    }
+
+    private func verifyFutachaReadAloudControls(backgroundPlayback: Bool) throws {
         let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+                       "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-boards_json", boardArgument, "-update_check_enabled", "false"]
         app.launchArguments += [
             "-experience.active_profile", "futacha",
-            "-experience.profile_generation", "1010"
+            "-experience.profile_generation", "1143"
         ]
         app.launch()
 
@@ -2337,18 +3258,90 @@ final class IosAppUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", "表示位置 (")
         ).firstMatch
         XCTAssertTrue(visiblePostSeek.exists, "The visible-post seek control is missing.")
+        guard backgroundPlayback else { return }
+        app.buttons["再生"].tap()
+        let pause = app.buttons["一時停止"]
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: pause
+        )], timeout: 10), .completed)
+        let progress = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "進捗 ")).firstMatch
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in progress.exists && !progress.label.hasPrefix("進捗 0 /") }, object: nil
+        )], timeout: 45), .completed, "The installed Japanese voice must finish the first utterance.")
+        let beforeBackground = progress.label
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
+        Thread.sleep(forTimeInterval: 10)
+        app.activate()
+        XCTAssertTrue(pause.isEnabled, "Read-aloud must continue when the app moves to the background.")
+        XCTAssertNotEqual(progress.label, beforeBackground, "Speech must advance through replies while backgrounded.")
+        app.buttons["停止"].tap()
     }
 
-    func testToshiakiThreadExposesReadAloudCommand() {
+    func testToshiakiPostMenuPreviewsBodyBeforeOptionalNgReport() throws {
         let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+                       "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-boards_json", boardArgument, "-update_check_enabled", "false",
+                                "-experience.active_profile", "futacha", "-experience.profile_generation", "1145",
+                                "-privacy_filter_enabled", "false"]
+        app.launch()
+        XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 15))
+        app.buttons["メニュー"].tap()
+        app.staticTexts["設定"].firstMatch.tap()
+        // The display choice lives inside the collapsible 表示 group.
+        app.staticTexts["表示"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["thread-display-quick-setting"].exists)
+        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["としあき(仮)モード"].firstMatch.tap()
+        app.buttons["切り替える"].tap()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 10))
+        board.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 10))
+        let body = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "ここは操作を試すサンプル板です")).firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        body.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 30, dy: 20)).press(forDuration: 1.0)
+        let preview = app.descendants(matching: .any)["post-action-preview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "同梱した見本")).count >= 1)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "thread-feedback-post-preview-ios"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let report = app.buttons["通報"].firstMatch
+        XCTAssertTrue(report.isHittable)
+        report.tap()
+        XCTAssertTrue(app.staticTexts["このレスをNGにも登録"].waitForExistence(timeout: 5))
+        // Never send a real deletion request from a UI test.
+        app.buttons["キャンセル"].tap()
+    }
+
+    func testToshiakiThreadExposesReadAloudCommand() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+                       "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-boards_json", boardArgument, "-update_check_enabled", "false"]
         app.launchArguments += [
-            "-experience.active_profile", "toshiaki_compat",
-            "-experience.profile_generation", "1011"
+            "-experience.active_profile", "futacha",
+            "-experience.profile_generation", "1143"
         ]
         app.launch()
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
-        let board = boardCard(in: app, url: "https://img.2chan.net/t/")
+        // Switching through settings imports the modern tutorial even when a prior
+        // test has already bootstrapped an empty compatibility board list.
+        app.buttons["メニュー"].tap()
+        app.staticTexts["設定"].firstMatch.tap()
+        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["としあき(仮)モード"].firstMatch.tap()
+        app.buttons["切り替える"].tap()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
         XCTAssertTrue(board.waitForExistence(timeout: 10))
         board.tap()
         app.buttons.matching(
@@ -2373,13 +3366,24 @@ final class IosAppUITests: XCTestCase {
         let speechDialog = app.descendants(matching: .any)["compat-thread-speech-dialog"]
         XCTAssertTrue(
             speechDialog.waitForExistence(timeout: 10),
-            "The reference-compatible full-width speech dialog did not open."
+            "The compatibility speech controls did not open."
         )
-        XCTAssertFalse(
-            app.staticTexts["読み上げプレーヤー"].exists,
-            "The compatibility mode must use the reference titleless speech dialog."
-        )
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.10)).tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "compat-speech-position").firstMatch.exists)
+        XCTAssertTrue(app.buttons["前のレス"].exists)
+        XCTAssertTrue(app.buttons["次のレス"].exists)
+        XCTAssertTrue(app.buttons["表示中のレスから"].exists)
+        let pause = app.buttons["一時停止"].firstMatch
+        if pause.exists { pause.tap() }
+        XCTAssertTrue(app.buttons["再開"].waitForExistence(timeout: 5))
+        let slider = app.descendants(matching: .any).matching(identifier: "compat-speech-position").firstMatch
+        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["前のレス"].isEnabled)
+        XCTAssertTrue(app.buttons["次のレス"].isEnabled)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "compat-speech-position-controls"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.buttons["停止して閉じる"].tap()
         XCTAssertFalse(
             speechDialog.waitForExistence(timeout: 2),
             "Closing the reference speech dialog did not stop and dismiss it."
@@ -3298,6 +4302,74 @@ final class IosAppUITests: XCTestCase {
         verifyPostingMedia(compat: true, build: true)
     }
 
+    func testCompatPostToolbarStaysAttachedToKeyboard() {
+        verifyCompatPostToolbarKeyboardLayout(build: true)
+    }
+
+    func testCompatReplyToolbarStaysAttachedToKeyboard() {
+        verifyCompatPostToolbarKeyboardLayout(build: false)
+    }
+
+    private func verifyCompatPostToolbarKeyboardLayout(build: Bool) {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1118",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15))
+        board.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
+        if build {
+            app.buttons["スレ立て"].firstMatch.tap()
+        } else {
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+            let reply = app.buttons["書き込み"].firstMatch
+            XCTAssertTrue(reply.waitForExistence(timeout: 10))
+            reply.tap()
+        }
+        let comment = app.textViews["compat-post-comment-field"]
+        XCTAssertTrue(comment.waitForExistence(timeout: 10))
+        comment.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "Enable the Simulator software keyboard.")
+        let send = app.buttons["送信する"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "compat-post-keyboard-toolbar"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertTrue(send.isHittable)
+        assertPostToolbarAboveKeyboard(send, keyboard: keyboard)
+        comment.typeText("Keyboard layout regression")
+        XCTAssertTrue(comment.isHittable)
+        assertPostToolbarAboveKeyboard(send, keyboard: keyboard)
+        let name = app.descendants(matching: .any).matching(identifier: "compat-post-name-field").firstMatch
+        XCTAssertTrue(name.exists)
+        name.tap()
+        name.typeText("Name")
+        assertPostToolbarAboveKeyboard(send, keyboard: keyboard)
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue((build ? app.otherElements["compat-catalog-grid"] : app.otherElements["compat-thread-pager"])
+            .waitForExistence(timeout: 10))
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: keyboard
+        )], timeout: 5), .completed)
+    }
+
+    private func assertPostToolbarAboveKeyboard(_ send: XCUIElement, keyboard: XCUIElement,
+                                               file: StaticString = #filePath, line: UInt = #line) {
+        // The Japanese keyboard's accessibility frame excludes its candidate
+        // strip (41pt on iOS 26.5). A screen capture also verifies that the bar
+        // touches that strip; the original double avoidance left a 343pt gap.
+        let gap = keyboard.frame.minY - send.frame.maxY
+        XCTAssertGreaterThanOrEqual(gap, -8, "Send must remain above the keyboard.", file: file, line: line)
+        XCTAssertLessThanOrEqual(gap, 60, "The toolbar floated away from the keyboard.", file: file, line: line)
+    }
+
     private func verifyPostingMedia(compat: Bool, build: Bool) {
         let app = makeApplication()
         app.launchArguments += [
@@ -3672,6 +4744,178 @@ final class IosAppUITests: XCTestCase {
         )
     }
 
+    func testFutachaPastesClipboardImage() { verifyClipboardImagePaste(compat: false) }
+    func testToshiakiPastesClipboardImage() { verifyClipboardImagePaste(compat: true) }
+
+    private func verifyClipboardImagePaste(compat: Bool) {
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", compat ? "toshiaki_compat" : "futacha",
+            "-experience.profile_generation", compat ? "2402" : "2401", "-update_check_enabled", "false"]
+        app.launch()
+        if compat {
+            let board = compatibilityBoardCardAfterUnwinding(in: app)
+            XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+            board.tap()
+        } else {
+            ensureCompactHeaderTutorialBoard(in: app).tap()
+        }
+        let build = app.buttons[compat ? "スレ立て" : "スレッド作成"].firstMatch
+        XCTAssertTrue(build.waitForExistence(timeout: 10), app.debugDescription)
+        build.tap()
+        let body = app.textViews[compat ? "compat-post-comment-field" : "コメント"].firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 10), app.debugDescription)
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16))
+        let image = renderer.image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        }
+        UIPasteboard.general.setData(image.pngData()!, forPasteboardType: "public.png")
+        app.buttons["その他"].firstMatch.tap()
+        let paste = app.buttons["画像を貼り付け"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), app.debugDescription)
+        paste.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allowPredicate = NSPredicate(format: "label == %@ OR label == %@", "ペーストを許可", "Allow Paste")
+        let allow = springboard.buttons.matching(allowPredicate).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let localAllow = app.buttons.matching(allowPredicate).firstMatch
+        if localAllow.exists { localAllow.tap() }
+        if compat {
+            XCTAssertTrue(app.buttons["添付削除"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        } else {
+            XCTAssertTrue(app.staticTexts["clipboard.png"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        }
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = compat ? "toshiaki-image-paste" : "futacha-image-paste"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testFutachaSavesImageToPhotos() { verifySaveToPhotos(compat: false) }
+    func testToshiakiSavesImageToPhotos() { verifySaveToPhotos(compat: true) }
+
+    private func verifySaveToPhotos(compat: Bool) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let pendingAllow = springboard.buttons["許可"].firstMatch
+        if pendingAllow.exists { pendingAllow.tap() }
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", compat ? "toshiaki_compat" : "futacha", "-experience.profile_generation", compat ? "2302" : "2301", "-update_check_enabled", "false", "-privacy_filter_enabled", "false"]
+        app.launch()
+        if compat {
+            let board = compatibilityBoardCardAfterUnwinding(in: app)
+            XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+            board.tap()
+            let thread = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch
+            XCTAssertTrue(thread.waitForExistence(timeout: 10))
+            thread.tap()
+            let top = app.buttons["ページ最上部へ"].firstMatch
+            XCTAssertTrue(top.waitForExistence(timeout: 10))
+            top.tap()
+            let image = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "No.", "の画像")).firstMatch
+            XCTAssertTrue(image.waitForExistence(timeout: 10), app.debugDescription)
+            image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        } else {
+            openCompactHeaderTutorial(in: app)
+            let image = app.images["添付画像"].firstMatch
+            XCTAssertTrue(image.waitForExistence(timeout: 10), app.debugDescription)
+            image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        let save = app.buttons[compat ? "保存する" : "保存"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10), app.debugDescription)
+        save.tap()
+        let photos = app.buttons["写真に保存"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["ファイルに保存"].exists)
+        photos.tap()
+        let allow = springboard.buttons.matching(NSPredicate(format: "label == %@ OR label == %@ OR label CONTAINS %@", "許可", "Allow", "Add Photos Only")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let done = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "写真に保存しました")).firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 20), app.debugDescription)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = compat ? "toshiaki-photo-save" : "futacha-photo-save"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testFutachaPrivacyFilterAndPrivateTitle() {
+        verifyPrivacyDisplay(compat: false)
+    }
+
+    func testToshiakiPrivacyFilterSettings() {
+        verifyPrivacyDisplay(compat: true)
+    }
+
+    private func verifyPrivacyDisplay(compat: Bool) {
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", compat ? "toshiaki_compat" : "futacha",
+                                "-experience.profile_generation", "1141", "-update_check_enabled", "false"]
+        app.launch()
+        func tagged(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<20 {
+                let frame = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 55)
+                if element.exists && element.isHittable && frame.contains(element.frame) { return }
+                let up = !element.exists || element.frame.midY > frame.midY
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.75 : 0.30))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.30 : 0.75)), withVelocity: .slow, thenHoldForDuration: 0.6)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+        func tap(_ element: XCUIElement) {
+            reveal(element)
+            // Compose can discard a tap while its list is still decelerating.
+            Thread.sleep(forTimeInterval: 1.0)
+            element.tap()
+
+        }
+        if compat {
+            XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15))
+            app.buttons["その他"].firstMatch.tap()
+        } else {
+            XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 20))
+            app.buttons["メニュー"].tap()
+        }
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        if !compat {
+            let section = tagged("settings-section-プライバシー・セキュリティ")
+            tap(section)
+        }
+        let privacy = compat ? tagged("compat-setting-プライバシー表示") : app.buttons["プライバシー表示"].firstMatch
+        tap(privacy)
+        let toggle = tagged("privacy-mode-toggle")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        if !toggle.isSelected && toggle.value as? String != "1" { tap(toggle) }
+        let mesh = tagged("privacy-filter-MESH")
+        tap(mesh)
+        let title = tagged("privacy-title-HIDDEN")
+        tap(title)
+        let settingsScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        settingsScreenshot.name = "privacy-settings-\(compat ? "compat" : "futacha")"
+        settingsScreenshot.lifetime = .keepAlways
+        add(settingsScreenshot)
+        app.buttons["戻る"].firstMatch.tap()
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(tagged("privacy-screen-filter").waitForExistence(timeout: 10))
+        if !compat {
+            ensureCompactHeaderTutorialBoard(in: app).tap()
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+            let heading = tagged("futacha-thread-title")
+            XCTAssertTrue(heading.waitForExistence(timeout: 10))
+            XCTAssertEqual(heading.label, "スレッド")
+        }
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "privacy-screen-\(compat ? "compat" : "futacha")"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(tagged("privacy-screen-filter").waitForExistence(timeout: 15), "The privacy toggle must survive relaunch.")
+    }
+
     func testBothModesOpenPatrolSettingsAndSearchHelp() throws {
         for compat in [false, true] {
             let app = makeApplication()
@@ -3812,6 +5056,47 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["設定"].waitForExistence(timeout: 5),
             "Cancelling the mode switch did not keep the user in settings."
         )
+    }
+
+    /// ふたちゃの設定の「モード」にふたばー風モードが並び、選んで切り替えるとふたばー風の画面（板ドロワー／カタログ）が開く。
+    func testFutachaSettingsOffersAndSwitchesToFutaberMode() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futacha",
+            "-experience.profile_generation", "1307",
+            "-commonUsedVersion", Self.alreadyReadChangeLogVersion,
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let menu = app.buttons["メニュー"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 15))
+        menu.tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        let mode = app.staticTexts["モード"].firstMatch
+        XCTAssertTrue(mode.waitForExistence(timeout: 10))
+        mode.tap()
+        XCTAssertTrue(app.staticTexts["としあき(仮)モード"].firstMatch.waitForExistence(timeout: 10))
+        let futaber = app.staticTexts["ふたばー風モード"].firstMatch
+        XCTAssertTrue(futaber.waitForExistence(timeout: 10), "ふたばー風モード is not offered in the mode settings.\n" + app.debugDescription)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "開発版のみ")).firstMatch.exists,
+                       "The development-only notice must be gone.")
+        mhtAttach(app, "futaber-mode-offered-in-settings")
+        futaber.tap()
+        XCTAssertTrue(app.staticTexts["ふたばー風モードへ切り替えますか？"].waitForExistence(timeout: 5))
+        app.buttons["切り替える"].tap()
+        let drawerBoard = app.descendants(matching: .any).matching(identifier: "futaber-drawer-board").firstMatch
+        let catalog = app.descendants(matching: .any).matching(identifier: "futaber-catalog-grid").firstMatch
+        let arrived = drawerBoard.waitForExistence(timeout: 30) || catalog.waitForExistence(timeout: 5)
+        XCTAssertTrue(arrived, "The switch did not open the ふたばー風 screens.\n" + app.debugDescription)
+        mhtAttach(app, "futaber-mode-after-switch")
     }
 
     func testIosReviewCanReportAndBlockFromPostMenu() {

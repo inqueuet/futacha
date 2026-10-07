@@ -513,6 +513,7 @@ internal fun buildFutachaImageLoader(
         // every http(s) URL, so platform fetchers must come first: on iOS the
         // video-frame fetcher for remote MP4/WebM thumbnails was never reached.
         // They only claim their own URLs (videos, local files, fixtures).
+        add(TutorialImageFetcherFactory())
         addPlatformImageComponents()
         // A manually registered factory takes precedence over Coil's service-loaded
         // default. Reusing the app client also applies Android's main-thread-safe

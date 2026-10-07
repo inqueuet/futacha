@@ -18,6 +18,9 @@ import kotlin.time.Clock
 
 private const val MAX_COMPAT_LEGACY_STATE_BYTES = 32L * 1024L * 1024L
 private const val CLOSED_BATCH_CACHE_KEY = "closedBatch"
+private const val UNREADABLE_COMPATIBILITY_DATABASE_FILE_PREFIX = "unreadable_compatibility_database-"
+private const val UNREADABLE_COMPATIBILITY_DATABASE_PREFIX = "compatibility/$UNREADABLE_COMPATIBILITY_DATABASE_FILE_PREFIX"
+private const val MAX_UNREADABLE_COMPATIBILITY_DATABASE_COPIES = 3
 private const val DEFAULT_MAX_THREAD_SNAPSHOTS = 512
 private const val PREFERENCE_STATE_RECORD = "pref"
 private const val ARCHIVE_STATE_RECORD = "archive"
@@ -462,6 +465,41 @@ internal class IosCompatibilityStore(
         true
     }
 
+    /**
+     * One-transaction form of [applyCatalogReplyCountsOneByOne]: the same per-row rules
+     * (counts only grow, missing rows and tombstoned history are never created, key/URL/anchor
+     * stay as stored, rows keep their position), but the whole state is persisted once.
+     */
+    override suspend fun applyCatalogReplyCounts(updates: List<CompatCatalogReplyCountUpdate>): Int = mutate {
+        if (updates.isEmpty()) return@mutate 0
+        val tabs = it.tabs.toMutableList()
+        val history = it.history.toMutableList()
+        var changedTabs = 0
+        var historyChanged = false
+        for (update in updates) {
+            val tabIndex = tabs.indexOfFirst { tab -> tab.key == update.tabKey }
+            if (tabIndex >= 0 && tabs[tabIndex].replyCount < update.replyCount) {
+                val current = tabs[tabIndex]
+                tabs[tabIndex] = current.copy(replyCount = update.replyCount).pinnedTo(current)
+                changedTabs++
+            }
+            if (update.canonicalUrl in it.historyTombstones) continue
+            val historyIndex = history.indexOfFirst { entry -> entry.canonicalUrl == update.canonicalUrl }
+            if (historyIndex >= 0 && history[historyIndex].replyCount < update.replyCount) {
+                val current = history[historyIndex]
+                history[historyIndex] = current.copy(replyCount = update.replyCount, canonicalUrl = current.canonicalUrl)
+                historyChanged = true
+            }
+        }
+        if (changedTabs > 0 || historyChanged) {
+            state = it.copy(
+                tabs = if (changedTabs > 0) tabs else it.tabs,
+                history = if (historyChanged) history else it.history
+            )
+        }
+        changedTabs
+    }
+
     override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate {
         val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
         state = it.copy(
@@ -692,7 +730,9 @@ internal class IosCompatibilityStore(
             existing.boardKey == record.boardKey && existing.sort == record.sort && existing.revision == record.revision
         } + record).groupBy { existing -> existing.boardKey to existing.sort }
             .values.flatMap { records -> records.sortedByDescending(CatalogSnapshotRecord::revision).take(MAX_CATALOG_GENERATIONS) }
+        val replyCounts = catalogReplyCountsByUrl(snapshot.items)
         state = it.copy(
+            tabs = it.tabs.map { tab -> tab.withCatalogReplyCount(replyCounts, snapshot.fetchedAtEpochMillis) },
             catalogSnapshots = trimmedSnapshots,
             droppedItems = dropped.groupBy { row -> row.boardKey }
                 .values.flatMap { rows -> rows.sortedByDescending(DroppedCatalogRecord::lastSeenAtEpochMillis).take(MAX_DROPPED_ITEMS) }
@@ -1131,6 +1171,36 @@ internal class IosCompatibilityStore(
         }
     }
 
+    /**
+     * Copies the unreadable database file (and its write-ahead log) beside it
+     * before the storage is recreated; returns the copy's path, or null when
+     * there is no file. The copy is a hard link where the file system allows
+     * it, so a large database is not read into memory. Only the newest few
+     * copies are kept.
+     */
+    private suspend fun preserveUnreadableCompatibilityDatabase(): String? {
+        val source = database.storagePath
+        if (!fileSystem.exists(source)) return null
+        database.close()
+        val target = "$UNREADABLE_COMPATIBILITY_DATABASE_PREFIX${nowMillis()}.db"
+        fileSystem.linkOrCopy(source, target).getOrThrow()
+        if (fileSystem.exists("$source-wal")) {
+            fileSystem.linkOrCopy("$source-wal", "$target-wal").getOrThrow()
+        }
+        runCatching {
+            fileSystem.listFiles("compatibility")
+                .map { it.substringAfterLast('/') }
+                .filter { it.startsWith(UNREADABLE_COMPATIBILITY_DATABASE_FILE_PREFIX) && it.endsWith(".db") }
+                .sorted()
+                .dropLast(MAX_UNREADABLE_COMPATIBILITY_DATABASE_COPIES)
+                .forEach { name ->
+                    fileSystem.delete("compatibility/$name")
+                    fileSystem.delete("compatibility/$name-wal")
+                }
+        }
+        return target
+    }
+
     private suspend fun ensureInitializedLocked() {
         if (initialized) return
         fileSystem.createDirectory("compatibility").getOrThrow()
@@ -1145,7 +1215,14 @@ internal class IosCompatibilityStore(
                     "Resetting unreadable compatibility database",
                     error
                 )
+                // Keep what is on disk before it is deleted (the database holds
+                // drafts, delete keys and tabs). Fails initialization when the copy
+                // cannot be made, like an undecodable payload below.
+                val backupPath = preserveUnreadableCompatibilityDatabase()
                 database.deleteStorage()
+                if (backupPath != null) {
+                    postUnreadableCompatibilityPayloadNotice(fileSystem, backupPath, location = "アプリ内の保存領域")
+                }
                 null
             } else {
                 // A transient I/O or permission failure must not be presented as

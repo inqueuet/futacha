@@ -280,7 +280,7 @@ import com.valoser.futacha.shared.compat.compatImageNgDisplayTitle
 import com.valoser.futacha.shared.compat.compatImageNgFirstUrl
 import com.valoser.futacha.shared.compat.compatImageNgKinds
 import com.valoser.futacha.shared.compat.compatImageNgManagementRules
-import com.valoser.futacha.shared.compat.compatImageNgMatchesSearch
+import com.valoser.futacha.shared.compat.CompatNgRuleSearchIndex
 import com.valoser.futacha.shared.compat.CompatOtherMenuItem
 import com.valoser.futacha.shared.compat.CompatOtherMenuRoute
 import com.valoser.futacha.shared.compat.CompatHost
@@ -569,19 +569,18 @@ internal fun CompatNgRuleManagementDialog(
     var editValidationMessage by remember { mutableStateOf<String?>(null) }
     val clipboard = LocalClipboardManager.current
     val openUrl = rememberUrlLauncher()
-    val filteredRules = remember(rules, searchQuery, isImageReference) {
-        val query = normalizeCompatSearchText(searchQuery)
-        if (isImageReference) {
-            rules.filter { rule -> compatImageNgMatchesSearch(rule, searchQuery) }
-        } else if (query.isBlank()) rules else rules.filter { rule ->
-            normalizeCompatSearchText(rule.normalizedValue).contains(query) ||
-                normalizeCompatSearchText(rule.memo).contains(query) ||
-                normalizeCompatSearchText(
-                    if (isThreadWordReference) compatThreadReferenceDisplayValue(rule)
-                    else rule.normalizedValue
-                ).contains(query) ||
-                normalizeCompatSearchText(rule.imageUrl.orEmpty()).contains(query)
-        }
+    // Normalized search fields are derived once per rule list, and the query is applied shortly
+    // after typing stops, so a key stroke no longer re-normalizes every rule on the main thread.
+    val ruleSearchIndex = remember(rules, isImageReference, isThreadWordReference) {
+        CompatNgRuleSearchIndex(rules, isImageReference, isThreadWordReference)
+    }
+    var appliedSearchQuery by remember { mutableStateOf(searchQuery) }
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotBlank() && appliedSearchQuery.isNotBlank()) delay(150)
+        appliedSearchQuery = searchQuery
+    }
+    val filteredRules = remember(ruleSearchIndex, appliedSearchQuery) {
+        ruleSearchIndex.filter(appliedSearchQuery)
     }
     fun hasReferenceDuplicate(value: String, global: Boolean, editingId: String? = null): Boolean = when {
         isCatalogWordReference -> hasCompatCatalogManagementDuplicate(rules, value, editingId)

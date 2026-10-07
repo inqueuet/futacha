@@ -42,7 +42,18 @@ internal object MockBoardData {
     suspend fun catalogItems(): List<CatalogItem> = catalogItemsDeferred.await()
 
     private val baseThreadPageDeferred = scope.async(start = CoroutineStart.LAZY) {
-        ThreadHtmlParserCore.parseThread(exampleThreadHtml)
+        val page = ThreadHtmlParserCore.parseThread(exampleThreadHtml)
+        page.copy(posts = page.posts.mapIndexed { index, post ->
+            if (index != 0) post else post.copy(messageHtml = """
+                チュートリアル<br>
+                ここは操作を試すサンプル板です。画像はアプリに同梱した見本です。<br><br>
+                板一覧の追加メニューから、見たい板のURLを登録してください。<br>
+                カタログのグリッド表示は格子状、リスト表示は縦一列です。<br><br>
+                ふたちゃ：設定 → スレ表示モードで通常／ツリー表示を選べます。<br>
+                としあき（仮）：設定 → スレッド画面 → レスの表示形式で選べます。<br>
+                設定 → 操作 → レスのタップ操作で、関連レスをタップで開く方式も選べます。
+            """.trimIndent())
+        })
     }
     private val threadPages: MutableMap<String, ThreadPage> = mutableMapOf(
         // Placeholder; actual entries filled after first parse

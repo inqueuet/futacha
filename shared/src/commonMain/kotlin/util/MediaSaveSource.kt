@@ -110,6 +110,7 @@ internal suspend fun <T> withOriginalMediaSaveSourceOrElse(
     }
 }
 
+@OptIn(org.jetbrains.compose.resources.ExperimentalResourceApi::class)
 internal suspend fun <T> withMediaSaveSource(
     httpClient: HttpClient,
     fileSystem: FileSystem,
@@ -118,6 +119,18 @@ internal suspend fun <T> withMediaSaveSource(
     block: suspend (MediaSaveSource) -> T
 ): T {
     require(isSupportedMediaSaveSource(url)) { "このメディアURLは保存に対応していません" }
+    if (com.valoser.futacha.shared.ui.image.isTutorialImageUrl(url)) {
+        val bytes = futacha.shared.generated.resources.Res.readBytes("files/tutorial_sample.png")
+        var offset = 0
+        return block(MediaSaveSource(ContentType.Image.PNG, bytes.size.toLong()) { buffer ->
+            val count = minOf(buffer.size, bytes.size - offset)
+            if (count == 0) -1 else {
+                bytes.copyInto(buffer, 0, offset, offset + count)
+                offset += count
+                count
+            }
+        })
+    }
     if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) {
         val path = localMediaSavePath(url)
         val size = fileSystem.getFileSize(path)

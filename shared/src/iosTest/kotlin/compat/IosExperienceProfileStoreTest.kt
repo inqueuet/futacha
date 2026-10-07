@@ -442,6 +442,11 @@ class IosExperienceProfileStoreTest {
                         replyCount = 9
                     )
                 )
+                override suspend fun getCatalogWithSettings(
+                    board: String,
+                    mode: CatalogMode,
+                    settings: com.valoser.futacha.shared.model.CatalogFetchSettings
+                ): List<CatalogItem> = getCatalog(board, mode)
             }
 
             val result = refreshCompatTabsInBackground(

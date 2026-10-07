@@ -141,7 +141,9 @@ private suspend fun readImageDataFromUriWithinTimeout(
         }
 
         Logger.d("ImagePicker", "Successfully read image: $fileName (${bytes.size / 1024}KB)")
-        ImageData(bytes, fileName)
+        // Extension-less display names (e.g. "1000012345") would otherwise be rejected as
+        // an unsupported format even when the content is a JPEG/PNG/GIF/WebP.
+        com.valoser.futacha.shared.ui.compat.compatPostAttachmentWithDetectedExtension(ImageData(bytes, fileName))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

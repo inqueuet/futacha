@@ -50,6 +50,7 @@ class CompatThreadFetchTest {
             shouldFetchCompatThread(manual = false, refreshOnActivation = false, cachedPostCount = 10)
         )
         assertTrue(shouldFetchCompatThread(manual = true, refreshOnActivation = false, cachedPostCount = 10))
+        assertTrue(shouldFetchCompatThread(manual = false, refreshOnActivation = true, cachedPostCount = 10))
     }
 
     @Test

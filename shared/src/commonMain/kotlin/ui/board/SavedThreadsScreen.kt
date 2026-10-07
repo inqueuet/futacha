@@ -54,7 +54,9 @@ fun SavedThreadsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
-    recoverUnindexedThreads: Boolean = false
+    recoverUnindexedThreads: Boolean = false,
+    /** Extra content under the summary (ふたちゃ shows its MHT files here); null changes nothing. */
+    extraContent: (@Composable ColumnScope.() -> Unit)? = null
 ) {
     var threads by remember(repository) { mutableStateOf<List<SavedThread>>(emptyList()) }
     var isLoading by remember(repository) { mutableStateOf(true) }
@@ -158,6 +160,7 @@ fun SavedThreadsScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
+            extraContent?.invoke(this)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

@@ -23,6 +23,8 @@ import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.compat.COMPAT_URL_BODY_CHAR_CLASS
+import com.valoser.futacha.shared.compat.trimCompatInlineUrlEnd
 import kotlinx.coroutines.sync.Mutex
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
@@ -33,8 +35,10 @@ private const val THREAD_MESSAGE_URL_ANNOTATION_MAX_MATCHES = 64
 private const val THREAD_MESSAGE_QUOTE_REFERENCE_MAX_COUNT = 512
 private const val THREAD_MESSAGE_QUOTE_TARGET_MAX_COUNT = 256
 
-private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
-private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
+// ASCII URL characters only: a full-width space, 。, full-width brackets or following Japanese text
+// end the URL. Closing parentheses and sentence punctuation are trimmed like the としあき(仮) links.
+private val URL_REGEX = Regex("https?://$COMPAT_URL_BODY_CHAR_CLASS+", RegexOption.IGNORE_CASE)
+private val SCHEMELESS_URL_REGEX = Regex("ttps?://$COMPAT_URL_BODY_CHAR_CLASS+", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
 
 private data class UrlMatch(
@@ -132,6 +136,7 @@ internal fun ThreadMessageText(
     // detector never sees presses over the text. Presses that don't land on a
     // link or quote are handed back through these instead.
     onPlainLongPress: (() -> Unit)? = null,
+    quoteLongPressOpensMenu: Boolean = false,
     onPlainTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -183,9 +188,13 @@ internal fun ThreadMessageText(
     }
     val textLayoutResult = remember { ThreadMessageTextLayoutHolder() }
     Text(
-        modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
+        modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick, quoteLongPressOpensMenu) {
             detectTapGestures(
                 onLongPress = { position ->
+                    if (quoteLongPressOpensMenu) {
+                        latestPlainLongPress.value?.invoke()
+                        return@detectTapGestures
+                    }
                     val layout = textLayoutResult.value
                     val offset = layout?.getOffsetForPosition(position)
                     val quote = offset?.let {
@@ -323,6 +332,47 @@ private fun buildThreadMessageAnnotationCacheKey(
     )
 }
 
+private fun isThreadMessageQuoteLine(content: String): Boolean =
+    content.startsWith(">") || content.startsWith("＞")
+
+/**
+ * The reference each quoted line opens, by line index. The parser merges consecutive lines that
+ * quote the same post's text into one reference and creates none for lines it cannot resolve, so
+ * "the N-th quote line is reference N" drifted and opened the wrong reply. A line belongs to the
+ * reference whose text holds that line (trimmed, as the parser stored it); only when no text
+ * matches and the counts agree is the old positional pairing used.
+ */
+internal fun assignThreadMessageQuoteReferences(
+    lines: List<String>,
+    references: List<QuoteReference>
+): Map<Int, Int> {
+    if (references.isEmpty()) return emptyMap()
+    val quoteLineIndexes = lines.indices.filter { isThreadMessageQuoteLine(lines[it].trimEnd()) }
+    val positionalPairing = quoteLineIndexes.size == references.size
+    val result = LinkedHashMap<Int, Int>()
+    var cursor = 0
+    quoteLineIndexes.forEachIndexed { ordinal, lineIndex ->
+        val wanted = lines[lineIndex].trim()
+        var matched: Int? = null
+        if (wanted.isNotEmpty()) {
+            for (candidate in cursor until references.size) {
+                val reference = references[candidate]
+                if (reference.targetPostIds.isEmpty()) continue
+                if (reference.text.trim() == wanted || reference.text.lineSequence().any { it.trim() == wanted }) {
+                    matched = candidate
+                    break
+                }
+            }
+        }
+        val chosen = matched ?: ordinal.takeIf { positionalPairing && references[it].targetPostIds.isNotEmpty() }
+        if (chosen != null) {
+            result[lineIndex] = chosen
+            cursor = chosen
+        }
+    }
+    return result
+}
+
 private fun buildAnnotatedMessageBase(
     html: String,
     quoteReferences: List<QuoteReference>,
@@ -330,20 +380,19 @@ private fun buildAnnotatedMessageBase(
     linkColor: Color
 ): AnnotatedString {
     val lines = messageHtmlToLines(html)
-    var referenceIndex = 0
     val urlMatches = mutableListOf<UrlMatch>()
+    val referenceIndexByLine = assignThreadMessageQuoteReferences(lines, quoteReferences)
     val built = buildAnnotatedString {
         lines.forEachIndexed { index, line ->
             val content = line.trimEnd()
-            val isQuote = content.startsWith(">") || content.startsWith("＞")
+            val isQuote = isThreadMessageQuoteLine(content)
             if (isQuote) {
                 val spanStyle = SpanStyle(color = quoteColor, fontWeight = FontWeight.SemiBold)
-                val reference = quoteReferences.getOrNull(referenceIndex)
-                if (reference != null && reference.targetPostIds.isNotEmpty()) {
+                val referenceIndex = referenceIndexByLine[index]
+                if (referenceIndex != null) {
                     pushStringAnnotation(QUOTE_ANNOTATION_TAG, referenceIndex.toString())
                     appendStyledText(content, spanStyle)
                     pop()
-                    referenceIndex += 1
                 } else {
                     appendStyledText(content, spanStyle)
                 }
@@ -357,10 +406,10 @@ private fun buildAnnotatedMessageBase(
     }
     val builtText = built.toString()
     urlMatches.addThreadMessageUrlMatches(URL_REGEX.findAll(builtText)) { match ->
-        UrlMatch(url = match.value, range = match.range)
+        threadMessageUrlMatch(match, prefix = "")
     }
     urlMatches.addThreadMessageUrlMatches(SCHEMELESS_URL_REGEX.findAll(builtText)) { match ->
-        UrlMatch(url = "h${match.value}", range = match.range)
+        threadMessageUrlMatch(match, prefix = "h")
     }
     urlMatches.addThreadMessageUrlMatches(URL_LINK_TEXT_REGEX.findAll(builtText)) { match ->
         val target = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() }
@@ -389,6 +438,19 @@ private fun buildAnnotatedMessageBase(
         )
     }
     return builder.toAnnotatedString()
+}
+
+/** The trimmed URL of [match] (balanced parentheses kept, trailing punctuation dropped) and its range. */
+internal fun threadMessageUrlRange(matchValue: String, matchStart: Int): IntRange? {
+    val trimmed = trimCompatInlineUrlEnd(matchValue)
+    if (trimmed.isEmpty() || !trimmed.contains("://") || trimmed.substringAfter("://").isEmpty()) return null
+    return matchStart until (matchStart + trimmed.length)
+}
+
+private fun threadMessageUrlMatch(match: MatchResult, prefix: String): UrlMatch? {
+    val range = threadMessageUrlRange(match.value, match.range.first) ?: return null
+    val url = prefix + trimCompatInlineUrlEnd(match.value)
+    return UrlMatch(url = url, range = range)
 }
 
 private inline fun MutableList<UrlMatch>.addThreadMessageUrlMatches(

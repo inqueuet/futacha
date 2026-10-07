@@ -189,7 +189,13 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         guard let type else {
             return true
         }
+        // Pause/stop only reduce activity: they act on the already composed thread
+        // screen directly (also while a background-audio reading continues with
+        // the app inactive), like the Android watch handler. Start/seek/open
+        // still need the active app.
         return type != "Refresh"
+            && type != "PauseReadAloudOnPhone"
+            && type != "StopReadAloudOnPhone"
     }
 
     private func isApplicationActiveForWatchCommand() -> Bool {

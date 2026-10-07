@@ -4,6 +4,8 @@ package com.valoser.futacha.shared.util
 
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS
+import com.valoser.futacha.shared.ui.futaber.mht.FUTABER_MHT_MAX_READ_BYTES
+import com.valoser.futacha.shared.ui.futaber.mht.FUTABER_MHT_TOO_LARGE_MESSAGE
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.BooleanVar
@@ -56,6 +58,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 private val activePickerDelegates = AtomicReference<List<NSObject>>(emptyList())
 private const val DEFAULT_PICKED_VIDEO_FILE_NAME = "video.mov"
 private const val MAX_CUSTOM_FONT_BYTES = 16L * 1024L * 1024L
+// The most a file can be and still be opened (the reader and the file system hold the whole file in memory).
+private const val MAX_PICKED_MHT_BYTES = FUTABER_MHT_MAX_READ_BYTES
 private const val PICKED_MEDIA_LOAD_TIMEOUT_MILLIS = 30_000L
 private const val PICKED_MEDIA_READ_CHUNK_BYTES = 64 * 1024
 private const val MILLIS_PER_SECOND = 1_000.0
@@ -527,6 +531,95 @@ suspend fun pickFontFromDocuments(): ImageData? = suspendCancellableCoroutine { 
     presentPicker(picker, logLabel = "custom font picker") {
         complete(null)
     }
+}
+
+/**
+ * Files.app から MHT ファイルを選択する（ふたばー風モードの「MHTを開く」用）。
+ *
+ * MHT の UTI は Files provider によって揺れるため data を受け入れ、呼び出し側が中身を検証する。
+ * asCopy=true により security-scoped URL を保持しない。
+ */
+suspend fun pickMhtFromDocuments(): ImageData? = suspendCancellableCoroutine { continuation ->
+    if (getRootViewController() == null) {
+        Logger.w("ImagePicker.ios", "Cannot present MHT file picker: root view controller is unavailable")
+        continuation.resumeWithException(IllegalStateException("ファイルの選択画面を開けませんでした"))
+        return@suspendCancellableCoroutine
+    }
+    val resumeGate = ResumeGate()
+    var delegateRef: NSObject? = null
+    var loadTimeout: PickedMediaLoadTimeout? = null
+    // [failure] is the reason a chosen file could not be taken in: it reaches the screen as an error, not silence.
+    fun complete(value: ImageData?, failure: String? = null) {
+        if (!resumeGate.tryOpen()) return
+        loadTimeout?.cancel()
+        loadTimeout = null
+        releasePickerDelegate(delegateRef)
+        if (failure != null) continuation.resumeWithException(IllegalStateException(failure))
+        else continuation.resume(value)
+    }
+
+    val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol {
+        override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
+            controller.dismissViewControllerAnimated(true, null)
+            val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
+            if (url == null) {
+                complete(null)
+                return
+            }
+            loadTimeout = schedulePickedMediaLoadTimeout(logLabel = "MHT file") {
+                complete(null, "ファイルの読み込みに時間がかかりすぎたため中止しました")
+            }
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                val result = try {
+                    loadPickedMhtFromUrl(url)
+                } finally {
+                    deleteIosDocumentPickerInboxCopies(didPickDocumentsAtURLs)
+                }
+                dispatch_async(dispatch_get_main_queue()) {
+                    complete(result.data, result.failure)
+                }
+            }
+        }
+
+        override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
+            controller.dismissViewControllerAnimated(true, null)
+            complete(null)
+        }
+    }
+
+    delegateRef = delegate
+    retainPickerDelegate(delegate)
+    continuation.invokeOnCancellation {
+        if (resumeGate.tryOpen()) {
+            dispatch_async(dispatch_get_main_queue()) {
+                loadTimeout?.cancel()
+                loadTimeout = null
+                releasePickerDelegate(delegateRef)
+            }
+        }
+    }
+    val picker = UIDocumentPickerViewController(
+        forOpeningContentTypes = listOf(UTTypeData),
+        asCopy = true
+    ).apply {
+        this.delegate = delegate
+        allowsMultipleSelection = false
+    }
+    presentPicker(picker, logLabel = "MHT file picker") {
+        complete(null, "ファイルの選択画面を開けませんでした")
+    }
+}
+
+private class PickedMhtResult(val data: ImageData?, val failure: String?)
+
+/** The bytes of the chosen file, or the reason they could not be taken (empty, too big, unreadable). */
+private fun loadPickedMhtFromUrl(url: NSURL): PickedMhtResult {
+    val knownFileSize = resolveFileSizeBytes(url)
+    if (knownFileSize != null && knownFileSize <= 0L) return PickedMhtResult(null, "ファイルが空です")
+    if (knownFileSize != null && knownFileSize > MAX_PICKED_MHT_BYTES) return PickedMhtResult(null, FUTABER_MHT_TOO_LARGE_MESSAGE)
+    val bytes = readPickedFileBytesUpTo(url, MAX_PICKED_MHT_BYTES, "MHT file")
+        ?: return PickedMhtResult(null, "ファイルを読み込めませんでした（大きすぎるか、読み取れないファイルです）")
+    return PickedMhtResult(buildPickedImageData(bytes, url.lastPathComponent, "thread.mht"), null)
 }
 
 private fun loadPickedFileFromUrl(

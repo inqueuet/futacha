@@ -60,7 +60,7 @@ internal suspend fun <T> submitHttpBoardApiBinaryForm(
     } catch (e: Exception) {
         // Failures while handling the received response keep their own message.
         if (responseReceived) throw e
-        throw NetworkException("${request.failureMessage}: ${e.message}", cause = e)
+        throw NetworkException("送信結果を確認できませんでした。スレッドを確認してから再送してください。${request.failureMessage}: ${e.message}", cause = e)
     }
 }
 
@@ -70,6 +70,17 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
     logTag: String,
     redirectedRequestUrl: String? = null
 ): String? {
+    // A followed 302/303 leading to an actual thread page is success. Its user-written
+    // posts and form help may contain error words; never interpret those as a refusal.
+    val redirectedId = redirectedRequestUrl?.let(::tryExtractHttpBoardApiThreadId)
+    val isThreadPage = Regex("""<div\b[^>]*class\s*=\s*(?:"thre"|'thre'|thre(?:\s|>))""", RegexOption.IGNORE_CASE).containsMatchIn(responseBody)
+    if (redirectedId != null && isThreadPage) {
+        return if (mode == HttpBoardApiPostResponseMode.CREATE_THREAD) redirectedId else null
+    }
+    // An explicit refusal always wins over incidental links or a redirect URL.
+    extractHttpBoardApiServerError(responseBody)?.let { detail ->
+        throw NetworkException(buildHttpBoardApiPostingFailureMessage(if (mode == HttpBoardApiPostResponseMode.REPLY) "返信に失敗しました" else "スレッド作成に失敗しました", detail))
+    }
     return when (mode) {
         HttpBoardApiPostResponseMode.CREATE_THREAD -> {
             // A non-ajax post answered with 302/303 lands on the new thread's
@@ -77,7 +88,7 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
             // which also links other threads.
             redirectedRequestUrl?.let(::tryExtractHttpBoardApiThreadId)?.let { return it }
             val extractedThreadId = tryExtractHttpBoardApiThreadId(responseBody)
-            if (!extractedThreadId.isNullOrBlank()) {
+            if (!extractedThreadId.isNullOrBlank() && isSuccessfulHttpBoardApiPostResponse(responseBody)) {
                 return extractedThreadId
             }
             val jsonThreadId = tryParseHttpBoardApiThreadIdFromJson(responseBody)

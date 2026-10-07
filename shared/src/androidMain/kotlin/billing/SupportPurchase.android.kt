@@ -22,6 +22,9 @@ import com.android.billingclient.api.QueryPurchasesParams
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
@@ -153,6 +156,13 @@ actual class SupportPurchaseClient internal constructor(
                     )
                 }
             )
+        } catch (timeout: TimeoutCancellationException) {
+            // withTimeout expiry is a CancellationException too, but not a dismissed screen:
+            // report it as a failed load so the UI leaves its loading state. A real cancellation
+            // of the caller is re-thrown by ensureActive().
+            currentCoroutineContext().ensureActive()
+            Logger.w(TAG, "Google Play product query timed out: ${timeout.message.orEmpty()}")
+            Result.failure(java.io.IOException("Google Play との通信がタイムアウトしました。しばらくしてからもう一度お試しください", timeout))
         } catch (cancellation: CancellationException) {
             // A dismissed settings screen must cancel the billing query instead
             // of turning cancellation into a normal failed Result.  Otherwise a

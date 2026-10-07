@@ -201,6 +201,8 @@ class ThreadLoadAuditFixesTest {
         scope: kotlinx.coroutines.CoroutineScope,
         harness: LoadHarness,
         offlinePage: ThreadPage? = null,
+        localStalePage: ThreadPage? = null,
+        reloadOnOpen: Boolean = true,
         loadRemote: suspend () -> ThreadPageContent
     ) = buildThreadScreenLoadBindings(
         coroutineScope = scope,
@@ -213,7 +215,8 @@ class ThreadLoadAuditFixesTest {
             loadRemoteByBoard = { _, _ -> loadRemote() },
             loadArchiveFallback = { ArchiveFallbackOutcome.NotFound },
             loadOfflineFallback = { offlinePage },
-            loadLocalStalePage = { null }
+            loadLocalStalePage = { localStalePage },
+            reloadOnOpenEnabled = { reloadOnOpen }
         ),
         history = emptyList(),
         threadId = "123",
@@ -244,6 +247,49 @@ class ThreadLoadAuditFixesTest {
             }
         )
     )
+
+    @Test
+    fun reopenToggleUsesSavedCopyOnlyWhenOffAndManualRefreshStillFetches() = runBlocking {
+        for (reload in listOf(false, true)) {
+            var requests = 0
+            val saved = page("1")
+            val newest = page("1", "2")
+            val harness = LoadHarness(ThreadUiState.Loading, offline = false)
+            val binding = bindings(this, harness, localStalePage = saved, reloadOnOpen = reload) {
+                requests++
+                ThreadPageContent(newest)
+            }
+            binding.refreshThread()
+            harness.refreshThreadJob?.join()
+            assertEquals(if (reload) 1 else 0, requests)
+            assertEquals(if (reload) newest else saved, (harness.uiState as ThreadUiState.Success).page)
+            assertEquals(!reload, harness.isShowingOfflineCopy)
+            binding.startManualRefresh(0, 0)
+            harness.refreshThreadJob?.join()
+            assertEquals(if (reload) 2 else 1, requests)
+            assertEquals(newest, (harness.uiState as ThreadUiState.Success).page)
+            // Posting/explicit reload still fetches with a page already visible.
+            binding.refreshThread()
+            harness.refreshThreadJob?.join()
+            assertEquals(if (reload) 3 else 2, requests)
+        }
+    }
+
+    @Test
+    fun openingUncachedThreadFetchesEvenWhenReopenToggleIsOff() = runBlocking {
+        for (saved in listOf(null, page())) {
+            var requests = 0
+            val harness = LoadHarness(ThreadUiState.Loading, offline = false)
+            val binding = bindings(this, harness, localStalePage = saved, reloadOnOpen = false) {
+                requests++
+                ThreadPageContent(page("1"))
+            }
+            binding.refreshThread()
+            harness.refreshThreadJob?.join()
+            assertEquals(1, requests)
+            assertEquals(page("1"), (harness.uiState as ThreadUiState.Success).page)
+        }
+    }
 
     @Test
     fun timedOutManualRefreshKeepsNewerVisibleRepliesAndAutoSaveState() = runBlocking {

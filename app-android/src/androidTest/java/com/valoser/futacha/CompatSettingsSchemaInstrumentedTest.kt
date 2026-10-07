@@ -1067,8 +1067,11 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("読み上げ").performClick()
         rule.onNodeWithTag("compat-thread-speech-dialog").assertIsDisplayed()
         rule.onAllNodesWithText("読み上げプレーヤー").assertCountEquals(0)
-        rule.onAllNodesWithText("再生").assertCountEquals(0)
-        pressBack()
+        rule.onNodeWithTag("compat-speech-position").assertExists()
+        rule.onNodeWithText("前のレス").assertExists()
+        rule.onNodeWithText("次のレス").assertExists()
+        rule.onNodeWithText("表示中のレスから").assertExists()
+        rule.onNodeWithText("停止して閉じる").performClick()
         rule.onAllNodesWithTag("compat-thread-speech-dialog").assertCountEquals(0)
     }
 
@@ -3715,7 +3718,8 @@ class CompatSettingsSchemaInstrumentedTest {
                 password: String,
                 imageFile: ByteArray?,
                 imageFileName: String?,
-                textOnly: Boolean
+                textOnly: Boolean,
+        handwriting: Boolean
             ): String? {
                 requestStarted.set(true)
                 awaitCancellation()
@@ -4256,6 +4260,175 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithContentDescription("CLOSE-LAST-90").assertIsDisplayed()
         rule.onAllNodesWithText("板が登録されていません。右上のメニューから板を追加してください。")
             .assertCountEquals(0)
+    }
+
+    @Test
+    fun threadTreeSettingPersistsAndCanReturnToFlat() {
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = null, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithContentDescription("その他").performClick()
+        rule.onNodeWithText("設定").performClick()
+        fun openThreadSettings() {
+            rule.onNodeWithTag("compat-settings-list-root").performScrollToNode(hasText("スレッド画面"))
+            rule.onNodeWithText("スレッド画面").performClick()
+            rule.onNodeWithTag("compat-settings-list-thread")
+                .performScrollToNode(hasTestTag("compat-setting-threadDisplayMode"))
+        }
+        openThreadSettings()
+        rule.onNodeWithTag("compat-setting-threadDisplayMode").performClick()
+        rule.onNodeWithText("ツリー表示").performClick()
+        rule.waitUntil(5_000) {
+            runBlocking { store.loadPreference("compat.thread.threadDisplayMode") } == "tree"
+        }
+        pressBack()
+        openThreadSettings()
+        rule.onNodeWithText("ツリー表示").assertIsDisplayed()
+        rule.onNodeWithTag("compat-setting-threadDisplayMode").performClick()
+        rule.onNodeWithText("通常表示").performClick()
+        rule.waitUntil(5_000) {
+            runBlocking { store.loadPreference("compat.thread.threadDisplayMode") } == "flat"
+        }
+    }
+
+    @Test
+    fun threadTreeReordersAndIndentsRepliesThenRestoresFlatRows() {
+        val boardUrl = "https://may.2chan.net/b/"
+        val boardKey = compatBoardKey(boardUrl)
+        val threadUrl = "${boardUrl}res/95.htm"
+        val item = CatalogItem(id = "95", threadUrl = threadUrl, title = "TREE-95",
+            thumbnailUrl = null, fullImageUrl = null, replyCount = 2)
+        runBlocking { store.upsertBoard(CompatBoard(boardKey, "mayb", boardUrl, boardUrl, 0)) }
+        val repository = object : BoardRepository by FakeBoardRepository() {
+            override suspend fun getCatalogWithSettings(
+                board: String, mode: CatalogMode, settings: CatalogFetchSettings
+            ): List<CatalogItem> = listOf(item)
+            override suspend fun getThreadByUrl(threadUrl: String): ThreadPage =
+                ThreadPage("95", "mayb", null, null, listOf(
+                    Post(id = "95", author = null, subject = null, timestamp = "",
+                        messageHtml = "ROOT", imageUrl = null, thumbnailUrl = null),
+                    Post(id = "96", author = null, subject = null, timestamp = "",
+                        messageHtml = "OTHER", imageUrl = null, thumbnailUrl = null),
+                    Post(id = "97", author = null, subject = null, timestamp = "",
+                        messageHtml = "&gt;No.95<br>CHILD", imageUrl = null, thumbnailUrl = null,
+                        quoteReferences = listOf(com.valoser.futacha.shared.model.QuoteReference(">>95", listOf("95"))))
+                ))
+        }
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = repository, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithText(boardUrl).performClick()
+        waitForContentDescriptionPresent("TREE-95")
+        rule.onNodeWithContentDescription("TREE-95").performClick()
+        waitForTagDisplayed("compat-thread-post-97")
+        fun bounds(id: String) = rule.onNodeWithTag("compat-thread-post-$id")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(bounds("97").top > bounds("96").top)
+        assertEquals(bounds("95").left, bounds("97").left)
+        runBlocking { store.savePreference("compat.thread.threadDisplayMode", "tree") }
+        rule.waitUntil(5_000) { bounds("97").top < bounds("96").top }
+        assertTrue(bounds("97").left > bounds("95").left)
+        runBlocking { store.savePreference("compat.thread.threadDisplayMode", "flat") }
+        rule.waitUntil(5_000) { bounds("97").top > bounds("96").top }
+        assertEquals(bounds("95").left, bounds("97").left)
+    }
+
+    @Test
+    fun threadReopenTogglePersistsInCatalogSettings() {
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = null, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithContentDescription("その他").performClick()
+        rule.onNodeWithText("設定").performClick()
+        rule.onNodeWithTag("compat-settings-list-root").performScrollToNode(hasText("カタログ画面"))
+        rule.onNodeWithText("カタログ画面").performClick()
+        val list = rule.onNodeWithTag("compat-settings-list-catalog")
+        list.performScrollToNode(hasTestTag("compat-setting-catalogThreadOpenWithReload"))
+        rule.onNodeWithText("スレッドを開いた時に更新").assertIsDisplayed()
+        val toggle = rule.onNodeWithTag("compat-setting-catalogThreadOpenWithReload")
+        toggle.performClick()
+        rule.waitUntil(5_000) { runBlocking { store.loadPreference("compat.catalog.catalogThreadOpenWithReload") } == "OFF" }
+        pressBack()
+        rule.onNodeWithTag("compat-settings-list-root").performScrollToNode(hasText("カタログ画面"))
+        rule.onNodeWithText("カタログ画面").performClick()
+        list.performScrollToNode(hasTestTag("compat-setting-catalogThreadOpenWithReload"))
+        toggle.performClick()
+        rule.waitUntil(5_000) { runBlocking { store.loadPreference("compat.catalog.catalogThreadOpenWithReload") } == "ON" }
+    }
+
+    @Test
+    fun reopeningThreadHonorsToggleAndRetainsCachedBodyDuringRefreshAndFailure() {
+        val boardUrl = "https://may.2chan.net/b/"
+        val boardKey = compatBoardKey(boardUrl)
+        val threadUrl = "${boardUrl}res/95.htm"
+        val tabKey = compatTabKey(threadUrl)
+        val item = CatalogItem(id = "95", threadUrl = threadUrl, title = "REOPEN-95",
+            thumbnailUrl = null, fullImageUrl = null, replyCount = 0)
+        runBlocking {
+            store.upsertBoard(CompatBoard(boardKey, "mayb", boardUrl, boardUrl, 0))
+            store.savePreference("compat.catalog.catalogOpenWithReload", "OFF")
+            store.saveCatalogSnapshot(CompatCatalogSnapshot(boardKey = boardKey, sort = CompatCatalogSort.CATALOG,
+                revision = 1L, fetchedAtEpochMillis = 1L, items = listOf(item)))
+        }
+        val requests = AtomicInteger()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val repository = object : BoardRepository by FakeBoardRepository() {
+            override suspend fun getCatalogWithSettings(
+                board: String, mode: CatalogMode, settings: CatalogFetchSettings
+            ): List<CatalogItem> = listOf(item)
+
+            override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+                if (threadUrl != "${boardUrl}res/95.htm") error("No archive available")
+                val request = requests.incrementAndGet()
+                if (request == 2) releaseRefresh.await()
+                if (request >= 4) error("Offline")
+                return ThreadPage("95", "mayb", null, null, listOf(
+                    Post(id = "95", author = null, subject = null, timestamp = "now",
+                        messageHtml = "REOPEN-BODY-$request", imageUrl = null, thumbnailUrl = null)))
+            }
+        }
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = repository, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithText(boardUrl).performClick()
+        fun openThread() {
+            waitForContentDescriptionPresent("REOPEN-95")
+            rule.onNodeWithContentDescription("REOPEN-95").performClick()
+            waitForTagDisplayed("compat-thread-pager")
+        }
+        openThread()
+        waitForTextPresent("REOPEN-BODY-1")
+        pressBack()
+        openThread()
+        rule.waitUntil(5_000) { requests.get() == 2 }
+        assertTextPresent("REOPEN-BODY-1")
+        releaseRefresh.complete(Unit)
+        waitForTextPresent("REOPEN-BODY-2")
+        pressBack()
+        runBlocking { store.savePreference("compat.catalog.catalogThreadOpenWithReload", "OFF") }
+        openThread()
+        assertTextPresent("REOPEN-BODY-2")
+        rule.waitForIdle()
+        assertEquals(2, requests.get())
+        // Manual reload is available independently of the reopening preference.
+        rule.onNodeWithContentDescription("リロード").performClick()
+        waitForTextPresent("REOPEN-BODY-3")
+        assertEquals(3, requests.get())
+        pressBack()
+        runBlocking { store.savePreference("compat.catalog.catalogThreadOpenWithReload", "ON") }
+        openThread()
+        rule.waitUntil(5_000) { requests.get() == 4 }
+        waitForTextPresent("スレッドを取得できませんでした")
+        assertTextPresent("REOPEN-BODY-3")
+        rule.waitUntil(5_000) { runBlocking { store.loadThreadSnapshot(tabKey)?.posts?.firstOrNull()?.messageHtml } == "REOPEN-BODY-3" }
     }
 
     @Test

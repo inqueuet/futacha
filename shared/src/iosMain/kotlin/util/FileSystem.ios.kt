@@ -988,6 +988,15 @@ class IosFileSystem : FileSystem {
     }
 
     private fun resolveBookmarkUrl(bookmarkData: String): NSURL {
+        val key = bookmarkRefreshKey(bookmarkData)
+        // A stale bookmark was re-created earlier; the caller still holds the original text.
+        persistedRefreshedBookmark(key)?.let { refreshed ->
+            runCatching { resolveBookmarkUrlFromData(refreshed, key) }.getOrNull()?.let { return it }
+        }
+        return resolveBookmarkUrlFromData(bookmarkData, key)
+    }
+
+    private fun resolveBookmarkUrlFromData(bookmarkData: String, refreshKey: String): NSURL {
         val data = runCatching { bookmarkData.decodeBase64ToNSData() }.getOrElse { decodeError ->
             throw BookmarkResolutionException(
                 "Invalid bookmark data. Please re-select the save directory.",
@@ -1010,11 +1019,39 @@ class IosFileSystem : FileSystem {
                 )
             }
             if (isStale.value) {
-                Logger.w("IosFileSystem", "Bookmark data is stale. The bookmark may not work after app restart. Consider re-selecting the directory.")
-                // Note: Stale bookmarks can still work in current session, but may fail after restart.
-                // To refresh, user should re-select via directory picker.
+                // A stale bookmark may stop working after a restart. The URL still resolves now,
+                // so create a fresh bookmark from it and use that from here on.
+                refreshStaleBookmark(url, refreshKey)
             }
             return url
+        }
+    }
+
+    private fun refreshStaleBookmark(url: NSURL, refreshKey: String) {
+        val startedAccess = url.startAccessingSecurityScopedResource()
+        try {
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val fresh = url.bookmarkDataWithOptions(
+                    options = NSURLBookmarkCreationWithSecurityScope,
+                    includingResourceValuesForKeys = null,
+                    relativeToURL = null,
+                    error = error.ptr
+                )
+                if (fresh == null) {
+                    Logger.w(
+                        "IosFileSystem",
+                        "Bookmark data is stale and could not be re-created: " +
+                            "${error.value?.localizedDescription ?: "Unknown error"}. Consider re-selecting the directory."
+                    )
+                    return@memScoped
+                }
+                val encoded = fresh.base64EncodedStringWithOptions(0uL)
+                if (encoded.length > MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS) return@memScoped
+                rememberRefreshedBookmark(refreshKey, encoded)
+            }
+        } finally {
+            if (startedAccess) url.stopAccessingSecurityScopedResource()
         }
     }
 
@@ -1133,4 +1170,42 @@ class IosFileSystem : FileSystem {
 
 actual fun createFileSystem(platformContext: Any?): FileSystem {
     return IosFileSystem()
+}
+
+// A stale bookmark that was re-created is kept here, keyed by the original bookmark text, because
+// the original is stored by callers (settings) that this file system cannot update.
+private const val REFRESHED_BOOKMARKS_KEY = "futacha.refreshedBookmarks.v1"
+private const val MAX_REFRESHED_BOOKMARKS = 16
+private val refreshedBookmarkLock = NSLock()
+
+/** FNV-1a 64 of the bookmark text; the stored bookmark is far too long to use as a key. */
+private fun bookmarkRefreshKey(bookmarkData: String): String {
+    var hash = -0x340d631b7bdddcdbL
+    bookmarkData.trim().forEach { char ->
+        hash = hash xor char.code.toLong()
+        hash *= 0x100000001b3L
+    }
+    return "${bookmarkData.trim().length}:${hash.toULong().toString(16)}"
+}
+
+private fun persistedRefreshedBookmarks(): Map<String, String> =
+    NSUserDefaults.standardUserDefaults.dictionaryForKey(REFRESHED_BOOKMARKS_KEY).orEmpty().entries
+        .mapNotNull { (key, value) -> (key as? String)?.let { k -> (value as? String)?.let { k to it } } }
+        .toMap()
+
+private fun persistedRefreshedBookmark(key: String): String? {
+    refreshedBookmarkLock.lock()
+    return try { persistedRefreshedBookmarks()[key] } finally { refreshedBookmarkLock.unlock() }
+}
+
+private fun rememberRefreshedBookmark(key: String, bookmark: String) {
+    refreshedBookmarkLock.lock()
+    try {
+        val updated = LinkedHashMap(persistedRefreshedBookmarks() - key)
+        while (updated.size >= MAX_REFRESHED_BOOKMARKS) updated.remove(updated.keys.first())
+        updated[key] = bookmark
+        NSUserDefaults.standardUserDefaults.setObject(updated.toMap<Any?, Any?>(), forKey = REFRESHED_BOOKMARKS_KEY)
+    } finally {
+        refreshedBookmarkLock.unlock()
+    }
 }

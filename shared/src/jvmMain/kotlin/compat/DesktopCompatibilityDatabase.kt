@@ -30,6 +30,9 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
                     s.execute("CREATE TABLE IF NOT EXISTS compat_scroll_anchor(tab_key TEXT PRIMARY KEY, anchor_payload TEXT NOT NULL, updated_at INTEGER NOT NULL)")
                     s.execute("CREATE TABLE IF NOT EXISTS compat_snapshot_access(tab_key TEXT PRIMARY KEY, accessed_at INTEGER NOT NULL)")
                     s.execute("CREATE TABLE IF NOT EXISTS compat_image_phash(key TEXT PRIMARY KEY, phash TEXT NOT NULL, used_at INTEGER NOT NULL)")
+                    // Refetchable thread/catalog caches, one row each, so a settings change
+                    // does not rewrite up to 32 MB of them with the profile row.
+                    s.execute("CREATE TABLE IF NOT EXISTS compat_cache_record(key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
                 }
                 connection = db
             } catch (failure: Throwable) { db.close(); throw failure }
@@ -94,11 +97,80 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
         }
     }
 
-    fun writePayload(payload: String, updatedAtMillis: Long) {
+    /** Cache rows (key -> payload) and the keys of rows that must not be trusted. */
+    class CacheRecordsRead(val records: Map<String, String>, val rejectedKeys: List<String>)
+
+    /** Reads the cache rows; an oversized row or one past the total budget is reported as rejected. */
+    fun readCacheRecords(): CacheRecordsRead = open().createStatement().use { s ->
+        s.executeQuery("SELECT key,payload FROM compat_cache_record").use { r ->
+            val records = LinkedHashMap<String, String>()
+            val rejected = mutableListOf<String>()
+            var bytes = 0L
+            while (r.next()) {
+                val key = r.getString(1)
+                val payload = r.getString(2)
+                val size = payload.toByteArray(Charsets.UTF_8).size
+                if (key.toByteArray(Charsets.UTF_8).size > 4096 || size > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES ||
+                    bytes + size > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES
+                ) {
+                    rejected += key
+                } else {
+                    bytes += size
+                    records[key] = payload
+                }
+            }
+            CacheRecordsRead(records, rejected)
+        }
+    }
+
+    fun deleteCacheRecords(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        inTransaction { db ->
+            db.prepareStatement("DELETE FROM compat_cache_record WHERE key = ?").use { s ->
+                keys.forEach { key -> s.setString(1, key); s.executeUpdate() }
+            }
+        }
+    }
+
+    fun clearCacheRecords() {
+        open().createStatement().use { s -> s.executeUpdate("DELETE FROM compat_cache_record") }
+    }
+
+    /**
+     * Writes the profile row, and in the same transaction the changed cache rows
+     * ([cacheUpdates]: a null payload deletes the row). [replaceCacheRecords] first
+     * removes every cache row, for a profile whose rows are not known to match memory.
+     */
+    fun writePayload(
+        payload: String,
+        updatedAtMillis: Long,
+        cacheUpdates: Map<String, String?> = emptyMap(),
+        replaceCacheRecords: Boolean = false
+    ) {
         bounded(payload, MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES)
+        cacheUpdates.forEach { (key, value) ->
+            bounded(key, 4096)
+            if (value != null) bounded(value, MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES)
+        }
         inTransaction { db ->
             db.prepareStatement("INSERT OR REPLACE INTO compat_state VALUES(1,?,?)").use { s ->
                 s.setString(1, payload); s.setLong(2, updatedAtMillis); s.executeUpdate()
+            }
+            if (replaceCacheRecords) {
+                db.createStatement().use { s -> s.executeUpdate("DELETE FROM compat_cache_record") }
+            }
+            if (cacheUpdates.isNotEmpty()) {
+                db.prepareStatement("INSERT OR REPLACE INTO compat_cache_record VALUES(?,?)").use { upsert ->
+                    db.prepareStatement("DELETE FROM compat_cache_record WHERE key = ?").use { delete ->
+                        cacheUpdates.forEach { (key, value) ->
+                            if (value == null) {
+                                delete.setString(1, key); delete.executeUpdate()
+                            } else {
+                                upsert.setString(1, key); upsert.setString(2, value); upsert.executeUpdate()
+                            }
+                        }
+                    }
+                }
             }
             db.createStatement().use { s ->
                 s.executeUpdate("DELETE FROM compat_scroll_anchor"); s.executeUpdate("DELETE FROM compat_snapshot_access")
@@ -110,6 +182,28 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
         runDesktopDatabaseTransaction(db, discard = { if (connection === db) connection = null }, block = block)
     }
     fun close() { connection?.close(); connection = null }
+    /**
+     * Copies the database files next to it (relative path of the main copy, or null when there is
+     * nothing to copy). Called before [deleteStorage] discards a database that could not be read:
+     * a payload over the size limit or a damaged file is still the user's data, and a copy can
+     * be recovered by hand. Throws when a copy cannot be written, so the caller keeps the original.
+     */
+    fun backupStorage(stampMillis: Long): String? {
+        close()
+        val main = File(fileSystem.resolveAbsolutePath("compatibility/compatibility.db"))
+        if (!main.isFile) return null
+        val backupBase = "unreadable_compatibility_db-$stampMillis.db"
+        for (suffix in listOf("", "-wal", "-shm")) {
+            val source = File(main.path + suffix)
+            if (!source.isFile) continue
+            java.nio.file.Files.copy(
+                source.toPath(),
+                File(main.parentFile, backupBase + suffix).toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+        }
+        return "compatibility/$backupBase"
+    }
     suspend fun deleteStorage() {
         close()
         for (suffix in listOf("", "-wal", "-shm")) fileSystem.delete("compatibility/compatibility.db$suffix").getOrThrow()

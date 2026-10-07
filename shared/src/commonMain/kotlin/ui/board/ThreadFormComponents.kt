@@ -97,7 +97,8 @@ internal fun ThreadFormDialog(
     showSubject: Boolean = true,
     showPassword: Boolean = true,
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
-    boardUrl: String = ""
+    boardUrl: String = "",
+    isReply: Boolean = false
 ) {
     val sharedFeatures = LocalFutachaSharedFeatures.current
     val commentLineCount = remember(comment) {
@@ -162,7 +163,7 @@ internal fun ThreadFormDialog(
     }
     fun finishPickedImage(image: ImageData) {
         attachmentProcessingError = null
-        if (!stripImageMetadata || image.fileName.isVideoAttachmentName()) {
+        if (image.isHandwriting || !stripImageMetadata || image.fileName.isVideoAttachmentName()) {
             selectAttachment(image)
             return
         }
@@ -174,6 +175,10 @@ internal fun ThreadFormDialog(
         }
     }
     fun acceptPickedImage(image: ImageData) {
+        if (isReply && !postingCapabilities.replyAttachmentsAllowed && !image.isHandwriting) {
+            attachmentProcessingError = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+            return
+        }
         // Files above the old 8 MB picker cap always go through the size decision.
         if (sharedFeatures == null && image.bytes.size <= com.valoser.futacha.shared.util.MAX_PICKED_IMAGE_BYTES) {
             finishPickedImage(image); return
@@ -196,6 +201,11 @@ internal fun ThreadFormDialog(
         }) { Text("圧縮") } }, dismissButton = { TextButton(onClick = { pendingCompression = null }) { Text("キャンセル") } }) } }
     // Read up to the compat picker limit (32 MB) so a large photo reaches the
     // compression dialog below instead of failing to load at 8 MB (K2).
+    fun chooseNormalAttachment(launcher: () -> Unit) {
+        if (isReply && !postingCapabilities.replyAttachmentsAllowed) {
+            attachmentProcessingError = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+        } else launcher()
+    }
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
@@ -225,6 +235,9 @@ internal fun ThreadFormDialog(
             attachmentProcessingError = null
             acceptPickedImage(image)
         }
+    )
+    val clipboardPaste = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
+        onImage = ::acceptPickedImage, onError = { attachmentProcessingError = it }
     )
     var overflowMenuExpanded by remember { mutableStateOf(false) }
 
@@ -285,6 +298,9 @@ internal fun ThreadFormDialog(
                             expanded = overflowMenuExpanded,
                             onDismissRequest = { overflowMenuExpanded = false }
                         ) {
+                            DropdownMenuItem(text = { Text("画像を貼り付け") },
+                                enabled = !clipboardPaste.busy && !isSanitizingAttachment,
+                                onClick = { overflowMenuExpanded = false; chooseNormalAttachment(clipboardPaste.paste) })
                             DropdownMenuItem(
                                 text = { Text("キャンセル") },
                                 onClick = {
@@ -361,7 +377,7 @@ internal fun ThreadFormDialog(
                         )
                     }
 
-                    TextField(
+                    if (postingCapabilities.nameAllowed) TextField(
                         value = nameInputState.value,
                         onValueChange = { nextValue ->
                             trackThreadFormFieldState("おなまえ", nameInputState.value.text, nextValue.text)
@@ -409,7 +425,7 @@ internal fun ThreadFormDialog(
                         }
                     }
 
-                    if (showSubject) {
+                    if (showSubject && postingCapabilities.subjectAllowed) {
                         TextField(
                             value = subjectInputState.value,
                             onValueChange = { nextValue ->
@@ -545,11 +561,12 @@ internal fun ThreadFormDialog(
                         FutachaPostToolbar(
                             features = sharedFeatures, boardUrl = boardUrl, comment = comment,
                             onCommentChange = onCommentChange, password = password,
-                            onImageSelected = ::acceptPickedImage, onChooseImage = imagePickerLauncher,
-                            onChooseVideo = videoPickerLauncher, onSubmit = onSubmit,
+                            onImageSelected = ::acceptPickedImage, onChooseImage = { chooseNormalAttachment(imagePickerLauncher) },
+                            onChooseVideo = { chooseNormalAttachment(videoPickerLauncher) },
+                            onPasteImage = { chooseNormalAttachment(clipboardPaste.paste) }, onSubmit = onSubmit,
                             onClear = { cancelAttachmentProcessing(); onClear() }, onDismiss = onDismiss,
-                            enabled = isSubmitEnabled && !isSanitizingAttachment,
-                            attachmentEnabled = !isSanitizingAttachment,
+                            enabled = isSubmitEnabled && !isSanitizingAttachment && !clipboardPaste.busy,
+                            attachmentEnabled = !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentPickerPreference = attachmentPickerPreference,
                             preferredFileManagerPackage = preferredFileManagerPackage
                         )
@@ -567,7 +584,7 @@ internal fun ThreadFormDialog(
                                 AnalyticsTracker.uiControl("thread_form_submit", sendDescription)
                                 onSubmit()
                             },
-                            enabled = isSubmitEnabled && !isSanitizingAttachment
+                            enabled = isSubmitEnabled && !isSanitizingAttachment && !clipboardPaste.busy
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
@@ -577,7 +594,7 @@ internal fun ThreadFormDialog(
                         }
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_image_picker", "投稿画像を選択")
-                            imagePickerLauncher()
+                            chooseNormalAttachment(imagePickerLauncher)
                         }) {
                             Icon(
                                 imageVector = Icons.Outlined.Image,
@@ -587,7 +604,7 @@ internal fun ThreadFormDialog(
                         }
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_video_picker", "投稿動画を選択")
-                            videoPickerLauncher()
+                            chooseNormalAttachment(videoPickerLauncher)
                         }) {
                             Icon(
                                 imageVector = Icons.Rounded.VideoLibrary,

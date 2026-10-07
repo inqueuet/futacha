@@ -249,6 +249,15 @@ interface FileSystem {
     suspend fun listFiles(base: SaveLocation, directory: String = ""): List<String>
 
     /**
+     * Like [listFiles], but a failure of the storage provider is thrown instead of being
+     * reported as an empty folder, so a caller can tell "nothing there" from "could not
+     * look". Cancellation is always rethrown. Locations that cannot fail this way keep the
+     * default.
+     */
+    suspend fun listFilesOrThrow(base: SaveLocation, directory: String = ""): List<String> =
+        listFiles(base, directory)
+
+    /**
      * ファイルまたはディレクトリを削除 (SaveLocation版)
      * @param base ベース保存先 (Path/TreeUri/Bookmark)
      * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を削除)

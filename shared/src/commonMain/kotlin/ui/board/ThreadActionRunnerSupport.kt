@@ -194,12 +194,19 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
                         buildThreadActionFailureLogMessage(failurePrefix),
                         result.error
                     )
-                    callbacks.onFailure?.invoke(result.error) ?: callbacks.onShowMessage(
-                        buildThreadActionFailureMessage(
-                            failurePrefix = failurePrefix,
-                            error = result.error
+                    val failureHandler = callbacks.onFailure
+                    if (failureHandler != null) {
+                        // The handler may suspend until a snackbar is dismissed. Run it outside this job
+                        // so the in-progress flag and join() waiters are released as soon as the action ends.
+                        this@launchManagedThreadAction.launch { failureHandler(result.error) }
+                    } else {
+                        callbacks.onShowMessage(
+                            buildThreadActionFailureMessage(
+                                failurePrefix = failurePrefix,
+                                error = result.error
+                            )
                         )
-                    )
+                    }
                 }
             }
         } finally {
@@ -289,7 +296,8 @@ internal data class ThreadReplyActionConfig(
     val password: String,
     val imageBytes: ByteArray?,
     val imageFileName: String?,
-    val textOnly: Boolean
+    val textOnly: Boolean,
+    val handwriting: Boolean = false
 )
 
 internal fun buildThreadReplyActionConfig(
@@ -308,7 +316,8 @@ internal fun buildThreadReplyActionConfig(
         password = normalizedPassword,
         imageBytes = draft.imageData?.bytes,
         imageFileName = draft.imageData?.fileName,
-        textOnly = draft.imageData == null
+        textOnly = draft.imageData == null,
+        handwriting = draft.imageData?.isHandwriting == true
     )
 }
 
@@ -331,7 +340,8 @@ internal fun buildThreadReplyActionCallbacks(
                 password = config.password,
                 imageFile = config.imageBytes,
                 imageFileName = config.imageFileName,
-                textOnly = config.textOnly
+                textOnly = config.textOnly,
+                handwriting = config.handwriting
             )
         }
     )

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.repository
 
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -220,6 +221,20 @@ internal suspend fun SavedThreadRepository.readSavedThreadIndexUnlocked(): Saved
             "Saved thread index is corrupted and no valid backup is available " +
                 "(primaryCorrupted=$primaryCorrupted, backupCorrupted=$backupCorrupted)"
         )
+    }
+
+    if (resolvedSaveLocation is SaveLocation.TreeUri) {
+        // exists() on a document tree reports a provider failure as "absent". Before treating
+        // both index files as missing (and letting the next save overwrite them with a
+        // one-entry index), look at the folder itself. A failed listing is thrown, so the
+        // caller can retry instead of starting from an empty index.
+        val children = fileSystem.listFilesOrThrow(resolvedSaveLocation, "")
+        if (children.any { it == indexRelativePath || it == backupPath }) {
+            throw IllegalStateException(
+                "Saved thread index could not be read from the storage location right now " +
+                    "(it is listed but not readable); not starting from an empty index"
+            )
+        }
     }
 
     return emptyIndex()

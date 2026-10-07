@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.FileType
+import com.valoser.futacha.shared.repository.MAX_SAVED_THREAD_METADATA_BYTES
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -274,7 +275,7 @@ internal suspend fun writeThreadSaveMetadataIfEnabled(
         isHtmlMissing = request.isHtmlMissing,
         version = 1
     )
-    val (metadataPayload, payloadSize) = buildThreadSaveMetadataPayloadWithStableSize(
+    val (metadataPayload, payloadSize) = fitThreadSaveMetadataPayload(
         metadata = metadata,
         baseTotalSize = request.baseTotalSize,
         encodeMetadata = encodeMetadata
@@ -287,6 +288,50 @@ internal suspend fun writeThreadSaveMetadataIfEnabled(
         measureAbsolutePathSize = fileSystem::getFileSize
     )
     return payloadSize
+}
+
+private val THREAD_SAVE_METADATA_POST_HTML_LIMITS = intArrayOf(4_000, 2_000, 1_000, 400)
+private const val THREAD_SAVE_METADATA_SIZE_TRUNCATION_REASON = "metadata size limit"
+
+/**
+ * The metadata payload, kept within what the reader accepts ([maxBytes], the 8 MB cap of
+ * SavedThreadRepository). A thread that fit the parser limits could still produce a larger
+ * file; it was written anyway and then could not be opened or recovered. Post bodies are cut
+ * to shorter and shorter lengths until it fits (the save is then marked truncated), and a
+ * payload that still does not fit fails the save with an explicit error.
+ */
+internal fun fitThreadSaveMetadataPayload(
+    metadata: SavedThreadMetadata,
+    baseTotalSize: Long,
+    encodeMetadata: (SavedThreadMetadata) -> String,
+    maxBytes: Long = MAX_SAVED_THREAD_METADATA_BYTES
+): Pair<String, Long> {
+    var result = buildThreadSaveMetadataPayloadWithStableSize(metadata, baseTotalSize, encodeMetadata)
+    for (limit in THREAD_SAVE_METADATA_POST_HTML_LIMITS) {
+        if (result.second <= maxBytes) return result
+        val shortened = metadata.copy(
+            posts = metadata.posts.map { post ->
+                if (post.messageHtml.length > limit) post.copy(messageHtml = truncateSavedPostHtml(post.messageHtml, limit)) else post
+            },
+            isTruncated = true,
+            truncationReason = listOfNotNull(
+                metadata.truncationReason?.takeIf { it.isNotBlank() },
+                THREAD_SAVE_METADATA_SIZE_TRUNCATION_REASON
+            ).joinToString("; ")
+        )
+        result = buildThreadSaveMetadataPayloadWithStableSize(shortened, baseTotalSize, encodeMetadata)
+    }
+    check(result.second <= maxBytes) {
+        "Save aborted: thread metadata is too large to read back (${result.second} bytes > $maxBytes)"
+    }
+    return result
+}
+
+/** [html] cut to at most [maxChars], without a surrogate pair or a half-written tag at the end. */
+private fun truncateSavedPostHtml(html: String, maxChars: Int): String {
+    val cut = html.takeWithoutSplittingSurrogates(maxChars)
+    val lastOpen = cut.lastIndexOf('<')
+    return if (lastOpen > cut.lastIndexOf('>')) cut.substring(0, lastOpen) else cut
 }
 
 internal suspend fun saveThreadRawHtmlIfEnabled(

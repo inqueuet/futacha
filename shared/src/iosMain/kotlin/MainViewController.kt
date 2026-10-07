@@ -110,6 +110,7 @@ import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.ui.compat.isCompatWifiConnected
 import com.valoser.futacha.shared.ui.compat.IosCompatNetworkStateBridge
+import com.valoser.futacha.shared.watch.ThreadReadAloudRemoteControl
 import com.valoser.futacha.shared.watch.WatchCommand
 import com.valoser.futacha.shared.watch.WatchCommandType
 import com.valoser.futacha.shared.watch.WatchReadAloudStatusStore
@@ -270,6 +271,15 @@ private object IosThreadDeepLinkBridge {
     }
 
     fun stream() = links
+
+    /**
+     * The replayed link only bridges the gap until a root has started
+     * collecting (cold launch). Once a root took it, it must not be replayed to
+     * a root created later (the second iPad window), which would reopen a
+     * thread the user already left.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun clearReplay() = links.resetReplayCache()
 }
 
 
@@ -283,6 +293,10 @@ private object IosBoardDeepLinkBridge {
     }
 
     fun stream() = links
+
+    /** See [IosThreadDeepLinkBridge.clearReplay]. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun clearReplay() = links.resetReplayCache()
 }
 
 /** Called from SwiftUI's `onOpenURL` for both cold and warm launches. */
@@ -471,10 +485,18 @@ private object IosWatchSnapshotBridge {
                 return enqueueIosWatchThreadAction(command, FutachaAiAction.StartThreadReadAloud)
             }
             WatchCommandType.PauseReadAloudOnPhone -> {
-                return enqueueIosWatchThreadAction(command, FutachaAiAction.PauseThreadReadAloud)
+                return handleIosWatchPlaybackReduction(
+                    command,
+                    ThreadReadAloudRemoteControl.Command.Pause,
+                    FutachaAiAction.PauseThreadReadAloud
+                )
             }
             WatchCommandType.StopReadAloudOnPhone -> {
-                return enqueueIosWatchThreadAction(command, FutachaAiAction.StopThreadReadAloud)
+                return handleIosWatchPlaybackReduction(
+                    command,
+                    ThreadReadAloudRemoteControl.Command.Stop,
+                    FutachaAiAction.StopThreadReadAloud
+                )
             }
             WatchCommandType.NextReadAloudOnPhone -> {
                 return enqueueIosWatchThreadAction(command, FutachaAiAction.NextThreadReadAloud)
@@ -496,24 +518,54 @@ private object IosWatchSnapshotBridge {
 
     fun cancelRefresh() = refreshController.cancel()
 
-    private fun enqueueIosWatchThreadAction(
+    /**
+     * Pause/stop act now on the thread screen that is still composed, also
+     * while the app is in the background (audio keeps it alive), like
+     * Android's WatchSyncManager (C-4/D7). Screens that do not register for
+     * remote control (the other modes) get the command through the AI queue
+     * with a short lifetime, so a stop that cannot be delivered while the app
+     * is suspended is dropped instead of running when the app is opened later.
+     * The check runs on the main thread, where composition registers.
+     */
+    private fun handleIosWatchPlaybackReduction(
         command: WatchCommand,
+        remoteCommand: ThreadReadAloudRemoteControl.Command,
         action: FutachaAiAction
     ): Boolean {
         val boardId = command.boardId?.takeIf { it.isNotBlank() } ?: return false
         val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() } ?: return false
         val threadId = command.threadId?.takeIf { it.isNotBlank() } ?: return false
-        return FutachaAiCommandBridge.enqueue(
-            FutachaAiCommand(
-                action = action,
-                parameters = buildIosWatchCommandParameters(command) {
-                    put("boardId", boardId)
-                    put("boardUrl", boardUrl)
-                    put("threadId", threadId)
-                },
-                source = "watchos"
-            )
+        dispatch_async(dispatch_get_main_queue()) {
+            val handled = ThreadReadAloudRemoteControl.dispatch(remoteCommand, boardId, boardUrl, threadId)
+            if (!handled) {
+                enqueueIosWatchThreadAction(command, action, IOS_WATCH_UI_COMMAND_MAX_AGE_MILLIS)
+            }
+        }
+        return true
+    }
+
+    private fun enqueueIosWatchThreadAction(
+        command: WatchCommand,
+        action: FutachaAiAction,
+        maxAgeMillis: Long? = null
+    ): Boolean {
+        val boardId = command.boardId?.takeIf { it.isNotBlank() } ?: return false
+        val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() } ?: return false
+        val threadId = command.threadId?.takeIf { it.isNotBlank() } ?: return false
+        val aiCommand = FutachaAiCommand(
+            action = action,
+            parameters = buildIosWatchCommandParameters(command) {
+                put("boardId", boardId)
+                put("boardUrl", boardUrl)
+                put("threadId", threadId)
+            },
+            source = "watchos"
         )
+        return if (maxAgeMillis == null) {
+            FutachaAiCommandBridge.enqueue(aiCommand)
+        } else {
+            FutachaAiCommandBridge.enqueue(aiCommand, maxAgeMillis)
+        }
     }
 
     private suspend fun buildSnapshot(): WatchSnapshot {
@@ -641,6 +693,9 @@ internal enum class IosWatchCommandOutcome(val wireValue: String) {
 
 internal enum class IosWatchRefreshDecision { Start, CoalesceIntoRunning, Throttled }
 
+/** How long an undelivered Watch pause/stop may wait for the app UI. Same as Android. */
+internal const val IOS_WATCH_UI_COMMAND_MAX_AGE_MILLIS = 60_000L
+
 internal val IOS_WATCH_REFRESH_MIN_INTERVAL: Duration = 2.minutes
 
 internal fun resolveIosWatchRefreshDecision(
@@ -681,8 +736,7 @@ fun registerIosBackgroundRefreshTask() {
     val enabledAtLaunch =
         defaults.boolForKey(IOS_BACKGROUND_REFRESH_KEY) ||
             defaults.boolForKey(IOS_WATCH_ALERT_KEY) ||
-            ExperienceProfile.fromPersistedValue(defaults.stringForKey(IOS_ACTIVE_PROFILE_KEY)) ==
-            ExperienceProfile.TOSHIAKI_COMPAT ||
+            !ExperienceProfile.fromPersistedValue(defaults.stringForKey(IOS_ACTIVE_PROFILE_KEY)).usesAppStateData ||
             (lastScreenDecision ?: true)
     Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabledAtLaunch=$enabledAtLaunch)")
     BackgroundRefreshManager.configure(enabledAtLaunch) { kind ->
@@ -814,11 +868,13 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         LaunchedEffect(Unit) {
             IosThreadDeepLinkBridge.stream().collect { raw ->
                 platformThreadDeepLink = raw
+                IosThreadDeepLinkBridge.clearReplay()
             }
         }
         LaunchedEffect(Unit) {
             IosBoardDeepLinkBridge.stream().collect { raw ->
                 platformBoardDeepLink = raw
+                IosBoardDeepLinkBridge.clearReplay()
             }
         }
         // FutachaAiCommandBridge is intentionally single-consumer. iOS owns
@@ -943,7 +999,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
             if (!initializationComplete) return@LaunchedEffect
             coroutineScope {
                 launch {
-                    if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
+                    if (!activeProfile.usesAppStateData) {
                         compatibilityStore.boards.collect { compatBoards ->
                             val current = stateStore.boards.first()
                             val synchronized = synchronizeModernBoardsFromCompatibility(current, compatBoards)
@@ -955,7 +1011,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             if (modernBoards.isNotEmpty()) hasObservedLoadedModernBoards = true
                             if (!hasObservedLoadedModernBoards) return@collect
                             val desired = modernBoardsToCompatibility(modernBoards)
-                            val desiredKeys = desired.mapTo(mutableSetOf()) { it.key }
+                            val desiredKeys = com.valoser.futacha.shared.compat.compatibilityBoardSynchronizationKeys(modernBoards)
+                            compatibilityStore.importModernBoards(modernBoards)
                             compatibilityStore.boards.first()
                                 .filterNot { it.key in desiredKeys }
                                 .forEach { compatibilityStore.deleteBoard(it.key) }
@@ -1006,7 +1063,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 ) { backgroundEnabled, watchAlertEnabled, compatPreferences, profile, generation ->
                     val archiveReportEnabled = compatPreferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
                     val compatEnabled = when (profile) {
-                        ExperienceProfile.FUTACHA -> false
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> false
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = parseCompatForegroundNetworkPolicy(
                                 compatPreferences["compat.background.backgroundThreadUpdateCheck"]
@@ -1024,7 +1081,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         profile = profile,
                         generation = generation,
                         enabled = when (profile) {
-                            ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled ||
+                            ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled ||
                                 com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                             ExperienceProfile.TOSHIAKI_COMPAT -> compatEnabled
                         }
@@ -1162,12 +1219,12 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             profileSwitchError = null
                             // Copy the shared dataset before persisting the new
                             // profile so a cold recompose can read it at once.
-                            if (target == ExperienceProfile.TOSHIAKI_COMPAT) {
+                            if (!target.usesAppStateData) {
                                 val boards = stateStore.boards.first()
                                 compatibilityStore.bootstrapBoardsIfNeeded(boards)
                                 compatibilityStore.importModernBoards(boards)
                                 compatibilityStore.importModernHistory(stateStore.history.first())
-                            } else if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
+                            } else if (!activeProfile.usesAppStateData) {
                                 val compatBoards = compatibilityStore.boards.first()
                                 val compatHistory = compatibilityStore.history.first()
                                 val boards = stateStore.boards.first()
@@ -1414,7 +1471,7 @@ private suspend fun runIosBackgroundRefreshLocked(
         cursorNamespace = "background"
     )
     try {
-        if (activeProfile == ExperienceProfile.TOSHIAKI_COMPAT) {
+        if (!activeProfile.usesAppStateData) {
             val store = IosAppGraph.compatibilityStore
             store.initialize()
             val preferences = store.preferences.first()
@@ -1549,7 +1606,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                         replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
                     notifyNewIosWatchAlertMatches(alerts)
                 }, commitGate = { commit ->
-                    profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
+                    profileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
                 },
                 budgetMillis = plan.sharedFeaturesBudgetMillis)
         }
@@ -1570,14 +1627,14 @@ private suspend fun runIosBackgroundRefreshLocked(
                         runBudgetMillis = plan.historyRunBudgetMillis,
                         historyCommitGate = { commit ->
                             profileStore.runIfGenerationCurrent(
-                                ExperienceProfile.FUTACHA,
+                                activeProfile,
                                 expectedGeneration,
                                 commit
                             )
                         },
                         autoSaveCommitGate = { commit ->
                             profileStore.runIfGenerationCurrent(
-                                ExperienceProfile.FUTACHA,
+                                activeProfile,
                                 expectedGeneration,
                                 commit
                             )
@@ -1589,7 +1646,7 @@ private suspend fun runIosBackgroundRefreshLocked(
             }
         }
         suspend fun runWatchAlerts() {
-            if (!watchAlertEnabled || !profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)) return
+            if (!watchAlertEnabled || !profileStore.isGenerationCommitAllowed(activeProfile, expectedGeneration)) return
             try {
                 // Nothing is marked seen until notified. A cut-off check still
                 // notifies what it found; the rest is redone next run.
@@ -1614,14 +1671,14 @@ private suspend fun runIosBackgroundRefreshLocked(
         }
         suspend fun runArchiveReports() {
             if (!archiveReportEnabled || !profileStore.isGenerationCommitAllowed(
-                    ExperienceProfile.FUTACHA,
+                    activeProfile,
                     expectedGeneration
                 )
             ) return
             // Each sent batch is saved; an unfinished one is retried later.
             withIosBackgroundStageTimeout(plan.archiveReportTimeoutMillis, "archive report") {
                 IosArchiveReportScheduler.processNow(archiveStore) {
-                    profileStore.isGenerationCommitAllowed(ExperienceProfile.FUTACHA, expectedGeneration)
+                    profileStore.isGenerationCommitAllowed(activeProfile, expectedGeneration)
                 }
             }
         }

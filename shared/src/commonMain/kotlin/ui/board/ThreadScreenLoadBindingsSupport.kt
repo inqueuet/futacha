@@ -216,8 +216,8 @@ internal fun buildThreadScreenLoadBindings(
                     config = loadRunnerConfig,
                     callbacks = loadRunnerCallbacks
                 ) else null
-                // Show the local copy at once, but always continue to the network:
-                // a local copy alone would hide new replies and dead threads.
+                // Show the local copy first. Automatic reopening can be disabled;
+                // explicit refreshes and posting still use the network.
                 val activeLoadRunnerConfig = when {
                     localStaleResult != null ->
                         loadRunnerConfig.copy(preferOfflineFallbackAfterLocalStale = true)
@@ -242,6 +242,7 @@ internal fun buildThreadScreenLoadBindings(
                             usedOffline = true
                         )
                     )
+                    if (localStaleResult.page.posts.isNotEmpty() && !loadRunnerCallbacks.reloadOnOpenEnabled()) return@launch
                 }
                 val loadResult = PerformanceTracker.measureSuspend(
                     traceName = "thread_initial_load",

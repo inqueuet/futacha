@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.repository
 import com.valoser.futacha.shared.model.HistoryArchiveEntry
 import com.valoser.futacha.shared.model.HistoryArchiveFile
 import com.valoser.futacha.shared.model.HistoryArchiveFileKind
+import com.valoser.futacha.shared.model.HISTORY_ARCHIVE_VERSION
 import com.valoser.futacha.shared.model.HistoryArchiveManifest
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
 import com.valoser.futacha.shared.model.SaveStatus
@@ -74,6 +75,12 @@ suspend fun importHistoryArchive(
             HistoryArchiveManifest.serializer(),
             manifestPayload
         )
+        // A file written by a newer app may use a layout this version would misread; a
+        // missing field reads as the current version, and 0 or negative is never valid.
+        require(manifest.archiveVersion in 1..HISTORY_ARCHIVE_VERSION) {
+            "History archive format version ${manifest.archiveVersion} is not supported " +
+                "(this app reads versions 1 to $HISTORY_ARCHIVE_VERSION)"
+        }
         require(manifest.entries.size <= MAX_HISTORY_ARCHIVE_ENTRIES) {
             "History archive contains too many entries"
         }

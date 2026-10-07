@@ -50,7 +50,7 @@ internal fun projectFutachaThread(
     phashHidden: Set<String> = emptySet(),
     modernNgHidden: Set<String> = emptySet()
 ): ThreadPage {
-    if (context.extraction == null && (!settings.ngEnabled || (rules.isEmpty() && phashHidden.isEmpty()))) {
+    if (isFutachaProjectionPassThrough(context, rules, settings, phashHidden)) {
         return normallyFiltered
     }
     val snapshots = source.toCompatThreadSnapshot(context.tabKey, 0).posts
@@ -72,6 +72,23 @@ internal fun projectFutachaThread(
     })
 }
 
+/** True when [projectFutachaThread] returns the normally filtered page as is (nothing to hide or extract). */
+internal fun isFutachaProjectionPassThrough(
+    context: FutachaThreadProjection,
+    rules: List<CompatNgRule>,
+    settings: FutachaThreadProjectionSettings,
+    phashHidden: Set<String>
+): Boolean = context.extraction == null && (!settings.ngEnabled || (rules.isEmpty() && phashHidden.isEmpty()))
+
+/**
+ * Whether the modern (header/word) NG ids are read by [projectFutachaThread]: they only count when NG is
+ * enabled, or when the NG extraction itself is shown.
+ */
+internal fun futachaProjectionUsesModernNg(
+    context: FutachaThreadProjection,
+    settings: FutachaThreadProjectionSettings
+): Boolean = settings.ngEnabled || context.extraction == CompatExtractionKind.NG
+
 /**
  * The Futacha page with the shared (compatibility) NG rules and extraction
  * applied. Returns null while a needed projection is still running, so the
@@ -85,7 +102,8 @@ internal fun rememberFutachaFilteredThreadPage(
     source: ThreadPage,
     normallyFiltered: ThreadPage,
     ngHeaders: List<String>,
-    ngWords: List<String>
+    ngWords: List<String>,
+    postTextCache: ThreadPostTextCache? = null
 ): ThreadPage? {
     val features = LocalFutachaSharedFeatures.current ?: return normallyFiltered
     val context = LocalFutachaThreadProjection.current ?: return normallyFiltered
@@ -112,7 +130,7 @@ internal fun rememberFutachaFilteredThreadPage(
             return@produceState
         }
         val posts = withContext(AppDispatchers.parsing) { source.toCompatThreadSnapshot(context.tabKey, 0).posts }
-        value = compatImagePhashHiddenPostNos(features.httpClient, posts, phashRules, threshold)
+        value = compatImagePhashHiddenPostNos(features.httpClient, posts, phashRules, threshold, store = features.store)
     }
     val settings = FutachaThreadProjectionSettings(
         ngEnabled = features.value("thread", "threadNg", "NG機能") != "OFF",
@@ -123,12 +141,24 @@ internal fun rememberFutachaFilteredThreadPage(
         (settings.ngEnabled && rules.isNotEmpty())
     val result = key(context.tabKey) {
     val projected by produceState<ThreadPage?>(null, source, normallyFiltered, context, rules,
-        settings, phashHidden, ngHeaders, ngWords) {
+        settings, phashHidden, ngHeaders, ngWords, needsProjection) {
+        // The result is not read when nothing needs projecting; do not walk every post for it.
+        if (!needsProjection) return@produceState
         val currentRules = rules ?: return@produceState
+        if (isFutachaProjectionPassThrough(context, currentRules, settings, phashHidden)) {
+            value = normallyFiltered
+            return@produceState
+        }
+        // Posts the modern NG hides, found only when projectFutachaThread reads them; rules are
+        // canonicalized once and bodies come from the screen's text cache.
+        val modernNgHidden = if (futachaProjectionUsesModernNg(context, settings)) {
+            findNgHiddenPostIds(source.posts, ngHeaders, ngWords, postTextCache)
+        } else {
+            emptySet()
+        }
         value = withContext(AppDispatchers.parsing) {
-            val modernVisible = applyNgFilters(source, ngHeaders, ngWords, true).posts.mapTo(hashSetOf()) { it.id }
             projectFutachaThread(source, normallyFiltered, context, currentRules, settings,
-                phashHidden, source.posts.filter { it.id !in modernVisible }.mapTo(hashSetOf()) { it.id })
+                phashHidden, modernNgHidden)
         }
     }
     projected

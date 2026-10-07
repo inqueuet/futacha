@@ -6,7 +6,15 @@ sealed interface CompatHost {
     data object Main : CompatHost
     data class Catalog(val boardKey: String) : CompatHost
     data class ThreadWorkspace(val origin: CompatThreadOrigin) : CompatHost
-    data class Post(val tabKey: String) : CompatHost
+    /**
+     * [threadOrigin] is how the thread workspace this screen was opened from was reached, so Back
+     * returns to that workspace (and from there to the main screen or the right catalog) instead of
+     * always assuming it came from a catalog.
+     */
+    data class Post(
+        val tabKey: String,
+        val threadOrigin: CompatThreadOrigin = CompatThreadOrigin.CATALOG
+    ) : CompatHost
     data class PostBuild(val boardKey: String) : CompatHost
     data class PostDrawing(val origin: CompatHost) : CompatHost
     data class Gallery(
@@ -14,7 +22,8 @@ sealed interface CompatHost {
         /** Gallery item to restore when returning from the viewer. */
         val index: Int = 0,
         /** Stable media identity used before the index when the snapshot changed. */
-        val postNo: String? = null
+        val postNo: String? = null,
+        val threadOrigin: CompatThreadOrigin = CompatThreadOrigin.CATALOG
     ) : CompatHost
     data class Viewer(
         val tabKey: String,
@@ -26,7 +35,8 @@ sealed interface CompatHost {
         /** Media opened directly from a filename while uploader gallery display is disabled. */
         val directMediaUrl: String? = null,
         /** Original thread position used by the viewer's source-post action. */
-        val directSourcePosition: Int? = null
+        val directSourcePosition: Int? = null,
+        val threadOrigin: CompatThreadOrigin = CompatThreadOrigin.CATALOG
     ) : CompatHost
     data class ToolbarEditor(
         val surface: CompatToolbarSurface,
@@ -449,16 +459,16 @@ private fun reduceCompatibilityBack(state: CompatibilityWorkspaceState): Compati
         is CompatHost.Viewer -> CompatibilityReduction(
             state.copy(
                 host = when (host.caller) {
-                    CompatViewerCaller.THREAD -> CompatHost.ThreadWorkspace(CompatThreadOrigin.CATALOG)
-                    CompatViewerCaller.GALLERY -> CompatHost.Gallery(host.tabKey, host.index, host.postNo)
+                    CompatViewerCaller.THREAD -> CompatHost.ThreadWorkspace(host.threadOrigin)
+                    CompatViewerCaller.GALLERY -> CompatHost.Gallery(host.tabKey, host.index, host.postNo, host.threadOrigin)
                 }
             )
         )
         is CompatHost.Gallery -> CompatibilityReduction(
-            state.copy(host = CompatHost.ThreadWorkspace(CompatThreadOrigin.CATALOG))
+            state.copy(host = CompatHost.ThreadWorkspace(host.threadOrigin))
         )
         is CompatHost.Post -> CompatibilityReduction(
-            state.copy(host = CompatHost.ThreadWorkspace(CompatThreadOrigin.CATALOG))
+            state.copy(host = CompatHost.ThreadWorkspace(host.threadOrigin))
         )
         is CompatHost.PostBuild -> CompatibilityReduction(state.copy(host = CompatHost.Catalog(host.boardKey)))
         is CompatHost.PostDrawing -> CompatibilityReduction(state.copy(host = host.origin))

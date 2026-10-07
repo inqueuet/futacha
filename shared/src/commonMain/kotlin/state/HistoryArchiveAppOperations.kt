@@ -44,7 +44,7 @@ suspend fun exportAppHistoryArchive(
             appVersion = appVersion
         )
     ).map { result ->
-        result.copy(omittedEntryCount = requestedEntries.size - exportEntries.size)
+        result.copy(omittedEntryCount = result.omittedEntryCount + (requestedEntries.size - exportEntries.size))
     }
 }
 

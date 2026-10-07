@@ -10,6 +10,7 @@ import org.json.JSONObject
 import com.valoser.futacha.shared.compat.isValidCompatImagePhash
 import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
 import com.valoser.futacha.shared.compat.pinnedTo
+import com.valoser.futacha.shared.compat.CompatCatalogReplyCountUpdate
 import com.valoser.futacha.shared.compat.ClosedCompatTab
 import com.valoser.futacha.shared.compat.ClosedTabBatch
 import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_MAX_ROWS
@@ -578,6 +579,39 @@ class AndroidCompatibilityStore(
         true
     }
 
+    /**
+     * One-transaction form of [applyCatalogReplyCountsOneByOne]: the same per-row rules
+     * (counts only grow, missing rows and tombstoned history are never created, key/URL/anchor
+     * stay as stored), but all rows are written, and the observable tabs/history are re-read,
+     * once for the whole catalog instead of once per update.
+     */
+    override suspend fun applyCatalogReplyCounts(updates: List<CompatCatalogReplyCountUpdate>): Int {
+        if (updates.isEmpty()) return 0
+        return mutate(
+            refresh = setOf(CompatObservableState.TABS, CompatObservableState.HISTORY)
+        ) { db ->
+            var changedTabs = 0
+            // Read the history once; later updates of the same URL see earlier ones.
+            var historyByUrl: MutableMap<String, CompatHistoryEntry>? = null
+            for (update in updates) {
+                val currentTab = db.readTab(update.tabKey)
+                if (currentTab != null && currentTab.replyCount < update.replyCount) {
+                    db.upsertTab(currentTab.copy(replyCount = update.replyCount).pinnedTo(currentTab))
+                    changedTabs++
+                }
+                if (db.hasHistoryTombstone(update.canonicalUrl)) continue
+                val byUrl = historyByUrl ?: db.readHistory().associateByTo(HashMap<String, CompatHistoryEntry>()) { it.canonicalUrl }
+                    .also { historyByUrl = it }
+                val currentEntry = byUrl[update.canonicalUrl] ?: continue
+                if (currentEntry.replyCount >= update.replyCount) continue
+                val next = currentEntry.copy(replyCount = update.replyCount, canonicalUrl = currentEntry.canonicalUrl)
+                db.upsertHistory(next)
+                byUrl[update.canonicalUrl] = next
+            }
+            changedTabs
+        }
+    }
+
     override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate(
         refresh = setOf(CompatObservableState.HISTORY)
     ) { db ->
@@ -876,7 +910,7 @@ class AndroidCompatibilityStore(
         trackDropped: Boolean,
         requestedThreadCount: Int,
         activeDroppedThreadIds: Set<String>
-    ): Boolean = mutate(refresh = NO_COMPAT_OBSERVABLE_STATES) { db ->
+    ): Boolean = mutate(refresh = setOf(CompatObservableState.TABS)) { db ->
         require(snapshot.boardKey.isNotBlank()) { "Compatibility catalog snapshot requires a board" }
         require(snapshot.revision >= 0L) { "Compatibility catalog revision must be non-negative" }
         require(snapshot.items.size <= MAX_COMPAT_CATALOG_SNAPSHOT_ITEMS) {
@@ -1035,6 +1069,24 @@ class AndroidCompatibilityStore(
                 MAX_COMPAT_CATALOG_SNAPSHOT_GENERATIONS
             )
         )
+        // The six generations are kept per board and sort; across many boards that is still
+        // unbounded, so the oldest-fetched generations of the whole table are dropped
+        // beyond a global limit (items go with them through the foreign key cascade).
+        db.execSQL(
+            """DELETE FROM compat_catalog_snapshot WHERE rowid IN (
+                    SELECT rowid FROM compat_catalog_snapshot ORDER BY fetched_at ASC, revision ASC
+                    LIMIT MAX(0, (SELECT COUNT(*) FROM compat_catalog_snapshot) - ?)
+                )""".trimIndent(),
+            arrayOf<Any?>(MAX_COMPAT_CATALOG_SNAPSHOT_TOTAL_GENERATIONS)
+        )
+        val replyCounts = com.valoser.futacha.shared.compat.catalogReplyCountsByUrl(snapshot.items)
+        db.readTabs().forEach { tab ->
+            val updated = com.valoser.futacha.shared.compat.updatedCatalogReplyCount(tab, replyCounts, snapshot.fetchedAtEpochMillis)
+            if (updated != tab) db.update("compat_tab", ContentValues().apply {
+                put("reply_count", updated.replyCount)
+                put("content_updated_at", updated.contentUpdatedAtEpochMillis)
+            }, "tab_key=?", arrayOf(tab.key))
+        }
         true
     }
 
@@ -2744,6 +2796,7 @@ class AndroidCompatibilityStore(
             put("subject", draft.subject)
             put("comment", draft.comment)
             put("attachment_uri", draft.attachmentUri)
+            put("attachment_handwriting", if (draft.attachmentIsHandwriting) 1 else 0)
             put("delete_key", draft.deleteKey)
             put("updated_at", draft.updatedAtEpochMillis)
         }
@@ -2754,7 +2807,7 @@ class AndroidCompatibilityStore(
 
     private fun SQLiteDatabase.readDraft(tabKey: String): CompatReplyDraft? = query(
         "compat_reply_draft",
-        arrayOf("tab_key", "name", "email", "subject", "comment", "attachment_uri", "delete_key", "updated_at"),
+        arrayOf("tab_key", "name", "email", "subject", "comment", "attachment_uri", "delete_key", "updated_at", "attachment_handwriting"),
         "tab_key=?",
         arrayOf(tabKey),
         null,
@@ -2770,7 +2823,8 @@ class AndroidCompatibilityStore(
             comment = cursor.getString(4),
             attachmentUri = cursor.getNullableString(5),
             deleteKey = cursor.getString(6),
-            updatedAtEpochMillis = cursor.getLong(7)
+            updatedAtEpochMillis = cursor.getLong(7),
+            attachmentIsHandwriting = cursor.getInt(8) != 0
         )
     }
 
@@ -2782,6 +2836,7 @@ class AndroidCompatibilityStore(
             put("subject", draft.subject)
             put("comment", draft.comment)
             put("attachment_uri", draft.attachmentUri)
+            put("attachment_handwriting", if (draft.attachmentIsHandwriting) 1 else 0)
             put("delete_key", draft.deleteKey)
             put("updated_at", draft.updatedAtEpochMillis)
         }
@@ -2792,7 +2847,7 @@ class AndroidCompatibilityStore(
 
     private fun SQLiteDatabase.readBuildDraft(boardKey: String): CompatBuildDraft? = query(
         "compat_build_draft",
-        arrayOf("board_key", "name", "email", "subject", "comment", "attachment_uri", "delete_key", "updated_at"),
+        arrayOf("board_key", "name", "email", "subject", "comment", "attachment_uri", "delete_key", "updated_at", "attachment_handwriting"),
         "board_key=?",
         arrayOf(boardKey),
         null,
@@ -2808,7 +2863,8 @@ class AndroidCompatibilityStore(
             comment = cursor.getString(4),
             attachmentUri = cursor.getNullableString(5),
             deleteKey = cursor.getString(6),
-            updatedAtEpochMillis = cursor.getLong(7)
+            updatedAtEpochMillis = cursor.getLong(7),
+            attachmentIsHandwriting = cursor.getInt(8) != 0
         )
     }
 
@@ -2956,6 +3012,8 @@ class AndroidCompatibilityStore(
         const val MAX_COMPAT_TAB_READ_ROWS = 1_000
         const val MAX_COMPAT_CATALOG_SNAPSHOT_ITEMS = 3_000
         const val MAX_COMPAT_CATALOG_SNAPSHOT_GENERATIONS = 6
+        /** About 30 board/sort combinations at six generations each; a few MB for typical catalogs. */
+        const val MAX_COMPAT_CATALOG_SNAPSHOT_TOTAL_GENERATIONS = 180
         const val MAX_COMPAT_CATALOG_DROPPED_ITEMS = 200
         const val MAX_COMPAT_CATALOG_ITEM_JSON_CHARS = 64 * 1024
         const val MAX_COMPAT_POST_JSON_CHARS = 2 * 1024 * 1024
@@ -3323,6 +3381,10 @@ private class CompatibilityDatabaseHelper(
             CompatibilityDatabaseSchema.migration11To12.forEach(db::execSQL)
             version = 12
         }
+        if (version == 12 && newVersion >= 13) {
+            CompatibilityDatabaseSchema.migration12To13.forEach(db::execSQL)
+            version = 13
+        }
         check(version == newVersion) {
             "Unsupported compatibility DB migration $oldVersion -> $newVersion (stopped at $version)"
         }
@@ -3337,7 +3399,11 @@ private fun CompatNgRule.compatPayloadJson(): String = JSONObject().apply {
 }.toString()
 
 internal object CompatibilityDatabaseSchema {
-    const val version = 12
+    const val version = 13
+    val migration12To13 = listOf(
+        "ALTER TABLE compat_reply_draft ADD COLUMN attachment_handwriting INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE compat_build_draft ADD COLUMN attachment_handwriting INTEGER NOT NULL DEFAULT 0"
+    )
     const val initialWorkspaceStatement =
         "INSERT INTO compat_workspace(singleton_id, selector_presentation, generation) VALUES(1, 'ABOVE', 0)"
     val migration1To2 = listOf(
@@ -3421,8 +3487,8 @@ internal object CompatibilityDatabaseSchema {
         "CREATE TABLE compat_workspace(singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1), active_tab_key TEXT, catalog_host_board_key TEXT, main_selector_open INTEGER NOT NULL DEFAULT 0, catalog_selector_open INTEGER NOT NULL DEFAULT 0, thread_selector_open INTEGER NOT NULL DEFAULT 0, selector_presentation TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE compat_tab(tab_key TEXT PRIMARY KEY NOT NULL, canonical_url TEXT UNIQUE NOT NULL, original_url TEXT NOT NULL, board_key TEXT NOT NULL, board_name TEXT NOT NULL, thread_no TEXT NOT NULL, title TEXT NOT NULL, thumbnail_url TEXT, reply_count INTEGER NOT NULL, checked_reply_count INTEGER NOT NULL, is_dead INTEGER NOT NULL, is_isolated INTEGER NOT NULL, is_exploded INTEGER NOT NULL, is_old INTEGER NOT NULL, favorite INTEGER NOT NULL, inserted_at INTEGER NOT NULL, content_updated_at INTEGER NOT NULL, scroll_anchor_json TEXT NOT NULL, snapshot_revision INTEGER NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
         "CREATE INDEX compat_tab_inserted_idx ON compat_tab(inserted_at DESC)",
-        "CREATE TABLE compat_reply_draft(tab_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(tab_key) REFERENCES compat_tab(tab_key) ON DELETE CASCADE)",
-        "CREATE TABLE compat_build_draft(board_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
+        "CREATE TABLE compat_reply_draft(tab_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, attachment_handwriting INTEGER NOT NULL DEFAULT 0, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(tab_key) REFERENCES compat_tab(tab_key) ON DELETE CASCADE)",
+        "CREATE TABLE compat_build_draft(board_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, attachment_handwriting INTEGER NOT NULL DEFAULT 0, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
         "CREATE TABLE compat_history(canonical_url TEXT PRIMARY KEY NOT NULL, original_url TEXT NOT NULL, board_key TEXT NOT NULL, board_name TEXT NOT NULL, thread_no TEXT NOT NULL, title TEXT NOT NULL, thumbnail_url TEXT, reply_count INTEGER NOT NULL, content_updated_at INTEGER NOT NULL, last_visited_at INTEGER NOT NULL, scroll_anchor_json TEXT NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
         "CREATE INDEX compat_history_updated_idx ON compat_history(content_updated_at DESC)",
         "CREATE INDEX compat_history_visited_idx ON compat_history(last_visited_at DESC)",

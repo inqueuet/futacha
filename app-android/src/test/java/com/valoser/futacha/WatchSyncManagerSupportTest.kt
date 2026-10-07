@@ -7,6 +7,19 @@ import org.junit.Test
 
 class WatchSyncManagerSupportTest {
     @Test
+    fun buildWatchReadAloudStatusUpdate_numbersUpdatesMonotonicallyWithinOneSession() {
+        val source = WatchReadAloudSequenceSource(sessionId = 42L)
+        val first = buildWatchReadAloudStatusUpdate(status = null, nowMillis = 1_000L, sequenceSource = source)
+        val second = buildWatchReadAloudStatusUpdate(status = null, nowMillis = 500L, sequenceSource = source)
+        assertEquals(42L, first.sessionId)
+        assertEquals(42L, second.sessionId)
+        assertEquals(1L, first.sequence)
+        // Even when the phone clock moves backwards the sequence keeps increasing.
+        assertEquals(2L, second.sequence)
+        assertEquals(500L, second.updatedAtMillis)
+    }
+
+    @Test
     fun isStaleWatchCommandDataItem_dropsCommandsQueuedWhileDisconnected() {
         val now = 1_800_000_000_000L
         assertEquals(false, isStaleWatchCommandDataItem(updatedAtMillis = now - 30_000L, nowMillis = now))

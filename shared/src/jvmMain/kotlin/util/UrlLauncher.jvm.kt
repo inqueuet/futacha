@@ -11,6 +11,10 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
     return remember(scope) { { value: String -> scope.launch {
         try { withContext(Dispatchers.IO) { openDesktopUrl(value) } }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { JOptionPane.showMessageDialog(null, failure.message ?: "リンクを開けませんでした", "ふたちゃ", JOptionPane.ERROR_MESSAGE) }
+        catch (failure: Exception) {
+            // Only our own (Japanese) validation messages are shown; the JDK's are English.
+            val message = (failure as? IllegalArgumentException)?.message ?: "リンクを開けませんでした"
+            JOptionPane.showMessageDialog(null, message, "ふたちゃ", JOptionPane.ERROR_MESSAGE)
+        }
     }; Unit } }
 }

@@ -289,6 +289,21 @@ private val COMPAT_POST_VIDEO_EXTENSIONS = FUTABA_VIDEO_EXTENSIONS
 internal fun compatPostAttachmentExtension(fileName: String): String =
     fileName.substringAfterLast('.', missingDelimiterValue = "").lowercase()
 
+/**
+ * Some providers return an extension-less display name such as `1000012345`. The
+ * extension decides acceptance (here and when the form is posted), so a real image
+ * would be rejected as an unsupported format. Names that already carry an extension
+ * are returned unchanged; otherwise it is supplied from the image's leading bytes.
+ * Videos and unknown content are not guessed and keep their name.
+ */
+internal fun compatPostAttachmentWithDetectedExtension(attachment: ImageData): ImageData {
+    if (attachment.isHandwriting) return attachment
+    val name = attachment.fileName
+    if (name.isBlank() || compatPostAttachmentExtension(name).isNotEmpty()) return attachment
+    val extension = detectCompatPostImageFormat(attachment.bytes).extension ?: return attachment
+    return attachment.copy(fileName = "${name.trimEnd('.')}.$extension")
+}
+
 internal fun compatPostAttachmentKind(fileName: String): CompatPostAttachmentKind {
     val extension = compatPostAttachmentExtension(fileName)
     return when (extension) {

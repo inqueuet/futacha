@@ -33,7 +33,8 @@ data class HistoryArchiveExportResult(
     val historyOnlyCount: Int,
     val partialPayloadCount: Int,
     // History entries left out because the archive holds at most
-    // MAX_HISTORY_ARCHIVE_ENTRIES (the oldest by last visit are dropped).
+    // MAX_HISTORY_ARCHIVE_ENTRIES (the oldest by last visit are dropped), or because their
+    // files would take the archive past its manifest or total size limit.
     val omittedEntryCount: Int = 0,
     // Saved files that existed but could not be copied into the archive. The source
     // still holds them, so "export then clear" must not delete it.
@@ -45,8 +46,8 @@ suspend fun exportHistoryArchive(
     sourceRepositories: List<SavedThreadRepository>,
     request: HistoryArchiveExportRequest,
     archiveBaseDirectory: String = HISTORY_ARCHIVE_DIRECTORY,
+    // Compact: indentation of up to 2,000 entries used a large part of the 4 MB manifest limit.
     json: Json = Json {
-        prettyPrint = true
         ignoreUnknownKeys = true
     }
 ): Result<HistoryArchiveExportResult> = withContext(AppDispatchers.io) {
@@ -73,19 +74,40 @@ suspend fun exportHistoryArchive(
         var copiedFileCount = 0
         var totalFailedCopyCount = 0
         var plannedFileCount = 0L
-        request.historyEntries.forEach { historyEntry ->
+        // The manifest and total payload limits are checked from the plan before an entry's
+        // files are copied. Found only after copying, they failed the export and deleted
+        // gigabytes of copies. Entries that no longer fit are left out and reported.
+        var plannedManifestBytes = HISTORY_ARCHIVE_MANIFEST_OVERHEAD_BYTES
+        var plannedPayloadBytes = 0L
+        var omittedForSizeCount = 0
+        for ((historyIndex, historyEntry) in request.historyEntries.withIndex()) {
             coroutineContext.ensureActive()
             val planned = chooseBestHistoryArchivePayloadPlan(
                 sourceRepositories = sourceRepositories,
                 historyEntry = historyEntry,
                 archiveId = archiveId
             )
-            val copiedFiles = mutableListOf<HistoryArchiveFile>()
-            var failedCopyCount = 0
             val sourceFiles = planned?.plan?.sourceFiles.orEmpty()
             require(sourceFiles.size <= MAX_HISTORY_ARCHIVE_FILES_PER_ENTRY) {
                 "History archive entry contains too many files"
             }
+            val plannedEntry = planned?.plan?.archiveEntry ?: buildHistoryOnlyArchiveEntry(historyEntry, archiveId)
+            // The copied entry lists a subset of the planned files, so this is an upper bound.
+            val entryManifestBytes = json.encodeToString(HistoryArchiveEntry.serializer(), plannedEntry)
+                .encodeToByteArray().size.toLong() + 1L
+            val entryPayloadBytes = sourceFiles
+                .filter { it.sizeBytes in 0L..MAX_HISTORY_ARCHIVE_SINGLE_PAYLOAD_BYTES }
+                .fold(0L) { total, file -> safeHistoryArchiveExportSizeAdd(total, file.sizeBytes) }
+            if (plannedManifestBytes + entryManifestBytes > MAX_HISTORY_ARCHIVE_MANIFEST_BYTES ||
+                plannedPayloadBytes + entryPayloadBytes > MAX_HISTORY_ARCHIVE_TOTAL_PAYLOAD_BYTES
+            ) {
+                omittedForSizeCount = request.historyEntries.size - historyIndex
+                break
+            }
+            plannedManifestBytes += entryManifestBytes
+            plannedPayloadBytes += entryPayloadBytes
+            val copiedFiles = mutableListOf<HistoryArchiveFile>()
+            var failedCopyCount = 0
             plannedFileCount += sourceFiles.size.toLong()
             require(plannedFileCount <= MAX_HISTORY_ARCHIVE_TOTAL_FILES) {
                 "History archive contains too many files"
@@ -120,8 +142,7 @@ suspend fun exportHistoryArchive(
             }
             totalFailedCopyCount += failedCopyCount
             exportedEntries += buildCopiedHistoryArchiveEntry(
-                plannedEntry = planned?.plan?.archiveEntry
-                    ?: buildHistoryOnlyArchiveEntry(historyEntry, archiveId),
+                plannedEntry = plannedEntry,
                 copiedFiles = copiedFiles,
                 failedCopyCount = failedCopyCount
             )
@@ -161,6 +182,7 @@ suspend fun exportHistoryArchive(
                 partialPayloadCount = exportedEntries.count {
                     it.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
                 },
+                omittedEntryCount = omittedForSizeCount,
                 failedCopyCount = totalFailedCopyCount
             )
         )
@@ -185,6 +207,8 @@ private suspend fun cleanupIncompleteHistoryArchive(fileSystem: FileSystem, dire
 }
 
 private const val HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS = 60_000L
+// Manifest header (ids, counts, version) and separators, with room to spare.
+private const val HISTORY_ARCHIVE_MANIFEST_OVERHEAD_BYTES = 4_096L
 private const val HISTORY_ARCHIVE_ABANDONED_AGE_MILLIS = 60L * 60L * 1000L
 private const val HISTORY_ARCHIVE_MAX_SWEPT_PER_EXPORT = 8
 private val HISTORY_ARCHIVE_TIMESTAMPED_NAME = Regex("^(?:history|archive)_([0-9]{10,15})$")

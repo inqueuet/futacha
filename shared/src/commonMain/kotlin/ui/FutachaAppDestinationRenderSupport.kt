@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.ui.board.ThreadScreenDependencies
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.CoroutineScope
 
@@ -44,7 +45,31 @@ internal fun buildFutachaResolvedDestinationContent(
                     buildFutachaSavedThreadsDestinationProps(
                         repository = it,
                         navigationCallbacks = assemblyContext.navigationCallbacks,
-                        preferencesState = assemblyContext.screenContract.preferencesState
+                        preferencesState = assemblyContext.screenContract.preferencesState,
+                        mht = assemblyContext.fileSystem?.let { fileSystem ->
+                            FutachaMhtDestinationProps(
+                                library = com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary(fileSystem, assemblyContext.httpClient),
+                                boards = boards,
+                                screenContract = assemblyContext.screenContract,
+                                dependenciesFor = { board, page ->
+                                    // Read-only: the page is served by the file, nothing is auto-saved, and the thread is not fetched.
+                                    ThreadScreenDependencies(
+                                        repository = com.valoser.futacha.shared.ui.board.FutachaStaticThreadRepository(
+                                            resolveFutachaBoardRepository(board, assemblyContext.sharedRepository) ?: assemblyContext.sharedRepository, page
+                                        ),
+                                        longRunningScope = assemblyContext.longRunningScope,
+                                        services = buildScreenServiceDependencies(
+                                            stateStore = assemblyContext.stateStore,
+                                            autoSavedThreadRepository = null,
+                                            cookieRepository = assemblyContext.cookieRepository,
+                                            fileSystem = fileSystem,
+                                            httpClient = null,
+                                            compatibilityStore = assemblyContext.compatibilityStore
+                                        )
+                                    )
+                                }
+                            )
+                        }
                     )
                 },
                 onUnavailable = assemblyContext.navigationCallbacks.onSavedThreadsDismissed

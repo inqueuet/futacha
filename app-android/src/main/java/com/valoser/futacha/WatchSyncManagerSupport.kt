@@ -1,6 +1,11 @@
 package com.valoser.futacha
 
+import com.valoser.futacha.shared.watch.WatchPhoneStatus
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
+import com.valoser.futacha.shared.watch.WatchReadAloudStatusUpdate
+import kotlinx.serialization.json.Json
+import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.atomic.AtomicLong
 
 internal enum class WatchRefreshRequestDecision {
     StartRefresh,
@@ -88,3 +93,46 @@ internal fun isStaleWatchCommandDataItem(
     nowMillis: Long,
     maxAgeMillis: Long = WATCH_COMMAND_DATA_ITEM_MAX_AGE_MILLIS
 ): Boolean = updatedAtMillis > 0L && nowMillis - updatedAtMillis > maxAgeMillis
+
+/**
+ * The reply to a watch snapshot request: the phone clock (echoing the watch clock the request
+ * carried, so the watch can learn its clock offset) and whether this mode serves the watch.
+ */
+internal fun buildWatchPhoneStatusPayload(
+    phoneNowMillis: Long,
+    watchSentAtMillis: Long,
+    isSupported: Boolean
+): ByteArray = Json.encodeToString(
+    WatchPhoneStatus.serializer(),
+    WatchPhoneStatus(
+        phoneNowMillis = phoneNowMillis,
+        watchSentAtMillis = watchSentAtMillis,
+        isSupported = isSupported
+    )
+).encodeToByteArray()
+
+/**
+ * Numbers read-aloud status updates for the watch: a per-process [sessionId] and a
+ * monotonic sequence, so the watch can order them without trusting either device's
+ * clock (the watch's learned clock offset may not be calibrated yet).
+ */
+internal class WatchReadAloudSequenceSource(val sessionId: Long) {
+    private val counter = AtomicLong(0L)
+
+    fun next(): Long = counter.incrementAndGet()
+}
+
+internal val watchReadAloudSequenceSource = WatchReadAloudSequenceSource(
+    sessionId = ThreadLocalRandom.current().nextLong(1L, Long.MAX_VALUE)
+)
+
+internal fun buildWatchReadAloudStatusUpdate(
+    status: WatchReadAloudStatus?,
+    nowMillis: Long,
+    sequenceSource: WatchReadAloudSequenceSource = watchReadAloudSequenceSource
+): WatchReadAloudStatusUpdate = WatchReadAloudStatusUpdate(
+    status = status,
+    updatedAtMillis = nowMillis,
+    sessionId = sequenceSource.sessionId,
+    sequence = sequenceSource.next()
+)

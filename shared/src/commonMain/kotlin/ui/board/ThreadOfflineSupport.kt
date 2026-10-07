@@ -135,14 +135,27 @@ internal fun buildOfflineMetadataNotFoundLogMessage(
     return "Offline metadata not found for threadId=$threadId boardIdCandidates=$boardIdCandidates"
 }
 
-internal suspend fun loadFirstOfflineThreadPage(
+/** A locally stored thread body and when it was stored/fetched. */
+internal data class OfflineThreadPageCandidate(
+    val page: ThreadPage,
+    val storedAtEpochMillis: Long
+)
+
+/**
+ * The newest copy over every source. Taking the first source that has the thread meant an old
+ * manual save kept being shown even though an auto-save (or any later copy) existed. A tie keeps
+ * the earlier source in the list, which is the previous priority order.
+ */
+internal suspend fun loadNewestOfflineThreadPageCandidate(
     threadId: String,
     boardIdCandidates: List<String?>,
     expectedBoardKeys: Set<String>,
     fileSystem: FileSystem,
     sources: List<OfflineThreadSource>,
     onBoardMismatch: (SavedThreadMetadata) -> Unit = {}
-): ThreadPage? {
+): OfflineThreadPageCandidate? {
+    var bestSource: OfflineThreadSource? = null
+    var bestMetadata: SavedThreadMetadata? = null
     sources.forEach { source ->
         val metadata = loadFirstOfflineMetadata(
             repository = source.repository,
@@ -151,14 +164,50 @@ internal suspend fun loadFirstOfflineThreadPage(
             expectedBoardKeys = expectedBoardKeys,
             onBoardMismatch = onBoardMismatch
         ) ?: return@forEach
-        return metadata.toThreadPage(
+        val currentBest = bestMetadata
+        if (currentBest == null || metadata.savedAt > currentBest.savedAt) {
+            bestSource = source
+            bestMetadata = metadata
+        }
+    }
+    val source = bestSource ?: return null
+    val metadata = bestMetadata ?: return null
+    return OfflineThreadPageCandidate(
+        page = metadata.toThreadPage(
             fileSystem = fileSystem,
             baseDirectory = source.baseDirectory,
             baseSaveLocation = source.baseSaveLocation
-        )
-    }
-    return null
+        ),
+        storedAtEpochMillis = metadata.savedAt
+    )
 }
+
+/** The newer of a saved copy and the shared (cross-mode) snapshot; a tie prefers the saved copy. */
+internal fun chooseNewestOfflineThreadPage(
+    saved: OfflineThreadPageCandidate?,
+    shared: OfflineThreadPageCandidate?
+): ThreadPage? = when {
+    saved == null -> shared?.page
+    shared == null -> saved.page
+    shared.storedAtEpochMillis > saved.storedAtEpochMillis -> shared.page
+    else -> saved.page
+}
+
+internal suspend fun loadFirstOfflineThreadPage(
+    threadId: String,
+    boardIdCandidates: List<String?>,
+    expectedBoardKeys: Set<String>,
+    fileSystem: FileSystem,
+    sources: List<OfflineThreadSource>,
+    onBoardMismatch: (SavedThreadMetadata) -> Unit = {}
+): ThreadPage? = loadNewestOfflineThreadPageCandidate(
+    threadId = threadId,
+    boardIdCandidates = boardIdCandidates,
+    expectedBoardKeys = expectedBoardKeys,
+    fileSystem = fileSystem,
+    sources = sources,
+    onBoardMismatch = onBoardMismatch
+)?.page
 
 internal suspend fun loadOfflineThreadPage(
     threadId: String,
@@ -166,9 +215,17 @@ internal suspend fun loadOfflineThreadPage(
     fileSystem: FileSystem?,
     sources: List<OfflineThreadSource>,
     onBoardMismatch: (SavedThreadMetadata) -> Unit = {}
-): ThreadPage? {
+): ThreadPage? = loadOfflineThreadPageCandidate(threadId, lookupContext, fileSystem, sources, onBoardMismatch)?.page
+
+internal suspend fun loadOfflineThreadPageCandidate(
+    threadId: String,
+    lookupContext: OfflineThreadLookupContext,
+    fileSystem: FileSystem?,
+    sources: List<OfflineThreadSource>,
+    onBoardMismatch: (SavedThreadMetadata) -> Unit = {}
+): OfflineThreadPageCandidate? {
     val localFileSystem = fileSystem ?: return null
-    return loadFirstOfflineThreadPage(
+    return loadNewestOfflineThreadPageCandidate(
         threadId = threadId,
         boardIdCandidates = lookupContext.boardIdCandidates,
         expectedBoardKeys = lookupContext.expectedBoardKeys,

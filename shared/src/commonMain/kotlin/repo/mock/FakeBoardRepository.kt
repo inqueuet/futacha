@@ -83,7 +83,8 @@ class FakeBoardRepository(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         onAccess()
         return null
@@ -98,7 +99,8 @@ class FakeBoardRepository(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         onAccess()
         // Return a mock thread ID

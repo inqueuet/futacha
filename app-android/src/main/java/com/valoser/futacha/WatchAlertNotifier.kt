@@ -38,19 +38,30 @@ internal class WatchAlertNotifier(
         } else {
             "${first.boardName}: ${first.title} ほか"
         }
+        // Every run posts under its own id, so a later run never replaces the
+        // previous one before the user saw it, and each match is listed (the
+        // ledger records all of them as notified).
+        val notificationId = nextNotificationId()
+        val style = NotificationCompat.InboxStyle()
+            .setBigContentTitle(title)
+        entries.take(MAX_INBOX_LINES).forEach { style.addLine("${it.boardName}: ${it.title}") }
+        if (entries.size > MAX_INBOX_LINES) {
+            style.setSummaryText("ほか ${entries.size - MAX_INBOX_LINES} 件")
+        }
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(mainActivityPendingIntent())
+            .setStyle(style)
+            .setContentIntent(contentPendingIntent(notificationId, entries))
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
         return runCatching {
-            notificationManager.notify(NOTIFICATION_ID, notification)
+            notificationManager.notify(notificationId, notification)
         }.isSuccess
     }
 
@@ -69,11 +80,19 @@ internal class WatchAlertNotifier(
             ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun mainActivityPendingIntent(): PendingIntent {
+    /** One match opens its thread; several matches just resume the app. */
+    private fun contentPendingIntent(
+        requestCode: Int,
+        entries: List<CatalogWatchAlertMatch>
+    ): PendingIntent {
+        val threadIntent = entries.singleOrNull()?.let { match ->
+            watchAlertThreadUrl(match.boardUrl, match.threadId)
+                ?.let { url -> buildWatchAlertThreadContentIntent(context, url) }
+        }
         return PendingIntent.getActivity(
             context,
-            0,
-            buildWatchAlertContentIntent(context),
+            requestCode,
+            threadIntent ?: buildWatchAlertContentIntent(context),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
@@ -94,9 +113,45 @@ internal class WatchAlertNotifier(
 
     private companion object {
         const val CHANNEL_ID = "watch_alerts"
-        const val NOTIFICATION_ID = 2407
+        const val MAX_INBOX_LINES = 5
+        private val lastNotificationId = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /** Seconds since the epoch: distinct per run, never the fixed id of older versions. */
+        fun nextNotificationId(): Int {
+            val candidate = (System.currentTimeMillis() / 1000L).toInt().coerceAtLeast(1)
+            return lastNotificationId.updateAndGet { previous ->
+                if (candidate > previous) candidate else previous + 1
+            }
+        }
     }
 }
+
+/**
+ * The thread page a single watch match points at, in the form MainActivity
+ * accepts as an external thread link (a trusted 2chan host and
+ * `/<board>/res/<number>.htm`); null when it cannot be built safely.
+ */
+internal fun watchAlertThreadUrl(boardUrl: String, threadId: String): String? {
+    if (threadId.isEmpty() || !threadId.all { it in '0'..'9' }) return null
+    val trimmed = boardUrl.trim().substringBefore('#').substringBefore('?')
+    val scheme = listOf("https://", "http://").firstOrNull { trimmed.startsWith(it, ignoreCase = true) }
+        ?: return null
+    val rest = trimmed.substring(scheme.length)
+    val host = rest.substringBefore('/').substringBefore(':')
+    if (!isTrustedFutabaDeepLinkHost(host)) return null
+    val path = rest.substringAfter('/', "")
+    // A board URL may end in a page (futaba.php / futaba.htm) rather than a directory.
+    val dir = if (path.substringAfterLast('/').contains('.')) path.substringBeforeLast('/', "") else path
+    val board = dir.trim('/')
+    if (board.isEmpty() || board.contains("/res")) return null
+    return "$scheme$host/$board/res/$threadId.htm"
+}
+
+/** Opens one thread through the same external-link path a 2chan link would take. */
+internal fun buildWatchAlertThreadContentIntent(context: Context, threadUrl: String): Intent =
+    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(threadUrl), context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
 
 /**
  * A watch alert is profile-neutral: tapping an old Modern notification may resume

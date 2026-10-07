@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.repository.CookieRepository
 import io.ktor.http.Url
 import kotlinx.coroutines.launch
@@ -182,7 +183,7 @@ private fun CompatReverseImageSearchScreenContent(
         initialCookies = if (cookieRepository == null || !isCompatReverseSearchBrowserUrl(initialCurrentUrl)) {
             emptyList()
         } else {
-            runCatching { cookieRepository.getCookiesFor(requireNotNull(initialCurrentUrl)) }
+            runSuspendCatchingPreservingCancellation { cookieRepository.getCookiesFor(requireNotNull(initialCurrentUrl)) }
                 .getOrDefault(emptyList())
                 .map { cookie ->
                     CompatBrowserCookie(
@@ -295,7 +296,7 @@ private fun CompatReverseImageSearchScreenContent(
                         onCookiesChanged = { url, header ->
                             if (cookieRepository != null && isCompatReverseSearchBrowserUrl(url)) {
                                 scope.launch {
-                                    runCatching { cookieRepository.importCookieHeader(url, header) }
+                                    runSuspendCatchingPreservingCancellation { cookieRepository.importCookieHeader(url, header) }
                                 }
                             }
                         }

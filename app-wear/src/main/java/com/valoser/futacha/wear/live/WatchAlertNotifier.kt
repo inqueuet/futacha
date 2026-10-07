@@ -4,13 +4,17 @@ import android.annotation.SuppressLint
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.valoser.futacha.shared.watch.WatchAlert
+import com.valoser.futacha.wear.R
+import com.valoser.futacha.wear.WearMainActivity
 
 object WatchAlertNotifier {
     // canPostNotifications() performs the runtime permission check before this
@@ -33,15 +37,28 @@ object WatchAlertNotifier {
             "${first.boardName}: ${first.title} ほか"
         }
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            // Tapping the alert opens the watch app (it did nothing before).
+            .setContentIntent(buildContentIntent(appContext))
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun buildContentIntent(context: Context): PendingIntent {
+        val intent = Intent(context, WearMainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun canPostNotifications(context: Context): Boolean {

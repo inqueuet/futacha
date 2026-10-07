@@ -98,6 +98,8 @@ internal class FutachaSharedBoardRepository(
     }
 
     suspend fun supplement(source: String, content: ThreadPageContent): ThreadPageContent {
+        // A read-only copy (an opened MHT file) is shown as it was saved: it never goes to the network.
+        if (delegate is FutachaStaticThreadRepository) return content
         val expected = store.tabs.first().firstOrNull { it.key == compatTabKey(source) }?.replyCount
         val needsSupplement = content.page.isTruncated || expected?.let { content.page.posts.size < it + 1 } == true
         val client = httpClient

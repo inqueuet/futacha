@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.replaceHtmlBreakTags
 import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 import kotlin.text.RegexOption
+import kotlinx.serialization.json.*
 
 private val THREAD_ID_REGEX = """res/(\d+)\.html?""".toRegex(RegexOption.IGNORE_CASE)
 private val RES_QUERY_ID_REGEX = """\bres=(\d+)\b""".toRegex(RegexOption.IGNORE_CASE)
@@ -132,7 +133,8 @@ private val POSTING_WAIT_ENGLISH_MINUTE_REGEX =
 private val POSTING_WAIT_ENGLISH_SECOND_REGEX =
     Regex("""(\d{1,7})\s*(?:seconds?|secs?|s)\b""", RegexOption.IGNORE_CASE)
 private val JSON_STATUS_REGEX = """"status"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
-private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
+// The value may hold JSON escapes (\" \/ \uXXXX); match them whole and decode with [decodeHttpBoardApiJsonStringValue].
+private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"(?=[^"])([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex(RegexOption.IGNORE_CASE)
 private val JSON_JUMPTO_REGEX = """"jumpto"\s*:\s*(\d+)""".toRegex()
 private val JSON_THISNO_REGEX = """"thisno"\s*:\s*(\d+)""".toRegex()
 private val HUMAN_READABLE_WHITESPACE_REGEX = Regex("""\s+""")
@@ -162,12 +164,10 @@ internal enum class HttpBoardApiPostingFailureKind {
 
 internal fun isSuccessfulHttpBoardApiPostResponse(body: String): Boolean {
     if (body.isBlank()) return false
-    if (looksLikeHttpBoardApiJson(body) && isHttpBoardApiJsonStatusOk(body)) {
-        return true
-    }
-    if (containsHttpBoardApiThreadId(body)) {
-        return true
-    }
+    if (looksLikeHttpBoardApiJson(body)) return isHttpBoardApiJsonStatusOk(body)
+    if (extractHttpBoardApiServerError(body) != null) return false
+    if (body.trim() == "ok") return true
+    if (httpBoardApiSuccessRedirect(body) != null) return true
     return SUCCESS_KEYWORDS.any { keyword -> body.contains(keyword) }
 }
 
@@ -196,6 +196,7 @@ internal fun extractHttpBoardApiServerError(body: String): String? {
             return null
         }
         val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
+            ?.let(::decodeHttpBoardApiJsonStringValue)
         if (message != null) {
             return message.take(POSTING_FAILURE_DETAIL_MAX_CHARS)
         }
@@ -256,6 +257,14 @@ internal fun extractHttpBoardApiShortFormFailure(body: String?): String? {
         .take(POSTING_FAILURE_DETAIL_MAX_CHARS)
 }
 
+/** Decodes the raw text between the quotes of a JSON string (\uXXXX, \" and \/ included); the raw text when it is not valid. */
+internal fun decodeHttpBoardApiJsonStringValue(raw: String): String {
+    if (raw.indexOf('\\') < 0) return raw
+    return runCatching {
+        Json.parseToJsonElement("\"" + raw + "\"").jsonPrimitive.content
+    }.getOrDefault(raw)
+}
+
 internal fun summarizeHttpBoardApiResponse(body: String): String {
     val normalized = body
         .take(POSTING_FAILURE_SCAN_MAX_CHARS)
@@ -263,6 +272,7 @@ internal fun summarizeHttpBoardApiResponse(body: String): String {
     if (looksLikeHttpBoardApiJson(normalized)) {
         val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
         val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
+            ?.let(::decodeHttpBoardApiJsonStringValue)
         return buildString {
             append("status=${status?.take(POSTING_FAILURE_DETAIL_MAX_CHARS) ?: "unknown"}")
             if (!message.isNullOrBlank()) {
@@ -651,17 +661,11 @@ internal fun looksLikeHttpBoardApiJson(body: String): Boolean {
 }
 
 internal fun isHttpBoardApiJsonStatusOk(body: String): Boolean {
-    val status = JSON_STATUS_REGEX
-        .find(body.take(POSTING_FAILURE_SCAN_MAX_CHARS))
-        ?.groupValues
-        ?.getOrNull(1)
-        ?.take(32)
-        ?.lowercase()
+    if (body.length > POSTING_FAILURE_SCAN_MAX_CHARS) return false
+    val status = runCatching {
+        (Json.parseToJsonElement(body) as? JsonObject)?.get("status")?.jsonPrimitive?.contentOrNull?.lowercase()
+    }.getOrNull()
     return status == "ok" || status == "success"
-}
-
-private fun containsHttpBoardApiThreadId(body: String): Boolean {
-    return THREAD_ID_REGEX.containsMatchIn(body) || RES_QUERY_ID_REGEX.containsMatchIn(body)
 }
 
 private fun findHttpBoardApiInputTagEnd(value: String, startIndex: Int): Int {
@@ -718,3 +722,8 @@ private fun extractHttpBoardApiTagAttribute(tag: String, attributeName: String):
     }
     return null
 }
+
+/** Only a real meta refresh is a success redirect; ordinary thread/back links are not. */
+internal fun httpBoardApiSuccessRedirect(body: String): String? =
+    Regex("""<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>""", RegexOption.IGNORE_CASE)
+        .findAll(body).mapNotNull { tryExtractHttpBoardApiThreadId(it.value) }.firstOrNull()

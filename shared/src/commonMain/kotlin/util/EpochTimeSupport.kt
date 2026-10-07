@@ -26,12 +26,17 @@ internal fun isWithinEpochInterval(
     return safeEpochElapsedMillis(nowMillis, startedAtMillis) <= intervalMillis
 }
 
+/**
+ * A clock that moved backward since [startedAtMillis] counts as no time elapsed, like
+ * enforceThreadSaveBudget: aborting a long save the moment the clock is corrected threw
+ * away work that had not run too long. The idle read/write timeouts still bound a stall.
+ */
 internal fun hasEpochDurationExceeded(
     nowMillis: Long,
     startedAtMillis: Long,
     maxDurationMillis: Long
 ): Boolean {
-    if (maxDurationMillis < 0L || nowMillis < startedAtMillis) return true
+    if (maxDurationMillis < 0L) return true
     return safeEpochElapsedMillis(nowMillis, startedAtMillis) > maxDurationMillis
 }
 

@@ -261,6 +261,7 @@ private fun ThreadReplyOverlay(bindings: ThreadScreenOverlayHostBindings) {
             shapes = MaterialTheme.shapes
         ) {
             ThreadFormDialog(
+            isReply = true,
                 title = "返信",
                 boardUrl = bindings.effectiveBoardUrl,
                 subtitle = subtitle,

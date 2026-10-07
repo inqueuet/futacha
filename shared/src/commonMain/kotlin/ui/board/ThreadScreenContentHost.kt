@@ -180,13 +180,14 @@ internal fun ThreadScreenContentHost(
                     } else {
                         emptyMap()
                     }
-                    applyThreadFilterResult(
+                    applyThreadFilterResultCancellable(
                         page = sourcePage,
                         criteria = threadFilterComputationState.criteria,
                         ngHeaders = bindings.ngHeaders,
                         ngWords = bindings.ngWords,
                         ngEnabled = hasNgFilters,
-                        precomputedLowerBodyByPost = precomputedLowerBodyByPost
+                        precomputedLowerBodyByPost = precomputedLowerBodyByPost,
+                        textCache = bindings.postTextCache
                     )
                 }
                 if (bindings.threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
@@ -210,7 +211,7 @@ internal fun ThreadScreenContentHost(
                 ).also { lastFilteredPage.page = it }
             }
             val filteredPage = rememberFutachaFilteredThreadPage(state.page, normallyFilteredPage,
-                bindings.ngHeaders, bindings.ngWords)
+                bindings.ngHeaders, bindings.ngWords, bindings.postTextCache)
             if (filteredPage == null) {
                 // Shared NG is still being applied; never show posts it will hide.
                 ThreadLoading(modifier = modifier.fillMaxSize())
@@ -240,16 +241,23 @@ internal fun ThreadScreenContentHost(
             val threadSummaryCache = remember { linkedMapOf<ThreadSummaryCacheKey, ThreadSummaryUiState.Ready>() }
             val threadPostModerationCache = remember { linkedMapOf<ThreadPostModerationCacheKey, PostModerationResult>() }
             val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
-            val aiPostModerationSourcePosts = remember(aiSourcePosts) {
-                resolveThreadAiPostModerationSourcePosts(aiSourcePosts)
+            // Every post's body is stripped to build this; nothing reads it while AI filtering is off.
+            val aiPostModerationSourcePosts = remember(aiSourcePosts, shouldApplyAiPostFilter) {
+                if (shouldApplyAiPostFilter) resolveThreadAiPostModerationSourcePosts(aiSourcePosts) else emptyList()
             }
             var moderationDisplayedPosts by remember(bindings.aiSourceBoard, state.page.threadId, bindings.threadDisplayMode) {
                 mutableStateOf<List<Post>>(emptyList())
             }
-            val moderationOrderedIds = remember(moderationDisplayedPosts) { moderationDisplayedPosts.map { it.id } }
-            val moderationItemKeys = remember(moderationDisplayedPosts, bindings.threadDisplayMode) {
-                val prefix = if (bindings.threadDisplayMode == ThreadDisplayMode.Tree) "tree-post" else "thread-post"
-                buildThreadPostLazyListKeys(moderationDisplayedPosts, prefix).zip(moderationOrderedIds).toMap()
+            val moderationOrderedIds = remember(moderationDisplayedPosts, shouldApplyAiPostFilter) {
+                if (shouldApplyAiPostFilter) moderationDisplayedPosts.map { it.id } else emptyList()
+            }
+            val moderationItemKeys = remember(moderationDisplayedPosts, bindings.threadDisplayMode, shouldApplyAiPostFilter) {
+                if (shouldApplyAiPostFilter) {
+                    val prefix = if (bindings.threadDisplayMode == ThreadDisplayMode.Tree) "tree-post" else "thread-post"
+                    buildThreadPostLazyListKeys(moderationDisplayedPosts, prefix).zip(moderationOrderedIds).toMap()
+                } else {
+                    emptyMap()
+                }
             }
             val nearbyModerationIds = rememberModerationViewport(
                 bindings.lazyListState, moderationOrderedIds, moderationItemKeys, shouldApplyAiPostFilter)

@@ -87,6 +87,7 @@ data class CompatReplyDraft(
     val subject: String = "",
     val comment: String = "",
     val attachmentUri: String? = null,
+    val attachmentIsHandwriting: Boolean = false,
     val deleteKey: String = "",
     val updatedAtEpochMillis: Long
 )
@@ -104,6 +105,7 @@ data class CompatBuildDraft(
     val subject: String = "",
     val comment: String = "",
     val attachmentUri: String? = null,
+    val attachmentIsHandwriting: Boolean = false,
     val deleteKey: String = "",
     val updatedAtEpochMillis: Long
 )

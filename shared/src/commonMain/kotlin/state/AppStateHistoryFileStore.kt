@@ -5,9 +5,14 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -24,6 +29,7 @@ private const val HISTORY_FILE_STORE_MAX_MANIFEST_BYTES = 8L * 1024L * 1024L
 private const val HISTORY_FILE_STORE_MAX_ENTRY_BYTES = 2L * 1024L * 1024L
 private const val HISTORY_FILE_STORE_MAX_KEY_LENGTH = 96
 private const val HISTORY_FILE_STORE_MAX_IDENTITY_LENGTH = 8_192
+private const val HISTORY_FILE_STORE_READ_PARALLELISM = 8
 
 @Serializable
 private data class AppStateHistoryFileManifest(
@@ -57,6 +63,14 @@ internal class AppStateHistoryFileStore(
     private val cachedEntriesByKey = HashMap<String, ThreadHistoryEntry>()
     private val manifestEntryByIdentity = mutableMapOf<String, AppStateHistoryFileManifestEntry>()
     private var legacyHistoryCleared = false
+
+    /**
+     * Manifest entries whose file exists but could not be read (an I/O failure, not a missing
+     * or oversized file). They are left out of the in-memory history, but must stay in the
+     * manifest and on disk: dropping them let the next write delete the file, so a read that
+     * failed once lost the entry for good. They are tried again at the next start.
+     */
+    private val unreadableEntries = LinkedHashMap<String, AppStateHistoryFileManifestEntry>()
 
     suspend fun readHistorySnapshot(
         clearLegacyHistoryJson: (suspend () -> Unit)? = null,
@@ -156,24 +170,63 @@ internal class AppStateHistoryFileStore(
             return emptyList()
         }
         val entriesByKey = mutableMapOf<String, ThreadHistoryEntry>()
-        val snapshot = manifest.orderedEntries.mapNotNull { entry ->
-            val path = historyEntryPath(entry.key)
-            val raw = readBoundedString(path, HISTORY_FILE_STORE_MAX_ENTRY_BYTES).getOrElse { error ->
-                Logger.w(tag, "Invalid split history entry '${entry.key}': ${error.message}")
+        unreadableEntries.clear()
+        // Up to 20,000 entry files were read one after another at every start. The files are read
+        // and decoded a few at a time; the results are applied below in manifest order, and
+        // the caches and the unreadable set are only touched there, from this one coroutine.
+        val gate = Semaphore(HISTORY_FILE_STORE_READ_PARALLELISM)
+        val loads = coroutineScope {
+            manifest.orderedEntries.map { entry ->
+                async { gate.withPermit { loadHistoryEntryFile(entry) } }
+            }.awaitAll()
+        }
+        val snapshot = loads.mapNotNull { load ->
+            val entry = load.manifestEntry
+            if (load.readError != null) {
+                Logger.w(tag, "Invalid split history entry '${entry.key}': ${load.readError.message}")
+                if (load.retainAsUnreadable) unreadableEntries[entry.key] = entry
                 return@mapNotNull null
             }
-            cachedEntryContentHashes[entry.key] = fnv1a64Hex(raw)
-            withContext(AppDispatchers.io) {
-                runCatching {
-                    json.decodeFromString(ThreadHistoryEntry.serializer(), raw)
-                }
-            }.onFailure { error ->
+            cachedEntryContentHashes[entry.key] = load.contentHash.orEmpty()
+            load.decodeError?.let { error ->
                 Logger.e(tag, "Failed to decode split history entry '${entry.key}'", error)
-            }.getOrNull()?.also { entriesByKey[entry.key] = it }
+            }
+            load.decoded?.also { entriesByKey[entry.key] = it }
         }
         cachedEntriesByKey.clear()
         cachedEntriesByKey.putAll(entriesByKey)
         return snapshot
+    }
+
+    private class HistoryEntryLoad(
+        val manifestEntry: AppStateHistoryFileManifestEntry,
+        val readError: Throwable? = null,
+        /** The file exists but could not be read: kept rather than dropped (see [unreadableEntries]). */
+        val retainAsUnreadable: Boolean = false,
+        val contentHash: String? = null,
+        val decoded: ThreadHistoryEntry? = null,
+        val decodeError: Throwable? = null
+    )
+
+    /** Reads and decodes one entry file; touches no shared state. */
+    private suspend fun loadHistoryEntryFile(entry: AppStateHistoryFileManifestEntry): HistoryEntryLoad {
+        val path = historyEntryPath(entry.key)
+        val raw = readBoundedString(path, HISTORY_FILE_STORE_MAX_ENTRY_BYTES).getOrElse { error ->
+            // An oversized or missing file is permanently unusable; anything else that
+            // fails on an existing file may succeed on a later read.
+            val retain = error !is IllegalArgumentException &&
+                runSuspendCatchingPreservingCancellation { fileSystem.exists(path) }.getOrDefault(false)
+            return HistoryEntryLoad(entry, readError = error, retainAsUnreadable = retain)
+        }
+        val decoded = withContext(AppDispatchers.io) {
+            runCatching { json.decodeFromString(ThreadHistoryEntry.serializer(), raw) }
+        }
+        return HistoryEntryLoad(
+            manifestEntry = entry,
+            contentHash = fnv1a64Hex(raw),
+            decoded = decoded.getOrNull(),
+            decodeError = decoded.exceptionOrNull()
+        )
     }
 
     private suspend fun persistHistorySnapshotLocked(history: List<ThreadHistoryEntry>) {
@@ -206,6 +259,22 @@ internal class AppStateHistoryFileStore(
                     orderUnchanged = false
                 }
                 manifestEntries += descriptor
+            }
+        }
+        if (history.isEmpty()) {
+            unreadableEntries.clear()
+        } else if (unreadableEntries.isNotEmpty()) {
+            // An entry that is active again was rewritten; the rest stay in the manifest (and
+            // so are never treated as stale) behind the readable history.
+            unreadableEntries.keys.removeAll(activeKeys)
+            for (descriptor in unreadableEntries.values) {
+                if (manifestEntries.size >= HISTORY_FILE_STORE_MAX_ENTRIES) break
+                if (activeKeys.add(descriptor.key)) {
+                    if (orderUnchanged && previousEntries.getOrNull(manifestEntries.size)?.key != descriptor.key) {
+                        orderUnchanged = false
+                    }
+                    manifestEntries += descriptor
+                }
             }
         }
         orderUnchanged = orderUnchanged && manifestEntries.size == previousEntries.size

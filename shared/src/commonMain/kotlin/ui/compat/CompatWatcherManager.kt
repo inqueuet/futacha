@@ -2,8 +2,8 @@ package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -23,7 +23,9 @@ internal fun CompatWatcherManager(
     onDismiss: () -> Unit,
     onResultsChanged: () -> Unit,
     onOpenExternal: (() -> Result<Unit>)? = null,
-    onOpenHelp: (() -> Unit)? = null
+    onOpenHelp: (() -> Unit)? = null,
+    /** Where the results are listed, named in the instructions; null keeps the other modes' drawer wording. */
+    resultsLocation: String? = null
 ) {
     val preferences by store.preferences.collectAsState(emptyMap())
     val boards by store.boards.collectAsState(emptyList())
@@ -60,11 +62,15 @@ internal fun CompatWatcherManager(
         onDismissRequest = { actionJob?.cancel(); onDismiss() },
         title = { Text("巡回管理") },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-                Text("キーワードを含むカタログのタイトルを探します。結果はドロワーの「巡回」に保存され、開いたスレッドだけが閲覧履歴に入ります。")
+            // Up to 500 keyword rules: compose only the rows in view. The parts before and after
+            // the rules are single items, so they are composed as one block exactly as before.
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+              item {
+              Column(Modifier.fillMaxWidth()) {
+                Text("キーワードを含むカタログのタイトルを探します。結果は${resultsLocation ?: "ドロワーの「巡回」"}に保存され、開いたスレッドだけが閲覧履歴に入ります。")
                 Text("標準はアプリ内巡回です。にじろぐのインストールや起動は不要です。自動巡回は画面を閉じてもOSの判断で実行されますが、省電力・強制停止などで遅延・停止します。")
                 onOpenHelp?.let { openHelp -> TextButton(onClick = openHelp) { Text("履歴・巡回のヘルプ") } }
-                Text("1. キーワードと板を選んで追加　2. 今すぐ巡回　3. ドロワーの巡回で結果を確認")
+                Text("1. キーワードと板を選んで追加　2. 今すぐ巡回　3. ${resultsLocation ?: "ドロワーの巡回"}で結果を確認")
                 Row {
                     Checkbox(preferences[COMPAT_WATCH_ENABLED_KEY] != "OFF", enabled = !busy,
                         onCheckedChange = { runAction { store.savePreference(COMPAT_WATCH_ENABLED_KEY, if (it) "ON" else "OFF") } })
@@ -105,7 +111,10 @@ internal fun CompatWatcherManager(
                     }) { Text(if (editing == null) "追加" else "変更を保存") }
                     if (editing != null) TextButton(onClick = { editing = null; word = "" }) { Text("取消") }
                 }
-                rules.forEachIndexed { index, rule ->
+              }
+              }
+              itemsIndexed(rules) { index, rule ->
+                Column(Modifier.fillMaxWidth()) {
                     HorizontalDivider()
                     Row {
                         Checkbox(rule.enabled, enabled = !busy, onCheckedChange = { enabled ->
@@ -127,6 +136,9 @@ internal fun CompatWatcherManager(
                         TextButton(enabled = !busy, onClick = { runAction { watcher.saveRules(rules.toMutableList().also { it.removeAt(index) }); editing = null } }) { Text("削除") }
                     }
                 }
+              }
+              item {
+              Column(Modifier.fillMaxWidth()) {
                 TextButton(enabled = !busy && repository != null, onClick = {
                     runAction {
                         val result = refreshCompatTabsInBackground(store, repository!!,
@@ -147,6 +159,8 @@ internal fun CompatWatcherManager(
                     TextButton(onClick = { onOpenExternal().onFailure { message = it.message } }) { Text("外部にじろぐを開く") }
                 }
                 message?.let { Text(it) }
+              }
+              }
             }
         },
         confirmButton = { TextButton(onClick = { actionJob?.cancel(); onDismiss() }) { Text(if (busy) "中止して閉じる" else "閉じる") } }

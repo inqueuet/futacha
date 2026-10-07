@@ -94,6 +94,7 @@ internal fun ThreadPostCard(
     onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
+    onRelatedClick: (() -> Unit)? = null,
     onAiHideAgain: (() -> Unit)? = null,
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
     postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
@@ -119,7 +120,8 @@ internal fun ThreadPostCard(
     var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted, post.isIsolated, sharedShowDeleted) {
         mutableStateOf(sharedShowDeleted)
     }
-    val onPostTap = LocalFutachaPostTap.current
+    val relatedTap = features?.value("control", POST_TAP_BEHAVIOR_KEY) == "related" && onRelatedClick != null
+    val onPostTap = if (relatedTap) onRelatedClick else LocalFutachaPostTap.current
     val latestLongPress = androidx.compose.runtime.rememberUpdatedState(onLongPress)
     val latestPostTap = androidx.compose.runtime.rememberUpdatedState(onPostTap)
     val cardModifier = if (onLongPress != null || onPostTap != null) {
@@ -135,6 +137,7 @@ internal fun ThreadPostCard(
         modifier = cardModifier
             .fillMaxWidth()
             .background(backgroundColor)
+            .postPressFeedback(post.id, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .padding(
                 horizontal = if (compactHeader) 8.dp else 12.dp,
                 vertical = if (compactHeader) 6.dp else 10.dp
@@ -347,10 +350,11 @@ internal fun ThreadPostCard(
                 messageHtml = post.messageHtml,
                 isDeleted = post.isDeleted || post.isIsolated,
                 quoteReferences = post.quoteReferences,
-                onQuoteClick = onQuoteClick,
+                onQuoteClick = if (relatedTap) { { onRelatedClick?.invoke(); Unit } } else onQuoteClick,
                 onUrlClick = onUrlClick,
                 highlightRanges = highlightRanges,
                 bodyTextSize = bodyTextSize,
+                quoteLongPressOpensMenu = relatedTap,
                 onPlainLongPress = onLongPress?.let { { latestLongPress.value?.invoke() } },
                 onPlainTap = onPostTap?.let { { latestPostTap.value?.invoke() } }
             )

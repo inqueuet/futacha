@@ -329,6 +329,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
         )
     ),
     "ふたちゃ拡張" to listOf(
+        CompatSettingEntry("プライバシー表示", "文字・画像の画面フィルター、タイトル表示", "privacy"),
         CompatSettingEntry("AI・補助機能", "スレ要約・荒らし非表示", "ai"),
         CompatSettingEntry("モード", "現在の表示モード", preferenceKey = "mode"),
         CompatSettingEntry(
@@ -364,6 +365,8 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
     if (!entry.enabled) return emptyList()
     if (entry.summary in setOf("ON", "OFF")) return listOf("ON", "OFF")
     return when {
+        key == "controlPostTapBehavior" -> listOf("従来の操作", "タップで関連レス・長押しでメニュー")
+        key == COMPAT_THREAD_DISPLAY_MODE_KEY -> listOf("通常表示", "ツリー表示")
         key == "designTheme" -> listOf("デフォルト", "モノクロ", "ふたば", "ブルー", "ピンク", "ブラック")
         key == "designTextColor" -> listOf("自動", "白", "薄い灰", "濃い灰", "黒")
         key == "designLoading" -> listOf("デフォルト", "アイコン")
@@ -476,7 +479,7 @@ internal suspend fun compatibilityAttachmentCacheUsageBytes(fileSystem: FileSyst
     if (!fileSystem.exists(directory)) return 0L
     var total = 0L
     fileSystem.listFiles(directory).forEach { name ->
-        val size = runCatching { fileSystem.getFileSize("$directory/$name") }.getOrDefault(0L)
+        val size = runSuspendCatchingPreservingCancellation { fileSystem.getFileSize("$directory/$name") }.getOrDefault(0L)
         if (size > 0L && total <= Long.MAX_VALUE - size) total += size
     }
     return total
@@ -523,6 +526,8 @@ internal fun formatCompatAvailableSpace(bytes: Long): String {
 
 internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: String): String =
     when (preferenceKey) {
+        "controlPostTapBehavior" -> if (displayedValue == "タップで関連レス・長押しでメニュー") "related" else "legacy"
+        COMPAT_THREAD_DISPLAY_MODE_KEY -> if (displayedValue == "ツリー表示") "tree" else "flat"
         "designTheme" -> when (displayedValue.lowercase()) {
             "デフォルト", "default" -> "default"
             "モノクロ", "mono" -> "mono"
@@ -624,6 +629,8 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
 
 internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: String): String =
     when (preferenceKey) {
+        "controlPostTapBehavior" -> if (storedValue == "related") "タップで関連レス・長押しでメニュー" else "従来の操作"
+        COMPAT_THREAD_DISPLAY_MODE_KEY -> if (storedValue == "tree") "ツリー表示" else "通常表示"
         "designTheme" -> when (storedValue.lowercase()) {
             "default", "デフォルト" -> "デフォルト"
             "mono", "モノクロ" -> "モノクロ"
@@ -817,6 +824,7 @@ internal fun compatPtmtMutationNotice(existingValue: String?, requestedValue: St
 }
 
 internal fun String.compatSettingsTitle(): String = when (this) {
+    "privacy" -> "プライバシー表示"
     "ai" -> "AI・補助機能"
     "design" -> "デザイン"
     "control" -> "コントロール"
@@ -845,6 +853,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
     "control" -> listOf(
         CompatSettingEntry("ボリュームキー", "何もしない", preferenceKey = "controlCatalogVolumeKey"),
         CompatSettingEntry("ロングタップ", "選択メニュー", preferenceKey = "controlCatalogLongTap"),
+        CompatSettingEntry("レスのタップ操作", "従来の操作", preferenceKey = "controlPostTapBehavior"),
         CompatSettingEntry("ボリュームキー", "何もしない", preferenceKey = "controlThreadVolumeKey"),
         CompatSettingEntry("タッチスクロール", "OFF", preferenceKey = "controlTouchScroll"),
         CompatSettingEntry("レスをタッチしてドロワー", "OFF", preferenceKey = "controlTouchOpenDrawer"),
@@ -930,6 +939,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("フォントサイズ", "14sp", preferenceKey = "catalogListViewTitleFontSize"),
         CompatSettingEntry("長辺の列数", "7行", preferenceKey = "catalogListViewLineNum"),
         CompatSettingEntry("カタログを開いた時リロードを行う", "OFF", preferenceKey = "catalogOpenWithReload"),
+        CompatSettingEntry("スレッドを開いた時に更新", "ON", preferenceKey = "catalogThreadOpenWithReload"),
         CompatSettingEntry(
             "リロード後に先頭へ戻る",
             "OFF",
@@ -945,6 +955,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("スレッド文", "20文字", preferenceKey = "catalogTitleLength")
     )
     "thread" -> listOf(
+        CompatSettingEntry("レスの表示形式", "通常表示", preferenceKey = COMPAT_THREAD_DISPLAY_MODE_KEY),
         CompatSettingEntry("スクロール更新", "ON", preferenceKey = "threadPullToRefresh"),
         CompatSettingEntry("高速スクロールバー", "OFF", preferenceKey = "threadFastScroll"),
         CompatSettingEntry("オートスクロール量", "5px", preferenceKey = "autoScrollPixel"),
@@ -986,11 +997,13 @@ private fun List<CompatSettingEntry>.compatKeys(vararg keys: String): List<Compa
  */
 internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = false): List<Pair<String, List<CompatSettingEntry>>> {
     val entries = path.compatSettingsEntries().filterNot {
-        modernPresentation && path == "design" &&
-            it.preferenceKey in setOf("designTheme", "designTextColor", "designNavigationBar")
+        modernPresentation && (
+            (path == "design" && it.preferenceKey in setOf("designTheme", "designTextColor", "designNavigationBar")) ||
+                (path == "thread" && it.preferenceKey == COMPAT_THREAD_DISPLAY_MODE_KEY)
+            )
     }
     return when (path) {
-        "media", "ai" -> emptyList()
+        "media", "ai", "privacy" -> emptyList()
         "design" -> listOf(
             "スタイル" to entries.compatKeys(
                 "designTheme", "designNavigationBar", "designLoading", "dummyCustomFont"
@@ -1001,7 +1014,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
         "control" -> listOf(
             "カタログ画面" to entries.compatKeys("controlCatalogVolumeKey", "controlCatalogLongTap"),
             "スレッド画面" to entries.compatKeys(
-                "controlThreadVolumeKey", "controlTouchScroll", "controlTouchOpenDrawer",
+                "controlPostTapBehavior", "controlThreadVolumeKey", "controlTouchScroll", "controlTouchOpenDrawer",
                 "controlThreadCloseBack"
             ),
             "ツールバー" to entries.compatKeys("controlTabSelectorLongTap"),
@@ -1043,7 +1056,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
                 "catalogListViewTitleLength", "catalogListViewTitleFontSize", "catalogListViewLineNum"
             ),
             "読み込み" to entries.compatKeys(
-                "catalogOpenWithReload", "catalogReloadScrollTop", "catalogThreadSize",
+                "catalogOpenWithReload", "catalogThreadOpenWithReload", "catalogReloadScrollTop", "catalogThreadSize",
                 "catalogFindThreadDeleted", "catalogAppendDropped", "catalogTitleLength"
             )
         )
@@ -1052,7 +1065,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
                 "threadPullToRefresh", "threadFastScroll", "autoScrollPixel", "autoScrollSpeed", "threadNg"
             ),
             "画面表示" to entries.compatKeys(
-                "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
+                COMPAT_THREAD_DISPLAY_MODE_KEY, "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
                 "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod"
             ),
@@ -1073,7 +1086,7 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "controlTouchScroll", "controlTouchOpenDrawer", "controlThreadCloseBack",
         "controlPostConfirm", "controlViewerSwipeClose", "controlPostDestinationConfirm",
         "catalogPullToRefresh", "catalogFastScroll", "catalogThumbCrop", "catalogEco",
-        "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload",
+        "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", "catalogThreadOpenWithReload",
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
         "threadPullToRefresh", "threadFastScroll", "threadNg",
         "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadAdminDeleteShow",

@@ -27,6 +27,7 @@ import io.ktor.client.request.prepareGet
 import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /** The reference starts empty and asks the user to enter Futaba's top URL. */
@@ -163,12 +164,37 @@ internal suspend fun updateCompatBoardsFromMenu(
     existingBoards: List<CompatBoard>
 ): Result<CompatBoardMenuUpdate> = runSuspendCatchingPreservingCancellation {
     val boards = fetchDefaultCompatBoardsFromMenu(httpClient, existingBoards).getOrThrow()
-    store.upsertBoards(boards)
-    val existingUrls = existingBoards.mapTo(hashSetOf(), CompatBoard::canonicalUrl)
+    // Decided against the boards as they are now: [existingBoards] is a snapshot from before the
+    // request, and writing its (re-listed) boards back reverted a rename or reorder made while
+    // the menu was loading, and re-added a board deleted meanwhile.
+    val toAdd = planCompatBoardMenuUpsert(
+        discovered = boards,
+        staleExisting = existingBoards,
+        latest = store.boards.first()
+    )
+    if (toAdd.isNotEmpty()) store.upsertBoards(toAdd)
     CompatBoardMenuUpdate(
-        addedOrUpdated = boards.count { board -> board.canonicalUrl !in existingUrls },
+        addedOrUpdated = toAdd.size,
         discovered = boards.size
     )
+}
+
+/**
+ * Only boards that are new both to the snapshot the menu was parsed against and to the store now
+ * are written, after the boards the user has now (a board in [staleExisting] but missing from
+ * [latest] was deleted during the request and stays deleted).
+ */
+internal fun planCompatBoardMenuUpsert(
+    discovered: List<CompatBoard>,
+    staleExisting: List<CompatBoard>,
+    latest: List<CompatBoard>
+): List<CompatBoard> {
+    val staleUrls = staleExisting.mapTo(hashSetOf(), CompatBoard::canonicalUrl)
+    val latestUrls = latest.mapTo(hashSetOf(), CompatBoard::canonicalUrl)
+    var nextSortOrder = (latest.maxOfOrNull(CompatBoard::sortOrder) ?: -1) + 1
+    return discovered
+        .filter { board -> board.canonicalUrl !in staleUrls && board.canonicalUrl !in latestUrls }
+        .map { board -> board.copy(sortOrder = nextSortOrder++) }
 }
 
 internal suspend fun fetchDefaultCompatBoardsFromMenu(

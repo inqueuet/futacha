@@ -14,12 +14,14 @@ import androidx.wear.tiles.TileService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
-import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
-import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_STALE_AGE_MILLIS
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchSnapshot
+import com.valoser.futacha.shared.watch.WatchSnapshotFreshness
 import com.valoser.futacha.shared.watch.WatchThreadSummary
+import com.valoser.futacha.shared.watch.classifyWatchSnapshotFreshness
+import com.valoser.futacha.shared.watch.isWatchReadAloudStatusFreshOnWatch
 import com.valoser.futacha.wear.WearMainActivity
+import com.valoser.futacha.wear.sync.WatchClockOffsetStore
 import com.valoser.futacha.wear.sync.WatchSnapshotStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,17 +59,22 @@ class FutachaTileService : TileService() {
         requestParams: RequestBuilders.TileRequest,
         snapshot: WatchSnapshot?
     ): Tile {
+        // The phone's time as far as the watch can tell; the watch clock may be off.
+        val nowMillis = WatchClockOffsetStore.phoneNowMillis(this)
         val activeReadAloudThread = snapshot
             ?.threads
-            ?.firstOrNull { it.freshReadAloudStatus() != null }
+            ?.firstOrNull { it.freshReadAloudStatus(nowMillis) != null }
         val mainText = when {
             snapshot == null -> "未同期"
-            activeReadAloudThread != null -> activeReadAloudThread.freshReadAloudStatus()
+            activeReadAloudThread != null -> activeReadAloudThread.freshReadAloudStatus(nowMillis)
                 ?.let { status ->
                     "${readAloudTileStateLabel(status.state.name)}\n${status.postId?.let { "No.$it" } ?: "${status.currentIndex + 1}/${status.totalPosts}"}"
                 }
                 ?: "読み上げ"
-            snapshot.isStale() -> "同期古い\n${formatTileTime(snapshot.generatedAtMillis)}"
+            snapshot.freshness(nowMillis) == WatchSnapshotFreshness.Stale ->
+                "同期古い\n${formatTileTime(snapshot.generatedAtMillis)}"
+            snapshot.freshness(nowMillis) == WatchSnapshotFreshness.ClockSkew ->
+                "時計ずれ\n${formatTileTime(snapshot.generatedAtMillis)}"
             else -> "新着 ${snapshot.unreadTotal}\n監視 ${snapshot.watchMatchTotal}"
         }
         val latestTitle = (activeReadAloudThread ?: snapshot?.threads?.firstOrNull())
@@ -86,7 +93,7 @@ class FutachaTileService : TileService() {
 
         return Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
-            .setFreshnessIntervalMillis(tileFreshnessIntervalMillis(snapshot, System.currentTimeMillis()))
+            .setFreshnessIntervalMillis(tileFreshnessIntervalMillis(snapshot, nowMillis))
             .setTileTimeline(TimelineBuilders.Timeline.fromLayoutElement(layout))
             .build()
     }
@@ -172,12 +179,8 @@ class FutachaTileService : TileService() {
         }
     }
 
-    private fun WatchSnapshot.isStale(
-        nowMillis: Long = System.currentTimeMillis()
-    ): Boolean {
-        val ageMillis = nowMillis - generatedAtMillis
-        return generatedAtMillis <= 0 || ageMillis !in 0..WATCH_SNAPSHOT_STALE_AGE_MILLIS
-    }
+    private fun WatchSnapshot.freshness(nowMillis: Long): WatchSnapshotFreshness =
+        classifyWatchSnapshotFreshness(generatedAtMillis, nowMillis)
 
     private fun formatTileTime(epochMillis: Long): String {
         if (epochMillis <= 0) return "--:--"
@@ -186,14 +189,10 @@ class FutachaTileService : TileService() {
     }
 
     private fun WatchThreadSummary.freshReadAloudStatus(
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long
     ): WatchReadAloudStatus? {
         val status = readAloudStatus ?: return null
-        val ageMillis = nowMillis - status.updatedAtMillis
-        return status.takeIf {
-            status.updatedAtMillis > 0 &&
-                ageMillis in 0..WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
-        }
+        return status.takeIf { isWatchReadAloudStatusFreshOnWatch(it.updatedAtMillis, nowMillis) }
     }
 
     private companion object {

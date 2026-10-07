@@ -1146,7 +1146,8 @@ private class FakeHistoryBoardRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
 
     override suspend fun createThread(
@@ -1158,7 +1159,8 @@ private class FakeHistoryBoardRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
 
     override fun close() = Unit

@@ -17,7 +17,8 @@ fun compatPostActionCandidates(post: CompatPostSnapshot): List<CompatPostActionC
     compatPosterIdentities(post).forEach { identity ->
         add(CompatPostActionCandidate(identity.kind.name, identity.display))
     }
-    compatPostMediaFileNames(post).forEach { fileName ->
+    // Offer the original attachment; thumbnail aliases are only for resolving existing quotes.
+    compatPostMediaFileNames(post, includeThumbnail = false).forEach { fileName ->
         add(CompatPostActionCandidate("file", fileName))
     }
     post.mail?.takeIf(String::isNotBlank)?.let { add(CompatPostActionCandidate("mail", it)) }

@@ -16,7 +16,13 @@ import platform.UIKit.UIWindowScene
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 
-internal fun findIosTopViewController(): UIViewController? {
+/**
+ * The key window's root view controller, without following presented
+ * controllers. Unlike [findIosTopViewController] it stays the same while a
+ * picker, share sheet or alert is presented, so long-lived attachments (the
+ * left-edge back recognizer) are not moved onto a modal's view.
+ */
+internal fun findIosRootViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
     val windows = buildList {
         application.connectedScenes
@@ -30,8 +36,12 @@ internal fun findIosTopViewController(): UIViewController? {
             addAll(application.windows.filterIsInstance<UIWindow>())
         }
     }
-    var controller = windows.firstOrNull { it.isKeyWindow() }?.rootViewController
+    return windows.firstOrNull { it.isKeyWindow() }?.rootViewController
         ?: windows.firstOrNull()?.rootViewController
+}
+
+internal fun findIosTopViewController(): UIViewController? {
+    var controller = findIosRootViewController()
     while (controller?.presentedViewController != null) {
         controller = controller.presentedViewController
     }

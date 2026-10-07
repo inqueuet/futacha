@@ -42,6 +42,12 @@ internal class DesktopCompatibilityStore(
 
     private var initialized = false
     private var state = PersistedCompatibilityState()
+    // The cache rows as last written (or read): compared by identity, so a change that touches
+    // no snapshot/catalog costs no serialization and no write of them.
+    private var persistedCaches: Map<String, Any> = emptyMap()
+    private var persistedCacheBytes: Map<String, Long> = emptyMap()
+    // False until the rows on disk are known to match memory (a fresh, legacy or non-partitioned profile).
+    private var cacheRowsInSync = false
 
     private val boardsState = MutableStateFlow<List<CompatBoard>>(emptyList())
     private val tabsState = MutableStateFlow<List<CompatTab>>(emptyList())
@@ -424,6 +430,41 @@ internal class DesktopCompatibilityStore(
         true
     }
 
+    /**
+     * One-transaction form of [applyCatalogReplyCountsOneByOne]: the same per-row rules
+     * (counts only grow, missing rows and tombstoned history are never created, key/URL/anchor
+     * stay as stored, rows keep their position), but the whole state is persisted once.
+     */
+    override suspend fun applyCatalogReplyCounts(updates: List<CompatCatalogReplyCountUpdate>): Int = mutate {
+        if (updates.isEmpty()) return@mutate 0
+        val tabs = it.tabs.toMutableList()
+        val history = it.history.toMutableList()
+        var changedTabs = 0
+        var historyChanged = false
+        for (update in updates) {
+            val tabIndex = tabs.indexOfFirst { tab -> tab.key == update.tabKey }
+            if (tabIndex >= 0 && tabs[tabIndex].replyCount < update.replyCount) {
+                val current = tabs[tabIndex]
+                tabs[tabIndex] = current.copy(replyCount = update.replyCount).pinnedTo(current)
+                changedTabs++
+            }
+            if (update.canonicalUrl in it.historyTombstones) continue
+            val historyIndex = history.indexOfFirst { entry -> entry.canonicalUrl == update.canonicalUrl }
+            if (historyIndex >= 0 && history[historyIndex].replyCount < update.replyCount) {
+                val current = history[historyIndex]
+                history[historyIndex] = current.copy(replyCount = update.replyCount, canonicalUrl = current.canonicalUrl)
+                historyChanged = true
+            }
+        }
+        if (changedTabs > 0 || historyChanged) {
+            state = it.copy(
+                tabs = if (changedTabs > 0) tabs else it.tabs,
+                history = if (historyChanged) history else it.history
+            )
+        }
+        changedTabs
+    }
+
     override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate {
         val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
         state = it.copy(
@@ -639,7 +680,9 @@ internal class DesktopCompatibilityStore(
             existing.boardKey == record.boardKey && existing.sort == record.sort && existing.revision == record.revision
         } + record).groupBy { existing -> existing.boardKey to existing.sort }
             .values.flatMap { records -> records.sortedByDescending(CatalogSnapshotRecord::revision).take(MAX_CATALOG_GENERATIONS) }
+        val replyCounts = catalogReplyCountsByUrl(snapshot.items)
         state = it.copy(
+            tabs = it.tabs.map { tab -> tab.withCatalogReplyCount(replyCounts, snapshot.fetchedAtEpochMillis) },
             catalogSnapshots = trimmedSnapshots,
             droppedItems = dropped.groupBy { row -> row.boardKey }
                 .values.flatMap { rows -> rows.sortedByDescending(DroppedCatalogRecord::lastSeenAtEpochMillis).take(MAX_DROPPED_ITEMS) }
@@ -1084,12 +1127,20 @@ internal class DesktopCompatibilityStore(
         val databaseRead = runSuspendCatchingPreservingCancellation { database.readPayload() }
         val databasePayload = databaseRead.getOrElse { error ->
             if (error.isRecoverableDesktopCompatibilityDatabaseCorruption() || error is IllegalArgumentException) {
+                // Keep a copy first (a payload over the size limit or a damaged file is still
+                // the user's data); when the copy cannot be written, initialization fails and
+                // the database is left as it is.
+                val backupPath = withContext(AppDispatchers.io) { database.backupStorage(nowMillis()) }
                 Logger.e(
                     "DesktopCompatibilityStore",
-                    "Resetting unreadable compatibility database",
+                    "Resetting unreadable compatibility database; a copy was kept at $backupPath",
                     error
                 )
                 database.deleteStorage()
+                if (backupPath != null) {
+                    val folder = java.io.File(fileSystem.resolveAbsolutePath(backupPath)).absoluteFile.parent
+                    postUnreadableCompatibilityPayloadNotice(fileSystem, backupPath, location = "フォルダ「$folder」")
+                }
                 null
             } else {
                 // A transient I/O or permission failure must not be presented as
@@ -1135,6 +1186,7 @@ internal class DesktopCompatibilityStore(
             readLegacyState(path)
         }
         state = databaseState ?: legacyState ?: PersistedCompatibilityState()
+        if (databaseState?.partitionedCaches == true) loadPartitionedCachesLocked()
         val pendingAnchors = runSuspendCatchingPreservingCancellation {
             database.readPendingScrollAnchors()
         }.getOrDefault(emptyMap())
@@ -1182,20 +1234,130 @@ internal class DesktopCompatibilityStore(
         publishLocked()
     }
 
+    private fun threadCacheKey(snapshot: CompatThreadSnapshot): String = "thread:${snapshot.tabKey}"
+
+    private fun catalogCacheKey(record: CatalogSnapshotRecord): String =
+        "catalog:${record.boardKey}:${record.sort}:${record.revision}"
+
+    private fun cacheRecords(): Map<String, Any> = buildMap {
+        state.closedBatch?.let { put(CLOSED_BATCH_CACHE_KEY, it) }
+        state.snapshots.forEach { put(threadCacheKey(it), it) }
+        state.catalogSnapshots.forEach { put(catalogCacheKey(it), it) }
+    }
+
+    private fun encodeCacheRecord(record: Any): String = when (record) {
+        is CompatThreadSnapshot -> json.encodeToString(CompatThreadSnapshot.serializer(), record)
+        is CatalogSnapshotRecord -> json.encodeToString(CatalogSnapshotRecord.serializer(), record)
+        is ClosedTabBatch -> json.encodeToString(ClosedTabBatch.serializer(), record)
+        else -> error("Unknown compatibility cache record")
+    }
+
+    /** The profile row without the caches, which live in their own rows. */
+    private fun metadataOf(value: PersistedCompatibilityState) = value.copy(
+        partitionedCaches = true,
+        snapshots = emptyList(),
+        catalogSnapshots = emptyList(),
+        closedBatch = null
+    )
+
+    /**
+     * Loads the partitioned caches. The rows are refetchable, so an undecodable or
+     * misfiled one is logged and deleted instead of failing initialization on every launch.
+     */
+    private suspend fun loadPartitionedCachesLocked() {
+        val read = runSuspendCatchingPreservingCancellation { database.readCacheRecords() }
+            .getOrElse { error ->
+                if (!error.isRecoverableDesktopCompatibilityDatabaseCorruption()) throw error
+                Logger.e("DesktopCompatibilityStore", "Dropping unreadable compatibility cache records", error)
+                database.clearCacheRecords()
+                DesktopCompatibilityDatabase.CacheRecordsRead(emptyMap(), emptyList())
+            }
+        val snapshots = mutableListOf<CompatThreadSnapshot>()
+        val catalogs = mutableListOf<CatalogSnapshotRecord>()
+        var closedBatch: ClosedTabBatch? = null
+        val acceptedBytes = mutableMapOf<String, Long>()
+        val rejectedKeys = read.rejectedKeys.toMutableList()
+        read.records.forEach { (key, payload) ->
+            val accepted = runCatching {
+                when {
+                    key.startsWith("thread:") ->
+                        json.decodeFromString(CompatThreadSnapshot.serializer(), payload)
+                            .takeIf { threadCacheKey(it) == key }
+                            ?.also(snapshots::add)
+                    key.startsWith("catalog:") ->
+                        json.decodeFromString(CatalogSnapshotRecord.serializer(), payload)
+                            .takeIf { catalogCacheKey(it) == key }
+                            ?.also(catalogs::add)
+                    key == CLOSED_BATCH_CACHE_KEY ->
+                        json.decodeFromString(ClosedTabBatch.serializer(), payload)
+                            .also { closedBatch = it }
+                    // Rows of an unknown kind (e.g. written by a newer build) are left untouched.
+                    else -> return@forEach
+                }
+            }.onFailure { error ->
+                Logger.w("DesktopCompatibilityStore", "Dropping undecodable compatibility cache record: ${error.message}")
+            }.getOrNull()
+            if (accepted == null) rejectedKeys += key else acceptedBytes[key] = payload.encodeToByteArray().size.toLong()
+        }
+        if (rejectedKeys.isNotEmpty()) {
+            runCatching { database.deleteCacheRecords(rejectedKeys) }.onFailure { error ->
+                Logger.e("DesktopCompatibilityStore", "Failed to delete invalid compatibility cache records", error)
+            }
+        }
+        state = state.copy(snapshots = snapshots, catalogSnapshots = catalogs, closedBatch = closedBatch)
+        persistedCaches = cacheRecords()
+        persistedCacheBytes = acceptedBytes
+        cacheRowsInSync = true
+    }
+
     private suspend fun persistLocked() {
-        var encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
-        val encodedBytes = encoded.encodeToByteArray().size
-        if (encodedBytes > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
+        state = state.copy(partitionedCaches = true)
+        var records = cacheRecords()
+        val inSync = cacheRowsInSync
+        val updates = LinkedHashMap<String, String?>()
+        val sizes = if (inSync) persistedCacheBytes.toMutableMap() else mutableMapOf()
+        records.forEach { (key, record) ->
+            if (!inSync || persistedCaches[key] !== record) {
+                val encoded = encodeCacheRecord(record)
+                updates[key] = encoded
+                sizes[key] = encoded.encodeToByteArray().size.toLong()
+            }
+        }
+        var encoded = json.encodeToString(PersistedCompatibilityState.serializer(), metadataOf(state))
+        fun totalBytes(): Long = encoded.encodeToByteArray().size.toLong() + records.keys.sumOf { sizes[it] ?: 0L }
+        if (totalBytes() > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
             // The user's cache quota may exceed the SQLite envelope limit (or
             // be unlimited). Evict refetchable bodies before they prevent even
             // a small setting/draft mutation from committing. Keep headroom for
             // subsequent writes and preserve all user-owned records.
             trimRefetchableCachesLocked(
-                encodedBytes.toLong() - MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES + 1024L * 1024L
+                totalBytes() - MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES + 1024L * 1024L
             )
-            encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
+            state = state.copy(partitionedCaches = true)
+            records = cacheRecords()
+            encoded = json.encodeToString(PersistedCompatibilityState.serializer(), metadataOf(state))
         }
-        database.writePayload(encoded, nowMillis())
+        require(totalBytes() <= MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
+            "Compatibility state exceeds its permitted size"
+        }
+        if (inSync) {
+            (persistedCaches.keys + updates.keys).filter { it !in records }.forEach {
+                updates[it] = null
+                sizes.remove(it)
+            }
+        } else {
+            // The whole table is replaced below, so only the rows still wanted are written.
+            updates.keys.retainAll(records.keys)
+        }
+        database.writePayload(
+            payload = encoded,
+            updatedAtMillis = nowMillis(),
+            cacheUpdates = updates,
+            replaceCacheRecords = !inSync
+        )
+        persistedCaches = records
+        persistedCacheBytes = sizes.filterKeys { it in records }
+        cacheRowsInSync = true
     }
 
     private fun trimRefetchableCachesLocked(bytesToRelease: Long) {
@@ -1388,6 +1550,7 @@ internal class DesktopCompatibilityStore(
         const val MAX_COMPAT_URL_CHARS = 500
         const val MAX_CATALOG_ITEMS = 3_000
         const val MAX_CATALOG_GENERATIONS = 6
+        const val CLOSED_BATCH_CACHE_KEY = "closedBatch"
         const val MAX_DROPPED_ITEMS = 200
         const val UNDO_WINDOW_MILLIS = 7_000L
         val COMPAT_SHARED_SNAPSHOT_KEY_REGEX = Regex("^compat_tab_[0-9a-f]{16}$")
@@ -1397,6 +1560,8 @@ internal class DesktopCompatibilityStore(
 @Serializable
 private data class PersistedCompatibilityState(
     val version: Int = 1,
+    /** Thread/catalog caches and the pending closed tabs are kept in compat_cache_record rows. */
+    val partitionedCaches: Boolean = false,
     val boardBootstrapComplete: Boolean = false,
     val boards: List<CompatBoard> = emptyList(),
     val tabs: List<CompatTab> = emptyList(),

@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -51,6 +52,8 @@ import coil3.size.Size
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
+import com.valoser.futacha.shared.ui.applyDesktopWheelZoom
+import com.valoser.futacha.shared.util.isDesktop
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 
 @Composable
@@ -359,6 +362,45 @@ private fun ImagePreviewTransformSurface(
                     } while (event.changes.any { it.pressed })
                 }
             }
+            .then(
+                if (isDesktop()) {
+                    // A mouse or trackpad has no two-finger pinch here: the wheel (with or
+                    // without Ctrl) zooms around the pointer. One-finger/drag panning while
+                    // zoomed is the gesture above.
+                    Modifier.pointerInput(resetKey, viewportSize) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.type != PointerEventType.Scroll) continue
+                                val change = event.changes.firstOrNull() ?: continue
+                                val wheelResult = applyDesktopWheelZoom(
+                                    scale = scale,
+                                    translationX = translation.x,
+                                    translationY = translation.y,
+                                    scrollDeltaY = change.scrollDelta.y,
+                                    pointerX = change.position.x,
+                                    pointerY = change.position.y,
+                                    viewportWidthPx = viewportSize.width.toFloat(),
+                                    viewportHeightPx = viewportSize.height.toFloat(),
+                                    maxScale = IMAGE_PREVIEW_MAX_ZOOM,
+                                    fitThreshold = IMAGE_PREVIEW_ZOOM_THRESHOLD
+                                ) ?: continue
+                                val wasZoomed = scale > IMAGE_PREVIEW_ZOOM_THRESHOLD
+                                scale = wheelResult.scale
+                                translation = Offset(wheelResult.translationX, wheelResult.translationY)
+                                if (wheelResult.scale > IMAGE_PREVIEW_ORIGINAL_REQUEST_ZOOM) {
+                                    onOriginalResolutionNeeded()
+                                }
+                                val nowZoomed = wheelResult.scale > IMAGE_PREVIEW_ZOOM_THRESHOLD
+                                if (nowZoomed != wasZoomed) onZoomedChanged(nowZoomed)
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         if (showThumbnail) {
             Image(

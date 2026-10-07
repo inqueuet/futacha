@@ -257,6 +257,7 @@ internal fun ThreadContent(
                             onMediaClick = postCardCallbacks.onMediaClick,
                             onMediaLongPress = postCardCallbacks.onMediaLongPress,
                             onLongPress = postCardCallbacks.onLongPress,
+                            onRelatedClick = postCardCallbacks.onRelatedClick,
                             onAiHideAgain = if (post.id in aiHiddenPostIds) {
                                 { revealedAiHiddenPostIds.remove(post.id) }
                             } else {

@@ -18,8 +18,16 @@ class EpochTimeSupportTest {
         assertTrue(hasEpochIntervalElapsed(50L, 100L, 1_000L))
         assertFalse(isWithinEpochInterval(50L, 100L, 1_000L))
         assertTrue(isWithinEpochInterval(150L, 100L, 50L))
-        assertTrue(hasEpochDurationExceeded(50L, 100L, 1_000L))
+        assertTrue(hasEpochDurationExceeded(150L, 100L, 10L))
         assertFalse(hasEpochDurationExceeded(150L, 100L, 50L))
+    }
+
+    @Test
+    fun saveDurationIsNotExceededByAClockRollback() {
+        // Same as enforceThreadSaveBudget: a rolled-back clock is zero elapsed time.
+        assertFalse(hasEpochDurationExceeded(50L, 100L, 1_000L))
+        assertFalse(hasEpochDurationExceeded(50L, 100L, 0L))
+        assertTrue(hasEpochDurationExceeded(50L, 100L, -1L))
     }
 
     @Test

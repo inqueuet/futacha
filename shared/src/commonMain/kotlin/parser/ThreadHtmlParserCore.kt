@@ -310,6 +310,18 @@ internal object ThreadHtmlParserCore {
                 )
             }
 
+            // A 200 page without any thread structure (maintenance, congestion, captive portal) must not
+            // become a successful empty thread: callers would overwrite the cached thread with it.
+            if (postsWithReferences.isEmpty() &&
+                firstReplyIndex == -1 &&
+                !opContainerStartRegex.containsMatchIn(normalized) &&
+                !postIdRegex.containsMatchIn(normalized) &&
+                !dataResRegex.containsMatchIn(normalized) &&
+                !normalized.contains("<blockquote", ignoreCase = true)
+            ) {
+                throw ParserException("スレッドのHTMLとして読めませんでした（メンテナンスや混雑中のページの可能性があります）")
+            }
+
             val resolvedThreadId = if (threadId.isNotBlank()) threadId else postsWithReferences.firstOrNull()?.id.orEmpty()
             ThreadPage(
                 threadId = resolvedThreadId,
@@ -322,6 +334,8 @@ internal object ThreadHtmlParserCore {
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // FIX: キャンセル例外は再スロー
+            throw e
+        } catch (e: ParserException) {
             throw e
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to parse thread HTML", e)

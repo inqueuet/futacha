@@ -600,14 +600,16 @@ class AndroidFileSystem(
             parentUri, android.provider.DocumentsContract.getDocumentId(parentUri)
         )
         val children = linkedMapOf<String, DocumentFile>()
-        context.contentResolver.query(
+        // A null cursor means the provider failed. Reading it as "no children" made missing
+        // files look absent (and the listing was cached as such for the whole save).
+        (context.contentResolver.query(
             childrenUri,
             arrayOf(
                 android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
             ),
             null, null, null
-        )?.use { cursor ->
+        ) ?: throw java.io.IOException("Document provider returned no cursor for $childrenUri")).use { cursor ->
             while (cursor.moveToNext()) {
                 val documentId = cursor.getString(0) ?: continue
                 val name = cursor.getString(1) ?: continue
@@ -1022,6 +1024,8 @@ class AndroidFileSystem(
                         createDirectories = false
                     )
                     findTreeChild(parentDir, fileName)?.exists() ?: false
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Logger.e("AndroidFileSystem", "Error checking existence for TreeUri: ${base.uri}, path: $relativePath", e)
                     false
@@ -1080,9 +1084,7 @@ class AndroidFileSystem(
             }
             is SaveLocation.TreeUri -> {
                 try {
-                    val baseDir = requireTreeBaseDirectory(base)
-                    val targetDir = navigateToDirectory(baseDir, directory) ?: return@withContext emptyList()
-                    runInterruptible { targetDir.listFiles().mapNotNull { it.name } }
+                    listTreeUriNames(base, directory)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1092,6 +1094,49 @@ class AndroidFileSystem(
             }
             is SaveLocation.Bookmark -> emptyList()
         }
+    }
+
+    override suspend fun listFilesOrThrow(base: SaveLocation, directory: String): List<String> = withContext(Dispatchers.IO) {
+        if (directory.isNotEmpty()) {
+            runFsCatching { validatePath(directory, "directory") }.getOrElse {
+                return@withContext emptyList()
+            }
+        }
+        when (base) {
+            // A provider failure must not read as an empty folder: an index judged missing
+            // because of it would be replaced by a one-entry index.
+            is SaveLocation.TreeUri -> listTreeUriNames(base, directory)
+            else -> listFiles(base, directory)
+        }
+    }
+
+    /**
+     * Names of the direct children of [directory] from one provider query (one cursor, display
+     * names only) rather than one query per child. A provider failure throws.
+     */
+    private suspend fun listTreeUriNames(base: SaveLocation.TreeUri, directory: String): List<String> {
+        val baseDir = requireTreeBaseDirectory(base)
+        val targetDir = navigateToDirectory(baseDir, directory) ?: return emptyList()
+        return queryTreeChildNames(targetDir)
+    }
+
+    private suspend fun queryTreeChildNames(parent: DocumentFile): List<String> = runInterruptible {
+        val parentUri = parent.uri
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+            parentUri, android.provider.DocumentsContract.getDocumentId(parentUri)
+        )
+        val names = mutableListOf<String>()
+        val cursor = context.contentResolver.query(
+            childrenUri,
+            arrayOf(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null, null, null
+        ) ?: throw java.io.IOException("Document provider returned no cursor for $childrenUri")
+        cursor.use {
+            while (it.moveToNext()) {
+                it.getString(0)?.let(names::add)
+            }
+        }
+        names
     }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {

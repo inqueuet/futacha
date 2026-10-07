@@ -72,7 +72,10 @@ internal fun FutachaTabsDialog(
                 items(tabs, key = { it.key }) { tab ->
                     ListItem(
                         headlineContent = { Text(tab.title) },
-                        supportingContent = { Text("${tab.boardName}・${tab.replyCount}レス${if (tab.unreadCount > 0) " (+${tab.unreadCount})" else ""}${if (tab.isDead) "・落ち" else ""}") },
+                        supportingContent = { Column {
+                            Text("${tab.boardName}・${tab.replyCount}レス${if (tab.isDead) "・落ち" else ""}")
+                            CatalogNewRepliesBadge(tab.unreadCount)
+                        } },
                         leadingContent = { TextButton(enabled = !busy, onClick = { perform {
                             features.store.tabs.first().firstOrNull { it.key == tab.key }?.let {
                                 features.store.updateTab(it.copy(favorite = !it.favorite))

@@ -1211,8 +1211,10 @@ class FutachaAppTest {
         )
 
         callbacks.onScrollPositionPersist("123", 9, 21, "109")
-        yield()
-        delay(1)
+        // Persistence dispatches asynchronously; wait for its result instead of a 1 ms scheduling guess.
+        kotlinx.coroutines.withTimeout(5_000) {
+            store.history.first { entries -> entries.firstOrNull()?.lastReadItemIndex == 9 }
+        }
 
         assertEquals(
             9,
@@ -2095,7 +2097,8 @@ private class TestBoardRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
 
     override suspend fun createThread(
@@ -2107,7 +2110,8 @@ private class TestBoardRepository : BoardRepository {
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? = null
 
     override fun close() = Unit

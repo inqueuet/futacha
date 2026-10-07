@@ -6,16 +6,20 @@ import FirebaseAnalytics
 import FirebasePerformance
 import FirebaseCrashlytics
 import Network
+import UserNotifications
 
 #if canImport(AppIntents)
 import AppIntents
 #endif
 
-final class AppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Without a delegate iOS drops notifications that arrive while the app is
+        // in the foreground, yet the watch-alert ledger records them as delivered.
+        UNUserNotificationCenter.current().delegate = self
         FutachaAppleIntelligenceBridge.installAiBridge()
         FutachaNetworkPathMonitor.shared.start()
         MainViewControllerKt.registerIosBackgroundRefreshTask()
@@ -28,6 +32,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
         IosFirebaseTelemetryBridge.shared.installKotlinExceptionHook()
         return true
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
     }
 }
 

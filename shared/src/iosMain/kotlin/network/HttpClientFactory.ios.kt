@@ -34,5 +34,5 @@ actual fun createHttpClient(
             storage = cookieStorage ?: AcceptAllCookiesStorage()
         }
 
-    }
+    }.also { it.attributes.put(PostingBrowserKey, IosPostingBrowser()) }
 }

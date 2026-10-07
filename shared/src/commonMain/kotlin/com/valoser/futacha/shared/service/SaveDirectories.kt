@@ -137,15 +137,37 @@ fun buildCompatManualImageFolderName(
     title: String,
     threadId: String
 ): String {
-    val raw = listOf(boardName.trim(), title.trim().take(4), threadId.trim())
+    val raw = listOf(boardName.trim(), title.trim().takeCodePoints(4), threadId.trim())
         .filter(String::isNotBlank)
         .joinToString(" ")
     return raw
         .replace(INVALID_COMPAT_MANUAL_FOLDER_REGEX, "_")
         .trim()
         .trim('.', '_')
-        .take(STORAGE_SEGMENT_MAX_LENGTH)
+        .takeWithoutSplittingSurrogates(STORAGE_SEGMENT_MAX_LENGTH)
         .ifBlank { "thread" }
+}
+
+/** The first [count] code points; an emoji or rare kanji is never cut in half. */
+internal fun String.takeCodePoints(count: Int): String {
+    var index = 0
+    var taken = 0
+    while (index < length && taken < count) {
+        index += if (this[index].isHighSurrogate() && index + 1 < length && this[index + 1].isLowSurrogate()) 2 else 1
+        taken += 1
+    }
+    return substring(0, index)
+}
+
+/** At most [maxChars] UTF-16 units, dropping a high surrogate left alone at the cut. */
+internal fun String.takeWithoutSplittingSurrogates(maxChars: Int): String {
+    if (length <= maxChars) return this
+    val cut = if (maxChars > 0 && this[maxChars - 1].isHighSurrogate() && this[maxChars].isLowSurrogate()) {
+        maxChars - 1
+    } else {
+        maxChars
+    }
+    return substring(0, cut.coerceAtLeast(0))
 }
 
 fun buildThreadSaveGenerationStorageId(

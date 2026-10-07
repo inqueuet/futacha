@@ -83,13 +83,16 @@ class HistoryRefreshWorker(
         expectedGeneration: Long,
         coverage: BackgroundRunCoverage
     ): Result {
-        if (app.experienceProfileStore.readActiveProfile() == ExperienceProfile.TOSHIAKI_COMPAT) {
+        val activeProfile = app.experienceProfileStore.readActiveProfile()
+        if (!activeProfile.usesAppStateData) {
             return doCompatibilityWork(app, expectedGeneration)
         }
+        // ふたちゃ and ふたばー share the AppState data, so the commit gate follows the
+        // profile that was active when this run started; a later switch refuses commits.
         fun isCurrentModernGeneration(): Boolean =
             expectedGeneration >= 0L &&
                 app.experienceProfileStore.isGenerationCommitAllowed(
-                    ExperienceProfile.FUTACHA,
+                    activeProfile,
                     expectedGeneration
                 )
         if (!isCurrentModernGeneration()) {
@@ -127,7 +130,8 @@ class HistoryRefreshWorker(
         }
         if (!enabledState.hasAnyEnabled && !sharedFeaturesEnabled) {
             Logger.d(TAG, "Background refresh disabled; skipping work")
-            AnalyticsTracker.event(
+            trackBackgroundRefreshEvent(
+                activeProfile,
                 "background_refresh_result",
                 mapOf("source" to "workmanager", "result" to "disabled")
             )
@@ -136,7 +140,7 @@ class HistoryRefreshWorker(
         awaitNetworkServicesOrResult()?.let { return it }
 
         return try {
-            AnalyticsTracker.event("background_refresh_started", mapOf("source" to "workmanager"))
+            trackBackgroundRefreshEvent(activeProfile, "background_refresh_started", mapOf("source" to "workmanager"))
             CrashReporter.log("background_refresh_started source=workmanager")
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
                 if (sharedFeaturesEnabled) {
@@ -146,7 +150,7 @@ class HistoryRefreshWorker(
                                 isCurrentModernGeneration() && WatchAlertNotifier(applicationContext).notifyMatches(fresh)
                             }
                         }, commitGate = { commit ->
-                            app.experienceProfileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
+                            app.experienceProfileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
                         }, budgetMillis = SHARED_FEATURES_BUDGET_MILLIS)
                 }
                 // A foreground history refresh may hold the refresher's lock. Skip
@@ -161,14 +165,14 @@ class HistoryRefreshWorker(
                             maxAutoSavesPerRun = MAX_AUTO_SAVES_PER_RUN,
                             historyCommitGate = { commit ->
                                 app.experienceProfileStore.runIfGenerationCurrent(
-                                    ExperienceProfile.FUTACHA,
+                                    activeProfile,
                                     expectedGeneration,
                                     commit
                                 )
                             },
                             autoSaveCommitGate = { commit ->
                                 app.experienceProfileStore.runIfGenerationCurrent(
-                                    ExperienceProfile.FUTACHA,
+                                    activeProfile,
                                     expectedGeneration,
                                     commit
                                 )
@@ -198,7 +202,8 @@ class HistoryRefreshWorker(
                 }
             }
             val errorSnapshot = app.historyRefresher.lastRefreshError.value
-            AnalyticsTracker.event(
+            trackBackgroundRefreshEvent(
+                activeProfile,
                 "background_refresh_result",
                 mapOf(
                     "source" to "workmanager",
@@ -214,7 +219,8 @@ class HistoryRefreshWorker(
             Result.success()
         } catch (e: TimeoutCancellationException) {
             Logger.w(TAG, "Background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
-            AnalyticsTracker.event(
+            trackBackgroundRefreshEvent(
+                activeProfile,
                 "background_refresh_result",
                 mapOf(
                     "source" to "workmanager",
@@ -239,7 +245,8 @@ class HistoryRefreshWorker(
         } catch (t: Exception) {
             Logger.e(TAG, "Background history refresh failed", t)
             val category = analyticsFailureCategory(t)
-            AnalyticsTracker.event(
+            trackBackgroundRefreshEvent(
+                activeProfile,
                 "background_refresh_result",
                 mapOf(
                     "source" to "workmanager",
@@ -526,6 +533,19 @@ class HistoryRefreshWorker(
 
         private const val WORK_CANCEL_TIMEOUT_SECONDS = 5L
     }
+}
+
+/** ふたばー風モードはAnalyticsを送らない。判定はデータの所有者ではなくプロファイル自体で行う。 */
+internal fun shouldSendBackgroundRefreshAnalytics(profile: ExperienceProfile): Boolean =
+    profile != ExperienceProfile.FUTABER
+
+private fun trackBackgroundRefreshEvent(
+    profile: ExperienceProfile,
+    name: String,
+    params: Map<String, String> = emptyMap()
+) {
+    if (!shouldSendBackgroundRefreshAnalytics(profile)) return
+    AnalyticsTracker.event(name, params)
 }
 
 /** Process-wide: the periodic and one-time works are different WorkManager entries. */

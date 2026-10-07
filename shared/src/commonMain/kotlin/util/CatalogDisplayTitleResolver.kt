@@ -79,13 +79,15 @@ private fun matchesCatalogTitleCompletionTrigger(
     }
 }
 
+private val CATALOG_TITLE_POST_NUMBER_REGEX = Regex("No\\.\\d+", RegexOption.IGNORE_CASE)
+
 private fun shouldResolveEmptyOrNumericReplyCountTitle(
     currentTitle: String?,
     replyCount: Int
 ): Boolean {
     val trimmedTitle = currentTitle?.trim().orEmpty()
     if (trimmedTitle.isEmpty()) return true
-    if (trimmedTitle.matches(Regex("No\\.\\d+", RegexOption.IGNORE_CASE))) return true
+    if (trimmedTitle.matches(CATALOG_TITLE_POST_NUMBER_REGEX)) return true
     val numericTitle = trimmedTitle.toIntOrNull() ?: return false
     return numericTitle == replyCount || replyCount <= 0
 }

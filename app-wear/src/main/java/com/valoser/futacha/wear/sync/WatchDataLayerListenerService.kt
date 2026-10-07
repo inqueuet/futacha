@@ -11,6 +11,7 @@ import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import com.valoser.futacha.shared.watch.WATCH_ALERT_KEY
 import com.valoser.futacha.shared.watch.WATCH_ALERT_PATH
+import com.valoser.futacha.shared.watch.WATCH_PHONE_STATUS_PATH
 import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_KEY
 import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_PATH
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_ACK_KEY
@@ -19,6 +20,7 @@ import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
 import com.valoser.futacha.shared.watch.WATCH_UPDATED_AT_KEY
 import com.valoser.futacha.shared.watch.WatchAlert
+import com.valoser.futacha.shared.watch.WatchPhoneStatus
 import com.valoser.futacha.wear.live.WatchAlertNotifier
 import kotlinx.serialization.json.Json
 
@@ -89,6 +91,10 @@ class WatchDataLayerListenerService : WearableListenerService() {
                     ?: messageEvent.data.decodeToString()
                 decodeAndSaveReadAloudStatusUpdate(encoded)
             }
+            WATCH_PHONE_STATUS_PATH -> {
+                if (messageEvent.data.isEmpty() || messageEvent.data.size > WATCH_PHONE_STATUS_PAYLOAD_MAX_BYTES) return
+                decodeAndApplyPhoneStatus(messageEvent.data.decodeToString())
+            }
             WATCH_ALERT_PATH -> {
                 if (messageEvent.data.isEmpty() || messageEvent.data.size > WATCH_ALERT_PAYLOAD_MAX_BYTES) return
                 val dataMap = runCatching { DataMap.fromByteArray(messageEvent.data) }.getOrNull()
@@ -126,6 +132,23 @@ class WatchDataLayerListenerService : WearableListenerService() {
         )
     }
 
+    /** The phone answers a snapshot request with its clock and whether it can serve the watch. */
+    private fun decodeAndApplyPhoneStatus(encoded: String) {
+        val status = runCatching {
+            json.decodeFromString(WatchPhoneStatus.serializer(), encoded)
+        }.onFailure {
+            Log.w(TAG, "Failed to decode phone status", it)
+        }.getOrNull() ?: return
+        WatchPhoneModeStore.setUnsupported(!status.isSupported)
+        if (status.watchSentAtMillis > 0L) {
+            WatchClockOffsetStore.recordSample(
+                context = applicationContext,
+                watchSentAtMillis = status.watchSentAtMillis,
+                phoneNowMillis = status.phoneNowMillis
+            )
+        }
+    }
+
     private fun decodeAndNotifyWatchAlert(encoded: String) {
         if (encoded.isBlank() || encoded.encodeToByteArray().size > WATCH_ALERT_PAYLOAD_MAX_BYTES) {
             return
@@ -159,5 +182,6 @@ class WatchDataLayerListenerService : WearableListenerService() {
         private const val WATCH_SNAPSHOT_ACK_PAYLOAD_MAX_BYTES = 128
         private const val WATCH_READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES = 4 * 1024
         private const val WATCH_ALERT_PAYLOAD_MAX_BYTES = 8 * 1024
+        private const val WATCH_PHONE_STATUS_PAYLOAD_MAX_BYTES = 1024
     }
 }

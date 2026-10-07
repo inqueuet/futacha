@@ -62,8 +62,6 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
     )
     deps.coroutineScope.launch {
         if (!checkPostingNoticeIfNeeded(deps.stateStore)) return@launch
-        deps.replyDialogBinding.setState(dismissedState)
-        submitOutcome.normalizedPassword?.let { deps.updateLastUsedDeleteKey(it) }
         val sendJob = deps.actionBindings.launch(
             successMessage = "返信を送信しました",
             failurePrefix = "返信の送信に失敗しました",
@@ -96,6 +94,9 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
                 callbacks = deps.threadReplyActionCallbacks
             )
         } ?: return@launch
+        // Another action in progress: the launch above was refused, so the dialog (and its draft) stays open.
+        deps.replyDialogBinding.setState(dismissedState)
+        submitOutcome.normalizedPassword?.let { deps.updateLastUsedDeleteKey(it) }
         deps.onSendingChanged(true)
         try {
             sendJob.join()

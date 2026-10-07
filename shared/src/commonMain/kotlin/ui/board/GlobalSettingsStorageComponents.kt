@@ -62,45 +62,48 @@ internal fun GlobalSettingsSaveSection(
         icon = Icons.Rounded.Folder,
         description = text.sectionDescription
     ) {
-        ListItem(
-            headlineContent = { Text(text.preferredAppTitle) },
-            supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = text.preferredAppDescription,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = state.preferredFileManagerState.currentSettingText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (state.preferredFileManagerState.isConfigured) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            AnalyticsTracker.uiControl("storage_settings", "優先ファイラーを選択")
-                            callbacks.onOpenFileManagerPicker()
-                        }) {
-                            Text(text.preferredAppButtonLabel)
-                        }
-                        if (state.preferredFileManagerState.isConfigured) {
-                            OutlinedButton(onClick = {
-                                AnalyticsTracker.uiControl("storage_settings", "優先ファイラーを解除")
-                                callbacks.onClearPreferredFileManager?.invoke()
+        // Desktop has no file-manager picker (its dialog is empty), so the row would do nothing.
+        if (shouldShowPreferredFileManagerRow(isDesktopPlatform = com.valoser.futacha.shared.util.isDesktop())) {
+            ListItem(
+                headlineContent = { Text(text.preferredAppTitle) },
+                supportingContent = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = text.preferredAppDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = state.preferredFileManagerState.currentSettingText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.preferredFileManagerState.isConfigured) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                AnalyticsTracker.uiControl("storage_settings", "優先ファイラーを選択")
+                                callbacks.onOpenFileManagerPicker()
                             }) {
-                                Text("クリア")
+                                Text(text.preferredAppButtonLabel)
+                            }
+                            if (state.preferredFileManagerState.isConfigured) {
+                                OutlinedButton(onClick = {
+                                    AnalyticsTracker.uiControl("storage_settings", "優先ファイラーを解除")
+                                    callbacks.onClearPreferredFileManager?.invoke()
+                                }) {
+                                    Text("クリア")
+                                }
                             }
                         }
                     }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        HorizontalDivider()
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            HorizontalDivider()
+        }
         if (LocalFutachaSharedFeatures.current != null) {
             SharedSettingsLink("storage", "保存先・キャッシュ", "通常保存と一括保存の保存先、容量・保存場所・キャッシュ削除")
         } else {

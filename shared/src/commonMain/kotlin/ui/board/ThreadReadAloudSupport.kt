@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.compat.COMPAT_URL_BODY_CHAR_CLASS
 import com.valoser.futacha.shared.model.Post
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.yield
@@ -24,7 +25,10 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
     "書き込みをした人によって削除されました",
     "管理者によって削除されました"
 )
-private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
+// ASCII URL characters only, so the Japanese text after "https://x/y.jpg　これ" is still read.
+private val READ_ALOUD_URL_REGEX = Regex(
+    "(?i)\\b(?:https?|ftp)://$COMPAT_URL_BODY_CHAR_CLASS+|\\bttps?://$COMPAT_URL_BODY_CHAR_CLASS+|\\bttp://$COMPAT_URL_BODY_CHAR_CLASS+"
+)
 private val READ_ALOUD_WHITESPACE_REGEX = Regex("\\s{2,}")
 
 internal suspend fun buildReadAloudSegments(

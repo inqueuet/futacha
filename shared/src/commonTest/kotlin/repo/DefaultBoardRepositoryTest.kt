@@ -1313,7 +1313,8 @@ private class FakeBoardApi(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         replyCalls += ReplyCall(
             board = board,
@@ -1338,7 +1339,8 @@ private class FakeBoardApi(
         password: String,
         imageFile: ByteArray?,
         imageFileName: String?,
-        textOnly: Boolean
+        textOnly: Boolean,
+        handwriting: Boolean
     ): String? {
         createThreadCalls += CreateThreadCall(
             board = board,

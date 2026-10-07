@@ -169,11 +169,33 @@ internal fun compatPostOrientationTransform(orientation: CompatImageOrientation,
     return AffineTransform(-1.0, 0.0, 0.0, 1.0, uprightWidth, 0.0).apply { concatenate(rotation) }
 }
 
-internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? = runCatching {
+/**
+ * Width and height from the image header only. ImageIO.read decodes every pixel (a large photo
+ * takes hundreds of milliseconds and many MB) and this is called while composing the post screen.
+ */
+internal fun compatPostImageDimensions(bytes: ByteArray): Pair<Int, Int>? = runCatching {
     if (bytes.isEmpty()) return@runCatching null
-    val image = ImageIO.read(ByteArrayInputStream(bytes)) ?: return@runCatching null
-    if (image.width > 0 && image.height > 0) image.width.toFloat() / image.height.toFloat() else null
+    ImageIO.createImageInputStream(ByteArrayInputStream(bytes))?.use { stream ->
+        val readers = ImageIO.getImageReaders(stream)
+        while (readers.hasNext()) {
+            val reader = readers.next()
+            try {
+                reader.setInput(stream, true, true)
+                val width = reader.getWidth(0)
+                val height = reader.getHeight(0)
+                if (width > 0 && height > 0) return@runCatching width to height
+            } catch (_: Exception) {
+                stream.seek(0)
+            } finally {
+                reader.dispose()
+            }
+        }
+        null
+    }
 }.getOrNull()
+
+internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? =
+    compatPostImageDimensions(bytes)?.let { (width, height) -> width.toFloat() / height.toFloat() }
 
 internal actual suspend fun computeCompatImagePhashFromBytes(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
     runCatching {

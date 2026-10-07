@@ -2,7 +2,9 @@ package com.valoser.futacha.shared.ui.compat
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -10,6 +12,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -35,9 +39,15 @@ internal actual fun CompatReverseImageSearchWebView(
     val currentLinkLongPressCallback by rememberUpdatedState(onLinkLongPressed)
     val currentCookiesChangedCallback by rememberUpdatedState(onCookiesChanged)
     var webView by remember { mutableStateOf<WebView?>(null) }
+    // Bumped when the WebView renderer dies; the dead view cannot be reused, so
+    // the AndroidView below is rebuilt and resumes at the last page.
+    var generation by remember { mutableIntStateOf(0) }
+    val lastUrl = remember { arrayOfNulls<String>(1) }
+    key(generation) {
     AndroidView(
         modifier = modifier,
         factory = { context ->
+            val restoreUrl = if (generation > 0) lastUrl[0] else null
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
@@ -50,7 +60,24 @@ internal actual fun CompatReverseImageSearchWebView(
                         request: WebResourceRequest?
                     ): Boolean = !isCompatReverseSearchBrowserUrl(request?.url?.toString())
 
+                    override fun onRenderProcessGone(
+                        view: WebView?,
+                        detail: RenderProcessGoneDetail?
+                    ): Boolean {
+                        // Returning false (the default) kills the app process.
+                        val dead = view ?: return true
+                        (dead.parent as? ViewGroup)?.removeView(dead)
+                        dead.destroy()
+                        if (webView === dead) webView = null
+                        currentCallback(CompatBrowserState(currentUrl = lastUrl[0], loading = false, canGoBack = false, canGoForward = false))
+                        // A page that kills the renderer again and again stays blank
+                        // rather than rebuilding forever.
+                        if (generation < MAX_RENDER_PROCESS_REBUILDS) generation += 1
+                        return true
+                    }
+
                     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                        url?.takeIf(::isCompatReverseSearchBrowserUrl)?.let { lastUrl[0] = it }
                         currentCallback(view.compatBrowserState(url, loading = true))
                     }
 
@@ -77,7 +104,10 @@ internal actual fun CompatReverseImageSearchWebView(
                     }
                 }
                 val cookieUrl = initialUrl ?: baseUrl
-                if (cookieUrl == null || initialCookies.isEmpty()) {
+                if (restoreUrl != null) {
+                    // Cookies already live in the process-wide CookieManager.
+                    loadUrl(restoreUrl)
+                } else if (cookieUrl == null || initialCookies.isEmpty()) {
                     loadInitialContent()
                 } else {
                     val remaining = AtomicInteger(initialCookies.size)
@@ -94,6 +124,7 @@ internal actual fun CompatReverseImageSearchWebView(
             }
         }
     )
+    }
     LaunchedEffect(navigationCommand?.serial) {
         when (navigationCommand?.navigation) {
             CompatBrowserNavigation.BACK -> webView?.takeIf(WebView::canGoBack)?.goBack()
@@ -132,6 +163,8 @@ private fun CompatBrowserCookie.toAndroidSetCookieValue(): String = buildString 
     append(path.ifBlank { "/" })
     if (secure) append("; Secure")
 }
+
+private const val MAX_RENDER_PROCESS_REBUILDS = 2
 
 private const val COMPAT_REVERSE_SEARCH_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +

@@ -192,15 +192,16 @@ class CompatPreferenceSchemaTest {
 
     @Test
     fun childScreensMatchApkPreferenceRowsAndUniqueKeys() {
+        // Includes the approved reopen, post-tap, and tree-display settings.
         val expectedCounts = mapOf(
             "background" to 2,
-            "catalog" to 21,
-            "control" to 11,
+            "catalog" to 22,
+            "control" to 12,
             "design" to 7,
             // Includes the high-quality thumbnail extension and its note.
             "network" to 7,
             "storage" to 10,
-            "thread" to 16,
+            "thread" to 17,
             "viewer" to 3
         )
         val entries = expectedCounts.flatMap { (path, count) ->
@@ -208,9 +209,9 @@ class CompatPreferenceSchemaTest {
                 .map { path to it }
         }
 
-        assertEquals(77, entries.size)
+        assertEquals(80, entries.size)
         assertEquals(
-            76,
+            79,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )
@@ -319,7 +320,7 @@ class CompatPreferenceSchemaTest {
         )
         assertEquals(
             listOf(
-                "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
+                "threadDisplayMode", "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
                 "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod"
             ),
@@ -350,7 +351,7 @@ class CompatPreferenceSchemaTest {
         )
         assertEquals(
             listOf(
-                "controlCatalogVolumeKey", "controlCatalogLongTap",
+                "controlCatalogVolumeKey", "controlCatalogLongTap", "controlPostTapBehavior",
                 "controlThreadVolumeKey", "controlTouchScroll", "controlTouchOpenDrawer",
                 "controlThreadCloseBack", "controlTabSelectorLongTap", "controlPostConfirm",
                 "controlViewerSwipeClose"

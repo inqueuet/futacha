@@ -81,11 +81,7 @@ internal fun buildThreadScreenOverlayActionCallbacks(
             } else {
                 val deleteActionConfig = submitOutcome.actionConfig
                 if (deleteActionConfig != null) {
-                    inputs.setPostOverlayState(
-                        submitOutcome.nextOverlayState ?: inputs.currentPostOverlayState()
-                    )
-                    submitOutcome.normalizedPassword?.let(inputs.updateLastUsedDeleteKey)
-                    inputs.actionBindings.launch(
+                    val deleteJob = inputs.actionBindings.launch(
                         successMessage = "本人削除を実行しました",
                         failurePrefix = "本人削除に失敗しました",
                         onSuccess = { _: Unit -> inputs.refreshThread() }
@@ -94,6 +90,13 @@ internal fun buildThreadScreenOverlayActionCallbacks(
                             config = deleteActionConfig,
                             callbacks = inputs.threadDeleteByUserActionCallbacks
                         )
+                    }
+                    // Another action in progress: keep the dialog (and its input) open instead of dropping it.
+                    if (deleteJob != null) {
+                        inputs.setPostOverlayState(
+                            submitOutcome.nextOverlayState ?: inputs.currentPostOverlayState()
+                        )
+                        submitOutcome.normalizedPassword?.let(inputs.updateLastUsedDeleteKey)
                     }
                 }
             }
@@ -116,9 +119,7 @@ internal fun buildThreadScreenOverlayActionCallbacks(
                 val replyActionConfig = submitOutcome.actionConfig
                 val dismissedState = submitOutcome.dismissedState
                 if (replyActionConfig != null && dismissedState != null) {
-                    inputs.replyDialogBinding.setState(dismissedState)
-                    submitOutcome.normalizedPassword?.let(inputs.updateLastUsedDeleteKey)
-                    inputs.actionBindings.launch(
+                    val replyJob = inputs.actionBindings.launch(
                         successMessage = "返信を送信しました",
                         failurePrefix = "返信の送信に失敗しました",
                         onSuccess = { thisNo ->
@@ -144,6 +145,11 @@ internal fun buildThreadScreenOverlayActionCallbacks(
                             config = replyActionConfig,
                             callbacks = inputs.threadReplyActionCallbacks
                         )
+                    }
+                    // Another action in progress: keep the dialog (and its draft) open instead of dropping it.
+                    if (replyJob != null) {
+                        inputs.replyDialogBinding.setState(dismissedState)
+                        submitOutcome.normalizedPassword?.let(inputs.updateLastUsedDeleteKey)
                     }
                 }
             }

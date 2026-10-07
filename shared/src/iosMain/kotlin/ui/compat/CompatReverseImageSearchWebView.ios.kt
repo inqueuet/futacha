@@ -22,6 +22,8 @@ import platform.Foundation.NSHTTPCookieValue
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.WebKit.WKNavigation
+import platform.WebKit.WKNavigationAction
+import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationDelegateProtocol
 import platform.WebKit.WKScriptMessage
 import platform.WebKit.WKScriptMessageHandlerProtocol
@@ -126,6 +128,43 @@ private class CompatReverseSearchNavigationDelegate : NSObject(), WKNavigationDe
     var onStateChanged: (CompatBrowserState) -> Unit = {}
     var onLinkLongPressed: (String) -> Unit = {}
     var onCookiesChanged: (String, String?) -> Unit = { _, _ -> }
+    private var lastBrowserUrl: String? = null
+    private var terminationCount = 0
+
+    /**
+     * Mirrors Android's shouldOverrideUrlLoading: only http(s) pages stay in
+     * this browser; custom schemes (app launches, intent-style links) are
+     * refused. about: is the blank/srcdoc document the page itself creates.
+     */
+    @ObjCSignatureOverride
+    override fun webView(
+        webView: WKWebView,
+        decidePolicyForNavigationAction: WKNavigationAction,
+        decisionHandler: (WKNavigationActionPolicy) -> Unit
+    ) {
+        val url = decidePolicyForNavigationAction.request.URL?.absoluteString
+        val allowed = isCompatReverseSearchBrowserUrl(url) ||
+            url?.startsWith("about:", ignoreCase = true) == true
+        decisionHandler(
+            if (allowed) WKNavigationActionPolicy.WKNavigationActionPolicyAllow
+            else WKNavigationActionPolicy.WKNavigationActionPolicyCancel
+        )
+    }
+
+    /**
+     * The web content process was killed (memory pressure) and the view is
+     * blank. Reopen the last page a limited number of times, otherwise leave
+     * it blank with loading cleared instead of spinning forever.
+     */
+    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
+        val target = lastBrowserUrl?.let(NSURL::URLWithString)
+        if (terminationCount < MAX_WEB_CONTENT_RELOADS && target != null) {
+            terminationCount += 1
+            webView.loadRequest(NSURLRequest.requestWithURL(target))
+        } else {
+            publish(webView, loading = false)
+        }
+    }
 
     override fun userContentController(
         userContentController: WKUserContentController,
@@ -141,6 +180,7 @@ private class CompatReverseSearchNavigationDelegate : NSObject(), WKNavigationDe
 
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
+        terminationCount = 0
         publish(webView, loading = false)
         val url = webView.URL?.absoluteString?.takeIf(::isCompatReverseSearchBrowserUrl) ?: return
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { values ->
@@ -185,6 +225,7 @@ private class CompatReverseSearchNavigationDelegate : NSObject(), WKNavigationDe
     }
 
     private fun publish(webView: WKWebView, loading: Boolean) {
+        webView.URL?.absoluteString?.takeIf(::isCompatReverseSearchBrowserUrl)?.let { lastBrowserUrl = it }
         onStateChanged(
             CompatBrowserState(
                 currentUrl = webView.URL?.absoluteString,
@@ -206,6 +247,8 @@ private fun CompatBrowserCookie.toIosHttpCookie(originUrl: NSURL): NSHTTPCookie?
             if (secure) put(NSHTTPCookieSecure, "TRUE")
         }
     )
+
+private const val MAX_WEB_CONTENT_RELOADS = 2
 
 private const val COMPAT_REVERSE_SEARCH_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +

@@ -194,7 +194,7 @@ class HttpBoardApiTest {
             requests += request
             when {
                 request.url.encodedPath.endsWith("/futaba.htm") -> htmlResponse(
-                    """<input type="hidden" name="chrenc" value="UTF-8">"""
+                    """<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>"""
                 )
 
                 request.url.toString().contains("futaba.php?guid=on") -> htmlResponse(
@@ -238,15 +238,15 @@ class HttpBoardApiTest {
             when {
                 request.url.encodedPath.endsWith("/futaba.htm") -> {
                     postingConfigFetchCount += 1
-                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                    htmlResponse("""<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>""")
                 }
 
                 request.url.toString().contains("futaba.php?guid=on") && request.headers[HttpHeaders.Referrer] == "https://www.2chan.net/b/futaba.htm" ->
-                    htmlResponse("""<html><body><a href="res/777.htm">created</a></body></html>""")
+                    htmlResponse("""<html><body><meta http-equiv="refresh" content="0;URL=res/777.htm"></body></html>""")
 
                 request.url.encodedPath.endsWith("/res/777.htm") -> {
                     postingConfigFetchCount += 1
-                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                    htmlResponse("""<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>""")
                 }
 
                 request.url.toString().contains("futaba.php?guid=on") && request.headers[HttpHeaders.Referrer] == "https://www.2chan.net/b/res/777.htm" ->
@@ -298,9 +298,9 @@ class HttpBoardApiTest {
                     postingConfigFetchCount += 1
                     htmlResponse(
                         """
-                            <input type="hidden" name="chrenc" value="UTF-8">
+                            <form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input type="hidden" name="chrenc" value="UTF-8">
                             <input type="hidden" name="hash" value="server-hash-$postingConfigFetchCount">
-                            <input type="hidden" name="ptua" value="server-ptua-$postingConfigFetchCount">
+                            <input type="hidden" name="ptua" value="server-ptua-$postingConfigFetchCount"></form>
                         """.trimIndent()
                     )
                 }
@@ -350,7 +350,7 @@ class HttpBoardApiTest {
         val api = createApi { request ->
             when {
                 request.url.encodedPath.endsWith("/futaba.htm") ->
-                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                    htmlResponse("""<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>""")
 
                 request.url.toString().contains("futaba.php?guid=on") ->
                     htmlResponse(
@@ -391,8 +391,8 @@ class HttpBoardApiTest {
     fun replyToThread_throwsParsedServerErrorFromSuccessfulHttpResponse() = runBlocking {
         val api = createApi { request ->
             when {
-                request.url.encodedPath.endsWith("/futaba.htm") ->
-                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                request.url.encodedPath.endsWith("/res/777.htm") ->
+                    htmlResponse("""<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>""")
 
                 request.url.toString().contains("futaba.php?guid=on") ->
                     htmlResponse("""<html><body><b>規制中です</b></body></html>""")
@@ -428,8 +428,8 @@ class HttpBoardApiTest {
     fun replyToThread_appendsCookieRecoveryGuidanceWhenCookieResetLooksRequired() = runBlocking {
         val api = createApi { request ->
             when {
-                request.url.encodedPath.endsWith("/futaba.htm") ->
-                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                request.url.encodedPath.endsWith("/res/777.htm") ->
+                    htmlResponse("""<form id="fm"><input name="resto" value="777"><input name="email"><textarea name="com"></textarea><input name="pwd"><input name="mode" value="regist"><input name="hash" value="server-hash"><input name="ptua" value="123"><input type="hidden" name="chrenc" value="UTF-8"></form>""")
 
                 request.url.toString().contains("futaba.php?guid=on") ->
                     htmlResponse("""posttime の期限切れです""")

@@ -25,7 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,9 +39,7 @@ import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.state.verifyAppLockPassword
 import com.valoser.futacha.shared.ui.board.rememberStableTextInputState
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
-import com.valoser.futacha.shared.util.saturatingEpochAdd
 import kotlinx.coroutines.delay
-import kotlin.time.Clock
 
 /**
  * Whether the app content is shown, as of the last composition. Use it to hide
@@ -51,23 +49,32 @@ import kotlin.time.Clock
  */
 internal val LocalFutachaAppUnlocked = androidx.compose.runtime.staticCompositionLocalOf { true }
 
-private const val APP_LOCK_MAX_FAILURES_BEFORE_WAIT = 5
-private const val APP_LOCK_FAILURE_WAIT_MILLIS = 15_000L
-
 @Composable
 internal fun FutachaAppLockScreen(
     passwordHash: String,
     onUnlocked: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * The persisted counter / cool-down (read once per process) and the writer for changes. The
+     * counter itself lives in [AppLockAttemptTracker.Process]; without a store it still survives
+     * rotation and re-locking but not a force-stop.
+     */
+    persistedAttempts: AppLockAttemptState = AppLockAttemptState(),
+    onAttemptsChanged: (AppLockAttemptState) -> Unit = {},
+    /** False while the persisted state is still being read: unlocking is ignored until then. */
+    attemptsLoaded: Boolean = true
 ) {
     var input by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
-    var failedAttempts by rememberSaveable { mutableStateOf(0) }
-    var lockoutUntilMillis by rememberSaveable { mutableStateOf(0L) }
-    var lockoutRefreshToken by rememberSaveable { mutableStateOf(0) }
-    val nowMillis = Clock.System.now().toEpochMilliseconds()
-    val isTemporarilyLocked = lockoutUntilMillis > nowMillis
-    val lockoutRemainingSeconds = appLockRemainingSeconds(lockoutUntilMillis, nowMillis)
+    val tracker = AppLockAttemptTracker.Process
+    // Bumped whenever the tracker changes or a cool-down ends, so the remaining wait is re-read.
+    var attemptRefreshToken by remember { mutableStateOf(0) }
+    @Suppress("UNUSED_VARIABLE")
+    val observedRefreshToken = attemptRefreshToken
+    val lockoutRemainingMillis = tracker.remainingMillis()
+    val isTemporarilyLocked = lockoutRemainingMillis > 0L || !attemptsLoaded
+    val currentOnAttemptsChanged by rememberUpdatedState(onAttemptsChanged)
+    val lockoutRemainingSeconds = lockoutRemainingMillis / 1_000L + if (lockoutRemainingMillis % 1_000L == 0L) 0L else 1L
     val inputState = rememberStableTextInputState(
         text = input,
         onTextChange = {
@@ -77,20 +84,26 @@ internal fun FutachaAppLockScreen(
         analyticsFieldLabel = "起動ロック解除パスワード"
     )
 
-    LaunchedEffect(lockoutUntilMillis, lockoutRefreshToken) {
-        val delayMillis = appLockRemainingMillis(
-            lockoutUntilMillis,
-            Clock.System.now().toEpochMilliseconds()
-        )
+    LaunchedEffect(attemptsLoaded) {
+        if (attemptsLoaded) {
+            tracker.restoreOnce(persistedAttempts)
+            attemptRefreshToken += 1
+        }
+    }
+    LaunchedEffect(attemptRefreshToken) {
+        val delayMillis = tracker.remainingMillis()
         if (delayMillis > 0L) {
             delay(delayMillis)
-            lockoutRefreshToken += 1
+            // The wait is over: persist that, so a force-stop now does not make the next launch wait again.
+            currentOnAttemptsChanged(tracker.snapshot())
+            attemptRefreshToken += 1
         }
     }
 
     fun submit() {
+        if (!attemptsLoaded) return
         AnalyticsTracker.uiControl("app_lock", "起動ロックの解除を実行")
-        if (lockoutUntilMillis > Clock.System.now().toEpochMilliseconds()) {
+        if (tracker.isLockedOut()) {
             isError = true
             AnalyticsTracker.uiControl("app_lock", "起動ロックの解除を試行: 一時ロック中")
             return
@@ -98,23 +111,18 @@ internal fun FutachaAppLockScreen(
         if (verifyAppLockPassword(input, passwordHash)) {
             input = ""
             isError = false
-            failedAttempts = 0
-            lockoutUntilMillis = 0L
+            tracker.recordSuccess()
+            onAttemptsChanged(tracker.snapshot())
             AnalyticsTracker.uiControl("app_lock", "起動ロックを解除: 成功")
             onUnlocked()
         } else {
-            failedAttempts += 1
-            if (failedAttempts >= APP_LOCK_MAX_FAILURES_BEFORE_WAIT) {
-                failedAttempts = 0
-                lockoutUntilMillis = saturatingEpochAdd(
-                    Clock.System.now().toEpochMilliseconds(),
-                    APP_LOCK_FAILURE_WAIT_MILLIS
-                )
-            }
+            val startedLockout = tracker.recordFailure()
+            onAttemptsChanged(tracker.snapshot())
+            attemptRefreshToken += 1
             isError = true
             AnalyticsTracker.uiControl(
                 "app_lock",
-                if (lockoutUntilMillis > Clock.System.now().toEpochMilliseconds()) {
+                if (startedLockout) {
                     "起動ロックの解除に失敗: 一時ロック"
                 } else {
                     "起動ロックの解除に失敗"
@@ -249,7 +257,10 @@ internal fun FutachaAppLockGateContent(
     gate: FutachaAppLockGate,
     passwordHash: String,
     onUnlocked: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    persistedAttempts: AppLockAttemptState = AppLockAttemptState(),
+    onAttemptsChanged: (AppLockAttemptState) -> Unit = {},
+    attemptsLoaded: Boolean = true
 ) {
     when (gate) {
         FutachaAppLockGate.Loading -> FutachaAppLockLoadingScreen()
@@ -260,7 +271,10 @@ internal fun FutachaAppLockGateContent(
             }
             FutachaAppLockScreen(
                 passwordHash = passwordHash,
-                onUnlocked = onUnlocked
+                onUnlocked = onUnlocked,
+                persistedAttempts = persistedAttempts,
+                onAttemptsChanged = onAttemptsChanged,
+                attemptsLoaded = attemptsLoaded
             )
         }
         FutachaAppLockGate.Unlocked -> Unit

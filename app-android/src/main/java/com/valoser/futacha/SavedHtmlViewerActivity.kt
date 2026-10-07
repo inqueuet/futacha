@@ -6,7 +6,10 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.view.ViewGroup
+import android.widget.Toast
 import android.webkit.WebResourceRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -20,6 +23,7 @@ import kotlin.coroutines.coroutineContext
 import java.io.ByteArrayOutputStream
 
 private const val MAX_SAVED_HTML_VIEWER_BYTES = 21 * 1024 * 1024
+private const val STATE_RENDER_PROCESS_GONE_COUNT = "savedHtmlRenderProcessGoneCount"
 
 internal fun isSupportedSavedHtmlDocument(mimeType: String?, path: String?): Boolean {
     val normalizedMime = mimeType?.substringBefore(';')?.trim()?.lowercase()
@@ -78,9 +82,12 @@ internal fun savedHtmlNavigation(
 class SavedHtmlViewerActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private var sourceUri: Uri? = null
+    private var webViewDestroyed = false
+    private var renderProcessGoneCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        renderProcessGoneCount = savedInstanceState?.getInt(STATE_RENDER_PROCESS_GONE_COUNT) ?: 0
         val uri = intent?.data
         if (
             intent?.action != Intent.ACTION_VIEW ||
@@ -118,6 +125,15 @@ class SavedHtmlViewerActivity : ComponentActivity() {
                     return true
                 }
 
+                // Without this the renderer's death takes the whole app process
+                // down. Rebuild the view once (the document is re-read from its
+                // source); a renderer that dies again means the page itself is
+                // the trigger, so give up instead of looping.
+                override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                    handleRenderProcessGone(view)
+                    return true
+                }
+
                 override fun shouldInterceptRequest(
                     view: WebView?,
                     request: WebResourceRequest?
@@ -150,6 +166,27 @@ class SavedHtmlViewerActivity : ComponentActivity() {
                 null
             )
         }
+    }
+
+    private fun handleRenderProcessGone(view: WebView?) {
+        val gone = view ?: webView
+        (gone.parent as? ViewGroup)?.removeView(gone)
+        if (!webViewDestroyed) {
+            webViewDestroyed = true
+            gone.destroy()
+        }
+        if (renderProcessGoneCount >= 1 || isFinishing || isDestroyed) {
+            Toast.makeText(this, "保存済みスレを表示できませんでした", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        renderProcessGoneCount += 1
+        recreate()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(STATE_RENDER_PROCESS_GONE_COUNT, renderProcessGoneCount)
     }
 
     private fun isPrivateAppFileUri(uri: Uri): Boolean {
@@ -201,7 +238,10 @@ class SavedHtmlViewerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (::webView.isInitialized) webView.destroy()
+        if (::webView.isInitialized && !webViewDestroyed) {
+            webViewDestroyed = true
+            webView.destroy()
+        }
         super.onDestroy()
     }
 }

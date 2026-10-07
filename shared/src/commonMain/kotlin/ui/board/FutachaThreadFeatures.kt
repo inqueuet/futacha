@@ -25,8 +25,11 @@ import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.compat.*
+import com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary
+import com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtSaveRequest
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -111,9 +114,15 @@ internal fun FutachaThreadFeatureHost(
     onOpenDrawer: () -> Unit,
     onReply: () -> Unit,
     onClose: () -> Unit,
+    /** Board URL the screen actually posts to (the archive URL while an archive copy is shown). */
+    effectiveBoardUrl: String = board.url,
+    /** Shares the screen's single "action in progress" flag with the "DEL依頼＋NG" action. */
+    isActionInProgress: () -> Boolean = { false },
+    setActionInProgress: (Boolean) -> Unit = {},
     content: @Composable () -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
+    val staticView = LocalFutachaStaticThreadView.current
     val canonicalBoard = canonicalizeBoardUrl(board.url)
     if (features == null || canonicalBoard == null) { content(); return }
     val sourceUrl = "${canonicalBoard}res/$threadId.htm"
@@ -122,6 +131,7 @@ internal fun FutachaThreadFeatureHost(
     val tabs by features.store.tabs.collectAsState(emptyList())
     val ngRules by features.store.ngRules.collectAsState(emptyList())
     val scope = rememberCoroutineScope()
+    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     val openUrl = rememberUrlLauncher()
     var previous by remember(tabKey) { mutableStateOf<ThreadUiState.Success?>(null) }
     var latest by remember(tabKey) { mutableStateOf<ThreadUiState.Success?>(null) }
@@ -139,6 +149,9 @@ internal fun FutachaThreadFeatureHost(
     var tabsOpen by remember { mutableStateOf(false) }
     var ngOpen by remember { mutableStateOf(false) }
     var pageSaveOpen by remember { mutableStateOf(false) }
+    var mhtSaveFull by remember { mutableStateOf<Boolean?>(null) }
+    // What the MHT save was asked to save, fixed when it was asked: a reload of the thread while the file is written must not change it.
+    var mhtSaveRequest by remember { mutableStateOf<FutaberMhtSaveRequest?>(null) }
     var stripVisible by remember(tabKey) { mutableStateOf(features.value("design", "designTabSelectorOpened") == "ON") }
     LaunchedEffect(features.value("design", "designTabSelectorOpened")) {
         stripVisible = features.value("design", "designTabSelectorOpened") == "ON"
@@ -167,6 +180,8 @@ internal fun FutachaThreadFeatureHost(
         val wasRestoring = restoring
         restoring = false
         if (wasRestoring) return@LaunchedEffect
+        // A read-only copy (an opened MHT file) is shown as it is: nothing is written to the tabs or the shared snapshots.
+        if (staticView) return@LaunchedEffect
         if (isCachedPage && features.store.tabs.first().any { it.key == tabKey }) return@LaunchedEffect
         try {
             val now = Clock.System.now().toEpochMilliseconds()
@@ -304,6 +319,26 @@ internal fun FutachaThreadFeatureHost(
             longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
     })
     CompositionLocalProvider(LocalFutachaThreadTools provides tools,
+        LocalDelPostAndNg provides { post ->
+            // Same gates as the plain DEL request: writable board and one action at a time.
+            when (resolveDelAndNgGate(effectiveBoardUrl, isActionInProgress())) {
+                DelAndNgGate.BUSY -> { message = buildThreadActionBusyMessage() }
+                DelAndNgGate.ARCHIVE_READ_ONLY -> { message = buildArchiveReadOnlyActionMessage() }
+                DelAndNgGate.PROCEED -> {
+                    setActionInProgress(true)
+                    scope.launch {
+                        try {
+                            message = sendReportAndOptionalNg(true,
+                                send = { repository.requestDeletion(effectiveBoardUrl, threadId, post.id, DEFAULT_DEL_REASON_CODE) },
+                                registerNg = { registerReportedPostNg(features.store, tabKey, post.id) },
+                                reviewCompliance = reviewComplianceEnabled)
+                        } finally {
+                            setActionInProgress(false)
+                        }
+                    }
+                }
+            }
+        },
         LocalFutachaTabStrip provides strip,
         LocalFutachaScrollRefreshEnabled provides (features.value("thread", "threadPullToRefresh") != "OFF"),
         LocalFutachaPostTap provides if (features.value("control", "controlTouchOpenDrawer") == "ON") onOpenDrawer else null,
@@ -321,7 +356,22 @@ internal fun FutachaThreadFeatureHost(
     }
     if (tabsOpen) FutachaTabsDialog(features, repository, onOpenThread, onDismiss = { tabsOpen = false })
     if (pageSaveOpen && page != null) FutachaPageSaveDialog(features, page, boardKey, board.name,
-        canonicalBoard, threadTitle, { pageSaveOpen = false })
+        canonicalBoard, threadTitle, { pageSaveOpen = false },
+        onSaveMht = if (features.fileSystem != null && features.httpClient != null) { full ->
+            pageSaveOpen = false
+            mhtSaveRequest = FutaberMhtSaveRequest(
+                boardKey = boardKey, boardName = board.name, boardUrl = canonicalBoard, threadId = page.threadId,
+                title = threadTitle, threadUrl = sourceUrl, page = page
+            )
+            mhtSaveFull = full
+        } else null)
+    val mhtFull = mhtSaveFull
+    val mhtPinnedRequest = mhtSaveRequest
+    val mhtFileSystem = features.fileSystem
+    if (mhtFull != null && mhtPinnedRequest != null && mhtFileSystem != null) {
+        val mhtLibrary = remember(mhtFileSystem, features.httpClient) { FutaberMhtLibrary(mhtFileSystem, features.httpClient) }
+        FutachaMhtSaveRun(mhtLibrary, mhtPinnedRequest, mhtFull) { mhtSaveFull = null; mhtSaveRequest = null }
+    }
     if (ngOpen) FutachaNgManagementDialog(features, boardKey, tabKey, board.name, onDismiss = { ngOpen = false })
     if (mediaOpen) {
         val galleryGridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
@@ -393,3 +443,9 @@ internal fun FutachaThreadFeatureHost(
     message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }
+
+/**
+ * True while the thread shown is a read-only copy (an opened MHT file). The thread's extra tools stay,
+ * but the screen does not register the thread as a tab or write it to the shared snapshots.
+ */
+internal val LocalFutachaStaticThreadView = androidx.compose.runtime.staticCompositionLocalOf { false }

@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogFetchSettings
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -44,6 +45,8 @@ class CompatBackgroundRefresherRotationTest {
             val repository = object : BoardRepository by FakeBoardRepository() {
                 override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> =
                     numbers.map { no -> CatalogItem(no, "${url}res/$no.htm", "スレ$no", null, null, replyCount = 7) }
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> =
+                    getCatalog(board, mode)
                 override suspend fun probeThreadGone(threadUrl: String): Boolean {
                     probed += threadUrl
                     return false
@@ -81,6 +84,8 @@ class CompatBackgroundRefresherRotationTest {
                     if (mode == CatalogMode.Catalog) delay(60_000L)
                     return listOf(CatalogItem("200", "${url}res/200.htm", "猫のスレ", null, null, replyCount = 1))
                 }
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> =
+                    getCatalog(board, mode)
             }
 
             // iOS BGAppRefresh: the update phase is capped so the watch words still run (H4-1).

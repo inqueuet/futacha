@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -9,8 +10,10 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.ui.compat.threadReloadOnOpenEnabled
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -59,7 +62,8 @@ internal data class ThreadLoadRunnerCallbacks(
     val loadLocalStalePage: suspend () -> ThreadPage? = loadOfflineFallback,
     val onArchiveFallbackTimeout: (String) -> Unit = {},
     val onOfflineFallbackMiss: () -> Unit = {},
-    val supplementRemote: suspend (ThreadLoadExecutionResult) -> ThreadLoadExecutionResult = { it }
+    val supplementRemote: suspend (ThreadLoadExecutionResult) -> ThreadLoadExecutionResult = { it },
+    val reloadOnOpenEnabled: suspend () -> Boolean = { true }
 )
 
 internal data class ThreadLoadExecutionResult(
@@ -96,20 +100,37 @@ internal fun buildThreadLoadRunnerCallbacks(
 ): ThreadLoadRunnerCallbacks {
     // The feature host persists the accepted page after it becomes visible.
     // Keep loading free of conversion/write work (including manual refresh).
-    suspend fun loadSharedCachedPage(): ThreadPage? {
+    suspend fun loadSharedCachedCandidate(): OfflineThreadPageCandidate? {
         val store = compatibilityStore ?: return null
         val rawUrl = currentThreadUrlOverride()
             ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
         val parsed = canonicalizeThreadUrl(rawUrl) ?: return null
         return runSuspendCatchingPreservingCancellation {
             store.loadThreadSnapshotByCanonicalUrl(parsed.canonicalUrl)
-                ?.toThreadPage(threadId)
+                ?.let { snapshot ->
+                    OfflineThreadPageCandidate(snapshot.toThreadPage(threadId), snapshot.fetchedAtEpochMillis)
+                }
         }.onFailure { error ->
             onWarning("共有スレキャッシュの読み込みに失敗しました: ${error.message}")
         }.getOrNull()
     }
+    // The newer of the saved copy and the shared snapshot (previously a saved copy always won).
+    suspend fun loadNewestLocalPage(onBoardMismatch: (SavedThreadMetadata) -> Unit): ThreadPage? =
+        chooseNewestOfflineThreadPage(
+            saved = loadOfflineThreadPageCandidate(
+                threadId = threadId,
+                lookupContext = offlineLookupContext,
+                fileSystem = fileSystem,
+                sources = offlineSources,
+                onBoardMismatch = onBoardMismatch
+            ),
+            shared = loadSharedCachedCandidate()
+        )
 
     return ThreadLoadRunnerCallbacks(
+        reloadOnOpenEnabled = {
+            compatibilityStore?.preferences?.first()?.threadReloadOnOpenEnabled() ?: true
+        },
         supplementRemote = { result ->
             if (result.usedOffline || result.fromArchive || repository !is FutachaSharedBoardRepository) result else {
                 // An archive result already merged the archive providers.
@@ -148,30 +169,19 @@ internal fun buildThreadLoadRunnerCallbacks(
         },
         loadOfflineFallback = {
             withContext(AppDispatchers.io) {
-                loadOfflineThreadPage(
-                    threadId = threadId,
-                    lookupContext = offlineLookupContext,
-                    fileSystem = fileSystem,
-                    sources = offlineSources,
-                    onBoardMismatch = { metadata ->
-                        onWarning(
-                            buildOfflineMetadataBoardMismatchLogMessage(
-                                threadId = threadId,
-                                boardUrl = metadata.boardUrl
-                            )
+                loadNewestLocalPage { metadata ->
+                    onWarning(
+                        buildOfflineMetadataBoardMismatchLogMessage(
+                            threadId = threadId,
+                            boardUrl = metadata.boardUrl
                         )
-                    }
-                ) ?: loadSharedCachedPage()
+                    )
+                }
             }
         },
         loadLocalStalePage = {
             withContext(AppDispatchers.io) {
-                loadOfflineThreadPage(
-                    threadId = threadId,
-                    lookupContext = offlineLookupContext,
-                    fileSystem = fileSystem,
-                    sources = offlineSources
-                ) ?: loadSharedCachedPage()
+                loadNewestLocalPage {}
             }
         },
         onArchiveFallbackTimeout = onWarning,

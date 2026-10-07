@@ -44,7 +44,7 @@ fun compatCatalogManagementRules(
         CompatNgKind.CATALOG_REFUSE -> applicable.sortedByDescending(CompatNgRule::createdAtEpochMillis)
         // CatalogExtract/CatalogIgnore are ordered by their displayed word.
         CompatNgKind.CATALOG_EXTRACT,
-        CompatNgKind.CATALOG_IGNORE -> applicable.sortedBy {
+        CompatNgKind.CATALOG_IGNORE -> applicable.sortedByPrecomputedKey {
             normalizeCompatSearchText(compatCatalogManagementDisplayValue(it))
         }
         else -> applicable

@@ -184,6 +184,10 @@ internal fun ThreadTreeContent(
     // Keyed by thread only: a refresh must not close an open quote preview,
     // and a growing AI-hidden set must not re-hide posts the user chose to show.
     var quotePreviewState by remember(page.threadId) { mutableStateOf<QuotePreviewState?>(null) }
+    // Same stable wrapper as the normal list: a fresh lambda per parent recomposition made every
+    // visible post card recompose (and could drop a tap that landed during the recomposition).
+    val currentUrlClick = androidx.compose.runtime.rememberUpdatedState(onUrlClick)
+    val stableUrlClick = remember { { url: String -> currentUrlClick.value(url) } }
     val revealedAiHiddenPostIds = remember(page.threadId) { mutableStateListOf<String>() }
     val hasAiHiddenPostsSummary = aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }
     val firstNewPostIndex = remember(displayedPosts, newPostIds) {
@@ -326,7 +330,7 @@ internal fun ThreadTreeContent(
                             saidaneLabelOverride = saidaneOverrides[post.id],
                             highlightRanges = searchHighlightRanges[post] ?: emptyList(),
                             onQuoteClick = postCardCallbacks.onQuoteClick,
-                            onUrlClick = onUrlClick,
+                            onUrlClick = stableUrlClick,
                             onQuoteRequested = postCardCallbacks.onQuoteRequested,
                             onPosterIdClick = postCardCallbacks.onPosterIdClick,
                             onReferencedByClick = postCardCallbacks.onReferencedByClick,
@@ -334,6 +338,7 @@ internal fun ThreadTreeContent(
                             onMediaClick = postCardCallbacks.onMediaClick,
                             onMediaLongPress = postCardCallbacks.onMediaLongPress,
                             onLongPress = postCardCallbacks.onLongPress,
+                            onRelatedClick = postCardCallbacks.onRelatedClick,
                             onAiHideAgain = if (post.id in aiHiddenPostIds) {
                                 { revealedAiHiddenPostIds.remove(post.id) }
                             } else {
@@ -402,7 +407,7 @@ internal fun ThreadTreeContent(
             state = state,
             onDismiss = quotePreviewCallbacks.onDismiss,
             onMediaClick = onMediaClick,
-            onUrlClick = onUrlClick,
+            onUrlClick = stableUrlClick,
             onQuoteClick = quotePreviewCallbacks.onQuoteClick,
             bodyTextSize = bodyTextSize,
             postImageSize = postImageSize,

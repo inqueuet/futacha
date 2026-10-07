@@ -94,6 +94,15 @@ interface CompatibilityStore {
         upsertHistory(next)
         return true
     }
+    /**
+     * Applies a catalog's reply counts to the stored tabs and history entries, with the same
+     * rules as [applyCatalogReplyCount] per tab (counts only grow; missing rows are never
+     * created), and returns how many tabs changed. Stores that rewrite their whole state per
+     * change (iOS, desktop) should override this to persist once; this default does one
+     * tab-and-history write pair per update.
+     */
+    suspend fun applyCatalogReplyCounts(updates: List<CompatCatalogReplyCountUpdate>): Int =
+        applyCatalogReplyCountsOneByOne(updates)
     /** Called on thread activation, before any network request completes. */
     suspend fun recordHistoryVisit(entry: CompatHistoryEntry)
     suspend fun deleteHistory(canonicalUrl: String)

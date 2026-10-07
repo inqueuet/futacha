@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -294,8 +295,10 @@ internal fun ReadAloudControlSheet(
         )
     }
     var sliderValue by remember { mutableFloatStateOf(controlState.sliderValue) }
+    // While the thumb is held, playback progress must not snap the slider back under the finger.
+    var sliderDragging by remember { mutableStateOf(false) }
     LaunchedEffect(currentIndex, segments.size) {
-        sliderValue = controlState.sliderValue
+        if (!sliderDragging) sliderValue = controlState.sliderValue
     }
 
     FutachaAppLockAwareWindow { ModalBottomSheet(
@@ -328,13 +331,17 @@ internal fun ReadAloudControlSheet(
                     val maxIndex = (controlState.totalSegments - 1).coerceAtLeast(0)
                     Slider(
                         value = sliderValue.coerceIn(0f, maxIndex.toFloat()),
-                        onValueChange = { sliderValue = it },
+                        onValueChange = {
+                            sliderDragging = true
+                            sliderValue = it
+                        },
                         onValueChangeFinished = {
                             AnalyticsTracker.uiControl(
                                 "read_aloud_seek",
                                 "読み上げ位置を変更",
                                 mapOf("target_index_bucket" to sliderValue.roundToInt().toString())
                             )
+                            sliderDragging = false
                             onSeek(sliderValue.roundToInt())
                         },
                         valueRange = 0f..maxIndex.toFloat(),

@@ -877,9 +877,9 @@ class WatchSyncManager(
 
     private suspend fun sendReadAloudStatusUpdate(status: WatchReadAloudStatus?): Boolean {
         if (!canUseWearDataLayer()) return false
-        val update = WatchReadAloudStatusUpdate(
+        val update = buildWatchReadAloudStatusUpdate(
             status = status,
-            updatedAtMillis = System.currentTimeMillis()
+            nowMillis = System.currentTimeMillis()
         )
         val encoded = json.encodeToString(WatchReadAloudStatusUpdate.serializer(), update)
         if (encoded.encodeToByteArray().size > WATCH_READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES) {

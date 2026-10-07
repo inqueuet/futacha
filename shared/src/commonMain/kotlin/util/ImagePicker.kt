@@ -27,7 +27,8 @@ data class PreferredFileManager(
 
 data class ImageData(
     val bytes: ByteArray,
-    val fileName: String
+    val fileName: String,
+    val isHandwriting: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -36,7 +37,7 @@ data class ImageData(
         other as ImageData
 
         if (bytes !== other.bytes) return false
-        if (fileName != other.fileName) return false
+        if (fileName != other.fileName || isHandwriting != other.isHandwriting) return false
 
         return true
     }
@@ -44,7 +45,7 @@ data class ImageData(
     override fun hashCode(): Int {
         var result = bytes.size
         result = 31 * result + fileName.hashCode()
-        return result
+        return 31 * result + isHandwriting.hashCode()
     }
 }
 

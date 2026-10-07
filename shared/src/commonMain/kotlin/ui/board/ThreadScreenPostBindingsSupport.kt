@@ -164,7 +164,8 @@ internal data class ThreadPostCardCallbacks(
     val onSaidaneClick: () -> Unit,
     val onMediaClick: ((String, MediaType) -> Unit)?,
     val onMediaLongPress: ((Post, String, MediaType) -> Unit)?,
-    val onLongPress: () -> Unit
+    val onLongPress: () -> Unit,
+    val onRelatedClick: () -> Unit = {}
 )
 
 @androidx.compose.runtime.Composable
@@ -200,7 +201,8 @@ internal fun rememberThreadScreenPostCardCallbacks(
             onSaidaneClick = { current.value.onSaidaneClick() },
             onMediaClick = callbacks.onMediaClick?.let { { url, type -> current.value.onMediaClick?.invoke(url, type); Unit } },
             onMediaLongPress = callbacks.onMediaLongPress?.let { { value, url, type -> current.value.onMediaLongPress?.invoke(value, url, type); Unit } },
-            onLongPress = { if (canHandleThreadPostLongPress(currentQuotePreview.value())) current.value.onLongPress() }
+            onLongPress = { if (canHandleThreadPostLongPress(currentQuotePreview.value())) current.value.onLongPress() },
+            onRelatedClick = { current.value.onRelatedClick() }
         )
     }
 }
@@ -220,6 +222,7 @@ internal fun buildThreadScreenPostCardCallbacks(
     onPostLongPress: (Post) -> Unit
 ): ThreadPostCardCallbacks {
     return ThreadPostCardCallbacks(
+        onRelatedClick = { onShowQuotePreview("関連レス No.${post.id}", relatedThreadPosts(post, postIndex.values)) },
         onQuoteClick = { reference ->
             val targets = resolveQuotePreviewTargets(reference.targetPostIds, postIndex)
             AnalyticsTracker.uiControl(

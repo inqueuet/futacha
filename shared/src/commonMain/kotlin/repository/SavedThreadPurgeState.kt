@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.TimeMark
 
 /**
  * Purge cutoffs of one repository root, shared by every [SavedThreadRepository]
@@ -16,6 +17,14 @@ internal class SavedThreadPurgeState {
     val mutex = Mutex()
     var rootCutoffMillis = Long.MIN_VALUE
     val threadCutoffMillis = LinkedHashMap<String, Long>()
+
+    /**
+     * Monotonic marks taken when the cutoffs above were recorded (null for one loaded from the
+     * persisted marker). They let a cutoff be re-expressed on the current wall clock after the
+     * clock was set back; see [effectivePurgeCutoffMillis].
+     */
+    var rootCutoffMark: TimeMark? = null
+    val threadCutoffMarks = HashMap<String, TimeMark>()
 
     /**
      * Serializes every read-modify-write of the purge marker file (a new purge, the
@@ -89,4 +98,25 @@ internal fun decodeSavedThreadPurgeMarker(encoded: String): SavedThreadPurgeMark
         cutoffMillis = cutoff,
         leftovers = lines.drop(1).map(String::trim).filter(::isRecoverableSavedThreadDirectory).distinct()
     )
+}
+
+/** Wall-clock disagreement smaller than this is jitter, not a clock that was set back. */
+private const val PURGE_CUTOFF_CLOCK_TOLERANCE_MILLIS = 2_000L
+
+/**
+ * The purge cutoff on the clock as it reads now. A save counts as started before a purge when
+ * its start time is at or before the cutoff, and both are wall-clock times. If the clock was
+ * set back after the purge, every later save would be stamped before the cutoff and silently
+ * discarded until the clock caught up. The monotonic [mark] shows how long ago the purge
+ * really was, which places it correctly on the new clock. A forward step needs no correction:
+ * saves that began before the purge carry the older, smaller stamps.
+ */
+internal fun effectivePurgeCutoffMillis(cutoffMillis: Long, mark: TimeMark?, nowMillis: Long): Long {
+    if (mark == null || cutoffMillis == Long.MIN_VALUE) return cutoffMillis
+    val purgedAtOnCurrentClock = nowMillis - mark.elapsedNow().inWholeMilliseconds
+    return if (purgedAtOnCurrentClock < cutoffMillis - PURGE_CUTOFF_CLOCK_TOLERANCE_MILLIS) {
+        purgedAtOnCurrentClock
+    } else {
+        cutoffMillis
+    }
 }
