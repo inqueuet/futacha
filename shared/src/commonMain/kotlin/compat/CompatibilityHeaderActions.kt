@@ -158,7 +158,7 @@ fun compatHeaderExtractionKinds(
     posts: List<CompatPostSnapshot>
 ): List<CompatHeaderExtractionKind> = buildList {
     // Only "is there at least one reply" is needed here, so stop at the first one.
-    if (post.referencedCount > 0 || posts.any(compatQuoteReplyPredicate(post))) {
+    if (post.referencedCount > 0 || posts.any(compatQuoteReplyPredicate(post, posts))) {
         add(CompatHeaderExtractionKind.QUOTE)
     }
     compatPosterIdentities(post).map(CompatPosterIdentity::kind).distinct().forEach { add(it) }
@@ -168,7 +168,10 @@ fun compatHeaderExtractionKinds(
  * Whether a candidate is a later post quoting [source]. The source's identities, media file
  * names and text matcher are derived once and reused for every candidate line.
  */
-private fun compatQuoteReplyPredicate(source: CompatPostSnapshot): (CompatPostSnapshot) -> Boolean {
+private fun compatQuoteReplyPredicate(source: CompatPostSnapshot, posts: List<CompatPostSnapshot>): (CompatPostSnapshot) -> Boolean {
+    // Only built for a quote the plain source test cannot decide (number-prefixed text, text that only
+    // contains a source line); the common case never pays for it.
+    val resolver by lazy(LazyThreadSafetyMode.NONE) { CompatQuoteIndex(posts) }
     val sourceFileNames by lazy(LazyThreadSafetyMode.NONE) { compatPostMediaFileNames(source) }
     val sourceIdentities by lazy(LazyThreadSafetyMode.NONE) { compatPosterIdentities(source) }
     val sourceMatcher by lazy(LazyThreadSafetyMode.NONE) { CompatQuoteTextMatcher(source) }
@@ -176,20 +179,26 @@ private fun compatQuoteReplyPredicate(source: CompatPostSnapshot): (CompatPostSn
         candidate.position > source.position && candidate.messageHtml.toCompatPlainText().lineSequence().any { line ->
             val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
             when {
-                query.startsWith("no:", ignoreCase = true) -> compatQuoteQueryPostNo(query) == source.postNo
+                query.startsWith("no:", ignoreCase = true) ->
+                    compatQuoteQueryPostNo(query) == source.postNo ||
+                        (compatQuoteQueryTextFallback(query) != null &&
+                            resolver.resolve(candidate.position, query).any { it.postNo == source.postNo })
                 query.startsWith("id:", ignoreCase = true) -> {
                     val value = query.substringAfter(':').trim()
-                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.ID && it.value == value }
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.ID && compatIdentityValueMatches(it.value, value) }
                 }
                 query.startsWith("ip:", ignoreCase = true) -> {
                     val value = query.substringAfter(':').trim()
-                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && it.value == value }
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
                 }
                 query.startsWith("file:", ignoreCase = true) -> {
                     val value = query.substringAfter(':').trim()
                     sourceFileNames.any { it.equals(value, ignoreCase = true) }
                 }
-                query.startsWith("text:", ignoreCase = true) -> sourceMatcher.matches(query.substringAfter(':'))
+                query.startsWith("text:", ignoreCase = true) -> {
+                    val text = query.substringAfter(':')
+                    sourceMatcher.matches(text) || sourceMatcher.matchesLineInside(text)
+                }
                 else -> false
             }
         }
@@ -201,7 +210,7 @@ fun extractCompatHeaderPosts(
     source: CompatPostSnapshot,
     kind: CompatHeaderExtractionKind
 ): List<CompatPostSnapshot> = when (kind) {
-    CompatHeaderExtractionKind.QUOTE -> posts.filter(compatQuoteReplyPredicate(source))
+    CompatHeaderExtractionKind.QUOTE -> posts.filter(compatQuoteReplyPredicate(source, posts))
     CompatHeaderExtractionKind.ID,
     CompatHeaderExtractionKind.IP -> {
         val identities = compatPosterIdentities(source).filter { it.kind == kind }

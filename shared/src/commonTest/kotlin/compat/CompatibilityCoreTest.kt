@@ -1244,6 +1244,58 @@ class CompatibilityCoreTest {
         assertTrue(result.state.selectorOpen)
     }
 
+    // Reported: "1レス" is shown but tapping it lists nothing, and the quote does not show its source either.
+    @Test
+    fun replyCountIsReachableBothWays_forNumberLedAndExtendedTextQuotes() {
+        val posts = listOf(
+            post(0, "1000100", "1000なら懐かしのキャラ祭り<br>スレ画は最新じゃない"),
+            post(1, "1000101", ">>1000なら懐かしのキャラ祭り<br>よし"),
+            post(2, "1000102", "10月いっぱい持てばいいほうじゃない？"),
+            post(3, "1000103", ">10月いっぱい持てばいいほうじゃない？<br>誤爆？"),
+            post(4, "1000104", "新モデル早く出してね"),
+            post(5, "1000105", ">いつもどうりエロい事出来る新モデル早く出してね")
+        )
+        fun replies(sourceIndex: Int) = extractCompatHeaderPosts(posts, posts[sourceIndex], CompatHeaderExtractionKind.QUOTE).map { it.postNo }
+        fun shown(replyIndex: Int): List<String> = posts[replyIndex].messageHtml.toCompatPlainText().lines()
+            .mapNotNull(::compatQuoteQueryForLine)
+            .flatMap { resolveCompatQuotePosts(posts, posts[replyIndex].position, it) }.map { it.postNo }
+        assertEquals(listOf("1000101"), replies(0))
+        assertEquals(listOf("1000100"), shown(1))
+        assertEquals(listOf("1000103"), replies(2))
+        assertEquals(listOf("1000102"), shown(3))
+        assertEquals(listOf("1000105"), replies(4))
+        assertEquals(listOf("1000104"), shown(5))
+        assertTrue(compatHeaderExtractionKinds(posts[4], posts).contains(CompatHeaderExtractionKind.QUOTE))
+        // The index used by the tree and related-post views must agree with the tap resolver.
+        val index = CompatQuoteIndex(posts)
+        for (reply in listOf(1, 3, 5)) {
+            for (query in posts[reply].messageHtml.toCompatPlainText().lines().mapNotNull(::compatQuoteQueryForLine)) {
+                assertEquals(
+                    resolveCompatQuotePosts(posts, posts[reply].position, query).map { it.postNo },
+                    index.resolve(posts[reply].position, query).map { it.postNo }
+                )
+            }
+        }
+    }
+
+    @Test
+    fun spacedNumberAfterDoubleMarkerStaysAPlainReference() {
+        assertEquals("no:100", compatQuoteQueryForLine(">>100 です"))
+        assertEquals("no:1000\ntext:1000なら祭り", compatQuoteQueryForLine(">>1000なら祭り"))
+    }
+
+    @Test
+    fun idEndingInPeriodIsFoundByItsQuote() {
+        val posts = listOf(
+            post(0, "2000100", "本文").copy(posterId = "ID:TrUQupJ."),
+            post(1, "2000101", ">ID:TrUQupJ.<br>どうも")
+        )
+        assertEquals("id:TrUQupJ", compatQuoteQueryForLine(">ID:TrUQupJ."))
+        assertEquals(listOf("2000100"), resolveCompatQuotePosts(posts, 1, "id:TrUQupJ").map { it.postNo })
+        assertEquals(listOf("2000100"), CompatQuoteIndex(posts).resolve(1, "id:TrUQupJ").map { it.postNo })
+        assertEquals(listOf("2000101"), extractCompatHeaderPosts(posts, posts[0], CompatHeaderExtractionKind.QUOTE).map { it.postNo })
+    }
+
     @Test
     fun quoteResolver_supportsNumberAndNoPrefix_withoutResolvingFuturePosts() {
         val posts = listOf(

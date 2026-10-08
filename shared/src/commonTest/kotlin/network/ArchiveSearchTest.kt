@@ -228,9 +228,10 @@ class ArchiveSearchTest {
         )
 
         assertEquals(emptyList(), items)
+        // No hit also asks the other past-log sites (they answer nothing here); inqueuet itself is asked once.
         assertEquals(
             listOf("https://may.inqueuet.com/search?q=test&server=may&board=b&limit=20"),
-            requestedUrls
+            requestedUrls.filter { "inqueuet.com" in it }
         )
     }
 
@@ -400,7 +401,7 @@ class ArchiveSearchTest {
                 "https://may.inqueuet.com/search?q=%E6%A0%AA&server=may&board=b&limit=5",
                 "https://may.inqueuet.com/b/res/1417196768.htm"
             ),
-            requestedUrls
+            requestedUrls.filter { "inqueuet.com" in it }
         )
     }
 
@@ -481,5 +482,149 @@ class ArchiveSearchTest {
 
         assertEquals(1, items.size)
         assertEquals("1417196768", items.single().threadId)
+    }
+
+    private val futapoLine =
+        "http://may.2chan.net/b/res/1440038751.htm<>http://kako.futakuro.com/futa/may_b/1440038751/0s.jpg<>25<>0<>1791378010<>0<>0<>&gt;SKYRIM skyrim<>1<>42<>50<><><><>"
+    private val forestHtml = """
+        <table class='c5-1'><tr>
+        <td class='c5-2'><a href='b/res/1440038751.htm' target='_blank'><div><img src='b/cat/1791378010612s.jpg' border=0 alt=''><br><small>SKYRIM s</small><br><font size=2>25</font></div></a></td>
+        <td class='c5-2'><a href='b/res/1439844797.htm' target='_blank'><div><img src='b/cat/1791291608131s.jpg' border=0 alt=''><br><small>SKYRIM s</small><br><font size=2>31</font></div></a></td>
+        </tr></table>
+    """.trimIndent()
+
+    private fun io.ktor.client.engine.mock.MockRequestHandleScope.emptyInqueuet() = respond(
+        """{"q":"SKYRIM","count":0,"results":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")
+    )
+
+    private suspend fun search(client: HttpClient, scope: ArchiveSearchScope? = ArchiveSearchScope("may", "b")) =
+        searchInqueuetArchiveThreads(client, Json { ignoreUnknownKeys = true }, "SKYRIM", scope)
+
+    @Test
+    fun noInqueuetHit_isAnsweredByFutapoWithTheThreadsOwnBoardUrl() = runBlocking {
+        val requested = mutableListOf<String>()
+        val engineClient = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requested += request.url.host
+                    when (request.url.host) {
+                        "may.inqueuet.com" -> emptyInqueuet()
+                        "kako.futakuro.com" -> respond(futapoLine, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/plain; charset=utf-8"))
+                        else -> error("Unexpected request: ${request.url}")
+                    }
+                }
+            }
+        }
+        val items = search(engineClient)
+        assertEquals(listOf("may.inqueuet.com", "kako.futakuro.com"), requested)
+        val item = items.single()
+        assertEquals("1440038751", item.threadId)
+        assertEquals(">SKYRIM skyrim", item.title)
+        assertEquals(25, item.replyCount)
+        assertEquals("https://may.2chan.net/b/res/1440038751.htm", item.htmlUrl)
+        assertEquals("https://kako.futakuro.com/futa/may_b/1440038751/0s.jpg", item.thumbUrl)
+        assertNull(item.status)
+        engineClient.close()
+    }
+
+    @Test
+    fun futapoWithoutHit_fallsThroughToFutabaForest() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requested += request.url.host
+                    when (request.url.host) {
+                        "may.inqueuet.com" -> emptyInqueuet()
+                        "kako.futakuro.com" -> respond("", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/plain; charset=utf-8"))
+                        "futabaforest.net" -> respond(forestHtml, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/html; charset=utf-8"))
+                        else -> error("Unexpected request: ${request.url}")
+                    }
+                }
+            }
+        }
+        val items = search(client)
+        assertEquals(listOf("may.inqueuet.com", "kako.futakuro.com", "futabaforest.net"), requested)
+        assertEquals(listOf("1440038751", "1439844797"), items.map { it.threadId })
+        assertEquals(listOf(25, 31), items.map { it.replyCount })
+        assertEquals(listOf(null, null), items.map { it.status })
+        assertEquals("https://futabaforest.net/b/cat/1791378010612s.jpg", items.first().thumbUrl)
+        assertEquals("https://may.2chan.net/b/res/1440038751.htm", items.first().htmlUrl)
+        client.close()
+    }
+
+    @Test
+    fun inqueuetHit_isNotSupplementedByOtherSites() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requested += request.url.host
+                    when (request.url.encodedPath) {
+                        "/search" -> respond(
+                            """{"results":[{"server":"may","board":"b","thread_no":"1416523187","reply_count":232,"title":"t","archive_url":"https://may.inqueuet.com/b/res/1416523187.htm"}]}""",
+                            HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")
+                        )
+                        else -> respond("<html></html>", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/html"))
+                    }
+                }
+            }
+        }
+        assertEquals("1416523187", search(client).single().threadId)
+        assertEquals(setOf("may.inqueuet.com"), requested.toSet())
+        client.close()
+    }
+
+    @Test
+    fun inqueuetFailure_isReportedOnlyWhenTheOtherSitesHaveNothing() = runBlocking {
+        for (otherSitesHaveIt in listOf(true, false)) {
+            val client = HttpClient(MockEngine) {
+                engine {
+                    addHandler { request ->
+                        when (request.url.host) {
+                            "may.inqueuet.com" -> respond("down", HttpStatusCode.InternalServerError)
+                            "kako.futakuro.com" -> respond(if (otherSitesHaveIt) futapoLine else "", HttpStatusCode.OK)
+                            "futabaforest.net" -> respond("<html></html>", HttpStatusCode.OK)
+                            else -> error("Unexpected request: ${request.url}")
+                        }
+                    }
+                }
+            }
+            if (otherSitesHaveIt) {
+                assertEquals("1440038751", search(client).single().threadId)
+            } else {
+                assertFailsWith<NetworkException> { search(client) }
+            }
+            client.close()
+        }
+    }
+
+    @Test
+    fun otherSitesAreNotAskedForABoardTheyDoNotCover() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requested += request.url.host
+                    if (request.url.host.endsWith("inqueuet.com")) emptyInqueuet() else error("Unexpected request: ${request.url}")
+                }
+            }
+        }
+        assertEquals(emptyList(), search(client, ArchiveSearchScope("dat", "b")))
+        assertEquals(emptyList(), search(client, null))
+        assertEquals(listOf("dat.inqueuet.com", "may.inqueuet.com"), requested)
+        client.close()
+    }
+
+    @Test
+    fun parsers_keepOnlyThreadRowsAndDecodeTitles() {
+        val scope = ArchiveSearchScope("img", "b")
+        val futapo = parseFutapoSearchResponse(
+            "broken line\n" + futapoLine.replace("may", "img") + "\n" + futapoLine.replace("may", "img"), scope, 10
+        )
+        assertEquals(1, futapo.size)
+        assertEquals("https://img.2chan.net/b/res/1440038751.htm", futapo.single().htmlUrl)
+        assertEquals(1, parseFutapoSearchResponse(futapoLine + "\n" + futapoLine.replace("1440038751", "1440038752"), scope, 1).size)
+        assertEquals(emptyList(), parseFutabaForestSearchResponse("<html>no hits</html>", scope, 10))
     }
 }

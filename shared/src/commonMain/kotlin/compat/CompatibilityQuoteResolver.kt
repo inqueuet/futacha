@@ -38,7 +38,7 @@ fun compatQuoteQueryPostNo(query: String): String? {
     return query.substringAfter(':').substringBefore('\n').trim()
 }
 
-private fun compatQuoteQueryTextFallback(query: String): String? {
+internal fun compatQuoteQueryTextFallback(query: String): String? {
     val index = query.indexOf(COMPAT_QUOTE_TEXT_FALLBACK_SEPARATOR)
     if (index < 0) return null
     return query.substring(index + COMPAT_QUOTE_TEXT_FALLBACK_SEPARATOR.length)
@@ -82,11 +82,13 @@ fun compatQuoteQueryForLine(line: String): String? {
         val number = match.groupValues[1]
         // `>3時のおやつ` / `>100円ショップ`: a single `>` with text glued to the number is a body
         // quotation unless post 3 / 100 exists. Keep the text so the resolver can fall back to it.
-        // `>>3` / `>No.3` stay plain number references.
+        // `>3` / `>>3` / `>No.3` stay plain number references.
+        // `>>1000なら…` (text glued to the number) is the same; `>>100 です` stays a plain reference.
         val markerCount = trimmed.takeWhile { it == '>' || it == '＞' }.length
         val explicitNo = trimmed.trimStart('>', '＞').trimStart().startsWith("No", ignoreCase = true)
         val trailing = trimmed.substring(match.groups[1]!!.range.last + 1)
-        if (markerCount == 1 && !explicitNo && trailing.isNotBlank() && text.isNotBlank()) {
+        val gluedText = markerCount == 1 || trailing.firstOrNull()?.isWhitespace() == false
+        if (gluedText && !explicitNo && trailing.isNotBlank() && text.isNotBlank()) {
             return "no:$number$COMPAT_QUOTE_TEXT_FALLBACK_SEPARATOR$text"
         }
         return "no:$number"
@@ -156,13 +158,13 @@ fun resolveCompatQuotePosts(
             val postNo = compatQuoteQueryPostNo(query).orEmpty()
             candidates.firstOrNull { it.postNo == postNo }?.let { return listOf(it) }
             val fallback = compatQuoteQueryTextFallback(query) ?: return emptyList()
-            return candidates.filter { it.matchesCompatQuote(fallback) }
+            return resolveCompatQuoteText(candidates, fallback)
         }
         query.startsWith("id:", ignoreCase = true) -> {
             val id = query.substringAfter(':').trim()
             return candidates.firstOrNull { post ->
                 compatPosterIdentities(post).any { identity ->
-                    identity.kind == CompatHeaderExtractionKind.ID && identity.value == id
+                    identity.kind == CompatHeaderExtractionKind.ID && compatIdentityValueMatches(identity.value, id)
                 }
             }?.let(::listOf).orEmpty()
         }
@@ -170,7 +172,7 @@ fun resolveCompatQuotePosts(
             val ip = query.substringAfter(':').trim()
             return candidates.firstOrNull { post ->
                 compatPosterIdentities(post).any { identity ->
-                    identity.kind == CompatHeaderExtractionKind.IP && identity.value == ip
+                    identity.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(identity.value, ip)
                 }
             }?.let(::listOf).orEmpty()
         }
@@ -183,8 +185,27 @@ fun resolveCompatQuotePosts(
     }
     val normalizedQuery = query.removePrefix("text:").normalizeCompatQuoteText()
     if (normalizedQuery.isBlank()) return emptyList()
-    return candidates.filter { it.matchesCompatQuote(normalizedQuery) }
+    return resolveCompatQuoteText(candidates, normalizedQuery)
 }
+
+/**
+ * Posts holding the quoted text, then posts whose line is wholly contained in the quote (the quoter
+ * appended to the line: `>裸のトランプ像出現！` for `裸のトランプ像出現`). The thread parser counts both
+ * directions, so a reply count is only reachable by tapping when this resolver lists both too. The
+ * holders come first because they are what the popup shows.
+ */
+private fun resolveCompatQuoteText(candidates: List<CompatPostSnapshot>, normalizedQuery: String): List<CompatPostSnapshot> {
+    val matchers = candidates.map(::CompatQuoteTextMatcher)
+    val forward = candidates.filterIndexed { index, _ -> matchers[index].matches(normalizedQuery) }
+    val holders = forward.mapTo(HashSet()) { it.position }
+    val inside = candidates.filterIndexed { index, post ->
+        post.position !in holders && matchers[index].matchesLineInside(normalizedQuery)
+    }
+    return forward + inside
+}
+
+/** Same lower bound as the thread parser's partial line match. */
+private const val COMPAT_QUOTE_MIN_CONTAINED_LINE_LENGTH = 6
 
 internal fun CompatPostSnapshot.matchesCompatQuote(query: String): Boolean =
     CompatQuoteTextMatcher(this).matches(query)
@@ -217,7 +238,23 @@ internal class CompatQuoteTextMatcher(private val post: CompatPostSnapshot) {
         if (messageLines.any { it == query || it.contains(query) }) return true
         return header.contains(query)
     }
+
+    /** Whether one of this post's lines (without its `>` marks) is wholly inside [query]. */
+    fun matchesLineInside(query: String): Boolean = messageLines.any { line ->
+        val bare = line.trimStart('>', '＞').trim()
+        bare.length >= COMPAT_QUOTE_MIN_CONTAINED_LINE_LENGTH && query.contains(bare)
+    }
 }
+
+/** Characters [compatQuoteQueryForLine] drops from the end of a quoted ID/IP (a sentence mark after `>ID:abc`). */
+private val compatIdentityTrailingPunctuation = charArrayOf('.', ',', '。', '、', '！', '!')
+
+/**
+ * Futaba IDs are base64-like and can legitimately end in `.` (`ID:TrUQupJ.`), but the query drops
+ * trailing punctuation. An identity therefore matches the queried value as is or without those marks.
+ */
+internal fun compatIdentityValueMatches(identityValue: String, queried: String): Boolean =
+    identityValue == queried || identityValue.trimEnd(*compatIdentityTrailingPunctuation) == queried
 
 /** Case folding used by `String.equals(ignoreCase = true)`: upper-case first, then lower-case. */
 private fun compatFileNameKey(name: String): String = buildString(name.length) {
@@ -253,6 +290,25 @@ class CompatQuoteIndex(posts: List<CompatPostSnapshot>) {
             compatPosterIdentities(post).forEach { identity -> map.getOrPut(identity) { ArrayList() }.add(index) }
         }
         map
+    }
+    private val indicesByTrimmedIdentity: Map<CompatPosterIdentity, List<Int>> by lazy {
+        val map = HashMap<CompatPosterIdentity, MutableList<Int>>()
+        newestFirst.forEachIndexed { index, post ->
+            compatPosterIdentities(post).forEach { identity ->
+                val trimmed = identity.copy(value = identity.value.trimEnd(*compatIdentityTrailingPunctuation))
+                if (trimmed != identity) map.getOrPut(trimmed) { ArrayList() }.add(index)
+            }
+        }
+        map
+    }
+    private fun identityIndices(identity: CompatPosterIdentity): List<Int>? {
+        val exact = indicesByIdentity[identity]
+        val trimmed = indicesByTrimmedIdentity[identity]
+        return when {
+            trimmed == null -> exact
+            exact == null -> trimmed
+            else -> (exact + trimmed).distinct().sorted()
+        }
     }
     private val indicesByFileName: Map<String, List<Int>> by lazy {
         val map = HashMap<String, MutableList<Int>>()
@@ -304,14 +360,14 @@ class CompatQuoteIndex(posts: List<CompatPostSnapshot>) {
             query.startsWith("id:", ignoreCase = true) -> {
                 val id = query.substringAfter(':').trim()
                 return firstAt(
-                    indicesByIdentity[CompatPosterIdentity(CompatHeaderExtractionKind.ID, id)],
+                    identityIndices(CompatPosterIdentity(CompatHeaderExtractionKind.ID, id)),
                     start
                 )?.let(::listOf).orEmpty()
             }
             query.startsWith("ip:", ignoreCase = true) -> {
                 val ip = query.substringAfter(':').trim()
                 return firstAt(
-                    indicesByIdentity[CompatPosterIdentity(CompatHeaderExtractionKind.IP, ip)],
+                    identityIndices(CompatPosterIdentity(CompatHeaderExtractionKind.IP, ip)),
                     start
                 )?.let(::listOf).orEmpty()
             }
@@ -327,8 +383,16 @@ class CompatQuoteIndex(posts: List<CompatPostSnapshot>) {
 
     private fun resolveText(start: Int, normalizedQuery: String, firstOnly: Boolean): List<CompatPostSnapshot> {
         val matches = ArrayList<CompatPostSnapshot>()
+        val holders = HashSet<Int>()
         for (index in start until newestFirst.size) {
             if (matcherAt(index).matches(normalizedQuery)) {
+                matches += newestFirst[index]
+                holders += index
+                if (firstOnly) return matches
+            }
+        }
+        for (index in start until newestFirst.size) {
+            if (index !in holders && matcherAt(index).matchesLineInside(normalizedQuery)) {
                 matches += newestFirst[index]
                 if (firstOnly) break
             }

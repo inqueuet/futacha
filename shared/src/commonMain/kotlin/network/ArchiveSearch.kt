@@ -201,6 +201,13 @@ fun buildDirectArchiveSearchItems(
     )
 }
 
+/**
+ * Past-log search: inqueuet first. When it has no hit (it keeps only threads with 100 replies or more) or
+ * fails, ふたポ and ふたばフォレスト are asked for the same words, and their threads are returned the same
+ * way (no mark says which site found them). A failure of inqueuet is only reported when the
+ * other sites have nothing either. A thread-number search and a search against a custom [archiveBaseUrl]
+ * stay with inqueuet alone.
+ */
 suspend fun searchInqueuetArchiveThreads(
     httpClient: HttpClient,
     archiveSearchJson: Json,
@@ -214,7 +221,36 @@ suspend fun searchInqueuetArchiveThreads(
     require(normalized.length <= ARCHIVE_SEARCH_QUERY_MAX_CHARS) {
         "q exceeds $ARCHIVE_SEARCH_QUERY_MAX_CHARS characters"
     }
+    if (archiveBaseUrl != null || buildDirectArchiveSearchItems(normalized, scope, archiveBaseUrl).isNotEmpty()) {
+        return searchInqueuetArchiveThreadsOnly(httpClient, archiveSearchJson, normalized, scope, limit, archiveBaseUrl)
+    }
+    var failure: Throwable? = null
+    val primary = try {
+        searchInqueuetArchiveThreadsOnly(httpClient, archiveSearchJson, normalized, scope, limit, archiveBaseUrl)
+    } catch (e: CancellationException) {
+        // A timeout inside the search surfaces as a cancellation too; only leaving the screen is rethrown.
+        currentCoroutineContext().ensureActive()
+        failure = e
+        null
+    } catch (e: Throwable) {
+        failure = e
+        null
+    }
+    if (!primary.isNullOrEmpty()) return primary
+    val others = searchThirdPartyArchiveThreads(httpClient, normalized, scope, limit)
+    if (others.isNotEmpty()) return others
+    failure?.let { throw it }
+    return primary.orEmpty()
+}
 
+private suspend fun searchInqueuetArchiveThreadsOnly(
+    httpClient: HttpClient,
+    archiveSearchJson: Json,
+    normalized: String,
+    scope: ArchiveSearchScope?,
+    limit: Int,
+    archiveBaseUrl: String?
+): List<ArchiveSearchItem> {
     val directItems = buildDirectArchiveSearchItems(normalized, scope, archiveBaseUrl)
     if (directItems.isNotEmpty()) {
         return enrichAvailableArchiveSearchItems(httpClient, directItems)
