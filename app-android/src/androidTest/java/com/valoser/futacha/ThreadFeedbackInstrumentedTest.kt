@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
 import coil3.ImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -46,8 +47,113 @@ class ThreadFeedbackInstrumentedTest {
         rule.activity.deleteDatabase(db)
     }
 
+    @Test fun successfulMediaSaveLetsTheReaderContinueAndKeepsShareAvailable() {
+        var continued = 0
+        var shared = 0
+        rule.setContent { MaterialTheme {
+            Column { Button(onClick = { continued++ }) { Text("閲覧を続ける") } }
+            MediaSaveNotice("saved.jpg", onDismiss = {}, onShare = { shared++ })
+        } }
+        waitTag("media-save-notice")
+        // Popup coordinates are window-relative; verify its screen placement in the captured image.
+        capture("save-notice")
+        rule.onNodeWithText("閲覧を続ける").performClick()
+        rule.runOnIdle { assertEquals(1, continued) }
+        rule.onNodeWithText("共有").performClick()
+        rule.runOnIdle { assertEquals(1, shared) }
+    }
+
+    @Test fun fullImagePreviewOffersReturnToTheResponseAndAnExternalBrowser() {
+        var returned = false
+        rule.setContent { MaterialTheme { CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            ImagePreviewDialog(MediaPreviewEntry("https://www.example.com/b/src/100.jpg", MediaType.Image, "96", "画像"),
+                currentIndex = 0, totalCount = 1, onDismiss = {}, onNavigateNext = {}, onNavigatePrevious = {},
+                onShowPost = { returned = true })
+        } } }
+        rule.onNodeWithText("ブラウザで開く").assertIsDisplayed()
+        capture("image-preview")
+        rule.onNodeWithText("レスに戻る").performClick()
+        rule.runOnIdle { assertTrue(returned) }
+    }
+
+    @Test fun threadImageReturnsToItsSourceAndMarksCanJumpWithoutLeavingTheActionSheetOpen() {
+        val sourceBoard = BoardSummary("source-test", "元レス確認", "test", board, "")
+        val page = ThreadPage("95", sourceBoard.name, null, null, listOf(
+            Post("95", 0, null, null, "", messageHtml = "SOURCE OP", imageUrl = null, thumbnailUrl = null),
+            Post("96", 1, null, null, "", messageHtml = "SOURCE BODY", imageUrl = "https://www.example.com/b/src/100.jpg", thumbnailUrl = "https://www.example.com/b/thumb/100s.jpg")))
+        val repo = object : BoardRepository by FakeBoardRepository() {
+            override suspend fun getThreadContent(board: String, threadId: String) = ThreadPageContent(page)
+            override suspend fun getThreadContentByUrl(threadUrl: String) = ThreadPageContent(page)
+        }
+        rule.setContent { MaterialTheme { CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            ProvideFutachaSharedFeatures(store, null, repo, null, null, "test") {
+                ThreadScreen(board = sourceBoard, history = emptyList(), threadId = "95", threadTitle = "画像から元レス",
+                    initialReplyCount = 1, repository = repo, preferencesState = ScreenPreferencesState("test"), onBack = {})
+            }
+        } } }
+        rule.waitUntil(10000) { rule.onAllNodesWithContentDescription("添付画像").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("添付画像").performScrollTo().performClick()
+        rule.onNodeWithText("レスに戻る").performClick()
+        rule.onNodeWithText("SOURCE BODY").assertIsDisplayed()
+        rule.onNodeWithText("SOURCE BODY").performTouchInput { longClick() }
+        rule.onNodeWithText("☆ レスをマーク").performScrollTo().performClick()
+        rule.waitUntil(5000) { runBlocking { decodeManualPostMarks(store.preferences.first()[MANUAL_POST_MARKS_KEY]).any { it.postNo == "96" } } }
+        rule.onNodeWithText("マーク一覧").performClick()
+        rule.onNodeWithText("★ No.96", substring = true).performClick()
+        rule.onNodeWithTag("post-action-preview").assertDoesNotExist()
+        rule.onNodeWithText("SOURCE BODY").assertIsDisplayed()
+        rule.onNodeWithText("★ マーク").assertIsDisplayed()
+        capture("marked-response")
+    }
+
+    @Test fun watchDiagnosticsCanRunAManualCheckAndPersistTheDetectionResult() {
+        rule.setContent { MaterialTheme {
+            WatchDiagnosticsDialog(store, FakeBoardRepository(), onDismiss = {})
+        } }
+        rule.onNodeWithText("今すぐ確認").performScrollTo().performClick()
+        rule.waitUntil(5000) { runBlocking { decodeWatchRunDiagnostics(store.preferences.first()[WATCH_RUN_CRAWL_KEY]) != null } }
+        assertEquals("完了", runBlocking { decodeWatchRunDiagnostics(store.preferences.first()[WATCH_RUN_CRAWL_KEY])!!.outcome })
+        capture("watch-diagnostics")
+    }
+
+    @Test fun manualMarkPersistsAndTheListReturnsToTheSelectedResponse() {
+        var jumped: String? = null
+        rule.setContent { MaterialTheme {
+            ManualPostMarkActions("96", PostMarkContext(store, url, listOf("95" to "親", "96" to "手動で印をつけるレス"), { jumped = it }))
+        } }
+        rule.onNodeWithText("☆ レスをマーク").performClick()
+        rule.waitUntil(5000) { runBlocking { decodeManualPostMarks(store.preferences.first()[MANUAL_POST_MARKS_KEY]).any { it.postNo == "96" } } }
+        rule.onNodeWithText("★ マーク解除").assertExists()
+        rule.onNodeWithText("マーク一覧").performClick()
+        rule.onNodeWithText("★ No.96", substring = true).performClick()
+        rule.runOnIdle { assertEquals("96", jumped) }
+        rule.onNodeWithText("★ マーク解除").performClick()
+        rule.waitUntil(5000) { runBlocking { decodeManualPostMarks(store.preferences.first()[MANUAL_POST_MARKS_KEY]).isEmpty() } }
+    }
+
+    @Test fun sharedAttachmentIsOfferedAndOnlyConsumedByAnExplicitTap() {
+        val image = com.valoser.futacha.shared.util.ImageData(byteArrayOf(1, 2, 3), "incoming.jpg")
+        IncomingSharedAttachment.offer(image)
+        var attached = 0
+        rule.setContent { MaterialTheme { IncomingSharedAttachmentButton { received ->
+            assertSame(image, received); attached++
+        } } }
+        rule.runOnIdle { assertEquals(0, attached) }
+        rule.onNodeWithText("共有された画像を添付").performClick()
+        rule.runOnIdle { assertEquals(1, attached); assertNull(IncomingSharedAttachment.pending.value) }
+        rule.onNodeWithText("共有された画像を添付").assertDoesNotExist()
+    }
+
     private fun waitTag(tag: String) = rule.waitUntil(10_000) {
         rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    }
+    private fun capture(name: String) {
+        rule.waitForIdle()
+        Thread.sleep(250) // Let native window fade-out finish before capturing the returned post.
+        val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("screencap -p /data/local/tmp/thread-feedback-$name.png")
+        java.io.FileInputStream(pfd.fileDescriptor).use { it.readBytes() }
+        pfd.close()
     }
     private fun openThread(related: Boolean = false) {
         val item = CatalogItem(id = "95", threadUrl = url, title = "FEEDBACK",

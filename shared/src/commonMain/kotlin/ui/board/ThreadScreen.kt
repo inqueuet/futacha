@@ -585,7 +585,7 @@ private fun ThreadScreenContent(
     }
     val asyncRuntimeBindingsBundle = originalAsyncRuntimeBindings.copy(
         manualSaveCallbacks = originalAsyncRuntimeBindings.manualSaveCallbacks.copy(
-            showMessage = { saveResultMessage = it }, applySaveErrorState = saveError
+            showMessage = { savedFileToShare = null; saveResultMessage = it }, applySaveErrorState = saveError
         ),
         singleMediaSaveCallbacks = originalAsyncRuntimeBindings.singleMediaSaveCallbacks.copy(
             showMessage = { saveResultMessage = it },
@@ -902,9 +902,12 @@ private fun ThreadScreenContent(
     }
     val searchMatches = derivedRuntimeState.searchMatches
     val postHighlightRanges = derivedRuntimeState.postHighlightRanges
+    var jumpHighlightedPostId by remember(threadId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(jumpHighlightedPostId) { if (jumpHighlightedPostId != null) { kotlinx.coroutines.delay(2500); jumpHighlightedPostId = null } }
     var postScrollRequestSequence by remember(threadId) { mutableStateOf(0L) }
     var postScrollRequest by remember(threadId) { mutableStateOf<ThreadPostScrollRequest?>(null) }
     val requestPostScroll: (Post) -> Unit = { post ->
+        jumpHighlightedPostId = post.id
         postScrollRequestSequence += 1L
         postScrollRequest = ThreadPostScrollRequest(
             post = post,
@@ -1504,14 +1507,18 @@ private fun ThreadScreenContent(
             isShowingRestoredSnapshot = true
             uiState.value = it
         }, onRefresh = refreshThread,
-        onOpenThread = onHistoryEntrySelected, onShowPost = scrollToPost, onClose = onBack,
+        onOpenThread = onHistoryEntrySelected, onShowPost = { post ->
+            postOverlayState = dismissThreadPostActionOverlay(postOverlayState)
+            threadFilterBinding.setState(clearThreadFilterUiState(threadFilterBinding.currentState()))
+            requestPostScroll(post)
+        }, onClose = onBack,
         onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
         onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) },
         effectiveBoardUrl = effectiveBoardUrl,
         isActionInProgress = { actionInProgress },
         setActionInProgress = { actionInProgress = it }
     ) {
-    CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors) {
+    CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors, LocalJumpHighlightedPostId provides jumpHighlightedPostId) {
         MaterialTheme(
             colorScheme = futabaThreadColorScheme,
             typography = MaterialTheme.typography,
@@ -1527,11 +1534,20 @@ private fun ThreadScreenContent(
             }
             ThreadScreenOverlayHost(
                 bindings = hostBindingsBundle.overlayBindings,
-                httpClient = httpClient
+                httpClient = httpClient,
+                onShowPreviewPost = { entry ->
+                    currentSuccessState?.page?.posts?.firstOrNull { it.id == entry.postId }?.let { post ->
+                        restoreGalleryAfterMediaPreview = false
+                        setMediaPreviewState(dismissThreadMediaPreview(mediaPreviewState))
+                        threadFilterBinding.setState(clearThreadFilterUiState(threadFilterBinding.currentState()))
+                        requestPostScroll(post)
+                    }
+                }
             )
             saveResultMessage?.let { result ->
                 SaveResultDialog(
                     message = result,
+                    transientSuccess = savedFileToShare != null,
                     onDismiss = { saveResultMessage = null },
                     onShare = savedFileToShare?.let { (saved, location) ->
                         {

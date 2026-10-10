@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -68,10 +70,12 @@ internal fun ThreadPostActionSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             PostActionPreview(post.id, post.messageHtml)
+            ManualPostMarkActions(post.id)
             Text(
                 text = "No.${post.id} の操作",
                 style = MaterialTheme.typography.titleMedium,

@@ -113,7 +113,9 @@ class CompactThreadHeaderInstrumentedTest {
         rule.onAllNodesWithContentDescription("その他").onFirst().performClick()
         rule.onAllNodesWithText("設定").onLast().performClick()
         rule.onNodeWithText("表示").performClick()
-        rule.onNodeWithTag("compact-thread-header-switch").performScrollTo().performClick()
+        // The palette list can put this lazy item below the initially composed viewport.
+        rule.onAllNodes(hasScrollToNodeAction()).onLast().performScrollToNode(hasTestTag("compact-thread-header-switch"))
+        rule.onNodeWithTag("compact-thread-header-switch").performClick()
         rule.waitUntil(5_000) { runBlocking { store.isCompactThreadHeaderEnabled.first() } == enabled }
         rule.onNodeWithTag("compact-thread-header-switch").assertIsToggleable()
         if (enabled) rule.onNodeWithTag("compact-thread-header-switch").assertIsOn()

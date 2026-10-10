@@ -94,11 +94,12 @@ internal fun FutaberArchiveSearchSheet(
     val colors = LocalFutaberColors.current
     var state by remember(query, board.id) { mutableStateOf<FutaberArchiveSearchState>(FutaberArchiveSearchState.Loading) }
     var attempt by remember(query, board.id) { mutableIntStateOf(0) }
-    LaunchedEffect(query, board.id, attempt) {
+    var allSources by remember(query, board.id) { mutableStateOf(false) }
+    LaunchedEffect(query, board.id, attempt, allSources) {
         state = FutaberArchiveSearchState.Loading
         state = try {
             val found = futaberDistinctArchiveItems(
-                searchInqueuetArchiveThreads(httpClient, archiveSearchJson, query.trim(), extractArchiveSearchScope(board))
+                searchInqueuetArchiveThreads(httpClient, archiveSearchJson, query.trim(), extractArchiveSearchScope(board), includeAllSources = allSources)
             )
             if (found.isEmpty()) FutaberArchiveSearchState.Empty else FutaberArchiveSearchState.Results(found)
         } catch (cancelled: CancellationException) {
@@ -129,6 +130,9 @@ internal fun FutaberArchiveSearchSheet(
                     futaberArchiveNotice(), color = colors.meta, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp)
                 )
+                TextButton(onClick = { allSources = true; attempt++ }, enabled = state !is FutaberArchiveSearchState.Loading) {
+                    Text("他の保存先も検索", color = colors.action)
+                }
                 HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
                 when (val current = state) {
                     FutaberArchiveSearchState.Loading -> Row(

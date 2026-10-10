@@ -284,7 +284,9 @@ internal fun CatalogScreenOverlayHost(
             state = bindings.pastSearchRuntimeState.state,
             onDismiss = bindings.overlayBindings.pastThreadSearchResultCallbacks.onDismiss,
             onRetry = bindings.overlayBindings.pastThreadSearchResultCallbacks.onRetry,
-            onItemSelected = bindings.overlayBindings.pastThreadSearchResultCallbacks.onItemSelected
+            onItemSelected = bindings.overlayBindings.pastThreadSearchResultCallbacks.onItemSelected,
+            query = bindings.archiveSearchQuery,
+            archiveScope = bindings.board?.let { com.valoser.futacha.shared.network.extractArchiveSearchScope(it) }
         )
     }
 

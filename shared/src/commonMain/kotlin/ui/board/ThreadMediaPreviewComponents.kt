@@ -59,7 +59,8 @@ internal fun ThreadMediaPreviewDialog(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     onSave: (MediaPreviewEntry) -> Unit,
-    onImageSearch: ((MediaPreviewEntry) -> Unit)? = null
+    onImageSearch: ((MediaPreviewEntry) -> Unit)? = null,
+    onShowPost: ((MediaPreviewEntry) -> Unit)? = null
 ) {
     val trackedDismiss = {
         AnalyticsTracker.uiControl("media_preview", "画像・動画プレビューを閉じる")
@@ -85,6 +86,7 @@ internal fun ThreadMediaPreviewDialog(
                 onNavigateNext = trackedNext,
                 onNavigatePrevious = trackedPrevious,
                 onSave = { onSave(state.entry) },
+                onShowPost = onShowPost?.let { show -> { show(state.entry) } },
                 onImageSearch = onImageSearch?.let { search -> { search(state.entry) } },
                 isSaveEnabled = state.isSaveEnabled,
                 isSaveInProgress = state.isSaveInProgress
@@ -99,6 +101,7 @@ internal fun ThreadMediaPreviewDialog(
             onNavigateNext = trackedNext,
             onNavigatePrevious = trackedPrevious,
             onSave = { onSave(state.entry) },
+                onShowPost = onShowPost?.let { show -> { show(state.entry) } },
             isSaveEnabled = state.isSaveEnabled,
             isSaveInProgress = state.isSaveInProgress
         )
@@ -318,7 +321,7 @@ internal fun ThreadMediaPreviewHeader(
         shape = MaterialTheme.shapes.small,
         tonalElevation = 6.dp,
         modifier = modifier
-            .padding(top = 32.dp, start = 16.dp, end = 16.dp)
+            .padding(top = 72.dp, start = 16.dp, end = 16.dp)
             .fillMaxWidth()
     ) {
         Row(
@@ -354,8 +357,8 @@ internal fun ThreadMediaPreviewCloseButton(
         onClick = onDismiss,
         modifier = modifier.size(40.dp),
         colors = IconButtonDefaults.iconButtonColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
-            contentColor = MaterialTheme.colorScheme.onSurface
+            containerColor = Color.Black.copy(alpha = 0.7f),
+            contentColor = Color.White
         )
     ) {
         Icon(

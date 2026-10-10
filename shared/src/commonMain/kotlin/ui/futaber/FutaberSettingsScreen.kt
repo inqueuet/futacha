@@ -354,6 +354,12 @@ internal fun FutaberSettingsScreen(
                 }
                 SettingsRoute.Extras -> {
                     SettingsSection("スレッド") {
+                        SwitchRow("そうだねボタンをレスに表示", "ext-quick-saidane", settings.extQuickSaidane) {
+                            onSettingChange(FutaberSettingKeys.EXT_QUICK_SAIDANE, if (it) "ON" else "OFF")
+                        }
+                        SwitchRow("NGボタンをレスに表示", "ext-quick-ng", settings.extQuickNg) {
+                            onSettingChange(FutaberSettingKeys.EXT_QUICK_NG, if (it) "ON" else "OFF")
+                        }
                         SwitchRow("ツリー表示", "ext-tree", settings.extTree) {
                             onSettingChange(FutaberSettingKeys.EXT_TREE, if (it) "ON" else "OFF")
                         }

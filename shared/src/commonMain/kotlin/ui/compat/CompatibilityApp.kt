@@ -5542,6 +5542,10 @@ private fun CompatThreadScreen(
     val manualSaveLocation = parseCompatSaveLocation(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
+    val manuallyMarkedNos = remember(preferences[com.valoser.futacha.shared.compat.MANUAL_POST_MARKS_KEY], tab.canonicalUrl) {
+        com.valoser.futacha.shared.compat.decodeManualPostMarks(preferences[com.valoser.futacha.shared.compat.MANUAL_POST_MARKS_KEY])
+            .filter { it.threadUrl == com.valoser.futacha.shared.compat.manualMarkThreadUrl(tab.canonicalUrl) }.mapTo(mutableSetOf()) { it.postNo }
+    }
     val ownPostNos = remember(preferences, tab.key) {
         val prefix = compatOwnPostPreferencePrefix(tab.key)
         preferences.asSequence()
@@ -5685,6 +5689,8 @@ private fun CompatThreadScreen(
     val readingAloudState = remember(tab.key) { mutableStateOf(false) }
     var readingAloud by readingAloudState
     var readAloudDialogOpen by remember(tab.key) { mutableStateOf(false) }
+    var speechFollow by remember(tab.key) { mutableStateOf(preferences["compat.speech.follow"] != "OFF") }
+    var speechThumbnails by remember(tab.key) { mutableStateOf(preferences["compat.speech.thumbnails"] == "ON") }
     var readAloudDisplayPost by remember(tab.key) { mutableStateOf<CompatPostSnapshot?>(null) }
     var readAloudStatus by remember(tab.key) { mutableStateOf<String?>(null) }
     var readAloudJob by remember(tab.key) { mutableStateOf<Job?>(null) }
@@ -6765,11 +6771,17 @@ private fun CompatThreadScreen(
             offset >= width * 0.25f -> latestPreviousTab.value
             else -> null
         }
+        val returnToCatalog = com.valoser.futacha.shared.ui.isIosReviewPlatform() &&
+            latestPreviousTab.value == null && offset >= width * 0.25f
         scope.launch {
             pagerDragUpdateJob?.cancel()
             pagerDragUpdateJob = null
             pagerOffset.snapTo(offset)
-            if (target != null) {
+            if (returnToCatalog) {
+                pagerOffset.animateTo(width, animationSpec = tween(180))
+                onBack()
+                pagerOffset.snapTo(0f)
+            } else if (target != null) {
                 pagerOffset.animateTo(
                     if (offset < 0f) -width else width,
                     animationSpec = tween(180)
@@ -7455,6 +7467,11 @@ private fun CompatThreadScreen(
                             onOpenHelp = onOpenHelp
                         )
                     }
+                    if (readingAloud && !readAloudDialogOpen) Row {
+                        TextButton(onClick = { speechFollow = true }) { Text(if (speechFollow) "読み上げに追従中" else "追従を再開") }
+                        TextButton(onClick = { readAloudDialogOpen = true }) { Text("読み上げ操作") }
+                        TextButton(onClick = { stopReadAloud() }) { Text("停止") }
+                    }
                     CompatTitleStrip(tabs, tab)
                     CompatThreadAiPanel(threadAi, onRetry = { aiRetry++ })
                 }
@@ -7602,7 +7619,7 @@ private fun CompatThreadScreen(
                                     val hasAdjacent = if (totalDx < 0f) {
                                         latestNextTab.value != null
                                     } else {
-                                        latestPreviousTab.value != null
+                                        latestPreviousTab.value != null || com.valoser.futacha.shared.ui.isIosReviewPlatform()
                                     }
                                     val resistance = if (hasAdjacent) 1f else 0.22f
                                     val width = pagerWidthPx.toFloat().coerceAtLeast(1f)
@@ -7711,6 +7728,7 @@ private fun CompatThreadScreen(
                             CompatPostRow(
                                 post,
                                 modifier = Modifier.padding(start = ((treeDepthByPostNo[post.postNo] ?: 0) * 18).coerceAtMost(108).dp),
+                                manuallyMarked = post.postNo in manuallyMarkedNos,
                                 ownPostNos = ownPostNos,
                                 deletionSummary = deletionSummary.takeIf { post.postNo == snapshot?.posts?.firstOrNull()?.postNo },
                                 fontSize = threadFontSize,
@@ -7886,9 +7904,25 @@ private fun CompatThreadScreen(
             }
         } }
     }
+    LaunchedEffect(tab.key, listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is androidx.compose.foundation.interaction.DragInteraction.Start && readingAloud) speechFollow = false
+        }
+    }
+    LaunchedEffect(readAloudDisplayPost?.postNo, speechFollow) {
+        if (speechFollow && readingAloud) {
+            val index = visiblePosts.indexOfFirst { it.postNo == readAloudDisplayPost?.postNo }
+            if (index >= 0) listState.animateScrollToItem(index + threadHeaderCount)
+        }
+    }
     if (readAloudDialogOpen) {
         CompatThreadSpeechDialog(
             post = readAloudDisplayPost,
+            follow = speechFollow,
+            showThumbnails = speechThumbnails,
+            onFollowChange = { speechFollow = it; scope.launch { store.savePreference("compat.speech.follow", if (it) "ON" else "OFF") } },
+            onThumbnailsChange = { speechThumbnails = it; scope.launch { store.savePreference("compat.speech.thumbnails", if (it) "ON" else "OFF") } },
+            onHide = { readAloudDialogOpen = false },
             message = readAloudStatus,
             fontSize = threadFontSize,
             currentIndex = readAloudCursor.coerceAtLeast(0),
@@ -8094,7 +8128,17 @@ private fun CompatThreadScreen(
             delPostState = delPostState,
             deletePostState = deletePostState,
             deletePasswordState = deletePasswordState,
-            deleteImageOnlyState = deleteImageOnlyState
+            deleteImageOnlyState = deleteImageOnlyState,
+            markControls = {
+                com.valoser.futacha.shared.ui.board.ManualPostMarkActions(post.postNo,
+                    com.valoser.futacha.shared.ui.board.PostMarkContext(store, tab.canonicalUrl,
+                        snapshot?.posts.orEmpty().map { it.postNo to it.messageHtml }, { no ->
+                            contextPost = null
+                            val index = visiblePosts.indexOfFirst { it.postNo == no }
+                            if (index >= 0) scope.launch { listState.animateScrollToItem(index + threadHeaderCount) }
+                            else error = "NGや削除表示の設定で、このレスは非表示です"
+                        }))
+            }
         )
     }
     delPost?.let { post ->
@@ -8710,7 +8754,8 @@ private fun CompatThreadPostContextDialog(
     delPostState: MutableState<CompatPostSnapshot?>,
     deletePostState: MutableState<CompatPostSnapshot?>,
     deletePasswordState: MutableState<String>,
-    deleteImageOnlyState: MutableState<Boolean>
+    deleteImageOnlyState: MutableState<Boolean>,
+    markControls: @Composable () -> Unit = {}
 ) {
     var error by errorState
     var snapshot by snapshotState
@@ -8724,6 +8769,7 @@ private fun CompatThreadPostContextDialog(
     var deleteImageOnly by deleteImageOnlyState
     CompatPostContextDialog(
         post = post,
+        markControls = markControls,
         onDismiss = { contextPost = null },
         onWeb = {
             val terms = compatGoogleSearchTerms(post)

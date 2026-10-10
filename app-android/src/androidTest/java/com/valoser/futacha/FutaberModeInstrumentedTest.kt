@@ -51,6 +51,8 @@ class FutaberModeInstrumentedTest {
     private lateinit var originalProfile: ExperienceProfile
 
     private val futaberKeys = listOf(
+        "compat.futaber.ext.quickSaidane",
+        "compat.futaber.ext.quickNg",
         "compat.futaber.ext.tree",
         "compat.futaber.ext.extract",
         "compat.futaber.ext.idTap",
@@ -362,11 +364,11 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-settings-row-viewer").performClick()
         waitForTag("futaber-viewer-settings")
         capture("32-settings-viewer")
-        Espresso.pressBack()
+        pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-settings-row-notifications").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("巡回管理").fetchSemanticsNodes().isNotEmpty() }
-        Espresso.pressBack()
+        pressSystemBack()
         rule.onNodeWithTag("futaber-settings-done").performClick()
     }
 
@@ -390,23 +392,23 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-viewer-settings")
         rule.waitUntil(10_000) { rule.onAllNodesWithText("画像キャッシュ上限").fetchSemanticsNodes().isNotEmpty() }
         capture("41-settings-storage")
-        Espresso.pressBack()
+        pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-settings-row-network").performScrollTo().performClick()
         waitForTag("futaber-viewer-settings")
         rule.waitUntil(10_000) { rule.onAllNodesWithText("通信の軽量化").fetchSemanticsNodes().isNotEmpty() }
-        Espresso.pressBack()
+        pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
 
         // ヘルプ → 更新情報（ヘルプの中から）→ 戻る、ライセンス。
         rule.onNodeWithTag("futaber-settings-row-help").performScrollTo().performClick()
         waitForTag("futaber-viewer-settings")
         capture("42-settings-help")
-        Espresso.pressBack()
+        pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-settings-row-license").performScrollTo().performClick()
         waitForTag("futaber-viewer-settings")
-        Espresso.pressBack()
+        pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
 
         // バージョンは文字で出る（押せない）。
@@ -515,6 +517,38 @@ class FutaberModeInstrumentedTest {
         assertTrue(rule.onAllNodesWithTag("futaber-menu-extract").fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodesWithTag("futaber-menu-auto-scroll").fetchSemanticsNodes().isEmpty())
         capture("48-menu-without-extensions")
+    }
+
+    @Test fun quickActionsAreOptionalAndCatalogReportingRequiresConfirmation() {
+        openTutorialCatalog()
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
+        rule.onNodeWithTag("futaber-action-report").performClick()
+        rule.onNodeWithText("通報する").assertIsDisplayed()
+        rule.onNodeWithText("キャンセル").performClick()
+        rule.onNodeWithText("通報する").assertDoesNotExist()
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
+        rule.onNodeWithTag("futaber-action-report").performClick()
+        rule.onNodeWithText("通報する").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("削除依頼を送りました").fetchSemanticsNodes().isNotEmpty() }
+
+        rule.onNodeWithTag("futaber-open-settings").performClick()
+        rule.onNodeWithTag("futaber-settings-row-extras").performScrollTo().performClick()
+        for (id in listOf("ext-quick-saidane", "ext-quick-ng")) {
+            rule.onNodeWithTag("futaber-settings-switch-$id").performScrollTo().performClick()
+        }
+        assertEquals("ON", preference("compat.futaber.ext.quickSaidane"))
+        assertEquals("ON", preference("compat.futaber.ext.quickNg"))
+        rule.onNodeWithTag("futaber-settings-back").performClick()
+        rule.onNodeWithTag("futaber-settings-done").performClick()
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        rule.onAllNodesWithText("そうだね ", substring = true)[0].performClick()
+        waitForTag("futaber-remote-notice")
+        rule.onNodeWithTag("futaber-remote-notice").assertTextContains("そうだね", substring = true)
+        rule.onNodeWithTag("futaber-remote-notice").performClick()
+        rule.onAllNodesWithText("NG")[0].performClick()
+        waitForTag("futaber-ng-input")
+        capture("feedback-quick-ng")
     }
 
     @Test fun settingsTurnOnTheExtensionsAndTheThreadGetsTheirEntries() {
@@ -1388,7 +1422,7 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
-        rule.onNodeWithTag("futaber-menu-write").performClick()
+        rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
         waitForTag("futaber-post-screen")
         rule.onNodeWithTag("futaber-post-title").assertIsDisplayed()
         capture("22-post-screen")
@@ -1414,7 +1448,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-post-close").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-screen").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-thread-menu").performClick()
-        rule.onNodeWithTag("futaber-menu-write").performClick()
+        rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
         waitForTag("futaber-post-comment")
         rule.onNodeWithText("テスト投稿").assertIsDisplayed()
 
@@ -1524,7 +1558,7 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
-        rule.onNodeWithTag("futaber-menu-write").performClick()
+        rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
         waitForTag("futaber-post-comment")
         rule.onNodeWithTag("futaber-post-comment").performTextInput("前置き")
 
@@ -1558,7 +1592,7 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
-        rule.onNodeWithTag("futaber-menu-write").performClick()
+        rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
         waitForTag("futaber-post-comment")
         rule.onNodeWithTag("futaber-post-comment").performTextInput("画像つき")
 
@@ -1614,7 +1648,7 @@ class FutaberModeInstrumentedTest {
             rule.waitUntil(15_000) { rule.onAllNodesWithTag("futaber-post-screen").fetchSemanticsNodes().isEmpty() }
             // 送った後の書き込み画面には、添付が持ち越されない。
             rule.onNodeWithTag("futaber-thread-menu").performClick()
-            rule.onNodeWithTag("futaber-menu-write").performClick()
+            rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
             waitForTag("futaber-post-comment")
             assertTrue(rule.onAllNodesWithTag("futaber-post-attachment").fetchSemanticsNodes().isEmpty())
             file.delete()
@@ -1623,6 +1657,15 @@ class FutaberModeInstrumentedTest {
                 oldClip?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip()
             }
         }
+    }
+
+    /** Inject the system key without Espresso selecting a non-focused underlying dialog root. */
+    private fun pressSystemBack() {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.executeShellCommand("input keyevent KEYCODE_BACK").use { command ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(command).use { it.readBytes() }
+        }
+        rule.waitForIdle()
     }
 
     private fun capture(name: String) {

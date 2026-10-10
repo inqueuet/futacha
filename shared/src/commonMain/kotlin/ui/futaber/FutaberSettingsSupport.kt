@@ -22,6 +22,8 @@ internal object FutaberSettingKeys {
     const val EXT_TREE = "compat.futaber.ext.tree"
     const val EXT_EXTRACT = "compat.futaber.ext.extract"
     const val EXT_ID_TAP = "compat.futaber.ext.idTap"
+    const val EXT_QUICK_SAIDANE = "compat.futaber.ext.quickSaidane"
+    const val EXT_QUICK_NG = "compat.futaber.ext.quickNg"
     const val EXT_AUTO_SCROLL = "compat.futaber.ext.autoScroll"
     const val EXT_HISTORY = "compat.futaber.ext.history"
     const val EXT_MAIL_PRESETS = "compat.futaber.ext.mailPresets"
@@ -72,6 +74,8 @@ internal data class FutaberDisplaySettings(
     val extIdTap: Boolean = false,
     /** The operation menu gets "オートスクロール". */
     val extAutoScroll: Boolean = false,
+    val extQuickSaidane: Boolean = false,
+    val extQuickNg: Boolean = false,
     /** The history list of the manage panel gets a search / sort / filter band and "一括更新". */
     val extHistory: Boolean = false,
     /** The write settings' mail field gets "ID表示" / "IP表示" / "sage" buttons. */
@@ -108,6 +112,8 @@ internal data class FutaberDisplaySettings(
             extTree = preferences[FutaberSettingKeys.EXT_TREE] == "ON",
             extExtract = preferences[FutaberSettingKeys.EXT_EXTRACT] == "ON",
             extIdTap = preferences[FutaberSettingKeys.EXT_ID_TAP] == "ON",
+            extQuickSaidane = preferences[FutaberSettingKeys.EXT_QUICK_SAIDANE] == "ON",
+            extQuickNg = preferences[FutaberSettingKeys.EXT_QUICK_NG] == "ON",
             extAutoScroll = preferences[FutaberSettingKeys.EXT_AUTO_SCROLL] == "ON",
             extHistory = preferences[FutaberSettingKeys.EXT_HISTORY] == "ON",
             extMailPresets = preferences[FutaberSettingKeys.EXT_MAIL_PRESETS] == "ON",

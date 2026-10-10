@@ -999,19 +999,85 @@ final class IosAppUITests: XCTestCase {
         waitForExpectations(timeout: 20)
     }
 
-    private func futaberTutorialApp(generation: String) throws -> XCUIApplication {
+    private func futaberTutorialApp(generation: String, profile: String = "futaber") throws -> XCUIApplication {
         let app = makeApplication()
         let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
             "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
         let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
         let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
         app.launchArguments += [
-            "-experience.active_profile", "futaber",
+            "-experience.active_profile", profile,
             "-experience.profile_generation", generation,
             "-update_check_enabled", "false",
             "-boards_json", boardArgument
         ]
         return app
+    }
+
+    private func launchToshiakiTutorialApp(generation: String) throws -> XCUIApplication {
+        // Enter through the product mode switch so the modern tutorial fixture is imported.
+        let app = try futaberTutorialApp(generation: generation, profile: "futacha")
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        app.buttons["メニュー"].tap()
+        app.staticTexts["設定"].firstMatch.tap()
+        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["としあき(仮)モード"].firstMatch.tap()
+        app.buttons["切り替える"].tap()
+        return app
+    }
+
+    func testFutaberManualResponseMarkCanBeAddedListedAndRemoved() throws {
+        let app = try futaberTutorialApp(generation: "1501")
+        app.launch()
+        func element(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
+        XCTAssertTrue(element("futaber-action-mark").waitForExistence(timeout: 10))
+        element("futaber-action-mark").tap()
+        let add = app.buttons["☆ レスをマーク"]
+        let remove = app.buttons["★ マーク解除"]
+        if remove.waitForExistence(timeout: 2) { remove.tap() }
+        XCTAssertTrue(add.waitForExistence(timeout: 10)); add.tap()
+        XCTAssertTrue(remove.waitForExistence(timeout: 10))
+        mhtAttach(app, "feedback-manual-mark")
+        app.buttons["マーク一覧"].tap()
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "★ No.")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        mhtAttach(app, "feedback-manual-mark-list")
+        row.tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["マーク一覧"].exists, "Returning to the post must close the mark controls.")
+        element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
+        element("futaber-action-mark").tap()
+        XCTAssertTrue(remove.waitForExistence(timeout: 10)); remove.tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+    }
+
+    func testToshiakiSwipingPastTheFirstTabReturnsToCatalog() throws {
+        let app = try launchToshiakiTutorialApp(generation: "1502")
+        let boardList = compatibilityBoardListAfterUnwinding(in: app)
+        XCTAssertTrue(boardList.waitForExistence(timeout: 15))
+        let tutorial = boardList.buttons.matching(NSPredicate(format: "label CONTAINS %@", "チュートリアル")).firstMatch
+        XCTAssertTrue(tutorial.waitForExistence(timeout: 10)); tutorial.tap()
+        let item = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "compat-catalog-item-")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 15)); item.tap()
+        let pager = app.otherElements["compat-thread-pager"]
+        XCTAssertTrue(pager.waitForExistence(timeout: 15))
+        for _ in 0..<20 {
+            if app.otherElements["compat-catalog-grid"].exists { break }
+            // Start inside the body, away from the edge gesture owned by the drawer.
+            pager.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.55))
+                .press(forDuration: 0.05, thenDragTo: pager.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.55)))
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
+        mhtAttach(app, "feedback-first-tab-catalog")
     }
 
     /// ふたばー風：カタログ検索に語を入れると「過去ログから検索」が出て、押すと結果のシートが開く（丸みのあるアイコンの下部バーも操作できる）。
@@ -1623,13 +1689,8 @@ final class IosAppUITests: XCTestCase {
         XCTAssertEqual(presets.count, 12, "The drawing picker did not expose the reference twelve colours.")
     }
 
-    func testToshiakiExplicitBackKeepsThreadTabAndReturnsThroughCatalog() {
-        let app = makeApplication()
-        app.launchArguments += [
-            "-experience.active_profile", "toshiaki_compat",
-            "-experience.profile_generation", "1102"
-        ]
-        app.launch()
+    func testToshiakiExplicitBackKeepsThreadTabAndReturnsThroughCatalog() throws {
+        let app = try launchToshiakiTutorialApp(generation: "1503")
 
         let boardList = compatibilityBoardListAfterUnwinding(in: app)
         XCTAssertTrue(boardList.waitForExistence(timeout: 15))
@@ -1671,13 +1732,8 @@ final class IosAppUITests: XCTestCase {
         )
     }
 
-    func testToshiakiReplyAttachmentCanReachThePhotoPicker() {
-        let app = makeApplication()
-        app.launchArguments += [
-            "-experience.active_profile", "toshiaki_compat",
-            "-experience.profile_generation", "1088"
-        ]
-        app.launch()
+    func testToshiakiReplyAttachmentCanReachThePhotoPicker() throws {
+        let app = try launchToshiakiTutorialApp(generation: "1504")
 
         let board = compatibilityBoardCardAfterUnwinding(in: app)
         XCTAssertTrue(board.waitForExistence(timeout: 15))

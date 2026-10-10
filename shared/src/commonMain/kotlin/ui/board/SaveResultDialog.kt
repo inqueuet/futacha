@@ -11,7 +11,11 @@ import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 /** A separate dialog keeps the result visible above the full-screen media preview. */
 @Composable
-internal fun SaveResultDialog(message: String, onDismiss: () -> Unit, onShare: (() -> Unit)? = null) {
+internal fun SaveResultDialog(message: String, onDismiss: () -> Unit, onShare: (() -> Unit)? = null, transientSuccess: Boolean = false) {
+    if (transientSuccess) {
+        MediaSaveNotice(message, onDismiss, onShare)
+        return
+    }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("保存結果") },

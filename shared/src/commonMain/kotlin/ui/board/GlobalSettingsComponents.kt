@@ -550,6 +550,7 @@ internal fun GlobalSettingsDisplaySection(
                     ThemePalette.FutabaClassic -> "生成りとえんじを基調にした、ふたば寄りの配色です。"
                     ThemePalette.FutabaBlack -> "上下バーとシステムバーを黒系で統一し、本文側はふたば寄りの読みやすさを残します。"
                     ThemePalette.Midnight -> "暗所向けの高コントラスト配色です。"
+                    ThemePalette.FutabaCalm -> "生成りに落ち着いた茶系を合わせた配色です。"
                 },
                 selected = themePalette == palette,
                 onClick = { onThemePaletteChanged(palette) }
@@ -592,7 +593,7 @@ internal fun GlobalSettingsDisplaySection(
             headlineContent = { Text("コンパクトヘッダー") },
             supportingContent = {
                 Text(
-                    text = "スレ上部のバーを低くし、レスのヘッダー情報を1行で表示します。通常表示・ツリー表示・引用プレビューに反映されます。",
+                    text = "スレ上部のバーを低くし、レスのヘッダー情報を詰めて表示します。狭い画面では折り返します。通常表示・ツリー表示・引用プレビューに反映されます。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

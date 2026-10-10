@@ -713,7 +713,8 @@ internal fun CompatPostContextDialog(
     onSaidane: () -> Unit,
     onQuick: () -> Unit,
     onReply: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    markControls: @Composable () -> Unit = {}
 ) {
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     val actions = listOf(onWeb, onExtract, onNg, onDel, onDelete, onSaidane, onQuick, onReply, onCopy)
@@ -739,6 +740,7 @@ internal fun CompatPostContextDialog(
         ) {
             Column {
                 com.valoser.futacha.shared.ui.board.PostActionPreview(post.postNo, post.messageHtml)
+                markControls()
                 HorizontalDivider()
                 rows.forEach { row ->
                     Row(Modifier.fillMaxWidth()) {

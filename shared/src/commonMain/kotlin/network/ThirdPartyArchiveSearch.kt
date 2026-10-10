@@ -45,21 +45,25 @@ internal suspend fun searchThirdPartyArchiveThreads(
     httpClient: HttpClient,
     query: String,
     scope: ArchiveSearchScope?,
-    limit: Int
+    limit: Int,
+    includeAllSources: Boolean = false
 ): List<ArchiveSearchItem> {
     val normalized = query.trim()
     if (normalized.isEmpty() || scope == null) return emptyList()
     val boardKey = "${scope.server.lowercase()}/${scope.board.lowercase()}"
     val safeLimit = limit.coerceIn(1, 100)
+    val combined = mutableListOf<ArchiveSearchItem>()
     if (boardKey in FUTAPO_SEARCH_BOARDS) {
         val items = runThirdPartySearch { searchFutapo(httpClient, normalized, scope, safeLimit) }
-        if (items.isNotEmpty()) return items
+        if (!includeAllSources && items.isNotEmpty()) return items
+        combined += items
     }
     if (boardKey in FUTABA_FOREST_SEARCH_BOARDS) {
         val items = runThirdPartySearch { searchFutabaForest(httpClient, normalized, scope, safeLimit) }
-        if (items.isNotEmpty()) return items
+        if (!includeAllSources && items.isNotEmpty()) return items
+        combined += items
     }
-    return emptyList()
+    return combined.distinctBy { "${it.server}/${it.board}/${it.threadId}" }.take(if (includeAllSources) 100 else safeLimit)
 }
 
 private suspend fun runThirdPartySearch(block: suspend () -> List<ArchiveSearchItem>): List<ArchiveSearchItem> =

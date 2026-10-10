@@ -17,6 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class CatalogWatchAlertRefresherTest {
     @Test
@@ -245,6 +246,25 @@ class CatalogWatchAlertRefresherTest {
         assertEquals(listOf(listOf("100")), delivered)
     }
 
+    @Test
+    fun aFastSecondRequestIsDeliveredEvenWhenTheFirstRequestNeverReturns() = runBlocking {
+        val board = watchBoard()
+        val store = AppStateStore(FakePlatformStateStorage()).apply {
+            setBoards(listOf(board)); setHistory(emptyList()); setWatchWords(listOf("cat"))
+        }
+        val repository = FakeCatalogWatchRepository().apply {
+            hangingSources += board.url to CatalogMode.New
+            catalogs[board.url to CatalogMode.Old] = listOf(catalogItem("102", "cat"))
+        }
+        val delivered = mutableListOf<String>()
+        assertNull(withTimeoutOrNull(500) {
+            CatalogWatchAlertRefresher(store, repository, Dispatchers.Default, maxConcurrency = 2)
+                .refresh { matches -> delivered.addAll(matches.map { it.threadId }) }
+        })
+        assertEquals(listOf("102"), delivered)
+        assertTrue(store.history.first().isEmpty())
+    }
+
     private suspend fun twoBoardWatchFixture(): Pair<AppStateStore, FakeCatalogWatchRepository> {
         val first = watchBoard()
         val second = watchBoard(id = "jun", name = "二次元実況", url = "https://jun.2chan.net/jun/futaba.php")
@@ -291,13 +311,14 @@ private class FakeCatalogWatchRepository : BoardRepository {
     val calls = mutableListOf<Pair<String, CatalogMode>>()
     /** Catalog requests of these boards never finish. */
     val hangingBoards = mutableSetOf<String>()
+    val hangingSources = mutableSetOf<Pair<String, CatalogMode>>()
     private val callsMutex = Mutex()
 
     override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
         callsMutex.withLock {
             calls += board to mode
         }
-        if (board in hangingBoards) kotlinx.coroutines.awaitCancellation()
+        if (board in hangingBoards || (board to mode) in hangingSources) kotlinx.coroutines.awaitCancellation()
         return catalogs[board to mode].orEmpty()
     }
 

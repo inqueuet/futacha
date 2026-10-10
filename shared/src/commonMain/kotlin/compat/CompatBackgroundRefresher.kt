@@ -119,6 +119,104 @@ suspend fun refreshCompatTabsInBackground(
         null
     }
 
+    if (checkWatchWords) {
+        val watchPreferences = store.preferences.first()
+        val watcher = CompatWatcherRepository(store)
+        val failuresBeforeWatch = failures
+        val previousWatchCursor = loadCursor("compat.background.watch_board_cursor")
+        var watchCursor = previousWatchCursor
+        var watchCompleted = false
+        val watchDeadline = budgetMillis?.let { TimeSource.Monotonic.markNow() + (it / 3).milliseconds }
+        fun watchRemainingMillis(): Long = minOf(remainingMillis(), watchDeadline?.let { (-it.elapsedNow()).inWholeMilliseconds } ?: Long.MAX_VALUE)
+        try {
+        if (compatWatchRules(watchPreferences).any { it.enabled }) {
+            val existingHistory = store.history.first()
+            compatRotatedBackgroundBoards(boards, previousWatchCursor).forEach boardLoop@{ board ->
+                val watchWords = compatWatchWordsForBoard(watchPreferences, board.key)
+                if (watchWords.isEmpty() || watchRemainingMillis() <= 0L) return@boardLoop
+                watchCursor = board.key
+                listOf(CatalogMode.New, CatalogMode.Old).forEach sourceLoop@{ mode ->
+                    try {
+                        val catalog = withinBudget(watchRemainingMillis().coerceAtLeast(0)) { fetchCatalog(board.originalUrl, mode) }
+                            ?: run { failures++; return@sourceLoop }
+                        val matches = collectCompatWatchMatches(
+                            board = board,
+                            items = catalog,
+                            watchWords = watchWords,
+                            existingHistory = existingHistory + newWatchMatches.map(CompatWatchMatch::history),
+                            nowEpochMillis = nowEpochMillis
+                        )
+                        // One preference write per catalog instead of one per match.
+                        var newUrls = emptySet<String>()
+                        if (commitGate { newUrls = watcher.recordAll(matches) }) {
+                            val recorded = matches.filter { it.history.canonicalUrl in newUrls }
+                                .distinctBy { it.history.canonicalUrl }
+                            newWatchMatches += recorded
+                            if (recorded.isNotEmpty() && onWatchMatchesRecorded != null) {
+                                withContext(NonCancellable) {
+                                    runCatching { onWatchMatchesRecorded(recorded) }
+                                }
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        failures++
+                    }
+                }
+            }
+        }
+        // Outcomes are written in batches; the last batch is written even when
+        // the time budget cancels the probes, so finished checks are kept.
+        val pendingChecks = linkedMapOf<CompatWatchResult, Boolean>()
+        suspend fun flushChecks() {
+            if (pendingChecks.isEmpty()) return
+            val batch = pendingChecks.toMap()
+            pendingChecks.clear()
+            commitGate { watcher.markCheckedAll(batch, nowEpochMillis) }
+        }
+        val completed = try {
+            withinBudget(minOf(watchCheckBudgetMillis, watchRemainingMillis().coerceAtLeast(0))) {
+                watcher.load(nowEpochMillis).filter { it.active && it.checkedAtEpochMillis < nowEpochMillis }
+                    .sortedBy { it.checkedAtEpochMillis }.take(100).forEach { result ->
+                        try {
+                            val gone = withTimeoutOrNull(existenceProbeTimeoutMillis) {
+                                repository.probeThreadGone(result.history.originalUrl)
+                            }
+                            if (gone == null) failures++
+                            pendingChecks[result] = gone ?: false
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Throwable) {
+                            failures++
+                            pendingChecks[result] = false
+                        }
+                        if (pendingChecks.size >= WATCH_CHECK_WRITE_BATCH) flushChecks()
+                    }
+                true
+            } ?: false
+        } finally {
+            withContext(NonCancellable) { flushChecks() }
+        }
+        if (!completed) failures++
+        watchCompleted = watchRemainingMillis() > 0L
+        } finally {
+            withContext(NonCancellable) {
+                runCatching { commitGate { store.savePreference("compat.background.watch_board_cursor", watchCursor.orEmpty()) } }
+            }
+            recordWatchRunDiagnostics(store, WATCH_RUN_CRAWL_KEY, WatchRunDiagnostics(
+                checkedAt = nowEpochMillis,
+                outcome = if (!watchCompleted) "中断" else if (failures > failuresBeforeWatch) "一部失敗" else "完了",
+                targets = boards.filter { compatWatchWordsForBoard(watchPreferences, it.key).isNotEmpty() }.map { it.name },
+                words = compatWatchRules(watchPreferences).filter { it.enabled }.map { it.word },
+                matchCount = newWatchMatches.size,
+                failures = if (failures > failuresBeforeWatch) listOf("取得・生存確認の失敗 ${failures - failuresBeforeWatch}件") else emptyList(),
+                matchedTitles = newWatchMatches.map { it.history.title }
+            ))
+        }
+    }
+
+
     if (checkUpdates) {
         val updateDeadline = updateBudgetMillis?.let { TimeSource.Monotonic.markNow() + it.milliseconds }
         fun updateRemainingMillis(): Long =
@@ -290,79 +388,6 @@ suspend fun refreshCompatTabsInBackground(
         if (!completed) failures++
     }
 
-    if (checkWatchWords) {
-        val watchPreferences = store.preferences.first()
-        val watcher = CompatWatcherRepository(store)
-        if (compatWatchRules(watchPreferences).any { it.enabled }) {
-            val existingHistory = store.history.first()
-            boards.forEach { board ->
-                val watchWords = compatWatchWordsForBoard(watchPreferences, board.key)
-                if (watchWords.isEmpty()) return@forEach
-                listOf(CatalogMode.New, CatalogMode.Old).forEach { mode ->
-                    try {
-                        val catalog = withinBudget { fetchCatalog(board.originalUrl, mode) }
-                            ?: run { failures++; return@forEach }
-                        val matches = collectCompatWatchMatches(
-                            board = board,
-                            items = catalog,
-                            watchWords = watchWords,
-                            existingHistory = existingHistory + newWatchMatches.map(CompatWatchMatch::history),
-                            nowEpochMillis = nowEpochMillis
-                        )
-                        // One preference write per catalog instead of one per match.
-                        var newUrls = emptySet<String>()
-                        if (commitGate { newUrls = watcher.recordAll(matches) }) {
-                            val recorded = matches.filter { it.history.canonicalUrl in newUrls }
-                                .distinctBy { it.history.canonicalUrl }
-                            newWatchMatches += recorded
-                            if (recorded.isNotEmpty() && onWatchMatchesRecorded != null) {
-                                withContext(NonCancellable) {
-                                    runCatching { onWatchMatchesRecorded(recorded) }
-                                }
-                            }
-                        }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Throwable) {
-                        failures++
-                    }
-                }
-            }
-        }
-        // Outcomes are written in batches; the last batch is written even when
-        // the time budget cancels the probes, so finished checks are kept.
-        val pendingChecks = linkedMapOf<CompatWatchResult, Boolean>()
-        suspend fun flushChecks() {
-            if (pendingChecks.isEmpty()) return
-            val batch = pendingChecks.toMap()
-            pendingChecks.clear()
-            commitGate { watcher.markCheckedAll(batch, nowEpochMillis) }
-        }
-        val completed = try {
-            withinBudget(watchCheckBudgetMillis) {
-                watcher.load(nowEpochMillis).filter { it.active && it.checkedAtEpochMillis < nowEpochMillis }
-                    .sortedBy { it.checkedAtEpochMillis }.take(100).forEach { result ->
-                        try {
-                            val gone = withTimeoutOrNull(existenceProbeTimeoutMillis) {
-                                repository.probeThreadGone(result.history.originalUrl)
-                            }
-                            if (gone == null) failures++
-                            pendingChecks[result] = gone ?: false
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Throwable) {
-                            failures++
-                            pendingChecks[result] = false
-                        }
-                        if (pendingChecks.size >= WATCH_CHECK_WRITE_BATCH) flushChecks()
-                    }
-                true
-            } ?: false
-        } finally {
-            withContext(NonCancellable) { flushChecks() }
-        }
-        if (!completed) failures++
-    }
 
     return CompatBackgroundRefreshResult(updated, dead, skipped, failures, newWatchMatches)
 }

@@ -75,7 +75,8 @@ internal data class ThreadScreenOverlayHostBindings(
 @Composable
 internal fun ThreadScreenOverlayHost(
     bindings: ThreadScreenOverlayHostBindings,
-    httpClient: io.ktor.client.HttpClient? = null
+    httpClient: io.ktor.client.HttpClient? = null,
+    onShowPreviewPost: ((MediaPreviewEntry) -> Unit)? = null
 ) {
     val galleryGridState = rememberLazyGridState()
     var imageSearchUrl by remember { mutableStateOf<String?>(null) }
@@ -146,7 +147,8 @@ internal fun ThreadScreenOverlayHost(
             onNavigateNext = bindings.uiBindings.mediaPreviewDialogCallbacks.onNavigateNext,
             onNavigatePrevious = bindings.uiBindings.mediaPreviewDialogCallbacks.onNavigatePrevious,
             onSave = bindings.uiBindings.mediaPreviewDialogCallbacks.onSave,
-            onImageSearch = { imageSearchUrl = it.url }
+            onImageSearch = { imageSearchUrl = it.url },
+            onShowPost = onShowPreviewPost
         )
     }
 

@@ -48,7 +48,8 @@ internal const val FUTABER_NOTHING_TO_READ_MESSAGE = "読み上げる本文が�
 @Stable
 internal class FutaberReadAloud(
     private val scope: CoroutineScope,
-    private val createEngine: () -> FutaberSpeechEngine
+    private val createEngine: () -> FutaberSpeechEngine,
+    private val livePollMillis: Long = 30_000
 ) {
     var isReading by mutableStateOf(false)
         private set
@@ -71,6 +72,8 @@ internal class FutaberReadAloud(
     private var currentSegmentIndex = -1
     /** Identifies the latest run: a run that was replaced must not clear the state of the one that replaced it. */
     private var generation = 0
+    private var loadNewPosts: (suspend () -> List<Post>?)? = null
+    private val seenPostIds = mutableSetOf<String>()
 
     fun clearMessage() {
         message = null
@@ -80,13 +83,16 @@ internal class FutaberReadAloud(
      * Starts from [firstVisibleRow] of [posts] (the list as shown). [scrollToRow] receives the
      * row index of each post as it is read.
      */
-    fun start(posts: List<Post>, firstVisibleRow: Int, scrollToRow: suspend (Int) -> Unit) {
+    fun start(posts: List<Post>, firstVisibleRow: Int, loadNewPosts: (suspend () -> List<Post>?)? = null, scrollToRow: suspend (Int) -> Unit) {
         if (isReading) return
         message = null
         stoppedByUser = false
         isReading = true
         val run = ++generation
         this.scrollToRow = scrollToRow
+        this.loadNewPosts = loadNewPosts
+        seenPostIds.clear()
+        seenPostIds.addAll(posts.map { it.id })
         // ATOMIC: a stop right after the start still runs the body up to its first check, so the state is reset below
         // (a coroutine cancelled before it ran would never reach its `finally`).
         job = scope.launch(start = CoroutineStart.ATOMIC) {
@@ -98,7 +104,8 @@ internal class FutaberReadAloud(
                 segments = built
                 val startIndex = findFirstVisibleReadAloudSegmentIndex(built, firstVisibleRow)
                 if (built.isEmpty() || startIndex < 0) {
-                    message = FUTABER_NOTHING_TO_READ_MESSAGE
+                    if (loadNewPosts == null) message = FUTABER_NOTHING_TO_READ_MESSAGE
+                    else read(speaker, built.size)
                     return@launch
                 }
                 read(speaker, startIndex)
@@ -118,8 +125,10 @@ internal class FutaberReadAloud(
     private suspend fun read(speaker: FutaberSpeechEngine, startIndex: Int) {
         val scroll = scrollToRow ?: return
         val context = currentCoroutineContext()
+        var nextIndex = startIndex
+        while (context.isActive && !stoppedByUser) {
         val result = runThreadReadAloudSession(
-            startIndex = startIndex,
+            startIndex = nextIndex,
             segments = segments,
             isRunnerActive = { context.isActive && !stoppedByUser },
             wasCancelledByUser = { stoppedByUser },
@@ -130,7 +139,21 @@ internal class FutaberReadAloud(
                 onFailure = { error -> message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE }
             )
         )
-        if (result.completedNormally) message = buildReadAloudCompletedMessage()
+        if (!result.completedNormally) return
+        val loader = loadNewPosts
+        if (loader == null) { message = buildReadAloudCompletedMessage(); return }
+        nextIndex = segments.size
+        currentPostId = null
+        message = "新着を待っています"
+        while (context.isActive && !stoppedByUser && nextIndex == segments.size) {
+            kotlinx.coroutines.delay(livePollMillis)
+            val posts = loader() ?: run { message = "スレッドが落ちています"; return }
+            val additions = buildReadAloudSegments(posts).filter { it.postId !in seenPostIds }.distinctBy { it.postId }
+            seenPostIds.addAll(posts.map { it.id })
+            segments = segments + additions
+        }
+        message = null
+        }
     }
 
     /**

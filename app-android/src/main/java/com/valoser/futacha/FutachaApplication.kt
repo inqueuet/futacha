@@ -371,6 +371,7 @@ class FutachaApplication : Application() {
                 val catalogWatch = CatalogWatchAlertRefresher(
                     stateStore = appStateStore,
                     repository = repository,
+                    diagnosticsStore = compatibilityStore,
                     dispatcher = Dispatchers.IO
                 )
                 val watchSync = WatchSyncManager(

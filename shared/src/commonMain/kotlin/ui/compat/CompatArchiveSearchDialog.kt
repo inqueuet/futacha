@@ -140,7 +140,7 @@ internal fun CompatArchiveSearchDialog(
 
     val results = filterCompatArchiveSearchItems(fetchedResults, query, mode.name)
 
-    fun search() {
+    fun search(includeAllSources: Boolean = false) {
         val normalized = query.trim()
         if (normalized.isBlank()) {
             error = "検索語を入力してください"
@@ -160,6 +160,7 @@ internal fun CompatArchiveSearchDialog(
                     httpClient = client,
                     archiveSearchJson = archiveSearchJson,
                     query = normalized,
+                    includeAllSources = includeAllSources,
                     scope = archiveScope,
                     archiveBaseUrl = archiveBaseUrl
                 )
@@ -225,6 +226,7 @@ internal fun CompatArchiveSearchDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                TextButton(enabled = !loading && query.isNotBlank(), onClick = { search(true) }) { Text("他の保存先も検索") }
                 TextField(
                     value = query,
                     onValueChange = { query = it.take(200); error = null },

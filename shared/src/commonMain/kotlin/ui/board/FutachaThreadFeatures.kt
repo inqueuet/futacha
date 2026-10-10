@@ -144,6 +144,7 @@ internal fun FutachaThreadFeatureHost(
     var viewerPostNo by remember(tabKey) { mutableStateOf<String?>(null) }
     var viewerToolbarOpen by remember { mutableStateOf(false) }
     var viewerToolbarRevision by remember { mutableLongStateOf(0) }
+    var marksOpen by remember(tabKey) { mutableStateOf(false) }
     var urlsOpen by remember { mutableStateOf(false) }
     var cacheSearchOpen by remember { mutableStateOf(false) }
     var tabsOpen by remember { mutableStateOf(false) }
@@ -279,7 +280,18 @@ internal fun FutachaThreadFeatureHost(
             } }
         }
     }
+    val manualMarkedNos = remember(features.preferences[MANUAL_POST_MARKS_KEY], sourceUrl) {
+        decodeManualPostMarks(features.preferences[MANUAL_POST_MARKS_KEY]).filter { it.threadUrl == manualMarkThreadUrl(sourceUrl) }.mapTo(mutableSetOf()) { it.postNo }
+    }
+    val latestMarkJump by rememberUpdatedState(onShowPost)
+    val markContext = remember(features.store, sourceUrl, page?.posts) {
+        PostMarkContext(features.store, sourceUrl, page?.posts.orEmpty().map { it.id to it.messageHtml },
+            { no -> page?.posts?.firstOrNull { it.id == no }?.let(latestMarkJump) })
+    }
+    if (marksOpen) ManualPostMarkDialog(markContext, onDismiss = { marksOpen = false })
     val tools = listOf(
+        FutachaThreadTool("レスマーク", Icons.Rounded.Star) { marksOpen = true },
+        FutachaThreadTool("ブラウザで開く", Icons.Rounded.Link) { openUrl(sourceUrl) },
         FutachaThreadTool("タブ一覧", Icons.Rounded.Tab) { tabsOpen = true },
         FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
         FutachaThreadTool("前のスレッド", Icons.AutoMirrored.Rounded.ArrowBack, tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) },
@@ -318,7 +330,7 @@ internal fun FutachaThreadFeatureHost(
             } }, onReload = onRefresh,
             longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
     })
-    CompositionLocalProvider(LocalFutachaThreadTools provides tools,
+    CompositionLocalProvider(LocalFutachaThreadTools provides tools, LocalPostMarkContext provides markContext, LocalManualPostMarkNos provides manualMarkedNos,
         LocalDelPostAndNg provides { post ->
             // Same gates as the plain DEL request: writable board and one action at a time.
             when (resolveDelAndNgGate(effectiveBoardUrl, isActionInProgress())) {

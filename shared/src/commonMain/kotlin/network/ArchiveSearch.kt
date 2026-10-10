@@ -214,7 +214,8 @@ suspend fun searchInqueuetArchiveThreads(
     query: String,
     scope: ArchiveSearchScope?,
     limit: Int = DEFAULT_ARCHIVE_SEARCH_LIMIT,
-    archiveBaseUrl: String? = null
+    archiveBaseUrl: String? = null,
+    includeAllSources: Boolean = false
 ): List<ArchiveSearchItem> {
     val normalized = query.trim()
     require(normalized.isNotBlank()) { "q required" }
@@ -236,8 +237,12 @@ suspend fun searchInqueuetArchiveThreads(
         failure = e
         null
     }
-    if (!primary.isNullOrEmpty()) return primary
-    val others = searchThirdPartyArchiveThreads(httpClient, normalized, scope, limit)
+    if (!includeAllSources && !primary.isNullOrEmpty()) return primary
+    val others = searchThirdPartyArchiveThreads(httpClient, normalized, scope, limit, includeAllSources)
+    if (includeAllSources && (!primary.isNullOrEmpty() || others.isNotEmpty())) {
+        return (primary.orEmpty() + others).distinctBy { "${it.server.lowercase()}/${it.board.lowercase()}/${it.threadId}" }
+            .take(MAX_ARCHIVE_SEARCH_LIMIT)
+    }
     if (others.isNotEmpty()) return others
     failure?.let { throw it }
     return primary.orEmpty()

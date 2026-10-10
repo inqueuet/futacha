@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import kotlinx.coroutines.launch
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -279,8 +281,14 @@ internal fun PastThreadSearchResultSheet(
     state: ArchiveSearchState,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
-    onItemSelected: (ArchiveSearchItem) -> Unit
+    onItemSelected: (ArchiveSearchItem) -> Unit,
+    query: String = "",
+    archiveScope: com.valoser.futacha.shared.network.ArchiveSearchScope? = null
 ) {
+    val client = LocalFutachaSharedFeatures.current?.httpClient
+    val extraScope = androidx.compose.runtime.rememberCoroutineScope()
+    var expanded by remember(query, archiveScope, state) { mutableStateOf<ArchiveSearchState?>(null) }
+    val shownState = expanded ?: state
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
@@ -299,7 +307,17 @@ internal fun PastThreadSearchResultSheet(
                 text = "過去スレ検索結果",
                 style = MaterialTheme.typography.titleMedium
             )
-            when (state) {
+            if (client != null && query.isNotBlank()) TextButton(enabled = shownState !is ArchiveSearchState.Loading, onClick = {
+                expanded = ArchiveSearchState.Loading
+                extraScope.launch {
+                    expanded = try {
+                        ArchiveSearchState.Success(com.valoser.futacha.shared.network.searchInqueuetArchiveThreads(
+                            client, kotlinx.serialization.json.Json { ignoreUnknownKeys = true }, query, archiveScope, includeAllSources = true))
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (error: Exception) { ArchiveSearchState.Error(error.message ?: "検索に失敗しました") }
+                }
+            }) { Text("他の保存先も検索") }
+            when (val state = shownState) {
                 ArchiveSearchState.Idle -> {
                     Text(
                         text = buildPastThreadSearchIdleMessage(),

@@ -576,6 +576,28 @@ class ArchiveSearchTest {
     }
 
     @Test
+    fun explicitAdditionalSearchMergesEverySiteEvenWhenPrimaryHasResultsAndDeduplicates() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = HttpClient(MockEngine) { engine { addHandler { request ->
+            requested += request.url.host
+            when (request.url.host) {
+                "may.inqueuet.com" -> if (request.url.encodedPath == "/search") respond(
+                    """{"results":[{"server":"may","board":"b","thread_no":"1440038751","reply_count":232,"title":"SKYRIM","archive_url":"https://may.inqueuet.com/b/res/1440038751.htm"}]}""",
+                    HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    else respond("<html></html>", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/html"))
+                "kako.futakuro.com" -> respond(futapoLine, HttpStatusCode.OK)
+                "futabaforest.net" -> respond(forestHtml.replace("1440038751", "1439844797"), HttpStatusCode.OK)
+                else -> error("Unexpected request: ${request.url}")
+            }
+        } } }
+        try {
+            val items = searchInqueuetArchiveThreads(client, Json { ignoreUnknownKeys = true }, "SKYRIM", ArchiveSearchScope("may", "b"), limit = 1, includeAllSources = true)
+            assertEquals(listOf("1440038751", "1439844797"), items.map { it.threadId })
+            kotlin.test.assertTrue(requested.containsAll(listOf("may.inqueuet.com", "kako.futakuro.com", "futabaforest.net")))
+        } finally { client.close() }
+    }
+
+    @Test
     fun inqueuetFailure_isReportedOnlyWhenTheOtherSitesHaveNothing() = runBlocking {
         for (otherSitesHaveIt in listOf(true, false)) {
             val client = HttpClient(MockEngine) {

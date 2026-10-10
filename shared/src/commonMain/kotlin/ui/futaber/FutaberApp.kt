@@ -183,6 +183,7 @@ internal fun FutaberApp(
     onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
+    val mockRepository = remember { FakeBoardRepository() }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val themeMode = FutaberThemeMode.fromPersistedValue(preferences[FutaberPreferenceKeys.THEME])
     val displaySettings = FutaberDisplaySettings.from(preferences)
@@ -197,13 +198,38 @@ internal fun FutaberApp(
     // A line at the bottom for what the person should know (a failed save, a full tab list); it goes away by itself.
     var appNotice by remember { mutableStateOf<String?>(null) }
     val notify: (String) -> Unit = { appNotice = it }
+    val openInBrowser = com.valoser.futacha.shared.util.rememberUrlLauncher()
+    var catalogReport by remember { mutableStateOf<Pair<BoardSummary, CatalogItem>?>(null) }
+    var reportingCatalog by remember { mutableStateOf(false) }
+    catalogReport?.let { (reportBoard, item) ->
+        com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { if (!reportingCatalog) catalogReport = null },
+            title = { Text("スレッドを通報") },
+            text = { Text("No.${item.id} のスレッドをふたば☆ちゃんねるの掲示板管理者へ削除依頼します。") },
+            confirmButton = { TextButton(enabled = !reportingCatalog, onClick = {
+                reportingCatalog = true
+                scope.launch {
+                    try {
+                        val result = com.valoser.futacha.shared.ui.board.performThreadAction {
+                            com.valoser.futacha.shared.ui.board.requireWritableThreadBoard(reportBoard.url)
+                            (if (reportBoard.isMockBoard()) mockRepository else repository).requestDeletion(
+                                reportBoard.url, item.id, item.id, com.valoser.futacha.shared.ui.board.DEFAULT_DEL_REASON_CODE)
+                        }
+                        when (result) {
+                            is com.valoser.futacha.shared.ui.board.ThreadActionRunResult.Success -> { notify("削除依頼を送りました"); catalogReport = null }
+                            is com.valoser.futacha.shared.ui.board.ThreadActionRunResult.Failure -> notify(result.error.message ?: "削除依頼を送れませんでした")
+                        }
+                    } finally { reportingCatalog = false }
+                }
+            }) { Text(if (reportingCatalog) "送信中…" else "通報する") } },
+            dismissButton = { TextButton(enabled = !reportingCatalog, onClick = { catalogReport = null }) { Text("キャンセル") } }) }
+    }
 
     val board = boards.firstOrNull { it.id == selectedBoardId }
         ?: boards.firstOrNull { it.id == preferences[FutaberPreferenceKeys.LAST_BOARD_ID] }
         ?: boards.firstOrNull()
     // A thread of a board that was deleted or is no longer selected is closed.
     val thread = openThread?.takeIf { it.boardId == board?.id }
-    val mockRepository = remember { FakeBoardRepository() }
     // Applied to the latest stored list, not the one the drawer showed.
     val editBoards: (transform: (List<BoardSummary>) -> List<BoardSummary>) -> Unit = { transform ->
         scope.launch {
@@ -1003,6 +1029,8 @@ internal fun FutaberApp(
                                 FutaberPostAction("ng-thread", "スレッドをNG", enabled = mediaServices != null && futaberNgScopeKey(board) != null) {
                                     registerNgThread(item)
                                 },
+                                FutaberPostAction("browser", "ブラウザで開く") { openInBrowser(futaberHistoryThreadUrl(board, item.id)) },
+                                FutaberPostAction("report", "不適切なスレッドを通報") { catalogReport = board to item },
                                 FutaberPostAction("remove-history", "履歴から削除", enabled = inHistory != null) {
                                     inHistory?.let(deleteHistory)
                                 }

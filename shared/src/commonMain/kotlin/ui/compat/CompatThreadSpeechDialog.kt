@@ -26,7 +26,12 @@ internal fun CompatThreadSpeechDialog(
     onSeekToVisible: () -> Unit,
     onPlay: () -> Unit,
     onPause: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    follow: Boolean = false,
+    showThumbnails: Boolean = false,
+    onFollowChange: (Boolean) -> Unit = {},
+    onThumbnailsChange: (Boolean) -> Unit = {},
+    onHide: () -> Unit = {}
 ) {
     val lastIndex = (postCount - 1).coerceAtLeast(0)
     var seekPosition by remember(currentIndex, postCount) { mutableFloatStateOf(currentIndex.coerceIn(0, lastIndex).toFloat()) }
@@ -49,11 +54,23 @@ internal fun CompatThreadSpeechDialog(
                     TextButton(onClick = { onSeek(currentIndex - 1) }, enabled = currentIndex > 0) { Text("前のレス") }
                     TextButton(onClick = { onSeek(currentIndex + 1) }, enabled = currentIndex < lastIndex) { Text("次のレス") }
                 }
+                Row {
+                    Checkbox(follow, onFollowChange)
+                    Text("読み上げ中のレスへ追従")
+                }
+                Row {
+                    Checkbox(showThumbnails, onThumbnailsChange)
+                    Text("サムネイルを表示")
+                }
+                TextButton(onClick = onHide) { Text("本文を見ながら続ける") }
                 TextButton(onClick = onSeekToVisible, enabled = postCount > 0) { Text("表示中のレスから") }
                 message?.let { Text(it, modifier = Modifier.testTag("compat-speech-status")) }
                 post?.let {
                     Text(it.compatSpeechHeader(), color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = (fontSize - 2).coerceAtLeast(8).sp)
+                    if (showThumbnails && !it.thumbnailUrl.isNullOrBlank()) coil3.compose.AsyncImage(
+                        model = it.thumbnailUrl, imageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader.current,
+                        contentDescription = "読み上げ中のレスの添付画像", modifier = Modifier.size(120.dp))
                     Text(it.messageHtml.toCompatPlainText(), fontSize = fontSize.sp)
                 }
             }

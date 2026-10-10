@@ -55,7 +55,8 @@ internal class FutachaSharedFeatures(
     val appVersion: String,
     val openSettings: (String) -> Unit,
     val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {},
-    val ngRulesState: State<List<com.valoser.futacha.shared.compat.CompatNgRule>?>? = null
+    val ngRulesState: State<List<com.valoser.futacha.shared.compat.CompatNgRule>?>? = null,
+    val appStateStore: com.valoser.futacha.shared.state.AppStateStore? = null
 ) {
     val catalogCache = FutachaCatalogMemoryCache()
     val preferences: Map<String, String> get() = preferencesState.value
@@ -161,9 +162,9 @@ internal fun ProvideFutachaSharedFeatures(
     var closedBatch by remember { mutableStateOf<com.valoser.futacha.shared.compat.ClosedTabBatch?>(null) }
     var notification by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion) {
+    val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion, appStateStore) {
         FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
-            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState)
+            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState, appStateStore = appStateStore)
     }
     LaunchedEffect(closedBatch, notification) {
         if (closedBatch != null || notification != null) {

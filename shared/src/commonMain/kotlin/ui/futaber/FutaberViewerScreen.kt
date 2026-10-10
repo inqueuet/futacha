@@ -124,6 +124,9 @@ internal fun FutaberViewerScreen(
     val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
         message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
     }
+    androidx.compose.runtime.LaunchedEffect(message) {
+        if (message == "保存しました") { kotlinx.coroutines.delay(5000); if (message == "保存しました") message = null }
+    }
     val choosePhotoSaveDestination = rememberPhotoSaveDestination(httpClient, fileSystem) { message = it }
     LaunchedEffect(message) {
         if (message != null) {

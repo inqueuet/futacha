@@ -1256,7 +1256,15 @@ internal fun CompatViewerScreen(
         ) }
     }
     message?.let { current ->
-        FutachaAppLockAwareWindow { AlertDialog(
+        val savedAction = messageState.action as? CompatSaveResultAction.Share
+        if (savedAction != null) {
+            com.valoser.futacha.shared.ui.board.MediaSaveNotice(current, onDismiss = { message = null }, onShare = {
+                launchScreenAction {
+                    val path = requireNotNull(fileSystem).resolveSavedFile(savedAction.location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), savedAction.file.relativePath).getOrThrow()
+                    share("", if (savedAction.file.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                }
+            })
+        } else FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { message = null },
             text = { Text(current) },
             confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } },

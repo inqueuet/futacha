@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.compat.toCompatPlainText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -291,6 +292,7 @@ internal fun FutaberThreadScreen(
     DisposableEffect(reader) { onDispose { reader.dispose() } }
     val appUnlocked = LocalFutachaAppUnlocked.current
     LaunchedEffect(appUnlocked) { if (!appUnlocked) reader.stop() }
+    var markTarget by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     var actionPost by remember(board.id, ref.threadId) { mutableStateOf<Post?>(null) }
     // The poster's ID (else the name) of the post whose "NG登録" opened the NG dialog, ready to add.
     var ngDialogInitialHeader by remember(board.id, ref.threadId) { mutableStateOf("") }
@@ -367,6 +369,10 @@ internal fun FutaberThreadScreen(
     val sharedPreferencesState = (mediaServices?.store?.preferences ?: kotlinx.coroutines.flow.flowOf(emptyMap<String, String>()))
         .collectAsState(emptyMap<String, String>())
     val sharedPreferences by sharedPreferencesState
+    val markedPostNos = remember(sharedPreferences[com.valoser.futacha.shared.compat.MANUAL_POST_MARKS_KEY], board, ref.threadId) {
+        com.valoser.futacha.shared.compat.decodeManualPostMarks(sharedPreferences[com.valoser.futacha.shared.compat.MANUAL_POST_MARKS_KEY])
+            .filter { it.threadUrl == com.valoser.futacha.shared.compat.manualMarkThreadUrl(futaberHistoryThreadUrl(board, ref.threadId)) }.mapTo(mutableSetOf()) { it.postNo }
+    }
     // The shared features the borrowed screens (image search, image NG, page save) read; one instance per services/repository.
     val sharedFeatures = remember(mediaServices, repository) {
         mediaServices?.let {
@@ -449,6 +455,9 @@ internal fun FutaberThreadScreen(
         }
     }
     val latestRows by rememberUpdatedState(rows)
+    val liveNgPrepared by rememberUpdatedState(ngPrepared)
+    val liveNgDisabled by rememberUpdatedState(ngDisabled)
+    val livePhashRules by rememberUpdatedState(phashRules)
     // Back to where reading stopped, once per opened thread, after its first page arrives.
     var restored by remember(board.id, ref.threadId) { mutableStateOf(false) }
     val postsReady = posts.isNotEmpty() && !ngWaiting
@@ -586,6 +595,9 @@ internal fun FutaberThreadScreen(
                             idLabel = idLabels[post.id],
                             replyCount = futaberReplyCount(post, replyIndex),
                             highlighted = reader.currentPostId == post.id,
+                            manuallyMarked = post.id in markedPostNos,
+                            onSaidaneTap = if (display.extQuickSaidane && archiveNotice == null && offlineNotice == null && offlineCopyNotice == null) ({ runRemoteAction(FutaberRemoteAction.Saidane, post) }) else null,
+                            onNgTap = if (display.extQuickNg) ({ ngDialogInitialHeader = futaberNgHeaderOf(post); ngDialogOpen = true }) else null,
                             smallImages = smallImages,
                             depth = row.depth,
                             onImageLongPress = if (futaberImageUrlOf(post) != null) {
@@ -714,6 +726,29 @@ internal fun FutaberThreadScreen(
                             }
                             menuOpen = false
                         },
+                        FutaberMenuItem("live-read-aloud", "新着を待って読み上げ", Icons.Outlined.RecordVoiceOver,
+                            enabled = !reader.isReading && !filter.isActive && rows.isNotEmpty() && offlineNotice == null && offlineCopyNotice == null && archiveNotice == null) {
+                            reader.start(rows.map { it.post }, listState.firstVisibleItemIndex, loadNewPosts = {
+                                if (repository.probeThreadGone(futaberHistoryThreadUrl(board, ref.threadId))) null else {
+                                    val content = repository.getThreadContent(board.url, ref.threadId)
+                                    load = FutaberThreadLoad(page = content.page, isLoading = false)
+                                    onPageLoaded(content.page.posts)
+                                    val newPosts = content.page.posts
+                                    val hiddenNow = if (liveNgDisabled) emptySet() else withContext(AppDispatchers.parsing) {
+                                        futaberNgEvaluate(newPosts, liveNgPrepared)
+                                    }
+                                    var imageHidden = emptySet<String>()
+                                    if (!liveNgDisabled && livePhashRules.isNotEmpty()) collectCompatImagePhashHiddenPostNos(
+                                        mediaServices?.httpClient, mediaServices?.store,
+                                        withContext(AppDispatchers.parsing) { content.page.toCompatThreadSnapshot(tabKeyForNg, 0).posts },
+                                        livePhashRules, phashThreshold) { imageHidden = it }
+                                    newPosts.filterNot { it.id in hiddenNow || it.id in imageHidden }
+                                }
+                            }) {
+                                futaberRowPositionOfPost(latestRows, reader.currentPostId)?.let { index -> listState.animateScrollToItem(index) }
+                            }
+                            menuOpen = false
+                        },
                         FutaberMenuItem(
                             "favorite", if (isFavorite) "お気に入り解除" else "お気に入りに追加",
                             if (isFavorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
@@ -795,6 +830,26 @@ internal fun FutaberThreadScreen(
                     onDismiss = { menuOpen = false }
                 )
             }
+            val markContext = mediaServices?.store?.let { store ->
+                com.valoser.futacha.shared.ui.board.PostMarkContext(store, futaberHistoryThreadUrl(board, ref.threadId),
+                    posts.map { it.id to it.messageHtml }, { no ->
+                        actionPost = null
+                        markTarget = null
+                        filter = FutaberViewFilter()
+                        scope.launch {
+                            kotlinx.coroutines.yield()
+                            futaberRowPositionOfPost(latestRows, no)?.let { listState.animateScrollToItem(it) }
+                                ?: run { remoteNotice = "NG設定で、このレスは非表示です" }
+                        }
+                    })
+            }
+            val markedPostNo = markTarget
+            if (markedPostNo != null && markContext != null) com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow {
+                androidx.compose.material3.AlertDialog(onDismissRequest = { markTarget = null },
+                    title = { Text("レスマーク") }, text = {
+                        com.valoser.futacha.shared.ui.board.ManualPostMarkActions(markedPostNo, markContext)
+                    }, confirmButton = { androidx.compose.material3.TextButton(onClick = { markTarget = null; actionPost = null }) { Text("閉じる") } })
+            }
             actionPost?.let { target ->
                 FutaberPostActionSheet(
                     title = "レス:${posts.indexOfFirst { it.id == target.id }.coerceAtLeast(0)}",
@@ -810,6 +865,9 @@ internal fun FutaberThreadScreen(
                         ngDialogInitialHeader = futaberNgHeaderOf(target)
                         actionPost = null
                         ngDialogOpen = true
+                    } + FutaberPostAction("mark", "レスをマーク／一覧", enabled = markContext != null) {
+                        markTarget = target.id
+                        actionPost = null
                     } + FutaberRemoteAction.entries.map { action ->
                         val blocked = futaberRemoteActionBlockedReason(action, offlineNotice != null || offlineCopyNotice != null, deleteKey)
                         FutaberPostAction(action.id, action.sheetLabel) {
@@ -1038,6 +1096,9 @@ internal fun FutaberPostRow(
     onQuoteTap: (line: String, anchor: FutaberAnchor) -> Unit,
     onRepliesTap: (anchor: FutaberAnchor) -> Unit,
     highlighted: Boolean = false,
+    manuallyMarked: Boolean = false,
+    onSaidaneTap: (() -> Unit)? = null,
+    onNgTap: (() -> Unit)? = null,
     smallImages: Boolean = false,
     /** Tree view indent level (0 outside the tree view). */
     depth: Int = 0,
@@ -1068,6 +1129,7 @@ internal fun FutaberPostRow(
             )
             .testTag("futaber-post")
     ) {
+        if (manuallyMarked) Text("★ マーク", color = colors.body, fontSize = display.sp(12f))
         Row(verticalAlignment = Alignment.Top) {
         FlowRow(
             modifier = Modifier.weight(1f),
@@ -1113,12 +1175,17 @@ internal fun FutaberPostRow(
             // One item, so the number is never split across lines.
             Text("No.${post.id}", color = colors.meta, fontSize = display.sp(12f))
         }
+        if (onNgTap != null) androidx.compose.material3.TextButton(onClick = onNgTap) { Text("NG", color = colors.action) }
+        if (onSaidaneTap != null) androidx.compose.material3.TextButton(onClick = onSaidaneTap) {
+            Text("そうだね ${futaberSaidaneCount(post.saidaneLabel) ?: 0}", color = colors.saidane)
+        } else {
         // The そうだね count at the right end of the header, as in the original.
         futaberSaidaneCount(post.saidaneLabel)?.let { count ->
             Text(
                 "×$count", color = colors.saidane, fontSize = display.sp(12f),
                 modifier = Modifier.padding(start = 6.dp).testTag("futaber-saidane-count")
             )
+        }
         }
         }
         titleLine?.let {

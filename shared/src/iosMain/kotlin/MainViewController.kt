@@ -1653,6 +1653,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                 val result = withIosBackgroundStageTimeout(plan.watchAlertTimeoutMillis, "watch alert") {
                     CatalogWatchAlertRefresher(
                         stateStore = stateStore,
+                        diagnosticsStore = archiveStore,
                         repository = repo,
                         dispatcher = AppDispatchers.io
                     ).refresh(onMatchesFound = { matches ->

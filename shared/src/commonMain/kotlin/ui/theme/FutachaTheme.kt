@@ -216,6 +216,8 @@ internal fun resolveFutachaColorScheme(
         ThemePalette.FutabaClassic -> if (useDarkTheme) ClassicDarkColors else ClassicLightColors
         ThemePalette.FutabaBlack -> if (useDarkTheme) FutabaBlackDarkColors else FutabaBlackLightColors
         ThemePalette.Midnight -> if (useDarkTheme) MidnightDarkColors else MidnightLightColors
+        ThemePalette.FutabaCalm -> if (useDarkTheme) ClassicDarkColors.copy(primary = Color(0xFFE2B3A5), onPrimary = Color(0xFF35211D))
+            else ClassicLightColors.copy(primary = Color(0xFF62423B), tertiary = Color(0xFF62423B), onBackground = Color(0xFF35211D), onSurface = Color(0xFF35211D))
     }
 }
 

@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride
 import androidx.compose.ui.platform.LocalWindowInfo
 import coil3.size.Precision
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -66,6 +67,8 @@ import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import kotlin.math.min
+
+internal val LocalJumpHighlightedPostId = androidx.compose.runtime.compositionLocalOf<String?> { null }
 
 private val ThreadPostThumbnailMaxWidth = 800.dp
 
@@ -137,6 +140,7 @@ internal fun ThreadPostCard(
         modifier = cardModifier
             .fillMaxWidth()
             .background(backgroundColor)
+            .then(if (LocalJumpHighlightedPostId.current == post.id) Modifier.border(2.dp, MaterialTheme.colorScheme.primary) else Modifier)
             .postPressFeedback(post.id, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .padding(
                 horizontal = if (compactHeader) 8.dp else 12.dp,
@@ -144,6 +148,7 @@ internal fun ThreadPostCard(
             ),
         verticalArrangement = Arrangement.spacedBy(if (compactHeader) 5.dp else 8.dp)
     ) {
+        if (post.id in LocalManualPostMarkNos.current) Text("★ マーク", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium)
         ThreadPostMetadata(
             post = post,
             isOp = isOp,
@@ -493,10 +498,10 @@ internal fun ThreadPostMetadata(
         fallbackFontSize = 14.sp,
         fallbackLineHeight = 20.sp
     )
-    val subjectStyle = MaterialTheme.typography.titleMedium.withThreadTextSize(
+    val subjectStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
         bodyTextSize = bodyTextSize,
-        fallbackFontSize = 16.sp,
-        fallbackLineHeight = 24.sp
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
     )
     val authorStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
         bodyTextSize = bodyTextSize,
@@ -550,12 +555,14 @@ internal fun ThreadPostMetadata(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
+                modifier = Modifier.alignByBaseline(),
                 text = (post.order ?: 0).toString(),
                 style = orderStyle,
                 fontWeight = FontWeight.Bold,
                 color = threadColors.accent
             )
             Text(
+                modifier = Modifier.alignByBaseline(),
                 text = subjectText,
                 style = subjectStyle,
                 color = subjectColor,
@@ -563,6 +570,7 @@ internal fun ThreadPostMetadata(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
+                modifier = Modifier.alignByBaseline(),
                 text = authorText,
                 style = authorStyle,
                 color = threadColors.author,
@@ -756,10 +764,10 @@ private fun ThreadPostCompactMetadata(
     labelStyle: androidx.compose.ui.text.TextStyle
 ) {
     val threadColors = LocalFutabaThreadColors.current
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
             text = order.toString(),
@@ -773,7 +781,7 @@ private fun ThreadPostCompactMetadata(
             color = subjectColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.34f, fill = true)
+            modifier = Modifier.alignByBaseline()
         )
         Text(
             text = authorText,
@@ -781,7 +789,7 @@ private fun ThreadPostCompactMetadata(
             color = threadColors.author,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.18f, fill = true)
+            modifier = Modifier.alignByBaseline()
         )
         Text(
             text = timestampText,
@@ -789,14 +797,14 @@ private fun ThreadPostCompactMetadata(
             color = threadColors.footerText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.40f, fill = true)
+            modifier = Modifier.alignByBaseline()
         )
         Text(
             text = "No.$postId",
             style = labelStyle,
             color = threadColors.footerText,
             maxLines = 1,
-            overflow = TextOverflow.Clip
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

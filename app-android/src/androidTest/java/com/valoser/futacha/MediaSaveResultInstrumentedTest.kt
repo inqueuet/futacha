@@ -93,8 +93,8 @@ class MediaSaveResultInstrumentedTest {
         clickSystemText("Documents")
         clickSystemText("USE THIS FOLDER", "このフォルダを使用")
         clickSystemText("ALLOW", "許可")
-        rule.waitUntil(15_000) { rule.onAllNodesWithText("保存結果").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("画像を保存しました", substring = true).assertIsDisplayed()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("media-save-notice").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("保存しました").assertIsDisplayed()
         rule.onNodeWithText("共有").assertIsDisplayed()
         rule.onNodeWithText("閉じる").performClick()
     }
@@ -120,14 +120,18 @@ class MediaSaveResultInstrumentedTest {
         throw AssertionError("System picker control missing: ${labels.toList()}")
     }
 
-    @Test fun localImageSaveShowsDestinationAndShareAboveThePreview() {
+    @Test fun localImageSaveLetsBrowsingContinueAndKeepsShareAboveThePreview() {
         openPreview(false)
-        rule.waitUntil(10_000) { rule.onAllNodesWithText("保存結果").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("保存結果").assertIsDisplayed()
-        rule.onNodeWithText("保存先:", substring = true).assertIsDisplayed()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("media-save-notice").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("保存しました").assertIsDisplayed()
+        val original = java.io.File(fs.resolveAbsolutePath("$root/source.png")).readBytes()
+        org.junit.Assert.assertTrue(java.io.File(fs.resolveAbsolutePath("$root/export")).walkTopDown()
+            .any { it.isFile && it.readBytes().contentEquals(original) })
+        rule.onNodeWithText("共有").assertIsDisplayed()
+        rule.onNodeWithContentDescription("プレビューを閉じる").performClick()
         rule.onNodeWithText("共有").assertIsDisplayed()
         rule.onNodeWithText("閉じる").performClick()
-        rule.onNodeWithContentDescription("プレビューを閉じる").assertIsDisplayed()
+        rule.onNodeWithContentDescription("プレビューを閉じる").assertDoesNotExist()
     }
 
     @Test fun remoteFailureIsVisibleAboveThePreviewAndCanBeDismissed() {

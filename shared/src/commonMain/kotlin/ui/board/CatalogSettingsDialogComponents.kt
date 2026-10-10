@@ -118,6 +118,11 @@ internal fun WatchWordsSheet(
         onTextChange = { boardInput = it },
         analyticsFieldLabel = "板別監視ワード"
     )
+    val features = LocalFutachaSharedFeatures.current
+    var diagnosticsOpen by remember { mutableStateOf(false) }
+    if (diagnosticsOpen && features != null) com.valoser.futacha.shared.ui.compat.WatchDiagnosticsDialog(
+        store = features.store, repository = features.repository, modernStore = features.appStateStore,
+        onDismiss = { diagnosticsOpen = false })
     val boardWords = boardWatchWordsOverride ?: effectiveBoardWatchWords
     val isBoardOverridden = boardWatchWordsOverride != null
 
@@ -157,6 +162,8 @@ internal fun WatchWordsSheet(
                     Icon(Icons.Rounded.Close, contentDescription = "閉じる")
                 }
             }
+
+            if (features != null) TextButton(onClick = { diagnosticsOpen = true }) { Text("監視の確認状況・今すぐ確認") }
 
             WatchWordsSection(
                 title = "共通",

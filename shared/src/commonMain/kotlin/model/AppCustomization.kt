@@ -10,7 +10,8 @@ enum class ThemePalette(val label: String) {
     Current("ふたちゃテーマ"),
     FutabaClassic("ふたばクラシック"),
     FutabaBlack("ふたばブラック"),
-    Midnight("ミッドナイト")
+    Midnight("ミッドナイト"),
+    FutabaCalm("ふたば・落ち着いた配色")
 }
 
 enum class AppIconVariant(val label: String) {

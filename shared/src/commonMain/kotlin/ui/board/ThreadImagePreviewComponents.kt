@@ -66,6 +66,7 @@ internal fun ImagePreviewDialog(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     onSave: (() -> Unit)? = null,
+    onShowPost: (() -> Unit)? = null,
     onImageSearch: (() -> Unit)? = null,
     isSaveEnabled: Boolean = true,
     isSaveInProgress: Boolean = false
@@ -93,8 +94,8 @@ internal fun ImagePreviewDialog(
         isSwipeNavigationEnabled = !isZoomed,
         isTapNavigationEnabled = !isZoomed,
         navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp,
-            bottom = promptBottomPadding.coerceAtLeast(8.dp)),
-        swipeNavigationPadding = PaddingValues(bottom = promptBottomPadding),
+            bottom = promptBottomPadding + 56.dp),
+        swipeNavigationPadding = PaddingValues(bottom = promptBottomPadding + 56.dp),
     ) { previewSize ->
         val requestSize = remember(previewSize) {
             resolveImagePreviewRequestSize(previewSize)
@@ -237,6 +238,12 @@ internal fun ImagePreviewDialog(
                 totalCount = totalCount,
                 modifier = Modifier.align(Alignment.TopStart)
             )
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = promptBottomPadding + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                onShowPost?.let { show ->
+                    TextButton(onClick = show, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("レスに戻る") }
+                }
+                TextButton(onClick = { urlLauncher(entry.url) }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("ブラウザで開く") }
+            }
             PromptInfoAction(promptMetadata, Modifier.align(Alignment.BottomStart).padding(16.dp)
                 .onSizeChanged { promptPanelHeightPx = it.height })
             Row(

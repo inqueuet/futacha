@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
@@ -27,9 +28,13 @@ class CatalogWatchAlertRefresher(
     private val stateStore: AppStateStore,
     private val repository: BoardRepository,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val maxConcurrency: Int = 2
+    private val maxConcurrency: Int = 2,
+    private val diagnosticsStore: com.valoser.futacha.shared.compat.CompatibilityStore? = null
 ) {
     private val refreshMutex = Mutex()
+    private var lastStartedBoardId: String? = null
+    private var runTargetNames: List<String> = emptyList()
+    private var runWords: List<String> = emptyList()
 
     /**
      * [onMatchesFound] receives all matches of this run once: when the check
@@ -43,12 +48,33 @@ class CatalogWatchAlertRefresher(
         if (!refreshMutex.tryLock()) {
             throw RefreshAlreadyRunningException()
         }
-        return try {
-            withContext(dispatcher) {
-                refreshLocked(onMatchesFound)
+        var result: CatalogWatchAlertRefreshResult? = null
+        lastStartedBoardId = null
+        runTargetNames = emptyList()
+        runWords = emptyList()
+        var interrupted = true
+        var detected = emptyList<CatalogWatchAlertMatch>()
+        try {
+            result = withContext(dispatcher) {
+                refreshLocked { matches -> detected = matches; onMatchesFound?.invoke(matches) }
             }
+            interrupted = false
+            return result
         } finally {
-            refreshMutex.unlock()
+            try { withContext(NonCancellable) { kotlinx.coroutines.withTimeoutOrNull(1000) { runCatching {
+            diagnosticsStore?.savePreference("compat.background.catalog_watch_cursor", if (interrupted) lastStartedBoardId.orEmpty() else "")
+            com.valoser.futacha.shared.compat.recordWatchRunDiagnostics(diagnosticsStore,
+                com.valoser.futacha.shared.compat.WATCH_RUN_CATALOG_KEY,
+                com.valoser.futacha.shared.compat.WatchRunDiagnostics(
+                    checkedAt = Clock.System.now().toEpochMilliseconds(),
+                    outcome = if (interrupted) "中断" else if (result?.failures.orEmpty().isNotEmpty()) "一部失敗" else "完了",
+                    targets = runTargetNames,
+                    words = runWords,
+                    matchCount = result?.matches?.size ?: detected.size,
+                    failures = result?.failures.orEmpty().map { "${it.boardName}: ${it.message}" },
+                    matchedTitles = (result?.matches ?: detected).map { it.title }
+                ))
+            } } } } finally { refreshMutex.unlock() }
         }
     }
 
@@ -58,7 +84,7 @@ class CatalogWatchAlertRefresher(
     ): CatalogWatchAlertRefreshResult {
         val globalWatchWords = stateStore.watchWords.first()
         val boardWatchWords = stateStore.boardWatchWords.first()
-        val targets = stateStore.boards.first()
+        val originalTargets = stateStore.boards.first()
             .filterNot { it.isMockBoardForWatchAlert() }
             .mapNotNull { board ->
                 val boardKey = resolveBoardWatchWordKey(board)
@@ -75,6 +101,11 @@ class CatalogWatchAlertRefresher(
                     WatchAlertBoardTarget(board, normalizedWatchWords)
                 }
             }
+        val cursor = diagnosticsStore?.preferences?.first()?.get("compat.background.catalog_watch_cursor")
+        val cursorIndex = originalTargets.indexOfFirst { it.board.id == cursor }
+        val targets = if (cursorIndex >= 0) originalTargets.drop(cursorIndex + 1) + originalTargets.take(cursorIndex + 1) else originalTargets
+        runTargetNames = targets.map { it.board.name }
+        runWords = targets.flatMap { it.normalizedWatchWords }.distinct()
         if (targets.isEmpty()) {
             return CatalogWatchAlertRefreshResult()
         }
@@ -84,6 +115,7 @@ class CatalogWatchAlertRefresher(
             .mapTo(mutableSetOf()) { it.watchAlertIdentityKey() }
         val matches = mutableListOf<CatalogWatchAlertMatch>()
         val seenKeys = existingHistoryKeys.toMutableSet()
+        val matchOrder = mutableMapOf<String, Int>()
         val failures = try {
             fetchWatchSourceCatalogs(targets) { source ->
                 val remaining = MAX_WATCH_ALERT_MATCHES_PER_RUN - matches.size
@@ -94,7 +126,11 @@ class CatalogWatchAlertRefresher(
                     .mapNotNull { item -> item.toWatchAlertMatch(source.board, nowMillis) }
                     .filter { match -> seenKeys.add(match.identityKey) }
                     .take(remaining)
-                    .forEach(matches::add)
+                    .forEach { match ->
+                        matchOrder[match.identityKey] = targets.indexOfFirst { it.board.id == source.board.id } * 2 + CatalogMode.watchSourceModes.indexOf(source.mode)
+                        matches.add(match)
+                    }
+                matches.sortBy { matchOrder[it.identityKey] }
             }
         } catch (cancelled: CancellationException) {
             if (matches.isNotEmpty() && onMatchesFound != null) {
@@ -125,11 +161,13 @@ class CatalogWatchAlertRefresher(
             .flatMap { target -> CatalogMode.watchSourceModes.asSequence().map { mode -> target to mode } }
             .iterator()
         val failures = mutableListOf<CatalogWatchAlertFailure>()
+        val collectMutex = Mutex()
         while (requests.hasNext()) {
             val tasks = buildList {
                 var batchSize = 0
                 while (batchSize < concurrency && requests.hasNext()) {
                     val (target, mode) = requests.next()
+                    lastStartedBoardId = target.board.id
                     add(async {
                         val result = runCatching {
                             WatchAlertCatalogSource(
@@ -140,7 +178,10 @@ class CatalogWatchAlertRefresher(
                             )
                         }
                         result.fold(
-                            onSuccess = { WatchAlertCatalogFetchOutcome.Success(it) },
+                            onSuccess = {
+                                collectMutex.withLock { onCatalog(it) }
+                                WatchAlertCatalogFetchOutcome.Success(it)
+                            },
                             onFailure = { error ->
                                 if (error is CancellationException) throw error
                                 WatchAlertCatalogFetchOutcome.Failure(
@@ -159,7 +200,7 @@ class CatalogWatchAlertRefresher(
             }
             tasks.forEach { task ->
                 when (val outcome = task.await()) {
-                    is WatchAlertCatalogFetchOutcome.Success -> onCatalog(outcome.source)
+                    is WatchAlertCatalogFetchOutcome.Success -> Unit
                     is WatchAlertCatalogFetchOutcome.Failure -> failures += outcome.failure
                 }
             }

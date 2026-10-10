@@ -1069,6 +1069,7 @@ internal fun CompatPostScreen(
                 .padding(horizontal = 10.dp, vertical = 0.dp)
                 .padding(bottom = 40.dp)
         ) {
+            com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending, onAttach = ::acceptAttachment)
             // Keep the compact APK spacing while retaining enough vertical
             // room for the label, baseline and IME text.  A fixed 45dp box
             // clips the glyphs on current Material3 fonts.
@@ -1079,6 +1080,7 @@ internal fun CompatPostScreen(
             // comment box, which was visibly different on the reference APK.
             TextField(
                 value = commentValue,
+                visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(commentValue.composition, MaterialTheme.colorScheme.primaryContainer),
                 onValueChange = {
                     if (it.text != commentValue.text) editedDraftFields.add(CompatPostDraftField.COMMENT)
                     // Preserve IME composition while the user is converting
@@ -1130,7 +1132,7 @@ internal fun CompatPostScreen(
                     onVideoPreview = { launchVideoPreview(selected) }
                 )
             }
-            if (postingCapabilities.nameAllowed) TextField(
+            if (postingCapabilities.nameAllowed) com.valoser.futacha.shared.ui.board.ImeTextField(
                 name,
                 { editedDraftFields.add(CompatPostDraftField.NAME); name = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_NAME_MAX_CHARS) },
                 label = { Text("おなまえ", modifier = Modifier.offset(x = (-12).dp)) },
@@ -1139,7 +1141,7 @@ internal fun CompatPostScreen(
                 colors = postTextFieldColors
             )
             Spacer(Modifier.height(10.dp))
-            TextField(
+            com.valoser.futacha.shared.ui.board.ImeTextField(
                 email,
                 { editedDraftFields.add(CompatPostDraftField.EMAIL); email = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_EMAIL_MAX_CHARS) },
                 label = { Text("メール", modifier = Modifier.offset(x = (-12).dp)) },
@@ -1174,7 +1176,7 @@ internal fun CompatPostScreen(
                     )
                 }
             }
-            if (postingCapabilities.subjectAllowed) TextField(
+            if (postingCapabilities.subjectAllowed) com.valoser.futacha.shared.ui.board.ImeTextField(
                 subject,
                 { editedDraftFields.add(CompatPostDraftField.SUBJECT); subject = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_SUBJECT_MAX_CHARS) },
                 label = { Text("題名", modifier = Modifier.offset(x = (-12).dp)) },

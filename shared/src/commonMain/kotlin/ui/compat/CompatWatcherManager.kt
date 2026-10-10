@@ -31,6 +31,8 @@ internal fun CompatWatcherManager(
     val boards by store.boards.collectAsState(emptyList())
     val rules = remember(preferences) { compatWatchRules(preferences) }
     val scope = rememberCoroutineScope()
+    var diagnosticsOpen by remember { mutableStateOf(false) }
+    if (diagnosticsOpen) WatchDiagnosticsDialog(store, repository, onDismiss = { diagnosticsOpen = false })
     val watcher = remember(store) { CompatWatcherRepository(store) }
     var word by remember { mutableStateOf("") }
     var boardKey by remember { mutableStateOf<String?>(null) }
@@ -70,6 +72,7 @@ internal fun CompatWatcherManager(
                 Text("キーワードを含むカタログのタイトルを探します。結果は${resultsLocation ?: "ドロワーの「巡回」"}に保存され、開いたスレッドだけが閲覧履歴に入ります。")
                 Text("標準はアプリ内巡回です。にじろぐのインストールや起動は不要です。自動巡回は画面を閉じてもOSの判断で実行されますが、省電力・強制停止などで遅延・停止します。")
                 onOpenHelp?.let { openHelp -> TextButton(onClick = openHelp) { Text("履歴・巡回のヘルプ") } }
+                TextButton(onClick = { diagnosticsOpen = true }) { Text("監視の確認状況") }
                 Text("1. キーワードと板を選んで追加　2. 今すぐ巡回　3. ${resultsLocation ?: "ドロワーの巡回"}で結果を確認")
                 Row {
                     Checkbox(preferences[COMPAT_WATCH_ENABLED_KEY] != "OFF", enabled = !busy,

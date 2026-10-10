@@ -12,6 +12,48 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FutaberReadAloudTest {
+    @Test fun liveReadingWaitsEvenWhenThereIsNoReadableInitialBody() = runBlocking {
+        val engine = FakeEngine()
+        val initial = listOf(post("1", "&gt;引用だけ"))
+        var polls = 0
+        val reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
+        reader.start(initial, 0, loadNewPosts = {
+            if (++polls == 1) initial + post("2", "新着本文") else null
+        }) {}
+        reader.awaitIdle()
+        assertEquals(listOf("新着本文"), engine.spoken)
+        assertEquals(2, polls)
+        assertFalse(reader.isReading)
+    }
+
+    @Test fun liveReadingReadsOnlyNewPostNumbersAndStopsWhenThreadIsGone() = runBlocking {
+        val engine = FakeEngine()
+        var polls = 0
+        val reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
+        reader.start(posts, 0, loadNewPosts = {
+            polls++
+            if (polls <= 2) posts + listOf(post("6", "六番目"), post("6", "六番目")) else null
+        }) {}
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "五番目", "六番目"), engine.spoken)
+        assertEquals(3, polls)
+        assertEquals("スレッドが落ちています", reader.message)
+        assertFalse(reader.isReading)
+    }
+
+    @Test fun stoppingWhileWaitingCancelsTheRequestAndKeepsItFromSpeakingLater() = runBlocking {
+        val engine = FakeEngine()
+        val entered = CompletableDeferred<Unit>()
+        val reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
+        reader.start(posts, 0, loadNewPosts = { entered.complete(Unit); kotlinx.coroutines.awaitCancellation() }) {}
+        entered.await()
+        reader.stop()
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "五番目"), engine.spoken)
+        assertFalse(reader.isReading)
+        reader.dispose()
+    }
+
     private class FakeEngine(val failOn: String? = null, val blockOn: String? = null) : FutaberSpeechEngine {
         val spoken = mutableListOf<String>()
         var prepared = 0

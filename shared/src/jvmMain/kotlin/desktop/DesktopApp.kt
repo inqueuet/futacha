@@ -58,7 +58,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         cookieRepository = cookieRepository, diagnosticFileSystem = fileSystem,
         catalogFetchSettingsProvider = { CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized() })
     val refresher = HistoryRefresher(stateStore, repository, Dispatchers.IO, autoSaved, httpClient, fileSystem)
-    private val watchRefresher = CatalogWatchAlertRefresher(stateStore, repository, Dispatchers.IO)
+    private val watchRefresher = CatalogWatchAlertRefresher(stateStore, repository, Dispatchers.IO, diagnosticsStore = compatibility)
     private val watchNotifications = DesktopWatchNotifications(File(environment.dataDirectory, "watch-notifications.tsv"))
     var initialized by mutableStateOf(false)
         private set

@@ -64,6 +64,7 @@ internal fun VideoPreviewDialog(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     onSave: (() -> Unit)? = null,
+    onShowPost: (() -> Unit)? = null,
     isSaveEnabled: Boolean = true,
     isSaveInProgress: Boolean = false
 ) {
@@ -153,6 +154,12 @@ internal fun VideoPreviewDialog(
                 isMuted = isMuted,
                 onPlaybackError = { playbackError = it }
             )
+            Row(Modifier.align(Alignment.TopCenter).padding(top = 76.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                onShowPost?.let { show ->
+                    TextButton(onClick = show, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("レスに戻る") }
+                }
+                TextButton(onClick = { urlLauncher(entry.url) }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("ブラウザで開く") }
+            }
             // Show the already small thread thumbnail while the player prepares
             // metadata/network. Playback remains paused until the user taps the
             // native controls.

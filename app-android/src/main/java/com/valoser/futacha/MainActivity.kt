@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) receiveSharedAttachment(intent)
         val app = application as? FutachaApplication
         inAppUpdateController = AndroidInAppUpdateController(
             activity = this,
@@ -701,8 +702,35 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private var incomingAttachmentJob: kotlinx.coroutines.Job? = null
+
+    @Suppress("DEPRECATION")
+    private fun receiveSharedAttachment(incoming: Intent?) {
+        if (incoming?.action != Intent.ACTION_SEND ||
+            !(incoming.type?.startsWith("image/") == true || incoming.type?.startsWith("video/") == true)) return
+        val uri = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                incoming.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
+            } else {
+                incoming.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? android.net.Uri
+            }
+        }.getOrNull() ?: return
+        if (uri.scheme != "content") return
+        incomingAttachmentJob?.cancel()
+        incomingAttachmentJob = lifecycleScope.launch {
+            val image = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.valoser.futacha.shared.util.readImageDataFromUri(this@MainActivity, uri, 32_000_000L)
+            }
+            if (image != null) com.valoser.futacha.shared.ui.board.IncomingSharedAttachment.offer(image)
+            android.widget.Toast.makeText(this@MainActivity,
+                if (image != null) "書き込み画面で「共有された画像を添付」を選んでください"
+                else "共有された画像を読み込めませんでした（上限32MB）", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        receiveSharedAttachment(intent)
         val ai = intent.futachaAiDeepLinkOrNull()
         val thread = intent.futabaThreadDeepLinkOrNull()
         if (ai == null && thread == null) return

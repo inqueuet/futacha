@@ -17,6 +17,39 @@ class CompatBackgroundRefresherRotationTest {
     private fun tab(key: String) = CompatTab(key, "u$key", "u$key", "b", "板", key, "スレ",
         insertedAtEpochMillis = 1L, contentUpdatedAtEpochMillis = 1L)
 
+    @Test fun watchCatalogTimeoutContinuesAtTheNextBoardAndKeepsDiagnostics() = runBlocking {
+        val root = Files.createTempDirectory("futacha-watch-rotation").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            val first = "https://may.2chan.net/b/"
+            val second = "https://img.2chan.net/b/"
+            store.importModernBoards(listOf(BoardSummary("may", "may", "", first, ""), BoardSummary("img", "img", "", second, "")))
+            CompatWatcherRepository(store).saveRules(listOf(CompatWatchRule("猫")))
+            val ordered = store.boards.first().sortedBy { it.key }
+            val calls = mutableListOf<String>()
+            var slow = true
+            val repository = object : BoardRepository by FakeBoardRepository() {
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> {
+                    calls += board
+                    if (slow) delay(60_000)
+                    return listOf(CatalogItem("333", board + "res/333.htm", "猫のスレ", null, null, replyCount = 1))
+                }
+                override suspend fun probeThreadGone(threadUrl: String) = false
+            }
+            refreshCompatTabsInBackground(store, repository, checkUpdates = false, checkExistence = false,
+                checkWatchWords = true, budgetMillis = 600)
+            assertEquals(ordered.first().originalUrl, calls.first())
+            assertNotNull(decodeWatchRunDiagnostics(store.preferences.first()[WATCH_RUN_CRAWL_KEY]))
+            calls.clear(); slow = false
+            val next = refreshCompatTabsInBackground(store, repository, checkUpdates = false, checkExistence = false,
+                checkWatchWords = true, budgetMillis = 3000)
+            assertEquals(ordered[1].originalUrl, calls.first())
+            assertTrue(next.newWatchMatches.isNotEmpty())
+            assertTrue(store.history.first().isEmpty())
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
     @Test fun rotationContinuesAfterTheCursorAndWraps() {
         val tabs = listOf("c", "a", "e", "b", "d").map(::tab)
         assertEquals(listOf("a", "b"), compatRotatedBackgroundTabs(tabs, null, 2).map(CompatTab::key))

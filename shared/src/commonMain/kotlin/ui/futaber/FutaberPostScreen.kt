@@ -108,6 +108,8 @@ internal fun FutaberPostScreen(
     onClose: () -> Unit
 ) {
     val colors = LocalFutaberColors.current
+    val commentIme = com.valoser.futacha.shared.ui.board.rememberStableTextInputState(comment, onCommentChange)
+    val subjectIme = com.valoser.futacha.shared.ui.board.rememberStableTextInputState(subject, { onSubjectChange(it.futaberTakeChars(FUTABER_DRAFT_MAX_SUBJECT_CHARS)) })
     val scope = rememberCoroutineScope()
     // Not saved with the screen: after a re-creation or process death no post is in flight any more, and a saved `true`
     // would leave the screen locked behind its "sending" cover.
@@ -179,6 +181,8 @@ internal fun FutaberPostScreen(
             .testTag("futaber-post-screen")
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding().navigationBarsPadding()) {
+            com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending,
+                onAttach = { attachment.offer(it, capabilities, isReply) })
             Row(
                 Modifier.fillMaxWidth().height(FUTABER_TOP_BAR_HEIGHT_DP.dp)
                     .then(
@@ -225,8 +229,9 @@ internal fun FutaberPostScreen(
             HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
             if (isCreate) {
                 BasicTextField(
-                    value = subject,
-                    onValueChange = { onSubjectChange(it.futaberTakeChars(FUTABER_DRAFT_MAX_SUBJECT_CHARS)) },
+                    value = subjectIme.value,
+                    onValueChange = subjectIme.onValueChange,
+                    visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(subjectIme.value.composition, colors.catalogGap),
                     singleLine = true,
                     textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontWeight = FontWeight.Medium),
                     cursorBrush = SolidColor(colors.accent),
@@ -241,8 +246,9 @@ internal fun FutaberPostScreen(
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 BasicTextField(
-                    value = comment,
-                    onValueChange = onCommentChange,
+                    value = commentIme.value,
+                    onValueChange = commentIme.onValueChange,
+                    visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(commentIme.value.composition, colors.catalogGap),
                     enabled = !sending,
                     textStyle = TextStyle(color = colors.body, fontSize = 16.sp),
                     cursorBrush = SolidColor(colors.accent),
@@ -453,6 +459,14 @@ internal fun FutaberPostSettingsDialog(
     var email by remember { mutableStateOf(settings.email) }
     var key by remember { mutableStateOf(deleteKey) }
     var confirmBeforeSend by remember { mutableStateOf(settings.confirmBeforeSend) }
+    val nameIme = com.valoser.futacha.shared.ui.board.rememberStableTextInputState(name, {
+        name = it.futaberTakeChars(60)
+        onSettingsChange(name, email, confirmBeforeSend)
+    })
+    val emailIme = com.valoser.futacha.shared.ui.board.rememberStableTextInputState(email, {
+        email = it.futaberTakeChars(60)
+        onSettingsChange(name, email, confirmBeforeSend)
+    })
     FutachaAppLockAwareWindow {
         AlertDialog(
             onDismissRequest = onDismiss,
@@ -464,21 +478,17 @@ internal fun FutaberPostSettingsDialog(
                 // Scrolls when the dialog does not fit (a landscape screen, large text).
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = name,
-                        onValueChange = {
-                            name = it.futaberTakeChars(60)
-                            onSettingsChange(name, email, confirmBeforeSend)
-                        },
+                        value = nameIme.value,
+                        onValueChange = nameIme.onValueChange,
+                        visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(nameIme.value.composition, colors.catalogGap),
                         label = { Text("名前") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("futaber-post-name")
                     )
                     OutlinedTextField(
-                        value = email,
-                        onValueChange = {
-                            email = it.futaberTakeChars(60)
-                            onSettingsChange(name, email, confirmBeforeSend)
-                        },
+                        value = emailIme.value,
+                        onValueChange = emailIme.onValueChange,
+                        visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(emailIme.value.composition, colors.catalogGap),
                         label = { Text("メール") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("futaber-post-email")

@@ -517,6 +517,7 @@ internal fun compatPostQuotesOwnPost(
 internal fun CompatPostRow(
     post: CompatPostSnapshot,
     ownPostNos: Set<String> = emptySet(),
+    manuallyMarked: Boolean = false,
     deletionSummary: String? = null,
     fontSize: Int,
     thumbnailSize: Int,
@@ -733,6 +734,7 @@ internal fun CompatPostRow(
         newReplyCount?.takeIf { it > 0 }?.let { count ->
             CompatNewRepliesDivider(count, Modifier.testTag("compat-new-replies-divider"))
         }
+        if (manuallyMarked) Text("★ マーク", color = MaterialTheme.colorScheme.onSurface, fontSize = fontSize.sp)
         Row(
             modifier = Modifier.fillMaxWidth().combinedClickable(
                 onClick = if (relatedTap) relatedClick else onHeaderClick,
