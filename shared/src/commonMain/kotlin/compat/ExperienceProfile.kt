@@ -62,9 +62,12 @@ enum class ExperienceProfile(
 ) {
     FUTACHA("futacha", "ふたちゃモード", ProfileDataOwner.APP_STATE, ModeAvailability.RELEASED),
     TOSHIAKI_COMPAT("toshiaki_compat", "としあき(仮)モード", ProfileDataOwner.COMPAT_STORE, ModeAvailability.RELEASED),
-    FUTABER("futaber", "ふたばー風モード", ProfileDataOwner.APP_STATE, ModeAvailability.MOBILE);
+    FUTABER("futaber", "ふたばー風モード", ProfileDataOwner.APP_STATE, ModeAvailability.MOBILE),
 
-    /** True when the mode edits the AppStateStore boards/history (ふたちゃ, ふたばー). */
+    /** 開発中は PREVIEW（デバッグ版だけ）だった。2026-10-14に MOBILE へ（docs/ftutter-mode-implementation-plan-2026-10-13.md）。 */
+    FTUTTER("ftutter", "ふたったー風モード", ProfileDataOwner.APP_STATE, ModeAvailability.MOBILE);
+
+    /** True when the mode edits the AppStateStore boards/history (ふたちゃ, ふたばー, ふたったー). */
     val usesAppStateData: Boolean get() = dataOwner == ProfileDataOwner.APP_STATE
 
     val isSelectable: Boolean

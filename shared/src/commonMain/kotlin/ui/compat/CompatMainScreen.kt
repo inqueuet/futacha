@@ -501,7 +501,11 @@ internal fun CompatMainScreen(
     onBoardSelected: (CompatBoard) -> Unit,
     onBoardUpsert: (CompatBoard) -> Unit,
     onBoardDelete: (CompatBoard) -> Unit,
-    onBoardsReordered: (List<CompatBoard>) -> Unit
+    onBoardsReordered: (List<CompatBoard>) -> Unit,
+    /** Boards pinned in the shared AppState; shown as a small pin beside the name. Empty without a state store. */
+    pinnedBoardKeys: Set<String> = emptySet(),
+    /** Null where the pin cannot be saved (no state store): the long-press menu then has no pin entry. */
+    onBoardPinToggle: ((CompatBoard) -> Unit)? = null
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
     var reorderMode by remember { mutableStateOf(false) }
@@ -630,7 +634,11 @@ internal fun CompatMainScreen(
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(board.name, fontSize = 18.sp, maxLines = 1)
+                            if (board.key in pinnedBoardKeys) {
+                                CompatPinnedBoardName(board.name)
+                            } else {
+                                Text(board.name, fontSize = 18.sp, maxLines = 1)
+                            }
                             Text(board.canonicalUrl, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Clip)
                         }
                         if (reorderMode) {
@@ -757,10 +765,14 @@ internal fun CompatMainScreen(
     contextBoard?.let { board ->
         CompatLegacyChoiceDialog(
             onDismiss = { contextBoard = null },
-            choices = listOf("名前を変更", "削除する"),
+            choices = compatBoardContextChoices(board.key in pinnedBoardKeys, onBoardPinToggle != null),
             onChoice = { choice ->
                 contextBoard = null
-                if (choice == "名前を変更") editingBoard = board else deletingBoard = board
+                when (choice) {
+                    "名前を変更" -> editingBoard = board
+                    COMPAT_BOARD_PIN_CHOICE, COMPAT_BOARD_UNPIN_CHOICE -> onBoardPinToggle?.invoke(board)
+                    else -> deletingBoard = board
+                }
             }
         )
     }

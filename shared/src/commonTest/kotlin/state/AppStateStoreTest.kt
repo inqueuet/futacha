@@ -106,6 +106,33 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun seedIfEmpty_removesBoardsStoredMoreThanOnce() = runBlocking {
+        // 2026-10-13 全体検証 7.6: the iOS Simulator had six copies of the tutorial imported from the shared store,
+        // and ふたちゃ's board list crashed on the repeated key. The start removes them and saves the repaired list.
+        val tutorialCopy = BoardSummary(
+            id = "compat_board_da40da0736865b28",
+            name = "チュートリアル＠ふたちゃ",
+            category = "互換モード",
+            url = "https://www.example.com/t/futaba.php",
+            description = "https://img.2chan.net/t/"
+        )
+        val may = BoardSummary("may", "may", "", "https://may.2chan.net/b/", "", pinned = true)
+        val stored = List(6) { tutorialCopy } + may + may.copy(id = "may-copy", url = "https://may.2chan.net/b/futaba.php")
+        val storage = FakePlatformStateStorage().apply {
+            boardsState.value = json.encodeToString(ListSerializer(BoardSummary.serializer()), stored)
+        }
+        val store = AppStateStore(storage)
+
+        store.seedIfEmpty(AppStateSeedDefaults(boards = emptyList(), history = emptyList()))
+
+        assertEquals(listOf(tutorialCopy, may), store.boards.first())
+        assertEquals(
+            listOf(tutorialCopy, may),
+            json.decodeFromString(ListSerializer(BoardSummary.serializer()), storage.boardsState.value!!)
+        )
+    }
+
+    @Test
     fun setBoards_recordsStorageErrorWhenPersistenceFails() = runBlocking {
         val storage = FakePlatformStateStorage().apply {
             failBoardsUpdate = true

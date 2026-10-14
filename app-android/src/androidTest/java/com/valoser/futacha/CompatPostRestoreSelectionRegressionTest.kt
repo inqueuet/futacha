@@ -71,7 +71,9 @@ class CompatPostRestoreSelectionRegressionTest {
     }
 
     private fun showScreen(delayDraft: Boolean = false) {
-        val boardUrl = "https://img.2chan.net/b/"
+        // A board whose reply form has a name field: since 12.4 the img board hides "おなまえ"
+        // (BoardPostingCapabilities.nameAllowed), and these tests edit that field.
+        val boardUrl = "https://may.2chan.net/b/"
         val board = CompatBoard("diagnostic-board", "diagnostic", boardUrl, boardUrl, 0)
         val url = "${boardUrl}res/123.htm"
         val tab = CompatTab("diagnostic-tab", url, url, board.key, board.name, "123", "diagnostic", insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1)

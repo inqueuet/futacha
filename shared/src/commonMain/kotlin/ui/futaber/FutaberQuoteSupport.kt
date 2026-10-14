@@ -8,7 +8,14 @@ internal enum class FutaberQuoteKind(val label: String) {
     Source("引用元"),
 
     /** The posts that quote the tapped post. */
-    Replies("返信先")
+    Replies("返信先"),
+
+    /** The long-pressed post, the posts it quotes and the posts quoting it (the post detail extension). */
+    Related("関連レス"),
+
+    /** The posts whose header shows the same ID / IP (the post detail extension). */
+    SameId("同じIDのレス"),
+    SameIp("同じIPのレス")
 }
 
 /** Root-coordinate bounds of the line or counter that was tapped (px). */

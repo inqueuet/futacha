@@ -157,7 +157,15 @@ internal fun FutaberCatalogScreen(
     /** Kept by the caller so the list, the scroll and the search survive a thread being opened over the catalog. */
     view: FutaberCatalogViewState = remember(board.id, sortMode) { FutaberCatalogViewState() },
     search: FutaberCatalogSearchState = remember(board.id) { FutaberCatalogSearchState() },
-    tabStrip: @Composable () -> Unit = {}
+    tabStrip: @Composable () -> Unit = {},
+    /** B7a (FutaberParityB7a.kt): "そ順" / "監視" in the sort menu, and the words "監視" fetches with. */
+    extraSorts: Boolean = false,
+    watchWords: List<String> = emptyList(),
+    /** B7a: the watch-word badges / order and the reply priority; null leaves the list as it is. */
+    projection: FutaberCatalogProjection? = null,
+    /** B7a: rows added to the refresh button's sheet, and going back several reloads at once. */
+    refreshActions: List<FutaberPostAction> = emptyList(),
+    perGenerationBack: Boolean = false
 ) {
     val colors = LocalFutaberColors.current
     val display = LocalFutaberDisplaySettings.current
@@ -186,7 +194,7 @@ internal fun FutaberCatalogScreen(
         view.lastAttemptKey = key
         view.load = view.load.copy(isLoading = true, errorMessage = null)
         try {
-            val page = repository.getCatalogPage(board.url, sortMode)
+            val page = futaberFetchCatalogPage(repository, board.url, sortMode, watchWords)
             view.history = futaberCatalogHistoryAfterLoad(view.history, view.load.items, page.items)
             view.load = FutaberCatalogLoad(items = page.items, isLoading = false)
             view.fetchedKey = key
@@ -249,10 +257,12 @@ internal fun FutaberCatalogScreen(
     val ngVisibleItems = remember(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds) {
         futaberApplyCatalogRules(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds)
     }
-    val titleKeys = remember(ngVisibleItems) { futaberCatalogTitleKeys(ngVisibleItems) }
+    // The B7a reordering (watch words first, few replies later / hidden) runs once per list, before the search.
+    val projected = remember(ngVisibleItems, projection) { futaberProjectCatalog(ngVisibleItems, projection) }
+    val titleKeys = remember(projected) { futaberCatalogTitleKeys(projected.items) }
     val appliedQuery = rememberFutaberDebouncedQuery(query)
-    val visibleItems = remember(ngVisibleItems, titleKeys, appliedQuery) {
-        filterFutaberCatalogByKeys(ngVisibleItems, titleKeys, appliedQuery)
+    val visibleItems = remember(projected, titleKeys, appliedQuery) {
+        filterFutaberCatalogByKeys(projected.items, titleKeys, appliedQuery)
     }
     // "消えたスレ" lists the threads that left the catalog, without the ones the person has hidden since.
     val droppedItems = remember(view.history.dropped, catalogNgWords, catalogNgIndex, phashHiddenIds) {
@@ -265,9 +275,12 @@ internal fun FutaberCatalogScreen(
         HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
+                // The board's reply-priority setting is still being read: wait rather than show another order first.
+                projection?.ready == false -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = colors.accent)
                 visibleItems.isNotEmpty() -> FutaberCatalogList(
                     visibleItems, displayStyle, view, onOpenThread,
-                    onLongPress = if (longPressActions != null) { item -> sheetItem = item } else null
+                    onLongPress = if (longPressActions != null) { item -> sheetItem = item } else null,
+                    badges = projected.badges
                 )
                 load.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = colors.accent)
                 load.errorMessage != null -> FutaberMessage(
@@ -276,7 +289,7 @@ internal fun FutaberCatalogScreen(
                     onAction = { view.refreshTick += 1 }
                 )
                 appliedQuery.isNotEmpty() -> FutaberMessage("「$appliedQuery」に一致するスレッドはありません")
-                else -> FutaberMessage("スレッドがありません")
+                else -> FutaberMessage(futaberWatchModeEmptyMessage(sortMode, watchWords) ?: "スレッドがありません")
             }
             if (searchOpen && query.isNotBlank() && archiveHttpClient != null && archiveQuery == null) {
                 FutaberArchiveSearchPill(query, onClick = { focusManager.clearFocus(); archiveQuery = query }, modifier = Modifier.align(Alignment.BottomEnd))
@@ -310,6 +323,7 @@ internal fun FutaberCatalogScreen(
             FutaberCatalogBottomBar(
                 displayStyle = displayStyle,
                 sortMode = sortMode,
+                sorts = futaberCatalogSortsFor(extraSorts),
                 onDisplayStyleChange = onDisplayStyleChange,
                 onSortChange = onSortChange,
                 onSearch = { search.open = true },
@@ -331,20 +345,17 @@ internal fun FutaberCatalogScreen(
     if (refreshSheet) {
         FutaberPostActionSheet(
             title = "カタログ",
-            actions = listOf(
-                // Not while a reload is running: its result would replace the list that was just brought back.
-                FutaberPostAction(
-                    "catalog-back", "更新前のカタログに戻す", enabled = view.history.earlier.isNotEmpty() && !load.isLoading
-                ) {
-                    refreshSheet = false
-                    futaberCatalogGoBack(view.history)?.let { (items, rest) ->
-                        view.history = rest
-                        view.load = view.load.copy(items = items)
-                    }
-                },
+            // Not while a reload is running: its result would replace the list that was just brought back.
+            actions = futaberCatalogBackActions(
+                view.history, load.isLoading, perGenerationBack, history = { view.history }, onClose = { refreshSheet = false }
+            ) { items, rest ->
+                view.history = rest
+                view.load = view.load.copy(items = items)
+            } + listOf(
                 FutaberPostAction(
                     "catalog-dropped", "消えたスレ（${droppedItems.size}件）", enabled = droppedItems.isNotEmpty()
-                ) { refreshSheet = false; droppedSheet = true },
+                ) { refreshSheet = false; droppedSheet = true }
+            ) + refreshActions.map { action -> action.copy(onClick = { refreshSheet = false; action.onClick() }) } + listOf(
                 FutaberPostAction("cancel", "キャンセル") { refreshSheet = false }
             ),
             onDismiss = { refreshSheet = false },
@@ -352,7 +363,8 @@ internal fun FutaberCatalogScreen(
         )
     }
     if (droppedSheet) {
-        // The sheet is not scrollable, so the newest few are listed; a tap opens the thread (an archive shows it if it fell off).
+        // Every thread the catalog remembers as gone (as many as the heading counts) is listed, newest first; the sheet scrolls.
+        // A tap opens the thread (an archive shows it if it fell off).
         FutaberPostActionSheet(
             title = "消えたスレ（新しい順）",
             actions = droppedItems.take(FUTABER_DROPPED_SHEET_MAX).map { item ->
@@ -416,6 +428,7 @@ private fun FutaberCatalogTopBar(
 private fun FutaberCatalogBottomBar(
     displayStyle: FutaberCatalogDisplayStyle,
     sortMode: CatalogMode,
+    sorts: List<FutaberCatalogSort>,
     onDisplayStyleChange: (FutaberCatalogDisplayStyle) -> Unit,
     onSortChange: (CatalogMode) -> Unit,
     onSearch: () -> Unit,
@@ -458,12 +471,12 @@ private fun FutaberCatalogBottomBar(
         }
         Box {
             IconButton(onClick = { sortMenu = true }, modifier = Modifier.testTag("futaber-sort")) {
-                val label = futaberCatalogSorts.firstOrNull { it.mode == sortMode }?.label ?: "通常"
+                val label = sorts.firstOrNull { it.mode == sortMode }?.label ?: "通常"
                 FutaberIcon(Icons.Outlined.BarChart, contentDescription = "ソート（現在: $label）", tint = colors.icon)
             }
             DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                 FutaberMenuTitle("表示順序")
-                futaberCatalogSorts.forEach { sort ->
+                sorts.forEach { sort ->
                     DropdownMenuItem(
                         text = {
                             Text(
@@ -524,7 +537,7 @@ private fun FutaberSearchBar(
                 value = query,
                 onValueChange = onQueryChange,
                 singleLine = true,
-                textStyle = TextStyle(color = colors.body, fontSize = 15.sp),
+                textStyle = TextStyle(color = colors.body, fontSize = 15.sp, fontFamily = LocalFutaberCustomFont.current),
                 cursorBrush = SolidColor(colors.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 // The search key puts the keyboard away (the list is already filtered as typed).
@@ -550,10 +563,11 @@ private fun FutaberCatalogList(
     style: FutaberCatalogDisplayStyle,
     view: FutaberCatalogViewState,
     onOpenThread: (CatalogItem) -> Unit,
-    onLongPress: ((CatalogItem) -> Unit)?
+    onLongPress: ((CatalogItem) -> Unit)?,
+    badges: Map<String, String> = emptyMap()
 ) {
     val colors = LocalFutaberColors.current
-    val columns = style.columns
+    val columns = futaberCatalogColumns(style, LocalFutaberDisplaySettings.current.catalogFine)
     val scrollToTopTick = view.scrollToTopTick
     if (columns != null) {
         val state = view.gridState
@@ -569,7 +583,7 @@ private fun FutaberCatalogList(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            gridItems(items, key = { it.id }) { item -> FutaberGridCell(item, columns, onOpenThread, onLongPress) }
+            gridItems(items, key = { it.id }) { item -> FutaberGridCell(item, columns, onOpenThread, onLongPress, badges[item.id]) }
         }
     } else {
         val state = view.listState
@@ -578,7 +592,7 @@ private fun FutaberCatalogList(
         }
         LazyColumn(Modifier.fillMaxSize().testTag("futaber-catalog-list"), state = state) {
             items(items, key = { it.id }) { item ->
-                FutaberRowCell(item, style.titleLines, onOpenThread, onLongPress)
+                FutaberRowCell(item, style.titleLines, onOpenThread, onLongPress, badges[item.id])
                 HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
             }
         }
@@ -586,7 +600,9 @@ private fun FutaberCatalogList(
 }
 
 @Composable
-private fun FutaberGridCell(item: CatalogItem, columns: Int, onOpen: (CatalogItem) -> Unit, onLongPress: ((CatalogItem) -> Unit)?) {
+private fun FutaberGridCell(
+    item: CatalogItem, columns: Int, onOpen: (CatalogItem) -> Unit, onLongPress: ((CatalogItem) -> Unit)?, badge: String? = null
+) {
     val haptic = rememberFutaberLongPressHaptic()
     val colors = LocalFutaberColors.current
     val titleSize = if (columns >= 6) 10.sp else 12.sp
@@ -602,19 +618,25 @@ private fun FutaberGridCell(item: CatalogItem, columns: Int, onOpen: (CatalogIte
             .semantics { contentDescription = "$title、${item.replyCount}レス" }
             .testTag("futaber-catalog-item")
     ) {
-        CatalogPreviewImage(
-            thumbnailUrl = item.thumbnailUrl,
-            fullImageUrl = item.fullImageUrl,
-            targetSizePx = 250,
-            contentDescription = "",
-            modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(colors.catalogGap),
-            fallbackTint = colors.meta
-        )
-        Row(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title, color = colors.body, fontSize = titleSize, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+        Box {
+            CatalogPreviewImage(
+                thumbnailUrl = item.thumbnailUrl,
+                fullImageUrl = item.fullImageUrl,
+                targetSizePx = 250,
+                contentDescription = "",
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(colors.catalogGap),
+                fallbackTint = colors.meta
             )
+            FutaberCatalogWatchBadge(badge, Modifier.align(Alignment.TopStart))
+        }
+        val fine = LocalFutaberDisplaySettings.current.catalogFine
+        Row(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            // C06 (FutaberParityB9.kt): the title's lines and letters; with nothing set, one line as before.
+            val shownTitle = futaberGridTitle(title, fine)
+            if (shownTitle != null) Text(
+                shownTitle, color = colors.body, fontSize = titleSize, maxLines = fine.gridTitleLines,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+            ) else androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
             Text(
                 item.replyCount.toString(), color = colors.accent, fontSize = titleSize,
                 fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 3.dp)
@@ -624,7 +646,9 @@ private fun FutaberGridCell(item: CatalogItem, columns: Int, onOpen: (CatalogIte
 }
 
 @Composable
-private fun FutaberRowCell(item: CatalogItem, titleLines: Int, onOpen: (CatalogItem) -> Unit, onLongPress: ((CatalogItem) -> Unit)?) {
+private fun FutaberRowCell(
+    item: CatalogItem, titleLines: Int, onOpen: (CatalogItem) -> Unit, onLongPress: ((CatalogItem) -> Unit)?, badge: String? = null
+) {
     val haptic = rememberFutaberLongPressHaptic()
     val colors = LocalFutaberColors.current
     val title = futaberCatalogTitle(item)
@@ -643,14 +667,17 @@ private fun FutaberRowCell(item: CatalogItem, titleLines: Int, onOpen: (CatalogI
             .testTag("futaber-catalog-item"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CatalogPreviewImage(
-            thumbnailUrl = item.thumbnailUrl,
-            fullImageUrl = item.fullImageUrl,
-            targetSizePx = 250,
-            contentDescription = "",
-            modifier = Modifier.size(thumbSize).background(colors.catalogGap),
-            fallbackTint = colors.meta
-        )
+        Box {
+            CatalogPreviewImage(
+                thumbnailUrl = item.thumbnailUrl,
+                fullImageUrl = item.fullImageUrl,
+                targetSizePx = 250,
+                contentDescription = "",
+                modifier = Modifier.size(thumbSize).background(colors.catalogGap),
+                fallbackTint = colors.meta
+            )
+            FutaberCatalogWatchBadge(badge, Modifier.align(Alignment.TopStart))
+        }
         Text(
             title, color = colors.body, fontSize = 13.sp, maxLines = lines,
             overflow = TextOverflow.Ellipsis,
@@ -689,4 +716,5 @@ private fun FutaberMenuTitle(text: String) {
     HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
 }
 
-private const val FUTABER_DROPPED_SHEET_MAX = 8
+/** As many as the catalog remembers, so the list is as long as the number in the menu says. */
+private const val FUTABER_DROPPED_SHEET_MAX = FUTABER_CATALOG_DROPPED_MAX

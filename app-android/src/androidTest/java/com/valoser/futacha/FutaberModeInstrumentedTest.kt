@@ -97,6 +97,8 @@ class FutaberModeInstrumentedTest {
             app.appStateStore.setLastUsedDeleteKey(originalDeleteKey)
             app.appStateStore.updateHistory { list -> list.filterNot { it.threadId == "1234567890" || it.threadId == "999001" } }
             app.compatibilityStore.savePreferences(futaberKeys.associateWith { null })
+            // The media features are shared by every mode and start off; a test that switched one on puts it back.
+            app.appStateStore.updateMediaFeatureSettings { com.valoser.futacha.shared.media.MediaFeatureSettings.Disabled }
         }
         switchProfile(originalProfile)
     }
@@ -243,6 +245,8 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-ng-empty").assertIsDisplayed()
         rule.onNodeWithTag("futaber-ng-input").performTextInput("チュートリアル")
         rule.onNodeWithTag("futaber-ng-add").performClick()
+        // Adding and removing go through the store; the list follows when the saved value comes back.
+        waitForTag("futaber-ng-delete", 5_000)
         rule.onNodeWithTag("futaber-ng-delete").assertIsDisplayed()
         // 件数が行に出る。
         rule.onNodeWithTag("futaber-settings-back").performClick()
@@ -257,6 +261,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-settings-row-ng").performClick()
         rule.onNodeWithTag("futaber-settings-row-ng-catalog-words").performClick()
         rule.onNodeWithTag("futaber-ng-delete").performClick()
+        waitForTag("futaber-ng-empty", 5_000)
         rule.onNodeWithTag("futaber-ng-empty").assertIsDisplayed()
         rule.onNodeWithTag("futaber-settings-back").performClick()
         rule.onNodeWithTag("futaber-settings-back").performClick()
@@ -519,6 +524,73 @@ class FutaberModeInstrumentedTest {
         capture("48-menu-without-extensions")
     }
 
+    @Test fun theMediaSettingsPageHasItsPartsAndTheEditEntriesAppearInTheMenuOnlyWhileTheEditorsAreOn() {
+        openTutorialCatalog()
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        // By default the operation menu is the original app's: no editor entries.
+        rule.onNodeWithTag("futaber-thread-menu").performClick()
+        waitForTag("futaber-operation-menu")
+        assertTrue(rule.onAllNodesWithTag("futaber-menu-image-edit").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithTag("futaber-menu-video-edit").fetchSemanticsNodes().isEmpty())
+        dismissOperationMenu()
+        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        waitForTag("futaber-catalog-item")
+
+        // The settings row opens a page of this mode with the four parts (it used to open an empty shared page).
+        rule.onNodeWithTag("futaber-open-settings").performClick()
+        waitForTag("futaber-settings")
+        rule.onNodeWithTag("futaber-settings-row-media").performScrollTo().performClick()
+        waitForTag("futaber-media-settings")
+        listOf("prompt-settings-toggle", "image-editor-settings-toggle", "video-editor-settings-toggle", "media-help-open").forEach { tag ->
+            rule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        }
+        capture("media-settings-page")
+        val settings = { runBlocking { app.appStateStore.mediaFeatureSettings.first() } }
+        assertTrue(!settings().imageEditorEnabled && !settings().videoEditorEnabled && !settings().promptDisplayEnabled)
+        rule.onNodeWithTag("image-editor-settings-toggle").performScrollTo().performClick()
+        rule.waitUntil(10_000) { settings().imageEditorEnabled }
+        assertTrue(!settings().videoEditorEnabled)
+        rule.onNodeWithTag("futaber-settings-back").performClick()
+        rule.onNodeWithTag("futaber-settings-done").performClick()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("futaber-catalog-item").fetchSemanticsNodes().isNotEmpty() }
+
+        // The image editor is on, the video editor is not: only "画像編集" joins the menu.
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        rule.onNodeWithTag("futaber-thread-menu").performClick()
+        waitForTag("futaber-operation-menu")
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-menu-image-edit").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithTag("futaber-menu-video-edit").fetchSemanticsNodes().isEmpty())
+        capture("media-edit-entry-in-menu")
+    }
+
+    @Test fun anAiCommandIsAnsweredAndTheBridgeDoesNotFill() {
+        openTutorialCatalog()
+        // Nobody else reads the bridge in this mode: the 129th command used to be refused (and a switch replayed them all).
+        val accepted = (1..200).count {
+            val taken = com.valoser.futacha.shared.ai.FutachaAiCommandBridge.enqueue(
+                com.valoser.futacha.shared.ai.FutachaAiCommand(com.valoser.futacha.shared.ai.FutachaAiAction.OpenBoardList)
+            )
+            // The test's composition runs its effects while the test waits for it (it does not run while this thread sleeps).
+            rule.waitForIdle()
+            taken
+        }
+        assertEquals(200, accepted)
+        waitForTag("futaber-app-notice")
+        // B8: the mode runs this command when the shared "AIアプリ操作" switch is on, and refuses it with a notice when off.
+        rule.waitUntil(20_000) {
+            listOf("AIアプリ操作は設定でOFFです", "板一覧を開きました").any { text ->
+                rule.onAllNodes(androidx.compose.ui.test.hasTestTag("futaber-app-notice") and androidx.compose.ui.test.hasText(text, substring = true))
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        // A link is answered too.
+        assertTrue(
+            com.valoser.futacha.shared.ai.FutachaAiCommandBridge.enqueueDeepLink("futacha://ai?action=refresh_catalog", source = "test")
+        )
+    }
+
     @Test fun quickActionsAreOptionalAndCatalogReportingRequiresConfirmation() {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
@@ -573,8 +645,11 @@ class FutaberModeInstrumentedTest {
         assertEquals("OFF", preference("compat.futaber.ext.video"))
         // オートスクロールを入れると、量と間隔の行が出る。
         waitForTag("futaber-settings-row-auto-scroll-pixel")
-        rule.onNodeWithTag("futaber-settings-plus-auto-scroll-pixel").performClick()
+        // The extensions page grew (B1–B8 rows), so the stepper can sit below the fold: scroll to it before
+        // pressing, as for the switches above.
+        rule.onNodeWithTag("futaber-settings-plus-auto-scroll-pixel").performScrollTo().performClick()
         waitForTag("futaber-settings-value-auto-scroll-pixel")
+        rule.waitUntil(5_000) { preference("compat.thread.autoScrollPixel") != null }
         assertEquals("6", preference("compat.thread.autoScrollPixel"))
         capture("49-extension-settings")
         rule.onNodeWithTag("futaber-settings-back").performClick()
@@ -1040,6 +1115,19 @@ class FutaberModeInstrumentedTest {
     }
 
     @Test fun aThreadIsStarredFromTheMenuListedInThePanelAndSurvivesClearingTheHistory() {
+        // The panel lists the shared history, which other tests and classes leave
+        // threads in. Start from an empty history so deleting this thread's row
+        // empties the list, and put the earlier history back afterwards.
+        val originalHistory = runBlocking { app.appStateStore.history.first() }
+        runBlocking { app.appStateStore.setHistory(emptyList()) }
+        try {
+            starTheThreadAndClearItsHistory()
+        } finally {
+            runBlocking { app.appStateStore.setHistory(originalHistory) }
+        }
+    }
+
+    private fun starTheThreadAndClearItsHistory() {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")

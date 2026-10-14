@@ -93,4 +93,19 @@ class FutaberSettingsSupportTest {
         assertTrue(FutaberDisplaySettings.from(mapOf("compat.watcher.enabled" to "ON")).patrolEnabled)
         assertEquals(com.valoser.futacha.shared.compat.COMPAT_WATCH_ENABLED_KEY, FutaberSettingKeys.PATROL_ENABLED)
     }
+
+    @Test
+    fun theExtrasPageNamesTheFourThingsThatWorkFromTheStart() {
+        // Most extensions are off by default; these four are not, and the page says so (and where two can be turned off).
+        val intro = FUTABER_EXTRAS_NOTE_INTRO
+        assertTrue(intro.contains("ほとんどは最初オフ"))
+        assertFalse(intro.contains("動画ビューアを除き"))
+        assertTrue(intro.contains("次の4つ"))
+        assertTrue(intro.contains("動画をビューアで再生"))
+        assertTrue(intro.contains("過去ログ保存サービスへの通知"))
+        assertTrue(intro.contains("「閲覧スレ通知」でオフにできます"))
+        assertTrue(intro.contains("「板を追加して開く」"))
+        assertTrue(intro.contains("img板の返信"))
+        assertTrue(intro.contains("手書き"))
+    }
 }

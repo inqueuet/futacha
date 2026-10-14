@@ -41,7 +41,9 @@ internal fun HistoryFilterSheet(
     onSettingsChanged: (HistoryViewSettings) -> Unit,
     onReset: () -> Unit,
     onApply: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** The sort choices offered; all by default. A mode without some of the dates leaves those out. */
+    sortOptions: List<HistorySortOption> = HistorySortOption.entries
 ) {
     FutachaAppLockAwareWindow { ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -77,7 +79,7 @@ internal fun HistoryFilterSheet(
             ) {
                 item {
                     HistoryFilterSectionTitle("並び替え")
-                    HistorySortOption.entries.forEach { option ->
+                    sortOptions.forEach { option ->
                         HistoryRadioRow(
                             label = option.label,
                             selected = settings.sortOption == option,

@@ -145,8 +145,13 @@ class FutachaSharedFeaturesInstrumentedTest {
         assertEquals(resolveFutachaColorScheme(true, ThemePalette.Current).background, settingsPixels[0, 0])
         saveScreenshot("futacha-theme-shared-settings-dark.png")
         androidx.test.espresso.Espresso.pressBack()
-        rule.onNodeWithText(ThemePalette.FutabaClassic.label).performScrollTo().performClick()
-        rule.onNodeWithText(ThemeMode.Light.label, substring = false).performScrollTo().performClick()
+        // The settings list is a LazyColumn: rows below the viewport (the theme rows sit below the
+        // font/thread/speech links) are not composed until the list is asked to scroll to them.
+        val settingsList = rule.onNodeWithTag("global-settings-list")
+        settingsList.performScrollToNode(hasText(ThemePalette.FutabaClassic.label))
+        rule.onNodeWithText(ThemePalette.FutabaClassic.label).performClick()
+        settingsList.performScrollToNode(hasText(ThemeMode.Light.label))
+        rule.onNodeWithText(ThemeMode.Light.label, substring = false).performClick()
         androidx.test.espresso.Espresso.pressBack()
         assertTheme()
         saveScreenshot("futacha-theme-classic-thread.png")

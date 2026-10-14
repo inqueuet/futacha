@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
@@ -92,6 +93,11 @@ fun FutaberVideoPlayer(
     val buffering = state == VideoPlayerState.Buffering
     val failed = state == VideoPlayerState.Error
     val showPanel = futaberVideoShowsPanel(state, controlsVisible)
+    // The generation info of the video (the shared media features' prompt display, off by default): read only while
+    // the page is the one on screen, as the shared viewer does.
+    val promptMetadata = com.valoser.futacha.shared.ui.image.rememberGenerationMetadata(videoUrl, visible = active)
+    var panelHeightPx by remember(videoUrl) { mutableIntStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
 
     Box(modifier.fillMaxSize().background(Color.Black).testTag("futaber-video-player")) {
         val size = videoSize
@@ -146,7 +152,9 @@ fun FutaberVideoPlayer(
             Surface(
                 color = Color.Black.copy(alpha = 0.65f),
                 shape = FutaberShapes.card,
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp)
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .onSizeChanged { panelHeightPx = it.height }
+                    .padding(horizontal = 12.dp)
                     .padding(bottom = bottomInset + 12.dp).navigationBarsPadding().testTag("futaber-video-panel")
             ) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -184,6 +192,15 @@ fun FutaberVideoPlayer(
                     }
                 }
             }
+        }
+        if (active) {
+            // Bottom left as in the shared viewer, above the panel (or, with the panel hidden, above the host's bar).
+            val promptModifier = if (showPanel && panelHeightPx > 0) {
+                Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = with(density) { panelHeightPx.toDp() } + 4.dp)
+            } else {
+                Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = bottomInset + 12.dp).navigationBarsPadding()
+            }
+            com.valoser.futacha.shared.ui.image.PromptInfoAction(promptMetadata, promptModifier)
         }
     }
 }

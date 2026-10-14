@@ -649,7 +649,9 @@ private fun CatalogScreenContent(
         } }, onScrollTop = { coroutineScope.launch {
             catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
         } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
-        ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled
+        ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
+        createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },
+            { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog })
     ) { projectedState ->
         CatalogScreenScaffold(bindings = scaffoldBindings.copy(uiState = projectedState), modifier = modifier)
         CatalogScreenOverlayHost(bindings = overlayHostBindings)

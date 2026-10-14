@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.compat.removeDuplicateBoardSummaries
 import com.valoser.futacha.shared.media.MediaFeatureSettings
 
 import com.valoser.futacha.shared.model.AppIconVariant
@@ -585,9 +586,20 @@ class AppStateStore internal constructor(
             ).toSeedBundles()
             storage.seedIfEmpty(seedBundles)
             val storedBoards = storage.boardsJson.first()
-            if (storedBoards != null && decodeAppStateBoardsResult(storedBoards, json).isFailure) {
+            val decodedBoards = storedBoards?.let { decodeAppStateBoardsResult(it, json) }
+            if (decodedBoards?.isFailure == true) {
                 Logger.w(TAG, "Repairing corrupted boards preference from startup defaults")
                 storage.updateBoardsJson(seedBundles.boards.boardsJson)
+            } else {
+                // A board saved more than once (the tutorial copies of 2026-10-13 全体検証 7.6) crashes the board
+                // lists, which key their rows by id. Keep one of each.
+                decodedBoards?.getOrNull()?.let { boards ->
+                    val repaired = removeDuplicateBoardSummaries(boards)
+                    if (repaired.size != boards.size) {
+                        Logger.w(TAG, "Removing ${boards.size - repaired.size} boards stored more than once")
+                        boardsCoordinator.updateBoards { current -> removeDuplicateBoardSummaries(current) }
+                    }
+                }
             }
         } catch (e: Exception) {
             rethrowIfCancellation(e)

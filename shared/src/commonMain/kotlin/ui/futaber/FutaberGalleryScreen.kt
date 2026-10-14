@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -40,7 +41,6 @@ import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 private val GalleryBackground = Color(0xFF000000)
 private val GalleryBar = Color(0xFF111111)
 private val GalleryText = Color(0xFFFFFFFF)
-private const val GALLERY_COLUMNS = 3
 
 /**
  * The thread's images as the original app shows them: always dark, three square columns, and a
@@ -53,7 +53,9 @@ internal fun FutaberGalleryScreen(
     gridState: LazyGridState,
     onOpenViewer: (index: Int, postNo: String?) -> Unit,
     onOpenSettings: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** The shared viewer settings' (portrait, landscape) column counts (an extension); null keeps the original's 3. */
+    sharedColumns: Pair<Int, Int>? = null
 ) {
     PlatformBackHandler(onBack = onClose)
     val keys = androidx.compose.runtime.remember(mediaPosts) { compatUniqueMediaKeys(mediaPosts) }
@@ -73,28 +75,47 @@ internal fun FutaberGalleryScreen(
                 FutaberIcon(Icons.Outlined.Close, contentDescription = "画像一覧を閉じる", tint = GalleryText)
             }
         }
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(GALLERY_COLUMNS),
-            state = gridState,
-            modifier = Modifier.weight(1f).fillMaxWidth().navigationBarsPadding(),
-            horizontalArrangement = Arrangement.spacedBy(1.dp),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            itemsIndexed(mediaPosts, key = { index, _ -> keys[index] }) { index, post ->
-                Box(
-                    Modifier.fillMaxWidth().aspectRatio(1f).background(GalleryBar)
-                        .clickable(onClickLabel = "No.${post.postNo}の画像を開く") { onOpenViewer(index, compatMediaIdentity(post)) }
-                        .testTag("futaber-gallery-item")
-                ) {
-                    CatalogPreviewImage(
-                        thumbnailUrl = resolveCompatPostPreviewUrl(post),
-                        fullImageUrl = null,
-                        targetSizePx = 400,
-                        contentDescription = "No.${post.postNo}の画像",
-                        modifier = Modifier.fillMaxSize(),
-                        fallbackTint = Color(0xFFBBBBBB)
-                    )
-                }
+        if (sharedColumns == null) {
+            GalleryGrid(mediaPosts, keys, gridState, FUTABER_GALLERY_DEFAULT_COLUMNS, Modifier.weight(1f).fillMaxWidth(), onOpenViewer)
+        } else {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val columns = futaberGalleryColumnCount(sharedColumns, landscape = maxWidth > maxHeight)
+                GalleryGrid(mediaPosts, keys, gridState, columns, Modifier.fillMaxSize(), onOpenViewer)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryGrid(
+    mediaPosts: List<CompatPostSnapshot>,
+    keys: List<String>,
+    gridState: LazyGridState,
+    columns: Int,
+    modifier: Modifier,
+    onOpenViewer: (index: Int, postNo: String?) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        state = gridState,
+        modifier = modifier.navigationBarsPadding().testTag("futaber-gallery-grid"),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        itemsIndexed(mediaPosts, key = { index, _ -> keys[index] }) { index, post ->
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(1f).background(GalleryBar)
+                    .clickable(onClickLabel = "No.${post.postNo}の画像を開く") { onOpenViewer(index, compatMediaIdentity(post)) }
+                    .testTag("futaber-gallery-item")
+            ) {
+                CatalogPreviewImage(
+                    thumbnailUrl = resolveCompatPostPreviewUrl(post),
+                    fullImageUrl = null,
+                    targetSizePx = 400,
+                    contentDescription = "No.${post.postNo}の画像",
+                    modifier = Modifier.fillMaxSize(),
+                    fallbackTint = Color(0xFFBBBBBB)
+                )
             }
         }
     }

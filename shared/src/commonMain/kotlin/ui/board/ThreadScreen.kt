@@ -1516,7 +1516,8 @@ private fun ThreadScreenContent(
         onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) },
         effectiveBoardUrl = effectiveBoardUrl,
         isActionInProgress = { actionInProgress },
-        setActionInProgress = { actionInProgress = it }
+        setActionInProgress = { actionInProgress = it },
+        replyDraft = replyDialogBinding
     ) {
     CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors, LocalJumpHighlightedPostId provides jumpHighlightedPostId) {
         MaterialTheme(

@@ -37,11 +37,10 @@ class AndroidModeSwitchCoordinator(
             if (current == target) {
                 return@withLock withContext(Dispatchers.IO) { profileStore.readGeneration() }
             }
-            // The Futaber mode shares the Futacha app icon setting, so its choice must be kept too.
-            if (current.usesAppStateData) {
-                withContext(Dispatchers.IO) {
-                    profileStore.savePreferredFutachaIcon(preferredFutachaIcon)
-                }
+            // Every mode shares the one app icon setting (ふたばー風 and, since its settings gained the choice,
+            // としあき(仮) as well), so the choice made in the mode being left must be kept whichever it is.
+            withContext(Dispatchers.IO) {
+                profileStore.savePreferredFutachaIcon(preferredFutachaIcon)
             }
             try {
                 var journal = withContext(Dispatchers.IO) {

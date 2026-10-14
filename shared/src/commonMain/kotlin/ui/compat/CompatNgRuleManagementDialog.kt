@@ -529,6 +529,11 @@ internal fun CompatNgRuleManagementDialog(
     referenceKind: CompatNgKind? = null,
     onAdd: ((value: String, globalScope: Boolean) -> Unit)? = null,
     onEdit: ((rule: CompatNgRule, value: String, globalScope: Boolean, memo: String) -> Unit)? = null,
+    /**
+     * False hides the scope checkboxes of the add and edit dialogs: a new rule is always for every board / thread, and an
+     * edited rule keeps its scope (a host that cannot keep rules per thread). True (the default) is the usual dialog.
+     */
+    offerLocalScope: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val isImageReference = imageReferenceBoardName != null
@@ -550,7 +555,7 @@ internal fun CompatNgRuleManagementDialog(
     }
     var confirmDeleteAll by remember { mutableStateOf(false) }
     var newValue by remember { mutableStateOf("") }
-    var globalScope by remember { mutableStateOf(false) }
+    var globalScope by remember { mutableStateOf(!offerLocalScope) }
     var searchQuery by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
@@ -685,7 +690,7 @@ internal fun CompatNgRuleManagementDialog(
                             if (onAdd != null) {
                                 IconButton(onClick = {
                                     newValue = ""
-                                    globalScope = false
+                                    globalScope = !offerLocalScope
                                     addValidationMessage = null
                                     addOpen = true
                                 }) {
@@ -989,7 +994,7 @@ internal fun CompatNgRuleManagementDialog(
                             })
                         )
                     }
-                    if (addScopeLabel != null) {
+                    if (addScopeLabel != null && offerLocalScope) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(10.dp),
                             horizontalArrangement = Arrangement.End,
@@ -1051,7 +1056,7 @@ internal fun CompatNgRuleManagementDialog(
             dismissButton = {
                 TextButton(onClick = {
                     newValue = ""
-                    globalScope = false
+                    globalScope = !offerLocalScope
                     addValidationMessage = null
                     addOpen = false
                 }) { Text("キャンセル") }
@@ -1253,7 +1258,7 @@ internal fun CompatNgRuleManagementDialog(
                             label = { Text("メモ") }
                         )
                     }
-                    Row(
+                    if (offerLocalScope) Row(
                         modifier = if (isWordReference) {
                             Modifier.fillMaxWidth().padding(10.dp)
                         } else if (isImageReference) {

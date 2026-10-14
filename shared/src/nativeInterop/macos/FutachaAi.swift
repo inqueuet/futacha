@@ -5,6 +5,10 @@ import FoundationModels
 #endif
 
 private func aiError(_ message: String) -> [String: Any] { ["status": "error", "message": message] }
+/** Keychain failures also carry the OSStatus for diagnostics; the user-facing message is unchanged. */
+private func aiError(_ message: String, osStatus: OSStatus) -> [String: Any] {
+    ["status": "error", "message": message, "osStatus": Int(osStatus)]
+}
 
 private func credentials(_ request: [String: String]) -> [String: Any] {
     guard let account = request["account"], !account.isEmpty, account.count <= 128 else {
@@ -30,7 +34,7 @@ private func credentials(_ request: [String: String]) -> [String: Any] {
         if status == errSecItemNotFound { return ["status": "done"] }
         guard status == errSecSuccess, let data = result as? Data, data.count <= 65_536,
               let value = String(data: data, encoding: .utf8) else {
-            return aiError("Keychainを読み込めません。ロック状態とアクセス許可を確認してください。")
+            return aiError("Keychainを読み込めません。ロック状態とアクセス許可を確認してください。", osStatus: status)
         }
         return ["status": "done", "value": value]
     case "credentialWrite":
@@ -45,10 +49,10 @@ private func credentials(_ request: [String: String]) -> [String: Any] {
             query[kSecAttrLabel as String] = "ふたちゃ OpenAI接続設定"
             status = SecItemAdd(query as CFDictionary, nil)
         }
-        return status == errSecSuccess ? ["status": "done"] : aiError("Keychainへ保存できません。アクセス許可を確認してください。")
+        return status == errSecSuccess ? ["status": "done"] : aiError("Keychainへ保存できません。アクセス許可を確認してください。", osStatus: status)
     case "credentialDelete":
         let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound ? ["status": "done"] : aiError("Keychainから削除できません。")
+        return status == errSecSuccess || status == errSecItemNotFound ? ["status": "done"] : aiError("Keychainから削除できません。", osStatus: status)
     default: return aiError("未対応の保存操作です。")
     }
 }

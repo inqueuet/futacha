@@ -187,10 +187,19 @@ internal fun ThreadMessageText(
         )
     }
     val textLayoutResult = remember { ThreadMessageTextLayoutHolder() }
+    val showUrlMenu = com.valoser.futacha.shared.ui.rememberBodyUrlMenu(onUrlClick)
     Text(
         modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick, quoteLongPressOpensMenu) {
             detectTapGestures(
                 onLongPress = { position ->
+                    val linkOffset = textLayoutResult.value?.getOffsetForPosition(position)
+                    val bodyUrl = linkOffset?.let { offset ->
+                        annotated.getStringAnnotations(URL_ANNOTATION_TAG, offset, offset).firstOrNull()?.item
+                    }
+                    if (bodyUrl != null) {
+                        showUrlMenu(bodyUrl)
+                        return@detectTapGestures
+                    }
                     if (quoteLongPressOpensMenu) {
                         latestPlainLongPress.value?.invoke()
                         return@detectTapGestures

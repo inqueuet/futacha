@@ -580,6 +580,8 @@ fun CompatibilityApp(
     compatibilityHistoryRefresh: (suspend () -> Result<String>)? = null,
     appVersion: String = "1.0",
     imageLoader: ImageLoader? = null,
+    /** ふたちゃ's history refresher (the shared AppState history); null hides the history tools' refresh. */
+    historyRefresher: com.valoser.futacha.shared.service.HistoryRefresher? = null,
     catalogImageLoader: ImageLoader? = null,
     initialThreadDeepLink: String? = null,
     initialThreadDeepLinkPreapprovedBoardRegistration: Boolean = false,
@@ -632,6 +634,7 @@ fun CompatibilityApp(
             savedThreadRepository = savedThreadRepository,
             compatibilityHistoryRefresh = compatibilityHistoryRefresh,
             appVersion = appVersion,
+            historyRefresher = historyRefresher,
             catalogImageLoader = effectiveCatalogImageLoader,
             initialThreadDeepLink = initialThreadDeepLink,
             initialThreadDeepLinkPreapprovedBoardRegistration =
@@ -663,6 +666,7 @@ private fun CompatibilityAppContent(
     savedThreadRepository: SavedThreadRepository? = null,
     compatibilityHistoryRefresh: (suspend () -> Result<String>)? = null,
     appVersion: String = "1.0",
+    historyRefresher: com.valoser.futacha.shared.service.HistoryRefresher? = null,
     catalogImageLoader: ImageLoader,
     initialThreadDeepLink: String? = null,
     initialThreadDeepLinkPreapprovedBoardRegistration: Boolean = false,
@@ -730,6 +734,7 @@ private fun CompatibilityAppContent(
     // observable; persistence still runs after the existing debounce.
     val latestThreadScrollAnchors = remember { mutableMapOf<String, ScrollAnchor>() }
     var previousCompatHost by remember { mutableStateOf<CompatHost?>(null) }
+    val threadReturn = remember { CompatThreadReturnTracker() }
     var threadRefreshToken by remember { mutableStateOf(0L) }
     val pendingPostRefreshTabs = remember { mutableSetOf<String>() }
     var scrollToBottomRequest by remember { mutableStateOf<Pair<String, Long>?>(null) }
@@ -856,6 +861,26 @@ private fun CompatibilityAppContent(
             Logger.e("CompatibilityApp", "$operation failed", failure)
         }
     }
+
+    // Board pins (shared AppState; null without a state store): see CompatBoardPinSupport.kt.
+    val boardPins = rememberCompatBoardPins(stateStore) { block ->
+        launchStoreSafely("board pin", "ピン留めを保存できませんでした") { block() }
+    }
+    // The common NG lists of ふたちゃ / ふたばー風 (edit, and apply behind a switch): see CompatCommonNg.kt.
+    val commonNg = rememberCompatCommonNg(stateStore, store, preferences)
+    // History tools (a control-page switch, AppState only): see CompatHistoryTools.kt.
+    val historyTools = rememberCompatHistoryTools(
+        stateStore = stateStore,
+        preferences = preferences,
+        fileSystem = fileSystem,
+        sourceRepositories = remember(historyAutoSavedThreadRepository, savedThreadRepository) {
+            listOfNotNull(historyAutoSavedThreadRepository, savedThreadRepository)
+        },
+        importedHistoryRepository = importedHistoryRepository,
+        historyRefresher = historyRefresher,
+        appVersion = appVersion,
+        onMessage = { deepLinkError = it }
+    )
 
     suspend fun loadPendingClosedTabsSafely(): ClosedTabBatch? = try {
         store.loadPendingClosedTabs(Clock.System.now().toEpochMilliseconds())
@@ -1393,6 +1418,8 @@ private fun CompatibilityAppContent(
         if (state.drawerPage == CompatDrawerPage.WATCHER) refreshExternalWatcher()
     }
 
+    historyTools?.let { CompatHistoryToolsHost(it, histories) }
+    commonNg?.let { CompatCommonNgSheetHost(it) }
     if (watcherManagerOpen) {
         CompatWatcherManager(
             store = store, repository = repository,
@@ -1430,6 +1457,8 @@ private fun CompatibilityAppContent(
         }
         previousCompatHost = state.host
     }
+    // Read while the next host composes (before this runs again), so the thread screen knows where it came back from.
+    SideEffect { threadReturn.lastHost = state.host }
 
     fun openCanonicalThread(
         parsed: CanonicalThreadUrl,
@@ -1617,8 +1646,7 @@ private fun CompatibilityAppContent(
                     board == null -> deepLinkError = "対象板を特定できませんでした"
                     sort == null -> deepLinkError = "カタログモードを特定できませんでした"
                     else -> launchStoreSafely("AI command", "操作に失敗しました") {
-                        val current = store.loadCatalogPreference(board.key)
-                        store.saveCatalogPreference(current.copy(sort = sort))
+                        saveCompatCatalogSortChoice(store, board.key, sort)
                         dispatch(CompatibilityEvent.OpenCatalog(board.key))
                     }
                 }
@@ -2309,6 +2337,7 @@ private fun CompatibilityAppContent(
             },
             onOpenExternalWatcherManager = { watcherManagerOpen = true },
             onRefreshExternalWatcher = ::refreshExternalWatcher,
+            historyTools = historyTools,
             onRefreshAllTabs = {
                 val activeRepository = repository
                 if (activeRepository != null) {
@@ -2393,6 +2422,8 @@ private fun CompatibilityAppContent(
         ) {
         when (val host = state.host) {
             CompatHost.Main -> CompatMainScreen(
+                pinnedBoardKeys = boardPins?.pinnedKeys.orEmpty(),
+                onBoardPinToggle = boardPins?.toggle,
                 boards = boards,
                 isDrawerOpen = drawerState.currentValue == DrawerValue.Open,
                 onOpenDrawer = ::openPreferredDrawer,
@@ -2524,6 +2555,9 @@ private fun CompatibilityAppContent(
                         initialToolbarItems = toolbarItemsBySurface[CompatToolbarSurface.CATALOG],
                         preferences = preferences,
                         ngRules = ngRules,
+                        commonNgRules = commonNg?.filterRules.orEmpty(),
+                        onOpenCommonNg = commonNg?.let { ng -> { ng.open(CompatCommonNgTarget.CATALOG) } },
+                        catalogExtraModesEnabled = stateStore != null,
                         tabs = distinctCompatTabs(state.tabs),
                         activeTabKey = state.activeTabKey,
                         repository = repository,
@@ -2629,6 +2663,9 @@ private fun CompatibilityAppContent(
                     } else {
                         repository
                     }
+                    // Back from this thread's own viewer, gallery, settings, help or editor: not an opening (7.6).
+                    val reloadOnOpenSuppressed = remember(tab.key) { threadReturn.returnsFromOwnChild(tab.key) }
+                    SideEffect { threadReturn.lastThreadTabKey = tab.key }
                     threadStateHolder.SaveableStateProvider(tab.key) {
                         CompatThreadScreen(
                             stateStore = stateStore,
@@ -2643,6 +2680,7 @@ private fun CompatibilityAppContent(
                             initialToolbarItems = toolbarItemsBySurface[CompatToolbarSurface.THREAD],
                             threadRefreshToken = threadRefreshToken,
                             consumePostRefreshRequest = { pendingPostRefreshTabs.remove(tab.key) },
+                            reloadOnOpenSuppressed = reloadOnOpenSuppressed,
                             archiveBaseUrl = preferences[COMPAT_CACHE_BASE_URL_KEY],
                             archiveSearchHistory = archiveSearchHistory,
                             archiveSearchNoticeHidden =
@@ -2653,6 +2691,8 @@ private fun CompatibilityAppContent(
                             store = store,
                             preferences = preferences,
                             ngRules = ngRules,
+                            commonNgRules = commonNg?.filterRules.orEmpty(),
+                            onOpenCommonNg = commonNg?.let { ng -> { ng.open(CompatCommonNgTarget.THREAD) } },
                             selectorOpen = threadSelectorOpen,
                             selectorPresentation = state.selectorPresentation,
                             platformAiCommand = threadAiSlot.deliverable(isAppUnlocked),
@@ -3695,6 +3735,12 @@ private fun CompatCatalogScreen(
     initialToolbarItems: List<CompatToolbarItem>? = null,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
+    /** The common NG lists as filter-only rules (empty unless applied); never listed or counted. */
+    commonNgRules: List<CompatNgRule> = emptyList(),
+    /** Opens the common NG lists; null (no shared store) leaves the NG menu as it is. */
+    onOpenCommonNg: (() -> Unit)? = null,
+    /** Offers "そ順" / "監視" after the six orders (see CompatCatalogExtraMode.kt); off leaves the dialog as it is. */
+    catalogExtraModesEnabled: Boolean = false,
     tabs: List<CompatTab>,
     activeTabKey: String?,
     repository: BoardRepository?,
@@ -3747,6 +3793,10 @@ private fun CompatCatalogScreen(
     var searchActive by remember(board.key) { mutableStateOf(false) }
     var searchQuery by remember(board.key) { mutableStateOf("") }
     var sortDialogOpen by remember { mutableStateOf(false) }
+    // State, so a refresh started right after the choice reads it before the stored value comes back.
+    var catalogExtraMode by remember(board.key, catalogExtraModesEnabled, preferences[compatCatalogExtraModeKey(board.key)]) {
+        mutableStateOf(if (catalogExtraModesEnabled) compatCatalogExtraMode(preferences, board.key) else null)
+    }
     var contextItem by remember { mutableStateOf<CatalogItem?>(null) }
     var catalogImageNgRegistrationItem by remember { mutableStateOf<CatalogItem?>(null) }
     var droppedDialogItems by remember(board.key) { mutableStateOf<List<CompatDroppedCatalogItem>?>(null) }
@@ -3812,8 +3862,8 @@ private fun CompatCatalogScreen(
     val catalogExtractRules = remember(catalogRules) {
         catalogRules.filter { it.kind == CompatNgKind.CATALOG_EXTRACT }
     }
-    val catalogRuleIndex = remember(catalogRules) {
-        buildCompatCatalogRuleIndex(catalogRules)
+    val catalogRuleIndex = remember(catalogRules, commonNgRules) {
+        buildCompatCatalogRuleIndex(catalogRules + commonNgRules)
     }
     val catalogPrivacyEnabled = preferences.compatPrivacyEnabled()
     val watchWords = remember(preferences, board.key) { compatWatchWordsForBoard(preferences, board.key) }
@@ -4224,10 +4274,13 @@ private fun CompatCatalogScreen(
             showLoadingIndicator = true
             val refreshResult = try {
                 val refreshResult = withTimeoutOrNull(COMPAT_CATALOG_REFRESH_TIMEOUT_MILLIS) {
-                    activeRepository.getCatalogWithSettings(
-                        board = board.originalUrl,
-                        mode = sort.toCatalogMode(),
-                        settings = compatCatalogFetchSettings(catalogLimit)
+                    fetchCompatCatalogItems(
+                        repository = activeRepository,
+                        boardUrl = board.originalUrl,
+                        baseMode = sort.toCatalogMode(),
+                        extraMode = catalogExtraMode,
+                        settings = compatCatalogFetchSettings(catalogLimit),
+                        watchWords = { compatCatalogWatchModeWords(watchWords, catalogRules) }
                     )
                 }?.let { Result.success(it) }
                     ?: Result.failure<List<CatalogItem>>(CompatCatalogRefreshTimeoutException())
@@ -4618,7 +4671,7 @@ private fun CompatCatalogScreen(
                 CompatTopBar(
                     "${board.name} (${items.size}件)",
                     buildString {
-                        append(preference.sort.displayLabel)
+                        append(catalogExtraMode?.label ?: preference.sort.displayLabel)
                         lastUpdatedAtEpochMillis?.let { append(" "); append(formatCompatCatalogTime(it)) }
                         if (catalogHistoryGeneration > 0) append(" (${catalogHistoryGeneration}つ前)")
                     },
@@ -4865,7 +4918,26 @@ private fun CompatCatalogScreen(
             onDismiss = { sortDialogOpen = false },
             onSelected = { selected ->
                 sortDialogOpen = false
-                persistPreference(preference.copy(sort = selected), reload = preferenceLoaded)
+                if (catalogExtraMode != null) {
+                    // Back to one of the six: the extra order is removed and the catalog read again in that order.
+                    catalogExtraMode = null
+                    persistPreference(preference.copy(sort = selected), reload = false)
+                    launchCatalogStoreSafely("catalog extra order removal") {
+                        store.savePreferences(mapOf(compatCatalogExtraModeKey(board.key) to null))
+                        if (preferenceLoaded) refresh(selected)
+                    }
+                } else {
+                    persistPreference(preference.copy(sort = selected), reload = preferenceLoaded)
+                }
+            },
+            extraModes = if (catalogExtraModesEnabled) CompatCatalogExtraMode.entries else emptyList(),
+            onExtraSelected = { mode ->
+                sortDialogOpen = false
+                catalogExtraMode = mode
+                launchCatalogStoreSafely("catalog extra order persistence") {
+                    store.savePreference(compatCatalogExtraModeKey(board.key), mode.storedValue)
+                    if (preferenceLoaded) refresh()
+                }
             }
         )
     }
@@ -4877,7 +4949,8 @@ private fun CompatCatalogScreen(
             showNonPriority = preference.showNonPriority,
             canUndoClose = canUndoClose,
             cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
-            activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key }
+            activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key },
+            commonNgEnabled = onOpenCommonNg != null
         )
         CompatHierarchicalOtherMenuDialog(
             route = route,
@@ -4945,6 +5018,7 @@ private fun CompatCatalogScreen(
                     "ng_ignore" -> managedNgKind = CompatNgKind.CATALOG_IGNORE
                     "ng_refuse" -> managedNgKind = CompatNgKind.CATALOG_REFUSE
                     "ng_image" -> managedNgKind = CompatNgKind.CATALOG_IMAGE
+                    COMPAT_COMMON_NG_MENU_KEY -> onOpenCommonNg?.invoke()
                     "ng_image_phash" -> managedNgKind = CompatNgKind.CATALOG_IMAGE_PHASH
                     "extract" -> managedNgKind = CompatNgKind.CATALOG_EXTRACT
                     "ng_toggle" -> launchCatalogStoreSafely("catalog NG preference persistence") {
@@ -5391,6 +5465,8 @@ private fun CompatThreadScreen(
     initialToolbarItems: List<CompatToolbarItem>? = null,
     threadRefreshToken: Long = 0L,
     consumePostRefreshRequest: () -> Boolean = { false },
+    /** Shown again after one of this thread's own child screens closed: "スレッドを開いた時に更新" does not apply. */
+    reloadOnOpenSuppressed: Boolean = false,
     archiveBaseUrl: String?,
     archiveSearchHistory: List<String>,
     archiveSearchNoticeHidden: Boolean,
@@ -5400,6 +5476,10 @@ private fun CompatThreadScreen(
     store: CompatibilityStore,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
+    /** The common NG lists as filter-only rules (empty unless applied); never listed or counted. */
+    commonNgRules: List<CompatNgRule> = emptyList(),
+    /** Opens the common NG lists; null (no shared store) leaves the NG menu as it is. */
+    onOpenCommonNg: (() -> Unit)? = null,
     selectorOpen: Boolean,
     selectorPresentation: SelectorPresentation,
     platformAiCommand: FutachaAiCommand? = null,
@@ -5484,6 +5564,7 @@ private fun CompatThreadScreen(
     ) ?: COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
     val treeDisplayEnabled = preferences.compatThreadTreeEnabled()
     val showDeletedPosts = preferences.compatPreferenceValue("thread", "threadAdminDeleteShow", "削除されたレスを表示") == "ON"
+    val hideDeletedRows = preferences.compatPreferenceValue("thread", "threadAdminDeleteShow", "削除されたレスを表示") == "HIDE"
     val threadNgEnabled = preferences.compatPreferenceValue("thread", "threadNg", "NG機能") != "OFF"
     val threadPrivacyEnabled = preferences.compatPrivacyEnabled()
     val saidaneExtractThreshold = preferences.compatPreferenceValue("thread", "threadExtractSoudaneNum", "そうだねが多いレス")
@@ -5884,9 +5965,12 @@ private fun CompatThreadScreen(
         }
     }
     CompatTextSpeakerDisposal(textSpeaker)
+    val speechSettings = com.valoser.futacha.shared.audio.speechSettingsFromPreferences(preferences)
+    SideEffect { textSpeaker?.configure(speechSettings) }
     DisposableEffect(tab.key) { onDispose { readAloudJob?.cancel() } }
 
     fun ensureTextSpeaker(): TextSpeaker = textSpeaker ?: createTextSpeaker(platformContext).also {
+        it.configure(speechSettings)
         textSpeaker = it
     }
 
@@ -6598,11 +6682,13 @@ private fun CompatThreadScreen(
         phashHiddenPostNos,
         threadUpsThumbMethod,
         compatWifiConnected,
-        showDeletedPosts
+        showDeletedPosts,
+        hideDeletedRows
     ) {
         val posts = presentCompatPostsForDeletedVisibilityOffMain(
             posts = snapshot?.posts.orEmpty(),
-            showDeletedContent = showDeletedPosts
+            showDeletedContent = showDeletedPosts,
+            hideDeletedRows = hideDeletedRows
         )
         val calculateViewerPosts = {
             compatViewerMediaPosts(
@@ -6628,8 +6714,10 @@ private fun CompatThreadScreen(
         snapshot?.revision,
         treeDisplayEnabled,
         showDeletedPosts,
+        hideDeletedRows,
         threadNgEnabled,
         ngRules,
+        commonNgRules,
         tab.key,
         phashHiddenPostNos,
         imageNgPhashThreshold,
@@ -6637,7 +6725,8 @@ private fun CompatThreadScreen(
     ) {
         val posts = presentCompatPostsForDeletedVisibilityOffMain(
             posts = snapshot?.posts.orEmpty(),
-            showDeletedContent = showDeletedPosts
+            showDeletedContent = showDeletedPosts,
+            hideDeletedRows = hideDeletedRows
         )
         val filteredPosts = try {
             if (!threadNgEnabled) {
@@ -6654,7 +6743,7 @@ private fun CompatThreadScreen(
                 // restoration when the filtered list arrives.
                 val calculateVisiblePosts = {
                     val ngRuleIndex = buildCompatThreadNgRuleIndex(
-                        rules = ngRules,
+                        rules = if (commonNgRules.isEmpty()) ngRules else ngRules + commonNgRules,
                         scopeKey = tab.key,
                         boardKey = tab.boardKey
                     )
@@ -7124,7 +7213,7 @@ private fun CompatThreadScreen(
             manual = false,
             // A successful post forces one refresh even when automatic reopening is OFF.
             // Consume it first so ON does not leave the request pending through short-circuiting.
-            refreshOnActivation = consumePostRefreshRequest() || reloadOnOpen
+            refreshOnActivation = consumePostRefreshRequest() || (reloadOnOpen && !reloadOnOpenSuppressed)
         )
     }
     // Not keyed on the post count or on `loading` once a snapshot exists: a
@@ -7963,6 +8052,7 @@ private fun CompatThreadScreen(
             route = route,
             tab = tab,
             ngRules = ngRules,
+            onOpenCommonNg = onOpenCommonNg,
             aiHiddenPostNos = threadAi.hiddenPostNos,
             preferences = preferences,
             store = store,
@@ -9136,6 +9226,7 @@ private fun CompatThreadOtherMenuDialog(
     route: CompatOtherMenuRoute,
     tab: CompatTab,
     ngRules: List<CompatNgRule>,
+    onOpenCommonNg: (() -> Unit)?,
     aiHiddenPostNos: Set<String>,
     preferences: Map<String, String>,
     store: CompatibilityStore,
@@ -9201,7 +9292,8 @@ private fun CompatThreadOtherMenuDialog(
         ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" } + aiHiddenPostNos.size,
         cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
         mhtEnabled = true,
-        activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key }
+        activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key },
+        commonNgEnabled = onOpenCommonNg != null
     )
     CompatHierarchicalOtherMenuDialog(
         route = route,
@@ -9234,6 +9326,7 @@ private fun CompatThreadOtherMenuDialog(
                 "ng_ignore" -> managedNgKinds = setOf(CompatNgKind.THREAD_IGNORE)
                 "ng_refuse" -> managedNgKinds = setOf(CompatNgKind.THREAD_REFUSE)
                 "ng_image" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE)
+                COMPAT_COMMON_NG_MENU_KEY -> onOpenCommonNg?.invoke()
                 "ng_image_phash" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE_PHASH)
                 "ng_toggle" -> scope.launch {
                     store.savePreference(
@@ -9594,7 +9687,10 @@ private fun CompatCatalogSearchTopBar(
 private fun CompatCatalogSortDialog(
     selected: CompatCatalogSort,
     onDismiss: () -> Unit,
-    onSelected: (CompatCatalogSort) -> Unit
+    onSelected: (CompatCatalogSort) -> Unit,
+    /** Rows after the six orders (そ順・監視); none by default. */
+    extraModes: List<CompatCatalogExtraMode> = emptyList(),
+    onExtraSelected: (CompatCatalogExtraMode) -> Unit = {}
 ) {
     val palette = LocalCompatibilityPalette.current
     CompatBottomPopup(
@@ -9608,6 +9704,18 @@ private fun CompatCatalogSortDialog(
             ) {
                 Text(
                     sort.displayLabel,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = compatibilityPopupContent(palette)
+                )
+            }
+        }
+        extraModes.forEach { mode ->
+            TextButton(
+                onClick = { onExtraSelected(mode) },
+                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("compat-catalog-sort-extra-${mode.storedValue}")
+            ) {
+                Text(
+                    mode.label,
                     modifier = Modifier.fillMaxWidth(),
                     color = compatibilityPopupContent(palette)
                 )
@@ -10052,7 +10160,9 @@ private fun CompatHistoryMetadataRow(
     entry: CompatHistoryEntry,
     openTab: CompatTab?,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    /** The history tools' marks (落ちた・書き込み済み・保存済み); empty draws the row exactly as before. */
+    marks: String = ""
 ) {
     val palette = LocalCompatibilityPalette.current
     val readCount = openTab?.checkedReplyCount ?: entry.replyCount
@@ -10067,6 +10177,8 @@ private fun CompatHistoryMetadataRow(
         sizePx = with(LocalDensity.current) { COMPAT_REFERENCE_DRAWER_THREAD_THUMBNAIL_DP.dp.roundToPx() },
         catalogImageLoader = LocalFutachaCatalogImageLoader.current
     )
+    // The marks go on a line of their own under the row, so the row itself is laid out as before.
+    Column {
     Row(
         modifier = Modifier.fillMaxWidth().height(COMPAT_REFERENCE_DRAWER_THREAD_ROW_DP.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -10100,6 +10212,8 @@ private fun CompatHistoryMetadataRow(
             Text(reply.increase, maxLines = 1, fontSize = 12.sp, color = Color.Red)
         }
     }
+    if (marks.isNotEmpty()) CompatHistoryMarksLine(entry.canonicalUrl, marks)
+    }
     HorizontalDivider()
 }
 
@@ -10128,7 +10242,9 @@ private fun CompatNavigationDrawer(
     onRefreshAllTabs: () -> Unit,
     onOpenSettings: () -> Unit,
     onClose: () -> Unit,
-    onUndoClose: () -> Unit
+    onUndoClose: () -> Unit,
+    /** The history tools (filter, marks, archive, refresh); null when off. See CompatHistoryTools.kt. */
+    historyTools: CompatHistoryTools? = null
 ) {
     var contextTab by remember { mutableStateOf<CompatTab?>(null) }
     var contextHistory by remember { mutableStateOf<CompatHistoryEntry?>(null) }
@@ -10138,6 +10254,7 @@ private fun CompatNavigationDrawer(
     val deadTabCheckScope = rememberCoroutineScope()
     val uniqueTabs = remember(tabs) { distinctCompatTabs(tabs) }
     val uniqueHistories = remember(histories) { distinctCompatHistory(histories) }
+    val historyToolsView = historyTools?.let { rememberCompatHistoryToolsView(it, uniqueHistories) }
     // The drawer lists only the first tabs; "下/他/全て削除" act on that list. Closing tabs the
     // user cannot see (beyond the cap) was a destructive surprise.
     val displayedTabs = remember(uniqueTabs) { uniqueTabs.take(COMPAT_DRAWER_VISIBLE_TAB_LIMIT) }
@@ -10197,7 +10314,8 @@ private fun CompatNavigationDrawer(
                                 }
                             }
                             CompatDrawerPage.HISTORY -> {
-                                items(uniqueHistories.take(100), key = { it.canonicalUrl }) { entry ->
+                                historyToolsView?.let { view -> compatHistoryToolsHeaderItems(view) { historyTools?.settings = com.valoser.futacha.shared.ui.board.HistoryViewSettings.Default } }
+                                items((historyToolsView?.entries ?: uniqueHistories).take(100), key = { it.canonicalUrl }) { entry ->
                                     CompatDismissibleDrawerRow(
                                         itemKey = entry.canonicalUrl,
                                         onDismissed = { onHistoryDeleted(entry) },
@@ -10207,7 +10325,8 @@ private fun CompatNavigationDrawer(
                                             entry = entry,
                                             openTab = uniqueTabs.firstOrNull { it.canonicalUrl == entry.canonicalUrl },
                                             onClick = { onHistorySelected(entry) },
-                                            onLongClick = { contextHistory = entry }
+                                            onLongClick = { contextHistory = entry },
+                                            marks = historyToolsView?.marks?.get(entry.canonicalUrl).orEmpty()
                                         )
                                     }
                                 }
@@ -10389,9 +10508,18 @@ private fun CompatNavigationDrawer(
     contextHistory?.let { selected ->
         CompatLegacyChoiceDialog(
             onDismiss = { contextHistory = null },
-            choices = listOf("削除する", "全て削除する"),
+            choices = compatHistoryContextChoices(historyTools != null, historyTools?.refreshAvailable == true),
             onChoice = { choice ->
-                if (choice == "削除する") onHistoryDeleted(selected) else onHistoryCleared()
+                when (choice) {
+                    COMPAT_HISTORY_CHOICE_DELETE -> onHistoryDeleted(selected)
+                    COMPAT_HISTORY_CHOICE_FILTER -> historyTools?.openFilter()
+                    COMPAT_HISTORY_CHOICE_ARCHIVE -> historyTools?.openArchive()
+                    COMPAT_HISTORY_CHOICE_REFRESH -> historyTools?.let { tools ->
+                        if (!tools.refreshing) transientMessage = "履歴の一括更新を開始しました"
+                        tools.refresh()
+                    }
+                    else -> onHistoryCleared()
+                }
             }
         )
     }

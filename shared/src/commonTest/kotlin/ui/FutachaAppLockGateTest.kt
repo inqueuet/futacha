@@ -71,7 +71,7 @@ class FutachaAppLockGateTest {
             currentBoards = { emptyList<BoardSummary>() },
             currentNavigationState = { navigation },
             setNavigationState = { navigation = it },
-            onUnregisteredBoard = { unregistered = it }
+            onUnregisteredBoard = { unregistered = it.boardName }
         )
         callbacks.onHistoryEntrySelected(
             ThreadHistoryEntry(

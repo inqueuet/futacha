@@ -465,7 +465,7 @@ class FutachaApplication : Application() {
                     val activeProfile = experienceProfileStore.readActiveProfile()
                     val generation = experienceProfileStore.readGeneration()
                     val enabled = when (activeProfile) {
-                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> backgroundEnabled || watchAlertEnabled ||
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> backgroundEnabled || watchAlertEnabled ||
                             com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]

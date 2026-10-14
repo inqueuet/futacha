@@ -17,7 +17,9 @@ import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.compat.*
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -38,6 +40,11 @@ internal fun CatalogMode.sharedCatalogSort(): CompatCatalogSort? = when (this) {
     else -> null
 }
 
+/** The thread's page address for "copy URL" / "open in browser": the board's own resolution, else what the catalog gave. */
+internal fun futachaCatalogThreadUrl(boardUrl: String, item: CatalogItem): String =
+    runCatching { BoardUrlResolver.resolveThreadUrl(boardUrl, item.id) }.getOrNull()
+        ?.takeIf { it.isNotBlank() } ?: item.threadUrl
+
 @Composable
 internal fun FutachaCatalogFeatureHost(
     board: BoardSummary?, mode: CatalogMode, state: CatalogUiState,
@@ -47,6 +54,8 @@ internal fun FutachaCatalogFeatureHost(
     onRefresh: () -> Unit,
     onOpenHistoryThread: (ThreadHistoryEntry) -> Unit,
     ngFilteringEnabled: Boolean = true,
+    /** The screen's new-thread form; kept as the board's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
+    createThreadDraft: FutachaDraftFormBinding? = null,
     content: @Composable (CatalogUiState) -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
@@ -54,6 +63,8 @@ internal fun FutachaCatalogFeatureHost(
     if (features == null || board == null || boardUrl == null) { content(state); return }
     val boardKey = compatBoardKey(boardUrl)
     val scope = rememberCoroutineScope()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val openUrl = rememberUrlLauncher()
     // null until the store delivered its rules (the app-wide state usually has
     // them already); an empty initial list let NG'd threads flash first.
     val rules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(features.ngRulesState?.value)
@@ -75,6 +86,13 @@ internal fun FutachaCatalogFeatureHost(
     var selected by remember { mutableStateOf<CatalogItem?>(null) }
     var imageNg by remember { mutableStateOf<CatalogItem?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    if (createThreadDraft != null) {
+        FutachaDraftPersistenceEffect(
+            features.store, features.fileSystem, FutachaDraftOwner.Build(boardKey),
+            enabled = features.value("control", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY) == "ON",
+            form = createThreadDraft, onMessage = { message = it }
+        )
+    }
     fun action(block: suspend () -> Unit) { scope.launch {
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { message = error.message ?: "操作できませんでした" }
@@ -302,7 +320,10 @@ internal fun FutachaCatalogFeatureHost(
     }, confirmButton = { TextButton(onClick = { undoOpen = false }) { Text("閉じる") } }) }
     if (ngOpen) FutachaNgManagementDialog(features, boardKey, null, board.name, onDismiss = { ngOpen = false })
     if (searchOpen) FutachaAppLockAwareWindow { CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, boardUrl,
-        localHistory = features.store.history.collectAsState(emptyList()).value, onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) }) }
+        localHistory = features.store.history.collectAsState(emptyList()).value,
+        initialSearchHistory = normalizeCompatCacheSearchHistory(features.preferences[COMPAT_CACHE_SEARCH_HISTORY_KEY].orEmpty()),
+        onSearchHistoryChanged = { values -> action { features.store.savePreference(COMPAT_CACHE_SEARCH_HISTORY_KEY, values.joinToString("\n")) } },
+        onDismiss = { searchOpen = false }, onOpenThread = { searchOpen = false; onOpenThread(it) }) }
     if (droppedOpen) FutachaAppLockAwareWindow { Dialog(onDismissRequest = { droppedOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         CompatDroppedCatalogScreen(board.name, dropped, { droppedOpen = false }, { droppedOpen = false; onOpenThread(it) }, {
             features.store.deleteDroppedCatalogItems(boardKey, CompatCatalogDroppedClass.DIE)
@@ -316,6 +337,15 @@ internal fun FutachaCatalogFeatureHost(
             TextButton(onClick = { register(item) }) { Text("NGスレッドに登録") }
             if (item.fullImageUrl != null || item.thumbnailUrl != null) TextButton(onClick = { imageNg = item; selected = null }) { Text("NG画像に登録") }
             TextButton(onClick = { requestDeletion(item) }) { Text("DEL依頼を送信") }
+            TextButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(futachaCatalogThreadUrl(boardUrl, item)))
+                selected = null
+                message = "URLをコピーしました"
+            }) { Text("URLをコピー") }
+            TextButton(onClick = {
+                openUrl(futachaCatalogThreadUrl(boardUrl, item))
+                selected = null
+            }) { Text("ブラウザで開く") }
         }
     }, confirmButton = { TextButton(onClick = { selected = null }) { Text("閉じる") } }) } }
     imageNg?.let { item -> FutachaImageNgRegistration(features, boardKey, CompatImageNgSource.CATALOG,

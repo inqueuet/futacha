@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.ui.buildAiCommandHeldByLockMessage
 import com.valoser.futacha.shared.ui.buildAiScreenCommandExpiredMessage
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -41,7 +42,11 @@ class CompatPlatformAiScreenCommandTest {
         assertNull(slot.deliverable(isAppUnlocked = false))
         slot.consume(readAloud)
         assertNull(slot.pending)
-        assertNull(supervision.await(), "a consumed command is not reported as dropped")
+        // The production LaunchedEffect is keyed on pending: consuming the
+        // command cancels its supervisor rather than waiting for its 15-minute TTL.
+        supervision.cancelAndJoin()
+        assertTrue(supervision.isCancelled)
+        assertNull(slot.deliverable(isAppUnlocked = true))
     }
 
     @Test

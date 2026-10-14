@@ -119,6 +119,8 @@ internal fun FutachaThreadFeatureHost(
     /** Shares the screen's single "action in progress" flag with the "DEL依頼＋NG" action. */
     isActionInProgress: () -> Boolean = { false },
     setActionInProgress: (Boolean) -> Unit = {},
+    /** The screen's reply form; kept as the tab's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
+    replyDraft: ThreadReplyDialogStateBinding? = null,
     content: @Composable () -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
@@ -139,6 +141,13 @@ internal fun FutachaThreadFeatureHost(
     var automatic by remember(tabKey) { mutableStateOf(false) }
     var touchedAt by remember(tabKey) { mutableLongStateOf(0L) }
     var message by remember { mutableStateOf<String?>(null) }
+    if (replyDraft != null) {
+        FutachaDraftPersistenceEffect(
+            features.store, features.fileSystem, FutachaDraftOwner.Reply(tabKey),
+            enabled = !staticView && features.value("control", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY) == "ON",
+            form = futachaReplyDraftFormBinding(replyDraft), onMessage = { message = it }
+        )
+    }
     var mediaOpen by remember(tabKey) { mutableStateOf(false) }
     var viewerIndex by remember(tabKey) { mutableStateOf<Int?>(null) }
     var viewerPostNo by remember(tabKey) { mutableStateOf<String?>(null) }
@@ -183,6 +192,9 @@ internal fun FutachaThreadFeatureHost(
         if (wasRestoring) return@LaunchedEffect
         // A read-only copy (an opened MHT file) is shown as it is: nothing is written to the tabs or the shared snapshots.
         if (staticView) return@LaunchedEffect
+        // "閲覧スレ通知" (FutachaArchiveReport.kt): only a page read from the board now.
+        features.noteViewedThreadForArchive(sourceUrl, isCachedPage, next.isArchived, staticView, wasRestoring,
+            Clock.System.now().toEpochMilliseconds())
         if (isCachedPage && features.store.tabs.first().any { it.key == tabKey }) return@LaunchedEffect
         try {
             val now = Clock.System.now().toEpochMilliseconds()
@@ -376,7 +388,8 @@ internal fun FutachaThreadFeatureHost(
                 title = threadTitle, threadUrl = sourceUrl, page = page
             )
             mhtSaveFull = full
-        } else null)
+        } else null,
+        offerMediaOnly = true)
     val mhtFull = mhtSaveFull
     val mhtPinnedRequest = mhtSaveRequest
     val mhtFileSystem = features.fileSystem

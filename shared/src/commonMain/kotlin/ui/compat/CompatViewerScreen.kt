@@ -1188,10 +1188,13 @@ internal fun CompatViewerScreen(
             }
         }
     }
+    val clipboardMediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
+        ?.takeIf { isCompatImageSearchableMediaUrl(it) }
+    val copyImage = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(clipboardMediaUrl, httpClient)
     if (quickMenu) {
         CompatLegacyChoiceDialog(
             onDismiss = { quickMenu = false },
-            choices = compatViewerQuickMenuLabels(),
+            choices = compatViewerQuickMenuLabels() + if (copyImage != null) listOf("画像をコピー") else emptyList(),
             enabled = { it == "検索" || !isSaving },
             testTag = "compat-viewer-quick-menu",
             onChoice = { choice ->
@@ -1199,6 +1202,7 @@ internal fun CompatViewerScreen(
                     "保存" -> saveCurrent(shareAfterSave = false)
                     "共有" -> saveCurrent(shareAfterSave = true)
                     "検索" -> searchCurrent()
+                    "画像をコピー" -> copyImage?.invoke()
                 }
             }
         )

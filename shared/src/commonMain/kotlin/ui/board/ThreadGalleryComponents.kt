@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
@@ -52,6 +53,20 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
+internal const val FUTACHA_GALLERY_DEFAULT_COLUMNS = 2
+internal const val FUTACHA_GALLERY_MAX_COLUMNS = 4
+
+/**
+ * Columns of the attachment sheet. Only a column count the user saved in the shared viewer settings
+ * (galleryGridViewPortraitClmNum / galleryGridViewLandscapeClmNum) changes the layout; a missing,
+ * blank or unreadable value keeps the original two columns. The sheet is narrow, so the shared
+ * range (2-16) is brought into 2-4.
+ */
+internal fun futachaGalleryColumnCount(savedValue: String?): Int {
+    val saved = savedValue?.trim()?.toIntOrNull() ?: return FUTACHA_GALLERY_DEFAULT_COLUMNS
+    return saved.coerceIn(FUTACHA_GALLERY_DEFAULT_COLUMNS, FUTACHA_GALLERY_MAX_COLUMNS)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +86,13 @@ internal fun ThreadImageGallery(
         buildThreadGalleryItemKeys(attachmentItems)
     }
 
+    val features = LocalFutachaSharedFeatures.current
+    val windowSize = LocalWindowInfo.current.containerSize
+    val landscape = windowSize.width > windowSize.height
+    val columns = futachaGalleryColumnCount(
+        if (landscape) features?.value("viewer", "galleryGridViewLandscapeClmNum", "横持ちの列数")
+        else features?.value("viewer", "galleryGridViewPortraitClmNum", "縦持ちの列数")
+    )
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     FutachaAppLockAwareWindow { ModalBottomSheet(
         onDismissRequest = {
@@ -112,7 +134,7 @@ internal fun ThreadImageGallery(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Fixed(columns),
                     state = gridState,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),

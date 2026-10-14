@@ -215,7 +215,8 @@ suspend fun searchInqueuetArchiveThreads(
     scope: ArchiveSearchScope?,
     limit: Int = DEFAULT_ARCHIVE_SEARCH_LIMIT,
     archiveBaseUrl: String? = null,
-    includeAllSources: Boolean = false
+    includeAllSources: Boolean = false,
+    onSourceFailure: (String) -> Unit = {}
 ): List<ArchiveSearchItem> {
     val normalized = query.trim()
     require(normalized.isNotBlank()) { "q required" }
@@ -232,13 +233,15 @@ suspend fun searchInqueuetArchiveThreads(
         // A timeout inside the search surfaces as a cancellation too; only leaving the screen is rethrown.
         currentCoroutineContext().ensureActive()
         failure = e
+        onSourceFailure("inqueuet：検索がタイムアウトしました")
         null
     } catch (e: Throwable) {
         failure = e
+        onSourceFailure("inqueuet：検索結果を取得できませんでした")
         null
     }
     if (!includeAllSources && !primary.isNullOrEmpty()) return primary
-    val others = searchThirdPartyArchiveThreads(httpClient, normalized, scope, limit, includeAllSources)
+    val others = searchThirdPartyArchiveThreads(httpClient, normalized, scope, limit, includeAllSources, onSourceFailure)
     if (includeAllSources && (!primary.isNullOrEmpty() || others.isNotEmpty())) {
         return (primary.orEmpty() + others).distinctBy { "${it.server.lowercase()}/${it.board.lowercase()}/${it.threadId}" }
             .take(MAX_ARCHIVE_SEARCH_LIMIT)

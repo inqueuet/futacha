@@ -19,6 +19,12 @@ fun requireValidCompatPreference(key: String, value: String) {
     require(isValidCompatPreference(key, value)) { "Compatibility preference is invalid or too large" }
 }
 
+/**
+ * としあき(仮)'s per-board "そ順"/"監視" order (ui/compat/CompatCatalogExtraMode.kt). The stores remove it with the
+ * board, so a board added again starts in its own order.
+ */
+fun compatCatalogExtraModePreferenceKey(boardKey: String): String = "compat.catalog.extraMode.$boardKey"
+
 private val ALWAYS_LOADED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
 interface CompatibilityStore {
@@ -37,6 +43,14 @@ interface CompatibilityStore {
      * default.
      */
     val isLoaded: StateFlow<Boolean> get() = ALWAYS_LOADED_COMPAT_STORE
+
+    /**
+     * Whether this store can hold the bundled tutorial board (example.com). The iOS and desktop stores keep it
+     * (under img.2chan.net/t/), so its absence there means the user deleted it in としあき(仮). The Android store
+     * accepts official boards only and never holds it: there its absence says nothing, and the board
+     * synchronization keeps the AppState's tutorial ([synchronizeModernBoardsFromCompatibility]).
+     */
+    val holdsBundledTutorialBoard: Boolean get() = true
 
     suspend fun bootstrapBoardsIfNeeded(modernBoards: List<BoardSummary>): Boolean
     suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int

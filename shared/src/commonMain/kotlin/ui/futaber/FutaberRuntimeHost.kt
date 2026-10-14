@@ -19,6 +19,7 @@ import com.valoser.futacha.shared.compat.parseCompatImageCacheQuotaBytes
 import com.valoser.futacha.shared.compat.parseCompatImageParallelism
 import com.valoser.futacha.shared.media.MediaFeatureGate
 import com.valoser.futacha.shared.media.MediaFeatureSettings
+import com.valoser.futacha.shared.media.analysis.ModelStore
 import com.valoser.futacha.shared.media.prompt.PromptMediaSource
 import com.valoser.futacha.shared.media.source.OriginalMediaSession
 import com.valoser.futacha.shared.model.BoardSummary
@@ -37,12 +38,15 @@ import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.LocalMediaFeatureGate
 import com.valoser.futacha.shared.ui.image.LocalMediaFeatureSettings
+import com.valoser.futacha.shared.ui.image.LocalMediaFeatureUpdater
 import com.valoser.futacha.shared.ui.image.LocalOriginalMediaSource
 import com.valoser.futacha.shared.ui.image.LocalPromptContentVisible
 import com.valoser.futacha.shared.ui.image.parseCompatCacheLocation
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.splitImageDiskBudget
+import com.valoser.futacha.shared.ui.media.DeviceImageEditingHost
+import com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore
 import com.valoser.futacha.shared.ui.rememberFutachaCoreRuntimeState
 import com.valoser.futacha.shared.util.DevicePerformanceProfile
 import com.valoser.futacha.shared.util.Logger
@@ -91,7 +95,19 @@ internal fun FutaberRuntimeHost(
     onThreadDeepLinkConsumed: (String) -> Unit = {},
     initialBoardDeepLink: String? = null,
     onBoardDeepLinkConsumed: (String) -> Unit = {},
-    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null
+    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null,
+    /** Writes the media feature settings (prompt display, image / video editing); the media settings page needs it. */
+    updateMediaFeatures: (suspend ((MediaFeatureSettings) -> MediaFeatureSettings) -> Unit)? = null,
+    /** The analysis models the media editors use. */
+    analysisModels: ModelStore? = null,
+    /** A line for the person from the host (an AI command this mode does not run); see [FutaberApp]. */
+    externalNotice: String? = null,
+    onExternalNoticeShown: () -> Unit = {},
+    /** "閲覧スレ通知": the host's sender and its reaction to the switch (see [FutaberApp]). */
+    onArchiveReportEnqueued: ((Int) -> Unit)? = null,
+    onArchiveReportEnabledChanged: (Boolean) -> Unit = {},
+    /** B8: the AI commands received at the app root, run by the mode's screen (see [FutaberApp]). */
+    aiInbox: com.valoser.futacha.shared.ui.futaber.FutaberAiInbox? = null
 ) {
     val scope = rememberCoroutineScope()
     // Stored settings, once loaded: building the image loader from the empty
@@ -190,6 +206,9 @@ internal fun FutaberRuntimeHost(
         LocalOriginalMediaSource provides promptMediaSource,
         LocalMediaFeatureSettings provides mediaFeatureSettings,
         LocalMediaFeatureGate provides mediaFeatureGate,
+        // The settings of the media features (a setting page of its own in this mode) and the editors' models.
+        LocalMediaFeatureUpdater provides updateMediaFeatures,
+        LocalAnalysisModelStore provides analysisModels,
         LocalPromptContentVisible provides !promptPrivacyEnabled
     ) {
         val app: @Composable () -> Unit = {
@@ -208,6 +227,13 @@ internal fun FutaberRuntimeHost(
                 initialBoardDeepLink = initialBoardDeepLink,
                 onBoardDeepLinkConsumed = onBoardDeepLinkConsumed,
                 onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
+                externalNotice = externalNotice,
+                onExternalNoticeShown = onExternalNoticeShown,
+                onArchiveReportEnqueued = onArchiveReportEnqueued,
+                onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
+                aiInbox = aiInbox,
+                // The image / video editors (opened from the operation menu or the settings) go inside the mode's theme.
+                mediaHost = { content -> DeviceImageEditingHost(fileSystem, stateStore, content) },
                 // The history refresh ふたちゃ runs from its drawer (no analytics here), bounded the same way.
                 onRefreshHistory = {
                     val completed = kotlinx.coroutines.withTimeoutOrNull(FUTABER_HISTORY_REFRESH_TIMEOUT_MILLIS) {

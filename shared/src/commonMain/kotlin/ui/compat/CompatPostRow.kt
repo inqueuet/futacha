@@ -1216,6 +1216,7 @@ private fun CompatMessageText(
     val latestLongClick by rememberUpdatedState(onLongClick)
     val latestQuoteClick by rememberUpdatedState(onQuoteClick)
     val latestUrlClick by rememberUpdatedState(onUrlClick)
+    val showBodyUrlMenu = com.valoser.futacha.shared.ui.rememberBodyUrlMenu(onUrlClick)
     BasicText(
         text = annotated,
         style = TextStyle(
@@ -1250,7 +1251,11 @@ private fun CompatMessageText(
             // exact annotated URL/quote under a real finger tap.
             .pointerInput(annotated) {
             detectTapGestures(
-                onLongPress = { latestLongClick() },
+                onLongPress = { position ->
+                    val offset = textLayoutResult?.getOffsetForPosition(position)
+                    val url = offset?.let { annotated.getStringAnnotations("compat_url", it, it).firstOrNull()?.item }
+                    if (url != null) showBodyUrlMenu(url) else latestLongClick()
+                },
                 onTap = { position ->
                     val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
                     annotated.getStringAnnotations("compat_quote", offset, offset)

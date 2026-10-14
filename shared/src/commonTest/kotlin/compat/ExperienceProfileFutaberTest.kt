@@ -22,7 +22,12 @@ class ExperienceProfileFutaberTest {
         assertEquals("toshiaki_compat", ExperienceProfile.TOSHIAKI_COMPAT.persistedValue)
         assertEquals("futaber", ExperienceProfile.FUTABER.persistedValue)
         assertEquals("ふたばー風モード", ExperienceProfile.FUTABER.displayName)
-        assertEquals(setOf("futacha", "toshiaki_compat", "futaber"), ExperienceProfile.entries.map { it.persistedValue }.toSet())
+        assertEquals("ftutter", ExperienceProfile.FTUTTER.persistedValue)
+        assertEquals("ふたったー風モード", ExperienceProfile.FTUTTER.displayName)
+        assertEquals(
+            setOf("futacha", "toshiaki_compat", "futaber", "ftutter"),
+            ExperienceProfile.entries.map { it.persistedValue }.toSet()
+        )
     }
 
     @Test
@@ -54,19 +59,24 @@ class ExperienceProfileFutaberTest {
             withMobileModes(true) {
                 assertTrue(ExperienceProfile.FUTABER.isSelectable)
                 assertEquals(
-                    listOf(ExperienceProfile.FUTACHA, ExperienceProfile.TOSHIAKI_COMPAT, ExperienceProfile.FUTABER),
+                    listOf(ExperienceProfile.FUTACHA, ExperienceProfile.TOSHIAKI_COMPAT, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER),
                     ExperienceProfile.selectableEntries
                 )
                 assertEquals(ExperienceProfile.FUTABER, ExperienceProfile.fromPersistedValue("futaber"))
+                // ふたったー風 is released on mobile too (2026-10-14).
+                assertTrue(ExperienceProfile.FTUTTER.isSelectable)
+                assertEquals(ExperienceProfile.FTUTTER, ExperienceProfile.fromPersistedValue("ftutter"))
             }
             // The desktop hosts: neither listed nor restored; a value saved elsewhere falls back to ふたちゃ.
             withMobileModes(false) {
                 assertFalse(ExperienceProfile.FUTABER.isSelectable)
+                assertFalse(ExperienceProfile.FTUTTER.isSelectable)
                 assertEquals(
                     listOf(ExperienceProfile.FUTACHA, ExperienceProfile.TOSHIAKI_COMPAT),
                     ExperienceProfile.selectableEntries
                 )
                 assertEquals(ExperienceProfile.FUTACHA, ExperienceProfile.fromPersistedValue("futaber"))
+                assertEquals(ExperienceProfile.FUTACHA, ExperienceProfile.fromPersistedValue("ftutter"))
             }
         }
     }
@@ -97,14 +107,36 @@ class ExperienceProfileFutaberTest {
         assertTrue(ExperienceProfile.FUTACHA.usesAppStateData)
         assertFalse(ExperienceProfile.TOSHIAKI_COMPAT.usesAppStateData)
         assertTrue(ExperienceProfile.FUTABER.usesAppStateData)
+        assertEquals(ProfileDataOwner.APP_STATE, ExperienceProfile.FTUTTER.dataOwner)
+        assertTrue(ExperienceProfile.FTUTTER.usesAppStateData)
     }
 
     @Test
-    fun onlyFutaberIsAMobileOnlyModeAndNoModeIsPreviewOnly() {
+    fun futaberAndFtutterAreTheMobileOnlyModesAndNoModeIsPreviewOnly() {
         assertEquals(
-            listOf(ExperienceProfile.FUTABER),
+            listOf(ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER),
             ExperienceProfile.entries.filter { it.availability == ModeAvailability.MOBILE }
         )
+        // The PREVIEW mechanism stays for future unfinished modes.
         assertEquals(emptyList(), ExperienceProfile.entries.filter { it.availability == ModeAvailability.PREVIEW })
+    }
+
+    @Test
+    fun ftutterIsOfferedOnMobileAndInPreviewBuildsButNotOnTheDesktopRelease() {
+        listOf(true, false).forEach { mobile ->
+            listOf(true, false).forEach { preview ->
+                withMobileModes(mobile) {
+                    withPreviewModes(preview) {
+                        val offered = mobile || preview
+                        assertEquals(offered, ExperienceProfile.FTUTTER.isSelectable)
+                        assertEquals(
+                            if (offered) ExperienceProfile.FTUTTER else ExperienceProfile.FUTACHA,
+                            ExperienceProfile.fromPersistedValue("ftutter")
+                        )
+                        if (offered) assertEquals(ExperienceProfile.FTUTTER, ExperienceProfile.selectableEntries.last())
+                    }
+                }
+            }
+        }
     }
 }

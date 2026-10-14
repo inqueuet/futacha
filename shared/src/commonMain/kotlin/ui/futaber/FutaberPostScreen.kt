@@ -23,7 +23,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.board.isVideoAttachmentName
-import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -105,7 +104,12 @@ internal fun FutaberPostScreen(
     onDeleteKeyChange: (String) -> Unit,
     onSend: suspend (FutaberPostInput) -> Result<String?>,
     onSent: (String?) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** The board's address, for the shared "板名の誤投稿確認" ([destinationConfirm]; off by default in every mode). */
+    boardUrl: String = "",
+    destinationConfirm: Boolean = false,
+    /** The posting aids (drawing, あぷ小, voice input, …; FutaberParityB2.kt). The default offers only the drawing where it is needed. */
+    tools: FutaberPostTools = FutaberPostTools()
 ) {
     val colors = LocalFutaberColors.current
     val commentIme = com.valoser.futacha.shared.ui.board.rememberStableTextInputState(comment, onCommentChange)
@@ -117,6 +121,9 @@ internal fun FutaberPostScreen(
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var confirmOpen by rememberSaveable { mutableStateOf(false) }
+    val toolsState = rememberFutaberPostToolsState()
+    // The error of the last failed send (the Cookie guidance reads it); not saved with the screen.
+    var lastFailure by remember { mutableStateOf<Throwable?>(null) }
     val isCreate = target is FutaberPostTarget.CreateThread
 
     // While a post is on its way the screen stays; afterwards Back closes it (the draft is kept).
@@ -124,6 +131,8 @@ internal fun FutaberPostScreen(
 
     val counts = futaberPostCounts(compatPostLineCount(comment), compatPostShiftJisByteCount(comment))
     val validation = com.valoser.futacha.shared.ui.board.validateThreadReplyForm(deleteKey, comment)
+    // A post that looks meant for another board (img's "としあき", may's empty 「」) asks first, even without the confirmation.
+    val destinationWarning = futaberPostDestinationWarning(boardUrl, comment, destinationConfirm)
     val isReply = target is FutaberPostTarget.Reply
     val attachedImage = attachment.image
     val pickImage = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
@@ -142,6 +151,7 @@ internal fun FutaberPostScreen(
         // A second tap (the confirmation's button, the send button) while a post is on its way sends nothing more.
         if (sending) return
         errorMessage = null
+        lastFailure = null
         sending = true
         scope.launch {
             val result = try {
@@ -169,6 +179,7 @@ internal fun FutaberPostScreen(
                 }
             }.onFailure { error ->
                 errorMessage = error.message ?: "送信に失敗しました"
+                lastFailure = error
             }
         }
     }
@@ -233,7 +244,7 @@ internal fun FutaberPostScreen(
                     onValueChange = subjectIme.onValueChange,
                     visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(subjectIme.value.composition, colors.catalogGap),
                     singleLine = true,
-                    textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontWeight = FontWeight.Medium),
+                    textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontWeight = FontWeight.Medium, fontFamily = LocalFutaberCustomFont.current),
                     cursorBrush = SolidColor(colors.accent),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
                         .semantics { contentDescription = "題名" }.testTag("futaber-post-subject"),
@@ -250,7 +261,7 @@ internal fun FutaberPostScreen(
                     onValueChange = commentIme.onValueChange,
                     visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(commentIme.value.composition, colors.catalogGap),
                     enabled = !sending,
-                    textStyle = TextStyle(color = colors.body, fontSize = 16.sp),
+                    textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontFamily = LocalFutaberCustomFont.current),
                     cursorBrush = SolidColor(colors.accent),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                     modifier = Modifier.fillMaxSize().padding(12.dp)
@@ -305,10 +316,11 @@ internal fun FutaberPostScreen(
                     color = colors.onAction,
                     fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().background(colors.accent)
-                        .clickable(onClickLabel = "閉じる") { errorMessage = null; attachment.clearError() }
+                        .clickable(onClickLabel = "閉じる") { errorMessage = null; lastFailure = null; attachment.clearError() }
                         .padding(8.dp).testTag("futaber-post-error")
                 )
             }
+            if (errorMessage != null) FutaberCookieGuidanceRow(toolsState, tools, lastFailure)
             HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
             Row(
                 Modifier.fillMaxWidth().background(colors.bar).heightIn(min = FUTABER_BOTTOM_BAR_HEIGHT_DP.dp).padding(horizontal = 4.dp),
@@ -322,9 +334,16 @@ internal fun FutaberPostScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    IconButton(onClick = pickImage, enabled = !sending, modifier = Modifier.testTag("futaber-post-attach")) {
-                        FutaberIcon(Icons.Outlined.PhotoCamera, contentDescription = "画像・動画を添付", tint = colors.icon)
-                    }
+                    FutaberAttachButton(
+                        enabled = !sending,
+                        onTap = {
+                            when (futaberAttachTap(isReply, capabilities.replyAttachmentsAllowed)) {
+                                FutaberAttachTap.PickFile -> pickImage()
+                                FutaberAttachTap.OpenToolSheet -> toolsState.sheetOpen = true
+                            }
+                        },
+                        onLongPress = if (tools.enabled) { { toolsState.sheetOpen = true } } else null
+                    )
                     IconButton(
                         onClick = pasteImage.paste,
                         enabled = !sending && !pasteImage.busy,
@@ -357,7 +376,7 @@ internal fun FutaberPostScreen(
                             if (validation != null) {
                                 errorMessage = if (validation.contains("削除キー")) "$validation（右下の歯車、書き込み設定で入力できます）" else validation
                             }
-                            else if (settings.confirmBeforeSend) confirmOpen = true
+                            else if (settings.confirmBeforeSend || destinationWarning != null) confirmOpen = true
                             else send()
                         }
                         .padding(horizontal = 22.dp)
@@ -393,6 +412,17 @@ internal fun FutaberPostScreen(
                 }
             }
         }
+        FutaberPostToolsHost(
+            state = toolsState,
+            tools = tools,
+            handwritingOnly = isReply && !capabilities.replyAttachmentsAllowed,
+            comment = comment,
+            onCommentChange = onCommentChange,
+            deleteKey = deleteKey,
+            onPickFile = pickImage,
+            onAttach = { attachment.offer(it, capabilities, isReply) },
+            boardUrl = boardUrl
+        )
     }
 
     attachment.pendingCompression?.let { big ->
@@ -419,7 +449,12 @@ internal fun FutaberPostScreen(
                 titleContentColor = colors.body,
                 textContentColor = colors.body,
                 title = { Text(if (isCreate) "スレッドを立てますか？" else "送信しますか？") },
-                text = { Text("${counts.lines}行 / ${counts.bytes}B") },
+                text = {
+                    Text(
+                        listOfNotNull(destinationWarning, "${counts.lines}行 / ${counts.bytes}B").joinToString("\n\n"),
+                        modifier = Modifier.testTag("futaber-post-confirm-text")
+                    )
+                },
                 confirmButton = {
                     TextButton(
                         onClick = { confirmOpen = false; send() },

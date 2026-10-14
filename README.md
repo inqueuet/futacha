@@ -82,7 +82,7 @@
 ```
 
 ビルド・テストに必要なコード、開発用スクリプト、品質契約、実装記録を含めています。署名鍵・ローカル設定・生成物・検証ログは Git 管理対象外です。文書に記載した `build/` 以下の証跡は、Clone したソースには含まれません。
-Android の Release ビルドでは `baselineprofile/` を使い、専用の API 35 エミュレーターで最適化プロファイルを生成します。
+Android の Release ビルドでは `baselineprofile/` を使い、専用の API 35 エミュレーターで最適化プロファイルを生成します。ふたちゃ・としあき（仮）・ふたばー風・ふたったー風の4モードで、起動と板一覧からカタログ・スレッドを開く操作を収集します。ふたばー風・ふたったー風では画像一覧も対象です。
 
 `shared/src/` の主な領域は次のとおりです。
 
@@ -178,7 +178,7 @@ Release AAB を署名するには、次の値を環境変数、ローカルの G
 
 ### 5. iOS / watchOS
 
-CocoaPods の依存関係を準備し、Xcode の workspace を開きます。共有 Framework は Xcode のビルド時に生成します。
+CocoaPods の依存関係を準備し、Xcode で `iosApp/iosApp.xcworkspace` を開きます。通常のビルドも Archive もこの workspace から実行してください。`iosApp.xcodeproj` を直接開くと Pods がビルド対象に入らず、Firebase などの `modulemap not found` エラーになります。共有 Framework は Xcode のビルド時に生成します。
 
 ```bash
 ./gradlew :shared:podInstall

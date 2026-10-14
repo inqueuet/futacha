@@ -107,6 +107,14 @@ class FutaberExtrasTest {
     @Test fun theOtherExtensionsAreOffByDefaultToo() {
         val defaults = FutaberDisplaySettings()
         assertFalse(defaults.extHistory); assertFalse(defaults.extMailPresets); assertFalse(defaults.extVolumeKeys)
+        // The B1 parity additions (2026-10-12) start off as well.
+        assertFalse(defaults.extTabsManage); assertFalse(defaults.extArchiveMenu); assertFalse(defaults.extSavedDetail)
+        assertFalse(defaults.extOtherFavorites); assertFalse(defaults.extScrollMenu); assertFalse(defaults.extSearchNav)
+        assertFalse(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
+        // The second half of B1: off as well, and the volume keys keep scrolling a screen.
+        assertFalse(defaults.extSortByBoard); assertFalse(defaults.extCatalogLongPress); assertFalse(defaults.extPostDetailOps)
+        assertFalse(defaults.extGalleryColumns); assertFalse(defaults.extImageMenu)
+        assertEquals(FutaberVolumeKeyMode.Screen, defaults.volumeKeyMode)
         val on = FutaberDisplaySettings.from(
             mapOf(
                 FutaberSettingKeys.EXT_HISTORY to "ON", FutaberSettingKeys.EXT_MAIL_PRESETS to "ON",

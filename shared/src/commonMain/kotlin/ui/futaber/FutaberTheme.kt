@@ -205,6 +205,12 @@ object FutaberTokens {
 
 val LocalFutaberColors = staticCompositionLocalOf { FutaberTokens.light }
 
+/**
+ * The custom font of the theme, for the text fields whose own [androidx.compose.ui.text.TextStyle] does not take the
+ * typography's font. Null (the default) is the same as not naming a font.
+ */
+val LocalFutaberCustomFont = staticCompositionLocalOf<androidx.compose.ui.text.font.FontFamily?> { null }
+
 @Composable
 fun FutaberTheme(
     mode: FutaberThemeMode,
@@ -213,6 +219,8 @@ fun FutaberTheme(
      * colour; false for the screens that show the plain bar (settings, writing).
      */
     statusFollowsTopBar: Boolean = true,
+    /** The shared custom font (拡張機能「カスタムフォント」); null keeps the typography exactly as before. */
+    fontFamily: androidx.compose.ui.text.font.FontFamily? = null,
     content: @Composable () -> Unit
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -246,8 +254,11 @@ fun FutaberTheme(
     val statusColor = if (statusFollowsTopBar) colors.topBar else colors.bar
     ApplyFutachaSystemBars(systemBarColor = statusColor, useDarkIcons = statusColor.luminance() > 0.5f)
     ApplyFutaberHostBackground(statusColor)
-    CompositionLocalProvider(LocalFutaberColors provides colors) {
-        MaterialTheme(colorScheme = scheme, typography = MaterialTheme.typography) {
+    CompositionLocalProvider(LocalFutaberColors provides colors, LocalFutaberCustomFont provides fontFamily) {
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = com.valoser.futacha.shared.ui.compat.compatibilityTypography(fontFamily, MaterialTheme.typography)
+        ) {
             Box(Modifier.fillMaxSize().background(colors.background)) {
                 content()
                 // Edge-to-edge hosts leave the system bars transparent; paint them with the bar colour.

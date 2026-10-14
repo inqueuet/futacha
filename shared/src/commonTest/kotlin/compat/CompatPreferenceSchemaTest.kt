@@ -57,6 +57,7 @@ class CompatPreferenceSchemaTest {
         assertEquals("@AndosanDev", groups[3].second[2].summary)
         assertEquals("8.5 Database v26", groups[3].second[3].summary)
         assertTrue(groups[4].second.any { it.title == "アップデート確認" })
+        assertTrue(groups[4].second.any { it.title == "読み上げ" && it.route == "speech" })
         assertTrue(groups[4].second.any { it.title == "保存済みスレッド" })
         assertTrue(groups[3].second.none { it.title in setOf("アップデート確認", "保存済みスレッド") })
     }

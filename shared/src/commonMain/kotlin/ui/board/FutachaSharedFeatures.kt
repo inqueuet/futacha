@@ -6,9 +6,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -56,9 +58,12 @@ internal class FutachaSharedFeatures(
     val openSettings: (String) -> Unit,
     val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {},
     val ngRulesState: State<List<com.valoser.futacha.shared.compat.CompatNgRule>?>? = null,
-    val appStateStore: com.valoser.futacha.shared.state.AppStateStore? = null
+    val appStateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
+    /** The host's sender of "閲覧スレ通知" (FutachaArchiveReport.kt); kept current by [ProvideFutachaSharedFeatures]. */
+    val archiveReport: FutachaArchiveReportHost = FutachaArchiveReportHost()
 ) {
     val catalogCache = FutachaCatalogMemoryCache()
+    val closedTabsUndo = FutachaClosedTabsUndo()
     val preferences: Map<String, String> get() = preferencesState.value
 
     private val preferenceReads = mutableMapOf<String, State<String?>>()
@@ -76,6 +81,29 @@ internal class FutachaSharedFeatures(
         }
 }
 
+/**
+ * "元に戻す" of the tabs ふたちゃ closed. The tab list keeps the pending batch the store remembers, and a tab closed
+ * elsewhere (the thread, the catalog) is offered by the host's snackbar; both can hold the same batch. The store's
+ * restore writes the batch's tabs back even when its record is gone, so one batch restored twice would bring back a
+ * tab closed again in between. A batch is restored once.
+ */
+internal class FutachaClosedTabsUndo {
+    private val mutex = kotlinx.coroutines.sync.Mutex()
+    // Snapshot state: the offers that show a restored batch go away (the snackbar, the list's button).
+    private val restoredIds = mutableStateMapOf<String, Unit>()
+
+    fun isRestored(batch: com.valoser.futacha.shared.compat.ClosedTabBatch): Boolean = batch.id in restoredIds
+
+    /** Restores [batch] unless it was restored already; true when it was restored now. */
+    suspend fun restore(store: CompatibilityStore, batch: com.valoser.futacha.shared.compat.ClosedTabBatch): Boolean =
+        mutex.withLock {
+            if (batch.id in restoredIds) return@withLock false
+            store.restoreClosedTabs(batch)
+            restoredIds[batch.id] = Unit
+            true
+        }
+}
+
 internal val LocalFutachaSharedFeatures = staticCompositionLocalOf<FutachaSharedFeatures?> { null }
 
 @Composable
@@ -88,6 +116,9 @@ internal fun ProvideFutachaSharedFeatures(
     appVersion: String,
     appStateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     catalogImageLoader: coil3.ImageLoader? = null,
+    /** "閲覧スレ通知": the host's sender (null = none, the default) and its reaction to the switch. */
+    onArchiveReportEnqueued: ((Int) -> Unit)? = null,
+    onArchiveReportEnabledChanged: (Boolean) -> Unit = {},
     content: @Composable () -> Unit
 ) {
     if (store == null) {
@@ -166,6 +197,10 @@ internal fun ProvideFutachaSharedFeatures(
         FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
             cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState, appStateStore = appStateStore)
     }
+    SideEffect {
+        features.archiveReport.onEnqueued = onArchiveReportEnqueued
+        features.archiveReport.onEnabledChanged = onArchiveReportEnabledChanged
+    }
     LaunchedEffect(closedBatch, notification) {
         if (closedBatch != null || notification != null) {
             delay(features.intValue("control", "controlCloseToastDuration", 1000..30000)?.toLong() ?: 7000L)
@@ -241,19 +276,22 @@ internal fun ProvideFutachaSharedFeatures(
         com.valoser.futacha.shared.ui.privacy.PrivacyModeHost(store, appStateStore, compatibilityMode = false) {
         Box(Modifier.fillMaxSize()) {
             content()
-            if (closedBatch != null || notification != null) Snackbar(
+            // A batch already restored (from the tab list) is no longer offered here.
+            val offeredBatch = closedBatch?.takeUnless(features.closedTabsUndo::isRestored)
+            if (offeredBatch != null || notification != null) Snackbar(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp),
-                action = { if (closedBatch != null) TextButton(
+                action = { if (offeredBatch != null) TextButton(
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inversePrimary),
+                    modifier = Modifier.testTag("futacha-closed-tabs-undo"),
                     onClick = {
-                    val batch = closedBatch ?: return@TextButton
+                    val batch = offeredBatch
                     scope.launch {
-                        try { store.restoreClosedTabs(batch); closedBatch = null }
+                        try { features.closedTabsUndo.restore(store, batch); closedBatch = null }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { notification = "タブを復元できませんでした"; closedBatch = null }
                     }
                 }) { Text("元に戻す") } }
-            ) { Text(if (closedBatch != null) "タブを閉じました" else notification.orEmpty()) }
+            ) { Text(if (offeredBatch != null) "タブを閉じました" else notification.orEmpty()) }
         }
         settingsPaths.lastOrNull()?.let { path ->
             val close = { settingsPaths = settingsPaths.dropLast(1) }
@@ -275,7 +313,9 @@ internal fun ProvideFutachaSharedFeatures(
                         cookieRepository = cookieRepository, appVersion = appVersion,
                         modernPresentation = true,
                         onOpenHelp = { settingsPaths = settingsPaths + "help" },
-                        onNavigate = { settingsPaths = settingsPaths + it }, onBack = close
+                        onNavigate = { settingsPaths = settingsPaths + it }, onBack = close,
+                        // Only for the restore: the boards it brings are added to the AppStateStore's list (the AI page keeps its state).
+                        restoreBoardsInto = appStateStore
                     )
                 }
             } }

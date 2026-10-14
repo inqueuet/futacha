@@ -543,12 +543,12 @@ private fun HistoryBottomIcon(
     }
 }
 
-private enum class HistoryArchiveAction {
+internal enum class HistoryArchiveAction {
     Export,
     Import
 }
 
-private suspend fun loadHistoryImportSelectionState(
+internal suspend fun loadHistoryImportSelectionState(
     loadPreview: suspend () -> FutachaHistoryArchivePreview?
 ): HistoryImportSelectionState = try {
     val preview = loadPreview()
@@ -592,7 +592,7 @@ internal class LatestOnlyLoad {
     }
 }
 
-private sealed interface HistoryImportSelectionState {
+internal sealed interface HistoryImportSelectionState {
     data object Hidden : HistoryImportSelectionState
     data object Loading : HistoryImportSelectionState
     data class Ready(val preview: FutachaHistoryArchivePreview) : HistoryImportSelectionState
@@ -600,26 +600,28 @@ private sealed interface HistoryImportSelectionState {
 }
 
 @Composable
-private fun HistoryArchiveActionDialog(
+internal fun HistoryArchiveActionDialog(
     action: HistoryArchiveAction,
     onDismiss: () -> Unit,
     onAllClick: () -> Unit,
     onExportThenClearClick: (() -> Unit)?,
-    onSelectedClick: () -> Unit
+    onSelectedClick: () -> Unit,
+    /** False for a mode that sends no analytics (ふたばー風); the other callers keep the default. */
+    trackAnalytics: Boolean = true
 ) {
     val title = if (action == HistoryArchiveAction.Export) "履歴エクスポート" else "履歴インポート"
     val allLabel = if (action == HistoryArchiveAction.Export) "すべてエクスポート" else "すべてインポート"
     val selectedLabel = if (action == HistoryArchiveAction.Export) "選択してエクスポート" else "選択してインポート"
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("history_archive_dialog", "履歴アーカイブ選択を閉じる")
+            historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴アーカイブ選択を閉じる")
             onDismiss()
         },
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = {
-                    AnalyticsTracker.uiControl(
+                    historyArchiveUiControl(trackAnalytics, 
                         "history_archive_dialog",
                         if (action == HistoryArchiveAction.Export) "全履歴をエクスポート" else "全履歴をインポート"
                     )
@@ -629,14 +631,14 @@ private fun HistoryArchiveActionDialog(
                 }
                 if (onExportThenClearClick != null) {
                     TextButton(onClick = {
-                        AnalyticsTracker.uiControl("history_archive_dialog", "履歴をエクスポートして全削除")
+                        historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴をエクスポートして全削除")
                         onExportThenClearClick()
                     }) {
                         Text("エクスポートして一括削除")
                     }
                 }
                 TextButton(onClick = {
-                    AnalyticsTracker.uiControl(
+                    historyArchiveUiControl(trackAnalytics, 
                         "history_archive_dialog",
                         if (action == HistoryArchiveAction.Export) "履歴を選択してエクスポート" else "履歴を選択してインポート"
                     )
@@ -649,7 +651,7 @@ private fun HistoryArchiveActionDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = {
-                AnalyticsTracker.uiControl("history_archive_dialog", "履歴アーカイブ選択を閉じる")
+                historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴アーカイブ選択を閉じる")
                 onDismiss()
             }) {
                 Text("閉じる")
@@ -659,10 +661,11 @@ private fun HistoryArchiveActionDialog(
 }
 
 @Composable
-private fun HistoryExportSelectionDialog(
+internal fun HistoryExportSelectionDialog(
     history: List<ThreadHistoryEntry>,
     onDismiss: () -> Unit,
-    onExport: (List<ThreadHistoryEntry>) -> Unit
+    onExport: (List<ThreadHistoryEntry>) -> Unit,
+    trackAnalytics: Boolean = true
 ) {
     // Keyed by thread identity and kept while the dialog is open: history
     // changes (visits, refreshes) shift indices and used to reset the choice.
@@ -671,7 +674,7 @@ private fun HistoryExportSelectionDialog(
     }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("history_export_selection", "履歴エクスポート選択を閉じる")
+            historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート選択を閉じる")
             onDismiss()
         },
         title = { Text("エクスポートする履歴") },
@@ -680,7 +683,7 @@ private fun HistoryExportSelectionDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         selectedKeys = history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey)
-                        AnalyticsTracker.uiControl(
+                        historyArchiveUiControl(trackAnalytics, 
                             "history_export_selection",
                             "履歴エクスポート対象を全選択",
                             mapOf("selection_count_bucket" to analyticsCountBucket(selectedKeys.size))
@@ -690,7 +693,7 @@ private fun HistoryExportSelectionDialog(
                     }
                     TextButton(onClick = {
                         selectedKeys = linkedSetOf()
-                        AnalyticsTracker.uiControl("history_export_selection", "履歴エクスポート対象を全解除")
+                        historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート対象を全解除")
                     }) {
                         Text("解除")
                     }
@@ -711,7 +714,7 @@ private fun HistoryExportSelectionDialog(
                                 selectedKeys = selectedKeys.toMutableSet().also { keys ->
                                     if (checked) keys.add(key) else keys.remove(key)
                                 }.toCollection(linkedSetOf())
-                                AnalyticsTracker.uiControl(
+                                historyArchiveUiControl(trackAnalytics, 
                                     "history_export_selection",
                                     if (checked) "履歴をエクスポート対象に追加" else "履歴をエクスポート対象から除外",
                                     mapOf("selection_count_bucket" to analyticsCountBucket(selectedKeys.size))
@@ -729,7 +732,7 @@ private fun HistoryExportSelectionDialog(
                     val selectedEntries = history.filter { entry ->
                         buildHistoryExportSelectionKey(entry) in selectedKeys
                     }
-                    AnalyticsTracker.uiControl(
+                    historyArchiveUiControl(trackAnalytics, 
                         "history_export_selection",
                         "選択した履歴をエクスポート",
                         mapOf("selection_count_bucket" to analyticsCountBucket(selectedEntries.size))
@@ -742,7 +745,7 @@ private fun HistoryExportSelectionDialog(
         },
         dismissButton = {
             TextButton(onClick = {
-                AnalyticsTracker.uiControl("history_export_selection", "履歴エクスポート選択を閉じる")
+                historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート選択を閉じる")
                 onDismiss()
             }) {
                 Text("閉じる")
@@ -797,10 +800,10 @@ private fun HistoryEntrySelectionRow(
 }
 
 @Composable
-private fun HistoryImportLoadingDialog(onDismiss: () -> Unit) {
+internal fun HistoryImportLoadingDialog(onDismiss: () -> Unit, trackAnalytics: Boolean = true) {
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("history_import_loading", "履歴インポート読み込みを閉じる")
+            historyArchiveUiControl(trackAnalytics, "history_import_loading", "履歴インポート読み込みを閉じる")
             onDismiss()
         },
         title = { Text("履歴アーカイブ") },
@@ -816,7 +819,7 @@ private fun HistoryImportLoadingDialog(onDismiss: () -> Unit) {
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = {
-                AnalyticsTracker.uiControl("history_import_loading", "履歴インポート読み込みを閉じる")
+                historyArchiveUiControl(trackAnalytics, "history_import_loading", "履歴インポート読み込みを閉じる")
                 onDismiss()
             }) {
                 Text("閉じる")
@@ -826,20 +829,21 @@ private fun HistoryImportLoadingDialog(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun HistoryImportErrorDialog(
+internal fun HistoryImportErrorDialog(
     message: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    trackAnalytics: Boolean = true
 ) {
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("history_import_error", "履歴インポートエラーを閉じる")
+            historyArchiveUiControl(trackAnalytics, "history_import_error", "履歴インポートエラーを閉じる")
             onDismiss()
         },
         title = { Text("履歴アーカイブ") },
         text = { Text(message) },
         confirmButton = {
             TextButton(onClick = {
-                AnalyticsTracker.uiControl("history_import_error", "履歴インポートエラーを確認")
+                historyArchiveUiControl(trackAnalytics, "history_import_error", "履歴インポートエラーを確認")
                 onDismiss()
             }) {
                 Text("OK")
@@ -849,17 +853,18 @@ private fun HistoryImportErrorDialog(
 }
 
 @Composable
-private fun HistoryImportSelectionDialog(
+internal fun HistoryImportSelectionDialog(
     preview: FutachaHistoryArchivePreview,
     onDismiss: () -> Unit,
-    onImport: (Set<String>) -> Unit
+    onImport: (Set<String>) -> Unit,
+    trackAnalytics: Boolean = true
 ) {
     var selectedSnapshotIds by remember(preview) {
         mutableStateOf(preview.entries.mapTo(linkedSetOf()) { it.snapshotId })
     }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("history_import_selection", "履歴インポート選択を閉じる")
+            historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート選択を閉じる")
             onDismiss()
         },
         title = { Text("インポートする履歴") },
@@ -873,7 +878,7 @@ private fun HistoryImportSelectionDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         selectedSnapshotIds = preview.entries.mapTo(linkedSetOf()) { it.snapshotId }
-                        AnalyticsTracker.uiControl(
+                        historyArchiveUiControl(trackAnalytics, 
                             "history_import_selection",
                             "履歴インポート対象を全選択",
                             mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
@@ -883,7 +888,7 @@ private fun HistoryImportSelectionDialog(
                     }
                     TextButton(onClick = {
                         selectedSnapshotIds = linkedSetOf()
-                        AnalyticsTracker.uiControl("history_import_selection", "履歴インポート対象を全解除")
+                        historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート対象を全解除")
                     }) {
                         Text("解除")
                     }
@@ -903,7 +908,7 @@ private fun HistoryImportSelectionDialog(
                                 selectedSnapshotIds = selectedSnapshotIds.toMutableSet().also { ids ->
                                     if (checked) ids.add(entry.snapshotId) else ids.remove(entry.snapshotId)
                                 }.toCollection(linkedSetOf())
-                                AnalyticsTracker.uiControl(
+                                historyArchiveUiControl(trackAnalytics, 
                                     "history_import_selection",
                                     if (checked) "履歴をインポート対象に追加" else "履歴をインポート対象から除外",
                                     mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
@@ -918,7 +923,7 @@ private fun HistoryImportSelectionDialog(
             TextButton(
                 enabled = selectedSnapshotIds.isNotEmpty(),
                 onClick = {
-                    AnalyticsTracker.uiControl(
+                    historyArchiveUiControl(trackAnalytics, 
                         "history_import_selection",
                         "選択した履歴をインポート",
                         mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
@@ -931,13 +936,18 @@ private fun HistoryImportSelectionDialog(
         },
         dismissButton = {
             TextButton(onClick = {
-                AnalyticsTracker.uiControl("history_import_selection", "履歴インポート選択を閉じる")
+                historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート選択を閉じる")
                 onDismiss()
             }) {
                 Text("閉じる")
             }
         }
     ) }
+}
+
+/** The history archive dialogs' analytics, skipped for a mode that sends none. */
+private fun historyArchiveUiControl(track: Boolean, control: String, label: String, params: Map<String, String> = emptyMap()) {
+    if (track) AnalyticsTracker.uiControl(control, label, params)
 }
 
 @Composable

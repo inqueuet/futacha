@@ -11,6 +11,27 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CompatDeletedPostPresentationTest {
+    @Test
+    fun hidingRowsPreservesNumbersAndPositionsWithoutMutatingSource() = runBlocking {
+        val rows = listOf(post("1"), post("2", isDeleted = true), post("3", isIsolated = true), post("4"))
+        val hidden = presentCompatPostsForDeletedVisibilityOffMain(rows, showDeletedContent = false, hideDeletedRows = true)
+        assertEquals(listOf("1", "4"), hidden.map { it.postNo })
+        assertEquals(listOf(1, 4), hidden.map { it.position })
+        assertEquals(4, rows.size)
+        assertEquals("元の本文", rows[1].messageHtml)
+        assertEquals(rows, presentCompatPostsForDeletedVisibilityOffMain(rows, showDeletedContent = true))
+    }
+
+    @Test
+    fun deletionSettingKeepsLegacyValuesAndOffersIndependentRowHiding() {
+        val entry = CompatSettingEntry("削除されたレスを表示", "OFF", preferenceKey = "threadAdminDeleteShow")
+        assertFalse(compatIsBooleanPreference("thread", entry))
+        assertEquals(listOf("通知のみ", "本文表示", "レス非表示"), compatPreferenceOptions("thread", entry))
+        for ((stored, label) in listOf("OFF" to "通知のみ", "ON" to "本文表示", "HIDE" to "レス非表示")) {
+            assertEquals(label, compatPreferenceDisplayValue(entry.preferenceKey, stored))
+            assertEquals(stored, compatPreferenceStoredValue(entry.preferenceKey, label))
+        }
+    }
     private fun post(
         no: String,
         isDeleted: Boolean = false,

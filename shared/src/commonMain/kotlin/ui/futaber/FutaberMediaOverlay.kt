@@ -54,6 +54,8 @@ internal fun FutaberMediaOverlay(
     services: FutaberMediaServices,
     /** Post numbers NG hides in the thread (words, IDs, rules, look-alike pictures); they are left out of the gallery and the viewer. */
     hiddenPostNos: Set<String> = emptySet(),
+    /** The post whose picture the viewer opens on at once ("ビューアで表示" of the image menu); null opens the picture list. */
+    initialPostNo: String? = null,
     onShowPost: (postId: String) -> Unit,
     onClose: () -> Unit
 ) {
@@ -83,6 +85,17 @@ internal fun FutaberMediaOverlay(
         snapshot?.let {
             compatViewerMediaPosts(posts = it.posts, hiddenImages = hiddenImages, hiddenPostNos = hiddenPostNos)
         }.orEmpty()
+    }
+    // "ビューアで表示": once the pictures are known, the viewer opens on that post's picture (only once; back goes to the list).
+    var initialApplied by rememberSaveable { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(snapshot, mediaPosts, initialPostNo) {
+        if (initialApplied || initialPostNo == null || snapshot == null) return@LaunchedEffect
+        initialApplied = true
+        val index = mediaPosts.indexOfFirst { it.postNo == initialPostNo }
+        if (index >= 0) {
+            viewerIndex = index
+            viewerPostNo = com.valoser.futacha.shared.ui.compat.compatMediaIdentity(mediaPosts[index])
+        }
     }
     FutachaAppLockAwareWindow {
         Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -143,6 +156,21 @@ internal fun FutaberMediaOverlay(
                                 onClose = onClose
                             )
                         }
+                        // B7b (FutaberParityB7b.kt): the shared list with the selection save (an extension, off by default).
+                        FutaberDisplaySettings.from(preferences).extGallerySelectSave -> FutaberSelectSaveGallery(
+                            tab = tab,
+                            snapshot = snapshot,
+                            hiddenPostNos = hiddenPostNos,
+                            mediaPosts = mediaPosts,
+                            services = services,
+                            preferences = preferences,
+                            ngRules = ngRules,
+                            gridState = galleryGridState,
+                            onOpenViewer = { index, identity -> viewerIndex = index; viewerPostNo = identity },
+                            onShowPost = onShowPost,
+                            onOpenSettings = { settingsPaths = listOf("viewer") },
+                            onClose = onClose
+                        )
                         else -> FutaberGalleryScreen(
                             mediaPosts = mediaPosts,
                             gridState = galleryGridState,
@@ -151,7 +179,11 @@ internal fun FutaberMediaOverlay(
                                 viewerPostNo = postNo
                             },
                             onOpenSettings = { settingsPaths = listOf("viewer") },
-                            onClose = onClose
+                            onClose = onClose,
+                            // The shared viewer settings' column counts (an extension); the original's 3 otherwise.
+                            sharedColumns = if (FutaberDisplaySettings.from(preferences).extGalleryColumns) {
+                                futaberSharedGalleryColumns(preferences)
+                            } else null
                         )
                     }
                 }

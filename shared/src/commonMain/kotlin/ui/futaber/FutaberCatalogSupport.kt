@@ -13,6 +13,8 @@ import com.valoser.futacha.shared.model.normalizeCatalogSearchText
 internal object FutaberPreferenceKeys {
     const val CATALOG_DISPLAY_STYLE = "compat.futaber.catalog.displayStyle"
     const val CATALOG_SORT = "compat.futaber.catalog.sort"
+    /** The sort order of each board (board id -> catalog mode, a JSON object), while "板ごとに表示順序を記憶" is on. */
+    const val CATALOG_SORT_BY_BOARD = "compat.futaber.catalog.sortByBoard"
     const val THEME = "compat.futaber.theme"
     const val LAST_BOARD_ID = "compat.futaber.lastBoardId"
     const val TABS = "compat.futaber.tabs"
@@ -65,8 +67,9 @@ internal val futaberCatalogSorts: List<FutaberCatalogSort> = listOf(
 
 internal val futaberDefaultCatalogMode: CatalogMode = CatalogMode.Catalog
 
-internal fun futaberCatalogModeFromPersisted(value: String?): CatalogMode =
-    futaberCatalogSorts.firstOrNull { it.mode.name == value }?.mode ?: futaberDefaultCatalogMode
+/** The stored sort; "そ順" / "監視" (the B7a extension) read as "通常" unless [extraModes] is on. */
+internal fun futaberCatalogModeFromPersisted(value: String?, extraModes: Boolean = false): CatalogMode =
+    futaberCatalogSortsFor(extraModes).firstOrNull { it.mode.name == value }?.mode ?: futaberDefaultCatalogMode
 
 /** Title match, ignoring width, case and kana type; a blank query keeps every thread. */
 internal fun filterFutaberCatalog(items: List<CatalogItem>, query: String): List<CatalogItem> {

@@ -535,9 +535,9 @@ class HistoryRefreshWorker(
     }
 }
 
-/** ふたばー風モードはAnalyticsを送らない。判定はデータの所有者ではなくプロファイル自体で行う。 */
+/** ふたばー風・ふたったー風モードはAnalyticsを送らない。判定はデータの所有者ではなくプロファイル自体で行う。 */
 internal fun shouldSendBackgroundRefreshAnalytics(profile: ExperienceProfile): Boolean =
-    profile != ExperienceProfile.FUTABER
+    profile != ExperienceProfile.FUTABER && profile != ExperienceProfile.FTUTTER
 
 private fun trackBackgroundRefreshEvent(
     profile: ExperienceProfile,

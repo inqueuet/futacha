@@ -33,6 +33,12 @@ private val IOS_SPEECH_BOUNDARY_IMMEDIATE = AVSpeechBoundary.AVSpeechBoundaryImm
 private const val IOS_SPEECH_RELEASE_GRACE_NANOS = 1_000_000_000L
 
 actual class TextSpeaker actual constructor(platformContext: Any?) {
+    actual val supportsPitch: Boolean = true
+    private var speechSettings = SpeechSettings()
+    actual fun configure(settings: SpeechSettings) { stateLock.withLock { speechSettings = settings } }
+    actual suspend fun availableVoices(): List<SpeechVoice> = AVSpeechSynthesisVoice.speechVoices()
+        .filterIsInstance<AVSpeechSynthesisVoice>().filter { it.language.startsWith("ja") }
+        .sortedBy { it.name }.map { SpeechVoice(it.identifier, it.name) }
     private val stateLock = NSLock()
     private val synthesizer = AVSpeechSynthesizer()
     private var activeContinuation: CancellableContinuation<Unit>? = null
@@ -103,12 +109,17 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
 
-        withTimeout(calculateTextSpeakerTimeoutMillis(text)) {
+        withTimeout(calculateTextSpeakerTimeoutMillis(text, stateLock.withLock { speechSettings.rate })) {
             prepare()
-            val japaneseVoice = checkNotNull(AVSpeechSynthesisVoice.voiceWithLanguage(IOS_JAPANESE_VOICE))
+            val settings = stateLock.withLock { speechSettings }
+            val japaneseVoice = AVSpeechSynthesisVoice.voiceWithIdentifier(settings.voiceId)
+                ?.takeIf { it.language.startsWith("ja") }
+                ?: checkNotNull(AVSpeechSynthesisVoice.voiceWithLanguage(IOS_JAPANESE_VOICE))
             suspendCancellableCoroutine<Unit> { continuation ->
                 val utterance = AVSpeechUtterance(string = text).apply {
                     voice = japaneseVoice
+                    rate = platform.AVFAudio.AVSpeechUtteranceDefaultSpeechRate * settings.rate.coerceIn(0.5f, 2f)
+                    pitchMultiplier = settings.pitch.coerceIn(0.5f, 2f)
                 }
 
                 val previousContinuation = stateLock.withLock {

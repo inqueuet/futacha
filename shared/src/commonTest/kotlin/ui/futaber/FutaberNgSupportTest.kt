@@ -57,7 +57,7 @@ class FutaberNgSupportTest {
         assertSame(one, futaberAddNgEntry(one, "   "))
         assertEquals(listOf("abc"), futaberAddNgEntry(emptyList(), "abc"))
         assertEquals(1, futaberAddNgEntry(listOf("ABC"), "abc").size)
-        assertEquals(FUTABER_NG_MAX_LENGTH, futaberAddNgEntry(emptyList(), "あ".repeat(500)).single().length)
+        assertEquals(FUTABER_NG_MAX_LENGTH, futaberAddNgEntry(emptyList(), "あ".repeat(FUTABER_NG_MAX_LENGTH + 500)).single().length)
         val full = (1..FUTABER_NG_MAX_ENTRIES).map { "w$it" }
         assertSame(full, futaberAddNgEntry(full, "new"))
         assertEquals(listOf("b"), futaberRemoveNgEntry(listOf("a", "b"), "a"))
@@ -71,5 +71,15 @@ class FutaberNgSupportTest {
         val emoji = "\uD83D\uDE00"
         val added = futaberAddNgEntry(emptyList(), "a".repeat(FUTABER_NG_MAX_LENGTH - 1) + emoji).single()
         assertEquals(FUTABER_NG_MAX_LENGTH - 1, added.length)
+    }
+
+    @Test
+    fun theLimitsAreTheOnesTheStoreKeepsSoAListFilledInFutachaStillTakesAnAddition() {
+        // ふたちゃ can fill a list up to the store's limits; a lower limit here refused additions to such a list.
+        assertEquals(com.valoser.futacha.shared.state.APP_STATE_STRING_LIST_MAX_ENTRIES, FUTABER_NG_MAX_ENTRIES)
+        assertEquals(com.valoser.futacha.shared.state.APP_STATE_STRING_ENTRY_MAX_CHARS, FUTABER_NG_MAX_LENGTH)
+        val filledInFutacha = (1..(FUTABER_NG_MAX_ENTRIES - 1)).map { "w$it" }
+        assertEquals(FUTABER_NG_MAX_ENTRIES, futaberAddNgEntry(filledInFutacha, "new").size)
+        assertTrue(filledInFutacha.size > 200)
     }
 }

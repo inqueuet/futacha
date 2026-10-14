@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.ui.futaber
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -104,11 +107,21 @@ internal fun FutaberManagePanel(
     onClearTabs: () -> Unit,
     onClose: () -> Unit,
     /** Refreshes the threads of the history ("一括更新" of the history band, an extension); null hides the button. */
-    onRefreshHistory: (suspend () -> Unit)? = null
+    onRefreshHistory: (suspend () -> Unit)? = null,
+    /** A row whose board is not registered asks to add the board and opens it (official boards); null keeps it disabled. */
+    onAddBoardAndOpen: ((FutaberBoardAddRequest) -> Unit)? = null,
+    /** Set with the saved-box extension: a long press on a saved thread shows how complete the save is. */
+    onReopenSaved: ((SavedThread) -> Unit)? = null,
+    /** The other modes' tabs (with the favourites extension): their starred threads are listed under the own ones. */
+    otherModeTabs: kotlinx.coroutines.flow.Flow<List<com.valoser.futacha.shared.compat.CompatTab>>? = null,
+    onOpenOtherFavorite: (BoardSummary, FutaberThreadRef) -> Unit = { _, _ -> },
+    /** The history band's "全件削除" and "アーカイブ" (the batch B4 extensions); the defaults add nothing. */
+    historyTools: FutaberHistoryTools = FutaberHistoryTools()
 ) {
     val colors = LocalFutaberColors.current
     var category by rememberSaveable { mutableStateOf(FutaberManageCategory.History) }
     var editing by rememberSaveable { mutableStateOf(false) }
+    var savedStatus by remember { mutableStateOf<SavedThread?>(null) }
     PlatformBackHandler(onBack = onClose)
 
     // The panel's own empty areas (header, gaps between icons, an empty list's message) take the touch themselves: a
@@ -187,7 +200,8 @@ internal fun FutaberManagePanel(
                                     deleteLabel = "${saved.title}を保存箱から削除",
                                     rowTag = "futaber-saved-row",
                                     onOpen = { onOpenSaved(saved) },
-                                    onDelete = { onDeleteSaved(saved) }
+                                    onDelete = { onDeleteSaved(saved) },
+                                    onLongPress = if (onReopenSaved != null) ({ savedStatus = saved }) else null
                                 )
                             }
                         }
@@ -228,6 +242,7 @@ internal fun FutaberManagePanel(
                             LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("futaber-notifications-list")) {
                                 items(notifications, key = { it.history.canonicalUrl }) { result ->
                                     val openable = futaberRefForWatchResult(result, boards) != null
+                                    val addRequest = if (openable || onAddBoardAndOpen == null) null else futaberBoardAddRequestForWatchResult(result)
                                     ManageRow(
                                         title = result.history.title.ifBlank { "(無題)" },
                                         thumbnail = result.history.thumbnailUrl.orEmpty(),
@@ -235,10 +250,10 @@ internal fun FutaberManagePanel(
                                         trailing = null,
                                         count = result.history.replyCount,
                                         editing = editing,
-                                        enabled = openable,
+                                        enabled = openable || addRequest != null,
                                         deleteLabel = "${result.history.title}を通知から削除",
                                         rowTag = "futaber-notification-row",
-                                        onOpen = { onOpenNotification(result) },
+                                        onOpen = { if (addRequest != null) onAddBoardAndOpen?.invoke(addRequest) else onOpenNotification(result) },
                                         onDelete = { onRemoveNotification(result) }
                                     )
                                 }
@@ -247,12 +262,15 @@ internal fun FutaberManagePanel(
                     }
                 }
                 FutaberManageCategory.Favorites -> Column(Modifier.fillMaxSize()) {
+                    val otherSource = remember(otherModeTabs) { otherModeTabs ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
+                    val otherTabs by otherSource.collectAsState(emptyList())
+                    val others = remember(otherTabs, boards) { futaberOtherModeFavorites(otherTabs, boards) }
                     if (editing && favorites.isNotEmpty()) {
                         TextButton(onClick = onClearFavorites, modifier = Modifier.testTag("futaber-favorites-clear")) {
                             Text("すべて削除", color = colors.link)
                         }
                     }
-                    if (favorites.isEmpty()) {
+                    if (favorites.isEmpty() && others.isEmpty()) {
                         FutaberMessage("お気に入りはありません。スレッドの操作メニューから追加できます")
                     } else {
                         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("futaber-favorites-list")) {
@@ -272,10 +290,38 @@ internal fun FutaberManagePanel(
                                     onDelete = { onRemoveFavorite(view) }
                                 )
                             }
+                            if (others.isNotEmpty()) {
+                                item(key = "other-favorites-header") {
+                                    MhtSectionTitle("他のモードのお気に入り（読み取り専用）", Modifier.testTag("futaber-other-favorites-header"))
+                                }
+                                items(others, key = { "other:" + it.tab.key }) { other ->
+                                    val ref = other.ref
+                                    val target = ref?.let { r -> boards.firstOrNull { it.id == r.boardId } }
+                                    val addRequest = if (target != null || onAddBoardAndOpen == null) null else futaberBoardAddRequestForOtherFavorite(other)
+                                    ManageRow(
+                                        title = other.tab.title.ifBlank { "(無題)" },
+                                        thumbnail = other.tab.thumbnailUrl.orEmpty(),
+                                        subtitle = other.tab.boardName + if (target != null) "" else "（板が未登録）",
+                                        trailing = null,
+                                        count = other.tab.replyCount,
+                                        // Read only: no delete button even while editing the own favourites.
+                                        editing = false,
+                                        enabled = target != null || addRequest != null,
+                                        deleteLabel = "",
+                                        rowTag = "futaber-other-favorite-row",
+                                        onOpen = {
+                                            if (target != null && ref != null) onOpenOtherFavorite(target, ref)
+                                            else addRequest?.let { onAddBoardAndOpen?.invoke(it) }
+                                        },
+                                        onDelete = {}
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-                FutaberManageCategory.History -> if (history.isEmpty()) {
+                // With the archive extension on, the band stays even with nothing listed (an archive can be read in).
+                FutaberManageCategory.History -> if (history.isEmpty() && historyTools.onOpenArchive == null) {
                     FutaberMessage("閲覧したスレッドはまだありません")
                 } else Column(Modifier.fillMaxSize()) {
                     val bandOn = LocalFutaberDisplaySettings.current.extHistory
@@ -283,13 +329,22 @@ internal fun FutaberManagePanel(
                     val shown = remember(history, viewSettings, bandOn) {
                         futaberDistinctHistoryRows(if (bandOn) applyHistoryViewSettings(history, viewSettings) else history)
                     }
-                    if (bandOn) {
-                        FutaberHistoryBand(viewSettings, { viewSettings = it }, shown.size, history.size, onRefreshHistory)
+                    if (bandOn || historyTools.onOpenArchive != null) {
+                        val viewTools = bandOn && history.isNotEmpty()
+                        FutaberHistoryBand(
+                            viewSettings, { viewSettings = it }, shown.size, history.size,
+                            onRefresh = if (viewTools) onRefreshHistory else null,
+                            showViewTools = viewTools,
+                            onClearAll = if (viewTools) historyTools.onClearAll else null,
+                            onOpenArchive = historyTools.onOpenArchive
+                        )
                     }
-                    if (shown.isEmpty()) FutaberMessage("条件に合う履歴はありません") else
+                    if (history.isEmpty()) FutaberMessage("閲覧したスレッドはまだありません")
+                    else if (shown.isEmpty()) FutaberMessage("条件に合う履歴はありません") else
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("futaber-history-list")) {
                         items(shown, key = ::futaberHistoryRowKey) { entry ->
                             val openable = futaberRefForHistory(entry, boards) != null
+                            val addRequest = if (openable || onAddBoardAndOpen == null) null else futaberBoardAddRequestForHistory(entry)
                             ManageRow(
                                 title = entry.title.ifBlank { "(無題)" },
                                 thumbnail = entry.titleImageUrl,
@@ -298,10 +353,10 @@ internal fun FutaberManagePanel(
                                 trailing = formatLastVisited(entry.lastVisitedEpochMillis),
                                 count = entry.replyCount,
                                 editing = editing,
-                                enabled = openable,
+                                enabled = openable || addRequest != null,
                                 deleteLabel = "${entry.title}を履歴から削除",
                                 rowTag = "futaber-history-row",
-                                onOpen = { onOpenHistory(entry) },
+                                onOpen = { if (addRequest != null) onAddBoardAndOpen?.invoke(addRequest) else onOpenHistory(entry) },
                                 onDelete = { onDeleteHistory(entry) }
                             )
                         }
@@ -362,6 +417,14 @@ internal fun FutaberManagePanel(
             }
         }
     }
+    savedStatus?.let { saved ->
+        val reopen = onReopenSaved
+        FutaberSavedStatusDialog(
+            saved = saved,
+            onReopen = if (reopen != null && futaberBoardForSaved(saved, boards) != null) ({ reopen(saved) }) else null,
+            onDismiss = { savedStatus = null }
+        )
+    }
 }
 
 /** Height of the panel's own header and category bar. */
@@ -371,6 +434,7 @@ internal const val FUTABER_PANEL_BAR_HEIGHT_DP = 44
  * One row of the panel as in the original app: a square thumbnail, the title with the count at
  * the right, and under it the board on the left and the time on the right.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ManageRow(
     title: String,
@@ -388,13 +452,21 @@ private fun ManageRow(
     /** An extra button at the right end (the MHT rows share their file from here). */
     endAction: (@Composable () -> Unit)? = null,
     /** A line under the board and date (the history marks of the history extension); nothing when null. */
-    marks: String? = null
+    marks: String? = null,
+    /** A long press (the saved box's status, an extension); null keeps the row a plain tap target. */
+    onLongPress: (() -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
     Column {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 58.dp)
-                .clickable(enabled = enabled && !editing, onClickLabel = "スレッドを開く", onClick = onOpen)
+                .then(
+                    if (onLongPress == null) Modifier.clickable(enabled = enabled && !editing, onClickLabel = "スレッドを開く", onClick = onOpen)
+                    else Modifier.combinedClickable(
+                        enabled = !editing, onClickLabel = "スレッドを開く", onLongClickLabel = "保存状態を表示",
+                        onClick = { if (enabled) onOpen() }, onLongClick = onLongPress
+                    )
+                )
                 .padding(horizontal = 8.dp, vertical = 4.dp)
                 .testTag(rowTag),
             verticalAlignment = Alignment.CenterVertically
@@ -453,11 +525,11 @@ private fun ManageRow(
 }
 
 @Composable
-private fun MhtSectionTitle(text: String) {
+private fun MhtSectionTitle(text: String, modifier: Modifier = Modifier) {
     val colors = LocalFutaberColors.current
     Text(
         text, color = colors.meta, fontSize = 12.sp,
-        modifier = Modifier.fillMaxWidth().background(colors.catalogGap).padding(horizontal = 12.dp, vertical = 6.dp)
+        modifier = modifier.fillMaxWidth().background(colors.catalogGap).padding(horizontal = 12.dp, vertical = 6.dp)
     )
 }
 

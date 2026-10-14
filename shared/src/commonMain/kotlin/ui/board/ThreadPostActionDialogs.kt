@@ -53,7 +53,10 @@ internal fun ThreadPostActionSheet(
     onSaidane: () -> Unit,
     isSaidaneEnabled: Boolean = true,
     onDelRequest: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onQuickQuote: (() -> Unit)? = null,
+    onSelectCopy: (() -> Unit)? = null,
+    onSelectSearch: (() -> Unit)? = null
 ) {
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     var showReportConfirmation by remember(post.id) { mutableStateOf(false) }
@@ -150,6 +153,11 @@ internal fun ThreadPostActionSheet(
                     onDelete()
                 }
             )
+            if (LocalFutachaSharedFeatures.current != null &&
+                onQuickQuote != null && onSelectCopy != null && onSelectSearch != null
+            ) {
+                FutachaPostExtraActionRows(onQuickQuote, onSelectCopy, onSelectSearch)
+            }
             Spacer(modifier = Modifier.height(8.dp))
         }
     } }

@@ -3,7 +3,12 @@ package com.valoser.futacha.shared.ui.futaber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -65,10 +70,13 @@ internal fun futaberRemoteActionBlockedReason(action: FutaberRemoteAction, offli
 internal fun FutaberRemoteActionDialog(
     action: FutaberRemoteAction,
     postNumber: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onConfirm: (imageOnly: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    /** Shows "画像だけ消す" (the post detail extension, for an own post that has a picture). */
+    offerImageOnly: Boolean = false
 ) {
     val colors = LocalFutaberColors.current
+    var imageOnly by remember(action, postNumber) { mutableStateOf(false) }
     FutachaAppLockAwareWindow {
         AlertDialog(
             onDismissRequest = onDismiss,
@@ -76,9 +84,18 @@ internal fun FutaberRemoteActionDialog(
             titleContentColor = colors.body,
             textContentColor = colors.body,
             title = { Text(action.confirmTitle.orEmpty()) },
-            text = { Text("No.$postNumber\n${action.confirmBody}") },
+            text = {
+                if (offerImageOnly) {
+                    Column {
+                        Text("No.$postNumber\n${action.confirmBody}")
+                        FutaberImageOnlyCheckRow(imageOnly) { imageOnly = it }
+                    }
+                } else {
+                    Text("No.$postNumber\n${action.confirmBody}")
+                }
+            },
             confirmButton = {
-                TextButton(onClick = onConfirm, modifier = Modifier.testTag("futaber-remote-confirm")) {
+                TextButton(onClick = { onConfirm(offerImageOnly && imageOnly) }, modifier = Modifier.testTag("futaber-remote-confirm")) {
                     Text(action.confirmLabel, color = colors.accent)
                 }
             },

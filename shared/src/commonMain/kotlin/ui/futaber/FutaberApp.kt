@@ -180,7 +180,20 @@ internal fun FutaberApp(
     initialBoardDeepLink: String? = null,
     onBoardDeepLinkConsumed: (String) -> Unit = {},
     /** The host's handling of the watch-word alert switch (it asks for the notification permission); null = just store it. */
-    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null
+    onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null,
+    /** A line for the person from the host (e.g. an AI command this mode does not run); shown once, then [onExternalNoticeShown]. */
+    externalNotice: String? = null,
+    onExternalNoticeShown: () -> Unit = {},
+    /**
+     * Wraps everything inside the mode's theme, so the dialogs of the shared media editors (picked from the operation
+     * menu or the settings) take this mode's colours. The default draws the content as it is.
+     */
+    mediaHost: @Composable (content: @Composable () -> Unit) -> Unit = { it() },
+    /** "閲覧スレ通知": the host's sender (the number waiting to be sent); null = nothing is sent from here. */
+    onArchiveReportEnqueued: ((Int) -> Unit)? = null,
+    onArchiveReportEnabledChanged: (Boolean) -> Unit = {},
+    /** B8: the AI commands received at the app root (FutaberAiCommands.kt); null runs none here. */
+    aiInbox: FutaberAiInbox? = null
 ) {
     val scope = rememberCoroutineScope()
     val mockRepository = remember { FakeBoardRepository() }
@@ -188,7 +201,6 @@ internal fun FutaberApp(
     val themeMode = FutaberThemeMode.fromPersistedValue(preferences[FutaberPreferenceKeys.THEME])
     val displaySettings = FutaberDisplaySettings.from(preferences)
     val displayStyle = FutaberCatalogDisplayStyle.fromPersistedValue(preferences[FutaberPreferenceKeys.CATALOG_DISPLAY_STYLE])
-    val sortMode = futaberCatalogModeFromPersisted(preferences[FutaberPreferenceKeys.CATALOG_SORT])
 
     var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
     var openThread by rememberSaveable(stateSaver = FutaberThreadRefSaver) { mutableStateOf<FutaberThreadRef?>(null) }
@@ -198,6 +210,11 @@ internal fun FutaberApp(
     // A line at the bottom for what the person should know (a failed save, a full tab list); it goes away by itself.
     var appNotice by remember { mutableStateOf<String?>(null) }
     val notify: (String) -> Unit = { appNotice = it }
+    LaunchedEffect(externalNotice) {
+        val text = externalNotice ?: return@LaunchedEffect
+        appNotice = text
+        onExternalNoticeShown()
+    }
     val openInBrowser = com.valoser.futacha.shared.util.rememberUrlLauncher()
     var catalogReport by remember { mutableStateOf<Pair<BoardSummary, CatalogItem>?>(null) }
     var reportingCatalog by remember { mutableStateOf(false) }
@@ -228,6 +245,8 @@ internal fun FutaberApp(
     val board = boards.firstOrNull { it.id == selectedBoardId }
         ?: boards.firstOrNull { it.id == preferences[FutaberPreferenceKeys.LAST_BOARD_ID] }
         ?: boards.firstOrNull()
+    // The catalog's sort: one value for every board, or (an extension) each board's own with that value as the fallback.
+    val sortMode = futaberCatalogSortFor(preferences, board?.id, displaySettings.extSortByBoard, displaySettings.extCatalogModes)
     // A thread of a board that was deleted or is no longer selected is closed.
     val thread = openThread?.takeIf { it.boardId == board?.id }
     // Applied to the latest stored list, not the one the drawer showed.
@@ -298,6 +317,8 @@ internal fun FutaberApp(
     val imageNgRules = remember(ngRules) {
         ngRules.filter { it.kind == CompatNgKind.THREAD_IMAGE_PHASH }.sortedByDescending { it.createdAtEpochMillis }
     }
+    // The other thread rules (post number, poster id, words, picture address) also hide posts here; they are listed too.
+    val threadDetailRules = remember(ngRules) { futaberThreadDetailNgRules(ngRules) }
     val deleteNgRule: (String) -> Unit = { ruleId ->
         val store = mediaServices?.store
         if (store != null) scope.launch {
@@ -315,6 +336,16 @@ internal fun FutaberApp(
     val threadRepository = remember(repository, mediaServices?.store, mediaServices?.httpClient) {
         mediaServices?.let { FutachaSharedBoardRepository(repository, it.store, it.httpClient) } ?: repository
     }
+    // The shared features the borrowed dialogs read (image NG, image search, page save), made once for the catalog and the thread.
+    val sharedFeatures = rememberFutaberSharedFeatures(mediaServices, threadRepository)
+    // B7a (FutaberParityB7a.kt): the catalog's extensions (そ順・監視, watch words, reply priority, generations, cache search).
+    val catalogExtras = rememberFutaberCatalogExtras(
+        board, sortMode, displaySettings, preferences, ngRules, boards, mediaServices?.store, openInBrowser, notify
+    )
+    // B7b (FutaberParityB7b.kt): the request of "NGの詳細管理" (thread menu / catalog refresh sheet).
+    val parityB7b = remember { FutaberParityB7bState() }
+    // The catalog thread whose picture is being registered as an image NG (the catalog long-press extension).
+    var catalogImageNg by remember { mutableStateOf<FutaberCatalogImageNgTarget?>(null) }
     // "板一覧から一括追加": the official list's boards that are not registered yet (the list ふたちゃ uses).
     val bulkAddBoards: (suspend () -> Result<Int>)? = mediaServices?.httpClient?.let { client ->
         {
@@ -393,6 +424,8 @@ internal fun FutaberApp(
     // Quote mode: the thread is shown for tapping lines while the draft waits in a card.
     var quoteMode by rememberSaveable { mutableStateOf(false) }
     val postAttachment = remember { FutaberAttachment(scope) }
+    // The Cookie page opened from the write screen's guidance after a failed post (the extension "書き込みツール").
+    var cookiesOpen by remember { mutableStateOf(false) }
     var attachmentOwnerKey by remember { mutableStateOf<String?>(null) }
     var postCapabilities by remember { mutableStateOf<com.valoser.futacha.shared.network.BoardPostingCapabilities?>(null) }
     val pickerPreference by stateStore.attachmentPickerPreference.collectAsState(com.valoser.futacha.shared.util.AttachmentPickerPreference.MEDIA)
@@ -410,7 +443,7 @@ internal fun FutaberApp(
     val openPost: (FutaberPostTarget, String) -> Unit = { target, quote ->
         // The text still on the screen wins over the saved draft when the same post is being written (a round trip through
         // quote mode keeps the target, and the draft is saved only a moment after typing stops).
-        val start = futaberPostStart(futaberDraftFor(drafts, target.draftKey), target, postTarget, postSubject, postComment)
+        val start = futaberPostStart(futaberDraftForTarget(drafts, target, boards), target, postTarget, postSubject, postComment)
         postSubject = start.subject
         postComment = futaberAppendQuote(start.comment, quote)
         quoteMode = false
@@ -419,12 +452,14 @@ internal fun FutaberApp(
         attachmentOwnerKey = target.draftKey
         postTarget = target
     }
+    // Applied to the drafts stored now, so saving this one does not bring back a draft another screen just cleared. The
+    // files of drafts that no longer note them go (the extension "下書きに添付も残す").
+    val editDrafts: ((List<FutaberDraft>) -> List<FutaberDraft>) -> Unit = { transform ->
+        futaberEditDrafts(editPreference, { dropped -> futaberDeleteDraftFiles(scope, mediaServices?.fileSystem, dropped) }, transform)
+    }
     val saveDraftNow: (FutaberPostTarget, String, String) -> Unit = { target, subject, comment ->
-        val draft = FutaberDraft(target.draftKey, subject, comment, Clock.System.now().toEpochMilliseconds())
-        // Applied to the drafts stored now, so saving this one does not bring back a draft another screen just cleared.
-        editPreference(FutaberPreferenceKeys.DRAFTS) { stored ->
-            encodeFutaberDrafts(futaberUpsertDraft(decodeFutaberDrafts(stored), draft))
-        }
+        val now = Clock.System.now().toEpochMilliseconds()
+        editDrafts { futaberDraftsWithText(it, target, boards, subject, comment, now) }
     }
     // The draft follows the text shortly after typing stops, in the write screen and in quote mode alike.
     LaunchedEffect(postTarget?.draftKey) {
@@ -448,6 +483,26 @@ internal fun FutaberApp(
             Logger.e(FUTABER_TAG, "Posting capabilities unavailable; using the board's known limits", error)
         }
     }
+    // The extension "下書きに添付も残す": the attachment goes with the draft (FutaberParityB3.kt).
+    FutaberDraftAttachmentSync(
+        enabled = displaySettings.extDraftAttachment,
+        fileSystem = mediaServices?.fileSystem,
+        scope = scope,
+        target = postTarget,
+        attachment = postAttachment,
+        boards = boards,
+        currentTargetKey = { postTarget?.draftKey },
+        capabilitiesFor = { target ->
+            postCapabilities ?: boards.firstOrNull { it.id == target.boardId }
+                ?.let { com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(it.url) }
+        },
+        loadDrafts = {
+            decodeFutaberDrafts(mediaServices?.store?.loadPreference(FutaberPreferenceKeys.DRAFTS) ?: preferences[FutaberPreferenceKeys.DRAFTS])
+        },
+        editDrafts = editDrafts,
+        adoptOwner = { attachmentOwnerKey = it },
+        notify = notify
+    )
     val sendPost: suspend (FutaberPostTarget, FutaberPostInput) -> Result<String?> = send@{ target, input ->
         val targetBoard = boards.firstOrNull { it.id == target.boardId }
             ?: return@send Result.failure(IllegalStateException("板が登録されていません"))
@@ -520,8 +575,8 @@ internal fun FutaberApp(
         }
     }
 
-    val tabKeys = remember(preferences[FutaberPreferenceKeys.TABS]) {
-        decodeFutaberTabs(preferences[FutaberPreferenceKeys.TABS])
+    val tabKeys = remember(preferences[FutaberPreferenceKeys.TABS], boards) {
+        futaberTabsFromStore(preferences[FutaberPreferenceKeys.TABS], boards)
     }
     val tabViews = remember(tabKeys, history) { futaberTabViews(tabKeys, history) }
     // The tabs closed during this run, the latest first ("閉じたタブを元に戻す", an extension). Only a person's own
@@ -530,37 +585,46 @@ internal fun FutaberApp(
     // Changes the tabs by a function applied to the tabs stored at that moment. [recordClosed] is false for the clean-up.
     val editTabs: (recordClosed: Boolean, transform: (List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { recordClosed, transform ->
         editPreference(FutaberPreferenceKeys.TABS) { stored ->
-            val current = decodeFutaberTabs(stored)
+            val current = futaberTabsFromStore(stored, boards)
             val next = transform(current)
             val removed = current.filter { it !in next }
             if (recordClosed && removed.isNotEmpty()) closedTabs = futaberRememberClosedTabs(closedTabs, removed, next)
-            if (next == current) null else encodeFutaberTabs(next)
+            if (next == current) null else futaberTabsToStore(next, boards)
         }
     }
     val saveTabs: ((List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { transform -> editTabs(true, transform) }
     val toggleTab: (FutaberTabKey) -> Unit = { key ->
         editPreference(FutaberPreferenceKeys.TABS) { stored ->
-            val current = decodeFutaberTabs(stored)
+            val current = futaberTabsFromStore(stored, boards)
             when (futaberTabToggleOutcome(current, key)) {
-                FutaberTabToggleOutcome.Full -> { notify(FUTABER_TAB_LIMIT_NOTICE); null }
-                FutaberTabToggleOutcome.Added -> encodeFutaberTabs(current + key)
+                FutaberTabToggleOutcome.Full -> {
+                    // Tabs whose thread has no history row take places the person cannot see: let one go before refusing.
+                    val room = futaberTabsMakingRoomFor(current, key, history)
+                    if (room == null) notify(FUTABER_TAB_LIMIT_NOTICE)
+                    room?.let { futaberTabsToStore(it, boards) }
+                }
+                FutaberTabToggleOutcome.Added -> futaberTabsToStore(current + key, boards)
                 FutaberTabToggleOutcome.Removed -> {
                     val next = current - key
                     closedTabs = futaberRememberClosedTabs(closedTabs, listOf(key), next)
-                    encodeFutaberTabs(next)
+                    futaberTabsToStore(next, boards)
                 }
             }
         }
     }
-    val favorites = remember(preferences[FutaberPreferenceKeys.FAVORITES]) {
-        decodeFutaberFavorites(preferences[FutaberPreferenceKeys.FAVORITES])
+    val favorites = remember(preferences[FutaberPreferenceKeys.FAVORITES], boards) {
+        futaberFavoritesFromStore(preferences[FutaberPreferenceKeys.FAVORITES], boards)
     }
     val favoriteViews = remember(favorites, history) { futaberFavoriteViews(favorites, history) }
+    // Closing several tabs at once keeps the starred threads' tabs with the extension on (they are not "closed" either).
+    val closeTabsInBulk: ((List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { transform ->
+        saveTabs { current -> futaberKeepFavoriteTabs(current, transform(current), favorites, displaySettings.extTabsManage) }
+    }
     val editFavorites: ((List<FutaberFavorite>) -> List<FutaberFavorite>) -> Unit = { transform ->
         editPreference(FutaberPreferenceKeys.FAVORITES) { stored ->
-            val current = decodeFutaberFavorites(stored)
+            val current = futaberFavoritesFromStore(stored, boards)
             val next = transform(current)
-            if (next == current) null else encodeFutaberFavorites(next)
+            if (next == current) null else futaberFavoritesToStore(next, boards)
         }
     }
     // Patrol results (keyword matches) are shared with the other modes; this mode only lists them.
@@ -580,6 +644,10 @@ internal fun FutaberApp(
         }
     }
     var watcherOpen by rememberSaveable { mutableStateOf(false) }
+    // The extension "外部にじろぐ" (Android): the patrol manager offers it, and "通知" lists its results while chosen.
+    val externalWatcher = rememberFutaberExternalWatcher(
+        displaySettings.extExternalWatcher, mediaServices?.store, preferences, managePanelOpen to watcherOpen
+    )
     // ---- Saved threads (保存箱): the shared manual-save index, wherever the user chose to save ----
     val saveLocation = preferences.compatManualSaveLocation()
     val savedFileSystem = mediaServices?.fileSystem
@@ -595,12 +663,13 @@ internal fun FutaberApp(
         val pruned = futaberPruneFavorites(favorites, boards)
         if (pruned != favorites) editFavorites { futaberPruneFavorites(it, boards) }
     }
-    // Deleting a thread (or its board) cleans its tab up; the thread being opened is kept
-    // because its history row may not have been written yet.
+    // Removing a board cleans up the tabs of its threads. A thread missing from the history does not: the other modes
+    // empty or trim the history, and a restored backup brings the tabs before the history; such a tab is not shown
+    // until its row is back (and the tab limit lets go of such tabs when they are in the way).
     val openKey = thread?.let { FutaberTabKey(it.boardId, it.threadId) }
-    LaunchedEffect(tabKeys, history, boards, openKey) {
-        val pruned = futaberPruneTabs(tabKeys, history, boards, keep = openKey)
-        if (pruned != tabKeys) editTabs(false) { futaberPruneTabs(it, history, boards, keep = openKey) }
+    LaunchedEffect(tabKeys, boards) {
+        val pruned = futaberPruneTabsOfRemovedBoards(tabKeys, boards)
+        if (pruned != tabKeys) editTabs(false) { futaberPruneTabsOfRemovedBoards(it, boards) }
     }
     // Opening a screen (from the catalog, a tab or the history) is what writes the history.
     val openRef: (BoardSummary, FutaberThreadRef) -> Unit = { target, ref ->
@@ -611,7 +680,7 @@ internal fun FutaberApp(
         // The posts seen when the thread was last left are this mode's own record: the history row's count also moves
         // with background refreshes and the other modes, and would leave nothing marked as new.
         openThread = futaberRefWithHistory(
-            ref, existing, futaberSeenCountFor(preferences[FutaberPreferenceKeys.SEEN], target.id, ref.threadId)
+            ref, existing, futaberSeenCountForBoard(preferences[FutaberPreferenceKeys.SEEN], target, ref.threadId)
         )
         managePanelOpen = false
         writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, target.id)
@@ -633,6 +702,18 @@ internal fun FutaberApp(
             }
         }
     }
+    // A row or a link of a board that is not registered asks to add it, then opens it (official boards only).
+    val boardAdder = remember { FutaberBoardAddController() }
+    val openBoardCatalog: (BoardSummary) -> Unit = { target ->
+        selectedBoardId = target.id
+        openThread = null
+        offlineView = null
+        managePanelOpen = false
+        writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, target.id)
+    }
+    val addBoardAndOpen: (FutaberBoardAddRequest) -> Unit = { request ->
+        boardAdder.openRequest(request, boards, openRef, openBoardCatalog)
+    }
     // Links from other apps. The board must be registered here; a link to one that is not says so instead of doing nothing.
     LaunchedEffect(initialThreadDeepLink, boards) {
         val raw = initialThreadDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
@@ -644,7 +725,8 @@ internal fun FutaberApp(
         if (parsed != null && target != null) {
             openRef(target, FutaberThreadRef(target.id, parsed.threadNo, "", "", 0))
         } else {
-            notify("このリンクの板が登録されていません。板一覧から追加してください")
+            futaberBoardAddRequest(raw)?.let(addBoardAndOpen)
+                ?: notify("このリンクの板が登録されていません。板一覧から追加してください")
         }
         onThreadDeepLinkConsumed(raw)
     }
@@ -654,13 +736,10 @@ internal fun FutaberApp(
         val canonical = com.valoser.futacha.shared.compat.canonicalizeBoardUrl(raw)
         val target = canonical?.let { link -> boards.firstOrNull { com.valoser.futacha.shared.compat.canonicalizeBoardUrl(it.url) == link } }
         if (target != null) {
-            selectedBoardId = target.id
-            openThread = null
-            offlineView = null
-            managePanelOpen = false
-            writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, target.id)
+            openBoardCatalog(target)
         } else {
-            notify("このリンクの板が登録されていません。板一覧から追加してください")
+            futaberBoardAddRequest(raw)?.let(addBoardAndOpen)
+                ?: notify("このリンクの板が登録されていません。板一覧から追加してください")
         }
         onBoardDeepLinkConsumed(raw)
     }
@@ -670,6 +749,8 @@ internal fun FutaberApp(
         }
     }
     var tabSheet by remember { mutableStateOf<FutaberTabView?>(null) }
+    // "全タブを確認" (the extension "タブの管理（お気に入りのタブを残す・全タブを確認）", FutaberParityB45.kt).
+    val tabChecker = rememberFutaberTabChecker(stateStore, repository)
     val tabStrip: @Composable () -> Unit = {
         FutaberTabStrip(tabViews, openKey, openTab, onLongPress = { tabSheet = it })
     }
@@ -819,10 +900,16 @@ internal fun FutaberApp(
     LaunchedEffect(hasAttachment) {
         if (!attachmentChecked) {
             attachmentChecked = true
-            if (futaberAttachmentLostNoticeDue(attachmentWasKept, postTarget != null, hasAttachment)) notify(FUTABER_ATTACHMENT_LOST_NOTICE)
+            // With the draft keeping its file, the file comes back from the draft instead (and says so if it cannot).
+            val keptByDraft = displaySettings.extDraftAttachment && mediaServices?.fileSystem != null
+            if (!keptByDraft && futaberAttachmentLostNoticeDue(attachmentWasKept, postTarget != null, hasAttachment)) notify(FUTABER_ATTACHMENT_LOST_NOTICE)
         }
         attachmentWasKept = hasAttachment
     }
+    // The history archive and "全件削除" of the history band (FutaberParityB45.kt).
+    val historyController = rememberFutaberHistoryController(
+        stateStore, savedFileSystem, autoSavedThreadRepository, savedRepository, mediaServices?.store, appVersion, notify
+    )
     // Deleting a history row cleans up as ふたちゃ does: the other modes' copy of the row (or the bridge would bring it back
     // at the next start), the person's own post numbers of the thread, and the auto-saved copy.
     val deleteHistory: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -830,6 +917,8 @@ internal fun FutaberApp(
             dismissHistoryEntry(
                 stateStore = stateStore,
                 autoSavedThreadRepository = autoSavedThreadRepository,
+                // The copy an imported archive brought for the row goes with it too.
+                importedHistoryRepository = historyController.importedHistoryRepository,
                 compatibilityStore = mediaServices?.store,
                 entry = entry,
                 onAutoSavedThreadDeleteFailure = {
@@ -840,8 +929,12 @@ internal fun FutaberApp(
         }
     }
 
-    FutaberTheme(themeMode, statusFollowsTopBar = !(settingsOpen || postTarget != null)) {
+    // B8 (FutaberAiHost.kt): the AI commands forwarded to the thread screen and the catalog.
+    val aiScreens = rememberFutaberAiScreens()
+    FutaberTheme(themeMode, statusFollowsTopBar = !(settingsOpen || postTarget != null),
+        fontFamily = rememberFutaberCustomFontFamily(displaySettings.extCustomFont, mediaServices?.fileSystem, preferences)) {
         CompositionLocalProvider(LocalFutaberDisplaySettings provides displaySettings) {
+        mediaHost {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val drawerWidth = maxWidth * FUTABER_DRAWER_WIDTH_FRACTION
             val drawerProgress by animateFloatAsState(
@@ -915,7 +1008,10 @@ internal fun FutaberApp(
                             onBack = { if (drawerOpen) drawerOpen = false else offlineView = null },
                             mediaServices = mediaServices,
                             offlineNotice = "保存したコピーを表示中です。最新のスレッドとは異なる場合があります",
-                            tabStrip = tabStrip
+                            features = sharedFeatures,
+                            tabStrip = tabStrip,
+                            stateStore = stateStore,
+                            ai = aiScreens.threadLink()
                         )
                     }
                     board == null -> FutaberNoBoards(
@@ -973,13 +1069,16 @@ internal fun FutaberApp(
                                 val now = Clock.System.now().toEpochMilliseconds()
                                 stateStore.updateHistory { futaberHistoryMarkAlive(it, board.id, thread.threadId, now) }
                             }
+                            scope.launch {
+                                futaberNoteViewedThread(mediaServices?.store, preferences, board, thread.threadId, onArchiveReportEnqueued)
+                            }
                         },
                         onScrollSettled = { index, offset, postId, total ->
                             // How far this person has read is written only when the reading position settles (or the
                             // screen is left): this is the count the next visit marks new posts from.
                             // (A value that is already stored is not written again.)
                             editPreference(FutaberPreferenceKeys.SEEN) { stored ->
-                                futaberSeenCountsAfter(stored, board.id, thread.threadId, total)
+                                futaberSeenCountsAfterForBoard(stored, board, thread.threadId, total)
                             }
                             launchStore("save reading position") {
                                 stateStore.updateHistoryScrollPositionImmediately(
@@ -1000,7 +1099,21 @@ internal fun FutaberApp(
                         },
                         onBack = threadBack,
                         mediaServices = mediaServices,
-                        tabStrip = tabStrip
+                        features = sharedFeatures,
+                        // The volume keys' "タブのスレッドを切り替え": the neighbour in the tab strip's order.
+                        onVolumeKeyThread = { forward ->
+                            futaberAdjacentTab(tabViews.map { it.key }, openKey, forward)
+                                ?.let { key -> tabViews.firstOrNull { it.key == key } }?.let(openTab)
+                        },
+                        tabStrip = tabStrip,
+                        onOpenCacheSearch = catalogExtras.openCacheSearch,
+                        cacheSearchEnabled = catalogExtras.cacheSearchEnabled,
+                        ngDetail = futaberNgDetailEntry(displaySettings.extNgDetail, sharedFeatures != null, board, thread.threadId) { parityB7b.ngDetail = it },
+                        stateStore = stateStore,
+                        ai = aiScreens.threadLink(),
+                        autoSave = futaberAutoSaveLink(
+                            displaySettings.extAutoSaveView, autoSavedThreadRepository, mediaServices, stateStore, history, board, thread.threadId
+                        )
                     )
                     else -> FutaberCatalogScreen(
                         board = board,
@@ -1008,7 +1121,14 @@ internal fun FutaberApp(
                         displayStyle = displayStyle,
                         sortMode = sortMode,
                         onDisplayStyleChange = { writePreference(FutaberPreferenceKeys.CATALOG_DISPLAY_STYLE, it.persistedValue) },
-                        onSortChange = { writePreference(FutaberPreferenceKeys.CATALOG_SORT, it.name) },
+                        onSortChange = { mode ->
+                            if (displaySettings.extSortByBoard) {
+                                val boardIds = boards.map { it.id }
+                                editPreference(FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD) { stored ->
+                                    futaberSortByBoardAfter(stored, board.id, mode, boardIds)
+                                }
+                            } else writePreference(FutaberPreferenceKeys.CATALOG_SORT, mode.name)
+                        },
                         onOpenDrawer = { drawerOpen = true },
                         onOpenSettings = { settingsOpen = true },
                         onOpenManage = { managePanelOpen = !managePanelOpen },
@@ -1034,6 +1154,11 @@ internal fun FutaberApp(
                                 FutaberPostAction("remove-history", "履歴から削除", enabled = inHistory != null) {
                                     inHistory?.let(deleteHistory)
                                 }
+                            ) + listOfNotNull(
+                                // An extension: the picture of this thread hides look-alike catalog pictures (the shared rule).
+                                futaberCatalogImageNgAction(
+                                    displaySettings.extCatalogLongPress, item, futaberNgScopeKey(board), sharedFeatures != null
+                                ) { catalogImageNg = it }
                             )
                         },
                         phashRules = catalogPhashRules,
@@ -1041,8 +1166,20 @@ internal fun FutaberApp(
                         phashStore = mediaServices?.store,
                         view = catalogView,
                         search = catalogSearch,
-                        tabStrip = tabStrip
+                        tabStrip = tabStrip,
+                        extraSorts = catalogExtras.extraSorts,
+                        watchWords = catalogExtras.watchWords,
+                        projection = catalogExtras.projection,
+                        refreshActions = catalogExtras.refreshActions + listOfNotNull(futaberNgDetailCatalogAction(
+                            futaberNgDetailEntry(displaySettings.extNgDetail, sharedFeatures != null, board, null) { parityB7b.ngDetail = it }
+                        )),
+                        perGenerationBack = catalogExtras.perGenerationBack
                     )
+                }
+                FutaberCatalogImageNgHost(catalogImageNg, sharedFeatures, boards) { catalogImageNg = null }
+                FutaberNgDetailHost(parityB7b.ngDetail, sharedFeatures, boards) { parityB7b.ngDetail = null }
+                FutaberCatalogExtrasHost(catalogExtras, board, mediaServices, preferences) { target, item ->
+                    openRef(target, item.toFutaberThreadRef(target.id))
                 }
                 if (managePanelOpen) {
                     // The panel sits between the top bar and the bottom bar, which stay visible but dimmed;
@@ -1063,18 +1200,22 @@ internal fun FutaberApp(
                             onOpenSaved = openSaved,
                             onDeleteSaved = deleteSaved,
                             mht = mhtBox,
-                            notifications = watchResults,
+                            notifications = externalWatcher?.results ?: watchResults,
                             notificationsAvailable = watcher != null,
-                            notificationsStatus = futaberNotificationsStatus(preferences),
+                            notificationsStatus = externalWatcher?.results?.let { externalWatcher.status } ?: futaberNotificationsStatus(preferences),
                             onOpenNotification = { result ->
                                 futaberRefForWatchResult(result, boards)?.let { ref ->
                                     boards.firstOrNull { it.id == ref.boardId }?.let { target -> openRef(target, ref) }
                                 }
                             },
                             onRemoveNotification = { result ->
-                                launchStore("remove a patrol result") { watcher?.delete(result.history.canonicalUrl) }
+                                if (externalWatcher?.results != null) externalWatcher.remove(result)
+                                else launchStore("remove a patrol result") { watcher?.delete(result.history.canonicalUrl) }
                             },
-                            onClearNotifications = { launchStore("clear the patrol results") { watcher?.deleteAll() } },
+                            onClearNotifications = {
+                                if (externalWatcher?.results != null) externalWatcher.clear()
+                                else launchStore("clear the patrol results") { watcher?.deleteAll() }
+                            },
                             onOpenWatcherManager = { watcherOpen = true },
                             favorites = favoriteViews,
                             onOpenFavorite = { view ->
@@ -1092,8 +1233,19 @@ internal fun FutaberApp(
                             onDeleteHistory = deleteHistory,
                             onOpenTab = openTab,
                             onRemoveTab = { view -> saveTabs { futaberRemoveTab(it, view.key) } },
-                            onClearTabs = { saveTabs { emptyList() } },
-                            onClose = { managePanelOpen = false }
+                            onClearTabs = { closeTabsInBulk { emptyList() } },
+                            onClose = { managePanelOpen = false },
+                            onAddBoardAndOpen = addBoardAndOpen,
+                            onReopenSaved = if (displaySettings.extSavedDetail) { saved ->
+                                futaberBoardForSaved(saved, boards)?.let { target -> openRef(target, futaberRefForSaved(saved, target)) }
+                            } else null,
+                            otherModeTabs = if (displaySettings.extOtherFavorites) mediaServices?.store?.tabs else null,
+                            onOpenOtherFavorite = { target, ref -> openRef(target, ref) },
+                            historyTools = futaberHistoryTools(
+                                historyController,
+                                clearEnabled = displaySettings.extHistory,
+                                archiveEnabled = displaySettings.extHistoryArchive && savedFileSystem != null
+                            )
                         )
 
                     }
@@ -1119,14 +1271,14 @@ internal fun FutaberApp(
                             FutaberPostAction("tab-remove", "タブを削除") { close(); saveTabs { futaberRemoveTab(it, tab.key) } },
                             FutaberPostAction(
                                 "tab-remove-right", "右側のタブを削除", enabled = tabKeys.lastOrNull() != tab.key
-                            ) { close(); saveTabs { futaberRemoveTabsToTheRight(it, tab.key) } },
+                            ) { close(); closeTabsInBulk { futaberRemoveTabsToTheRight(it, tab.key) } },
                             FutaberPostAction(
                                 "tab-remove-others", "他のタブを削除", enabled = tabKeys.size > 1
-                            ) { close(); saveTabs { futaberKeepOnlyTab(it, tab.key) } },
+                            ) { close(); closeTabsInBulk { futaberKeepOnlyTab(it, tab.key) } },
                             FutaberPostAction(
                                 "tab-remove-fallen", "スレ落ちしたタブを削除", enabled = fallen.isNotEmpty()
-                            ) { close(); saveTabs { futaberRemoveFallenTabs(it, fallen) } },
-                            FutaberPostAction("tab-remove-all", "タブをすべて削除") { close(); saveTabs { emptyList() } },
+                            ) { close(); closeTabsInBulk { futaberRemoveFallenTabs(it, fallen) } },
+                            FutaberPostAction("tab-remove-all", "タブをすべて削除") { close(); closeTabsInBulk { emptyList() } },
                         ) + listOfNotNull(
                             if (displaySettings.extTabs) {
                                 val restorable = futaberRestorableTabs(closedTabs, tabKeys, history, boards)
@@ -1135,14 +1287,19 @@ internal fun FutaberApp(
                                 ) {
                                     close()
                                     editPreference(FutaberPreferenceKeys.TABS) { stored ->
-                                        val result = futaberRestoreTabs(decodeFutaberTabs(stored), restorable)
+                                        val result = futaberRestoreTabs(futaberTabsFromStore(stored, boards), restorable)
                                         // Only the tabs that were written leave the memory; the ones a full list had no room for stay in it.
                                         closedTabs = closedTabs.filter { it !in result.restored }
                                         if (result.restored.size < restorable.size) notify(FUTABER_TAB_LIMIT_NOTICE)
-                                        if (result.restored.isEmpty()) null else encodeFutaberTabs(result.tabs)
+                                        if (result.restored.isEmpty()) null else futaberTabsToStore(result.tabs, boards)
                                     }
                                 }
                             } else null
+                        ) + listOfNotNull(
+                            futaberTabCheckAction(displaySettings.extTabsManage, tabChecker) {
+                                close()
+                                tabChecker.check(futaberTabCheckTargets(tabKeys, history, boards), boards, notify)
+                            }
                         ) + listOf(
                             FutaberPostAction("tab-cancel", "キャンセル") { close() }
                         ),
@@ -1164,6 +1321,8 @@ internal fun FutaberApp(
                         FutaberPostScreen(
                             target = target,
                             boardAddress = futaberBoardAddress(targetBoard.url),
+                            boardUrl = targetBoard.url,
+                            destinationConfirm = displaySettings.postDestinationConfirm,
                             subject = postSubject,
                             comment = postComment,
                             onSubjectChange = { postSubject = it },
@@ -1186,13 +1345,24 @@ internal fun FutaberApp(
                             },
                             onDeleteKeyChange = { key -> launchStore("save the delete key") { stateStore.setLastUsedDeleteKey(key) } },
                             onSend = { input -> sendPost(target, input) },
+                            tools = FutaberPostTools(
+                                enabled = displaySettings.extPostTools,
+                                httpClient = mediaServices?.httpClient,
+                                fileSystem = mediaServices?.fileSystem,
+                                drawingCopyLocation = futaberDrawingCopyLocation(preferences),
+                                appVersion = appVersion,
+                                cookieRepository = mediaServices?.cookieRepository,
+                                openCookies = if (mediaServices?.cookieRepository != null) { { cookiesOpen = true } } else null,
+                                pickerPreference = pickerPreference,
+                                preferredFileManagerPackage = preferredFileManager?.packageName
+                            ),
                             onSent = { posted ->
                                 // What was typed names a new thread until the thread itself is read.
                                 val sentSubject = postSubject
                                 postSubject = ""
                                 postComment = ""
                                 postAttachment.clear()
-                                saveDraftNow(target, "", "")
+                                editDrafts { futaberDiscardDraft(it, target, boards) }
                                 postTarget = null
                                 when (target) {
                                     is FutaberPostTarget.Reply -> threadRefreshSignal += 1
@@ -1241,9 +1411,56 @@ internal fun FutaberApp(
                     repository = repository,
                     onDismiss = { watcherOpen = false },
                     onResultsChanged = {},
+                    onOpenExternal = externalWatcher?.let { it::openManager },
                     resultsLocation = "管理画面の「通知」"
                 )
             }
+        }
+        FutaberBoardAddHost(boardAdder, boards, stateStore, openRef, openBoardCatalog, notify)
+        FutaberAiCatalogReceiver(aiScreens, board, catalogView, catalogSearch, shown = offlineView == null && thread == null)
+        FutaberAiCommandHost(
+            screens = aiScreens,
+            inbox = aiInbox,
+            stateStore = stateStore,
+            context = FutaberAiContext(
+                boards = boards, history = history,
+                currentBoard = offlineView?.board ?: board, currentThread = offlineView?.ref ?: thread,
+                historyRefreshAvailable = onRefreshHistory != null,
+                cookiesAvailable = mediaServices?.cookieRepository != null,
+                savedThreadsAvailable = savedRepository != null,
+                appVersion = appVersion
+            ),
+            actions = FutaberAiAppActions(
+                setDrawerOpen = { drawerOpen = it },
+                closeOverlays = { settingsOpen = false; managePanelOpen = false },
+                openBoard = openBoardCatalog,
+                refreshCatalog = { catalogRefreshSignal += 1 },
+                openManage = { managePanelOpen = true },
+                refreshHistory = onRefreshHistory,
+                openThread = openRef,
+                addBoardAndOpen = addBoardAndOpen,
+                openSettings = { settingsOpen = true },
+                openCookies = if (mediaServices?.cookieRepository != null) { { cookiesOpen = true } } else null,
+                openUrl = openInBrowser,
+                deleteHistory = deleteHistory,
+                clearHistory = { historyController.clearAll() },
+                editBoards = editBoards,
+                openDraft = { target, subject, comment ->
+                    openPost(target, comment)
+                    if (subject.isNotEmpty()) postSubject = subject
+                },
+                savedRepository = savedRepository,
+                onSavedChanged = { savedTick += 1 }
+            ),
+            notify = notify
+        )
+        FutaberHistoryDialogs(historyController)
+        FutaberForegroundPatrol(
+            displaySettings.extForegroundPatrol, mediaServices?.store, repository, boards, preferences, notify
+        )
+        val cookieServices = mediaServices
+        if (cookiesOpen && cookieServices != null) {
+            FutaberSharedSettingsHost("cookies", cookieServices, appVersion, stateStore) { cookiesOpen = false }
         }
         savedNotice?.let { text ->
             val colors = LocalFutaberColors.current
@@ -1279,6 +1496,9 @@ internal fun FutaberApp(
                 catalogWordRules = catalogWordRules,
                 catalogImageRules = catalogImageRules,
                 imageNgRules = imageNgRules,
+                threadDetailRules = threadDetailRules,
+                // Worked out only when the list is opened (it keys every history row).
+                threadNgScopeTitles = { futaberThreadNgScopeTitles(history, boards) },
                 onDeleteNgRule = deleteNgRule,
                 // Each edit is applied to the list stored at that moment, so two quick "×" both count.
                 onEditCatalogNgWords = { edit -> launchStore("save catalog NG words") { stateStore.updateCatalogNgWords(edit) } },
@@ -1290,7 +1510,11 @@ internal fun FutaberApp(
                 onOpenNotifications = { watcherOpen = true },
                 onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
                 onNotice = notify,
-                onClose = { settingsOpen = false }
+                onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
+                onClose = { settingsOpen = false },
+                watchWords = stateStore.observedWatchWords.collectAsState(emptyList<String>()).value,
+                boardWatchWordCount = stateStore.observedBoardWatchWords.collectAsState(emptyMap<String, List<String>>()).value.size,
+                onEditWatchWords = { edit -> launchStore("save watch words") { stateStore.updateWatchWords(edit) } }
             )
         }
         // The notice goes over everything, the settings screen included.
@@ -1314,6 +1538,7 @@ internal fun FutaberApp(
                         .padding(8.dp).testTag("futaber-app-notice")
                 )
             }
+        }
         }
         }
     }

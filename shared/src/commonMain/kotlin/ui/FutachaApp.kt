@@ -628,6 +628,7 @@ private fun FutachaAppContent(
                 cookieRepository = cookieRepository,
                 savedThreadRepository = compatibilitySavedThreadRepository,
                 compatibilityHistoryRefresh = compatibilityHistoryRefresh,
+                historyRefresher = sharedHistoryRefresher,
                 appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" },
                 imageLoader = compatibilityImageLoader,
                 catalogImageLoader = compatibilityCatalogImageLoader,
@@ -662,7 +663,7 @@ private fun FutachaAppContent(
         }
         return
     }
-    if (experienceProfile == ExperienceProfile.FUTABER) {
+    if (experienceProfile == ExperienceProfile.FUTABER || experienceProfile == ExperienceProfile.FTUTTER) {
         // Crash diagnostics follow the user's data-collection setting here too.
         // Only the Futacha screen below sets it from the UI, so a Futaber launch
         // (iOS has no Application-level hook) stayed at the disabled default.
@@ -688,6 +689,57 @@ private fun FutachaAppContent(
             ) {
                 SettingsRecoveryNoticeDialog()
             }
+        }
+        // AI commands (Siri / Shortcuts / Wear OS / links) are taken off the queue here and handed to the mode's screen,
+        // which runs the ones it supports and answers the others with a notice: left alone they piled up in the Android
+        // bridge and replayed after a mode switch, and on iOS an unconsumed head blocked the queue.
+        var futaberAiNotice by remember { mutableStateOf<String?>(null) }
+        val futaberAiInbox = com.valoser.futacha.shared.ui.futaber.FutaberAiCommandSink(
+            appLock = appLock,
+            platformAiDeepLink = platformAiDeepLink,
+            onPlatformAiDeepLinkConsumed = onPlatformAiDeepLinkConsumed,
+            platformAiCommand = platformAiCommand,
+            onPlatformAiCommandConsumed = onPlatformAiCommandConsumed,
+            consumeAiCommandBridge = consumeAiCommandBridge,
+            onNotice = { futaberAiNotice = it }
+        )
+        // ふたばー風・ふたったー風は、AppStateStore の板と履歴をふたちゃと共有する。
+        if (experienceProfile == ExperienceProfile.FTUTTER) {
+            com.valoser.futacha.shared.ui.ftutter.FtutterRuntimeHost(
+                stateStore = stateStore,
+                boardList = boardList,
+                history = history,
+                httpClient = httpClient,
+                imageTransport = imageTransport,
+                originalMediaSession = originalMediaSession,
+                sharedRepository = sharedRepository,
+                sharedHistoryRefresher = sharedHistoryRefresher,
+                fileSystem = fileSystem,
+                cookieRepository = cookieRepository,
+                autoSavedThreadRepository = autoSavedThreadRepository,
+                compatibilityStore = compatibilityStore,
+                promptMediaSource = promptMediaSource,
+                mediaFeatureSettings = mediaFeatureSettings,
+                mediaFeatureGate = mediaFeatureGate,
+                promptPrivacyEnabled = promptPrivacyEnabled,
+                devicePerformanceProfile = devicePerformanceProfile,
+                platformContext = platformContext,
+                appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" },
+                // External links are opened here too (and consumed): a link left pending would be replayed by a later mode switch.
+                initialThreadDeepLink = platformThreadDeepLink.takeIf { isAppUnlocked },
+                onThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
+                initialBoardDeepLink = platformBoardDeepLink.takeIf { isAppUnlocked },
+                onBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
+                onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
+                updateMediaFeatures = updateMediaFeatures,
+                analysisModels = analysisModels,
+                externalNotice = futaberAiNotice,
+                onExternalNoticeShown = { futaberAiNotice = null },
+                onArchiveReportEnqueued = onArchiveReportEnqueued,
+                onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
+                aiInbox = futaberAiInbox
+            )
+            return
         }
         // ふたばー shares the boards and history stored by AppStateStore with ふたちゃ.
         com.valoser.futacha.shared.ui.futaber.FutaberRuntimeHost(
@@ -715,7 +767,14 @@ private fun FutachaAppContent(
             onThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
             initialBoardDeepLink = platformBoardDeepLink.takeIf { isAppUnlocked },
             onBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
-            onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested
+            onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
+            updateMediaFeatures = updateMediaFeatures,
+            analysisModels = analysisModels,
+            externalNotice = futaberAiNotice,
+            onExternalNoticeShown = { futaberAiNotice = null },
+            onArchiveReportEnqueued = onArchiveReportEnqueued,
+            onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
+            aiInbox = futaberAiInbox
         )
         return
     }
@@ -858,7 +917,9 @@ private fun FutachaAppContent(
                 fileSystem = fileSystem, cookieRepository = cookieRepository,
                 appStateStore = stateStore,
                 catalogImageLoader = catalogImageLoader,
-                appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" }
+                appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" },
+                onArchiveReportEnqueued = onArchiveReportEnqueued,
+                onArchiveReportEnabledChanged = onArchiveReportEnabledChanged
             ) {
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
                 val coroutineScope = rememberCoroutineScope()
@@ -923,7 +984,8 @@ private fun FutachaAppContent(
                 }
                 var pendingCompatThreadDeepLink by remember { mutableStateOf<String?>(null) }
                 var threadDeepLinkError by remember { mutableStateOf<String?>(null) }
-                var unregisteredBoardMessage by remember { mutableStateOf<String?>(null) }
+                var unregisteredBoardRequest by remember { mutableStateOf<FutachaUnregisteredBoardRequest?>(null) }
+                var pendingOpenAfterBoardAdd by remember { mutableStateOf<ThreadHistoryEntry?>(null) }
                 val profileController = LocalExperienceProfileUiController.current
                 // Resolve only against the stored boards: the seed defaults would report a
                 // registered board as unregistered at startup.
@@ -982,13 +1044,29 @@ private fun FutachaAppContent(
                         }
                     )
                 }
-                unregisteredBoardMessage?.takeIf { isAppUnlocked }?.let { message ->
-                    AlertDialog(
-                        onDismissRequest = { unregisteredBoardMessage = null },
-                        title = { Text("スレッドを開けませんでした") },
-                        text = { Text(message) },
-                        confirmButton = { TextButton(onClick = { unregisteredBoardMessage = null }) { Text("OK") } }
-                    )
+                unregisteredBoardRequest?.takeIf { isAppUnlocked }?.let { request ->
+                    FutachaUnregisteredBoardDialog(request, onDismiss = { unregisteredBoardRequest = null }) { name, url, entry ->
+                        unregisteredBoardRequest = null
+                        coroutineScope.launch {
+                            val added = try {
+                                stateStore.updateBoards { boards -> addFutachaBoardIfMissing(boards, name, url) }
+                                resolveHistoryEntrySelection(entry, stateStore.boards.first()) != null
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                false
+                            }
+                            if (added) pendingOpenAfterBoardAdd = entry
+                            else threadDeepLinkError = "板を追加できませんでした"
+                        }
+                    }
+                }
+                // Open once the added board is in the stored list (the same resolution as the history tap).
+                LaunchedEffect(pendingOpenAfterBoardAdd, persistedBoards) {
+                    val entry = pendingOpenAfterBoardAdd ?: return@LaunchedEffect
+                    val selection = resolveHistoryEntrySelection(entry, persistedBoards) ?: return@LaunchedEffect
+                    pendingOpenAfterBoardAdd = null
+                    navigationState = applyFutachaThreadSelection(navigationState, selection)
                 }
                 threadDeepLinkError?.takeIf { isAppUnlocked }?.let { message ->
                     AlertDialog(
@@ -1033,9 +1111,7 @@ private fun FutachaAppContent(
                     navigationState = navigationState,
                     updateNavigationState = updateNavigationState,
                     onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
-                    onUnregisteredBoard = { boardName ->
-                        unregisteredBoardMessage = buildFutachaUnregisteredBoardMessage(boardName)
-                    }
+                    onUnregisteredBoard = { request -> unregisteredBoardRequest = request }
                 )
                 val screenBindings = bindingsRuntimeState.screenBindings
                 val aiImportedHistoryRepository = remember(fileSystem) {

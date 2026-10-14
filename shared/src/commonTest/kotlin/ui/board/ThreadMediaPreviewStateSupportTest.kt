@@ -62,6 +62,34 @@ class ThreadMediaPreviewStateSupportTest {
     }
 
     @Test
+    fun swipeDown_closes_only_when_enabled_and_vertical_dominant() {
+        assertEquals(SwipeNavigationAction.Close,
+            resolveSwipeNavigationAction(totalDx = 10f, totalDy = 120f, thresholdPx = 56f, swipeDownToClose = true))
+        // Upward swipe never closes.
+        assertEquals(SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(totalDx = 10f, totalDy = -120f, thresholdPx = 56f, swipeDownToClose = true))
+        // Below the threshold.
+        assertEquals(SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(totalDx = 0f, totalDy = 40f, thresholdPx = 56f, swipeDownToClose = true))
+        // Horizontal wins when it is the larger movement.
+        assertEquals(SwipeNavigationAction.Next,
+            resolveSwipeNavigationAction(totalDx = -130f, totalDy = 90f, thresholdPx = 56f, swipeDownToClose = true))
+        // Disabled (the old behavior): a downward swipe does nothing.
+        assertEquals(SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(totalDx = 10f, totalDy = 120f, thresholdPx = 56f, swipeDownToClose = false))
+        assertEquals(SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(totalDx = 10f, totalDy = 120f, thresholdPx = 56f))
+    }
+
+    @Test
+    fun futachaPreviewSwipeDownClose_requires_explicit_on() {
+        assertTrue(isFutachaPreviewSwipeDownCloseEnabled("ON"))
+        assertFalse(isFutachaPreviewSwipeDownCloseEnabled(null))
+        assertFalse(isFutachaPreviewSwipeDownCloseEnabled("OFF"))
+        assertFalse(isFutachaPreviewSwipeDownCloseEnabled(""))
+    }
+
+    @Test
     fun resolveSwipeNavigationAction_requires_horizontal_dominance_and_threshold() {
         assertEquals(
             SwipeNavigationAction.Next,

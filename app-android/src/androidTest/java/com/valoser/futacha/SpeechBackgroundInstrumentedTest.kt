@@ -27,6 +27,17 @@ class SpeechBackgroundInstrumentedTest {
                 .executeShellCommand(command)).use { it.readBytes() }
         }
         val stopped = CompletableDeferred<Unit>()
+        val notifications = context.getSystemService(NotificationManager::class.java)
+        // Earlier tests in the same run leave the app's own notifications behind (and one of them
+        // grants POST_NOTIFICATIONS). With another one present, Android groups ours under a system
+        // summary ("ranker_group") that copies the triggering notification's channel, so a second
+        // "read_aloud" notification appears. Start without leftovers, and only ever look at real
+        // (non-summary) notifications.
+        notifications.cancelAll()
+        fun readAloudNotifications() = notifications.activeNotifications.filter {
+            it.notification.channelId == "read_aloud" &&
+                it.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY == 0
+        }
         val lease = AndroidSpeechPlaybackService.acquire(context) { stopped.complete(Unit) }
         try {
             shell("input keyevent 223")
@@ -34,17 +45,19 @@ class SpeechBackgroundInstrumentedTest {
             kotlinx.coroutines.delay(2_000)
             assertFalse(context.getSystemService(PowerManager::class.java).isInteractive)
             assertFalse(stopped.isCompleted)
-            val service = context.getSystemService(ActivityManager::class.java).getRunningServices(100)
-                .single { it.service.className == AndroidSpeechPlaybackService::class.java.name }
-            assertTrue(service.foreground)
-            val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
-                .single { it.notification.channelId == "read_aloud" }.notification
+            val services = context.getSystemService(ActivityManager::class.java).getRunningServices(100)
+                .filter { it.service.className == AndroidSpeechPlaybackService::class.java.name }
+            assertEquals("Speech services: ${services.map { "pid=${it.pid} process=${it.process} started=${it.started} fg=${it.foreground} clients=${it.clientCount}" }}",
+                1, services.size)
+            assertTrue(services.single().foreground)
+            val readAloud = readAloudNotifications()
+            assertEquals("Read-aloud notifications: ${readAloud.map { "id=${it.id} tag=${it.tag} title=${it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)}" }}",
+                1, readAloud.size)
+            val notification = readAloud.single().notification
             assertEquals("停止", notification.actions.single().title.toString())
             notification.actions.single().actionIntent.send()
             withTimeout(5_000) { stopped.await() }
-            rule.waitUntil(5_000) {
-                context.getSystemService(NotificationManager::class.java).activeNotifications.none { it.notification.channelId == "read_aloud" }
-            }
+            rule.waitUntil(5_000) { readAloudNotifications().isEmpty() }
         } finally {
             lease.close()
             shell("input keyevent 224")

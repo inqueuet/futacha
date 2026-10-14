@@ -98,7 +98,7 @@ internal data class FutachaScreenBindingsInputs(
     val onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
     val onHistoryImport: suspend () -> String = { "" },
     val onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
-    val onUnregisteredBoard: (String) -> Unit = {}
+    val onUnregisteredBoard: (FutachaUnregisteredBoardRequest) -> Unit = {}
 )
 
 internal data class FutachaScreenBindingsBundle(

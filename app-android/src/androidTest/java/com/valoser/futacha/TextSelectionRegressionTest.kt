@@ -104,6 +104,13 @@ class TextSelectionRegressionTest {
             val connection = checkNotNull(rule.activity.currentFocus?.onCreateInputConnection(
                 android.view.inputmethod.EditorInfo()
             ))
+            // The emulator's AOSP keyboard (LatinIME) marks the word next to the
+            // cursor as its composing region when the field is focused. A later
+            // setComposingText() replaces that region instead of the selection.
+            // Finish it first so the transaction starts from the selection alone,
+            // as when a user selects text before typing. This runs on the main
+            // thread, so no keyboard callback can interleave until runOnIdle ends.
+            connection.finishComposingText()
             connection.setSelection(0, 16)
             connection.setComposingText("にほん", 1)
             // Reuse this connection for the whole IME transaction. Creating another

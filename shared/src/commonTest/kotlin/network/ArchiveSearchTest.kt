@@ -15,6 +15,38 @@ import kotlin.test.assertNull
 
 class ArchiveSearchTest {
     @Test
+    fun sourceFailureIsDistinctFromSuccessfulEmptySearchAndKeepsOtherResults() = runBlocking {
+        for (failed in listOf(false, true)) {
+            val failures = mutableListOf<String>()
+            val client = HttpClient(MockEngine) { engine { addHandler { request ->
+                when (request.url.host) {
+                    "may.inqueuet.com" -> respond("""{"results":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    "kako.futakuro.com" -> respond("", if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK)
+                    "futabaforest.net" -> respond("<html></html>", HttpStatusCode.OK)
+                    else -> error("Unexpected host")
+                }
+            } } }
+            try {
+                assertEquals(emptyList(), searchInqueuetArchiveThreads(client, Json { ignoreUnknownKeys = true }, "test", ArchiveSearchScope("may", "b"), onSourceFailure = failures::add))
+                assertEquals(if (failed) 1 else 0, failures.size)
+                if (failed) kotlin.test.assertTrue(failures.single().startsWith("ふたポ："))
+            } finally { client.close() }
+        }
+        val failures = mutableListOf<String>()
+        val client = HttpClient(MockEngine) { engine { addHandler { request ->
+            when (request.url.host) {
+                "may.inqueuet.com" -> respond("down", HttpStatusCode.ServiceUnavailable)
+                "kako.futakuro.com" -> respond(futapoLine, HttpStatusCode.OK)
+                "futabaforest.net" -> respond("down", HttpStatusCode.ServiceUnavailable)
+                else -> error("Unexpected host")
+            }
+        } } }
+        try {
+            assertEquals("1440038751", searchInqueuetArchiveThreads(client, Json { ignoreUnknownKeys = true }, "test", ArchiveSearchScope("may", "b"), includeAllSources = true, onSourceFailure = failures::add).single().threadId)
+            assertEquals(2, failures.size)
+        } finally { client.close() }
+    }
+    @Test
     fun extractArchiveSearchScope_usesBoardSlugAndServerFromThreadUrl() {
         val scope = extractArchiveSearchScope("https://may.2chan.net/b/res/123456.htm")
 

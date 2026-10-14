@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -132,6 +133,7 @@ internal fun CompatArchiveSearchDialog(
     var mode by remember { mutableStateOf(CompatArchiveSearchMode.OR) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var sourceFailures by remember { mutableStateOf<List<String>>(emptyList()) }
     var fetchedResults by remember { mutableStateOf<List<ArchiveSearchItem>>(emptyList()) }
     var searchHistory by remember { mutableStateOf(initialSearchHistory.distinct().take(20)) }
     var queryFocused by remember { mutableStateOf(false) }
@@ -154,6 +156,7 @@ internal fun CompatArchiveSearchDialog(
         }
         loading = true
         error = null
+        sourceFailures = emptyList()
         coroutineScope.launch {
             try {
                 val fetched = if (client == null) emptyList() else searchInqueuetArchiveThreads(
@@ -162,14 +165,16 @@ internal fun CompatArchiveSearchDialog(
                     query = normalized,
                     includeAllSources = includeAllSources,
                     scope = archiveScope,
-                    archiveBaseUrl = archiveBaseUrl
+                    archiveBaseUrl = archiveBaseUrl,
+                    onSourceFailure = { failure -> sourceFailures = (sourceFailures + failure).distinct() }
                 )
                 val merged = mergeCompatArchiveSearchItems(fetched, localHistory, archiveScope)
                 fetchedResults = merged
                 searchHistory = listOf(normalized) + searchHistory.filterNot { it.equals(normalized, true) }.take(19)
                 onSearchHistoryChanged(searchHistory)
                 if (filterCompatArchiveSearchItems(merged, normalized, mode.name).isEmpty()) {
-                    error = "一致する過去スレが見つかりません"
+                    error = if (sourceFailures.isEmpty()) "一致する過去スレが見つかりません"
+                        else "一部の検索先に接続できず、検索を完了できませんでした"
                 }
             } catch (cancellation: CancellationException) {
                 // A timeout inside the search is reported like any failure.
@@ -296,6 +301,10 @@ internal fun CompatArchiveSearchDialog(
                         Text("AND")
                     }
                     TextButton(onClick = ::search, enabled = !loading) { Text("検索") }
+                }
+                if (!loading && sourceFailures.isNotEmpty()) {
+                    Text(sourceFailures.joinToString("\n"), color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.testTag("archive-search-source-failures"))
                 }
                 when {
                     loading -> Row(

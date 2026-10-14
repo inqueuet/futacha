@@ -30,8 +30,9 @@ internal class IosModeSwitchCoordinator(
             if (store.readJournal() != null) recoverInterruptedModeSwitch { recoverLocked() }
             val current = store.readActiveProfile()
             if (current == target) return@withLock store.readGeneration()
-            // The Futaber mode shares the Futacha app icon setting, so its choice must be kept too.
-            if (current.usesAppStateData) store.savePreferredFutachaIcon(preferredFutachaIcon)
+            // Every mode shares the one app icon setting (ふたばー風 and, since its settings gained the choice,
+            // としあき(仮) as well), so the choice made in the mode being left must be kept whichever it is.
+            store.savePreferredFutachaIcon(preferredFutachaIcon)
             try {
                 var journal = store.beginSwitchWithCommitBarrier(current, target)
                 quiesceOldProfile()

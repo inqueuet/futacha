@@ -36,7 +36,7 @@ private val HTML_TAG_REGEX = Regex("<[^>]+>")
 /**
  * Past-log search on sites other than inqueuet, for when inqueuet has no hit (it keeps only threads with
  * 100 replies or more). Tries ふたポ and then ふたばフォレスト; the first one that has results answers.
- * Never throws except for cancellation: a site that is down or changed just contributes nothing.
+ * A failed source contributes no items but is reported separately from a successful empty search.
  *
  * The result's [ArchiveSearchItem.htmlUrl] is the thread's own board URL, so opening it shows the live
  * thread or, once it has fallen, the same external-archive fallback every fallen thread gets.
@@ -46,7 +46,8 @@ internal suspend fun searchThirdPartyArchiveThreads(
     query: String,
     scope: ArchiveSearchScope?,
     limit: Int,
-    includeAllSources: Boolean = false
+    includeAllSources: Boolean = false,
+    onSourceFailure: (String) -> Unit = {}
 ): List<ArchiveSearchItem> {
     val normalized = query.trim()
     if (normalized.isEmpty() || scope == null) return emptyList()
@@ -54,26 +55,28 @@ internal suspend fun searchThirdPartyArchiveThreads(
     val safeLimit = limit.coerceIn(1, 100)
     val combined = mutableListOf<ArchiveSearchItem>()
     if (boardKey in FUTAPO_SEARCH_BOARDS) {
-        val items = runThirdPartySearch { searchFutapo(httpClient, normalized, scope, safeLimit) }
+        val items = runThirdPartySearch("ふたポ", onSourceFailure) { searchFutapo(httpClient, normalized, scope, safeLimit) }
         if (!includeAllSources && items.isNotEmpty()) return items
         combined += items
     }
     if (boardKey in FUTABA_FOREST_SEARCH_BOARDS) {
-        val items = runThirdPartySearch { searchFutabaForest(httpClient, normalized, scope, safeLimit) }
+        val items = runThirdPartySearch("ふたばフォレスト", onSourceFailure) { searchFutabaForest(httpClient, normalized, scope, safeLimit) }
         if (!includeAllSources && items.isNotEmpty()) return items
         combined += items
     }
     return combined.distinctBy { "${it.server}/${it.board}/${it.threadId}" }.take(if (includeAllSources) 100 else safeLimit)
 }
 
-private suspend fun runThirdPartySearch(block: suspend () -> List<ArchiveSearchItem>): List<ArchiveSearchItem> =
+private suspend fun runThirdPartySearch(source: String, onFailure: (String) -> Unit, block: suspend () -> List<ArchiveSearchItem>): List<ArchiveSearchItem> =
     try {
         block()
     } catch (e: CancellationException) {
         // Only the caller's own cancellation ends the search; a timeout inside is just a site that did not answer.
         currentCoroutineContext().ensureActive()
+        onFailure("$source：検索がタイムアウトしました")
         emptyList()
     } catch (_: Throwable) {
+        onFailure("$source：検索結果を取得できませんでした")
         emptyList()
     }
 
@@ -81,17 +84,16 @@ private suspend fun fetchThirdPartyText(
     httpClient: HttpClient,
     url: String,
     configure: io.ktor.client.request.HttpRequestBuilder.() -> Unit
-): String? = withTimeoutOrNull(THIRD_PARTY_SEARCH_REQUEST_TIMEOUT_MILLIS) {
+): String = withTimeoutOrNull(THIRD_PARTY_SEARCH_REQUEST_TIMEOUT_MILLIS) {
     httpClient.prepareGet(url) {
         // A site that does not answer must not hold the search for the client's own retries.
         attributes.put(HigherLayerRetryManaged, true)
         configure()
     }.execute { response ->
-        // Unknown board or a site that changed: no result, not an error shown to the user.
-        if (!response.status.isSuccess()) return@execute null
+        check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
         readBoundedHttpResponseText(response, THIRD_PARTY_SEARCH_RESPONSE_MAX_BYTES)
     }
-}
+} ?: throw IllegalStateException("検索がタイムアウトしました")
 
 private suspend fun searchFutapo(
     httpClient: HttpClient,
@@ -107,7 +109,7 @@ private suspend fun searchFutapo(
         parameter("so", 1)
         parameter("as", 0)
         parameter("st", 0)
-    } ?: return emptyList()
+    }
     return withContext(AppDispatchers.parsing) { parseFutapoSearchResponse(body, scope, limit) }
 }
 
@@ -146,7 +148,7 @@ private suspend fun searchFutabaForest(
     val body = fetchThirdPartyText(httpClient, "$FUTABA_FOREST_BASE_URL/index.htm") {
         parameter("sm", 1)
         parameter("words", query)
-    } ?: return emptyList()
+    }
     return withContext(AppDispatchers.parsing) { parseFutabaForestSearchResponse(body, scope, limit) }
 }
 

@@ -134,7 +134,7 @@ val validateQualityContracts by tasks.registering {
             "Feature inventory is missing mandatory groups: ${requiredFeatureIds - featureIds.toSet()}"
         }
         featureRows.forEach { row ->
-            require(row[2] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT")) {
+            require(row[2] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FTUTTER")) {
                 "${row[0]} has invalid mode scope ${row[2]}"
             }
             require(row[3] in setOf("BOTH", "ANDROID", "IOS")) {
@@ -160,7 +160,7 @@ val validateQualityContracts by tasks.registering {
             val feature = requireNotNull(featureById[row[1]]) {
                 "$behaviorId references unknown feature ${row[1]}"
             }
-            require(row[3] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT")) {
+            require(row[3] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FTUTTER")) {
                 "$behaviorId has invalid mode scope ${row[3]}"
             }
             require(row[4] in setOf("BOTH", "ANDROID", "IOS")) {
@@ -514,13 +514,17 @@ val validateQualityContracts by tasks.registering {
         val requiredIosTargets = setOf(
             "SIMULATOR_SMALL_LATEST", "SIMULATOR_STANDARD_LATEST", "PHYSICAL_LATEST"
         )
+        // ふたったー風（2026-10-14公開、Android・iOSだけ）：最新のEmulator・標準のSimulatorと、R8版の起動。
+        // Close済みissueは既存2モードの契約なので求めない。
+        val additionalModes = mapOf("FTUTTER" to (setOf("EMULATOR_LATEST") to setOf("SIMULATOR_STANDARD_LATEST")))
         matrixRows.forEach { row ->
-            require(row[1] in requiredModes) { "${row[0]} has invalid mode ${row[1]}" }
+            require(row[1] in requiredModes || row[1] in additionalModes) { "${row[0]} has invalid mode ${row[1]}" }
             require(row[2] in setOf("ANDROID", "IOS")) { "${row[0]} has invalid platform ${row[2]}" }
             require(row[4] in setOf("THREE_BUTTON", "GESTURE", "BOTH")) {
                 "${row[0]} has invalid navigation mode ${row[4]}"
             }
-            val requiredScenarioSet = setOf("COMMON", "CLOSED_ISSUES", "LAYOUT", "MEDIA")
+            val requiredScenarioSet = if (row[1] in additionalModes) setOf("COMMON", "LAYOUT", "MEDIA")
+                else setOf("COMMON", "CLOSED_ISSUES", "LAYOUT", "MEDIA")
             val scenarios = row[5].split(',').toSet()
             require(scenarios.containsAll(requiredScenarioSet)) {
                 "${row[0]} misses release scenarios ${requiredScenarioSet - scenarios}"
@@ -543,6 +547,14 @@ val validateQualityContracts by tasks.registering {
             }
             require(matrixRows.filter { it[1] == mode && it[2] == "IOS" }.map { it[3] }.toSet()
                 .containsAll(requiredIosTargets)) {
+                "Release matrix misses iOS targets for $mode"
+            }
+        }
+        additionalModes.forEach { (mode, targets) ->
+            require(matrixRows.filter { it[1] == mode && it[2] == "ANDROID" }.map { it[3] }.toSet().containsAll(targets.first)) {
+                "Release matrix misses Android targets for $mode"
+            }
+            require(matrixRows.filter { it[1] == mode && it[2] == "IOS" }.map { it[3] }.toSet().containsAll(targets.second)) {
                 "Release matrix misses iOS targets for $mode"
             }
         }

@@ -16,7 +16,9 @@ internal enum class FutaberExtract(val id: String, val label: String) {
     Saidane("saidane", "そうだねが多いレス"),
     Deleted("deleted", "削除されたレス"),
     Url("url", "URLを含むレス"),
-    Image("image", "画像のあるレス")
+    Image("image", "画像のあるレス"),
+    /** The posts NG hides (they are listed while every other post is left out); see [futaberVisibleRows]. */
+    NgHidden("ng", "NGで隠したレス")
 }
 
 /** A post with this many "そうだね" or more counts as one with many. */
@@ -52,6 +54,8 @@ internal fun futaberMatchesExtract(
     FutaberExtract.Deleted -> post.isDeleted || post.isIsolated
     FutaberExtract.Url -> hasUrl ?: FUTABER_URL_PATTERN.containsMatchIn(messageHtmlToPlainText(post.messageHtml))
     FutaberExtract.Image -> !post.imageUrl.isNullOrBlank() || !post.thumbnailUrl.isNullOrBlank()
+    // Decided by futaberVisibleRows from the NG result, which a single post does not know.
+    FutaberExtract.NgHidden -> false
 }
 
 /** Everything a person could search a post by: body text, subject, name, ID and number. */
@@ -109,6 +113,8 @@ internal fun futaberBuildPostTexts(
  * The rows to list: posts hidden by NG are dropped first, then the filter applies. Rows keep the
  * number they have in the whole thread, so a filtered list still shows 12, 40, 41. [texts] (of these [posts]) saves
  * working out each post's text again; without it, or with the texts of other posts, they are worked out here.
+ * "NGで隠したレス" ([FutaberExtract.NgHidden]) turns the NG step round: only the posts of [ngHidden] are kept (what NG
+ * hides even while it is switched off for the thread, which empties [hidden]).
  */
 internal fun futaberVisibleRows(
     posts: List<Post>,
@@ -117,15 +123,18 @@ internal fun futaberVisibleRows(
     hidden: Set<String> = emptySet(),
     manyRepliesThreshold: Int = FUTABER_MANY_REPLIES_THRESHOLD,
     selfIds: Set<String> = emptySet(),
-    texts: FutaberPostTexts? = null
+    texts: FutaberPostTexts? = null,
+    ngHidden: Set<String> = hidden
 ): List<FutaberRow> {
     val needle = normalizeCatalogSearchText(filter.query)
     val entries = texts?.takeIf { it.posts === posts }?.entries
+    val ngOnly = filter.extract == FutaberExtract.NgHidden
     return posts.mapIndexedNotNull { ordinal, post ->
         when {
-            post.id in hidden -> null
+            ngOnly && post.id !in ngHidden -> null
+            !ngOnly && post.id in hidden -> null
             filter.repliesOnly && (replyIndex[post.id]?.size ?: 0) < manyRepliesThreshold -> null
-            filter.extract != null && !futaberMatchesExtract(post, filter.extract, selfIds, entries?.get(ordinal)?.hasUrl) -> null
+            !ngOnly && filter.extract != null && !futaberMatchesExtract(post, filter.extract, selfIds, entries?.get(ordinal)?.hasUrl) -> null
             filter.sameId.isNotBlank() && post.posterId != filter.sameId -> null
             needle.isNotEmpty() &&
                 !(entries?.get(ordinal)?.normalized ?: normalizeCatalogSearchText(futaberPostSearchText(post))).contains(needle) -> null

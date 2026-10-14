@@ -109,9 +109,14 @@ class VideoPromptViewerInstrumentedTest {
         val calls = AtomicInteger()
         val failures = AtomicInteger()
         val active = mutableStateOf(false)
+        // Since 2026-09-25 an unfinished playback download keeps running for 60 s after its
+        // last player lets go, so a retry can join it (OriginalMediaPlaybackTest covers that).
+        // Without that grace period the transfer is cancelled only after every lease is closed,
+        // including the native player's pin and its data source's reader; that release is what
+        // this test checks.
         val originals = OriginalMediaStore("partial-viewer", {
             DiskCache.Builder().directory(File(directory, "partial").path.toPath()).maxSizeBytes(1024 * 1024).build()
-        }, object : OriginalMediaDownloader {
+        }, playbackLingerMillis = 0, downloader = object : OriginalMediaDownloader {
             override suspend fun download(request: OriginalMediaRequest, sink: BufferedSink) = download(request, sink) {}
             override suspend fun download(request: OriginalMediaRequest, sink: BufferedSink, onHeaders: (OriginalMediaInfo) -> Unit): OriginalMediaInfo {
                 calls.incrementAndGet()
@@ -229,7 +234,9 @@ class VideoPromptViewerInstrumentedTest {
         }
         rule.onNodeWithText("閉じる").performClick()
         rule.onNodeWithTag("viewer-prompt-inline-text", useUnmergedTree = true).assertIsDisplayed()
-        onView(withClassName(equalTo("androidx.media3.ui.PlayerView"))).check { view, _ ->
+        val restoredPlayer = onView(withClassName(equalTo("androidx.media3.ui.PlayerView")))
+        if (!compat) restoredPlayer.inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog())
+        restoredPlayer.check { view, _ ->
             view.javaClass.getMethod("showController").invoke(view)
         }
         rule.waitForIdle()

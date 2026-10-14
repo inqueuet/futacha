@@ -61,6 +61,8 @@ class FutaberPerformanceEquivalenceTest {
         FutaberExtract.Deleted -> post.isDeleted || post.isIsolated
         FutaberExtract.Url -> legacyUrlPattern.containsMatchIn(messageHtmlToPlainText(post.messageHtml))
         FutaberExtract.Image -> !post.imageUrl.isNullOrBlank() || !post.thumbnailUrl.isNullOrBlank()
+        // Not drawn below: "NGで隠したレス" came after the replaced implementation (FutaberParityB1bTest covers it).
+        FutaberExtract.NgHidden -> false
     }
 
     private fun legacySearchText(post: Post): String = buildString {
@@ -308,7 +310,7 @@ class FutaberPerformanceEquivalenceTest {
     private fun randomFilter(random: Random, posts: List<Post>): FutaberViewFilter = FutaberViewFilter(
         query = random.pick(listOf("", " ", "ねこ", "ネコ", "abc", "ＡＢＣ", "http", "テスト", "id:abc123", "104", " 犬 ", "存在しない")),
         repliesOnly = random.nextInt(4) == 0,
-        extract = random.pick(listOf(null) + FutaberExtract.entries),
+        extract = random.pick(listOf(null) + (FutaberExtract.entries - FutaberExtract.NgHidden)),
         sameId = random.pick(listOf("", "", "ID:abc123", "zzz"))
     )
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.ui.board.distinctBoardsById
 import kotlinx.coroutines.launch
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
@@ -74,6 +75,8 @@ internal fun FutaberBoardDrawer(
     var renameTarget by remember { mutableStateOf<BoardSummary?>(null) }
     // With no board there is nothing to open, so the list starts in the mode that can add one.
     LaunchedEffect(boards.isEmpty()) { if (boards.isEmpty()) editing = true }
+    // Rows are keyed by id: a board stored twice is shown once instead of crashing the list.
+    val shownBoards = remember(boards) { distinctBoardsById(boards) }
 
     Box(modifier.background(colors.drawerBackground).testTag("futaber-drawer")) {
         // Own geometric backdrop (no borrowed artwork): a few translucent facets.
@@ -101,7 +104,7 @@ internal fun FutaberBoardDrawer(
                 modifier = Modifier.padding(16.dp)
             )
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                itemsIndexed(boards, key = { _, item -> item.id }) { index, item ->
+                itemsIndexed(shownBoards, key = { _, item -> item.id }) { index, item ->
                     val selected = item.id == selectedBoardId
                     Row(
                         Modifier.fillMaxWidth()
@@ -148,13 +151,13 @@ internal fun FutaberBoardDrawer(
                             }
                             IconButton(
                                 onClick = { onMoveBoard(item, false) },
-                                enabled = index < boards.lastIndex,
+                                enabled = index < shownBoards.lastIndex,
                                 modifier = Modifier.testTag("futaber-board-down")
                             ) {
                                 FutaberIcon(
                                     Icons.Outlined.KeyboardArrowDown,
                                     contentDescription = "${item.name}を下へ移動",
-                                    tint = if (index < boards.lastIndex) colors.drawerText else colors.drawerShape
+                                    tint = if (index < shownBoards.lastIndex) colors.drawerText else colors.drawerShape
                                 )
                             }
                         }

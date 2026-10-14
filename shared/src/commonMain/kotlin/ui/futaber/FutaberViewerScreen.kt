@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -47,20 +48,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatibilityStore
-import com.valoser.futacha.shared.model.SaveLocation
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
-import com.valoser.futacha.shared.service.SingleMediaSaveService
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
-import com.valoser.futacha.shared.ui.board.rememberPhotoSaveDestination
 import com.valoser.futacha.shared.ui.compat.CompatViewerImagePage
 import com.valoser.futacha.shared.ui.compat.CompatViewerTransform
 import com.valoser.futacha.shared.ui.compat.compatUniqueMediaKeys
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.compat.isCompatVideoMediaUrl
-import com.valoser.futacha.shared.ui.compat.rememberCompatManualSaveDestinationLauncher
-import com.valoser.futacha.shared.ui.compat.rememberCompatShareLauncher
 import com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl
-import com.valoser.futacha.shared.ui.compat.toCompatUserMessage
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.rememberUrlLauncher
@@ -110,24 +104,19 @@ internal fun FutaberViewerScreen(
     PlatformBackHandler(onBack = onOpenGallery)
     val scope = rememberCoroutineScope()
     val openUrl = rememberUrlLauncher()
-    val share = rememberCompatShareLauncher()
     val keys = remember(mediaPosts) { compatUniqueMediaKeys(mediaPosts) }
     val pagerState = rememberPagerState(initialPage = initialIndex.coerceIn(0, (mediaPosts.size - 1).coerceAtLeast(0))) { mediaPosts.size }
     var chromeVisible by remember { mutableStateOf(true) }
     val longPressHaptic = rememberFutaberLongPressHaptic()
     var message by remember { mutableStateOf<String?>(null) }
-    var isSaving by remember { mutableStateOf(false) }
     val transforms = remember { mutableStateMapOf<String, CompatViewerTransform>() }
-    val saver = remember(httpClient, fileSystem) {
-        if (httpClient != null && fileSystem != null) SingleMediaSaveService(httpClient, fileSystem) else null
-    }
-    val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
-        message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
-    }
+    // Saving and sharing go through the saver the thread's image menu shares (one at a time, the same destinations).
+    val mediaSaver = rememberFutaberMediaSaver(store, preferences, httpClient, fileSystem, boardKey, threadKey) { message = it }
+    val isSaving = mediaSaver.isSaving
+    val sharingInProgress = mediaSaver.sharingInProgress
     androidx.compose.runtime.LaunchedEffect(message) {
         if (message == "保存しました") { kotlinx.coroutines.delay(5000); if (message == "保存しました") message = null }
     }
-    val choosePhotoSaveDestination = rememberPhotoSaveDestination(httpClient, fileSystem) { message = it }
     LaunchedEffect(message) {
         if (message != null) {
             kotlinx.coroutines.delay(3000)
@@ -136,50 +125,9 @@ internal fun FutaberViewerScreen(
     }
     val current = mediaPosts.getOrNull(pagerState.currentPage)
 
-    fun saveNow(mediaUrl: String, shareAfterSave: Boolean, location: SaveLocation?) {
-        if (isSaving) return
-        isSaving = true
-        scope.launch {
-            try {
-                val fs = fileSystem
-                if (saver == null || fs == null) {
-                    message = if (shareAfterSave) "画像共有を初期化できませんでした" else "保存機能を初期化できませんでした"
-                    return@launch
-                }
-                saver.saveMedia(
-                    mediaUrl, boardKey, threadKey,
-                    baseSaveLocation = location,
-                    storageDirectoryOverride = if (shareAfterSave) null else "",
-                    useTypeSubdirectory = shareAfterSave
-                ).onSuccess { saved ->
-                    if (shareAfterSave) {
-                        val mime = if (saved.mediaType.name == "VIDEO") "video/*" else "image/*"
-                        share(
-                            mediaUrl, mime,
-                            fs.resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
-                        )
-                    } else {
-                        message = "保存しました"
-                    }
-                }.onFailure {
-                    message = it.toCompatUserMessage(if (shareAfterSave) "画像を共有できませんでした" else "画像を保存できませんでした")
-                }
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                // The share step after a successful save (finding the saved file) can fail too; it is told, not left to crash.
-                message = error.toCompatUserMessage(if (shareAfterSave) "画像を共有できませんでした" else "画像を保存できませんでした")
-            } finally {
-                isSaving = false
-            }
-        }
-    }
-
     fun saveCurrent(shareAfterSave: Boolean) {
         val mediaUrl = current?.let(::resolveCompatViewerMediaUrl) ?: return
-        if (isSaving) return
-        if (shareAfterSave) withSaveDestination { saveNow(mediaUrl, true, it) }
-        else choosePhotoSaveDestination(mediaUrl) { withSaveDestination { saveNow(mediaUrl, false, it) } }
+        mediaSaver.saveOrShare(mediaUrl, shareAfterSave)
     }
 
     var zoomed by remember { mutableStateOf(false) }
@@ -281,6 +229,14 @@ internal fun FutaberViewerScreen(
                 }
                 Box(Modifier.weight(1f).fillMaxWidth())
                 Column(Modifier.fillMaxWidth().background(ViewerBar).navigationBarsPadding()) {
+                    if (isSaving) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp), color = ViewerText, strokeWidth = 2.dp)
+                            Text(if (sharingInProgress) "共有の準備中…" else "保存中…", color = ViewerText,
+                                modifier = Modifier.testTag("futaber-viewer-save-progress"))
+                        }
+                    }
                     current?.let { post ->
                         Column(
                             Modifier.fillMaxWidth().background(ViewerInfo).padding(horizontal = 20.dp, vertical = 10.dp)
@@ -295,12 +251,12 @@ internal fun FutaberViewerScreen(
                         }
                     }
                     Row(Modifier.fillMaxWidth().height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp), verticalAlignment = Alignment.CenterVertically) {
-                        ViewerBarButton(Icons.Outlined.GridView, "画像一覧", "futaber-viewer-grid", Modifier.weight(1f), onOpenGallery)
+                        ViewerBarButton(Icons.Outlined.GridView, "画像一覧", "futaber-viewer-grid", Modifier.weight(1f), onClick = onOpenGallery)
                         ViewerBarButton(Icons.Outlined.ChatBubbleOutline, "レスに戻る", "futaber-viewer-post", Modifier.weight(1f)) {
                             current?.let { onShowPost(it.postNo) }
                         }
-                        ViewerBarButton(Icons.Outlined.IosShare, "共有", "futaber-viewer-share", Modifier.weight(1f)) { saveCurrent(true) }
-                        ViewerBarButton(Icons.Outlined.SaveAlt, "保存", "futaber-viewer-save", Modifier.weight(1f)) { saveCurrent(false) }
+                        ViewerBarButton(Icons.Outlined.IosShare, "共有", "futaber-viewer-share", Modifier.weight(1f), enabled = !isSaving) { saveCurrent(true) }
+                        ViewerBarButton(Icons.Outlined.SaveAlt, "保存", "futaber-viewer-save", Modifier.weight(1f), enabled = !isSaving) { saveCurrent(false) }
                     }
                 }
             }
@@ -321,9 +277,10 @@ private fun ViewerBarButton(
     label: String,
     tag: String,
     modifier: Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    IconButton(onClick = onClick, modifier = modifier.testTag(tag)) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.testTag(tag)) {
         FutaberIcon(icon, contentDescription = label, tint = ViewerText)
     }
 }

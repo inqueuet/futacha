@@ -103,7 +103,7 @@ internal fun FutaberOperationMenu(
                             value = query,
                             onValueChange = onQueryChange,
                             singleLine = true,
-                            textStyle = TextStyle(color = colors.body, fontSize = 15.sp),
+                            textStyle = TextStyle(color = colors.body, fontSize = 15.sp, fontFamily = LocalFutaberCustomFont.current),
                             cursorBrush = SolidColor(colors.accent),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = {

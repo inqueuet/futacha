@@ -210,8 +210,12 @@ internal fun ThreadScreenContentHost(
                     previous = lastFilteredPage.page
                 ).also { lastFilteredPage.page = it }
             }
-            val filteredPage = rememberFutachaFilteredThreadPage(state.page, normallyFilteredPage,
+            val projectedPage = rememberFutachaFilteredThreadPage(state.page, normallyFilteredPage,
                 bindings.ngHeaders, bindings.ngWords, bindings.postTextCache)
+            val hideDeletedRows = LocalFutachaSharedFeatures.current?.value("thread", "threadAdminDeleteShow") == "HIDE"
+            val filteredPage = remember(projectedPage, hideDeletedRows) {
+                if (hideDeletedRows) projectedPage?.copy(posts = projectedPage.posts.filterNot { it.isDeleted || it.isIsolated }) else projectedPage
+            }
             if (filteredPage == null) {
                 // Shared NG is still being applied; never show posts it will hide.
                 ThreadLoading(modifier = modifier.fillMaxSize())

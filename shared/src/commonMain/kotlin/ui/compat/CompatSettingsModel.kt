@@ -329,6 +329,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
         )
     ),
     "ふたちゃ拡張" to listOf(
+        CompatSettingEntry("読み上げ", "音声・速さ・試聴", "speech"),
         CompatSettingEntry("プライバシー表示", "文字・画像の画面フィルター、タイトル表示", "privacy"),
         CompatSettingEntry("AI・補助機能", "スレ要約・荒らし非表示", "ai"),
         CompatSettingEntry("モード", "現在の表示モード", preferenceKey = "mode"),
@@ -361,6 +362,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
 )
 
 internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): List<String> {
+    if (entry.preferenceKey == "threadAdminDeleteShow") return listOf("通知のみ", "本文表示", "レス非表示")
     val key = entry.preferenceKey
     if (!entry.enabled) return emptyList()
     if (entry.summary in setOf("ON", "OFF")) return listOf("ON", "OFF")
@@ -526,6 +528,7 @@ internal fun formatCompatAvailableSpace(bytes: Long): String {
 
 internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: String): String =
     when (preferenceKey) {
+        "threadAdminDeleteShow" -> when (displayedValue) { "本文表示" -> "ON"; "レス非表示" -> "HIDE"; else -> "OFF" }
         "controlPostTapBehavior" -> if (displayedValue == "タップで関連レス・長押しでメニュー") "related" else "legacy"
         COMPAT_THREAD_DISPLAY_MODE_KEY -> if (displayedValue == "ツリー表示") "tree" else "flat"
         "designTheme" -> when (displayedValue.lowercase()) {
@@ -629,6 +632,7 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
 
 internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: String): String =
     when (preferenceKey) {
+        "threadAdminDeleteShow" -> when (storedValue) { "ON" -> "本文表示"; "HIDE" -> "レス非表示"; else -> "通知のみ" }
         "controlPostTapBehavior" -> if (storedValue == "related") "タップで関連レス・長押しでメニュー" else "従来の操作"
         COMPAT_THREAD_DISPLAY_MODE_KEY -> if (storedValue == "tree") "ツリー表示" else "通常表示"
         "designTheme" -> when (storedValue.lowercase()) {
@@ -801,7 +805,7 @@ internal fun compatBooleanPreferenceSummary(preferenceKey: String): String = whe
         "通信に成功した更新の後だけ先頭へ戻り、キャッシュ表示時は位置を保ちます"
     "catalogAppendDropped" ->
         "今回のリロードで消えたスレをカタログの末尾に継ぎ足します"
-    else -> ""
+    else -> compatParityControlSummary(preferenceKey).orEmpty()
 }
 
 internal fun validateCompatPtmtCheck(check: String): String? = when {
@@ -1089,9 +1093,10 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", "catalogThreadOpenWithReload",
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
         "threadPullToRefresh", "threadFastScroll", "threadNg",
-        "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadAdminDeleteShow",
+        "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple",
         "viewerWebMSwitchMp4"
-    ) || (path == "network" && entry.preferenceKey == COMPAT_CACHE_ENABLED_KEY) ||
+    ) || (path == "control" && entry.preferenceKey in COMPAT_PARITY_CONTROL_BOOLEAN_KEYS) ||
+        (path == "network" && entry.preferenceKey == COMPAT_CACHE_ENABLED_KEY) ||
         (path == "root" && entry.preferenceKey == "archiveReportEnabled")
 
 /**

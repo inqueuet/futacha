@@ -50,7 +50,7 @@ internal fun rememberFutachaBindingsRuntimeState(
     navigationState: FutachaNavigationState,
     updateNavigationState: (FutachaNavigationState) -> Unit,
     onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)? = null,
-    onUnregisteredBoard: (String) -> Unit = {}
+    onUnregisteredBoard: (FutachaUnregisteredBoardRequest) -> Unit = {}
 ): FutachaBindingsRuntimeState {
     val refreshHistoryEntries: suspend () -> Unit = {
         AnalyticsTracker.event(

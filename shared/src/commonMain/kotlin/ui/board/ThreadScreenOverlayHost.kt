@@ -80,6 +80,7 @@ internal fun ThreadScreenOverlayHost(
 ) {
     val galleryGridState = rememberLazyGridState()
     var imageSearchUrl by remember { mutableStateOf<String?>(null) }
+    var postItemSelection by remember { mutableStateOf<FutachaPostItemSelection?>(null) }
 
     val sheetTarget = bindings.postOverlayState.actionSheetState.targetPost
     if (bindings.postOverlayState.actionSheetState.isActionSheetVisible && sheetTarget != null) {
@@ -91,9 +92,22 @@ internal fun ThreadScreenOverlayHost(
             onSaidane = { bindings.onSaidaneFromActionSheet(sheetTarget) },
             isSaidaneEnabled = bindings.isSaidaneEnabled(sheetTarget),
             onDelRequest = { bindings.onDelRequestFromActionSheet(sheetTarget) },
-            onDelete = { bindings.onDeleteFromActionSheet(sheetTarget) }
+            onDelete = { bindings.onDeleteFromActionSheet(sheetTarget) },
+            onQuickQuote = {
+                bindings.onDismissPostActionSheet()
+                bindings.uiBindings.quoteSelectionConfirm(futachaQuickQuoteLines(sheetTarget))
+            },
+            onSelectCopy = {
+                bindings.onDismissPostActionSheet()
+                postItemSelection = futachaPostItemSelection(sheetTarget, FutachaPostItemSelectionMode.COPY)
+            },
+            onSelectSearch = {
+                bindings.onDismissPostActionSheet()
+                postItemSelection = futachaPostItemSelection(sheetTarget, FutachaPostItemSelectionMode.SEARCH)
+            }
         )
     }
+    FutachaPostItemSelectionHost(postItemSelection) { postItemSelection = it }
 
     val attachmentTarget = bindings.postOverlayState.attachmentActionState.target
     if (bindings.postOverlayState.attachmentActionState.isVisible && attachmentTarget != null) {

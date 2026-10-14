@@ -24,7 +24,9 @@ internal fun ThreadPage.postsForFutachaSave(mode: FutachaPageSaveMode) = posts.m
 internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: ThreadPage,
     boardKey: String, boardName: String, boardUrl: String, title: String, onDismiss: () -> Unit,
     /** When set, the dialog also offers MHT (one file); [fullImages] says whether the full-size pictures are taken. */
-    onSaveMht: ((fullImages: Boolean) -> Unit)? = null) {
+    onSaveMht: ((fullImages: Boolean) -> Unit)? = null,
+    /** When true, also offers 「メディアのみ（ZIP）／（フォルダ）」 (ふたちゃ, and ふたばー風 with its extension on; other callers keep the old list). */
+    offerMediaOnly: Boolean = false) {
     val client = features.httpClient
     val fs = features.fileSystem
     if (client == null || fs == null) {
@@ -37,6 +39,9 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    val mediaOnlyProgressFlow = remember { kotlinx.coroutines.flow.MutableStateFlow<com.valoser.futacha.shared.model.SaveProgress?>(null) }
+    val mediaOnlyProgress by mediaOnlyProgressFlow.collectAsState()
+    var mediaOnlyRunning by remember { mutableStateOf(false) }
     val destination = rememberCompatManualSaveDestinationLauncher(features.store, features.preferences) {
         message = it.message ?: "保存先を記録できませんでした"
     }
@@ -59,6 +64,20 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                 finally { job = null }
             } }
         }) { Text(mode.label) } }
+            if (offerMediaOnly) FutachaMediaOnlySaveKind.entries.forEach { kind -> TextButton(onClick = {
+                destination { location ->
+                    mediaOnlyProgressFlow.value = null
+                    mediaOnlyRunning = true
+                    job = scope.launch {
+                        try {
+                            message = runFutachaMediaOnlySave(kind, page, boardKey, boardName, title, location,
+                                client, fs, mediaOnlyProgressFlow)
+                        } catch (cancelled: CancellationException) { message = "保存を中止しました"; throw cancelled }
+                        catch (failure: Exception) { message = failure.message ?: "保存できませんでした" }
+                        finally { job = null; mediaOnlyRunning = false }
+                    }
+                }
+            }) { Text(kind.label) } }
             if (onSaveMht != null) {
                 TextButton(onClick = { onSaveMht(false) }) { Text("MHT（1ファイル・サムネイル）") }
                 TextButton(onClick = { onSaveMht(true) }) { Text("MHT（1ファイル・全画像）") }
@@ -66,7 +85,7 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
     if (job != null) FutachaAppLockAwareWindow {
-        SaveProgressDialog(progress, onDismissRequest = {}, onCancelRequest = { job?.cancel() })
+        SaveProgressDialog(if (mediaOnlyRunning) mediaOnlyProgress else progress, onDismissRequest = {}, onCancelRequest = { job?.cancel() })
     }
     message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, text = { Text(text) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) } }

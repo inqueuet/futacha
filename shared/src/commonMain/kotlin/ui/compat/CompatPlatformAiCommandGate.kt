@@ -80,14 +80,14 @@ internal suspend fun holdCompatPlatformAiCommand(
 /**
  * C4-4: the compatibility workspace follows the same "AIアプリ操作" setting as
  * the modern mode, with the same exceptions (settings screens, watch open and
- * read-aloud stop). The setting has no switch in this mode's own settings, so
- * the message names where it is. Null when the command may proceed.
+ * read-aloud stop). The switch is on this mode's "AI・補助機能" settings page
+ * as well as ふたちゃ's, and the message names that page. Null when the command may proceed.
  */
 internal fun compatPlatformAiDisabledRejection(command: FutachaAiCommand, isAiCommandEnabled: Boolean): String? =
     if (isAiCommandEnabled || command.isAllowedWhenAiCommandsDisabled()) null else COMPAT_AI_COMMANDS_DISABLED_MESSAGE
 
 internal const val COMPAT_AI_COMMANDS_DISABLED_MESSAGE =
-    "AIアプリ操作は設定でOFFです。ふたちゃモードの設定画面で「AIアプリ操作」をONにしてください（この設定は両モード共通です）。"
+    "AIアプリ操作は設定でOFFです。設定の「AI・補助機能」で「AIアプリ操作」をONにしてください（この設定は全モード共通です）。"
 
 /**
  * S4-2: the confirmation text, with the values the command will store. A new

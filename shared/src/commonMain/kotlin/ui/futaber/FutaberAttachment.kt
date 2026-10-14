@@ -17,8 +17,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.max
 
+/** The way to the drawing is the attach button (its tap offers "手書き" on such a board: FutaberParityB2.kt). */
 internal const val FUTABER_REPLY_ATTACHMENT_REFUSED_MESSAGE =
-    "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+    "この板の返信には画像・動画を添付できません。手書きは添付ボタン（カメラ）の「手書き」から添付できます"
 
 /** What to do with a picked or pasted file for this board. */
 internal sealed interface FutaberAttachmentVerdict {

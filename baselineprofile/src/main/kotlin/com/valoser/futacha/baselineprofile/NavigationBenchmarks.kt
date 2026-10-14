@@ -17,6 +17,12 @@ class FutachaNavigationBenchmark : NavigationBenchmark(FutachaProfile.FUTACHA)
 @RunWith(AndroidJUnit4::class)
 class ToshiakiCompatNavigationBenchmark : NavigationBenchmark(FutachaProfile.TOSHIAKI_COMPAT)
 
+@RunWith(AndroidJUnit4::class)
+class FutaberNavigationBenchmark : NavigationBenchmark(FutachaProfile.FUTABER)
+
+@RunWith(AndroidJUnit4::class)
+class FtutterNavigationBenchmark : NavigationBenchmark(FutachaProfile.FTUTTER)
+
 abstract class NavigationBenchmark(private val profile: FutachaProfile) {
     @get:Rule
     val rule = MacrobenchmarkRule()

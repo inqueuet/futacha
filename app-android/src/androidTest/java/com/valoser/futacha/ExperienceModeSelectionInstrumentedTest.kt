@@ -73,4 +73,28 @@ class ExperienceModeSelectionInstrumentedTest {
         rule.waitForIdle()
         assertEquals(ExperienceProfile.FUTABER, requested)
     }
+
+    @Test
+    fun ftutterIsOfferedInSettingsOfAReleaseBuildAndAsksBeforeSwitching() {
+        var requested: ExperienceProfile? = null
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalExperienceProfileUiController provides ExperienceProfileUiController(
+                        isAvailable = true,
+                        activeProfile = ExperienceProfile.FUTACHA,
+                        requestSwitch = { requested = it }
+                    )
+                ) { GlobalSettingsModeSection() }
+            }
+        }
+        rule.onNodeWithText("モード").performClick()
+        rule.onNodeWithText("ふたったー風モード").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("開発版のみ", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("ふたったー風モード").performClick()
+        rule.onNodeWithText("ふたったー風モードへ切り替えますか？").assertIsDisplayed()
+        rule.onNodeWithText("切り替える").performClick()
+        rule.waitForIdle()
+        assertEquals(ExperienceProfile.FTUTTER, requested)
+    }
 }

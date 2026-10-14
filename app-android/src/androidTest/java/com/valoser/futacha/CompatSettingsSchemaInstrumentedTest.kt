@@ -675,10 +675,13 @@ class CompatSettingsSchemaInstrumentedTest {
         val futabaPixels = rule.onNodeWithTag("compat-startup-loading")
             .captureToImage()
             .toPixelMap()
-        val futabaCorner = futabaPixels[2, 2]
+        // The loading surface paints the status-bar region in the theme's chrome colour (since the
+        // system-bar fix), so the top-left corner is no longer the page background. Sample the
+        // body, away from the bars and the centred indicator.
+        val futabaBody = futabaPixels[futabaPixels.width / 4, futabaPixels.height / 2]
         assertTrue(
             "The manual Futaba theme must stay light under a dark host theme",
-            futabaCorner.red > 0.95f && futabaCorner.green > 0.95f && futabaCorner.blue > 0.85f
+            futabaBody.red > 0.95f && futabaBody.green > 0.95f && futabaBody.blue > 0.85f
         )
 
         runBlocking {
@@ -691,8 +694,8 @@ class CompatSettingsSchemaInstrumentedTest {
         }
         rule.waitUntil(5_000) {
             val pixels = rule.onNodeWithTag("compat-startup-loading").captureToImage().toPixelMap()
-            val corner = pixels[2, 2]
-            corner.red < 0.05f && corner.green < 0.05f && corner.blue < 0.05f
+            val body = pixels[pixels.width / 4, pixels.height / 2]
+            body.red < 0.05f && body.green < 0.05f && body.blue < 0.05f
         }
 
         runBlocking { delayedBoards.emit(emptyList()) }
@@ -2234,10 +2237,19 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onAllNodesWithText("ふたちゃ拡張").assertCountEquals(0)
         rule.onAllNodesWithText("画像NG類似度閾値").assertCountEquals(0)
 
+        val threadSettingsList = rule.onNodeWithTag("compat-settings-list-thread")
+        threadSettingsList.performScrollToNode(hasTestTag("compat-setting-threadUpsThumbMethod"))
         val uploaderPolicy = rule.onNodeWithTag("compat-setting-threadUpsThumbMethod")
             .performScrollTo()
             .fetchSemanticsNode().boundsInRoot
-        val checkboxRow = rule.onNodeWithTag("compat-setting-threadAdminDeleteShow")
+        // threadAdminDeleteShow is a three-way list row (通知のみ / 本文表示 / レス非表示) since the
+        // HIDE value was added, so a true checkbox row is represented by another boolean setting.
+        threadSettingsList.performScrollToNode(hasTestTag("compat-setting-threadHideDefaultNameAndSubject"))
+        val checkboxRow = rule.onNodeWithTag("compat-setting-threadHideDefaultNameAndSubject")
+            .performScrollTo()
+            .fetchSemanticsNode().boundsInRoot
+        threadSettingsList.performScrollToNode(hasTestTag("compat-setting-threadAdminDeleteShow"))
+        val deletedRow = rule.onNodeWithTag("compat-setting-threadAdminDeleteShow")
             .performScrollTo()
             .fetchSemanticsNode().boundsInRoot
         val listRow = rule.onNodeWithTag("compat-setting-threadHeaderSoudaneDisplay")
@@ -2245,6 +2257,7 @@ class CompatSettingsSchemaInstrumentedTest {
             .fetchSemanticsNode().boundsInRoot
         assertTrue(abs(uploaderPolicy.height - with(rule.density) { 73.dp.toPx() }) <= 1f)
         assertTrue(abs(checkboxRow.height - with(rule.density) { 54.dp.toPx() }) <= 1f)
+        assertTrue(abs(deletedRow.height - with(rule.density) { 73.dp.toPx() }) <= 1f)
         assertTrue(abs(listRow.height - with(rule.density) { 73.dp.toPx() }) <= 1f)
         rule.onNodeWithText("表示する").assertIsDisplayed()
         rule.onAllNodesWithText("表示しない").assertCountEquals(0)
@@ -2451,11 +2464,14 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("compat-setting-commonImageCache").performScrollTo()
         rule.onNodeWithText("1024MB").assertIsDisplayed()
 
+        // The storage list is a LazyColumn: ask it to compose the row before addressing it.
+        settingsList.performScrollToNode(hasTestTag("compat-setting-dummyCatalogImageCacheLocation"))
         rule.onNodeWithTag("compat-setting-dummyCatalogImageCacheLocation").performScrollTo().performClick()
         rule.onNodeWithText("内部ストレージ").performClick()
         rule.waitUntil(5_000) {
             runBlocking { store.loadPreference("compat.storage.dummyCatalogImageCacheLocation") } == "internal"
         }
+        settingsList.performScrollToNode(hasTestTag("compat-setting-dummyCatalogImageCacheLocation"))
         rule.onNodeWithTag("compat-setting-dummyCatalogImageCacheLocation").performScrollTo()
         rule.onNodeWithText("内部ストレージ").assertIsDisplayed()
 
@@ -2552,6 +2568,11 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.waitUntil(10_000) { helpDocumentScript("document.querySelectorAll('mark').length > 0") == "true" }
         assertHelpSearchDocument("強制停止")
         rule.onNodeWithTag("help-search-field").performTextReplacement("missing-help-word-114")
+        // The search is debounced (180ms) and runs off the main thread, so the count first shows
+        // "検索中…" and the result arrives later; wait for it instead of asserting immediately.
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("一致する項目がありません").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
         rule.onNodeWithText("クリア").performClick()
         closeSoftKeyboard()
@@ -2780,7 +2801,14 @@ class CompatSettingsSchemaInstrumentedTest {
         val catalogChecks = AtomicInteger(0)
         val existenceChecks = AtomicInteger(0)
         val repository = object : BoardRepository by FakeBoardRepository() {
-            override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
+            // The background update check fetches every board's catalog with the catalog screen's
+            // layout settings (300 threads when catalogThreadSize is unset), so it always goes
+            // through getCatalogWithSettings, never the settings-free getCatalog.
+            override suspend fun getCatalogWithSettings(
+                board: String,
+                mode: CatalogMode,
+                settings: CatalogFetchSettings
+            ): List<CatalogItem> {
                 catalogChecks.incrementAndGet()
                 return listOf(
                     CatalogItem(
@@ -3800,10 +3828,14 @@ class CompatSettingsSchemaInstrumentedTest {
         val toolbar = rule.onNodeWithTag("compat-post-bottom-bar")
             .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         assertTrue("post overflow must end above its toolbar", popup.bottom <= toolbar.top + 2f)
+        // The popup is text-only rows of 48dp: "画像を貼り付け" (always first, since the clipboard
+        // paste was added) plus the one deactivated toolbar item, inside 4dp vertical padding.
+        val compactMenuHeight = with(rule.density) { (2 * 48 + 2 * 4 + 4).dp.toPx() }
         assertTrue(
-            "post overflow must remain a compact text menu",
-            popup.height <= toolbar.height * 1.5f
+            "post overflow must remain a compact text menu (${popup.height}px > ${compactMenuHeight}px)",
+            popup.height <= compactMenuHeight
         )
+        rule.onNodeWithText("画像を貼り付け").assertIsDisplayed()
         rule.onNodeWithText("回線情報").assertIsDisplayed()
         rule.onAllNodesWithText("閉じる").assertCountEquals(0)
     }
@@ -4810,6 +4842,19 @@ class CompatSettingsSchemaInstrumentedTest {
             }
         }
 
+        // The thread load is wrapped in a 75 s timeout. While a request is held open the test clock
+        // must not be auto-advanced (waitUntil/waitForIdle would fast-forward that timeout and end the
+        // refresh, hiding the loading indicator), so step frames by hand until the request arrives.
+        fun awaitHeldRefresh(expectedRequests: Int) {
+            rule.mainClock.autoAdvance = false
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (requestCount.get() < expectedRequests) {
+                check(System.nanoTime() < deadline) { "request $expectedRequests was not made (count=${requestCount.get()})" }
+                rule.mainClock.advanceTimeByFrame()
+                Thread.sleep(10)
+            }
+            rule.mainClock.advanceTimeByFrame()
+        }
         rule.waitUntil(5_000) { requestCount.get() == 1 }
         rule.waitUntil(5_000) {
             runBlocking { store.loadThreadSnapshot(compatTabKey(threadUrl)) != null }
@@ -4832,11 +4877,12 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithContentDescription("ページ最上部へ").performClick()
         refreshGate = CompletableDeferred()
         rule.onNodeWithTag("compat-thread-pull-refresh").performTouchInput { swipeDown() }
-        rule.waitUntil(5_000) { requestCount.get() == 2 }
+        awaitHeldRefresh(2)
         rule.onNodeWithText("読み込み中…").assertIsDisplayed()
         rule.onNodeWithTag("compat-thread-pull-refresh-indicator").assertIsDisplayed()
         refreshGate.complete(Unit)
         refreshGate = null
+        rule.mainClock.autoAdvance = true
         rule.waitUntil(5_000) {
             runBlocking {
                 (store.loadThreadSnapshot(compatTabKey(threadUrl))?.revision ?: 0L) > initialRevision
@@ -4856,10 +4902,11 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("compat-thread-list").performScrollToIndex(59)
         refreshGate = CompletableDeferred()
         rule.onNodeWithTag("compat-thread-pull-refresh").performTouchInput { swipeUp() }
-        rule.waitUntil(5_000) { requestCount.get() == 3 }
+        awaitHeldRefresh(3)
         rule.onNodeWithText("読み込み中…").assertIsDisplayed()
         refreshGate.complete(Unit)
         refreshGate = null
+        rule.mainClock.autoAdvance = true
         rule.waitUntil(5_000) {
             runBlocking {
                 (store.loadThreadSnapshot(compatTabKey(threadUrl))?.revision ?: 0L) > topPullRevision
@@ -5104,11 +5151,15 @@ class CompatSettingsSchemaInstrumentedTest {
                 )
             )
         }
-        val updateChecks = AtomicInteger(0)
+        // The update probe and the catalog screen both fetch with the catalog layout settings
+        // (getCatalogWithSettings), so the two are told apart by the number of such fetches:
+        // opening the catalog is the first one, the all-tab probe the second. The settings-free
+        // getCatalog must not be used any more.
+        val legacyCatalogCalls = AtomicInteger(0)
         val catalogReloads = AtomicInteger(0)
         val repository = object : BoardRepository by FakeBoardRepository() {
             override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
-                updateChecks.incrementAndGet()
+                legacyCatalogCalls.incrementAndGet()
                 return listOf(item)
             }
 
@@ -5163,8 +5214,8 @@ class CompatSettingsSchemaInstrumentedTest {
         }
         rule.mainClock.autoAdvance = true
 
-        rule.waitUntil(5_000) { updateChecks.get() == 1 }
-        assertEquals(1, catalogReloads.get())
+        rule.waitUntil(5_000) { catalogReloads.get() == 2 }
+        assertEquals(0, legacyCatalogCalls.get())
         rule.waitUntil(5_000) {
             runBlocking { store.tabs.first().single().replyCount == 2 }
         }
@@ -6771,6 +6822,8 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("本当によろしいですか？").assertIsDisplayed()
         rule.onNodeWithText("削除する").performClick()
         rule.onNodeWithText("ＮＧヘッダー 0個").assertIsDisplayed()
+        // "全て削除" clears exactly the rules the dialog lists: this thread's and the all-thread
+        // ones. Another thread's rules were never shown and must survive (audit fix ad1e87c5).
         rule.waitUntil(5_000) {
             runBlocking {
                 store.ngRules.first().none {
@@ -6778,10 +6831,14 @@ class CompatSettingsSchemaInstrumentedTest {
                         CompatNgKind.THREAD_REFUSE,
                         CompatNgKind.THREAD_POST_NO,
                         CompatNgKind.THREAD_POSTER_ID
-                    )
+                    ) && (it.scopeKey == threadKey || it.scopeKey == "*")
                 }
             }
         }
+        assertTrue(
+            "another thread's header rule must survive the clear",
+            runBlocking { store.ngRules.first() }.any { it.kind == CompatNgKind.THREAD_POSTER_ID && it.scopeKey == otherThreadKey }
+        )
         rule.onNodeWithContentDescription("戻る").performClick()
         rule.onNodeWithTag("compat-thread-pager").assertIsDisplayed()
 
@@ -6821,9 +6878,15 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("ＮＧワード 0個").assertIsDisplayed()
         rule.waitUntil(5_000) {
             runBlocking {
-                store.ngRules.first().none { it.kind == CompatNgKind.THREAD_IGNORE }
+                store.ngRules.first().none {
+                    it.kind == CompatNgKind.THREAD_IGNORE && (it.scopeKey == threadKey || it.scopeKey == "*")
+                }
             }
         }
+        assertTrue(
+            "another thread's word rule must survive the clear",
+            runBlocking { store.ngRules.first() }.any { it.kind == CompatNgKind.THREAD_IGNORE && it.scopeKey == otherThreadKey }
+        )
     }
 
     @Test

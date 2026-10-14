@@ -14,8 +14,9 @@ import java.io.IOException
 
 class HistoryRefreshWorkerSupportTest {
     @Test
-    fun backgroundRefreshAnalytics_isSkippedOnlyForTheFutaberProfile() {
+    fun backgroundRefreshAnalytics_isSkippedOnlyForTheFutaberAndFtutterProfiles() {
         assertFalse(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.FUTABER))
+        assertFalse(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.FTUTTER))
         assertTrue(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA))
         assertTrue(shouldSendBackgroundRefreshAnalytics(com.valoser.futacha.shared.compat.ExperienceProfile.TOSHIAKI_COMPAT))
     }

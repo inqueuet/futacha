@@ -1002,7 +1002,9 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     if (!activeProfile.usesAppStateData) {
                         compatibilityStore.boards.collect { compatBoards ->
                             val current = stateStore.boards.first()
-                            val synchronized = synchronizeModernBoardsFromCompatibility(current, compatBoards)
+                            val synchronized = synchronizeModernBoardsFromCompatibility(
+                                current, compatBoards, compatibilityStore.holdsBundledTutorialBoard
+                            )
                             if (synchronized != current) stateStore.setBoards(synchronized)
                         }
                     } else {
@@ -1063,7 +1065,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 ) { backgroundEnabled, watchAlertEnabled, compatPreferences, profile, generation ->
                     val archiveReportEnabled = compatPreferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
                     val compatEnabled = when (profile) {
-                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> false
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> false
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = parseCompatForegroundNetworkPolicy(
                                 compatPreferences["compat.background.backgroundThreadUpdateCheck"]
@@ -1081,7 +1083,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         profile = profile,
                         generation = generation,
                         enabled = when (profile) {
-                            ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled ||
+                            ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled ||
                                 com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                             ExperienceProfile.TOSHIAKI_COMPAT -> compatEnabled
                         }
@@ -1228,7 +1230,9 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                                 val compatBoards = compatibilityStore.boards.first()
                                 val compatHistory = compatibilityStore.history.first()
                                 val boards = stateStore.boards.first()
-                                val mergedBoards = synchronizeModernBoardsFromCompatibility(boards, compatBoards)
+                                val mergedBoards = synchronizeModernBoardsFromCompatibility(
+                                    boards, compatBoards, compatibilityStore.holdsBundledTutorialBoard
+                                )
                                 if (mergedBoards != boards) stateStore.setBoards(mergedBoards)
                                 stateStore.updateHistory { current ->
                                     mergeCompatibilityHistory(current, compatHistory, mergedBoards)

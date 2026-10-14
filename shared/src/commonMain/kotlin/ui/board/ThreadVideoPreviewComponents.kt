@@ -50,7 +50,6 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
-import com.valoser.futacha.shared.ui.image.PromptInfoAction
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -154,12 +153,6 @@ internal fun VideoPreviewDialog(
                 isMuted = isMuted,
                 onPlaybackError = { playbackError = it }
             )
-            Row(Modifier.align(Alignment.TopCenter).padding(top = 76.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                onShowPost?.let { show ->
-                    TextButton(onClick = show, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("レスに戻る") }
-                }
-                TextButton(onClick = { urlLauncher(entry.url) }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("ブラウザで開く") }
-            }
             // Show the already small thread thumbnail while the player prepares
             // metadata/network. Playback remains paused until the user taps the
             // native controls.
@@ -239,7 +232,11 @@ internal fun VideoPreviewDialog(
                     .onSizeChanged { controlPanelHeightPx = it.height },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                PromptInfoAction(promptMetadata)
+                ThreadMediaPreviewBottomActions(
+                    metadata = promptMetadata,
+                    onShowPost = onShowPost,
+                    onOpenBrowser = { urlLauncher(entry.url) }
+                )
                 if (chromeState.showsControlPanel) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.65f),

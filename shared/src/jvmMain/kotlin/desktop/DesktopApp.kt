@@ -95,7 +95,9 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
                     synchronizeBoardsToCompatibility(stateStore.boards.first())
                     compatibility.importModernHistory(stateStore.history.first())
                 } else {
-                    val boards = synchronizeModernBoardsFromCompatibility(stateStore.boards.first(), compatibility.boards.first())
+                    val boards = synchronizeModernBoardsFromCompatibility(
+                        stateStore.boards.first(), compatibility.boards.first(), compatibility.holdsBundledTutorialBoard
+                    )
                     stateStore.setBoards(boards)
                     val history = compatibility.history.first()
                     stateStore.updateHistory { mergeCompatibilityHistory(it, history, boards) }
@@ -121,7 +123,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         if (profile == ExperienceProfile.FUTACHA) synchronizeBoardsToCompatibility(stateStore.boards.first())
         else {
             val current = stateStore.boards.first()
-            val updated = synchronizeModernBoardsFromCompatibility(current, compatibility.boards.first())
+            val updated = synchronizeModernBoardsFromCompatibility(current, compatibility.boards.first(), compatibility.holdsBundledTutorialBoard)
             if (current != updated) stateStore.setBoards(updated)
         }
     }

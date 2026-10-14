@@ -26,6 +26,18 @@ class ToshiakiCompatColdStartupBenchmark :
 class ToshiakiCompatWarmStartupBenchmark :
     StartupBenchmark(FutachaProfile.TOSHIAKI_COMPAT, StartupMode.WARM)
 
+@RunWith(AndroidJUnit4::class)
+class FutaberColdStartupBenchmark : StartupBenchmark(FutachaProfile.FUTABER, StartupMode.COLD)
+
+@RunWith(AndroidJUnit4::class)
+class FutaberWarmStartupBenchmark : StartupBenchmark(FutachaProfile.FUTABER, StartupMode.WARM)
+
+@RunWith(AndroidJUnit4::class)
+class FtutterColdStartupBenchmark : StartupBenchmark(FutachaProfile.FTUTTER, StartupMode.COLD)
+
+@RunWith(AndroidJUnit4::class)
+class FtutterWarmStartupBenchmark : StartupBenchmark(FutachaProfile.FTUTTER, StartupMode.WARM)
+
 abstract class StartupBenchmark(
     private val profile: FutachaProfile,
     private val startupMode: StartupMode

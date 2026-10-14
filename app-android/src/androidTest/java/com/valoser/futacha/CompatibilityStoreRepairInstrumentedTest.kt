@@ -13,6 +13,9 @@ import com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY
 import com.valoser.futacha.shared.compat.CompatWatchRule
 import com.valoser.futacha.shared.compat.compatBoardDefaultNamePreferenceKey
 import com.valoser.futacha.shared.compat.compatBoardKey
+import com.valoser.futacha.shared.compat.compatCatalogExtraModePreferenceKey
+import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
+import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.compat.compatWatchRules
 import com.valoser.futacha.shared.compat.encodeValidCompatWatchRules
 import com.valoser.futacha.shared.compat.compatTabKey
@@ -21,6 +24,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -98,6 +103,44 @@ class CompatibilityStoreRepairInstrumentedTest {
             }
             db.rawQuery("PRAGMA foreign_key_check", null).use { cursor -> assertEquals(0, cursor.count) }
         }
+    }
+
+    /** 2026-10-13 全体検証 3.4: the per-board "そ順"/"監視" order goes with the board. */
+    @Test
+    fun deletingABoardRemovesItsCatalogExtraOrder() = runBlocking {
+        val store = openStore(newDatabaseName())
+        val imgUrl = "https://img.2chan.net/b/"
+        store.upsertBoards(listOf(CompatBoard(boardKey, "may", boardUrl, boardUrl, 0),
+            CompatBoard(compatBoardKey(imgUrl), "img", imgUrl, imgUrl, 1)))
+        store.savePreference(compatCatalogExtraModePreferenceKey(boardKey), "SO")
+        store.savePreference(compatCatalogExtraModePreferenceKey(compatBoardKey(imgUrl)), "WATCH")
+        store.deleteBoard(boardKey)
+        assertNull(store.preferences.first()[compatCatalogExtraModePreferenceKey(boardKey)])
+        assertEquals("WATCH", store.preferences.first()[compatCatalogExtraModePreferenceKey(compatBoardKey(imgUrl))])
+        store.upsertBoard(CompatBoard(boardKey, "may", boardUrl, boardUrl, 0))
+        assertNull(store.preferences.first()[compatCatalogExtraModePreferenceKey(boardKey)])
+    }
+
+    /**
+     * 2026-10-13 全体検証 3.2: this store never holds the bundled tutorial, so switching back from としあき(仮) keeps it in
+     * the AppState (MainActivity passes [AndroidCompatibilityStore.holdsBundledTutorialBoard]).
+     */
+    @Test
+    fun theTutorialTheStoreCannotHoldSurvivesTheSwitchBack() = runBlocking {
+        val store = openStore(newDatabaseName())
+        assertFalse(store.holdsBundledTutorialBoard)
+        val appStateBoards = mockBoardSummaries
+        // The switch to としあき(仮) (MainActivity): bootstrap and import of the AppState's boards.
+        store.bootstrapBoardsIfNeeded(appStateBoards)
+        store.importModernBoards(appStateBoards)
+        assertTrue(store.boards.first().isEmpty())
+        // The switch back with nothing added: the board list is not emptied.
+        assertEquals(appStateBoards, synchronizeModernBoardsFromCompatibility(appStateBoards, store.boards.first(),
+            store.holdsBundledTutorialBoard))
+        // A board added in としあき(仮): both are there.
+        store.upsertBoard(CompatBoard(boardKey, "may", boardUrl, boardUrl, 0))
+        val back = synchronizeModernBoardsFromCompatibility(appStateBoards, store.boards.first(), store.holdsBundledTutorialBoard)
+        assertEquals(listOf(appStateBoards.single().id, boardKey), back.map { it.id })
     }
 
     @Test

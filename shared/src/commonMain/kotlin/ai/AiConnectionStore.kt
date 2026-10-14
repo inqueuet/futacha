@@ -180,7 +180,7 @@ class AiConnectionStore internal constructor(
             val encoded = AI_CONNECTION_JSON.encodeToString(StoredAiConnection.serializer(), next)
             check(encoded.encodeToByteArray().size <= MAX_AI_CREDENTIAL_BYTES)
             storage.write(encoded)
-        } catch (_: Exception) { throw IllegalStateException("AI接続設定を安全に保存できませんでした。") }
+        } catch (failure: Exception) { throw IllegalStateException("AI接続設定を安全に保存できませんでした。", failure) }
     }
     private suspend fun changeKeys(resetOrder: Boolean = false, change: (List<StoredOpenAiKey>) -> List<StoredOpenAiKey>) = withContext(AppDispatchers.io) {
         mutex.withLock {

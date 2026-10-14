@@ -323,6 +323,16 @@ internal fun BoardManagementTopBar(
     )
 }
 
+/**
+ * The board lists key their rows by id, and a board stored twice crashed ふたちゃ at start (2026-10-13 全体検証 7.6).
+ * The stores remove such copies; the list also shows each id once, so a copy left anywhere cannot crash it.
+ * Returns [boards] itself when every id is distinct.
+ */
+internal fun distinctBoardsById(boards: List<BoardSummary>): List<BoardSummary> {
+    val ids = HashSet<String>(boards.size)
+    return if (boards.all { ids.add(it.id) }) boards else boards.distinctBy(BoardSummary::id)
+}
+
 @Composable
 internal fun BoardManagementBoardList(
     boards: List<BoardSummary>,
@@ -343,7 +353,7 @@ internal fun BoardManagementBoardList(
     LaunchedEffect(boards, isReorderMode) {
         if (draggedBoardId == null) dragOrder = null
     }
-    val displayedBoards = dragOrder ?: boards
+    val displayedBoards = remember(dragOrder, boards) { distinctBoardsById(dragOrder ?: boards) }
     var renamingBoardId by rememberSaveable { mutableStateOf<String?>(null) }
     var renamedBoardName by rememberSaveable { mutableStateOf("") }
     val currentBoards = rememberUpdatedState(boards)

@@ -251,4 +251,158 @@ class FutaberReadAloudTest {
         // The engine was never even created for a run that was stopped before it began.
         assertEquals(0, engine.prepared)
     }
+
+    // ---- B7b: pause / resume / seek (the read-aloud panel extension) ----
+
+    @Test
+    fun pausingKeepsReadingStateAndPositionAndResumeReadsThePausedPostAgain() = runBlocking {
+        val engine = FakeEngine(blockOn = "三番目")
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, firstVisibleRow = 0) {}
+        awaitCondition { engine.spoken.contains("三番目") }
+        assertEquals(3, reader.segmentCount)
+        assertEquals(1, reader.currentIndex)
+        reader.pause()
+        reader.awaitIdle()
+        // Still "reading" (the chip stays), paused on 三番目, nothing more said.
+        assertTrue(reader.isReading)
+        assertTrue(reader.isPaused)
+        assertEquals("3", reader.currentPostId)
+        assertEquals(1, reader.currentIndex)
+        assertEquals(listOf("一番目", "三番目"), engine.spoken)
+        assertNull(reader.message)
+        reader.resume()
+        engine.gate.complete(Unit)
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "三番目", "五番目"), engine.spoken)
+        assertFalse(reader.isReading)
+        assertFalse(reader.isPaused)
+        assertEquals("読み上げを完了しました", reader.message)
+    }
+
+    @Test
+    fun seekingWhilePausedMovesThePositionAndStaysPaused() = runBlocking {
+        val engine = FakeEngine(blockOn = "一番目")
+        val scrolled = mutableListOf<Int>()
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, firstVisibleRow = 0) { scrolled += it }
+        awaitCondition { engine.spoken.contains("一番目") }
+        reader.pause()
+        reader.awaitIdle()
+        reader.seekTo(2)
+        awaitCondition { scrolled.lastOrNull() == 4 }
+        assertTrue(reader.isPaused)
+        assertEquals(2, reader.currentIndex)
+        assertEquals("5", reader.currentPostId)
+        reader.skip(-1) // while paused the chip's 前 only moves too
+        assertTrue(reader.isPaused)
+        assertEquals(1, reader.currentIndex)
+        assertEquals(listOf("一番目"), engine.spoken)
+        reader.resume()
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "五番目"), engine.spoken)
+        assertFalse(reader.isReading)
+    }
+
+    @Test
+    fun seekingWhileReadingCarriesOnFromTheChosenPost() = runBlocking {
+        val engine = FakeEngine(blockOn = "一番目")
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, firstVisibleRow = 0) {}
+        awaitCondition { engine.spoken.contains("一番目") }
+        reader.seekTo(2)
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "五番目"), engine.spoken)
+        assertFalse(reader.isPaused)
+        assertFalse(reader.isReading)
+    }
+
+    @Test
+    fun stoppingWhilePausedEndsEverythingAndAStartAfterwardsBeginsAfresh() = runBlocking {
+        val engine = FakeEngine(blockOn = "一番目")
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, firstVisibleRow = 0) {}
+        awaitCondition { engine.spoken.contains("一番目") }
+        reader.pause()
+        reader.stop()
+        reader.awaitIdle()
+        assertFalse(reader.isReading)
+        assertFalse(reader.isPaused)
+        assertNull(reader.currentPostId)
+        // The cancelled run must not take the state back later.
+        kotlinx.coroutines.yield()
+        assertFalse(reader.isReading)
+        val second = FakeEngine()
+        val again = FutaberReadAloud(this, { second })
+        again.start(posts, firstVisibleRow = 2) {}
+        again.awaitIdle()
+        assertEquals(listOf("三番目", "五番目"), second.spoken)
+    }
+
+    @Test
+    fun aPauseBeforeTheFirstPostOrWhileIdleIsIgnoredAndResumeWithoutPauseDoesNothing() = runBlocking {
+        val engine = FakeEngine()
+        val reader = FutaberReadAloud(this, { engine })
+        reader.pause()
+        reader.resume()
+        assertFalse(reader.isPaused)
+        assertFalse(reader.isReading)
+        reader.start(posts, firstVisibleRow = 0) {}
+        // The run has not reached its first post yet: there is no position to keep.
+        reader.pause()
+        assertFalse(reader.isPaused)
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "五番目"), engine.spoken)
+    }
+
+    @Test
+    fun aRunReplacedByAPauseDoesNotMoveThePositionOrClearTheState() = runBlocking {
+        val engine = FakeEngine(blockOn = "三番目")
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, firstVisibleRow = 0) {}
+        awaitCondition { engine.spoken.contains("三番目") }
+        reader.skip(1) // a replacing run that is paused before it gets far
+        reader.pause()
+        reader.awaitIdle()
+        kotlinx.coroutines.yield()
+        assertTrue(reader.isReading)
+        assertTrue(reader.isPaused)
+        val pausedAt = reader.currentIndex
+        reader.resume()
+        engine.gate.complete(Unit)
+        reader.awaitIdle()
+        assertFalse(reader.isReading)
+        // Resumed from where the pause found it; nothing after the end was read.
+        assertTrue(pausedAt in 1..2)
+        assertEquals("五番目", engine.spoken.last())
+    }
+
+    @Test
+    fun pausingWhileWaitingForNewPostsWaitsAgainOnResume() = runBlocking {
+        val engine = FakeEngine()
+        var polls = 0
+        val entered = CompletableDeferred<Unit>()
+        val reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
+        reader.start(posts, 0, loadNewPosts = {
+            polls++
+            if (polls == 1) { entered.complete(Unit); posts } else posts + post("6", "六番目")
+        }) {}
+        entered.await()
+        awaitCondition { reader.message == "新着を待っています" }
+        reader.pause()
+        reader.awaitIdle()
+        assertTrue(reader.isPaused)
+        assertTrue(reader.isReading)
+        assertNull(reader.message)
+        val pollsWhilePaused = polls
+        kotlinx.coroutines.delay(20)
+        assertEquals(pollsWhilePaused, polls) // no polling while paused
+        reader.resume()
+        awaitCondition { engine.spoken.contains("六番目") }
+        // The last post was not read again: resuming went back to waiting.
+        assertEquals(listOf("一番目", "三番目", "五番目", "六番目"), engine.spoken)
+        reader.stop()
+        reader.awaitIdle()
+        assertFalse(reader.isReading)
+    }
 }

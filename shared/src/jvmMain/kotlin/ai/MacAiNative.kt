@@ -24,10 +24,23 @@ internal object MacAiNative {
         catch (_: LinkageError) { throw IllegalStateException("MacのAI接続を読み込めませんでした。アプリを再インストールしてください。") }
         try {
             val result = Json.parseToJsonElement(pointer.getString(0, "UTF-8")).jsonObject
-            check(result["status"]?.jsonPrimitive?.content != "error") {
-                result["message"]?.jsonPrimitive?.content ?: "MacのAI処理に失敗しました。"
+            if (result["status"]?.jsonPrimitive?.content == "error") {
+                throw MacAiNativeException(
+                    result["message"]?.jsonPrimitive?.content ?: "MacのAI処理に失敗しました。",
+                    operation,
+                    result["osStatus"]?.jsonPrimitive?.content?.toIntOrNull()
+                )
             }
             return result
         } finally { bridge.futacha_ai_free(pointer) }
     }
+}
+
+/**
+ * A failed bridge call. [message] is the user-facing text as before; the operation and the
+ * Keychain OSStatus (when there is one) only appear in [toString], for logs and test failures.
+ */
+internal class MacAiNativeException(message: String, val operation: String, val osStatus: Int?) : IllegalStateException(message) {
+    override fun toString(): String =
+        "${javaClass.name}: $message (operation=$operation" + (osStatus?.let { ", OSStatus=$it" } ?: "") + ")"
 }

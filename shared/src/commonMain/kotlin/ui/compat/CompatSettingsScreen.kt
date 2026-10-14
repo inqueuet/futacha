@@ -290,18 +290,31 @@ internal fun CompatSettingsScreen(
     initialScrollPosition: Pair<Int, Int>? = null,
     onScrollPositionChanged: (Pair<Int, Int>) -> Unit = {},
     modernPresentation: Boolean = false,
-    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
+    /**
+     * The AppStateStore that owns the boards (ふたちゃ, ふたばー風); null where the compatibility store does (としあき(仮)).
+     * The boards a restore brings are added to it, or the next board synchronisation drops them.
+     */
+    restoreBoardsInto: com.valoser.futacha.shared.state.AppStateStore? = null
 ) {
     com.valoser.futacha.shared.ui.privacy.PrivacySettingsExemption()
+    if (path == "speech") {
+        CompatSpeechSettingsScreen(store, preferences, onBack)
+        return
+    }
     val profileController = LocalExperienceProfileUiController.current
     val scope = rememberCoroutineScope()
-    val groups = remember(path, appVersion, modernPresentation) {
+    val appStateSettings = rememberCompatAppStateSettings(stateStore)
+    var appStateDialog by remember(path) { mutableStateOf<CompatAppStateSetting?>(null) }
+    val groups = remember(path, appVersion, modernPresentation, stateStore != null) {
         if (path == "backup" && modernPresentation) {
             listOf("バックアップ" to (compatRootSettingsGroups(appVersion).first { it.first == "バックアップ" }.second +
                 CompatSettingEntry("旧版設定・NGの復元", "keyword.cfg / setting.cfg を読み込む")))
         } else if (path == "ptmt" && modernPresentation) {
             listOf("Cookie" to listOf(CompatSettingEntry("ptmtクッキーの編集", "", preferenceKey = "ptmtEditor")))
-        } else if (path == "root") compatRootSettingsGroups(appVersion) else compatSettingsGroups(path, modernPresentation)
+        } else if (path == "root") {
+            compatRootSettingsGroups(appVersion, includeAppStateEntries = stateStore != null && !modernPresentation)
+        } else compatSettingsGroups(path, modernPresentation, includeAppStateEntries = stateStore != null && !modernPresentation)
     }
     var modeDialog by remember { mutableStateOf(false) }
     var editingEntry by remember(path) { mutableStateOf<CompatSettingEntry?>(null) }
@@ -468,7 +481,10 @@ internal fun CompatSettingsScreen(
                         compatBackupSuccessMessage(backupKind, report)
                     }
                 } }
-                if (result.isSuccess) recordCompatBackupDate(backupKind)
+                if (result.isSuccess) {
+                    recordCompatBackupDate(backupKind)
+                    mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
+                }
                 backupMessage = result.getOrElse { error ->
                     compatBackupFailureMessage(backupKind, error)
                 }
@@ -577,7 +593,11 @@ internal fun CompatSettingsScreen(
                         payload
                     } else null
                 } }
-                if (result.isSuccess) recordCompatBackupDate(kind)
+                if (result.isSuccess) {
+                    recordCompatBackupDate(kind)
+                    // Saving a backup restores nothing; every other kind (settings, NG, the old app's files) can bring boards.
+                    if (!kind.startsWith("save_")) mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
+                }
                 val message = result.getOrElse { error ->
                     compatBackupFailureMessage(kind, error)
                 }
@@ -765,6 +785,7 @@ internal fun CompatSettingsScreen(
                 }
                 itemsIndexed(entries, key = { index, entry -> "$group-${entry.preferenceKey}:$index" }) { _, entry ->
                     val isMode = path == "root" && entry.preferenceKey == "mode"
+                    val appStateSetting = if (path == "root") CompatAppStateSetting.fromPreferenceKey(entry.preferenceKey) else null
                     val isBoolean = compatIsBooleanPreference(path, entry)
                     val options = if (path == "root" || isBoolean) emptyList() else compatPreferenceOptions(path, entry)
                     val isThreadCacheClear = path == "storage" && entry.title == "スレッドキャッシュのクリア"
@@ -874,7 +895,7 @@ internal fun CompatSettingsScreen(
                         }
                     }
                     val actionable = entry.enabled && dependencyEnabled && (
-                        isMode || isBoolean ||
+                        isMode || isBoolean || appStateSetting != null ||
                         entry.route != null || options.isNotEmpty() || isThreadCacheClear ||
                             isImageCacheClear || isAttachmentClear || isDirectoryPicker ||
                             isUpdateCheckToggle || isArchiveReportToggle || isArchiveReportClear || isArchiveReportInfo ||
@@ -888,6 +909,7 @@ internal fun CompatSettingsScreen(
                         title = entry.title,
                         summary = when {
                             isMode -> "現在: ${profileController.activeProfile.displayName}"
+                            appStateSetting != null -> appStateSettings.summary(appStateSetting)
                             isUpdateCheckToggle -> if (isUpdateCheckEnabled) {
                                 "ON・起動時に最新リリースを確認"
                             } else {
@@ -967,6 +989,8 @@ internal fun CompatSettingsScreen(
                         onClick = {
                             if (isMode) {
                                 modeDialog = true
+                            } else if (appStateSetting != null) {
+                                appStateDialog = appStateSetting
                             } else if (isBoolean || isUpdateCheckToggle) {
                                 applyBoolean(!checkedValue)
                             } else if (isPtmtEditor) {
@@ -1051,6 +1075,7 @@ internal fun CompatSettingsScreen(
             }
         }
     }
+    CompatAppStateSettingDialogs(stateStore, appStateDialog, appStateSettings) { appStateDialog = null }
     if (confirmThreadCacheClear) {
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (!threadCacheClearInProgress) confirmThreadCacheClear = false },

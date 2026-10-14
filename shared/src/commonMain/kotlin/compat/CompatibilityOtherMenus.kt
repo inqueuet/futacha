@@ -26,7 +26,9 @@ fun compatCatalogOtherMenu(
     showNonPriority: Boolean,
     canUndoClose: Boolean,
     cacheEnabled: Boolean? = null,
-    activeToolbarKeys: Set<String> = emptySet()
+    activeToolbarKeys: Set<String> = emptySet(),
+    /** Adds the shared NG lists (ふたちゃ・ふたばー風) at the end of the NG menu. Off by default: the menu stays as it is. */
+    commonNgEnabled: Boolean = false
 ): List<CompatOtherMenuItem> = when (route) {
     CompatOtherMenuRoute.CATALOG_ROOT -> listOf(
         CompatOtherMenuItem("extract", "監視ワード"),
@@ -55,7 +57,7 @@ fun compatCatalogOtherMenu(
             "non_priority_toggle",
             if (showNonPriority) "レス数非優先を隠す" else "レス数非優先を表示する"
         )
-    )
+    ) + compatCommonNgMenuItems(commonNgEnabled)
 
     // sample/1.apk's catalog_extract_menu is a separate screen with its own
     // search/add/clear actions.  The Compose implementation reuses the same
@@ -80,7 +82,9 @@ fun compatThreadOtherMenu(
     cacheEnabled: Boolean? = null,
     activeToolbarKeys: Set<String> = emptySet(),
     /** Offers the MHT formats in the save menu. Off by default so the reference menu stays exactly as it is. */
-    mhtEnabled: Boolean = false
+    mhtEnabled: Boolean = false,
+    /** Adds the shared NG lists (ふたちゃ・ふたばー風) at the end of the NG menu. Off by default: the menu stays as it is. */
+    commonNgEnabled: Boolean = false
 ): List<CompatOtherMenuItem> = when (route) {
     CompatOtherMenuRoute.THREAD_ROOT -> listOf(
         CompatOtherMenuItem("save", "ページを保存", CompatOtherMenuRoute.THREAD_SAVE),
@@ -118,7 +122,7 @@ fun compatThreadOtherMenu(
         CompatOtherMenuItem("ng_ignore", "NGワード"),
         CompatOtherMenuItem("ng_image", "NG画像"),
         CompatOtherMenuItem("ng_toggle", if (ngEnabled) "無効にする" else "有効にする")
-    )
+    ) + compatCommonNgMenuItems(commonNgEnabled)
 
     CompatOtherMenuRoute.THREAD_URL -> listOf(
         CompatOtherMenuItem("url_browser", "ブラウザ"),
@@ -156,3 +160,6 @@ fun compatOtherMenuTitle(route: CompatOtherMenuRoute): String = when (route) {
     CompatOtherMenuRoute.THREAD_URL -> "URL"
     CompatOtherMenuRoute.THREAD_EXTRACT -> "抽出"
 }
+
+private fun compatCommonNgMenuItems(enabled: Boolean): List<CompatOtherMenuItem> =
+    if (enabled) listOf(CompatOtherMenuItem("ng_common", "共通NG（ふたちゃ・ふたばー風と共有）")) else emptyList()

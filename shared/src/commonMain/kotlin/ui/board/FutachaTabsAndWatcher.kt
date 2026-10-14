@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Settings
 import com.valoser.futacha.shared.util.isAndroid
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -92,8 +93,10 @@ internal fun FutachaTabsDialog(
                     val result = refreshCompatTabsInBackground(features.store, requireNotNull(repository), maxTabs = 100)
                     message = "更新${result.updatedTabs}件・落ち${result.deadTabs}件・失敗${result.failures}件"
                 } }) { Text("全タブを確認") }
-                TextButton(enabled = !busy && undo != null, onClick = { perform {
-                    undo?.let { features.store.restoreClosedTabs(it) }; undo = null
+                // Also offered by the host's snackbar for a tab closed elsewhere: once restored there, not here.
+                val offeredUndo = undo?.takeUnless(features.closedTabsUndo::isRestored)
+                TextButton(enabled = !busy && offeredUndo != null, modifier = Modifier.testTag("futacha-tabs-undo"), onClick = { perform {
+                    offeredUndo?.let { features.closedTabsUndo.restore(features.store, it) }; undo = null
                 } }) { Text("元に戻す") }
             }
         }
@@ -101,6 +104,7 @@ internal fun FutachaTabsDialog(
     selected?.let { tab -> FutachaAppLockAwareWindow {
         AlertDialog(onDismissRequest = { selected = null }, title = { Text("タブを整理") }, text = {
             Column {
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row {
                     Checkbox(checked = protect, onCheckedChange = { protect = it })
                     Text("お気に入りを保護")
@@ -114,15 +118,60 @@ internal fun FutachaTabsDialog(
                 ).forEach { (label, action) ->
                     TextButton(enabled = !busy, onClick = { perform {
                         val keys = compatDrawerTabCloseKeys(features.store.tabs.first(), tab.key, action, protect)
+                        // Undone with this list's own "元に戻す"; the host's snackbar is not asked to offer it again.
                         undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds())
-                        undo?.let(features.onTabsClosed)
                         selected = null
                     } }) { Text(label) }
+                    if (action == CompatDrawerTabCloseAction.DEAD && repository != null) {
+                        TextButton(enabled = !busy, modifier = Modifier.testTag("futacha-tabs-close-dead-checked"),
+                            onClick = { perform {
+                                val keys = futachaCheckedDeadTabCloseKeys({ features.store.tabs.first() }, protect) { url ->
+                                    repository.probeThreadGone(url)
+                                }
+                                if (keys.isEmpty()) {
+                                    message = "落ちたスレは見つかりませんでした"
+                                } else {
+                                    undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds())
+                                    message = "落ちたスレを${keys.size}件閉じました"
+                                }
+                                selected = null
+                            } }) { Text("確認して落ちたスレを閉じる") }
+                    }
                 }
             }
         }, confirmButton = { TextButton(onClick = { selected = null }) { Text("キャンセル") } })
     } }
 }
+
+/**
+ * 「確認して落ちたスレを閉じる」: like 「落ちたスレを閉じる」 but asks the server about every
+ * tab first (としあき(仮)'s explicit check: up to 4 at once, 10 s each; a failed check
+ * counts as alive). Favorites stay when [protectFavorites].
+ */
+internal suspend fun futachaCheckedDeadTabCloseKeys(
+    currentTabs: suspend () -> List<CompatTab>,
+    protectFavorites: Boolean,
+    probeGone: suspend (String) -> Boolean
+): Set<String> = checkCompatDeadTabCloseKeys(
+    tabs = currentTabs(),
+    protectFavorites = protectFavorites,
+    currentTabs = currentTabs,
+    probeGone = probeGone
+)
+
+/**
+ * Second line of a crawl-result row: the word it matched, the board, the reply count and whether the
+ * thread has gone. Spelled like としあき(仮) and ふたばー風 (the word in 「」, "落ち" for a dropped thread).
+ */
+internal fun futachaWatcherSubtitle(entry: CompatExternalWatcherEntry): String = buildString {
+    entry.extractedKeyword?.trim()?.takeIf { it.isNotEmpty() }?.let { append("「").append(it).append("」") }
+    append(entry.boardName.orEmpty())
+    append("・").append(entry.replyCount).append("レス")
+    if (!entry.active) append("・落ち")
+}
+
+internal const val FUTACHA_WATCHER_DELETE_ALL_CONFIRMATION =
+    "巡回結果をすべて削除しますか？\nふたちゃ・としあき(仮)・ふたばー風で共有している結果が消えます。"
 
 @Composable
 private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: (ThreadHistoryEntry) -> Unit, onDismiss: () -> Unit) {
@@ -131,6 +180,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
     var snapshot by remember { mutableStateOf(CompatExternalWatcherSnapshot()) }
     var message by remember { mutableStateOf<String?>(null) }
     var managing by remember { mutableStateOf(false) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(watcher, refresh, features.preferences) {
         watcher.load().onSuccess { snapshot = it }.onFailure { message = it.message }
@@ -142,7 +192,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
             LazyColumn(Modifier.heightIn(max = 400.dp)) {
                 items(snapshot.entries, key = { it.key }) { entry ->
                     ListItem(headlineContent = { Text(entry.title) },
-                        supportingContent = { Text("${entry.boardName.orEmpty()}・${entry.replyCount}レス") },
+                        supportingContent = { Text(futachaWatcherSubtitle(entry)) },
                         trailingContent = { TextButton(onClick = { scope.launch {
                             watcher.delete(entry.key).onFailure { message = it.message }; refresh++
                         } }) { Text("削除") } },
@@ -160,8 +210,16 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
             if (snapshot.entries.isEmpty()) Text("巡回管理からキーワードを登録できます")
             TextButton(onClick = { managing = true }) { Icon(Icons.Filled.Settings, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("巡回管理") }
             TextButton(onClick = { refresh++ }) { Text("保存済み結果を再読込") }
+            TextButton(enabled = snapshot.entries.isNotEmpty(), onClick = { confirmDeleteAll = true }) { Text("すべて削除") }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
+    if (confirmDeleteAll) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { confirmDeleteAll = false },
+        title = { Text("巡回結果の削除") }, text = { Text(FUTACHA_WATCHER_DELETE_ALL_CONFIRMATION) },
+        confirmButton = { TextButton(onClick = {
+            confirmDeleteAll = false
+            scope.launch { watcher.deleteAll().onFailure { message = it.message }; refresh++ }
+        }) { Text("すべて削除する") } },
+        dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("キャンセル") } }) }
     if (managing) FutachaAppLockAwareWindow { CompatWatcherManager(features.store, features.repository,
         onDismiss = { managing = false; refresh++ }, onResultsChanged = { refresh++ },
         onOpenExternal = if (isAndroid()) watcher::openManager else null,

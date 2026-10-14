@@ -235,7 +235,9 @@ class MainActivity : ComponentActivity() {
                                     if (compatBoards.isNotEmpty()) hasObservedAuthoritativeCompatBoards = true
                                     if (!hasObservedAuthoritativeCompatBoards) return@collect
                                     val current = stateStore.boards.first()
-                                    val synchronized = synchronizeModernBoardsFromCompatibility(current, compatBoards)
+                                    val synchronized = synchronizeModernBoardsFromCompatibility(
+                                        current, compatBoards, compatibilityApp.compatibilityStore.holdsBundledTutorialBoard
+                                    )
                                     if (synchronized != current) stateStore.setBoards(synchronized)
                                 }
                             } else {
@@ -331,7 +333,9 @@ class MainActivity : ComponentActivity() {
                                 val compatBoards = application.compatibilityStore.boards.first()
                                 val compatHistory = application.compatibilityStore.history.first()
                                 val currentBoards = stateStore.boards.first()
-                                val mergedBoards = synchronizeModernBoardsFromCompatibility(currentBoards, compatBoards)
+                                val mergedBoards = synchronizeModernBoardsFromCompatibility(
+                                    currentBoards, compatBoards, application.compatibilityStore.holdsBundledTutorialBoard
+                                )
                                 if (mergedBoards != currentBoards) stateStore.setBoards(mergedBoards)
                                 stateStore.updateHistory { currentHistory ->
                                     mergeCompatibilityHistory(currentHistory, compatHistory, mergedBoards)

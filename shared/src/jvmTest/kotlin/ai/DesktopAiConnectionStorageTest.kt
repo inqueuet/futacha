@@ -9,6 +9,16 @@ import java.util.UUID
 import kotlin.test.*
 
 class DesktopAiConnectionStorageTest {
+    /**
+     * These two tests have failed intermittently on the developer Mac (2026-10-13) without
+     * the Keychain's OSStatus. A failed write now carries it in the exception's cause
+     * ([MacAiNativeException.toString]); a failed read is shown here.
+     */
+    private fun keychainReadDiagnostic(credentials: MacAiCredentials): String =
+        runCatching { credentials.read() }.exceptionOrNull()?.toString() ?: "a direct credentialRead succeeded afterwards"
+
+    private fun keychainReadDiagnostic(account: String) = keychainReadDiagnostic(MacAiCredentials(account))
+
     @Test fun macKeychainRestoresReplacesAndRemovesKeysWithoutPlaintextFiles() = runBlocking {
         assumeTrue(DesktopPlatform.isMac)
         val directory = Files.createTempDirectory("futacha-keychain-test").toFile()
@@ -21,7 +31,7 @@ class DesktopAiConnectionStorageTest {
             first.save(AiProvider.DEVICE, AiProvider.OPENAI, DEFAULT_OPENAI_SUMMARY_MODEL, "test-desktop-key", 0.9f, false, setOf("harassment"))
             val reopened = AiConnectionStore(DesktopAiConnectionStorage(MacAiCredentials(account), File(directory, "cache.json")))
             reopened.load()
-            assertNull(reopened.state.value.storageError)
+            assertNull(reopened.state.value.storageError, keychainReadDiagnostic(account))
             assertEquals("test-desktop-key", reopened.apiKey(reopened.state.value.revision))
             assertEquals(0.9f, reopened.state.value.moderationThreshold)
             assertFalse(reopened.state.value.moderationAutoHide)
@@ -47,11 +57,20 @@ class DesktopAiConnectionStorageTest {
             repeat(MAX_OPENAI_KEYS) { store.saveApiKey(null, "API $it", "test-$it-" + "x".repeat(1000)) }
             assertTrue(credentials.read()!!.encodeToByteArray().size > 8192)
             val reopened = AiConnectionStore(storage).also { it.load() }
-            assertNull(reopened.state.value.storageError)
+            assertNull(reopened.state.value.storageError, keychainReadDiagnostic(credentials))
             assertEquals(MAX_OPENAI_KEYS, reopened.state.value.apiKeys.size)
             assertEquals("test-0-" + "x".repeat(1000), reopened.apiKey(reopened.state.value.revision))
             assertTrue(directory.walkTopDown().none { it.isFile })
         } finally { credentials.delete(); directory.deleteRecursively() }
+    }
+
+    @Test fun bridgeFailureKeepsItsMessageAndReportsTheKeychainStatusForDiagnostics() {
+        val failure = MacAiNativeException("Keychainへ保存できません。アクセス許可を確認してください。", "credentialWrite", -25308)
+        assertEquals("Keychainへ保存できません。アクセス許可を確認してください。", failure.message)
+        assertTrue(failure is IllegalStateException)
+        assertTrue("OSStatus=-25308" in failure.toString(), failure.toString())
+        assertTrue("operation=credentialWrite" in failure.toString(), failure.toString())
+        assertFalse("OSStatus" in MacAiNativeException("m", "availability", null).toString())
     }
 
     @Test fun windowsDpapiRoundTripRejectsTamperingAndNeverWritesPlaintext() {
@@ -88,7 +107,10 @@ class DesktopAiConnectionStorageTest {
             store.save(AiProvider.DEVICE, AiProvider.OPENAI, DEFAULT_OPENAI_SUMMARY_MODEL, "test-only-key")
             val revision = store.state.value.revision
             failing = true
-            assertFailsWith<IllegalStateException> { store.save(AiProvider.DEVICE, AiProvider.DEVICE, DEFAULT_OPENAI_SUMMARY_MODEL, "") }
+            val failure = assertFailsWith<IllegalStateException> { store.save(AiProvider.DEVICE, AiProvider.DEVICE, DEFAULT_OPENAI_SUMMARY_MODEL, "") }
+            // The user-facing text stays the same; the storage failure is kept as the cause for diagnostics.
+            assertEquals("AI接続設定を安全に保存できませんでした。", failure.message)
+            assertNotNull(failure.cause)
             assertEquals(revision, store.state.value.revision)
             assertEquals("test-only-key", store.apiKey(revision))
             assertTrue(directory.walkTopDown().none { it.isFile })

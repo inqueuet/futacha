@@ -95,29 +95,31 @@ fun ThreadPage.toCompatThreadSnapshot(tabKey: String, revision: Long): CompatThr
         deletedNotice = deletedNotice,
         isTruncated = isTruncated,
         truncationReason = truncationReason,
-        posts = posts.mapIndexed { index, post ->
-            normalizeCompatPostMedia(CompatPostSnapshot(
-                position = index,
-                postNo = post.id,
-                author = post.author,
-                subject = post.subject,
-                mail = post.mail,
-                timestamp = post.timestamp,
-                posterId = post.posterId,
-                messageHtml = post.messageHtml,
-                imageUrl = post.imageUrl,
-                thumbnailUrl = post.thumbnailUrl,
-                saidaneLabel = post.saidaneLabel,
-                isDeleted = post.isDeleted,
-                isIsolated = post.isIsolated,
-                referencedCount = post.referencedCount,
-                thumbnailWidth = post.thumbnailWidth,
-                thumbnailHeight = post.thumbnailHeight,
-                imageFileSizeBytes = post.imageFileSizeBytes,
-                quoteReferences = post.quoteReferences
-            ))
-        }
+        posts = posts.mapIndexed { index, post -> post.toCompatPostSnapshot(index) }
     )
+
+/** Convert one modern post into the shared compatibility snapshot (same normalization as a thread). */
+fun Post.toCompatPostSnapshot(position: Int): CompatPostSnapshot =
+    normalizeCompatPostMedia(CompatPostSnapshot(
+        position = position,
+        postNo = id,
+        author = author,
+        subject = subject,
+        mail = mail,
+        timestamp = timestamp,
+        posterId = posterId,
+        messageHtml = messageHtml,
+        imageUrl = imageUrl,
+        thumbnailUrl = thumbnailUrl,
+        saidaneLabel = saidaneLabel,
+        isDeleted = isDeleted,
+        isIsolated = isIsolated,
+        referencedCount = referencedCount,
+        thumbnailWidth = thumbnailWidth,
+        thumbnailHeight = thumbnailHeight,
+        imageFileSizeBytes = imageFileSizeBytes,
+        quoteReferences = quoteReferences
+    ))
 
 /** Futaba catalog reply counts do not include the opening post. */
 fun ThreadPage.compatReplyCount(): Int = (posts.size - 1).coerceAtLeast(0)

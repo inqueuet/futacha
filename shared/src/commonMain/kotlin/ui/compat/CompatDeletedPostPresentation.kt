@@ -45,8 +45,10 @@ internal fun compatPostDeletionKind(post: CompatPostSnapshot): PostDeletionKind?
  */
 internal fun presentCompatPostsForDeletedVisibility(
     posts: List<CompatPostSnapshot>,
-    showDeletedContent: Boolean
+    showDeletedContent: Boolean,
+    hideDeletedRows: Boolean = false
 ): List<CompatPostSnapshot> {
+    if (hideDeletedRows) return posts.filterNot { it.isDeleted || it.isIsolated }
     if (showDeletedContent) return posts
     // Keep the input instance when nothing is redacted so that callers keyed on
     // the list (and Compose skipping) see an unchanged value.
@@ -70,14 +72,15 @@ internal fun presentCompatPostsForDeletedVisibility(
  */
 internal suspend fun presentCompatPostsForDeletedVisibilityOffMain(
     posts: List<CompatPostSnapshot>,
-    showDeletedContent: Boolean
+    showDeletedContent: Boolean,
+    hideDeletedRows: Boolean = false
 ): List<CompatPostSnapshot> {
-    if (showDeletedContent || posts.none { it.isDeleted || it.isIsolated }) return posts
+    if ((showDeletedContent && !hideDeletedRows) || posts.none { it.isDeleted || it.isIsolated }) return posts
     if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
-        return presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
+        return presentCompatPostsForDeletedVisibility(posts, showDeletedContent, hideDeletedRows)
     }
     return withContext(AppDispatchers.parsing) {
-        presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
+        presentCompatPostsForDeletedVisibility(posts, showDeletedContent, hideDeletedRows)
     }
 }
 

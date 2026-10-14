@@ -262,6 +262,9 @@ class AndroidCompatibilityStore(
         }
     }
 
+    /** Official boards only (see [validatedModernBoards]): the bundled tutorial is never stored here. */
+    override val holdsBundledTutorialBoard: Boolean get() = false
+
     override suspend fun bootstrapBoardsIfNeeded(modernBoards: List<BoardSummary>): Boolean = mutate(
         refresh = setOf(CompatObservableState.BOARDS)
     ) { db ->
@@ -354,7 +357,8 @@ class AndroidCompatibilityStore(
                 CompatObservableState.TABS,
                 CompatObservableState.HISTORY,
                 CompatObservableState.WORKSPACE,
-                CompatObservableState.NG_RULES
+                CompatObservableState.NG_RULES,
+                CompatObservableState.PREFERENCES
             )
         ) { db ->
             val candidates = db.readDraftAttachmentLocatorsForBoard(boardKey).toMutableSet()
@@ -387,6 +391,12 @@ class AndroidCompatibilityStore(
                 }
             }
             db.delete("compat_ng_rule", "scope_key=?", arrayOf(boardKey))
+            // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
+            db.delete(
+                "compat_preference",
+                "key=?",
+                arrayOf(com.valoser.futacha.shared.compat.compatCatalogExtraModePreferenceKey(boardKey))
+            )
             db.delete("compat_board", "board_key=?", arrayOf(boardKey))
             val active = db.readWorkspace().activeTabKey
             if (active != null && db.readTab(active) == null) {
@@ -2489,7 +2499,9 @@ class AndroidCompatibilityStore(
      * default name/subject. Without this they silently stop applying.
      */
     private fun SQLiteDatabase.moveBoardKeyedPreferences(fromKey: String, toKey: String) {
-        fun put(key: String, value: String) {
+        // Not named "put": inside ContentValues().apply {} a local function named put wins over
+        // ContentValues.put, and called itself until StackOverflowError (2026-10-13 全体検証 E).
+        fun putPreference(key: String, value: String) {
             insertWithOnConflict(
                 "compat_preference",
                 null,
@@ -2499,14 +2511,14 @@ class AndroidCompatibilityStore(
         }
         readPreferenceValue(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY)?.let { encoded ->
             com.valoser.futacha.shared.compat.remapCompatWatchRulesBoardKey(encoded, fromKey, toKey)
-                ?.let { put(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY, it) }
+                ?.let { putPreference(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY, it) }
         }
         com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(fromKey)
             .zip(com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(toKey))
             .forEach { (from, to) ->
                 val value = readPreferenceValue(from) ?: return@forEach
                 // A value already learned for the corrected board is kept.
-                if (readPreferenceValue(to) == null && com.valoser.futacha.shared.compat.isValidCompatPreference(to, value)) put(to, value)
+                if (readPreferenceValue(to) == null && com.valoser.futacha.shared.compat.isValidCompatPreference(to, value)) putPreference(to, value)
                 delete("compat_preference", "key=?", arrayOf(from))
             }
     }

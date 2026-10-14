@@ -32,8 +32,8 @@ internal fun buildFutachaNavigationCallbacks(
     currentBoards: () -> List<BoardSummary>,
     currentNavigationState: () -> FutachaNavigationState,
     setNavigationState: (FutachaNavigationState) -> Unit,
-    /** Called with the board name when the target board is not registered in ふたちゃ. */
-    onUnregisteredBoard: (String) -> Unit = {}
+    /** Called when the target board is not registered in ふたちゃ (history entries carry the entry). */
+    onUnregisteredBoard: (FutachaUnregisteredBoardRequest) -> Unit = {}
 ): FutachaNavigationCallbacks {
     return FutachaNavigationCallbacks(
         onHistoryEntrySelected = { entry ->
@@ -54,7 +54,7 @@ internal fun buildFutachaNavigationCallbacks(
                     applyFutachaThreadSelection(currentNavigationState(), selection)
                 )
             } else {
-                onUnregisteredBoard(entry.boardName)
+                onUnregisteredBoard(FutachaUnregisteredBoardRequest(entry.boardName, entry))
             }
         },
         onSavedThreadSelected = { thread ->
@@ -68,7 +68,7 @@ internal fun buildFutachaNavigationCallbacks(
                     selectSavedThread(currentNavigationState(), selection)
                 )
             } else {
-                onUnregisteredBoard(thread.boardName)
+                onUnregisteredBoard(FutachaUnregisteredBoardRequest(thread.boardName))
             }
         },
         onCatalogThreadSelected = { threadId, title, replies, thumbnailUrl, threadUrl ->

@@ -12,7 +12,9 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_COMMAND_ENABLED
 import com.valoser.futacha.shared.ui.board.OpenAiConnectionControls
+import com.valoser.futacha.shared.ui.board.aiCommandSettingDescription
 import com.valoser.futacha.shared.ui.board.rememberSelectedAiService
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.CancellationException
@@ -23,6 +25,7 @@ import kotlinx.coroutines.withContext
 internal fun CompatAiSettingsControls(stateStore: AppStateStore?) {
     val summary = stateStore?.isThreadSummaryModeEnabled?.collectAsState(false)?.value ?: false
     val moderation = stateStore?.isAiPostFilterEnabled?.collectAsState(false)?.value ?: false
+    val aiCommand = stateStore?.isAiCommandEnabled?.collectAsState(false)?.value ?: false
     val service = rememberSelectedAiService(LocalPlatformContext.current)
     var availability by remember(service) { mutableStateOf(AiAvailability(false, "AIを確認中です。")) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -58,6 +61,14 @@ internal fun CompatAiSettingsControls(stateStore: AppStateStore?) {
         }
         Text("判定対象のレスをNGと同じように一覧から非表示にします。NG表示切替で一時的に再表示でき、NG抽出でも確認できます。手動NGには登録しません。",
             color = MaterialTheme.colorScheme.onSurface)
+        // The command gate is shared with ふたちゃ; before this row the setting could only be switched from that mode.
+        Row(Modifier.fillMaxWidth()) {
+            Text("AIアプリ操作（アルファ版）", Modifier.weight(1f).padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurface)
+            Switch(aiCommand && ALPHA_AI_COMMAND_ENABLED, { enabled -> if (ALPHA_AI_COMMAND_ENABLED) save { it.setAiCommandEnabled(enabled) } },
+                enabled = stateStore != null && ALPHA_AI_COMMAND_ENABLED,
+                modifier = Modifier.testTag("compat-ai-command-enabled"))
+        }
+        Text(aiCommandSettingDescription(availability, aiCommand), color = MaterialTheme.colorScheme.onSurface)
         availability.unavailableReason?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }

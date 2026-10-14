@@ -507,8 +507,18 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["保存"].exists, "The Futacha thread did not expose save.")
         app.buttons["返信"].tap()
         XCTAssertTrue(app.textViews["コメント"].waitForExistence(timeout: 10), "The Futacha reply form did not open.")
-        XCTAssertTrue(app.buttons["画像を選択"].exists, "The Futacha reply form did not expose image selection.")
-        XCTAssertTrue(app.buttons["動画を選択"].exists, "The Futacha reply form did not expose video selection.")
+        // Since 2026-09-21 the reply form uses the shared post toolbar (FutachaPostToolbar):
+        // image and video selection are the two entries of its "添付画像" menu, not separate buttons.
+        let attach = app.buttons["添付画像"].firstMatch
+        XCTAssertTrue(attach.waitForExistence(timeout: 10), "The Futacha reply toolbar did not expose the attachment command.")
+        attach.tap()
+        let chooseImage = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像を選択")).firstMatch
+        let chooseVideo = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "動画を選択")).firstMatch
+        XCTAssertTrue(chooseImage.waitForExistence(timeout: 5), "The Futacha reply form did not expose image selection.\n" + app.debugDescription)
+        XCTAssertTrue(chooseVideo.exists, "The Futacha reply form did not expose video selection.")
+        // Close the menu without choosing (a tap outside dismisses the dropdown).
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(chooseImage.waitForNonExistence(timeout: 5), "The attachment menu did not close.")
         app.buttons["閉じる"].firstMatch.tap()
 
         // #50/#51: the real thread's attachment gallery must be reachable
@@ -635,6 +645,55 @@ final class IosAppUITests: XCTestCase {
     }
 
     /// ふたばー風モード（開発版のみ）の縦の導線。Compose の testTag は accessibilityIdentifier として公開される。
+    func testFtutterModeReachesBoardsCatalogThreadAndExtras() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "ftutter",
+            "-experience.profile_generation", "1301",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The ftutter host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        // 板一覧 → カタログ → スレッド（チュートリアル板の模擬データだけ）。
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 20), "The board list is empty.")
+        attach("ftutter-1-boards")
+        element("ftutter-board-row").tap()
+        XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        attach("ftutter-2-catalog")
+        element("ftutter-catalog-item").tap()
+        XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 20), "The thread shows no post.")
+        attach("ftutter-3-thread")
+
+        // 設定 → 拡張機能（既定はすべてOFF）。
+        element("ftutter-thread-settings").tap()
+        XCTAssertTrue(element("ftutter-settings").waitForExistence(timeout: 10), "The settings did not open.")
+        let extras = element("ftutter-settings-extras")
+        var swipes = 0
+        while !extras.isHittable && swipes < 6 { app.swipeUp(); swipes += 1 }
+        // 送りの慣性が止まってから押す（動いている一覧へのタップは、止めるだけで行を押したことにならない）。
+        sleep(2)
+        extras.tap()
+        if !element("ftutter-settings-page-extras").waitForExistence(timeout: 5) { extras.tap() }
+        XCTAssertTrue(element("ftutter-settings-page-extras").waitForExistence(timeout: 10), "The extras page did not open.")
+        attach("ftutter-4-extras")
+    }
+
     func testFutaberPreviewModeReachesCatalogThreadAndTabs() throws {
         let app = makeApplication()
         // 板の一覧は既存の試験と同じく起動引数で固定し、端末に残った状態に左右されないようにする。
@@ -1143,7 +1202,17 @@ final class IosAppUITests: XCTestCase {
             let target = element(identifier)
             for _ in 0..<8 where !(target.exists && target.isHittable) { app.swipeUp() }
             for _ in 0..<12 where !(target.exists && target.isHittable) { app.swipeDown() }
-            Thread.sleep(forTimeInterval: 0.8) // スクロールの慣性が止まってから押す
+            // スクロールの慣性が止まってから押す。慣性で動いている一覧へのタップは、スクロールを止めるだけで
+            // 行には届かない（起動ロックの行で「押したのに開かない」になった原因）。固定の待ち時間ではなく、
+            // 行の位置が2回続けて変わらなくなるまで待つ。
+            var lastFrame = target.exists ? target.frame : .zero
+            var stableReads = 0
+            for _ in 0..<40 where stableReads < 2 {
+                Thread.sleep(forTimeInterval: 0.2)
+                let frame = target.exists ? target.frame : .zero
+                stableReads = frame == lastFrame ? stableReads + 1 : 0
+                lastFrame = frame
+            }
             return target
         }
         // 共有ページ（またはヘルプ）を開く。開かなければ、もう1度だけ押す。
@@ -1578,6 +1647,16 @@ final class IosAppUITests: XCTestCase {
         waitForExpectations(timeout: 8)
     }
 
+    /// Drags the visible list up by a fixed share of the screen. Unlike `XCUIElement.swipeUp()` on a
+    /// small element, whose swipe is scaled to that element and can register as a tap, this always
+    /// travels far enough to scroll. The finger rests before lifting so the list does not fling: a tap
+    /// on a still-flinging Compose list only stops the scroll and is not delivered to the row.
+    private func dragListUp(_ app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+
     func testToshiakiCompatibilityProfileReachesForeground() {
         let app = makeApplication()
         // NSUserDefaults' argument domain takes precedence over persisted
@@ -1636,10 +1715,11 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["スクロール更新"].exists, "The reference pull-refresh setting is missing.")
         XCTAssertTrue(app.staticTexts["オートスクロール量"].exists, "The reference auto-scroll amount is missing.")
 
-        let settingsList = app.otherElements["compat-settings-list-thread"]
         let saidaneMode = app.staticTexts["そうだねの表示方法"].firstMatch
+        // A swipe on a one-line text is scaled to that small frame and Compose takes it as a tap
+        // (it opened the auto-scroll amount choices). Drag the list over a fixed screen distance.
         for _ in 0..<3 where !saidaneMode.exists {
-            app.staticTexts["オートスクロール量"].firstMatch.swipeUp()
+            dragListUp(app)
         }
         XCTAssertTrue(saidaneMode.waitForExistence(timeout: 5), "The reference saidane display mode is missing.")
         saidaneMode.tap()
@@ -1648,12 +1728,10 @@ final class IosAppUITests: XCTestCase {
         compactRight.tap()
 
         let extractionCategory = app.staticTexts["抽出する閾値"].firstMatch
-        for _ in 0..<4 where !extractionCategory.exists {
-            if settingsList.exists {
-                settingsList.swipeUp()
-            } else {
-                saidaneMode.swipeUp()
-            }
+        let quoteThreshold = app.staticTexts["返信が多いレス"].firstMatch
+        // The category and both of its rows must be on screen (the list only exposes visible rows).
+        for _ in 0..<5 where !(extractionCategory.exists && quoteThreshold.exists) {
+            dragListUp(app)
         }
         XCTAssertTrue(extractionCategory.waitForExistence(timeout: 5), "The reference extraction category is missing.")
         XCTAssertTrue(app.staticTexts["そうだねが多いレス"].exists, "The saidane extraction threshold is missing.")
@@ -3326,7 +3404,19 @@ final class IosAppUITests: XCTestCase {
         )], timeout: 45), .completed, "The installed Japanese voice must finish the first utterance.")
         let beforeBackground = progress.label
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
+        if !app.wait(for: .runningBackground, timeout: 5) {
+            print("After Home: app state=\(app.state.rawValue), guidedAccess=\(UIAccessibility.isGuidedAccessEnabled)")
+            // On a physical iPhone, the Home event may leave the tested scene
+            // in front. Activate the actual home screen and verify background
+            // state before measuring speech; foreground progress is insufficient.
+            XCUIApplication(bundleIdentifier: "com.apple.springboard").activate()
+        }
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10),
+                      "The app must be running in the background before checking speech; state=\(app.state.rawValue)")
+        let backgroundShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        backgroundShot.name = "speech-background-home-screen"
+        backgroundShot.lifetime = .keepAlways
+        add(backgroundShot)
         Thread.sleep(forTimeInterval: 10)
         app.activate()
         XCTAssertTrue(pause.isEnabled, "Read-aloud must continue when the app moves to the background.")
@@ -3488,6 +3578,7 @@ final class IosAppUITests: XCTestCase {
     }
 
     func testFutachaImageSearchOpensFromPreviewAndAttachmentMenu() throws {
+        XCUIDevice.shared.orientation = .portrait
         let app = makeApplication()
         // Give the bundled tutorial its own board so an earlier test's offline
         // snapshot cannot replace its original image with a missing thumbnail.
@@ -3497,9 +3588,14 @@ final class IosAppUITests: XCTestCase {
                        "url": boardUrl, "description": "画像検索テスト"]]
         let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
         let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        let mediaSettings = String(data: try JSONEncoder().encode("{\"prompt_display_enabled\":true}"), encoding: .utf8)!
         app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false",
-                                "-boards_json", boardArgument]
+                                "-boards_json", boardArgument, "-media_feature_settings_v1", mediaSettings]
         app.launch()
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in app.frame.height > app.frame.width }, object: nil
+        )], timeout: 5), .completed)
         let board = boardCard(in: app, url: boardUrl)
         XCTAssertTrue(board.waitForExistence(timeout: 15))
         board.tap()
@@ -3507,6 +3603,24 @@ final class IosAppUITests: XCTestCase {
         let attachment = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "1762576973515")).firstMatch
         XCTAssertTrue(attachment.waitForExistence(timeout: 10), app.debugDescription)
         attachment.tap()
+        let returnToPost = app.buttons["レスに戻る"]
+        let openBrowser = app.buttons["ブラウザで開く"]
+        let generationInfo = app.buttons["生成情報"]
+        for action in [returnToPost, openBrowser, generationInfo] {
+            XCTAssertTrue(action.waitForExistence(timeout: 10), app.debugDescription)
+            XCTAssertTrue(action.isHittable, app.debugDescription)
+            XCTAssertGreaterThan(action.frame.midY, app.frame.minY + app.frame.height * 0.70)
+            XCTAssertGreaterThanOrEqual(action.frame.minX, app.frame.minX)
+            XCTAssertLessThanOrEqual(action.frame.maxX, app.frame.maxX)
+            XCTAssertLessThanOrEqual(action.frame.maxY, app.frame.maxY)
+        }
+        let previewScreenshot = XCTAttachment(screenshot: app.screenshot())
+        previewScreenshot.name = "futacha-image-preview-bottom-actions"
+        previewScreenshot.lifetime = .keepAlways
+        add(previewScreenshot)
+        generationInfo.tap()
+        XCTAssertTrue(app.buttons["閉じる"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["閉じる"].firstMatch.tap()
         XCTAssertTrue(app.buttons["画像検索"].waitForExistence(timeout: 5))
         app.buttons["画像検索"].tap()
         XCTAssertTrue(app.buttons["Google画像検索 (File)"].waitForExistence(timeout: 5))
@@ -3516,6 +3630,20 @@ final class IosAppUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         app.buttons["閉じる"].firstMatch.tap()
+        returnToPost.tap()
+        let threadContent = app.otherElements["futacha-thread-content"]
+        XCTAssertTrue(threadContent.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["プレビューを閉じる"].exists)
+        let returnedScreenshot = XCTAttachment(screenshot: app.screenshot())
+        returnedScreenshot.name = "futacha-image-preview-returned-post"
+        returnedScreenshot.lifetime = .keepAlways
+        add(returnedScreenshot)
+        // Returning aligns the source post, with its image visible. Reveal
+        // its filename link above the image before using that link again.
+        threadContent.swipeDown()
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5))
+        attachment.tap()
+        XCTAssertTrue(app.buttons["プレビューを閉じる"].waitForExistence(timeout: 5))
         app.buttons["プレビューを閉じる"].tap()
         attachment.press(forDuration: 1.0)
         let search = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像検索")).firstMatch
@@ -5114,7 +5242,157 @@ final class IosAppUITests: XCTestCase {
         )
     }
 
-    /// ふたちゃの設定の「モード」にふたばー風モードが並び、選んで切り替えるとふたばー風の画面（板ドロワー／カタログ）が開く。
+    /// ふたちゃの設定から読み上げの速さを変更し、開き直した後も値が残り、標準へ戻せる。
+    func testFutachaSpeechSettingsCanBeOpenedChangedAndRestored() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        let boards = [["id": "speech-test", "name": "チュートリアル", "category": "テスト",
+                       "url": "https://www.example.com/speech-test/futaba.php", "description": "読み上げ設定確認"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false",
+                                "-commonUsedVersion", Self.alreadyReadChangeLogVersion, "-boards_json", boardArgument]
+        app.launch()
+        if app.staticTexts["利用規約（EULA）"].waitForExistence(timeout: 3) {
+            let agreement = app.buttons["ugc-eula-agreement"]
+            for _ in 0..<6 where !agreement.isHittable { app.swipeUp() }
+            XCTAssertTrue(agreement.isHittable, app.debugDescription)
+            agreement.tap()
+            app.buttons["ugc-eula-accept"].tap()
+        }
+        XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 15))
+        app.buttons["メニュー"].tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        let display = app.staticTexts["表示"].firstMatch
+        for _ in 0..<6 where !display.isHittable { app.swipeUp() }
+        XCTAssertTrue(display.isHittable, app.debugDescription)
+        display.tap()
+        func visible(_ element: XCUIElement) -> Bool {
+            element.exists && element.isHittable && element.frame.minY >= 96 && element.frame.maxY <= app.frame.maxY - 24
+        }
+        let speech = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "読み上げ,")).firstMatch
+        for _ in 0..<8 where !visible(speech) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.8) }
+        XCTAssertTrue(visible(speech), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.8) // Compose のスクロール慣性が止まってから操作する。
+        mhtAttach(app, "speech-settings-entry")
+        speech.tap()
+        let speechBack = app.buttons["‹ 設定"].firstMatch
+        if !speechBack.waitForExistence(timeout: 5) { speech.tap() }
+        XCTAssertTrue(speechBack.waitForExistence(timeout: 10), app.debugDescription)
+        mhtAttach(app, "speech-settings-opened")
+        let rate = app.descendants(matching: .any).matching(identifier: "speech-rate").firstMatch
+        for _ in 0..<8 where !visible(rate) { app.swipeUp() }
+        XCTAssertTrue(rate.exists, app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertTrue(visible(rate), app.debugDescription)
+        let before = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "速さ：")).firstMatch.label
+        rate.coordinate(withNormalizedOffset: CGVector(dx: before == "速さ：190%" ? 0.6 : 0.9, dy: 0.5)).tap()
+        let rateText = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "速さ：")).firstMatch
+        XCTAssertTrue(rateText.waitForExistence(timeout: 5))
+        let stored = rateText.label
+        XCTAssertNotEqual(stored, before)
+        XCTAssertNotEqual(stored, "速さ：100%")
+        mhtAttach(app, "speech-settings-changed")
+        app.buttons["‹ 設定"].firstMatch.tap()
+        for _ in 0..<8 where !visible(speech) { app.swipeDown(); Thread.sleep(forTimeInterval: 0.8) }
+        for _ in 0..<8 where !visible(speech) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.8) }
+        XCTAssertTrue(visible(speech), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.8)
+        speech.tap()
+        if !speechBack.waitForExistence(timeout: 5) { speech.tap() }
+        XCTAssertTrue(speechBack.waitForExistence(timeout: 10), app.debugDescription)
+        for _ in 0..<8 where !visible(rate) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.8) }
+        XCTAssertTrue(app.staticTexts[stored].waitForExistence(timeout: 10), app.debugDescription)
+        let reset = app.buttons["速さ を標準に戻す"]
+        for _ in 0..<6 where !visible(reset) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.8) }
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertTrue(visible(reset), app.debugDescription)
+        mhtAttach(app, "speech-settings-before-reset")
+        reset.tap()
+        XCTAssertTrue(app.staticTexts["速さ：100%"].waitForExistence(timeout: 5), app.debugDescription)
+        mhtAttach(app, "speech-settings-restored")
+    }
+
+    /// 2026-10-13 全体検証 7.6: copies of the tutorial imported from the shared store (id `compat_board_…`) were kept by
+    /// every synchronization and one more was added, and ふたちゃ crashed on the repeated board key. Starting with three
+    /// saved copies must not crash, shows one tutorial, and switching としあき(仮) ↔ ふたちゃ does not add any.
+    ///
+    /// Launch arguments win over the saved values when read, so only the first launch passes the mode and the boards:
+    /// with `-experience.active_profile futacha` the switch back to ふたちゃ would read "already ふたちゃ" and do nothing.
+    func testTutorialCopiesDoNotCrashFutachaOrGrowAcrossModeSwitches() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let copy = ["id": "compat_board_da40da0736865b28", "name": "チュートリアル＠ふたちゃ", "category": "互換モード",
+                    "url": "https://www.example.com/t/futaba.php", "description": "https://img.2chan.net/t/"]
+        let boardJson = String(data: try JSONEncoder().encode([copy, copy, copy]), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        let common = ["-commonUsedVersion", Self.alreadyReadChangeLogVersion, "-update_check_enabled", "false"]
+        var app = makeApplication()
+        app.launchArguments += common + [
+            "-experience.active_profile", "futacha",
+            "-experience.profile_generation", "1309",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        func tutorialCards() -> Int {
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "https://www.example.com/t/futaba.php")).count
+        }
+        func assertFutachaShowsOneTutorial(_ step: String) {
+            XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 30),
+                          "\(step): ふたちゃ did not show its board list.\n" + app.debugDescription)
+            XCTAssertTrue(boardCard(in: app, url: "https://www.example.com/t/futaba.php").waitForExistence(timeout: 10),
+                          step + "\n" + app.debugDescription)
+            XCTAssertEqual(tutorialCards(), 1, step + "\n" + app.debugDescription)
+            mhtAttach(app, "tutorial-copies-futacha-\(step)")
+        }
+        func switchToToshiaki(_ step: String) {
+            app.buttons["メニュー"].tap()
+            app.staticTexts["設定"].firstMatch.tap()
+            app.staticTexts["モード"].firstMatch.tap()
+            app.staticTexts["としあき(仮)モード"].firstMatch.tap()
+            app.buttons["切り替える"].tap()
+            XCTAssertTrue(compatibilityBoardCardAfterUnwinding(in: app).waitForExistence(timeout: 20),
+                          "\(step): としあき(仮)\n" + app.debugDescription)
+            mhtAttach(app, "tutorial-copies-toshiaki-\(step)")
+        }
+        func switchToFutacha(_ step: String) {
+            app.buttons["その他"].firstMatch.tap()
+            app.staticTexts["設定"].firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["基本設定"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+            // The mode row is near the end of the lazily built settings list.
+            let mode = app.buttons["compat-setting-mode"].firstMatch
+            for _ in 0..<15 where !(mode.exists && mode.isHittable) { app.swipeUp() }
+            XCTAssertTrue(mode.exists && mode.isHittable, app.debugDescription)
+            Thread.sleep(forTimeInterval: 0.8) // Let the scroll settle before tapping.
+            let futacha = app.staticTexts["ふたちゃモード"].firstMatch
+            for _ in 0..<3 where !futacha.exists {
+                mode.tap()
+                _ = futacha.waitForExistence(timeout: 5)
+            }
+            XCTAssertTrue(futacha.exists, app.debugDescription)
+            Thread.sleep(forTimeInterval: 0.5) // The dialog is still appearing.
+            futacha.tap()
+            app.buttons["切り替える"].firstMatch.tap()
+            assertFutachaShowsOneTutorial(step)
+        }
+
+        assertFutachaShowsOneTutorial("start")
+        switchToToshiaki("1")
+        app.terminate()
+
+        // From here the saved values are used: the mode (としあき(仮)) and the boards the first launch saved.
+        app = makeApplication()
+        app.launchArguments += common
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        XCTAssertTrue(compatibilityBoardCardAfterUnwinding(in: app).waitForExistence(timeout: 20), app.debugDescription)
+        switchToFutacha("1")
+        switchToToshiaki("2")
+        switchToFutacha("2")
+    }
+
     func testFutachaSettingsOffersAndSwitchesToFutaberMode() throws {
         let app = makeApplication()
         let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",

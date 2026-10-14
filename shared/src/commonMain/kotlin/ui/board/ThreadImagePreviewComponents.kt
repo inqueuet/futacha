@@ -1,9 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
-import com.valoser.futacha.shared.ui.image.PromptInfoAction
-import com.valoser.futacha.shared.ui.image.LocalMediaFeatureSettings
-import com.valoser.futacha.shared.ui.image.LocalPromptContentVisible
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -74,11 +71,9 @@ internal fun ImagePreviewDialog(
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
     val urlLauncher = rememberUrlLauncher()
-    val promptActionVisible = LocalMediaFeatureSettings.current.promptDisplayEnabled && LocalPromptContentVisible.current
-    var promptPanelHeightPx by remember(entry.url) { mutableStateOf(0) }
-    val promptBottomPadding = if (promptActionVisible) {
-        with(LocalDensity.current) { promptPanelHeightPx.toDp() } + 32.dp
-    } else 0.dp
+    val copyImage = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(entry.url, LocalFutachaSharedFeatures.current?.httpClient)
+    var bottomActionsHeightPx by remember(entry.url) { mutableStateOf(0) }
+    val navigationBottomPadding = with(LocalDensity.current) { bottomActionsHeightPx.toDp() } + 32.dp
     var isZoomed by remember { mutableStateOf(false) }
     LaunchedEffect(entry.url) { isZoomed = false }
     // The first request is decoded at screen size. Zooming past
@@ -94,8 +89,8 @@ internal fun ImagePreviewDialog(
         isSwipeNavigationEnabled = !isZoomed,
         isTapNavigationEnabled = !isZoomed,
         navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp,
-            bottom = promptBottomPadding + 56.dp),
-        swipeNavigationPadding = PaddingValues(bottom = promptBottomPadding + 56.dp),
+            bottom = navigationBottomPadding),
+        swipeNavigationPadding = PaddingValues(bottom = navigationBottomPadding),
     ) { previewSize ->
         val requestSize = remember(previewSize) {
             resolveImagePreviewRequestSize(previewSize)
@@ -238,14 +233,14 @@ internal fun ImagePreviewDialog(
                 totalCount = totalCount,
                 modifier = Modifier.align(Alignment.TopStart)
             )
-            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = promptBottomPadding + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                onShowPost?.let { show ->
-                    TextButton(onClick = show, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("レスに戻る") }
-                }
-                TextButton(onClick = { urlLauncher(entry.url) }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("ブラウザで開く") }
-            }
-            PromptInfoAction(promptMetadata, Modifier.align(Alignment.BottomStart).padding(16.dp)
-                .onSizeChanged { promptPanelHeightPx = it.height })
+            ThreadMediaPreviewBottomActions(
+                metadata = promptMetadata,
+                onShowPost = onShowPost,
+                onOpenBrowser = { urlLauncher(entry.url) },
+                onCopyImage = copyImage,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+                    .onSizeChanged { bottomActionsHeightPx = it.height }
+            )
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)

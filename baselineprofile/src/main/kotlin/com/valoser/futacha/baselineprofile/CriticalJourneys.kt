@@ -11,13 +11,17 @@ internal const val BENCHMARK_ITERATIONS = 10
 
 enum class FutachaProfile {
     FUTACHA,
-    TOSHIAKI_COMPAT
+    TOSHIAKI_COMPAT,
+    FUTABER,
+    FTUTTER
 }
 
 internal fun MacrobenchmarkScope.runCriticalNavigation(profile: FutachaProfile) {
     when (profile) {
         FutachaProfile.FUTACHA -> runFutachaNavigation()
         FutachaProfile.TOSHIAKI_COMPAT -> runToshiakiCompatNavigation()
+        FutachaProfile.FUTABER -> runFutaberNavigation()
+        FutachaProfile.FTUTTER -> runFtutterNavigation()
     }
 }
 
@@ -88,6 +92,50 @@ private fun MacrobenchmarkScope.runToshiakiCompatNavigation() {
     waitFor(device, By.desc("ドロワー"), "としあき(仮)板一覧への復帰")
 }
 
+private fun MacrobenchmarkScope.runFutaberNavigation() {
+    normalizeToBoardRoot(device, FutachaProfile.FUTABER)
+    clickText(device, "チュートリアル＠ふたちゃ")
+    waitFor(device, By.desc("カタログを更新"), "ふたばー風カタログ")
+    click(device, By.descContains("チュートリアル、"), "ふたばー風チュートリアル")
+    waitFor(device, By.textStartsWith("No."), "ふたばー風スレッド本文")
+    scrollThread(device)
+    click(device, By.desc("画像一覧"), "ふたばー風画像一覧")
+    waitFor(device, By.desc("画像一覧を閉じる"), "ふたばー風画像一覧の表示")
+    device.pressBack()
+    click(device, By.desc("カタログへ戻る"), "ふたばー風カタログへの復帰")
+    waitFor(device, By.desc("カタログを更新"), "ふたばー風カタログへの復帰")
+    normalizeToBoardRoot(device, FutachaProfile.FUTABER)
+}
+
+private fun MacrobenchmarkScope.runFtutterNavigation() {
+    normalizeToBoardRoot(device, FutachaProfile.FTUTTER)
+    clickText(device, "チュートリアル＠ふたちゃ")
+    waitFor(device, By.desc("板を選ぶ"), "ふたったー風カタログ")
+    // The thumbnail's accessibility node disappears when its sample URL fails
+    // to load. The title remains available regardless of image loading state.
+    clickText(device, "チュートリアル")
+    waitFor(device, By.textStartsWith("No."), "ふたったー風スレッド本文")
+    scrollThread(device)
+    click(device, By.desc("画像一覧"), "ふたったー風画像一覧")
+    waitFor(device, By.desc("列を増やす"), "ふたったー風画像一覧の表示")
+    device.pressBack()
+    waitFor(device, By.desc("画像一覧"), "ふたったー風スレッドへの復帰")
+    device.pressBack()
+    waitFor(device, By.desc("板を選ぶ"), "ふたったー風カタログへの復帰")
+    normalizeToBoardRoot(device, FutachaProfile.FTUTTER)
+}
+
+private fun scrollThread(device: UiDevice) {
+    device.swipe(
+        device.displayWidth / 2,
+        device.displayHeight * 3 / 4,
+        device.displayWidth / 2,
+        device.displayHeight / 4,
+        12
+    )
+    device.waitForIdle()
+}
+
 private fun launchTarget(device: UiDevice) {
     device.executeShellCommand("am start -W $TARGET_PACKAGE/.MainActivity")
     device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 15_000)
@@ -113,9 +161,13 @@ private fun waitForProfileRoot(device: UiDevice, profile: FutachaProfile) {
     val selector = when (profile) {
         FutachaProfile.FUTACHA -> By.desc("履歴を開く")
         FutachaProfile.TOSHIAKI_COMPAT -> By.desc("ドロワー")
+        FutachaProfile.FUTABER -> By.desc("板一覧を開く")
+        FutachaProfile.FTUTTER -> By.text("板追加")
     }
     val deadline = System.currentTimeMillis() + 15_000
     while (System.currentTimeMillis() < deadline) {
+        // With no remembered board, Futaber starts directly in its drawer.
+        if (profile == FutachaProfile.FUTABER && device.hasObject(By.text("掲示板"))) return
         device.findObject(selector)?.let { return }
         if (device.hasObject(By.text("更新履歴")) && device.hasObject(By.desc("戻る"))) {
             device.findObject(By.desc("戻る")).click()
@@ -128,6 +180,24 @@ private fun waitForProfileRoot(device: UiDevice, profile: FutachaProfile) {
 }
 
 private fun normalizeToBoardRoot(device: UiDevice, profile: FutachaProfile) {
+    if (profile == FutachaProfile.FUTABER) {
+        // The catalog remembers its board. Open the drawer explicitly rather
+        // than treating the catalog's board title as a board-list row.
+        if (!device.hasObject(By.text("掲示板"))) {
+            click(device, By.desc("板一覧を開く"), "ふたばー風板一覧")
+        }
+        waitFor(device, By.text("掲示板"), "ふたばー風板一覧の表示")
+        waitFor(device, By.text("チュートリアル＠ふたちゃ"), "ふたばー風チュートリアル板")
+        return
+    }
+    if (profile == FutachaProfile.FTUTTER) {
+        repeat(5) {
+            if (device.wait(Until.hasObject(By.text("板追加")), 2_000)) return
+            device.pressBack()
+            device.waitForIdle()
+        }
+        error("Timed out returning FTUTTER to the seeded board list; visible=${visibleSemantics(device)}")
+    }
     val board = By.text("チュートリアル＠ふたちゃ")
     repeat(5) {
         if (device.wait(Until.hasObject(board), 2_000)) return
@@ -185,4 +255,4 @@ private fun waitFor(
     label: String
 ): androidx.test.uiautomator.UiObject2 = checkNotNull(
     device.wait(Until.findObject(selector), 15_000)
-) { "Timed out waiting for $label" }
+) { "Timed out waiting for $label; visible=${visibleSemantics(device)}" }

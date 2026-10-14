@@ -34,15 +34,22 @@ internal fun futaberPostTargetFromStrings(parts: List<String>): FutaberPostTarge
     else -> null
 }
 
-/** The text of an unsent post. Attachments are not kept: bytes do not belong in settings storage. */
+/**
+ * The text of an unsent post. The bytes of an attachment never go into the settings storage: with the extension
+ * "下書きに添付も残す" on, the file is kept in the app's private storage and only its place ([attachmentLocator]) is noted
+ * here (FutaberParityB3.kt). Both fields have defaults that are not written, so a draft without a file reads and writes
+ * exactly as before, and an older app reads a newer value (it ignores the unknown fields).
+ */
 @Serializable
 internal data class FutaberDraft(
     val key: String,
     val subject: String = "",
     val comment: String = "",
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val attachmentLocator: String? = null,
+    val attachmentIsHandwriting: Boolean = false
 ) {
-    val isEmpty: Boolean get() = subject.isBlank() && comment.isBlank()
+    val isEmpty: Boolean get() = subject.isBlank() && comment.isBlank() && attachmentLocator == null
 }
 
 internal const val FUTABER_DRAFT_MAX_COUNT = 6

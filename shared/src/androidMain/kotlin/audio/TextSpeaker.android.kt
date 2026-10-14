@@ -25,6 +25,17 @@ import kotlin.coroutines.resumeWithException
 
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 actual class TextSpeaker actual constructor(platformContext: Any?) {
+    actual val supportsPitch: Boolean = true
+    @Volatile private var speechSettings = SpeechSettings()
+    private var defaultJapaneseVoice: String? = null
+    actual fun configure(settings: SpeechSettings) { speechSettings = settings }
+    actual suspend fun availableVoices(): List<SpeechVoice> {
+        val engine = awaitTts()
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            engine.voices.orEmpty().filter { it.locale.language == "ja" }
+                .sortedBy { it.name }.map { SpeechVoice(it.name, it.name + if (it.isNetworkConnectionRequired) "（ネットワーク）" else "（端末内）") }
+        }
+    }
     // FIX: Activity ContextではなくApplicationContextを使用してメモリリークを防止
     private val appContext = (platformContext as? Context)?.applicationContext
         ?: throw IllegalArgumentException("TextSpeaker requires an Android Context")
@@ -95,6 +106,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                         if (status == TextToSpeech.SUCCESS && engine != null) {
                             val result = engine.setLanguage(Locale.JAPAN)
                             if (result in TextToSpeech.LANG_AVAILABLE..TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
+                                defaultJapaneseVoice = engine.voice?.name
                                 initState.complete(Unit)
                             } else {
                                 initState.completeExceptionally(IOException(JAPANESE_TTS_UNAVAILABLE_MESSAGE))
@@ -208,7 +220,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         try {
             // Capture the session job before entering the per-utterance timeout.
             preparePlayback()
-            withTimeout(calculateTextSpeakerTimeoutMillis(text)) {
+            withTimeout(calculateTextSpeakerTimeoutMillis(text, speechSettings.rate)) {
                 val engine = awaitTts()
                 suspendCancellableCoroutine<Unit> { continuation ->
                     val utteranceId = UUID.randomUUID().toString()
@@ -268,10 +280,17 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     }
 
     private fun startUtterance(engine: TextToSpeech, utteranceId: String, text: String) {
+        val settings = speechSettings
         val params = Bundle().apply {
             putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
         }
         val speakResult = runCatching {
+            val voices = engine.voices.orEmpty()
+            val voice = voices.firstOrNull { it.name == settings.voiceId && it.locale.language == "ja" }
+                ?: voices.firstOrNull { it.name == defaultJapaneseVoice }
+            if (voice != null) engine.voice = voice
+            engine.setSpeechRate(settings.rate.coerceIn(0.5f, 2f))
+            engine.setPitch(settings.pitch.coerceIn(0.5f, 2f))
             engine.setAudioAttributes(speechAudioAttributes())
             engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         }.getOrElse { error ->

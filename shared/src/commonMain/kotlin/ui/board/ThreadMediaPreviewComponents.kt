@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +29,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,8 +52,44 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.media.prompt.GenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
 import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
+@Composable
+internal fun ThreadMediaPreviewBottomActions(
+    metadata: GenerationMetadata?,
+    onShowPost: (() -> Unit)?,
+    onOpenBrowser: () -> Unit,
+    modifier: Modifier = Modifier,
+    onCopyImage: (() -> Unit)? = null
+) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        PromptInfoAction(metadata, Modifier.align(Alignment.CenterVertically))
+        FlowRow(
+            modifier = Modifier.align(Alignment.CenterVertically),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+        ) {
+            onShowPost?.let { show ->
+                TextButton(
+                    onClick = show,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) { Text("レスに戻る") }
+            }
+            TextButton(
+                onClick = onOpenBrowser,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+            ) { Text("ブラウザで開く") }
+            onCopyImage?.let { copy -> TextButton(onClick = copy,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("画像をコピー") } }
+        }
+    }
+}
 
 @Composable
 internal fun ThreadMediaPreviewDialog(
@@ -138,6 +177,11 @@ internal fun ThreadMediaPreviewDialogFrame(
     val windowSize = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
     var previewSize by remember(windowSize) { mutableStateOf(windowSize) }
     val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
+    val swipeDownToClose = isFutachaPreviewSwipeDownCloseEnabled(
+        LocalFutachaSharedFeatures.current?.value(
+            "control", "controlViewerSwipeClose", "下にスワイプして閉じる", "縦にスワイプして閉じる"
+        )
+    )
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val swipeStartPaddingPx = remember(density, layoutDirection, swipeNavigationPadding) {
@@ -170,7 +214,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .privacyWindowFilter()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
-                .pointerInput(navigationKey, isSwipeNavigationEnabled, swipeNavigationPadding) {
+                .pointerInput(navigationKey, isSwipeNavigationEnabled, swipeNavigationPadding, swipeDownToClose) {
                     if (!isSwipeNavigationEnabled) return@pointerInput
                     awaitEachGesture {
                         val down = awaitFirstDown(
@@ -212,7 +256,8 @@ internal fun ThreadMediaPreviewDialogFrame(
                             totalDy += delta.y
                         }
                         if (cancelled) return@awaitEachGesture
-                        when (resolveSwipeNavigationAction(totalDx, totalDy, swipeThresholdPx)) {
+                        when (resolveSwipeNavigationAction(totalDx, totalDy, swipeThresholdPx, swipeDownToClose)) {
+                            SwipeNavigationAction.Close -> onDismiss()
                             SwipeNavigationAction.Next -> onNavigateNext()
                             SwipeNavigationAction.Previous -> onNavigatePrevious()
                             SwipeNavigationAction.None -> Unit

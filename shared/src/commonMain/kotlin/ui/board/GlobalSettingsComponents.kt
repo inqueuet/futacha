@@ -311,7 +311,7 @@ internal fun GlobalSettingsScaffold(
             item {
                 if (LocalFutachaSharedFeatures.current != null) SettingsSection(
                     title = "バックアップ・復元", icon = Icons.Rounded.History,
-                    description = "設定・監視ワード・NGの保存と復元。"
+                    description = "共有の設定・巡回キーワード・詳細NG・タブの保存と復元。ふたちゃのNGワード・監視ワード・テーマ・閲覧履歴は含まれません。"
                 ) {
                     SharedSettingsLink("backup", "バックアップを開く", "設定の保存・復元、旧版データの取り込み")
                 }
@@ -506,6 +506,7 @@ internal fun GlobalSettingsDisplaySection(
         {
         SharedSettingsLink("design", "フォント・タブ一覧", "フォントとタブ一覧の設定を両モードで共有します。配色はふたちゃのテーマに従います。")
         SharedSettingsLink("thread", "スレッドの表示・画像サイズ", "レスの文字・画像・NG・抽出・スクロール")
+        SharedSettingsLink("speech", "読み上げ", "日本語音声・速さ・声の高さ・試聴")
         ListItem(
             headlineContent = { Text("テーマモード") },
             supportingContent = {
@@ -843,6 +844,7 @@ internal fun GlobalSettingsBackgroundSection(
             },
             modifier = Modifier.fillMaxWidth()
         )
+        FutachaArchiveReportSettingRow()
     }
 }
 

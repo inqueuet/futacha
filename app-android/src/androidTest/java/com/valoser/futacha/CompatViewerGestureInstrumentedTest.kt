@@ -87,6 +87,9 @@ class CompatViewerGestureInstrumentedTest {
             store = AndroidCompatibilityStore(context, databaseName = databaseName)
             store.initialize()
             store.savePreference("compat.commonUsedVersion", "1.0")
+            // The mock threads use an official board address: no report to the external archive (the test database
+            // is deleted afterwards, so nothing has to be restored).
+            store.savePreference("compat.archive_report.enabled", "OFF")
             store.upsertBoard(CompatBoard(boardKey, "may/b", boardUrl, boardUrl, 0))
             store.openTab(
                 CompatTab(
@@ -619,15 +622,64 @@ class CompatViewerGestureInstrumentedTest {
         ) { "Preapproved deep link did not persist its board" }
     }
 
+    /**
+     * With "スレッドを開いた時に更新" OFF the cached body is shown as is (2026-10-04 spec):
+     * neither opening the thread nor coming back from the viewer may fetch it.
+     */
     @Test
     fun viewerBackRestoresCachedThreadWithoutNetworkRefresh() {
+        runBlocking { store.savePreference("compat.catalog.catalogThreadOpenWithReload", "OFF") }
         val threadRequests = AtomicInteger(0)
-        val repository = object : BoardRepository by FakeBoardRepository() {
-            override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
-                threadRequests.incrementAndGet()
-                return FakeBoardRepository().getThreadByUrl(threadUrl)
+        setThreadContent(countingRepository(threadRequests))
+        waitForThreadImage()
+        rule.waitForIdle()
+        check(threadRequests.get() == 0) { "Cached thread unexpectedly fetched on entry with reopening OFF" }
+
+        openViewerAndComeBack()
+        check(threadRequests.get() == 0) { "Viewer return triggered an unnecessary thread fetch" }
+    }
+
+    /**
+     * With the default ON, opening the thread fetches it once after the cached
+     * body is shown. Coming back from the viewer is not opening the thread
+     * again and must not fetch it a second time.
+     *
+     * The repository answers with the same two posts as the cache so the
+     * refreshed screen still has the thumbnails this test taps. Fetches run
+     * on the composition's dispatcher, so waitForIdle() covers a fetch started
+     * by the thread screen's restart.
+     */
+    @Test
+    fun viewerBackDoesNotRefetchWhenThreadOpenReloadIsOn() {
+        val threadRequests = AtomicInteger(0)
+        val completedRequests = AtomicInteger(0)
+        setThreadContent(countingRepository(threadRequests, completedRequests))
+        waitForThreadImage()
+        rule.waitUntil(10_000) { completedRequests.get() >= 1 }
+        rule.waitForIdle()
+        check(threadRequests.get() == 1) { "Opening the thread should fetch exactly once: ${threadRequests.get()}" }
+
+        openViewerAndComeBack()
+        check(threadRequests.get() == 1) {
+            "Viewer return triggered an unnecessary thread fetch (${threadRequests.get()} fetches in total)"
+        }
+    }
+
+    private fun countingRepository(
+        requests: AtomicInteger,
+        completed: AtomicInteger = AtomicInteger(0)
+    ): BoardRepository = object : BoardRepository by FakeBoardRepository() {
+        override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+            requests.incrementAndGet()
+            return try {
+                cachedThreadPage()
+            } finally {
+                completed.incrementAndGet()
             }
         }
+    }
+
+    private fun setThreadContent(repository: BoardRepository) {
         rule.setContent {
             MaterialTheme {
                 CompatibilityApp(
@@ -638,24 +690,42 @@ class CompatViewerGestureInstrumentedTest {
                 )
             }
         }
+    }
+
+    private fun waitForThreadImage() {
         rule.waitUntil(10_000) {
             rule.onAllNodesWithContentDescription("No.1の画像")
                 .fetchSemanticsNodes(atLeastOneRootRequired = false)
                 .isNotEmpty()
         }
-        check(threadRequests.get() == 0) { "Cached thread unexpectedly fetched on entry" }
+    }
 
+    private fun openViewerAndComeBack() {
         rule.onNodeWithContentDescription("No.1の画像").performClick()
         waitForViewerCounter("1/2")
         rule.onNodeWithTag("compat-viewer-toolbar-icon-back", useUnmergedTree = true).performClick()
-        rule.waitUntil(10_000) {
-            rule.onAllNodesWithContentDescription("No.1の画像")
-                .fetchSemanticsNodes(atLeastOneRootRequired = false)
-                .isNotEmpty()
-        }
+        waitForThreadImage()
         rule.waitForIdle()
-        check(threadRequests.get() == 0) { "Viewer return triggered an unnecessary thread fetch" }
     }
+
+    /** The same two posts as the cached snapshot prepared in [prepareStore]. */
+    private fun cachedThreadPage() = ThreadPage(
+        threadId = "1234567890",
+        boardTitle = "may/b",
+        expiresAtLabel = null,
+        deletedNotice = null,
+        posts = listOf("1", "2").map { postNo ->
+            com.valoser.futacha.shared.model.Post(
+                id = postNo,
+                author = null,
+                subject = null,
+                timestamp = "26/08/05(水)22:00:00",
+                messageHtml = "image $postNo",
+                imageUrl = "https://example.invalid/$postNo.jpg",
+                thumbnailUrl = "https://example.invalid/$postNo.jpg"
+            )
+        }
+    )
 
     @Test
     fun thousandReplyThreadOnlyRequestsImagesNearTheVisibleViewport() {
@@ -942,6 +1012,11 @@ class CompatViewerGestureInstrumentedTest {
                 CompatibilityApp(store = delayedStore, repository = null, imageLoader = testImageLoader,
                     initialThreadDeepLink = threadUrl, onExitApplication = {})
             }
+        }
+        // The thread body is read from the store off the main thread, which the Compose
+        // idling check does not wait for. Wait for the thumbnail before the precondition.
+        rule.waitUntil(10_000) {
+            runCatching { rule.onNodeWithContentDescription("No.2の画像").assertIsDisplayed() }.isSuccess
         }
         rule.onNodeWithContentDescription("No.2の画像").assertIsDisplayed()
         viewerDraws.clear()

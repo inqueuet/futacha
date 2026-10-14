@@ -7,12 +7,16 @@ import com.valoser.futacha.shared.compat.matchesCompatThreadNg
 import com.valoser.futacha.shared.compat.toCompatThreadSnapshot
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.state.APP_STATE_STRING_ENTRY_MAX_CHARS
+import com.valoser.futacha.shared.state.APP_STATE_STRING_LIST_MAX_ENTRIES
 import com.valoser.futacha.shared.ui.board.buildPostHeaderText
 import com.valoser.futacha.shared.ui.board.canonicalThreadSearchText
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
 
-internal const val FUTABER_NG_MAX_ENTRIES = 200
-internal const val FUTABER_NG_MAX_LENGTH = 100
+// The limits of the lists the store keeps (ふたちゃ edits the same lists): a lower limit here refused an addition to a
+// list that ふたちゃ had already filled beyond it.
+internal const val FUTABER_NG_MAX_ENTRIES = APP_STATE_STRING_LIST_MAX_ENTRIES
+internal const val FUTABER_NG_MAX_LENGTH = APP_STATE_STRING_ENTRY_MAX_CHARS
 
 /**
  * Ids of the posts to hide: the shared word and header lists (the ones ふたちゃ edits) and the

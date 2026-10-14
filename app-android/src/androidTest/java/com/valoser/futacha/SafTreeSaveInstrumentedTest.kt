@@ -1,5 +1,6 @@
 package com.valoser.futacha
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -52,8 +53,10 @@ class SafTreeSaveInstrumentedTest {
                 .register("saf-tree-test", ActivityResultContracts.OpenDocumentTree()) { result.complete(it) }
                 .launch(initial)
         }
-        clickText("Use this folder")
-        clickText("Allow")
+        // DocumentsUI follows the device language (the API 35 emulator here runs ja-JP), so its
+        // buttons are found by resource id rather than by their English labels.
+        clickPickerButton(dialog = false) // "Use this folder" / 「このフォルダを使用」
+        clickPickerButton(dialog = true) // "Allow" / 「許可」
         tree = requireNotNull(runBlocking { withTimeout(10_000) { result.await() } }) { "The picker returned no folder" }
         context.contentResolver.takePersistableUriPermission(
             tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -115,19 +118,34 @@ class SafTreeSaveInstrumentedTest {
         ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
     }
 
-    /** DocumentsUI is another app: find its button through accessibility and click it. */
-    private fun clickText(text: String) {
+    /**
+     * DocumentsUI is another app: find its button through accessibility and click it.
+     * The folder picker's "Use this folder" and the confirmation dialog's "Allow" are both
+     * the platform's positive button (`android:id/button1`); the dialog is told apart by its
+     * title (`<documentsui package>:id/alertTitle`, or the platform's own id).
+     */
+    private fun clickPickerButton(dialog: Boolean) {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        }
         val deadline = SystemClock.uptimeMillis() + 15_000
         while (SystemClock.uptimeMillis() < deadline) {
-            val node = automation.rootInActiveWindow
-                ?.findAccessibilityNodeInfosByText(text)
-                ?.firstOrNull { it.text?.toString().equals(text, ignoreCase = true) }
-            var target: AccessibilityNodeInfo? = node
-            while (target != null && !target.isClickable) target = target.parent
-            if (target != null && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
+            val root = automation.rootInActiveWindow
+            val pickerPackage = root?.packageName?.toString()
+            if (root != null && pickerPackage != null && "documentsui" in pickerPackage) {
+                val isDialog = listOf("$pickerPackage:id/alertTitle", "android:id/alertTitle")
+                    .any { root.findAccessibilityNodeInfosByViewId(it).isNotEmpty() }
+                if (isDialog == dialog) {
+                    var target: AccessibilityNodeInfo? = root.findAccessibilityNodeInfosByViewId("android:id/button1")
+                        .firstOrNull { it.isEnabled }
+                    while (target != null && !target.isClickable) target = target.parent
+                    if (target != null && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
+                }
+            }
             SystemClock.sleep(200)
         }
-        throw AssertionError("\"$text\" did not appear in the folder picker")
+        val which = if (dialog) "The access confirmation's Allow button" else "The picker's Use this folder button"
+        throw AssertionError("$which (android:id/button1) did not appear in the folder picker")
     }
 }

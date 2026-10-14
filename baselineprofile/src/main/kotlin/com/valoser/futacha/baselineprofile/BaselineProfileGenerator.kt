@@ -38,6 +38,24 @@ class BaselineProfileGenerator {
     }
 
     @Test
+    fun futaberStartup() = collectStartup(FutachaProfile.FUTABER)
+
+    @Test
+    fun ftutterStartup() = collectStartup(FutachaProfile.FTUTTER)
+
+    private fun collectStartup(profile: FutachaProfile) {
+        ensureProfile(profile)
+        rule.collect(
+            packageName = TARGET_PACKAGE,
+            includeInStartupProfile = true,
+            maxIterations = 10,
+            stableIterations = 2
+        ) {
+            startActivityAndWait()
+        }
+    }
+
+    @Test
     fun futachaCriticalNavigation() {
         ensureProfile(FutachaProfile.FUTACHA)
         rule.collect(
@@ -60,6 +78,24 @@ class BaselineProfileGenerator {
         ) {
             startActivityAndWait()
             runCriticalNavigation(FutachaProfile.TOSHIAKI_COMPAT)
+        }
+    }
+
+    @Test
+    fun futaberCriticalNavigation() = collectNavigation(FutachaProfile.FUTABER)
+
+    @Test
+    fun ftutterCriticalNavigation() = collectNavigation(FutachaProfile.FTUTTER)
+
+    private fun collectNavigation(profile: FutachaProfile) {
+        ensureProfile(profile)
+        rule.collect(
+            packageName = TARGET_PACKAGE,
+            maxIterations = 10,
+            stableIterations = 2
+        ) {
+            startActivityAndWait()
+            runCriticalNavigation(profile)
         }
     }
 }

@@ -73,9 +73,10 @@ internal fun futaberRemoveFallenTabs(keys: List<FutaberTabKey>, fallen: Set<Futa
     keys.filterNot { it in fallen }
 
 /**
- * Drops the keys whose thread is no longer in the shared history or whose board was removed,
- * so deleting a thread cleans its tab up. [keep] is never dropped: the thread being opened
- * may not have reached the history yet.
+ * Drops the keys whose thread is no longer in the shared history or whose board was removed.
+ * [keep] is never dropped: the thread being opened may not have reached the history yet.
+ * This is not the automatic clean-up of the tab list (that is [futaberPruneTabsOfRemovedBoards]): it tells which
+ * closed tabs can come back ([futaberRestorableTabs]), and a tab comes back only with its history row.
  */
 internal fun futaberPruneTabs(
     keys: List<FutaberTabKey>,
@@ -86,6 +87,35 @@ internal fun futaberPruneTabs(
     val boardIds = boards.mapTo(HashSet()) { it.id }
     val historyKeys = history.mapTo(HashSet()) { FutaberTabKey(it.boardId, it.threadId) }
     return keys.filter { key -> key == keep || (key.boardId in boardIds && key in historyKeys) }
+}
+
+/**
+ * The clean-up that runs by itself: drops the tabs of a board that was removed from the board list, and nothing else.
+ * A thread missing from the shared history does not lose its tab (the history is emptied or trimmed by the other
+ * modes, and a restored backup brings the tabs before the history): such a tab is simply not shown until its row is
+ * back ([futaberTabViews]). An empty [boards] list drops nothing, since it cannot tell a removed board from a list
+ * that is not there yet.
+ */
+internal fun futaberPruneTabsOfRemovedBoards(keys: List<FutaberTabKey>, boards: List<BoardSummary>): List<FutaberTabKey> {
+    if (boards.isEmpty()) return keys
+    val boardIds = boards.mapTo(HashSet()) { it.id }
+    return keys.filter { it.boardId in boardIds }
+}
+
+/**
+ * The tabs after adding [key] to a full list by letting go of the oldest tab that is not shown (its thread has no row
+ * in the shared history, so it takes a place the person cannot see), or null when every tab is shown or [key] is
+ * already a tab. Only one is dropped, the others may come back with their history.
+ */
+internal fun futaberTabsMakingRoomFor(
+    keys: List<FutaberTabKey>,
+    key: FutaberTabKey,
+    history: List<ThreadHistoryEntry>
+): List<FutaberTabKey>? {
+    if (key in keys || keys.size < FUTABER_MAX_TABS) return null
+    val historyKeys = history.mapTo(HashSet()) { FutaberTabKey(it.boardId, it.threadId) }
+    val hidden = keys.firstOrNull { it !in historyKeys } ?: return null
+    return (keys - hidden) + key
 }
 
 /** What one tab shows. */

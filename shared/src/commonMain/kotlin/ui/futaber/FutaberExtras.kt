@@ -3,7 +3,6 @@ package com.valoser.futacha.shared.ui.futaber
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Row
@@ -92,20 +91,46 @@ internal fun FutaberAutoScrollChip(onStop: () -> Unit, modifier: Modifier = Modi
 
 /**
  * The volume keys (an extension, off by default): the Android host hands them to whoever registered on
- * [CompatVolumeKeyBus]; "up" scrolls a screen back, "down" a screen on. Nothing is registered while it is off,
- * so the keys keep changing the volume.
+ * [CompatVolumeKeyBus]. [mode] says what they do: a screen back / on (the default, as before), a post back / on, or the
+ * previous / next thread of the tab strip ([onSwitchThread]; nothing happens while the open thread is not a tab, and the
+ * key is still taken so the volume does not change). Nothing is registered while it is off, so the keys keep changing
+ * the volume.
  */
 @Composable
-internal fun FutaberVolumeKeyEffect(enabled: Boolean, listState: LazyListState) {
+internal fun FutaberVolumeKeyEffect(
+    enabled: Boolean,
+    listState: LazyListState,
+    mode: FutaberVolumeKeyMode = FutaberVolumeKeyMode.Screen,
+    onSwitchThread: ((forward: Boolean) -> Unit)? = null
+) {
     val scope = rememberCoroutineScope()
     val owner = remember { Any() }
-    DisposableEffect(enabled) {
+    val latestSwitch by rememberUpdatedState(onSwitchThread)
+    DisposableEffect(enabled, mode) {
         if (enabled) {
             CompatVolumeKeyBus.register(owner) { key ->
-                val page = listState.layoutInfo.viewportSize.height.toFloat()
-                if (page <= 0f) return@register false
-                scope.launch { listState.animateScrollBy(if (key == CompatVolumeKey.UP) -page else page) }
-                true
+                val up = key == CompatVolumeKey.UP
+                when (mode) {
+                    FutaberVolumeKeyMode.Thread -> {
+                        latestSwitch?.invoke(!up)
+                        true
+                    }
+                    FutaberVolumeKeyMode.Response -> {
+                        val info = listState.layoutInfo
+                        if (info.viewportSize.height <= 0 || info.totalItemsCount <= 0) return@register false
+                        val target = futaberResponseStepTarget(
+                            listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, info.totalItemsCount - 1, up
+                        )
+                        scope.launch { listState.animateScrollToItem(target) }
+                        true
+                    }
+                    FutaberVolumeKeyMode.Screen -> {
+                        if (listState.layoutInfo.viewportSize.height <= 0) return@register false
+                        // The same page the operation menu's "1ページ上へ／下へ" scrolls.
+                        scope.launch { futaberScrollPage(listState, up = up) }
+                        true
+                    }
+                }
             }
         }
         onDispose { CompatVolumeKeyBus.unregister(owner) }

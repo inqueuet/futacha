@@ -60,14 +60,20 @@ internal fun FutaberHistoryBand(
     onSettingsChange: (HistoryViewSettings) -> Unit,
     shownCount: Int,
     totalCount: Int,
-    onRefresh: (suspend () -> Unit)?
+    onRefresh: (suspend () -> Unit)?,
+    /** False when only the archive extension is on (or nothing is listed yet): the search and the chips are not shown. */
+    showViewTools: Boolean = true,
+    /** "全件削除" (asks first); null hides it. */
+    onClearAll: (() -> Unit)? = null,
+    /** "アーカイブ" (the history archive's export / import); null hides it. */
+    onOpenArchive: (() -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
     val scope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(false) }
     var refreshMessage by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth().background(colors.bar).padding(horizontal = 12.dp, vertical = 8.dp).testTag("futaber-history-band")) {
-        Row(
+        if (showViewTools) Row(
             Modifier.fillMaxWidth().clip(FutaberShapes.pill).background(colors.catalogGap)
                 .heightIn(min = 40.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -78,7 +84,7 @@ internal fun FutaberHistoryBand(
                     value = settings.titleQuery,
                     onValueChange = { onSettingsChange(settings.copy(titleQuery = it)) },
                     singleLine = true,
-                    textStyle = TextStyle(color = colors.body, fontSize = 14.sp),
+                    textStyle = TextStyle(color = colors.body, fontSize = 14.sp, fontFamily = LocalFutaberCustomFont.current),
                     cursorBrush = SolidColor(colors.accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {}),
@@ -93,20 +99,20 @@ internal fun FutaberHistoryBand(
             }
         }
         FlowRow(
-            Modifier.padding(top = 8.dp),
+            Modifier.padding(top = if (showViewTools) 8.dp else 0.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            BandChip("並び：${settings.sortOption.label}", "futaber-history-sort", false) {
+            if (showViewTools) BandChip("並び：${settings.sortOption.label}", "futaber-history-sort", false) {
                 onSettingsChange(settings.copy(sortOption = futaberNextChoice(HistorySortOption.entries, settings.sortOption)))
             }
-            BandChip(settings.sortDirection.label, "futaber-history-direction", false) {
+            if (showViewTools) BandChip(settings.sortDirection.label, "futaber-history-direction", false) {
                 onSettingsChange(settings.copy(sortDirection = futaberNextChoice(HistorySortDirection.entries, settings.sortDirection)))
             }
-            BandChip("自分が書き込んだスレ", "futaber-history-self", settings.selfPostsOnly) {
+            if (showViewTools) BandChip("自分が書き込んだスレ", "futaber-history-self", settings.selfPostsOnly) {
                 onSettingsChange(settings.copy(selfPostsOnly = !settings.selfPostsOnly))
             }
-            BandChip("状態：${settings.lifeFilter.label}", "futaber-history-life", settings.lifeFilter != HistoryLifeFilter.All) {
+            if (showViewTools) BandChip("状態：${settings.lifeFilter.label}", "futaber-history-life", settings.lifeFilter != HistoryLifeFilter.All) {
                 onSettingsChange(settings.copy(lifeFilter = futaberNextChoice(HistoryLifeFilter.entries, settings.lifeFilter)))
             }
             if (onRefresh != null) {
@@ -129,8 +135,11 @@ internal fun FutaberHistoryBand(
                     }
                 }
             }
+            // The extensions of the batch B4 (FutaberParityB45.kt): after the chips that were there before.
+            if (onOpenArchive != null) BandChip("アーカイブ", "futaber-history-archive", false, onOpenArchive)
+            if (onClearAll != null) BandChip("全件削除", "futaber-history-clear-all", false, onClearAll)
         }
-        val status = refreshMessage ?: if (settings.isDefault) null else "${shownCount}件 / 全${totalCount}件"
+        val status = refreshMessage ?: if (settings.isDefault || !showViewTools) null else "${shownCount}件 / 全${totalCount}件"
         status?.let {
             Text(it, color = colors.meta, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp).testTag("futaber-history-status"))
         }

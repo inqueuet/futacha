@@ -189,17 +189,23 @@ internal fun previousMediaPreviewIndex(currentIndex: Int?, totalCount: Int): Int
 internal enum class SwipeNavigationAction {
     None,
     Next,
-    Previous
+    Previous,
+    /** Downward swipe; only produced when the user explicitly saved 「下にスワイプして閉じる」=ON. */
+    Close
 }
 
 internal fun resolveSwipeNavigationAction(
     totalDx: Float,
     totalDy: Float,
-    thresholdPx: Float
+    thresholdPx: Float,
+    swipeDownToClose: Boolean = false
 ): SwipeNavigationAction {
     if (thresholdPx <= 0f) return SwipeNavigationAction.None
     val horizontalDistance = abs(totalDx)
     val verticalDistance = abs(totalDy)
+    if (swipeDownToClose && totalDy >= thresholdPx && verticalDistance > horizontalDistance) {
+        return SwipeNavigationAction.Close
+    }
     if (horizontalDistance < thresholdPx || horizontalDistance <= verticalDistance) {
         return SwipeNavigationAction.None
     }
@@ -209,6 +215,13 @@ internal fun resolveSwipeNavigationAction(
         SwipeNavigationAction.Previous
     }
 }
+
+/**
+ * ふたちゃ's own preview closes on a downward swipe only when the shared
+ * 「下にスワイプして閉じる」 was explicitly saved as ON. The shared viewer treats an
+ * unsaved value as ON; ふたちゃ keeps its old behavior (no close) in that case.
+ */
+internal fun isFutachaPreviewSwipeDownCloseEnabled(storedValue: String?): Boolean = storedValue == "ON"
 
 internal fun isSwipeNavigationStartWithinBounds(
     position: Offset,
