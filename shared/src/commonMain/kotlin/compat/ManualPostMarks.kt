@@ -21,16 +21,27 @@ fun decodeManualPostMarks(raw: String?): List<ManualPostMark> = raw?.takeIf { it
 }?.filter { it.postNo.matches(markPostNoPattern) && it.threadUrl.length <= 240 }
     ?.distinct()?.take(120).orEmpty()
 
-/** The explicit state avoids racing two toggles from different screens; automatic own-post markers are untouched. */
-suspend fun setManualPostMark(store: CompatibilityStore, url: String, postNo: String, marked: Boolean) {
+/** Told when marking let the oldest marks go (audit L37: 120 marks at most, and the oldest went without a word). */
+fun manualPostMarksDroppedNotice(dropped: Int): String? =
+    if (dropped <= 0) null else "レスのマークは${MANUAL_POST_MARK_LIMIT}件までのため、古いマークを${dropped}件外しました"
+
+const val MANUAL_POST_MARK_LIMIT = 120
+
+/**
+ * The explicit state avoids racing two toggles from different screens; automatic own-post markers are untouched.
+ * Returns how many old marks went to make room ([manualPostMarksDroppedNotice]).
+ */
+suspend fun setManualPostMark(store: CompatibilityStore, url: String, postNo: String, marked: Boolean): Int {
     val mark = ManualPostMark(manualMarkThreadUrl(url), postNo)
     require(mark.postNo.matches(markPostNoPattern) && mark.threadUrl.length <= 240)
     store.isLoaded.first { it }
-    markMutex.withLock {
+    return markMutex.withLock {
         val previous = decodeManualPostMarks(store.preferences.first()[MANUAL_POST_MARKS_KEY]).filterNot { it == mark }
-        val next = (if (marked) listOf(mark) + previous else previous).take(120).toMutableList()
+        val wanted = if (marked) listOf(mark) + previous else previous
+        val next = wanted.take(MANUAL_POST_MARK_LIMIT).toMutableList()
         var encoded = markJson.encodeToString(next)
         while (encoded.length > 18_000 && next.isNotEmpty()) { next.removeAt(next.lastIndex); encoded = markJson.encodeToString(next) }
         store.savePreference(MANUAL_POST_MARKS_KEY, encoded)
+        wanted.size - next.size
     }
 }

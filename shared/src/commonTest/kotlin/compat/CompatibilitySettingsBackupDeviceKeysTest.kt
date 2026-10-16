@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.compat
 
+import com.valoser.futacha.shared.ui.ftutter.FtutterKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -46,5 +47,24 @@ class CompatibilitySettingsBackupDeviceKeysTest {
         // Unchanged behaviour: a delete key in an older backup is still restored.
         assertEquals("pass", restored.preferences["compat.common.commonPostDeleteKey"])
         assertEquals("18", restored.preferences["compat.thread.threadFontSize"])
+    }
+
+    @Test
+    fun ftutterDeleteKeyAndDraftsAreNeitherExportedNorRestored() {
+        // The backup's own spelling of the keys is the one the mode writes.
+        val secret = mapOf(
+            FtutterKeys.DELETE_KEY to "abcd1234",
+            FtutterKeys.DRAFTS to "[{\"text\":\"unsent\"}]"
+        )
+        val kept = mapOf(
+            "compat.ftutter.mainColor" to "4280391411",
+            "compat.ftutter.NGList" to "[]"
+        )
+        assertEquals(kept, compatBackupExportPreferences(secret + kept))
+
+        // A file written before they were left out does not bring them back.
+        val older = CompatSettingsBackup(exportedAtEpochMillis = 1L, preferences = secret + kept)
+        val restored = decodeCompatSettingsBackup(encodeCompatSettingsBackup(older))
+        assertEquals(kept, restored.preferences)
     }
 }

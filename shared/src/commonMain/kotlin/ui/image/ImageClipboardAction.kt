@@ -48,7 +48,9 @@ internal suspend fun copyImageUrlToClipboard(client: HttpClient, url: String, wr
 /** Available only on Desktop. Uses the host's original-media cache and never copies a thumbnail. */
 @Composable
 internal fun rememberImageClipboardAction(url: String?, client: HttpClient?): (() -> Unit)? {
-    if (!isDesktop() || url == null || client == null) return null
+    if (!isDesktop()) return null
+    // The copy and its notice stay when the page turns to a video (url null): returning before these were remembered
+    // dropped them, which cancelled a copy in progress without a word (audit L32).
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -63,6 +65,7 @@ internal fun rememberImageClipboardAction(url: String?, client: HttpClient?): ((
             }
         }
     } } }
+    if (url == null || client == null) return null
     return {
         if (!busy) {
             busy = true

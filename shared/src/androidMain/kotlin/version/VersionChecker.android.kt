@@ -40,6 +40,9 @@ class AndroidVersionChecker(
         }
     }
 
+    /** The GitHub prompt is always one the person may put off; Google Play's required updates come through Play itself. */
+    override val mayRequireUpdate: Boolean get() = false
+
     override suspend fun checkForUpdate(): UpdateInfo? {
         val currentVersion = getCurrentVersion()
         // Play installs are updated through Google Play In-App Updates; the GitHub

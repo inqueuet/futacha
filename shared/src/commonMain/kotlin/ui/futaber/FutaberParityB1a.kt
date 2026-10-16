@@ -258,17 +258,21 @@ internal fun futaberArchiveLinks(threadUrl: String): FutaberArchiveLinks =
 /**
  * The sheet of "URL・アーカイブ": the same four actions and the same messages as としあき(仮). Registering in つまんね。
  * sends the thread's address there (only when the person picks it); the others open the archive in the browser.
+ *
+ * The sheet closes as soon as an action is picked, so the registration runs in [scope], which must outlive the sheet
+ * (the thread screen's): a scope of the sheet itself was cancelled with it and the result was never reported.
  */
 @Composable
 internal fun FutaberArchiveMenuSheet(
     threadUrl: String,
     title: String,
     httpClient: HttpClient?,
+    scope: CoroutineScope,
     openUrl: (String) -> Unit,
     onNotice: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    register: suspend (HttpClient, String, String) -> Result<String> = ::registerCompatTsumanne
 ) {
-    val scope = rememberCoroutineScope()
     val links = remember(threadUrl) { futaberArchiveLinks(threadUrl) }
     FutaberPostActionSheet(
         title = "URL・アーカイブ",
@@ -276,7 +280,7 @@ internal fun FutaberArchiveMenuSheet(
             FutaberPostAction("archive-ftbucket", "FTBucketに登録") { onDismiss(); openUrl(links.ftbucket) },
             FutaberPostAction("archive-tsumanne", "つまんね。に登録") {
                 onDismiss()
-                futaberRegisterTsumanne(scope, httpClient, threadUrl, title, openUrl, onNotice)
+                futaberRegisterTsumanne(scope, httpClient, threadUrl, title, openUrl, onNotice, register)
             },
             FutaberPostAction("archive-forest", "ふたばフォレストで開く") {
                 onDismiss()
@@ -292,18 +296,19 @@ internal fun FutaberArchiveMenuSheet(
     )
 }
 
-private fun futaberRegisterTsumanne(
+internal fun futaberRegisterTsumanne(
     scope: CoroutineScope,
     httpClient: HttpClient?,
     threadUrl: String,
     title: String,
     openUrl: (String) -> Unit,
-    onNotice: (String) -> Unit
+    onNotice: (String) -> Unit,
+    register: suspend (HttpClient, String, String) -> Result<String> = ::registerCompatTsumanne
 ) {
     val client = httpClient ?: run { onNotice("通信機能を初期化できませんでした"); return }
     onNotice("つまんね。に登録しています…")
     scope.launch {
-        registerCompatTsumanne(client, threadUrl, title)
+        register(client, threadUrl, title)
             .onSuccess { openUrl(it); onNotice("つまんね。に登録しました") }
             .onFailure { onNotice(it.toCompatUserMessage("つまんね。への登録に失敗しました")) }
     }

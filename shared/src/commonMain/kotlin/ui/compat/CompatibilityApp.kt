@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
 
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -140,6 +142,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -740,6 +743,12 @@ private fun CompatibilityAppContent(
     var scrollToBottomRequest by remember { mutableStateOf<Pair<String, Long>?>(null) }
     var pendingUnregisteredDeepLink by remember { mutableStateOf<CompatUnregisteredThreadRequest?>(null) }
     var deepLinkError by remember { mutableStateOf<String?>(null) }
+    // A result told without stopping what the person is doing (audit L34: the history refresh, up to a minute, ended in a
+    // dialog over whatever screen was open by then).
+    var appNotice by remember { mutableStateOf<String?>(null) }
+    // "全タブ更新確認": one at a time, and its end is told (re-audit L17: pressed again it ran beside itself, and nothing
+    // said when it was over).
+    var refreshingAllTabs by remember { mutableStateOf(false) }
     var pendingPlatformAiConfirmation by remember { mutableStateOf<FutachaAiCommand?>(null) }
     val threadAiSlot = remember { CompatAiScreenCommandSlot() }
     val pendingThreadCommandTarget = remember(com.valoser.futacha.shared.ui.AiCommandEffectKey(threadAiSlot.pending)) {
@@ -879,7 +888,7 @@ private fun CompatibilityAppContent(
         importedHistoryRepository = importedHistoryRepository,
         historyRefresher = historyRefresher,
         appVersion = appVersion,
-        onMessage = { deepLinkError = it }
+        onMessage = { appNotice = it }
     )
 
     suspend fun loadPendingClosedTabsSafely(): ClosedTabBatch? = try {
@@ -1153,6 +1162,8 @@ private fun CompatibilityAppContent(
     }
     // Keyed on stable inputs only: navigating between Main, a catalog and a
     // thread must not restart the timer (and with it every interval).
+    // Outlives the loop, which a child screen cancels: a pass goes on from where it stopped (audit M21).
+    val foregroundPassProgress = remember(store) { CompatForegroundPassProgress() }
     LaunchedEffect(
         repository,
         store,
@@ -1177,7 +1188,8 @@ private fun CompatibilityAppContent(
             tabs = { latestCompatTabs },
             boards = { latestCompatBoards },
             histories = { latestCompatHistories },
-            persist = { operation, block -> persistStoreSafely(operation, block) }
+            persist = { operation, block -> persistStoreSafely(operation, block) },
+            progress = foregroundPassProgress
         )
     }
     LaunchedEffect(store) {
@@ -1420,6 +1432,14 @@ private fun CompatibilityAppContent(
 
     historyTools?.let { CompatHistoryToolsHost(it, histories) }
     commonNg?.let { CompatCommonNgSheetHost(it) }
+    // While the common NG sheet is open, the sheet shows the failure itself (re-audit M15: on Android the notice popup
+    // stayed under the sheet's window).
+    commonNg?.failureNotice?.takeIf { commonNg.sheet == null }?.let { notice ->
+        LaunchedEffect(notice) {
+            appNotice = notice
+            commonNg.failureNotice = null
+        }
+    }
     if (watcherManagerOpen) {
         CompatWatcherManager(
             store = store, repository = repository,
@@ -1647,6 +1667,9 @@ private fun CompatibilityAppContent(
                     sort == null -> deepLinkError = "カタログモードを特定できませんでした"
                     else -> launchStoreSafely("AI command", "操作に失敗しました") {
                         saveCompatCatalogSortChoice(store, board.key, sort)
+                        // The catalog on screen already read its order: it is told to change and read again, as when
+                        // the order is chosen there (re-audit L15: the order was stored and the screen stayed as it was).
+                        if (state.catalogHostBoardKey == board.key) catalogAiSlot.forward(command)
                         dispatch(CompatibilityEvent.OpenCatalog(board.key))
                     }
                 }
@@ -2341,17 +2364,27 @@ private fun CompatibilityAppContent(
             onRefreshAllTabs = {
                 val activeRepository = repository
                 if (activeRepository != null) {
-                    launchStoreSafely("refresh all tabs") {
-                        refreshCompatTabsInBackground(
-                            store = store,
-                            repository = activeRepository,
-                            nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                            maxTabs = Int.MAX_VALUE,
-                            checkUpdates = true,
-                            checkExistence = true,
-                            existenceStaleMillis = 0L,
-                            checkWatchWords = false
-                        )
+                    if (refreshingAllTabs) {
+                        appNotice = COMPAT_REFRESH_ALL_TABS_BUSY_NOTICE
+                    } else {
+                        refreshingAllTabs = true
+                        launchStoreSafely("refresh all tabs") {
+                            try {
+                                val result = refreshCompatTabsInBackground(
+                                    store = store,
+                                    repository = activeRepository,
+                                    nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                                    maxTabs = Int.MAX_VALUE,
+                                    checkUpdates = true,
+                                    checkExistence = true,
+                                    existenceStaleMillis = 0L,
+                                    checkWatchWords = false
+                                )
+                                appNotice = compatRefreshAllTabsDoneNotice(result)
+                            } finally {
+                                refreshingAllTabs = false
+                            }
+                        }
                     }
                 }
             },
@@ -3597,6 +3630,30 @@ private fun CompatibilityAppContent(
             }
         ) }
     }
+    appNotice?.let { message ->
+        // Long notices (a file path, a reason) stay longer, and the time runs only while the app is unlocked
+        // (re-audit M14/M15: every notice went after 4 seconds, also behind the lock screen). A tap still closes it.
+        LaunchedEffect(message, isAppUnlocked) {
+            if (!isAppUnlocked) return@LaunchedEffect
+            kotlinx.coroutines.delay(compatAppNoticeMillis(message))
+            appNotice = null
+        }
+        FutachaAppLockAwareWindow { Popup(
+            alignment = Alignment.BottomCenter,
+            offset = IntOffset(0, -with(LocalDensity.current) { 96.dp.roundToPx() + WindowInsets.navigationBars.getBottom(this) }),
+            properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false, clippingEnabled = false)
+        ) {
+            Surface(
+                modifier = Modifier.width(320.dp).clickable { appNotice = null }.testTag("compat-app-notice"),
+                shape = RoundedCornerShape(4.dp),
+                color = Color(0xFF323232),
+                contentColor = Color.White,
+                shadowElevation = 4.dp
+            ) {
+                Text(message, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), fontSize = 14.sp)
+            }
+        } }
+    }
     deepLinkError?.takeIf { isAppUnlocked }?.let { message ->
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { deepLinkError = null },
@@ -3777,11 +3834,19 @@ private fun CompatCatalogScreen(
     }
     var items by remember(board.key) { mutableStateOf<List<CatalogItem>>(emptyList()) }
     var catalogReplyDeltas by remember(board.key) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    // The extra order ("そ順"/"監視") the shown list was fetched in; null for the board's own order (a snapshot).
+    var itemsExtraMode by remember(board.key) { mutableStateOf<CompatCatalogExtraMode?>(null) }
     var resolvedCatalogTitles by remember(board.key) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var catalogItemStates by remember(board.key) { mutableStateOf<Map<String, CompatCatalogItemState>>(emptyMap()) }
     var loading by remember(board.key) { mutableStateOf(true) }
     var catalogContentReady by remember(board.key) { mutableStateOf(false) }
     val refreshMutex = remember(board.key) { Mutex() }
+    // The order the running refresh fetches, and one asked for meanwhile (audit L33: a different order chosen during a
+    // load was dropped with "読み込み中です", so the heading showed the new order over the old list).
+    val runningRefresh = remember(board.key) { arrayOfNulls<Pair<CompatCatalogSort, Any?>>(1) }
+    val queuedRefresh = remember(board.key) { arrayOfNulls<CompatCatalogSort>(1) }
+    // The board shown now: a load of the board left behind does not start the order queued there (re-audit L12).
+    val latestCatalogBoardKey by rememberUpdatedState(board.key)
     var showLoadingIndicator by remember(board.key) { mutableStateOf(true) }
     var layoutSwitchLoading by remember(board.key) { mutableStateOf(false) }
     var layoutSwitchGeneration by remember(board.key) { mutableIntStateOf(0) }
@@ -4077,15 +4142,15 @@ private fun CompatCatalogScreen(
             transientMessage = failure.toCompatUserMessage("落ちたスレを読み込めませんでした")
         }
     }
-    val filteredDroppedCatalogItems = remember(
+    // The titles and the NG of the dropped threads do not depend on the search: made once, not at every key typed
+    // (re-audit L18).
+    val ngCheckedDroppedCatalogItems = remember(
         droppedCatalogItems,
-        searchQuery,
         catalogNgEnabled,
         catalogRuleIndex,
         resolvedCatalogTitles,
         catalogSourceTitleLength
     ) {
-        val normalizedQuery = normalizeCatalogSearchText(searchQuery)
         droppedCatalogItems.map { dropped ->
             val resolvedTitle = resolvedCatalogTitles[dropped.item.id]
                 ?.takeIf(String::isNotBlank)
@@ -4099,7 +4164,11 @@ private fun CompatCatalogScreen(
             dropped.copy(item = item)
         }.filterNot { dropped ->
             catalogNgEnabled && catalogRuleIndex.hides(dropped.item)
-        }.filter { dropped ->
+        }
+    }
+    val filteredDroppedCatalogItems = remember(ngCheckedDroppedCatalogItems, searchQuery) {
+        val normalizedQuery = normalizeCatalogSearchText(searchQuery)
+        ngCheckedDroppedCatalogItems.filter { dropped ->
             normalizedQuery.isBlank() ||
                 normalizeCatalogSearchText(dropped.item.title.orEmpty()).contains(normalizedQuery) ||
                 dropped.item.id.contains(searchQuery, ignoreCase = true)
@@ -4111,7 +4180,8 @@ private fun CompatCatalogScreen(
         catalogAppendDroppedEnabled,
         catalogContentReady,
         suppressedDroppedThreadIds,
-        catalogLimit
+        catalogLimit,
+        itemsExtraMode
     ) {
         appendCompatDroppedCatalogItems(
             current = visibleItems
@@ -4120,7 +4190,8 @@ private fun CompatCatalogScreen(
             dropped = filteredDroppedCatalogItems,
             enabled = catalogAppendDroppedEnabled,
             contentReady = catalogContentReady,
-            suppressedThreadIds = suppressedDroppedThreadIds
+            suppressedThreadIds = suppressedDroppedThreadIds,
+            extraOrder = itemsExtraMode != null
         )
     }
     val droppedClassByThreadId = remember(filteredDroppedCatalogItems, items) {
@@ -4257,9 +4328,16 @@ private fun CompatCatalogScreen(
     }
     suspend fun refresh(sort: CompatCatalogSort = preference.sort) {
         if (!refreshMutex.tryLock()) {
-            transientMessage = "読み込み中です"
+            if (runningRefresh[0] != (sort to catalogExtraMode)) {
+                // Another order: fetched as soon as the running load ends.
+                queuedRefresh[0] = sort
+                transientMessage = "読み込み中です。終わったら選んだ並び順で読み直します"
+            } else {
+                transientMessage = "読み込み中です"
+            }
             return
         }
+        runningRefresh[0] = sort to catalogExtraMode
         try {
             val activeRepository = effectiveRepository
             if (activeRepository == null) {
@@ -4267,6 +4345,8 @@ private fun CompatCatalogScreen(
                 return
             }
             loading = true
+            // The order this refresh fetches in: the screen may switch while it runs.
+            val fetchedExtraMode = catalogExtraMode
             // The compatibility APK keeps its centered loader above the
             // existing catalog while a refresh is running. Hiding it merely
             // because a cached snapshot is visible is what made #69 appear
@@ -4278,7 +4358,7 @@ private fun CompatCatalogScreen(
                         repository = activeRepository,
                         boardUrl = board.originalUrl,
                         baseMode = sort.toCatalogMode(),
-                        extraMode = catalogExtraMode,
+                        extraMode = fetchedExtraMode,
                         settings = compatCatalogFetchSettings(catalogLimit),
                         watchWords = { compatCatalogWatchModeWords(watchWords, catalogRules) }
                     )
@@ -4302,22 +4382,34 @@ private fun CompatCatalogScreen(
                 val fetchedAt = Clock.System.now().toEpochMilliseconds()
                 val revision = maxOf(fetchedAt, lastSnapshotRevision + 1L)
                 val previousSnapshot = store.loadCatalogSnapshot(board.key, sort)
+                val replyDeltaBaseline = compatCatalogReplyDeltaBaseline(
+                    fetchedExtraMode = fetchedExtraMode,
+                    shownExtraMode = itemsExtraMode,
+                    shownItems = items,
+                    boardSnapshotItems = previousSnapshot?.items.orEmpty()
+                )
                 // Up to thousands of rows: diff, NFKC watch matching and the
                 // generation diff below run on the parsing dispatcher.
                 val nextReplyDeltas = withContext(AppDispatchers.parsing) {
                     buildCompatCatalogReplyDeltas(
                         current = loadedItems,
-                        previous = previousSnapshot?.items.orEmpty()
+                        previous = replyDeltaBaseline
                     )
                 }
-                catalogReplyDeltas = nextReplyDeltas
-                items = loadedItems
-                catalogHistoryGeneration = 0
-                // The timestamp in the legacy toolbar describes the cached
-                // snapshot being shown. A successful network refresh replaces
-                // that snapshot, so clear the cache marker until the next
-                // cached open (#46).
-                lastUpdatedAtEpochMillis = null
+                // Another order chosen meanwhile is what the screen shows now: this result is stored, not shown
+                // over it (re-audit L11: the old order replaced the new one, then the new one was read again).
+                fun shownNow() = queuedRefresh[0].let { it == null || it == sort }
+                if (shownNow()) {
+                    catalogReplyDeltas = nextReplyDeltas
+                    items = loadedItems
+                    itemsExtraMode = fetchedExtraMode
+                    catalogHistoryGeneration = 0
+                    // The timestamp in the legacy toolbar describes the cached
+                    // snapshot being shown. A successful network refresh replaces
+                    // that snapshot, so clear the cache marker until the next
+                    // cached open (#46).
+                    lastUpdatedAtEpochMillis = null
+                }
                 val watchWordsAtRefresh = compatWatchWordsForBoard(preferences, board.key)
                 val historyAtRefresh = localHistory
                 val watchMatches = withContext(AppDispatchers.parsing) {
@@ -4336,42 +4428,35 @@ private fun CompatCatalogScreen(
                         withContext(AppDispatchers.io) { CompatWatcherRepository(store).recordAll(watchMatches) }
                     }
                 }
-                val activeDroppedThreadIds = previousSnapshot?.takeIf { catalogDroppedTrackingEnabled }?.let { previous ->
-                    val vanished = withContext(AppDispatchers.parsing) {
-                        diffCompatCatalogGenerations(
-                            current = loadedItems,
-                            previous = previous.items,
-                            requestedThreadCount = catalogLimit,
-                            enabled = true
-                        ).vanishedWithin.take(COMPAT_DROPPED_PROBE_MAX_ITEMS)
-                    }
-                    probeCompatDroppedThreadsNotDeleted(vanished, COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS) {
-                        activeRepository.probeThreadExists(it.threadUrl)
-                    }
-                }.orEmpty()
-                if (runSuspendCatchingPreservingCancellation {
-                        store.saveCatalogSnapshot(
-                            CompatCatalogSnapshot(
-                                boardKey = board.key,
-                                sort = sort,
-                                revision = revision,
-                                fetchedAtEpochMillis = fetchedAt,
-                                items = loadedItems
-                            ),
-                            trackDropped = catalogDroppedTrackingEnabled,
-                            requestedThreadCount = catalogLimit,
-                            activeDroppedThreadIds = activeDroppedThreadIds
-                        )
-                    }.getOrDefault(false)
+                // A list of "そ順"/"監視" is shown only: it neither replaces the
+                // board's snapshot of its own order nor drives the dropped
+                // threads (which would mark every unmatched thread as gone).
+                if (commitCompatCatalogRefresh(
+                        store = store,
+                        snapshot = CompatCatalogSnapshot(
+                            boardKey = board.key,
+                            sort = sort,
+                            revision = revision,
+                            fetchedAtEpochMillis = fetchedAt,
+                            items = loadedItems
+                        ),
+                        extraMode = fetchedExtraMode,
+                        previousSnapshot = previousSnapshot,
+                        trackDropped = catalogDroppedTrackingEnabled,
+                        requestedThreadCount = catalogLimit,
+                        probeMaxItems = COMPAT_DROPPED_PROBE_MAX_ITEMS,
+                        probeTimeoutMillis = COMPAT_DROPPED_PROBE_TOTAL_TIMEOUT_MILLIS,
+                        probe = { activeRepository.probeThreadExists(it.threadUrl) }
+                    )
                 ) {
                     lastSnapshotRevision = revision
                     onFreshSnapshotCommitted(board.key, revision)
-                    store.loadCatalogSnapshot(board.key, sort)?.let { committed ->
+                    if (shownNow()) store.loadCatalogSnapshot(board.key, sort)?.let { committed ->
                         items = committed.items
                         catalogItemStates = committed.itemStates
                     }
                 }
-                if (catalogDroppedTrackingEnabled) {
+                if (catalogDroppedTrackingEnabled && fetchedExtraMode == null) {
                     val refreshedDropped = store.loadDroppedCatalogItems(board.key)
                     val refreshedIds = refreshedDropped.mapTo(mutableSetOf()) { it.item.id }
                     val newlyDroppedIds = if (droppedCatalogItemsLoaded) {
@@ -4386,8 +4471,9 @@ private fun CompatCatalogScreen(
                 }
                 // Keep the request size alongside the snapshot. A cached
                 // catalog from an older setting must not be presented as if
-                // it satisfied the newly selected size (#17).
-                launchCatalogStoreSafely("catalog fetch count persistence") {
+                // it satisfied the newly selected size (#17). An extra order
+                // saved no snapshot, so it records no size either.
+                if (fetchedExtraMode == null) launchCatalogStoreSafely("catalog fetch count persistence") {
                     store.savePreference(
                         compatCatalogLastFetchCountKey(board.key, sort),
                         catalogLimit.toString()
@@ -4411,15 +4497,27 @@ private fun CompatCatalogScreen(
             catalogContentReady = true
             loading = false
             showLoadingIndicator = false
+            runningRefresh[0] = null
             refreshMutex.unlock()
+        }
+        queuedRefresh[0]?.let { queued ->
+            queuedRefresh[0] = null
+            if (latestCatalogBoardKey == board.key) refresh(queued)
         }
     }
     suspend fun showCachedThenRefresh(sort: CompatCatalogSort, forceRefresh: Boolean = false) {
+        // The snapshot is the board's own order: in "そ順"/"監視" it is not the
+        // list asked for, so the catalog is fetched in that order instead.
+        if (catalogExtraMode != null) {
+            refresh(sort)
+            return
+        }
         val cached = store.loadCatalogSnapshot(board.key, sort)
         cached?.let {
             catalogHistoryGeneration = 0
             catalogReplyDeltas = emptyMap()
             items = it.items
+            itemsExtraMode = null
             catalogItemStates = it.itemStates
             lastUpdatedAtEpochMillis = compatCatalogCachedAtForSession(
                 snapshotRevision = it.revision,
@@ -4428,8 +4526,11 @@ private fun CompatCatalogScreen(
             )
             lastSnapshotRevision = it.revision
             catalogContentReady = true
-            loading = false
-            showLoadingIndicator = false
+            // A load still running keeps its loader (re-audit L11: it went away while the old order was being fetched).
+            if (!refreshMutex.isLocked) {
+                loading = false
+                showLoadingIndicator = false
+            }
         }
         // The legacy setting is specifically about opening an already cached
         // catalog.  Always refreshing here made OFF indistinguishable from ON
@@ -4442,6 +4543,12 @@ private fun CompatCatalogScreen(
     suspend fun showPreviousCatalogGeneration() {
         if (loading) {
             transientMessage = "読み込み中です"
+            return
+        }
+        // "そ順"/"監視" keep no earlier lists: the board's own order shown under their heading was not what was asked for
+        // (re-audit L14).
+        compatCatalogRollbackRefusal(catalogExtraMode)?.let {
+            transientMessage = it
             return
         }
         val nextGeneration = catalogHistoryGeneration + 1
@@ -4457,6 +4564,7 @@ private fun CompatCatalogScreen(
         catalogHistoryGeneration = nextGeneration
         catalogReplyDeltas = emptyMap()
         items = snapshot.items
+        itemsExtraMode = null
         catalogItemStates = snapshot.itemStates
         lastUpdatedAtEpochMillis = snapshot.fetchedAtEpochMillis
         error = null
@@ -4543,6 +4651,12 @@ private fun CompatCatalogScreen(
                 command.parameter("query", "q", "word", "keyword", "text")?.let { searchQuery = it }
             }
             FutachaAiAction.OpenBoardExternally -> openUrl(board.originalUrl)
+            FutachaAiAction.SetCatalogMode -> resolvePlatformAiCatalogSort(command)?.let { sort ->
+                // Already stored by the host: the screen takes the order and reads the catalog again in it.
+                catalogExtraMode = null
+                preference = preference.copy(sort = sort)
+                if (preferenceLoaded) showCachedThenRefresh(sort, forceRefresh = true)
+            }
             else -> Unit
         }
         onPlatformAiCommandConsumed(command)
@@ -4920,11 +5034,12 @@ private fun CompatCatalogScreen(
                 sortDialogOpen = false
                 if (catalogExtraMode != null) {
                     // Back to one of the six: the extra order is removed and the catalog read again in that order.
+                    // The board's snapshot of that order is shown at once, not the list of the extra order.
                     catalogExtraMode = null
                     persistPreference(preference.copy(sort = selected), reload = false)
                     launchCatalogStoreSafely("catalog extra order removal") {
                         store.savePreferences(mapOf(compatCatalogExtraModeKey(board.key) to null))
-                        if (preferenceLoaded) refresh(selected)
+                        if (preferenceLoaded) showCachedThenRefresh(selected, forceRefresh = true)
                     }
                 } else {
                     persistPreference(preference.copy(sort = selected), reload = preferenceLoaded)
@@ -5532,24 +5647,27 @@ private fun CompatThreadScreen(
     // this whole screen body on every drag and settle frame.
     val pagerShowsNext by remember(pagerOffset) { derivedStateOf { pagerOffset.value < 0f } }
     val pagerNeighbor = if (pagerShowsNext) nextTab else previousTab
+    // The neighbour is drawn only while the page is moved (re-audit M24: at rest the previous tab's whole thread was
+    // drawn off screen, with its loading, NG and image matching). Its snapshot is still read ahead below.
+    val pagerMoving by remember(pagerOffset) { derivedStateOf { pagerOffset.value != 0f } }
     // Keep a deliberate dead zone before the pager captures a gesture. The
     // reference app does not change tabs from a tiny/diagonal reading drag.
     val pagerTouchSlopPx = with(LocalDensity.current) { 16.dp.toPx() }
-    var pagerNeighborSnapshot by remember(tab.key, pagerNeighbor?.key) {
-        mutableStateOf<CompatThreadSnapshot?>(null)
-    }
+    // Both neighbours are kept once read: turning the swipe the other way and back does not read and normalise the
+    // whole thread again (re-audit L18).
+    val neighborSnapshots = remember(tab.key) { mutableStateMapOf<String, CompatThreadSnapshot?>() }
+    val pagerNeighborSnapshot = pagerNeighbor?.key?.let { neighborSnapshots[it] }
     LaunchedEffect(pagerNeighbor?.key) {
+        val neighbor = pagerNeighbor ?: return@LaunchedEffect
+        if (neighbor.key in neighborSnapshots) return@LaunchedEffect
         try {
-            pagerNeighborSnapshot = pagerNeighbor?.let { neighbor ->
-                store.loadThreadSnapshot(neighbor.key)?.let { snapshot ->
-                    withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(snapshot) }
-                }
+            neighborSnapshots[neighbor.key] = store.loadThreadSnapshot(neighbor.key)?.let { snapshot ->
+                withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(snapshot) }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
             Logger.e("CompatibilityThread", "Failed to load neighboring tab", failure)
-            pagerNeighborSnapshot = null
         }
     }
     val threadFontSize = preferences.compatPreferenceValue("thread", "threadFontSize", "フォントサイズ")
@@ -7602,7 +7720,7 @@ private fun CompatThreadScreen(
                     .clipToBounds()
                     .onSizeChanged { pagerWidthPx = it.width }
         ) {
-            if (pagerNeighbor != null && pagerWidthPx > 0) {
+            if (pagerNeighbor != null && pagerWidthPx > 0 && pagerMoving) {
                 CompatThreadPagerNeighborPreview(
                     tab = pagerNeighbor,
                     snapshot = pagerNeighborSnapshot,
@@ -9781,7 +9899,7 @@ private fun CompatToolbar(
         modifier = Modifier.fillMaxWidth().background(CompatTeal).navigationBarsPadding()
             .testTag("compat-main-bottom-bar")
     ) {
-        Row(modifier = Modifier.fillMaxWidth().height(40.dp)) {
+        ScrollableToolbarRow(itemCount = renderedCommands.size, modifier = Modifier.fillMaxWidth().height(40.dp)) {
             renderedCommands.forEach { command ->
                 val refreshing = command.key in refreshingCommandKeys
                 Box(

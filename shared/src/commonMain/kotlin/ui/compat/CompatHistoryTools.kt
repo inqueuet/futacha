@@ -87,9 +87,10 @@ internal const val COMPAT_HISTORY_CHOICE_FILTER = "絞り込み・並べ替え�
 internal const val COMPAT_HISTORY_CHOICE_ARCHIVE = "履歴のエクスポート／インポート…"
 internal const val COMPAT_HISTORY_CHOICE_REFRESH = "履歴を一括更新"
 
+// The store keeps 200 rows; the drawer lists the newest 100 (re-audit L19: the notice said 200 were shown).
 internal const val COMPAT_HISTORY_IMPORT_NOTICE =
     "としあき(仮)では履歴の一覧だけが戻り、保存した本文はふたちゃで開けます。" +
-        "としあき(仮)の履歴は新しい順に200件まで表示されます。"
+        "としあき(仮)の履歴は新しい順に200件まで保存され、ドロワーには100件まで表示されます。"
 
 private const val COMPAT_HISTORY_REFRESH_TIMEOUT_MILLIS = 60_000L
 private const val COMPAT_HISTORY_REFRESH_MAX_THREADS = 5
@@ -139,13 +140,16 @@ internal data class CompatHistoryToolRow(val entry: CompatHistoryEntry, val view
 internal fun buildCompatHistoryToolRows(
     histories: List<CompatHistoryEntry>,
     appStateHistory: List<ThreadHistoryEntry>,
-    ownPostTabKeys: Set<String>
+    ownPostTabKeys: Set<String>,
+    /** Checked every few hundred rows, so a build whose inputs changed gives way (re-audit L13). */
+    ensureActive: () -> Unit = {}
 ): List<CompatHistoryToolRow> {
     val sharedByUrl = HashMap<String, ThreadHistoryEntry>(appStateHistory.size)
     appStateHistory.forEach { entry ->
         entry.toCompatHistoryEntry()?.canonicalUrl?.let { url -> if (url !in sharedByUrl) sharedByUrl[url] = entry }
     }
-    return histories.map { entry ->
+    return histories.mapIndexed { index, entry ->
+        if (index % 256 == 0) ensureActive()
         val base = entry.toModernThreadHistoryEntry() ?: ThreadHistoryEntry(
             threadId = entry.threadNo,
             boardId = entry.boardKey,
@@ -213,6 +217,9 @@ internal class CompatHistoryTools(
     var ownPostTabKeys by mutableStateOf<Set<String>>(emptySet())
         internal set
     var dialog by mutableStateOf<CompatHistoryToolsDialog?>(null)
+    /** ドロワーの表と絞り込みシートの行。ドロワー・シートより長く持つ（再監査M9・M11）。 */
+    internal val viewMemo = com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, CompatHistoryToolsView?>()
+    internal val filterRowsMemo = com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, List<ThreadHistoryEntry>>()
     var refreshing by mutableStateOf(false)
         private set
     internal var fileSystem: FileSystem? = null
@@ -389,21 +396,40 @@ internal fun rememberCompatHistoryTools(
 internal fun rememberCompatHistoryToolsView(
     tools: CompatHistoryTools,
     histories: List<CompatHistoryEntry>
-): CompatHistoryToolsView {
+): CompatHistoryToolsView? {
     val settings = tools.settings
     val appStateHistory = tools.appStateHistory
     val ownPostTabKeys = tools.ownPostTabKeys
-    return remember(histories, appStateHistory, ownPostTabKeys, settings) {
-        val rows = buildCompatHistoryToolRows(histories, appStateHistory, ownPostTabKeys)
-        val shown = applyCompatHistoryTools(rows, settings)
-        CompatHistoryToolsView(
-            entries = shown.map { it.entry },
-            marks = rows.associate { it.entry.canonicalUrl to futaberHistoryMarks(it.view) }.filterValues(String::isNotEmpty),
-            totalCount = rows.size,
-            settings = settings.compatSupported(),
-            labels = buildHistoryViewSummaryLabels(settings.compatSupported(), buildHistoryBoardFilterOptions(rows.map { it.view }))
-        )
+    // Made on the parsing dispatcher and kept in [tools] with what it was made from (re-audit M9/M11: the first one was
+    // made in composition each time the drawer was composed again, and going back to the first filter kept the result of
+    // a filter in between). Until a new one is ready the last stays.
+    val key = listOf(
+        com.valoser.futacha.shared.ui.SameInstance(histories), com.valoser.futacha.shared.ui.SameInstance(appStateHistory),
+        com.valoser.futacha.shared.ui.SameInstance(ownPostTabKeys), settings
+    )
+    return com.valoser.futacha.shared.ui.rememberOffMain<List<Any?>, CompatHistoryToolsView?>(tools.viewMemo, key, null) { _, ensureActive ->
+        buildCompatHistoryToolsView(histories, appStateHistory, ownPostTabKeys, settings, ensureActive)
     }
+}
+
+/** The drawer's view of [histories] with the tools (rows matched to the AppState history, filtered and sorted). */
+internal fun buildCompatHistoryToolsView(
+    histories: List<CompatHistoryEntry>,
+    appStateHistory: List<ThreadHistoryEntry>,
+    ownPostTabKeys: Set<String>,
+    settings: HistoryViewSettings,
+    ensureActive: () -> Unit = {}
+): CompatHistoryToolsView {
+    val rows = buildCompatHistoryToolRows(histories, appStateHistory, ownPostTabKeys, ensureActive)
+    ensureActive()
+    val shown = applyCompatHistoryTools(rows, settings)
+    return CompatHistoryToolsView(
+        entries = shown.map { it.entry },
+        marks = rows.associate { it.entry.canonicalUrl to futaberHistoryMarks(it.view) }.filterValues(String::isNotEmpty),
+        totalCount = rows.size,
+        settings = settings.compatSupported(),
+        labels = buildHistoryViewSummaryLabels(settings.compatSupported(), buildHistoryBoardFilterOptions(rows.map { it.view }))
+    )
 }
 
 /** The tools' dialogs, drawn once at the app level (the drawer can be composed twice during the edge preview). */
@@ -415,9 +441,18 @@ internal fun CompatHistoryToolsHost(
     when (val dialog = tools.dialog) {
         null -> Unit
         CompatHistoryToolsDialog.Filter -> {
-            val rows = remember(histories, tools.appStateHistory, tools.ownPostTabKeys) {
-                buildCompatHistoryToolRows(compatDistinctHistory(histories), tools.appStateHistory, tools.ownPostTabKeys)
-                    .map { it.view }
+            // Up to 20,000 rows: made off the main thread and kept in [tools] (re-audit M9).
+            val appStateHistory = tools.appStateHistory
+            val ownPostTabKeys = tools.ownPostTabKeys
+            val rows = com.valoser.futacha.shared.ui.rememberOffMain(
+                tools.filterRowsMemo,
+                listOf(
+                    com.valoser.futacha.shared.ui.SameInstance(histories), com.valoser.futacha.shared.ui.SameInstance(appStateHistory),
+                    com.valoser.futacha.shared.ui.SameInstance(ownPostTabKeys)
+                ),
+                emptyList()
+            ) { _, ensureActive ->
+                buildCompatHistoryToolRows(compatDistinctHistory(histories), appStateHistory, ownPostTabKeys, ensureActive).map { it.view }
             }
             var draft by remember { mutableStateOf(tools.settings) }
             val filteredCount by produceState<Int?>(null, rows, draft) {

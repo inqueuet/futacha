@@ -10,6 +10,7 @@ import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.compat.stableCompatHash
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.network.BoardPostingCapabilities
+import com.valoser.futacha.shared.ui.compat.COMPAT_POST_ATTACHMENT_DIRECTORY
 import com.valoser.futacha.shared.ui.compat.compatPostAttachmentContainer
 import com.valoser.futacha.shared.ui.compat.deleteCompatPostAttachment
 import com.valoser.futacha.shared.ui.compat.loadCompatPostAttachment
@@ -200,20 +201,48 @@ internal fun futaberDroppedDraftLocators(before: List<FutaberDraft>, after: List
 
 /**
  * Changes the stored drafts by [transform] (applied to the value stored at that moment) and deletes the files of the
- * drafts that no longer note them. Nothing is written when nothing changed.
+ * drafts that no longer note them. Nothing is written when nothing changed. The files go only once the drafts are saved
+ * ([editPreference] calls its last argument then): if the save fails, the drafts still note them (audit M14; they used to
+ * be deleted before the save, and a failed save left drafts pointing at files that were gone).
  */
 internal fun futaberEditDrafts(
-    editPreference: (key: String, transform: (String?) -> String?) -> Unit,
+    editPreference: (key: String, transform: (String?) -> String?, afterSaved: () -> Unit) -> Unit,
     onDropped: (Set<String>) -> Unit,
     transform: (List<FutaberDraft>) -> List<FutaberDraft>
 ) {
-    editPreference(FutaberPreferenceKeys.DRAFTS) { stored ->
+    var dropped: Set<String> = emptySet()
+    editPreference(FutaberPreferenceKeys.DRAFTS, { stored ->
         val before = decodeFutaberDrafts(stored)
         val after = transform(before)
         if (after == before) return@editPreference null
-        futaberDroppedDraftLocators(before, after).takeIf { it.isNotEmpty() }?.let(onDropped)
+        dropped = futaberDroppedDraftLocators(before, after)
         encodeFutaberDrafts(after)
+    }) { if (dropped.isNotEmpty()) onDropped(dropped) }
+}
+
+
+/**
+ * Deletes this mode's draft folders that no stored draft notes (audit M14: a file written while the drafts could not be
+ * saved, or left by a mode switch or the app ending in the middle, stayed for good). Only this mode's folders are looked
+ * at (としあき(仮)'s are never touched), and only while [stillIdle] says nothing is attached on the write screen: a file
+ * being kept right now would not be noted yet. Returns how many folders went.
+ */
+internal suspend fun futaberSweepDraftFiles(
+    fileSystem: FileSystem,
+    drafts: List<FutaberDraft>,
+    stillIdle: () -> Boolean
+): Int {
+    val noted = drafts.mapNotNullTo(mutableSetOf()) { draft -> draft.attachmentLocator?.let(::compatPostAttachmentContainer)?.substringAfterLast('/') }
+    val ownPrefix = stableCompatHash(FUTABER_DRAFT_ATTACHMENT_OWNER) + "-"
+    val stale = fileSystem.listFiles(COMPAT_POST_ATTACHMENT_DIRECTORY).filter { it.startsWith(ownPrefix) && it !in noted }
+    var removed = 0
+    for (folder in stale) {
+        if (!stillIdle()) break
+        fileSystem.deleteRecursively("$COMPAT_POST_ATTACHMENT_DIRECTORY/$folder")
+            .onSuccess { removed++ }
+            .onFailure { Logger.e(PARITY_B3_TAG, "Failed to delete a stale draft attachment", it) }
     }
+    return removed
 }
 
 /** Told when the file a draft kept could not be read back (deleted by "添付・一時ファイルのクリア", or damaged). */
@@ -272,6 +301,7 @@ internal fun FutaberDraftAttachmentSync(
 ) {
     val memory = remember { FutaberDraftAttachmentMemory() }
     val latestBoards by rememberUpdatedState(boards)
+    val latestEnabled by rememberUpdatedState(enabled)
     LaunchedEffect(enabled) {
         if (!enabled) {
             memory.savedImage = null
@@ -345,11 +375,22 @@ internal fun FutaberDraftAttachmentSync(
                 }
                 // Still the attached file (the screen may have been closed meanwhile: the file is kept for when it opens
                 // again). Another post, a sent post or another file took its place: it is not needed.
-                if (attachment.image !== image) {
+                // The extension was turned off meanwhile (its drafts were just cleared of files): the file is not needed either
+                // (audit M15: it used to be noted again after the clearing).
+                if (attachment.image !== image || !latestEnabled) {
                     futaberDeleteDraftFiles(scope, fileSystem, setOf(locator))
                     return@launch
                 }
-                editDrafts { futaberDraftsWithAttachment(it, writing, latestBoards, locator, image.isHandwriting, now()) }
+                // Checked again inside the edit, which runs in order with the others (audit M15: a post sent between the check
+                // above and this write discarded its draft, and the write then made a draft with the file again).
+                editDrafts { drafts ->
+                    if (attachment.image === image && latestEnabled) {
+                        futaberDraftsWithAttachment(drafts, writing, latestBoards, locator, image.isHandwriting, now())
+                    } else {
+                        futaberDeleteDraftFiles(scope, fileSystem, setOf(locator))
+                        drafts
+                    }
+                }
             }
         }
     }

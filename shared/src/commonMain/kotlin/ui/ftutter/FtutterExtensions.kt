@@ -91,6 +91,10 @@ internal enum class FtutterExtension(val stored: String, val title: String, val 
         "他のモードと共有のAIの設定（スレ要約・AIによる荒らし非表示。どちらも既定OFF）に従い、このモードのスレッドでも使います"
     ),
     WATCHER("watcher", "キーワード通知・巡回", "他のモードと共有のキーワード巡回の管理と結果の一覧を、この画面から開けるようにします"),
+    HISTORY_TOOLS(
+        "historyTools", "履歴の選択削除・すべて削除",
+        "ドロワーの「履歴」の上に選択のボタンを出します。選んだ履歴をまとめて消すことと、すべて消すこと（保護したスレッドは残します）ができます"
+    ),
     ARCHIVE_SEARCH("archiveSearch", "過去ログ検索", "カタログの検索に語を入れた時、その語で過去ログを探すボタンを出します"),
     APP_LOCK("appLock", "起動ロック・アプリアイコン", "他のモードと共有の起動ロック（パスワード）とアプリアイコンの選択を、この画面から設定できるようにします");
 
@@ -200,6 +204,19 @@ internal fun FtutterWatcherScreen(
     val slots = remember(preferences) { futaberWatchResultSlots(preferences) }
     var results by remember { mutableStateOf<List<CompatWatchResult>?>(null) }
     var managerOpen by remember { mutableStateOf(false) }
+    // 「すべて削除」は確認してから（監査L15）。
+    var clearAllOpen by remember { mutableStateOf(false) }
+    if (clearAllOpen) {
+        FtutterConfirmDialog(
+            title = "巡回の結果をすべて削除しますか？",
+            message = "見つかったスレの一覧を空にします（キーワードは残ります）。",
+            confirmLabel = "削除",
+            onDismiss = { clearAllOpen = false }
+        ) {
+            clearAllOpen = false
+            scope.launch { runCatching { watcher.deleteAll() } }
+        }
+    }
     LaunchedEffect(slots) {
         results = runCatching { watcher.load(kotlin.time.Clock.System.now().toEpochMilliseconds()) }.getOrDefault(emptyList())
             .sortedByDescending { it.insertedAtEpochMillis }
@@ -215,7 +232,7 @@ internal fun FtutterWatcherScreen(
         } else {
             if (list.isNotEmpty()) item(key = "clear") {
                 TextButton(
-                    onClick = { scope.launch { runCatching { watcher.deleteAll() } } },
+                    onClick = { clearAllOpen = true },
                     modifier = Modifier.padding(horizontal = 8.dp).testTag("ftutter-watcher-clear")
                 ) { Text("すべて削除", color = colors.text, fontWeight = FontWeight.Bold) }
             }
@@ -406,22 +423,37 @@ private val ftutterArchiveSearchJson = kotlinx.serialization.json.Json { ignoreU
 // ---- 共通のNG ----
 
 /** 共有のカタログNGワード（題名に含む語。検索と同じ比べ方）を、このモードのNGの結果に重ねる。消えたスレはNGの一覧へ。 */
-internal fun ftutterApplyCommonCatalogNg(result: FtutterCatalogNgResult, words: List<String>): FtutterCatalogNgResult {
+internal fun ftutterApplyCommonCatalogNg(
+    result: FtutterCatalogNgResult,
+    words: List<String>,
+    titleNg: Map<String, FtutterTitleNg>? = null
+): FtutterCatalogNgResult {
     if (words.none { it.isNotBlank() }) return result
-    val kept = com.valoser.futacha.shared.ui.futaber.futaberApplyCatalogNg(result.items, words)
+    val kept = if (titleNg == null) com.valoser.futacha.shared.ui.futaber.futaberApplyCatalogNg(result.items, words) else {
+        result.items.filterNot { item ->
+            titleNg[item.title.orEmpty()]?.commonHidden
+                ?: com.valoser.futacha.shared.ui.futaber.futaberApplyCatalogNg(listOf(item), words).isEmpty()
+        }
+    }
     if (kept.size == result.items.size) return result
     val keptUrls = kept.mapTo(mutableSetOf()) { it.threadUrl }
     return result.copy(items = kept, ngRemoved = result.ngRemoved + result.items.filterNot { it.threadUrl in keptUrls })
 }
 
-/** 共有のNGワード（本文）・NGネーム等（名前・ID・メール等の見出し）に当たるレスの番号（0始まり）。 */
+/**
+ * 共有のNGワード（本文）・NGネーム等（名前・ID・メール等の見出し）に当たるレスの番号（0始まり）。全レスを見るので、画面は
+ * メインスレッドの外で呼ぶ（ふたばー風の`futaberNgResolve`と同じ）。[ensureActive]は途中で取り消しを見る。
+ */
 internal fun ftutterCommonNgPosts(
     posts: List<com.valoser.futacha.shared.model.Post>,
     words: List<String>,
-    headers: List<String>
+    headers: List<String>,
+    ensureActive: () -> Unit = {}
 ): Set<Int> {
     if (posts.isEmpty() || (words.none { it.isNotBlank() } && headers.none { it.isNotBlank() })) return emptySet()
-    val ids = com.valoser.futacha.shared.ui.futaber.futaberNgHiddenIds(posts, words, headers, emptyList(), "", "")
+    val ids = com.valoser.futacha.shared.ui.futaber.futaberNgEvaluate(
+        posts, com.valoser.futacha.shared.ui.futaber.futaberNgPrepare(words, headers, emptyList(), "", ""), ensureActive
+    )
     if (ids.isEmpty()) return emptySet()
     return posts.indices.filterTo(mutableSetOf()) { posts[it].id in ids }
 }

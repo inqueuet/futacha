@@ -240,4 +240,18 @@ class FtutterThreadSupportTest {
         val fixed = ftutterImageBox(p, isOp = false, settings = FtutterThreadSettings(imageFixedWidth = true))
         assertEquals(200f, fixed.maxWidth)
     }
+
+    /** 監査M3：長押ししたレスは位置でなくNo.で引く。更新でレスが減った・途中に入った時も、選んだレスを指す。 */
+    @Test
+    fun aLongPressedPostIsFoundByNumberAfterTheListChanges() {
+        val before = listOf(post("1"), post("2"), post("3"))
+        val chosen = before[2].id
+        // 以前は位置2のまま：レスが減ると範囲外で落ち、途中に入ると別のレスを指していた。
+        val shrunk = listOf(post("1"), post("3"))
+        assertEquals(1, ftutterIndexOfPost(shrunk, chosen))
+        val inserted = listOf(post("1"), post("2"), post("2a"), post("3"))
+        assertEquals("3", inserted[ftutterIndexOfPost(inserted, chosen)].id)
+        assertEquals(-1, ftutterIndexOfPost(listOf(post("1")), chosen))
+        assertEquals(-1, ftutterIndexOfPost(before, null))
+    }
 }

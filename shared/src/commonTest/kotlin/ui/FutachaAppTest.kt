@@ -479,6 +479,16 @@ class FutachaAppTest {
         )
     }
 
+    /** Re-audit L43: with the check off, a checker that never requires an update is not asked at all. */
+    @Test
+    fun anUpdateCheckThatIsOffDoesNotAskACheckerThatNeverRequiresUpdates() = runBlocking {
+        val checker = TestVersionChecker(updateInfo = UpdateInfo("1.0.0", "1.1.0", "update"), mayRequireUpdate = false)
+        assertNull(fetchFutachaUpdateInfoIfEnabled(enabled = false, versionChecker = checker))
+        assertEquals(0, checker.checks)
+        assertEquals("1.1.0", fetchFutachaUpdateInfoIfEnabled(enabled = true, versionChecker = checker)?.latestVersion)
+        assertEquals(1, checker.checks)
+    }
+
     @Test
     fun futachaRuntimeHelpers_fetchUpdateInfoHandlesSuccessFailureAndNull() = runBlocking {
         val updateInfo = UpdateInfo(
@@ -1673,6 +1683,23 @@ class FutachaAppTest {
         )
     }
 
+    /** Re-audit M34: a thread opened from an address (no title yet) keeps the title its history row already has. */
+    @Test
+    fun aThreadOpenedWithoutItsTitleKeepsTheHistoryTitle() {
+        val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val existing = historyEntry(boardId = "img-b", boardName = "img", boardUrl = "https://may.2chan.net/img/res/123.htm")
+            .copy(threadId = "123", title = "前からの題名")
+        val unknownTitle = buildFutachaThreadHistoryContext(
+            board,
+            FutachaNavigationState(selectedThreadId = "123", selectedThreadUrl = "https://may.2chan.net/img/res/123.htm")
+        )
+        assertEquals("前からの題名", buildFutachaVisitedHistoryEntry("123", board, unknownTitle, 100_000L, existing).title)
+        // With no row yet, the placeholder is used as before; a known title still wins.
+        assertEquals("無題", buildFutachaVisitedHistoryEntry("123", board, unknownTitle, 100_000L, null).title)
+        val known = unknownTitle.copy(title = "新しい題名", titleKnown = true)
+        assertEquals("新しい題名", buildFutachaVisitedHistoryEntry("123", board, known, 100_000L, existing).title)
+    }
+
     @Test
     fun resolveHistoryEntrySelection_prefersBoardIdAndKeepsThreadUrlWhenResUrl() {
         val targetBoard = board(
@@ -2050,11 +2077,14 @@ private class DeleteRecursivelyFailingFileSystem(
 
 private class TestVersionChecker(
     private val updateInfo: UpdateInfo? = null,
-    private val failure: Throwable? = null
+    private val failure: Throwable? = null,
+    override val mayRequireUpdate: Boolean = true
 ) : VersionChecker {
+    var checks = 0
     override fun getCurrentVersion(): String = "1.0.0"
 
     override suspend fun checkForUpdate(): UpdateInfo? {
+        checks += 1
         failure?.let { throw it }
         return updateInfo
     }

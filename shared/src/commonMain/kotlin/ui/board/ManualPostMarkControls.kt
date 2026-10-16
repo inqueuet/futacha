@@ -10,7 +10,10 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+internal const val MANUAL_POST_MARK_NOTICE_MILLIS = 4_000L
 
 internal class PostMarkContext(val store: CompatibilityStore, val threadUrl: String,
     posts: List<Pair<String, String>>, val onShowPost: (String) -> Unit) {
@@ -28,11 +31,20 @@ internal fun ManualPostMarkActions(postNo: String, context: PostMarkContext? = L
     }
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
+    // The "old marks were removed" notice is information, not a failure: shown in the body colour and gone after a
+    // few seconds (re-audit L47: it was red and stayed until the next press). A failure keeps the error colour.
     var failure by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(MANUAL_POST_MARK_NOTICE_MILLIS)
+            notice = null
+        }
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        TextButton(enabled = !busy, onClick = { busy = true; scope.launch {
-            try { setManualPostMark(context.store, context.threadUrl, postNo, !marked) }
+        TextButton(enabled = !busy, onClick = { busy = true; failure = null; notice = null; scope.launch {
+            try { notice = manualPostMarksDroppedNotice(setManualPostMark(context.store, context.threadUrl, postNo, !marked)) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { failure = "マークを保存できませんでした" }
             finally { busy = false }
@@ -40,6 +52,7 @@ internal fun ManualPostMarkActions(postNo: String, context: PostMarkContext? = L
         TextButton(onClick = { open = true }) { Text("マーク一覧") }
     }
     failure?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    notice?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     if (open) ManualPostMarkDialog(context, postNo, onDismiss = { open = false })
 }
 

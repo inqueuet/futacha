@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.ThreadPage
 import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -45,5 +47,12 @@ class FutachaThreadUndoSnapshotTest {
         )
         assertNull(restored.previous)
         assertSame(first, restored.latest)
+    }
+
+    @Test
+    fun aBoardPageWithTheCopysTextIsWrittenToTheTabOnlyWhenTheCopyWasNot() {
+        assertTrue(futachaSamePageNeedsTabWrite(isCachedPage = false, latestWrittenToTab = false))
+        assertFalse(futachaSamePageNeedsTabWrite(isCachedPage = false, latestWrittenToTab = true))
+        assertFalse(futachaSamePageNeedsTabWrite(isCachedPage = true, latestWrittenToTab = false))
     }
 }

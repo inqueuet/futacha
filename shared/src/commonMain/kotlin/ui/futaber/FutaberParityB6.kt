@@ -11,7 +11,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -21,14 +21,18 @@ import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.board.FileManagerPickerDialog
+import com.valoser.futacha.shared.ui.compat.COMPAT_CUSTOM_FONT_CANDIDATES
 import com.valoser.futacha.shared.ui.compat.compatPreferenceStorageKey
 import com.valoser.futacha.shared.ui.compat.rememberCompatCustomFontFamily
 import com.valoser.futacha.shared.ui.compat.rememberCompatFontPickerLauncher
+import com.valoser.futacha.shared.ui.compat.removeCompatCustomFontFiles
+import com.valoser.futacha.shared.ui.compat.replaceCompatCustomFontFile
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -46,8 +50,6 @@ private const val FUTABER_B6_TAG = "FutaberParityB6"
 
 /** The shared preference that names the custom font; "デフォルト" or nothing means none. */
 internal val FUTABER_CUSTOM_FONT_PREFERENCE_KEY = compatPreferenceStorageKey("design", "dummyCustomFont")
-private const val COMPAT_FONT_DIRECTORY = "private/compat_font"
-private val COMPAT_FONT_CANDIDATES = listOf("$COMPAT_FONT_DIRECTORY/font.ttf", "$COMPAT_FONT_DIRECTORY/font.otf")
 internal const val FUTABER_CUSTOM_FONT_RESTART_NOTICE = "フォントを変更しました。反映されない場合はアプリを再起動してください"
 
 /** The name shown for the shared custom font, or null when none is chosen. */
@@ -68,11 +70,12 @@ internal fun rememberFutaberCustomFontFamily(
     var path by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(fileSystem, selected) {
         path = if (fileSystem == null || selected == null) null else withContext(AppDispatchers.io) {
-            COMPAT_FONT_CANDIDATES.firstOrNull { candidate ->
+            COMPAT_CUSTOM_FONT_CANDIDATES.firstOrNull { candidate ->
                 try { fileSystem.exists(candidate) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
             }?.let(fileSystem::resolveAbsolutePath)
         }
     }
+    // The loader also follows a replacement of the file at the same path (a font replaced by one of the same extension).
     val font = rememberCompatCustomFontFamily(if (selected == null) null else path)
     return if (selected == null) null else font
 }
@@ -82,10 +85,9 @@ internal suspend fun futaberSaveCustomFont(store: CompatibilityStore, fileSystem
     val extension = selected.fileName.substringAfterLast('.', "").lowercase()
     if (extension !in setOf("ttf", "otf")) return Result.failure(IllegalArgumentException("フォントファイルではありません"))
     return try {
-        // Only the chosen extension is kept, or a font replaced from OTF to TTF would leave two candidates.
-        fileSystem.deleteRecursively(COMPAT_FONT_DIRECTORY).getOrThrow()
-        fileSystem.createDirectory(COMPAT_FONT_DIRECTORY).getOrThrow()
-        fileSystem.writeBytes("$COMPAT_FONT_DIRECTORY/font.$extension", selected.bytes).getOrThrow()
+        // The new file is written before anything is removed, so a failed copy keeps the font in use; only the chosen
+        // extension is kept, or a font replaced from OTF to TTF would leave two candidates.
+        replaceCompatCustomFontFile(fileSystem, extension, selected.bytes)
         store.savePreference(FUTABER_CUSTOM_FONT_PREFERENCE_KEY, selected.fileName)
         Result.success(Unit)
     } catch (cancelled: CancellationException) {
@@ -97,7 +99,7 @@ internal suspend fun futaberSaveCustomFont(store: CompatibilityStore, fileSystem
 
 /** Removes the shared custom font (every mode goes back to its own letters). */
 internal suspend fun futaberResetCustomFont(store: CompatibilityStore, fileSystem: FileSystem?): Result<Unit> = try {
-    fileSystem?.deleteRecursively(COMPAT_FONT_DIRECTORY)?.getOrThrow()
+    fileSystem?.let { removeCompatCustomFontFiles(it) }
     store.savePreference(FUTABER_CUSTOM_FONT_PREFERENCE_KEY, "デフォルト")
     Result.success(Unit)
 } catch (cancelled: CancellationException) {
@@ -106,32 +108,68 @@ internal suspend fun futaberResetCustomFont(store: CompatibilityStore, fileSyste
     Result.failure(failure)
 }
 
-/** "フォントを選ぶ": choose a font file, or go back to the default; the font is the one every mode shares. */
+/** "選択" and "リセット" of the custom font. */
+internal class FutaberCustomFontActions(val pick: () -> Unit, val reset: () -> Unit)
+
+/**
+ * The custom font's actions, held by the screen that opens the dialog and not by the dialog: the dialog closes as soon
+ * as one is picked. A picker registered by the dialog lost the chosen file with it (Android drops the result of a
+ * launcher that is gone; iOS waited for the file in the dialog's own scope), and a save or reset run in the dialog's
+ * scope was cancelled half way. [scope] must outlive the dialog.
+ */
 @Composable
-internal fun FutaberCustomFontDialog(
-    services: FutaberMediaServices,
-    currentName: String?,
-    onNotice: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val colors = LocalFutaberColors.current
-    val scope = rememberCoroutineScope()
+internal fun rememberFutaberCustomFontActions(
+    services: FutaberMediaServices?,
+    scope: CoroutineScope,
+    onNotice: (String) -> Unit
+): FutaberCustomFontActions {
+    val currentServices by rememberUpdatedState(services)
+    val notice by rememberUpdatedState(onNotice)
     val pick = rememberCompatFontPickerLauncher(
         onSelected = { selected ->
-            val fileSystem = services.fileSystem
-            if (fileSystem == null) {
-                onNotice("フォントの保存先を利用できません")
+            val target = currentServices
+            val fileSystem = target?.fileSystem
+            if (target == null || fileSystem == null) {
+                notice("フォントの保存先を利用できません")
             } else scope.launch {
-                futaberSaveCustomFont(services.store, fileSystem, selected)
-                    .onSuccess { onNotice(FUTABER_CUSTOM_FONT_RESTART_NOTICE) }
+                futaberSaveCustomFont(target.store, fileSystem, selected)
+                    .onSuccess { notice(FUTABER_CUSTOM_FONT_RESTART_NOTICE) }
                     .onFailure { error ->
                         Logger.e(FUTABER_B6_TAG, "Failed to copy the font", error)
-                        onNotice(if (error is IllegalArgumentException) error.message.orEmpty() else "フォントのコピーに失敗しました")
+                        notice(if (error is IllegalArgumentException) error.message.orEmpty() else "フォントのコピーに失敗しました")
                     }
             }
         },
-        onError = onNotice
+        onError = { notice(it) }
     )
+    return FutaberCustomFontActions(
+        pick = pick,
+        reset = {
+            currentServices?.let { target ->
+                scope.launch {
+                    futaberResetCustomFont(target.store, target.fileSystem)
+                        .onSuccess { notice(FUTABER_CUSTOM_FONT_RESTART_NOTICE) }
+                        .onFailure { error ->
+                            Logger.e(FUTABER_B6_TAG, "Failed to reset the font", error)
+                            notice("既存フォントの削除に失敗しました")
+                        }
+                }
+            }
+        }
+    )
+}
+
+/**
+ * "フォントを選ぶ": choose a font file, or go back to the default; the font is the one every mode shares. The work is
+ * done by [actions] (see [rememberFutaberCustomFontActions]), which outlive this dialog.
+ */
+@Composable
+internal fun FutaberCustomFontDialog(
+    currentName: String?,
+    actions: FutaberCustomFontActions,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalFutaberColors.current
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("futaber-custom-font-dialog"),
@@ -146,7 +184,7 @@ internal fun FutaberCustomFontDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onDismiss(); pick() }, modifier = Modifier.testTag("futaber-custom-font-pick")) {
+            TextButton(onClick = { onDismiss(); actions.pick() }, modifier = Modifier.testTag("futaber-custom-font-pick")) {
                 Text("選択", color = colors.link)
             }
         },
@@ -155,14 +193,7 @@ internal fun FutaberCustomFontDialog(
                 if (currentName != null) {
                     TextButton(onClick = {
                         onDismiss()
-                        scope.launch {
-                            futaberResetCustomFont(services.store, services.fileSystem)
-                                .onSuccess { onNotice(FUTABER_CUSTOM_FONT_RESTART_NOTICE) }
-                                .onFailure { error ->
-                                    Logger.e(FUTABER_B6_TAG, "Failed to reset the font", error)
-                                    onNotice("既存フォントの削除に失敗しました")
-                                }
-                        }
+                        actions.reset()
                     }, modifier = Modifier.testTag("futaber-custom-font-reset")) { Text("リセット", color = colors.link) }
                 }
                 TextButton(onClick = onDismiss) { Text("キャンセル", color = colors.link) }
@@ -189,15 +220,18 @@ internal fun rememberFutaberPreferredFileManagerLabel(stateStore: AppStateStore)
  * Android's "優先ファイルマネージャー": the app the attachment and folder pickers open first. The value is the one
  * ふたちゃ's settings write ([AppStateStore.setPreferredFileManager]). With an app chosen the dialog offers to change or
  * clear it; without, the list of file managers opens at once.
+ *
+ * Choosing or clearing closes the dialog at once, so the value is written in [scope], which must outlive the dialog
+ * (a scope of the dialog was cancelled with it, before the value was stored).
  */
 @Composable
 internal fun FutaberPreferredFileManagerDialog(
     stateStore: AppStateStore,
+    scope: CoroutineScope,
     onNotice: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = LocalFutaberColors.current
-    val scope = rememberCoroutineScope()
     val current by stateStore.getPreferredFileManager().collectAsState(null)
     var picking by remember { mutableStateOf(false) }
     fun write(packageName: String?, label: String?) {

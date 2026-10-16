@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.AI_UNTRUSTED_THREAD_URL_MESSAGE
 import com.valoser.futacha.shared.ui.FutachaAppLockHolder
 import com.valoser.futacha.shared.ui.compat.COMPAT_AI_COMMANDS_DISABLED_MESSAGE
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -281,5 +282,26 @@ class FutaberParityB8AiTest {
         inbox.deliver(command(FutachaAiAction.OpenBoardList), TimeSource.Monotonic.markNow(), null, unlockedLock(), readyTimeoutMillis = 10) { notices += it }
         assertTrue(notices.single().contains("準備が終わらなかった"))
         assertNull(inbox.runner)
+    }
+
+    /** 監査M16：命令は、実行が終わる前（画面が受け取った時）に「受け取った」になる。長い命令の間も次の命令を受け取れる。 */
+    @Test
+    fun aCommandIsTakenBeforeItFinishesRunning() = runBlocking<Unit> {
+        val inbox = FutaberAiInbox()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        inbox.runner = { events += "run"; release.await(); events += "done" }
+        val delivery = launch {
+            inbox.deliver(command(FutachaAiAction.OpenBoardList), TimeSource.Monotonic.markNow(), null, unlockedLock(), onTaken = { events += "taken" }) {}
+        }
+        kotlinx.coroutines.withTimeout(5_000) { while ("run" !in events) kotlinx.coroutines.yield() }
+        assertEquals(listOf("taken", "run"), events)
+        release.complete(Unit)
+        delivery.join()
+        assertEquals(listOf("taken", "run", "done"), events)
+        // 捨てた命令も「受け取った」になる（列の先頭に残らない）。
+        val dropped = mutableListOf<String>()
+        FutaberAiInbox().deliver(command(FutachaAiAction.OpenBoardList), TimeSource.Monotonic.markNow(), null, unlockedLock(), readyTimeoutMillis = 10, onTaken = { dropped += "taken" }) {}
+        assertEquals(listOf("taken"), dropped)
     }
 }

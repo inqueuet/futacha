@@ -318,6 +318,14 @@ internal class AppStatePreferenceOperations(
         )
     }
 
+    /** [removeSelfPostIdentifiersForThread] for several threads with one write (threadId to boardId). */
+    suspend fun removeSelfPostIdentifiersForThreads(threads: Collection<Pair<String, String?>>) {
+        if (threads.isEmpty()) return
+        mutateSelfPostIdentifierMap { currentMap ->
+            threads.fold(currentMap) { map, (threadId, boardId) -> removeSelfPostIdentifiersFromMap(map, threadId, boardId) }
+        }
+    }
+
     suspend fun clearSelfPostIdentifiers() {
         clearAppStateSelfPostIdentifiers(mutateSelfPostIdentifierMap)
     }

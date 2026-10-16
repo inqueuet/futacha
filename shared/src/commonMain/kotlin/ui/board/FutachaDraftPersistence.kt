@@ -49,6 +49,7 @@ import kotlin.time.Clock
 private const val FUTACHA_DRAFT_TAG = "FutachaDraft"
 internal const val FUTACHA_DRAFT_DEBOUNCE_MILLIS = 1_500L
 internal const val FUTACHA_DRAFT_LOAD_FAILED_NOTICE = "下書きを読み込めませんでした"
+internal const val FUTACHA_DRAFT_ATTACHMENT_REPLACED_NOTICE = "保存していた添付は、新しく選んだ添付に置き換えました"
 internal const val FUTACHA_DRAFT_ATTACHMENT_LOST_NOTICE = "下書きの添付ファイルを読み込めなかったため、添付が外れました"
 
 /** The fields of a reply or a new-thread form that the draft keeps (the delete key is not kept). */
@@ -63,6 +64,25 @@ internal data class FutachaDraftFields(
 /** Only a subject, a comment or an attachment makes a draft; a name, a mail or an autofilled delete key alone does not. */
 internal fun FutachaDraftFields.hasDraftContent(): Boolean =
     subject.isNotBlank() || comment.isNotBlank() || image != null
+
+/** The stored draft with what was typed before it was read: the typed text after the stored one, empty fields filled. */
+internal fun mergeFutachaDraftFields(stored: FutachaDraftFields, typed: FutachaDraftFields): FutachaDraftFields {
+    // Typed text that already starts with the stored one is taken as is (re-audit L31: a form restored after the process ended holds the
+    // stored text plus what was typed, and joining them doubled it, "abc" and "abcd" -> "abc\nabcd").
+    fun join(a: String, b: String) = when {
+        a.isBlank() -> b
+        b.isBlank() || b == a -> a
+        b.startsWith(a) -> b
+        else -> a.trimEnd('\n') + "\n" + b
+    }
+    return FutachaDraftFields(
+        name = typed.name.ifEmpty { stored.name },
+        email = typed.email.ifEmpty { stored.email },
+        subject = typed.subject.ifBlank { stored.subject },
+        comment = join(stored.comment, typed.comment),
+        image = typed.image ?: stored.image
+    )
+}
 
 /** Where a draft is kept: a thread tab's reply draft, or a board's new-thread draft. */
 internal sealed interface FutachaDraftOwner {
@@ -165,6 +185,17 @@ internal suspend fun persistFutachaDraft(
         deleteAttachmentFile(fileSystem, old)
         return FutachaDraftWrite.Deleted
     }
+    // The delete key as stored now (としあき(仮) writes it): a screen whose read failed knew none and wrote it back empty
+    // (audit L31). Unreadable now too: nothing is written, so it is not lost.
+    val deleteKey = try {
+        readStoredDraft(store, owner)?.deleteKey ?: session.storedDeleteKey
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Throwable) {
+        if (!session.allowDelete) return FutachaDraftWrite.Skipped
+        session.storedDeleteKey
+    }
+    session.storedDeleteKey = deleteKey
     val image = fields.image
     var written: String? = null
     val locator = when {
@@ -180,7 +211,7 @@ internal suspend fun persistFutachaDraft(
                     tabKey = owner.key, name = fields.name, email = fields.email, subject = fields.subject,
                     comment = fields.comment, attachmentUri = locator,
                     attachmentIsHandwriting = locator != null && image?.isHandwriting == true,
-                    deleteKey = session.storedDeleteKey, updatedAtEpochMillis = nowEpochMillis
+                    deleteKey = deleteKey, updatedAtEpochMillis = nowEpochMillis
                 )
             )
             is FutachaDraftOwner.Build -> store.saveBuildDraft(
@@ -188,7 +219,7 @@ internal suspend fun persistFutachaDraft(
                     boardKey = owner.key, name = fields.name, email = fields.email, subject = fields.subject,
                     comment = fields.comment, attachmentUri = locator,
                     attachmentIsHandwriting = locator != null && image?.isHandwriting == true,
-                    deleteKey = session.storedDeleteKey, updatedAtEpochMillis = nowEpochMillis
+                    deleteKey = deleteKey, updatedAtEpochMillis = nowEpochMillis
                 )
             )
         }
@@ -247,12 +278,22 @@ internal class FutachaDraftFormBinding(
     val read: () -> FutachaDraftFields,
     val isOpen: () -> Boolean,
     /** Fills the form with a restored draft (the delete key is left as it is). */
-    val restore: (FutachaDraftFields) -> Unit
+    val restore: (FutachaDraftFields) -> Unit,
+    /**
+     * True while the form's text is being sent (audit M19). The stored draft is removed when sending starts and the text is
+     * not written while it is in flight, so leaving the screen or the app ending mid-send does not keep the sent text as a
+     * draft (it used to come back on the next opening, inviting a second post). If the send fails the text is written again.
+     */
+    val isSubmitting: () -> Boolean = { false }
 )
 
 /** The reply form of the thread screen. A restored draft keeps a name / mail already in the form. */
-internal fun futachaReplyDraftFormBinding(binding: ThreadReplyDialogStateBinding): FutachaDraftFormBinding =
+internal fun futachaReplyDraftFormBinding(
+    binding: ThreadReplyDialogStateBinding,
+    isSubmitting: () -> Boolean = { false }
+): FutachaDraftFormBinding =
     FutachaDraftFormBinding(
+        isSubmitting = isSubmitting,
         read = {
             val draft = binding.currentState().draft
             FutachaDraftFields(draft.name, draft.email, draft.subject, draft.comment, draft.imageData)
@@ -280,8 +321,10 @@ internal fun futachaCreateThreadDraftFormBinding(
     currentImage: () -> ImageData?,
     setDraft: (CreateThreadDraft) -> Unit,
     setImage: (ImageData?) -> Unit,
-    isOpen: () -> Boolean
+    isOpen: () -> Boolean,
+    isSubmitting: () -> Boolean = { false }
 ): FutachaDraftFormBinding = FutachaDraftFormBinding(
+    isSubmitting = isSubmitting,
     read = {
         val draft = currentDraft()
         FutachaDraftFields(draft.name, draft.email, draft.title, draft.comment, currentImage())
@@ -353,7 +396,17 @@ internal fun FutachaDraftPersistenceEffect(
             null
         }
         val current = formOfOwner.read()
-        if (restored != null && !current.hasDraftContent()) {
+        if (restored != null && current.hasDraftContent()) {
+            // Typed while the stored draft was still being read (audit L31: the stored text was then overwritten 1.5 s
+            // later). Both are kept: what was typed goes after the stored text, an empty field takes the stored value.
+            formOfOwner.restore(mergeFutachaDraftFields(restored.fields, current))
+            session.lastEnqueued = null
+            // Told here too (re-audit L31): the stored picture could not be read, or the one chosen since replaced it.
+            when {
+                restored.attachmentLost -> latestMessage(FUTACHA_DRAFT_ATTACHMENT_LOST_NOTICE)
+                restored.fields.image != null && current.image != null -> latestMessage(FUTACHA_DRAFT_ATTACHMENT_REPLACED_NOTICE)
+            }
+        } else if (restored != null) {
             formOfOwner.restore(restored.fields)
             if (restored.attachmentLost) latestMessage(FUTACHA_DRAFT_ATTACHMENT_LOST_NOTICE)
             session.lastEnqueued = formOfOwner.read()
@@ -363,16 +416,21 @@ internal fun FutachaDraftPersistenceEffect(
         }
         session.loaded = true
         var wasOpen = formOfOwner.isOpen()
-        snapshotFlow { formOfOwner.read() to formOfOwner.isOpen() }.collectLatest { (fields, open) ->
+        snapshotFlow { Triple(formOfOwner.read(), formOfOwner.isOpen(), formOfOwner.isSubmitting()) }.collectLatest { (fields, open, submitting) ->
             val closed = wasOpen && !open
             wasOpen = open
+            if (submitting) {
+                // Being sent: the stored draft goes now (audit M19); a failed send writes the text again when it ends.
+                enqueueWrite(FutachaDraftFields())
+                return@collectLatest
+            }
             if (!closed) delay(FUTACHA_DRAFT_DEBOUNCE_MILLIS)
             enqueueWrite(fields)
         }
     }
     DisposableEffect(owner, store) {
         onDispose {
-            if (latestEnabled && session.loaded) enqueueWrite(formOfOwner.read())
+            if (latestEnabled && session.loaded && !formOfOwner.isSubmitting()) enqueueWrite(formOfOwner.read())
             session.loaded = false
         }
     }

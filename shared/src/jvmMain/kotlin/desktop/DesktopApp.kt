@@ -142,6 +142,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
             checkUpdates = manual || allowed("compat.background.backgroundThreadUpdateCheck"),
             checkExistence = manual || allowed("compat.background.backgroundThreadExistCheck"),
             checkWatchWords = compatWatchAllowed(preferences, DesktopNetworkState.unmetered),
+            budgetMillis = com.valoser.futacha.shared.compat.compatRefreshBudgetWithin(5 * 60_000L),
             commitGate = { commit -> profileMutex.withLock {
                 if (switching || profile != ExperienceProfile.TOSHIAKI_COMPAT || generation != token) false
                 else { commit(); true }

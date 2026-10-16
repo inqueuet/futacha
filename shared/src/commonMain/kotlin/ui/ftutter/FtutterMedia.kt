@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -164,7 +166,9 @@ internal fun FtutterGalleryScreen(
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()
     var selecting by remember { mutableStateOf(false) }
-    val selected = remember { mutableStateMapOf<Int, Boolean>() }
+    // 選んだ画像は位置でなく画像のアドレスで持つ（監査L5：選んでいる間にスレを取り直すと並びがずれ、別の画像を保存していた）。
+    val selected = remember { mutableStateMapOf<String, Boolean>() }
+    fun keyOf(post: CompatPostSnapshot): String = resolveCompatViewerMediaUrl(post) ?: "#${post.position}"
     var confirm by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -172,7 +176,8 @@ internal fun FtutterGalleryScreen(
         if (selecting) { selecting = false; selected.clear() } else onClose()
     }
     LaunchedEffect(message) { if (message != null) { kotlinx.coroutines.delay(3000); message = null } }
-    Box(Modifier.fillMaxSize().background(colors.background).testTag("ftutter-gallery")) {
+    // 背面のスレッドへタップを通さない（監査L4）。
+    Box(Modifier.fillMaxSize().background(colors.background).pointerInput(Unit) {}.testTag("ftutter-gallery")) {
         Column(Modifier.fillMaxSize()) {
             FtutterTopBar(title = if (selecting) "選択保存" else "画像一覧", onBack = {
                 if (selecting) { selecting = false; selected.clear() } else onClose()
@@ -209,15 +214,15 @@ internal fun FtutterGalleryScreen(
                         Modifier.aspectRatio(1f).padding(1.dp)
                             .combinedClickable(
                                 onClick = {
-                                    if (selecting) selected[index] = selected[index] != true else onOpenViewer(index)
+                                    if (selecting) selected[keyOf(post)] = selected[keyOf(post)] != true else onOpenViewer(index)
                                 },
-                                onLongClick = { if (!selecting) { selecting = true; selected[index] = true } }
+                                onLongClick = { if (!selecting) { selecting = true; selected[keyOf(post)] = true } }
                             )
                             .testTag("ftutter-gallery-cell")
                     ) {
                         FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize())
                         if (selecting) {
-                            Checkbox(checked = selected[index] == true, onCheckedChange = { selected[index] = it }, modifier = Modifier.align(Alignment.TopEnd))
+                            Checkbox(checked = selected[keyOf(post)] == true, onCheckedChange = { selected[keyOf(post)] = it }, modifier = Modifier.align(Alignment.TopEnd))
                         } else {
                             FtutterIndexCard(post.position, Modifier.align(Alignment.TopStart)) { onBackToPost(post.position) }
                         }
@@ -226,15 +231,16 @@ internal fun FtutterGalleryScreen(
             }
             }
             if (selecting) {
-                Row(
-                    Modifier.fillMaxWidth().height(50.dp).background(colors.toolBar).navigationBarsPadding(),
+                ScrollableToolbarRow(
+                    itemCount = 4, minItemWidth = 48.dp,
+                    modifier = Modifier.fillMaxWidth().height(50.dp).background(colors.toolBar).navigationBarsPadding(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     FtutterDestinationButton(tools, Modifier.weight(1f))
                     IconButton(onClick = { if (selected.values.any { it }) confirm = true }, modifier = Modifier.testTag("ftutter-gallery-save")) {
                         Icon(Icons.Rounded.Download, contentDescription = "保存", tint = colors.onToolBar)
                     }
-                    IconButton(onClick = { media.indices.forEach { selected[it] = true } }, modifier = Modifier.testTag("ftutter-gallery-select-all")) {
+                    IconButton(onClick = { media.forEach { selected[keyOf(it)] = true } }, modifier = Modifier.testTag("ftutter-gallery-select-all")) {
                         Icon(Icons.Rounded.SelectAll, contentDescription = "全選択", tint = colors.onToolBar)
                     }
                     IconButton(onClick = { selected.clear() }) {
@@ -249,7 +255,8 @@ internal fun FtutterGalleryScreen(
         }
     }
     if (confirm) {
-        val chosen = selected.filterValues { it }.keys.sorted()
+        // 今の一覧の並びで、選んだ画像（取り直しで消えた画像は除く）。
+        val chosen = media.filter { selected[keyOf(it)] == true }
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { if (progress == null) confirm = false },
             title = { Text(ftutterSelectSaveQuestion(chosen.size)) },
@@ -263,7 +270,7 @@ internal fun FtutterGalleryScreen(
             },
             confirmButton = {
                 TextButton(enabled = progress == null, onClick = {
-                    val urls = chosen.mapNotNull { media.getOrNull(it)?.let(::resolveCompatViewerMediaUrl) }
+                    val urls = chosen.mapNotNull(::resolveCompatViewerMediaUrl).distinct()
                     progress = 0 to urls.size
                     scope.launch {
                         val saved = tools.saveMany(urls) { done -> progress = done to urls.size }
@@ -392,7 +399,7 @@ internal fun FtutterViewerScreen(
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                ScrollableToolbarRow(itemCount = 6, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     FtutterDestinationButton(tools, Modifier.weight(1f))
                     IconButton(onClick = { currentUrl?.let(tools.saveOne) }, enabled = !tools.isSaving, modifier = Modifier.testTag("ftutter-viewer-save")) {
                         Icon(Icons.Rounded.Download, contentDescription = "保存", tint = colors.onToolBar)
@@ -433,7 +440,9 @@ internal fun FtutterViewerScreen(
                         val post = posts.getOrNull(position) ?: return@itemsIndexed
                         Column(Modifier.fillMaxWidth().padding(start = ftutterIndentDp(depth).dp, top = 4.dp, bottom = 4.dp)) {
                             Text("$position  No.${post.id}", color = colors.headerText, fontSize = 12.sp)
-                            Text(messageHtmlToPlainText(post.messageHtml), color = colors.text, fontSize = 14.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                            // 本文は1つのレスにつき1回だけ変換する（監査L9：描くたびに変換していた）。
+                            val plain = remember(post.messageHtml) { messageHtmlToPlainText(post.messageHtml) }
+                            Text(plain, color = colors.text, fontSize = 14.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                             val target = media.indexOfFirst { it.position == position }
                             if (target >= 0) {
                                 Box(Modifier.size(80.dp).clickable {

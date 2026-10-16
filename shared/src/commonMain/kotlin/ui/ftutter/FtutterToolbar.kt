@@ -1,6 +1,9 @@
 package com.valoser.futacha.shared.ui.ftutter
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.ui.util.TOOLBAR_MIN_ITEM_WIDTH_DP
 
 /**
  * 原作のツールバーの項目。並び・ON/OFFは `catTBOrderName`／`catTBOrderBool`（スレッドは `sureTB…`）に保存する。
@@ -112,14 +116,14 @@ internal data class FtutterToolbarMetrics(
 )
 
 internal fun parseFtutterCatalogToolbarMetrics(p: Map<String, String>) = FtutterToolbarMetrics(
-    iconWidth = p.ftutterInt(FtutterKeys.CATALOG_ICON_WIDTH, 45, 30..80),
+    iconWidth = p.ftutterInt(FtutterKeys.CATALOG_ICON_WIDTH, 45, 30..80).coerceAtLeast(TOOLBAR_MIN_ITEM_WIDTH_DP),
     iconHeight = p.ftutterInt(FtutterKeys.CATALOG_ICON_HEIGHT, 45, 30..80),
     leftSpace = p.ftutterInt(FtutterKeys.CATALOG_TOOLBAR_LEFT, 5, 0..100),
     rightSpace = p.ftutterInt(FtutterKeys.CATALOG_TOOLBAR_RIGHT, 5, 0..100)
 )
 
 internal fun parseFtutterThreadToolbarMetrics(p: Map<String, String>) = FtutterToolbarMetrics(
-    iconWidth = p.ftutterInt(FtutterKeys.THREAD_ICON_WIDTH, 45, 30..80),
+    iconWidth = p.ftutterInt(FtutterKeys.THREAD_ICON_WIDTH, 45, 30..80).coerceAtLeast(TOOLBAR_MIN_ITEM_WIDTH_DP),
     iconHeight = p.ftutterInt(FtutterKeys.THREAD_ICON_HEIGHT, 45, 30..80),
     leftSpace = p.ftutterInt(FtutterKeys.THREAD_TOOLBAR_LEFT, 5, 0..100),
     rightSpace = p.ftutterInt(FtutterKeys.THREAD_TOOLBAR_RIGHT, 5, 0..100)
@@ -142,10 +146,7 @@ internal const val FTUTTER_TOOLBAR_ORDER_WIDTH = 64
 /** スペース項目がONの時に最低限残す幅。 */
 internal const val FTUTTER_TOOLBAR_SPACE_MIN = 20
 
-/**
- * 原作の式（Catalog.dart LayoutBuilder）：利用幅 = 全幅 − 左右の余白 − (スペースONなら20) − (並び順ONなら64)、
- * ボタン幅 = min(設定の幅, 利用幅 / ボタンの数)。ボタンの数は並び順とスペースを除いたONの項目。
- */
+/** The original's width calculation, with a usable minimum for crowded and split-screen toolbars. */
 internal fun ftutterToolbarButtonWidth(
     totalWidth: Float,
     metrics: FtutterToolbarMetrics,
@@ -153,10 +154,20 @@ internal fun ftutterToolbarButtonWidth(
     hasSpace: Boolean,
     hasOrder: Boolean
 ): Float {
-    if (buttonCount <= 0) return metrics.iconWidth.toFloat()
+    val preferred = metrics.iconWidth.coerceAtLeast(TOOLBAR_MIN_ITEM_WIDTH_DP).toFloat()
+    if (buttonCount <= 0) return preferred
     val usable = totalWidth - metrics.leftSpace - metrics.rightSpace -
         (if (hasSpace) FTUTTER_TOOLBAR_SPACE_MIN else 0) - (if (hasOrder) FTUTTER_TOOLBAR_ORDER_WIDTH else 0)
-    return minOf(metrics.iconWidth.toFloat(), (usable / buttonCount).coerceAtLeast(1f))
+    return minOf(preferred, usable / buttonCount).coerceAtLeast(TOOLBAR_MIN_ITEM_WIDTH_DP.toFloat())
+}
+
+/** Keep at least one button visible initially, even with 100dp margins in a tiny pane. */
+internal fun ftutterToolbarMetricsForWidth(width: Float, metrics: FtutterToolbarMetrics): FtutterToolbarMetrics {
+    val margins = metrics.leftSpace + metrics.rightSpace
+    val budget = (width - TOOLBAR_MIN_ITEM_WIDTH_DP).coerceAtLeast(0f)
+    if (margins <= budget || margins == 0) return metrics
+    val scale = budget / margins
+    return metrics.copy(leftSpace = (metrics.leftSpace * scale).toInt(), rightSpace = (metrics.rightSpace * scale).toInt())
 }
 
 /** 下部の平らなツールバー。[slot] がスペースか並び順か、それ以外のボタンかで描き分ける。 */
@@ -171,21 +182,34 @@ internal fun <T> FtutterBottomToolbar(
 ) {
     val colors = LocalFtutterColors.current
     val shown = entries.filter { it.enabled }.map { it.tool }
+    if (shown.none { !isSpace(it) }) {
+        // Only the system inset remains; no empty 45dp toolbar body.
+        Box(modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding())
+        return
+    }
     BoxWithConstraints(
         modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding()
     ) {
+        val fittedMetrics = ftutterToolbarMetricsForWidth(maxWidth.value, metrics)
+        val hasSpace = shown.any(isSpace)
+        val hasOrder = shown.any(isOrder)
+        val buttonCount = shown.count { !isSpace(it) && !isOrder(it) }
         val width = ftutterToolbarButtonWidth(
             totalWidth = maxWidth.value,
-            metrics = metrics,
-            buttonCount = shown.count { !isSpace(it) && !isOrder(it) },
-            hasSpace = shown.any(isSpace),
-            hasOrder = shown.any(isOrder)
+            metrics = fittedMetrics,
+            buttonCount = buttonCount,
+            hasSpace = hasSpace,
+            hasOrder = hasOrder
         ).dp
+        val contentWidth = maxOf(maxWidth.value, fittedMetrics.leftSpace + fittedMetrics.rightSpace +
+            buttonCount * width.value + (if (hasSpace) FTUTTER_TOOLBAR_SPACE_MIN else 0) +
+            (if (hasOrder) FTUTTER_TOOLBAR_ORDER_WIDTH else 0)).dp
         Row(
-            Modifier.fillMaxWidth().height(metrics.iconHeight.dp),
+            Modifier.horizontalScroll(rememberScrollState()).width(contentWidth).height(metrics.iconHeight.dp),
+            horizontalArrangement = if (hasSpace) Arrangement.Start else Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Spacer(Modifier.width(metrics.leftSpace.dp))
+            Spacer(Modifier.width(fittedMetrics.leftSpace.dp))
             shown.forEach { tool ->
                 when {
                     isSpace(tool) -> Spacer(Modifier.weight(1f))
@@ -193,8 +217,7 @@ internal fun <T> FtutterBottomToolbar(
                     else -> Box(Modifier.width(width), contentAlignment = Alignment.Center) { slot(tool, width) }
                 }
             }
-            if (shown.none(isSpace)) Spacer(Modifier.weight(1f))
-            Spacer(Modifier.width(metrics.rightSpace.dp))
+            Spacer(Modifier.width(fittedMetrics.rightSpace.dp))
         }
     }
 }

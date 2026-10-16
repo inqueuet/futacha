@@ -36,24 +36,38 @@ internal class FtutterAes(key: ByteArray) {
     fun encryptBlock(input: ByteArray): ByteArray {
         require(input.size == 16)
         val s = IntArray(16) { input[it].toInt() and 0xFF }
-        addRoundKey(s, 0)
-        for (round in 1 until rounds) {
-            subBytes(s); shiftRows(s); mixColumns(s); addRoundKey(s, round)
-        }
-        subBytes(s); shiftRows(s); addRoundKey(s, rounds)
+        encryptState(s, IntArray(4))
         return ByteArray(16) { s[it].toByte() }
     }
 
-    /** CTR：[iv] を128ビットの数としてブロックごとに1ずつ増やし、その暗号化と排他的論理和をとる（暗号化も復号も同じ）。 */
-    fun ctr(data: ByteArray, iv: ByteArray): ByteArray {
+    /** [s]（0〜255の16個）をその場で暗号化する。[row]は行をずらす時の作業用（4個）。ブロックごとに配列を作らない。 */
+    private fun encryptState(s: IntArray, row: IntArray) {
+        addRoundKey(s, 0)
+        for (round in 1 until rounds) {
+            subBytes(s); shiftRows(s, row); mixColumns(s); addRoundKey(s, round)
+        }
+        subBytes(s); shiftRows(s, row); addRoundKey(s, rounds)
+    }
+
+    /**
+     * CTR：[iv] を128ビットの数としてブロックごとに1ずつ増やし、その暗号化と排他的論理和をとる（暗号化も復号も同じ）。
+     * 作業用の配列は使い回す（以前はブロックごとに3つ作っていた）。[ensureActive]は大きなデータの途中で取り消しを見る。
+     */
+    fun ctr(data: ByteArray, iv: ByteArray, ensureActive: () -> Unit = {}): ByteArray {
         require(iv.size == 16)
         val counter = iv.copyOf()
         val out = ByteArray(data.size)
+        val s = IntArray(16)
+        val row = IntArray(4)
         var offset = 0
+        var blocks = 0
         while (offset < data.size) {
-            val stream = encryptBlock(counter)
+            if (blocks and CANCEL_CHECK_MASK == 0) ensureActive()
+            blocks++
+            for (i in 0 until 16) s[i] = counter[i].toInt() and 0xFF
+            encryptState(s, row)
             val n = minOf(16, data.size - offset)
-            for (i in 0 until n) out[offset + i] = (data[offset + i].toInt() xor stream[i].toInt()).toByte()
+            for (i in 0 until n) out[offset + i] = (data[offset + i].toInt() xor s[i]).toByte()
             offset += n
             for (i in 15 downTo 0) {
                 val v = (counter[i].toInt() and 0xFF) + 1
@@ -62,6 +76,30 @@ internal class FtutterAes(key: ByteArray) {
             }
         }
         return out
+    }
+
+    /**
+     * CTR の[blockIndex]番目（0始まり）の16バイトだけを復号する（[ctr]の結果の同じ位置と同じ）。全体を復号する前に、
+     * 先頭と末尾で明らかに違うファイルを断るのに使う。
+     */
+    fun ctrBlock(data: ByteArray, iv: ByteArray, blockIndex: Int): ByteArray {
+        require(iv.size == 16)
+        val start = blockIndex * 16
+        require(blockIndex >= 0 && start < data.size)
+        // カウンタ＝[iv]＋[blockIndex]（128ビットのビッグエンディアン）。
+        val counter = iv.copyOf()
+        var carry = blockIndex.toLong()
+        var i = 15
+        while (carry != 0L && i >= 0) {
+            val v = (counter[i].toLong() and 0xFF) + (carry and 0xFF)
+            counter[i] = v.toByte()
+            carry = (carry ushr 8) + (v ushr 8)
+            i--
+        }
+        val s = IntArray(16) { counter[it].toInt() and 0xFF }
+        encryptState(s, IntArray(4))
+        val n = minOf(16, data.size - start)
+        return ByteArray(n) { (data[start + it].toInt() xor s[it]).toByte() }
     }
 
     private fun addRoundKey(s: IntArray, round: Int) {
@@ -76,10 +114,10 @@ internal class FtutterAes(key: ByteArray) {
 
     private fun subBytes(s: IntArray) { for (i in 0 until 16) s[i] = SBOX[s[i]] }
 
-    private fun shiftRows(s: IntArray) {
+    private fun shiftRows(s: IntArray, row: IntArray) {
         // 状態は列ごと（s[c*4 + r]）。r 行目を左へ r つずらす。
         for (r in 1 until 4) {
-            val row = IntArray(4) { c -> s[((c + r) % 4) * 4 + r] }
+            for (c in 0 until 4) row[c] = s[((c + r) % 4) * 4 + r]
             for (c in 0 until 4) s[c * 4 + r] = row[c]
         }
     }
@@ -95,6 +133,9 @@ internal class FtutterAes(key: ByteArray) {
     }
 
     private companion object {
+        /** 4,096ブロック（64KB）ごとに取り消しを見る。 */
+        const val CANCEL_CHECK_MASK = 0xFFF
+
         fun xtime(x: Int): Int = ((x shl 1) xor (if (x and 0x80 != 0) 0x1B else 0)) and 0xFF
         fun rotWord(w: Int): Int = (w shl 8) or (w ushr 24)
         fun subWord(w: Int): Int =

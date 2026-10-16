@@ -46,10 +46,11 @@ private sealed interface FtutterSettingsRoute {
 internal fun FtutterSettingsHost(
     preferences: Map<String, String>,
     save: (String, String) -> Unit,
+    edit: (String, (String?) -> String?) -> Unit,
     appVersion: String,
     boards: List<BoardSummary>,
     ngRules: List<FtutterNgRule>,
-    onSaveNgRules: (List<FtutterNgRule>) -> Unit,
+    onSaveNgRules: FtutterNgEdit,
     deleteKey: String,
     ngRemoved: List<CatalogItem>,
     services: FutaberMediaServices?,
@@ -120,8 +121,8 @@ internal fun FtutterSettingsHost(
             }
             FtutterSettingsPage.STATS -> FtutterStatsPage(preferences, appVersion, back)
         }
-        FtutterSettingsRoute.NgList -> FtutterNgListScreen(ngRules, boards, onSave = onSaveNgRules, onBack = back)
-        FtutterSettingsRoute.Hidden -> FtutterHiddenAndNgScreen(preferences, save, onBack = back, ngRemoved = ngRemoved)
+        FtutterSettingsRoute.NgList -> FtutterNgListScreen(ngRules, boards, onEdit = { onSaveNgRules(it, null) }, onBack = back)
+        FtutterSettingsRoute.Hidden -> FtutterHiddenAndNgScreen(preferences, edit, onBack = back, ngRemoved = ngRemoved)
         FtutterSettingsRoute.Gesture -> FtutterGestureSettingsScreen(preferences, save, onBack = back)
         FtutterSettingsRoute.Tablet -> FtutterTabletSettingsScreen(preferences, save, onBack = back)
         FtutterSettingsRoute.Extras -> FtutterExtrasSettingsPage(
@@ -161,7 +162,9 @@ private fun FtutterSharedSettingsHost(
 ) {
     val colors = LocalFtutterColors.current
     val palette = remember(colors) { ftutterMediaPalette(colors) }
-    val preferences by services.store.preferences.collectAsStateCompat()
+    // 読み終えるまでは何も描かない（監査L16：空の設定で既定値が一瞬見えていた）。
+    val loadedPreferences by services.store.preferences.collectAsStateCompat()
+    val preferences = loadedPreferences ?: return
     var paths by remember { mutableStateOf(listOf(startPath)) }
     val back = { if (paths.size > 1) paths = paths.dropLast(1) else onClose() }
     FutachaAppLockAwareWindow { Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -201,4 +204,4 @@ private fun FtutterSharedSettingsHost(
 
 @Composable
 private fun kotlinx.coroutines.flow.Flow<Map<String, String>>.collectAsStateCompat() =
-    androidx.compose.runtime.produceState(emptyMap<String, String>(), this) { collect { value = it } }
+    androidx.compose.runtime.produceState<Map<String, String>?>(null, this) { collect { value = it } }

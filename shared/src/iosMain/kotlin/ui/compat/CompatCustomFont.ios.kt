@@ -21,15 +21,16 @@ import platform.posix.memcpy
 private const val MAX_CUSTOM_FONT_BYTES = 16L * 1024L * 1024L
 
 @Composable
-internal actual fun rememberCompatCustomFontFamily(path: String?): FontFamily? {
-    return produceState<FontFamily?>(initialValue = null, key1 = path) {
+internal actual fun rememberCompatCustomFontFamilyFile(path: String?, revision: Int): FontFamily? {
+    return produceState<FontFamily?>(initialValue = null, key1 = path, key2 = revision) {
         value = withContext(AppDispatchers.io) {
             path
                 ?.takeIf { it.isNotBlank() }
                 ?.let(::readCustomFontBytes)
                 ?.let { bytes ->
                     runCatching {
-                        FontFamily(Font(identity = path, data = bytes))
+                        // The identity names the font in the shared typeface cache: a replaced file must not reuse the old one.
+                        FontFamily(Font(identity = "$path#$revision", data = bytes))
                     }.getOrNull()
                 }
         }

@@ -330,6 +330,9 @@ class HistoryRefreshWorker(
                     checkWatchWords = compatWatchWordsEnabled,
                     // Rejects writes once the user switched modes during the run.
                     commitGate = commitGate,
+                    // Within the timeout, so the watch phase leaves time for the reply counts and the check times
+                    // stored below (audit M23).
+                    budgetMillis = com.valoser.futacha.shared.compat.compatRefreshBudgetWithin(REFRESH_TIMEOUT_MILLIS),
                     // Notify as soon as matches are recorded: a timeout in a later
                     // phase must not drop notifications for matches already marked seen.
                     onWatchMatchesRecorded = { recorded ->

@@ -216,6 +216,17 @@ internal fun ThreadScreenContentHost(
             val filteredPage = remember(projectedPage, hideDeletedRows) {
                 if (hideDeletedRows) projectedPage?.copy(posts = projectedPage.posts.filterNot { it.isDeleted || it.isIsolated }) else projectedPage
             }
+            // What NG hides (with the hidden deleted rows), for the attachment list and the viewer (re-audit M33). Found
+            // only while no filter of the sheet narrows the list; meanwhile the last one is kept.
+            val lastNgHidden = remember { ThreadNgHiddenHolder() }
+            val ngHiddenPostIds = remember(state.page, filteredPage, hasThreadFilters) {
+                if (filteredPage == null || hasThreadFilters) lastNgHidden.ids else {
+                    val shown = filteredPage.posts.mapTo(HashSet()) { it.id }
+                    state.page.posts.mapNotNullTo(HashSet()) { post -> post.id.takeUnless { it in shown } }
+                        .also { lastNgHidden.ids = it }
+                }
+            }
+            val currentNgHiddenPostIds by rememberUpdatedState(ngHiddenPostIds)
             if (filteredPage == null) {
                 // Shared NG is still being applied; never show posts it will hide.
                 ThreadLoading(modifier = modifier.fillMaxSize())
@@ -245,10 +256,27 @@ internal fun ThreadScreenContentHost(
             val threadSummaryCache = remember { linkedMapOf<ThreadSummaryCacheKey, ThreadSummaryUiState.Ready>() }
             val threadPostModerationCache = remember { linkedMapOf<ThreadPostModerationCacheKey, PostModerationResult>() }
             val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
-            // Every post's body is stripped to build this; nothing reads it while AI filtering is off.
-            val aiPostModerationSourcePosts = remember(aiSourcePosts, shouldApplyAiPostFilter) {
-                if (shouldApplyAiPostFilter) resolveThreadAiPostModerationSourcePosts(aiSourcePosts) else emptyList()
+            // Every post's body is stripped to build this and its key; nothing reads them while AI filtering is off. Made off
+            // the main thread (re-audit M21: on every refresh both were made in composition).
+            val moderationInput by produceState<Pair<List<Post>, ThreadAiCacheKey>?>(
+                null, aiSourcePosts, shouldApplyAiPostFilter, bindings.aiSourceBoard, state.page.threadId, aiService.configurationKey
+            ) {
+                if (!shouldApplyAiPostFilter) {
+                    value = null
+                    return@produceState
+                }
+                val threadKey = "${bindings.aiSourceBoard}/${state.page.threadId}"
+                val providerLabel = aiService.configurationKey
+                value = withContext(AppDispatchers.parsing) {
+                    val sourcePosts = resolveThreadAiPostModerationSourcePosts(aiSourcePosts)
+                    sourcePosts to buildThreadAiModerationCacheKey(
+                        threadId = threadKey,
+                        moderationSourcePosts = sourcePosts,
+                        providerLabel = providerLabel
+                    )
+                }
             }
+            val aiPostModerationSourcePosts = moderationInput?.first.orEmpty()
             var moderationDisplayedPosts by remember(bindings.aiSourceBoard, state.page.threadId, bindings.threadDisplayMode) {
                 mutableStateOf<List<Post>>(emptyList())
             }
@@ -265,22 +293,22 @@ internal fun ThreadScreenContentHost(
             }
             val nearbyModerationIds = rememberModerationViewport(
                 bindings.lazyListState, moderationOrderedIds, moderationItemKeys, shouldApplyAiPostFilter)
-            val externalSummaryFingerprint = remember(aiSourcePosts, bindings.aiThreadTitle, aiService.externalSummary) {
-                if (aiService.externalSummary) aiDigest(openAiSummaryText(ThreadSummaryInput(state.page.threadId, bindings.aiThreadTitle, aiSourcePosts))) else ""
+            // The digest of every post's body: only for a summary that is shown and made outside, and off the main thread
+            // (re-audit M21: it was made on every refresh even with the summary off). Null until it is ready.
+            val needsExternalFingerprint = shouldShowThreadSummary && aiService.externalSummary
+            val externalSummaryFingerprint by produceState<String?>(
+                if (needsExternalFingerprint) null else "", aiSourcePosts, bindings.aiThreadTitle, needsExternalFingerprint
+            ) {
+                if (!needsExternalFingerprint) {
+                    value = ""
+                    return@produceState
+                }
+                value = null
+                val input = ThreadSummaryInput(state.page.threadId, bindings.aiThreadTitle, aiSourcePosts)
+                value = withContext(AppDispatchers.parsing) { aiDigest(openAiSummaryText(input)) }
             }
             // Moderation input only: a そうだね, image or unchanged refresh must not restart the pass.
-            val aiCacheKey = remember(
-                bindings.aiSourceBoard,
-                state.page.threadId,
-                aiPostModerationSourcePosts,
-                aiService.configurationKey
-            ) {
-                buildThreadAiModerationCacheKey(
-                    threadId = "${bindings.aiSourceBoard}/${state.page.threadId}",
-                    moderationSourcePosts = aiPostModerationSourcePosts,
-                    providerLabel = aiService.configurationKey
-                )
-            }
+            val aiCacheKey = moderationInput?.second
             val threadSummaryCacheKey = remember(
                 bindings.aiSourceBoard,
                 state.page.threadId,
@@ -300,6 +328,11 @@ internal fun ThreadScreenContentHost(
             ) {
                 if (!shouldShowThreadSummary) {
                     value = null
+                    return@produceState
+                }
+                // The key waits for the digest of the bodies (made off the main thread); this starts again once it is there.
+                if (externalSummaryFingerprint == null) {
+                    value = ThreadSummaryUiState.Loading
                     return@produceState
                 }
                 threadSummaryCache[threadSummaryCacheKey]?.let {
@@ -362,6 +395,11 @@ internal fun ThreadScreenContentHost(
                     value = AiPostModerationUiState(isEnabled = false)
                     return@produceState
                 }
+                // The moderation input is made off the main thread; this starts again once it is there.
+                val cacheKey = aiCacheKey ?: run {
+                    value = AiPostModerationUiState(isEnabled = true)
+                    return@produceState
+                }
                 while (
                     shouldDeferAiPostModeration(
                         shouldApplyAiPostFilter = shouldApplyAiPostFilter,
@@ -384,7 +422,7 @@ internal fun ThreadScreenContentHost(
                 val prepared = aiModerationCacheMutex.withLock {
                     withContext(AppDispatchers.parsing) {
                         prepareThreadAiModeration(
-                            cacheThreadId = aiCacheKey.threadId,
+                            cacheThreadId = cacheKey.threadId,
                             title = bindings.aiThreadTitle,
                             sourcePosts = sourcePosts,
                             external = external,
@@ -554,7 +592,7 @@ internal fun ThreadScreenContentHost(
                     searchScrollRequest = bindings.searchScrollRequest,
                     onDisplayedPostsChanged = {
                         moderationDisplayedPosts = it.posts
-                        bindings.onDisplayedPostsChanged(it)
+                        bindings.onDisplayedPostsChanged(it.copy(ngHiddenPostIds = currentNgHiddenPostIds))
                     },
                     newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
@@ -586,7 +624,7 @@ internal fun ThreadScreenContentHost(
                     searchScrollRequest = bindings.searchScrollRequest,
                     onDisplayedPostsChanged = {
                         moderationDisplayedPosts = it.posts
-                        bindings.onDisplayedPostsChanged(it)
+                        bindings.onDisplayedPostsChanged(it.copy(ngHiddenPostIds = currentNgHiddenPostIds))
                     },
                     newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
@@ -660,4 +698,8 @@ internal fun shouldPublishAiPostModerationBatch(
     if (index >= lastIndex) return true
     if (didFail) return true
     return (index + 1) % THREAD_AI_POST_MODERATION_UI_UPDATE_BATCH_INTERVAL == 0
+}
+
+private class ThreadNgHiddenHolder {
+    var ids: Set<String> = emptySet()
 }

@@ -164,7 +164,10 @@ internal fun FutaberSettingsScreen(
     var ngKind by rememberSaveable { mutableStateOf(FutaberNgListKind.ResWords) }
     // The shared settings page (or help / change log / licence / cookies) shown over this screen; null = none.
     var sharedPath by rememberSaveable { mutableStateOf<String?>(null) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // Writes and the font's copy / reset go on in the app's scope: pressing "完了" at once closes this screen and its own
+    // scope would cancel them half way (re-audit L4).
+    val screenScope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = LocalFutaberAppTasks.current?.scope ?: screenScope
     val updateCheckEnabled by (stateStore?.isUpdateCheckEnabled ?: kotlinx.coroutines.flow.flowOf(true)).collectAsState(true)
     val backgroundRefreshEnabled by (stateStore?.isBackgroundRefreshEnabled ?: kotlinx.coroutines.flow.flowOf(false)).collectAsState(false)
     val watchAlertEnabled by (stateStore?.isWatchAlertEnabled ?: kotlinx.coroutines.flow.flowOf(false)).collectAsState(false)
@@ -813,11 +816,13 @@ internal fun FutaberSettingsScreen(
             onDismiss = { postingOpen = false }
         )
     }
+    // Held here, not by the dialog: the dialog closes before the picked font arrives and is copied (see the function).
+    val fontActions = rememberFutaberCustomFontActions(mediaServices, scope, onNotice)
     if (fontDialog && mediaServices != null) {
-        FutaberCustomFontDialog(mediaServices, rememberFutaberCustomFontName(mediaServices.store), onNotice) { fontDialog = false }
+        FutaberCustomFontDialog(rememberFutaberCustomFontName(mediaServices.store), fontActions) { fontDialog = false }
     }
     if (fileManagerDialog && stateStore != null) {
-        FutaberPreferredFileManagerDialog(stateStore, onNotice) { fileManagerDialog = false }
+        FutaberPreferredFileManagerDialog(stateStore, scope, onNotice) { fileManagerDialog = false }
     }
     if (lockDialog) {
         FutaberAppLockDialog(

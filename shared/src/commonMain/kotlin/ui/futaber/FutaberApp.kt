@@ -196,10 +196,13 @@ internal fun FutaberApp(
     aiInbox: FutaberAiInbox? = null
 ) {
     val scope = rememberCoroutineScope()
+    // The manage panel's history rows outlive the panel (re-audit M9).
+    val manageHistoryRowsMemo = remember { com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, List<ThreadHistoryEntry>?>() }
     val mockRepository = remember { FakeBoardRepository() }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val themeMode = FutaberThemeMode.fromPersistedValue(preferences[FutaberPreferenceKeys.THEME])
-    val displaySettings = FutaberDisplaySettings.from(preferences)
+    // Read again only when the settings change (re-audit M22: it was made again on every composition of the app).
+    val displaySettings = remember(preferences) { FutaberDisplaySettings.from(preferences) }
     val displayStyle = FutaberCatalogDisplayStyle.fromPersistedValue(preferences[FutaberPreferenceKeys.CATALOG_DISPLAY_STYLE])
 
     var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -210,6 +213,8 @@ internal fun FutaberApp(
     // A line at the bottom for what the person should know (a failed save, a full tab list); it goes away by itself.
     var appNotice by remember { mutableStateOf<String?>(null) }
     val notify: (String) -> Unit = { appNotice = it }
+    // Work that outlives the screen that started it (re-audit M19).
+    val appTasks = remember(scope) { FutaberAppTasks(scope) { appNotice = it } }
     LaunchedEffect(externalNotice) {
         val text = externalNotice ?: return@LaunchedEffect
         appNotice = text
@@ -246,7 +251,9 @@ internal fun FutaberApp(
         ?: boards.firstOrNull { it.id == preferences[FutaberPreferenceKeys.LAST_BOARD_ID] }
         ?: boards.firstOrNull()
     // The catalog's sort: one value for every board, or (an extension) each board's own with that value as the fallback.
-    val sortMode = futaberCatalogSortFor(preferences, board?.id, displaySettings.extSortByBoard, displaySettings.extCatalogModes)
+    val sortMode = futaberCatalogSortFor(
+        preferences, board?.id, displaySettings.extSortByBoard, displaySettings.extCatalogModes, board?.let(::futaberStoredBoardId)
+    )
     // A thread of a board that was deleted or is no longer selected is closed.
     val thread = openThread?.takeIf { it.boardId == board?.id }
     // Applied to the latest stored list, not the one the drawer showed.
@@ -400,14 +407,15 @@ internal fun FutaberApp(
     }
     // A list kept in one setting (the tabs, the favourites) is changed by a function applied to the value stored at that
     // moment, not to the one the screen last showed: two quick changes ("×" twice) both count. A null result writes nothing.
-    val editPreference: (key: String, transform: (String?) -> String?) -> Unit = { key, transform ->
+    // [afterSaved] runs only once the changed value is stored (not when nothing changed or the save failed).
+    val editPreferenceThen: (key: String, transform: (String?) -> String?, afterSaved: () -> Unit) -> Unit = { key, transform, afterSaved ->
         val store = mediaServices?.store
         if (store == null) {
-            transform(preferences[key])?.let { savePreference(key, it) }
+            transform(preferences[key])?.let { savePreference(key, it); afterSaved() }
         } else scope.launch {
             try {
                 preferenceMutex.withLock {
-                    transform(store.loadPreference(key))?.let { store.savePreference(key, it) }
+                    transform(store.loadPreference(key))?.let { store.savePreference(key, it); afterSaved() }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -417,6 +425,7 @@ internal fun FutaberApp(
             }
         }
     }
+    val editPreference: (key: String, transform: (String?) -> String?) -> Unit = { key, transform -> editPreferenceThen(key, transform) {} }
     // ---- Writing: a reply to the open thread, or a new thread on the board ----
     var postTarget by rememberSaveable(stateSaver = FutaberPostTargetSaver) { mutableStateOf<FutaberPostTarget?>(null) }
     var postSubject by rememberSaveable { mutableStateOf("") }
@@ -440,7 +449,14 @@ internal fun FutaberApp(
     val drafts = remember(preferences[FutaberPreferenceKeys.DRAFTS]) { decodeFutaberDrafts(preferences[FutaberPreferenceKeys.DRAFTS]) }
     val quoteTarget = (postTarget as? FutaberPostTarget.Reply)?.takeIf { quoteMode && thread?.threadId == it.threadId }
     /** Opens the write screen with the saved draft for [target], plus [quote] on its own line. */
-    val openPost: (FutaberPostTarget, String) -> Unit = { target, quote ->
+    // 送信中の書き込みの宛先（監査M13）。送信はこの画面より長く続くスコープで動き、書き込み画面が外れても止まらない。
+    var postInFlight by remember { mutableStateOf<String?>(null) }
+    val openPost: (FutaberPostTarget, String) -> Unit = open@{ target, quote ->
+        // 送信中は、別の宛先の書き込み画面に差し替えない（送っている本文の画面が消え、結果も分からなくなる）。
+        if (futaberPostRefusedWhileSending(postInFlight, target)) {
+            notify(FUTABER_POST_IN_FLIGHT_NOTICE)
+            return@open
+        }
         // The text still on the screen wins over the saved draft when the same post is being written (a round trip through
         // quote mode keeps the target, and the draft is saved only a moment after typing stops).
         val start = futaberPostStart(futaberDraftForTarget(drafts, target, boards), target, postTarget, postSubject, postComment)
@@ -455,7 +471,25 @@ internal fun FutaberApp(
     // Applied to the drafts stored now, so saving this one does not bring back a draft another screen just cleared. The
     // files of drafts that no longer note them go (the extension "下書きに添付も残す").
     val editDrafts: ((List<FutaberDraft>) -> List<FutaberDraft>) -> Unit = { transform ->
-        futaberEditDrafts(editPreference, { dropped -> futaberDeleteDraftFiles(scope, mediaServices?.fileSystem, dropped) }, transform)
+        futaberEditDrafts(editPreferenceThen, { dropped -> futaberDeleteDraftFiles(scope, mediaServices?.fileSystem, dropped) }, transform)
+    }
+    // Once per opening of this mode: draft files no draft notes go (audit M14). Done under the settings lock and only while
+    // nothing is attached on the write screen, so a file being kept right now is never taken.
+    LaunchedEffect(mediaServices?.fileSystem, mediaServices?.store) {
+        val fileSystem = mediaServices?.fileSystem ?: return@LaunchedEffect
+        val store = mediaServices?.store ?: return@LaunchedEffect
+        try {
+            preferenceMutex.withLock {
+                val stored = decodeFutaberDrafts(store.loadPreference(FutaberPreferenceKeys.DRAFTS))
+                futaberSweepDraftFiles(fileSystem, stored) {
+                    postTarget == null && postAttachment.image == null && !postAttachment.processing
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Logger.e(FUTABER_TAG, "Failed to sweep stale draft files", error)
+        }
     }
     val saveDraftNow: (FutaberPostTarget, String, String) -> Unit = { target, subject, comment ->
         val now = Clock.System.now().toEpochMilliseconds()
@@ -503,7 +537,7 @@ internal fun FutaberApp(
         adoptOwner = { attachmentOwnerKey = it },
         notify = notify
     )
-    val sendPost: suspend (FutaberPostTarget, FutaberPostInput) -> Result<String?> = send@{ target, input ->
+    val sendPostNow: suspend (FutaberPostTarget, FutaberPostInput) -> Result<String?> = send@{ target, input ->
         val targetBoard = boards.firstOrNull { it.id == target.boardId }
             ?: return@send Result.failure(IllegalStateException("板が登録されていません"))
         val repo = if (targetBoard.isMockBoard()) mockRepository else repository
@@ -573,6 +607,36 @@ internal fun FutaberApp(
                 )
             )
         }
+    }
+    // 送信は書き込み画面のスコープでなく、この画面のスコープで動かす（監査M13：板が消える・AIの命令などで書き込み画面が外れると、
+    // 送信が途中で取り消され、結果も「送れたか分からない」案内も出ず、送り直すと二重に投稿されることがあった）。書き込み画面が
+    // 残っていれば結果はそちらが受け、外れていればここで知らせる（成功なら下書きを消す）。
+    val currentPostTarget by rememberUpdatedState(postTarget)
+    val sendPost: suspend (FutaberPostTarget, FutaberPostInput) -> Result<String?> = { target, input ->
+        postInFlight = target.draftKey
+        futaberSendOutlivingScreen(
+            scope = scope,
+            send = {
+                try {
+                    sendPostNow(target, input)
+                } finally {
+                    postInFlight = null
+                }
+            },
+            screenStillOpen = { currentPostTarget?.draftKey == target.draftKey },
+            onSentAway = {
+                editDrafts { futaberDiscardDraft(it, target, boards) }
+                // The text and the file still held for this post go too, or they come back in the next reply to the same
+                // thread (re-audit L1). Held for another post (opened since), they stay.
+                if (futaberHeldTextBelongsTo(attachmentOwnerKey, target)) {
+                    postSubject = ""
+                    postComment = ""
+                    postAttachment.clear()
+                }
+                notify(FUTABER_POST_SENT_AWAY_NOTICE)
+            },
+            onFailedAway = { notify(futaberPostFailedAwayNotice(it)) }
+        )
     }
 
     val tabKeys = remember(preferences[FutaberPreferenceKeys.TABS], boards) {
@@ -814,7 +878,8 @@ internal fun FutaberApp(
         val library = mhtLibrary
         if (!managePanelOpen || library == null) return@LaunchedEffect
         mhtEntries = try {
-            library.list()
+            // The headers of every file are read off the main thread (re-audit L9).
+            kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.io) { library.list() }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -933,7 +998,7 @@ internal fun FutaberApp(
     val aiScreens = rememberFutaberAiScreens()
     FutaberTheme(themeMode, statusFollowsTopBar = !(settingsOpen || postTarget != null),
         fontFamily = rememberFutaberCustomFontFamily(displaySettings.extCustomFont, mediaServices?.fileSystem, preferences)) {
-        CompositionLocalProvider(LocalFutaberDisplaySettings provides displaySettings) {
+        CompositionLocalProvider(LocalFutaberDisplaySettings provides displaySettings, LocalFutaberAppTasks provides appTasks) {
         mediaHost {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val drawerWidth = maxWidth * FUTABER_DRAWER_WIDTH_FRACTION
@@ -947,7 +1012,10 @@ internal fun FutaberApp(
             // The list sits at the start edge, so in a right-to-left layout the screen is pushed the other way.
             val drawerDirection = if (LocalLayoutDirection.current == LayoutDirection.Rtl) -1 else 1
 
-            if (drawerProgress > 0f) {
+            // Only whether the drawer is drawn is read here; the slide itself is read where the screen is laid out, so the
+            // animation does not compose the whole app on every frame (re-audit M22).
+            val drawerDrawn by remember { androidx.compose.runtime.derivedStateOf { drawerProgress > 0f } }
+            if (drawerDrawn) {
                 FutaberBoardDrawer(
                     boards = boards,
                     selectedBoardId = board?.id,
@@ -1029,6 +1097,8 @@ internal fun FutaberApp(
                         },
                         // Behind the writing screen (not quote mode, which shows the thread) and the settings the thread waits.
                         paused = (postTarget != null && quoteTarget == null) || settingsOpen,
+                        // The board drawer and the manage panel cover the thread: the volume keys leave it alone (audit L17).
+                        volumeKeysCovered = drawerOpen || managePanelOpen || tabSheet != null,
                         selfPostIds = remember(selfPostMap, board.id, thread.threadId) {
                             com.valoser.futacha.shared.ui.board.buildSelfPostIdentifierSet(
                                 com.valoser.futacha.shared.ui.board.buildPersistedSelfPostIdentifiers(
@@ -1111,9 +1181,15 @@ internal fun FutaberApp(
                         ngDetail = futaberNgDetailEntry(displaySettings.extNgDetail, sharedFeatures != null, board, thread.threadId) { parityB7b.ngDetail = it },
                         stateStore = stateStore,
                         ai = aiScreens.threadLink(),
-                        autoSave = futaberAutoSaveLink(
+                        // Made again only when what it is made from changes (re-audit M22: every composition, a keystroke on
+                        // the write screen included, searched the whole history for the thread).
+                        autoSave = remember(
                             displaySettings.extAutoSaveView, autoSavedThreadRepository, mediaServices, stateStore, history, board, thread.threadId
-                        )
+                        ) {
+                            futaberAutoSaveLink(
+                                displaySettings.extAutoSaveView, autoSavedThreadRepository, mediaServices, stateStore, history, board, thread.threadId
+                            )
+                        }
                     )
                     else -> FutaberCatalogScreen(
                         board = board,
@@ -1123,9 +1199,9 @@ internal fun FutaberApp(
                         onDisplayStyleChange = { writePreference(FutaberPreferenceKeys.CATALOG_DISPLAY_STYLE, it.persistedValue) },
                         onSortChange = { mode ->
                             if (displaySettings.extSortByBoard) {
-                                val boardIds = boards.map { it.id }
+                                val boardIds = boards.map { it.id } + boards.map(::futaberStoredBoardId)
                                 editPreference(FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD) { stored ->
-                                    futaberSortByBoardAfter(stored, board.id, mode, boardIds)
+                                    futaberSortByBoardAfter(stored, board.id, mode, boardIds, futaberStoredBoardId(board))
                                 }
                             } else writePreference(FutaberPreferenceKeys.CATALOG_SORT, mode.name)
                         },
@@ -1241,6 +1317,7 @@ internal fun FutaberApp(
                             } else null,
                             otherModeTabs = if (displaySettings.extOtherFavorites) mediaServices?.store?.tabs else null,
                             onOpenOtherFavorite = { target, ref -> openRef(target, ref) },
+                            historyRowsMemo = manageHistoryRowsMemo,
                             historyTools = futaberHistoryTools(
                                 historyController,
                                 clearEnabled = displaySettings.extHistory,
@@ -1307,79 +1384,83 @@ internal fun FutaberApp(
                         avoidNavigationBar = true
                     )
                 }
-                if (quoteTarget != null) {
-                    FutaberQuoteStrip(
-                        comment = postComment,
-                        onBackToWriting = { quoteMode = false },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    )
-                    PlatformBackHandler(enabled = true) { quoteMode = false }
-                } else postTarget?.let { target ->
-                    val targetBoard = boards.firstOrNull { it.id == target.boardId }
-                    // A board that is gone drops the write screen (the effect above); nothing is drawn meanwhile.
-                    if (targetBoard != null) {
-                        FutaberPostScreen(
-                            target = target,
-                            boardAddress = futaberBoardAddress(targetBoard.url),
-                            boardUrl = targetBoard.url,
-                            destinationConfirm = displaySettings.postDestinationConfirm,
-                            subject = postSubject,
+                // The write screen reads the text being typed in a scope of its own, so a keystroke does not compose the thread or
+                // the catalog behind it again (re-audit M22).
+                FutaberRecomposeScope {
+                    if (quoteTarget != null) {
+                        FutaberQuoteStrip(
                             comment = postComment,
-                            onSubjectChange = { postSubject = it },
-                            onCommentChange = { postComment = it },
-                            // Quoting needs the thread the reply is for to be on screen behind the writing.
-                            onEnterQuoteMode = if (target is FutaberPostTarget.Reply && thread?.threadId == target.threadId) {
-                                { quoteMode = true }
-                            } else null,
-                            attachment = postAttachment,
-                            capabilities = postCapabilities
-                                ?: com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(targetBoard.url),
-                            pickerPreference = pickerPreference,
-                            preferredFileManagerPackage = preferredFileManager?.packageName,
-                            settings = postSettings,
-                            deleteKey = deleteKey,
-                            onSettingsChange = { name, email, confirm ->
-                                writePreference(FutaberPreferenceKeys.POST_NAME, name)
-                                writePreference(FutaberPreferenceKeys.POST_EMAIL, email)
-                                writePreference(FutaberPreferenceKeys.POST_CONFIRM, if (confirm) "ON" else "OFF")
-                            },
-                            onDeleteKeyChange = { key -> launchStore("save the delete key") { stateStore.setLastUsedDeleteKey(key) } },
-                            onSend = { input -> sendPost(target, input) },
-                            tools = FutaberPostTools(
-                                enabled = displaySettings.extPostTools,
-                                httpClient = mediaServices?.httpClient,
-                                fileSystem = mediaServices?.fileSystem,
-                                drawingCopyLocation = futaberDrawingCopyLocation(preferences),
-                                appVersion = appVersion,
-                                cookieRepository = mediaServices?.cookieRepository,
-                                openCookies = if (mediaServices?.cookieRepository != null) { { cookiesOpen = true } } else null,
+                            onBackToWriting = { quoteMode = false },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                        PlatformBackHandler(enabled = true) { quoteMode = false }
+                    } else postTarget?.let { target ->
+                        val targetBoard = boards.firstOrNull { it.id == target.boardId }
+                        // A board that is gone drops the write screen (the effect above); nothing is drawn meanwhile.
+                        if (targetBoard != null) {
+                            FutaberPostScreen(
+                                target = target,
+                                boardAddress = futaberBoardAddress(targetBoard.url),
+                                boardUrl = targetBoard.url,
+                                destinationConfirm = displaySettings.postDestinationConfirm,
+                                subject = postSubject,
+                                comment = postComment,
+                                onSubjectChange = { postSubject = it },
+                                onCommentChange = { postComment = it },
+                                // Quoting needs the thread the reply is for to be on screen behind the writing.
+                                onEnterQuoteMode = if (target is FutaberPostTarget.Reply && thread?.threadId == target.threadId) {
+                                    { quoteMode = true }
+                                } else null,
+                                attachment = postAttachment,
+                                capabilities = postCapabilities
+                                    ?: com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(targetBoard.url),
                                 pickerPreference = pickerPreference,
-                                preferredFileManagerPackage = preferredFileManager?.packageName
-                            ),
-                            onSent = { posted ->
-                                // What was typed names a new thread until the thread itself is read.
-                                val sentSubject = postSubject
-                                postSubject = ""
-                                postComment = ""
-                                postAttachment.clear()
-                                editDrafts { futaberDiscardDraft(it, target, boards) }
-                                postTarget = null
-                                when (target) {
-                                    is FutaberPostTarget.Reply -> threadRefreshSignal += 1
-                                    is FutaberPostTarget.CreateThread -> {
-                                        catalogRefreshSignal += 1
-                                        // The new thread opens at once when the server named it.
-                                        if (!posted.isNullOrBlank()) {
-                                            openRef(targetBoard, FutaberThreadRef(targetBoard.id, posted, futaberNewThreadTitle(sentSubject), "", 0))
+                                preferredFileManagerPackage = preferredFileManager?.packageName,
+                                settings = postSettings,
+                                deleteKey = deleteKey,
+                                onSettingsChange = { name, email, confirm ->
+                                    writePreference(FutaberPreferenceKeys.POST_NAME, name)
+                                    writePreference(FutaberPreferenceKeys.POST_EMAIL, email)
+                                    writePreference(FutaberPreferenceKeys.POST_CONFIRM, if (confirm) "ON" else "OFF")
+                                },
+                                onDeleteKeyChange = { key -> launchStore("save the delete key") { stateStore.setLastUsedDeleteKey(key) } },
+                                onSend = { input -> sendPost(target, input) },
+                                tools = FutaberPostTools(
+                                    enabled = displaySettings.extPostTools,
+                                    httpClient = mediaServices?.httpClient,
+                                    fileSystem = mediaServices?.fileSystem,
+                                    drawingCopyLocation = futaberDrawingCopyLocation(preferences),
+                                    appVersion = appVersion,
+                                    cookieRepository = mediaServices?.cookieRepository,
+                                    openCookies = if (mediaServices?.cookieRepository != null) { { cookiesOpen = true } } else null,
+                                    pickerPreference = pickerPreference,
+                                    preferredFileManagerPackage = preferredFileManager?.packageName
+                                ),
+                                onSent = { posted ->
+                                    // What was typed names a new thread until the thread itself is read.
+                                    val sentSubject = postSubject
+                                    postSubject = ""
+                                    postComment = ""
+                                    postAttachment.clear()
+                                    editDrafts { futaberDiscardDraft(it, target, boards) }
+                                    postTarget = null
+                                    when (target) {
+                                        is FutaberPostTarget.Reply -> threadRefreshSignal += 1
+                                        is FutaberPostTarget.CreateThread -> {
+                                            catalogRefreshSignal += 1
+                                            // The new thread opens at once when the server named it.
+                                            if (!posted.isNullOrBlank()) {
+                                                openRef(targetBoard, FutaberThreadRef(targetBoard.id, posted, futaberNewThreadTitle(sentSubject), "", 0))
+                                            }
                                         }
                                     }
+                                },
+                                onClose = {
+                                    saveDraftNow(target, postSubject, postComment)
+                                    postTarget = null
                                 }
-                            },
-                            onClose = {
-                                saveDraftNow(target, postSubject, postComment)
-                                postTarget = null
-                            }
-                        )
+                            )
+                        }
                     }
                 }
                 if (drawerOpen) {
@@ -1442,13 +1523,27 @@ internal fun FutaberApp(
                 openSettings = { settingsOpen = true },
                 openCookies = if (mediaServices?.cookieRepository != null) { { cookiesOpen = true } } else null,
                 openUrl = openInBrowser,
-                deleteHistory = deleteHistory,
+                // Carried out within the command, so its "しました" is told only once the change is stored (audit L18).
+                deleteHistory = { entry ->
+                    dismissHistoryEntry(
+                        stateStore = stateStore,
+                        autoSavedThreadRepository = autoSavedThreadRepository,
+                        importedHistoryRepository = historyController.importedHistoryRepository,
+                        compatibilityStore = mediaServices?.store,
+                        entry = entry,
+                        onAutoSavedThreadDeleteFailure = {
+                            Logger.e(FUTABER_TAG, "Failed to delete the auto-saved copy", it)
+                            notify(FUTABER_AUTO_SAVE_DELETE_FAILED_NOTICE)
+                        }
+                    )
+                },
                 clearHistory = { historyController.clearAll() },
-                editBoards = editBoards,
+                editBoards = { transform -> stateStore.updateBoards(transform) },
                 openDraft = { target, subject, comment ->
                     openPost(target, comment)
                     if (subject.isNotEmpty()) postSubject = subject
                 },
+                draftRefused = { target -> futaberPostRefusedWhileSending(postInFlight, target) },
                 savedRepository = savedRepository,
                 onSavedChanged = { savedTick += 1 }
             ),
@@ -1578,4 +1673,10 @@ private fun FutaberNoBoards(onAddBoard: () -> Unit, onOpenSettings: () -> Unit) 
             }
         }
     }
+}
+
+/** Its own recomposition scope: state read in [content] composes only [content] again (re-audit M22). */
+@Composable
+private fun FutaberRecomposeScope(content: @Composable () -> Unit) {
+    content()
 }

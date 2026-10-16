@@ -61,7 +61,9 @@ internal data class ThreadScreenReadAloudDependencies(
         isRunnerActive: () -> Boolean,
         wasCancelledByUser: () -> Boolean,
         callbacks: ThreadReadAloudRunnerCallbacks
-    ) -> ThreadReadAloudRunResult = ::runThreadReadAloudSession,
+    ) -> ThreadReadAloudRunResult = { start, segments, active, cancelled, callbacks ->
+        runThreadReadAloudSession(start, segments, active, cancelled, callbacks, latestSegments = currentSegments)
+    },
     val resolveFinalState: (Boolean, ReadAloudStatus) -> ThreadReadAloudFinalState = ::resolveThreadReadAloudFinalState
 )
 

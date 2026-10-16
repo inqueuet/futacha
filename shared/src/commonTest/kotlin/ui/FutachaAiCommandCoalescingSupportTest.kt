@@ -70,4 +70,16 @@ class FutachaAiCommandCoalescingSupportTest {
             )
         )
     }
+
+    @Test
+    fun buildAiConfirmationBusyMessage_namesTheCommandThatWasNotRun() {
+        val request = FutachaAiConfirmationRequest(
+            command = FutachaAiCommand(FutachaAiAction.RefreshHistory),
+            title = "t",
+            message = "m"
+        )
+        val message = buildAiConfirmationBusyMessage(request)
+        assertTrue(message.contains(FutachaAiAction.RefreshHistory.label), message)
+        assertTrue(message.contains("確認待ち"), message)
+    }
 }

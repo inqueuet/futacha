@@ -65,13 +65,13 @@ class ClipboardUnreadInstrumentedTest {
         rule.onAllNodesWithContentDescription("その他")[0].performClick()
         rule.onNodeWithText("画像を貼り付け").performClick()
     }
-    private fun modern(replyBoard: String = boardUrl) {
+    private fun modern(replyBoard: String = boardUrl, canSubmit: Boolean = true) {
         rule.setContent { MaterialTheme { CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
             ThreadFormDialog(title = "返信", subtitle = null, attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
                 preferredFileManagerPackage = null, emailPresets = emptyList(), comment = "keep body", onCommentChange = {},
                 name = "", onNameChange = {}, email = "", onEmailChange = {}, subject = "", onSubjectChange = {},
                 password = "key", onPasswordChange = {}, selectedImage = chosen, onImageSelected = { chosen = it },
-                onDismiss = {}, onSubmit = { error("Must not post") }, onClear = {}, isSubmitEnabled = true,
+                onDismiss = {}, onSubmit = { error("Must not post") }, onClear = {}, isSubmitEnabled = canSubmit,
                 sendDescription = "送信", boardUrl = replyBoard, isReply = true)
         } } }
     }
@@ -87,6 +87,22 @@ class ClipboardUnreadInstrumentedTest {
         assertSame(accepted, chosen)
         rule.onNodeWithText("keep body").assertExists()
     }
+    /** Re-audit L35: a picture can be added before anything is typed (the send button is still off). */
+    @Test fun aSharedPictureCanBeAttachedBeforeTheFormCanBeSent() {
+        val png = java.io.ByteArrayOutputStream().also { out ->
+            val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+        }.toByteArray()
+        com.valoser.futacha.shared.ui.board.IncomingSharedAttachment.offer(
+            com.valoser.futacha.shared.util.ImageData(png, "shared.png")
+        )
+        modern(canSubmit = false)
+        rule.onNodeWithText("共有された画像を添付").assertIsEnabled().performClick()
+        rule.waitUntil(10_000) { chosen != null }
+        assertEquals("shared.png", chosen!!.fileName)
+    }
+
     @Test fun clipboardCannotBypassImgReplyAttachmentRestriction() {
         modern("https://img.2chan.net/b/"); copyImage(); paste()
         rule.onNodeWithText("この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます").assertExists()

@@ -111,6 +111,8 @@ internal const val FUTABER_HISTORY_CLEARED_PARTIAL_NOTICE = "履歴を削除し�
 internal fun futaberHistoryImportMessage(message: String): String =
     if (message.startsWith("履歴アーカイブを読み込みました")) "$message。$FUTABER_HISTORY_IMPORT_NOTICE" else message
 
+internal const val FUTABER_HISTORY_BUSY_NOTICE = "履歴の処理中です。終わってからもう一度お試しください"
+
 /**
  * The history archive (ふたちゃ's own: a fixed folder of the app, no file picker) and "全件削除", run on the screen's
  * scope; each result is one line for [onMessage]. Only one of them runs at a time.
@@ -202,7 +204,12 @@ internal class FutaberHistoryController(private val scope: CoroutineScope, priva
 
     private fun run(actionLabel: String, block: suspend () -> String) {
         dialog = null
-        if (running) return
+        // Said, not dropped without a word (re-audit L7: "全件削除" and the AI's command did nothing while an export or an
+        // import ran).
+        if (running) {
+            onMessage(FUTABER_HISTORY_BUSY_NOTICE)
+            return
+        }
         running = true
         scope.launch {
             val message = try {

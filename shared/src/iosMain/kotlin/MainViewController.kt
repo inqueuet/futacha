@@ -105,6 +105,7 @@ import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_UPDATE_TIME_PREFERENC
 import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
 import com.valoser.futacha.shared.compat.parseCompatForegroundNetworkPolicy
 import com.valoser.futacha.shared.compat.parseCompatWatchWords
+import com.valoser.futacha.shared.compat.compatRefreshBudgetWithin
 import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
@@ -849,9 +850,6 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 applyAppIconVariant(platformContext = null, variant = variant)
             }
         }
-        val preferredAppIcon by stateStore.appIconVariant.collectAsState(
-            initial = com.valoser.futacha.shared.model.AppIconVariant.Current
-        )
         var initializationComplete by remember { mutableStateOf(false) }
         var initializationError by remember { mutableStateOf<String?>(null) }
         var initializationAttempt by remember { mutableIntStateOf(0) }
@@ -1180,10 +1178,14 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                                             profileGeneration,
                                             commit
                                         )
-                                    }
+                                    },
+                                    // Within the timeout, so the watch phase leaves time for the reply counts (audit M23).
+                                    budgetMillis = compatRefreshBudgetWithin(IOS_COMPAT_MANUAL_HISTORY_REFRESH_TIMEOUT_MILLIS)
                                 )
                             }
-                            "履歴を更新しました（更新 ${result.updatedTabs}件、終了 ${result.deadTabs}件、失敗 ${result.failures}件）"
+                            "履歴を更新しました（更新 ${result.updatedTabs}件、終了 ${result.deadTabs}件、失敗 ${result.failures}件）" +
+                                // Steps cut by the time are not failures; they are done by the next refresh (re-audit M16).
+                                if (result.unfinished > 0) "。時間内に確認しきれなかった分は次回確認します" else ""
                         }
                     }
                 }
@@ -1240,7 +1242,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             }
                             modeSwitchCoordinator.switchTo(
                                 target = target,
-                                preferredFutachaIcon = preferredAppIcon,
+                                // Read from the store now: the screen's copy is "Current" until loaded (audit L40).
+                                preferredFutachaIcon = stateStore.appIconVariant.first(),
                                 quiesceOldProfile = { BackgroundRefreshManager.cancel() }
                             ).getOrThrow()
                             // activeProfile/generation flows now change and the

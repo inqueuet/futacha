@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -116,7 +118,10 @@ internal fun FutaberManagePanel(
     otherModeTabs: kotlinx.coroutines.flow.Flow<List<com.valoser.futacha.shared.compat.CompatTab>>? = null,
     onOpenOtherFavorite: (BoardSummary, FutaberThreadRef) -> Unit = { _, _ -> },
     /** The history band's "全件削除" and "アーカイブ" (the batch B4 extensions); the defaults add nothing. */
-    historyTools: FutaberHistoryTools = FutaberHistoryTools()
+    historyTools: FutaberHistoryTools = FutaberHistoryTools(),
+    /** The history rows with what they were made from, kept by the host so reopening the panel does not make them again. */
+    historyRowsMemo: com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, List<com.valoser.futacha.shared.model.ThreadHistoryEntry>?> =
+        remember { com.valoser.futacha.shared.ui.OffMainMemo() }
 ) {
     val colors = LocalFutaberColors.current
     var category by rememberSaveable { mutableStateOf(FutaberManageCategory.History) }
@@ -326,9 +331,15 @@ internal fun FutaberManagePanel(
                 } else Column(Modifier.fillMaxSize()) {
                     val bandOn = LocalFutaberDisplaySettings.current.extHistory
                     var viewSettings by rememberSaveable(stateSaver = HistoryViewSettings.Saver) { mutableStateOf(HistoryViewSettings.Default) }
-                    val shown = remember(history, viewSettings, bandOn) {
-                        futaberDistinctHistoryRows(if (bandOn) applyHistoryViewSettings(history, viewSettings) else history)
-                    }
+                    // The filter and sort of up to 20,000 rows run on the parsing dispatcher, as in ふたちゃ (audit M17), and the
+                    // result is kept by the host with what it was made from (re-audit M9/M10: the first list was made in
+                    // composition each time the panel opened, and going back to the first search or order kept the result of the
+                    // one in between). Until a new one is ready the last stays, and typing is debounced.
+                    val appliedSettings = viewSettings.copy(titleQuery = rememberFutaberDebouncedQuery(viewSettings.titleQuery))
+                    val made = com.valoser.futacha.shared.ui.rememberOffMain(
+                        historyRowsMemo, listOf(com.valoser.futacha.shared.ui.SameInstance(history), appliedSettings, bandOn), null
+                    ) { _, _ -> futaberManageHistoryRows(history, appliedSettings, bandOn) }
+                    val shown = made.orEmpty()
                     if (bandOn || historyTools.onOpenArchive != null) {
                         val viewTools = bandOn && history.isNotEmpty()
                         FutaberHistoryBand(
@@ -340,6 +351,7 @@ internal fun FutaberManagePanel(
                         )
                     }
                     if (history.isEmpty()) FutaberMessage("閲覧したスレッドはまだありません")
+                    else if (made == null) Unit
                     else if (shown.isEmpty()) FutaberMessage("条件に合う履歴はありません") else
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("futaber-history-list")) {
                         items(shown, key = ::futaberHistoryRowKey) { entry ->
@@ -394,8 +406,9 @@ internal fun FutaberManagePanel(
             }
         }
         HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
-        Row(
-            Modifier.fillMaxWidth().background(colors.bar).height(FUTABER_PANEL_BAR_HEIGHT_DP.dp),
+        ScrollableToolbarRow(
+            itemCount = FutaberManageCategory.entries.size, minItemWidth = 48.dp,
+            modifier = Modifier.fillMaxWidth().background(colors.bar).height(FUTABER_PANEL_BAR_HEIGHT_DP.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -550,3 +563,11 @@ private fun MhtHeader(mht: FutaberMhtBox, onImport: () -> Unit) {
         }
     }
 }
+
+/** The rows of the manage panel's history: with the band on, ふたちゃ's filter and sort; then one row per thread. */
+internal fun futaberManageHistoryRows(
+    history: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    bandOn: Boolean
+): List<com.valoser.futacha.shared.model.ThreadHistoryEntry> =
+    futaberDistinctHistoryRows(if (bandOn) applyHistoryViewSettings(history, settings) else history)

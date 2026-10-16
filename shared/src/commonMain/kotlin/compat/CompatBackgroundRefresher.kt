@@ -38,8 +38,22 @@ data class CompatBackgroundRefreshResult(
     val deadTabs: Int = 0,
     val skippedTabs: Int = 0,
     val failures: Int = 0,
-    val newWatchMatches: List<CompatWatchMatch> = emptyList()
+    val newWatchMatches: List<CompatWatchMatch> = emptyList(),
+    /**
+     * Steps left for a later run because the time budget ran out (a board not visited, the probes cut short). Not
+     * failures (re-audit M16: they were counted as failures, and the manual refresh said "失敗 N件").
+     */
+    val unfinished: Int = 0
 )
+
+/**
+ * The [refreshCompatTabsInBackground] budget for a caller that cuts the run off at [timeoutMillis] (audit M23). Without a
+ * budget the watch phase, which runs first, had no deadline: with many watched boards it used up the outer timeout and the
+ * tabs' reply counts were never updated, nor the check times stored. A tenth of the time (30 s at most) is kept for the
+ * work after the call.
+ */
+fun compatRefreshBudgetWithin(timeoutMillis: Long): Long =
+    (timeoutMillis - minOf(30_000L, timeoutMillis / 10)).coerceAtLeast(1L)
 
 /**
  * Refreshes compatibility tabs without requiring the compatibility UI to be alive.
@@ -89,6 +103,7 @@ suspend fun refreshCompatTabsInBackground(
     var dead = 0
     var skipped = 0
     var failures = 0
+    var unfinished = 0
     val newWatchMatches = mutableListOf<CompatWatchMatch>()
     val deadline = budgetMillis?.let { TimeSource.Monotonic.markNow() + it.milliseconds }
     fun remainingMillis(): Long = deadline?.let { (-it.elapsedNow()).inWholeMilliseconds } ?: Long.MAX_VALUE
@@ -123,22 +138,32 @@ suspend fun refreshCompatTabsInBackground(
         val watchPreferences = store.preferences.first()
         val watcher = CompatWatcherRepository(store)
         val failuresBeforeWatch = failures
+        val unfinishedBeforeWatch = unfinished
         val previousWatchCursor = loadCursor("compat.background.watch_board_cursor")
         var watchCursor = previousWatchCursor
         var watchCompleted = false
-        val watchDeadline = budgetMillis?.let { TimeSource.Monotonic.markNow() + (it / 3).milliseconds }
+        val watchStarted = TimeSource.Monotonic.markNow()
+        val watchDeadline = budgetMillis?.let { watchStarted + (it / 3).milliseconds }
+        // The crawl gets two thirds of the watch phase; the rest is kept for the liveness probes of the watched threads
+        // (re-audit M16: the crawl could use it all, and threads that fell stayed "active").
+        val crawlDeadline = budgetMillis?.let { watchStarted + (it / 3 * 2 / 3).milliseconds }
         fun watchRemainingMillis(): Long = minOf(remainingMillis(), watchDeadline?.let { (-it.elapsedNow()).inWholeMilliseconds } ?: Long.MAX_VALUE)
+        fun crawlRemainingMillis(): Long = minOf(watchRemainingMillis(), crawlDeadline?.let { (-it.elapsedNow()).inWholeMilliseconds } ?: Long.MAX_VALUE)
         try {
         if (compatWatchRules(watchPreferences).any { it.enabled }) {
             val existingHistory = store.history.first()
             compatRotatedBackgroundBoards(boards, previousWatchCursor).forEach boardLoop@{ board ->
                 val watchWords = compatWatchWordsForBoard(watchPreferences, board.key)
-                if (watchWords.isEmpty() || watchRemainingMillis() <= 0L) return@boardLoop
+                if (watchWords.isEmpty()) return@boardLoop
+                if (crawlRemainingMillis() <= 0L) {
+                    unfinished++
+                    return@boardLoop
+                }
                 watchCursor = board.key
                 listOf(CatalogMode.New, CatalogMode.Old).forEach sourceLoop@{ mode ->
                     try {
-                        val catalog = withinBudget(watchRemainingMillis().coerceAtLeast(0)) { fetchCatalog(board.originalUrl, mode) }
-                            ?: run { failures++; return@sourceLoop }
+                        val catalog = withinBudget(crawlRemainingMillis().coerceAtLeast(0)) { fetchCatalog(board.originalUrl, mode) }
+                            ?: run { unfinished++; return@sourceLoop }
                         val matches = collectCompatWatchMatches(
                             board = board,
                             items = catalog,
@@ -198,13 +223,17 @@ suspend fun refreshCompatTabsInBackground(
         } finally {
             withContext(NonCancellable) { flushChecks() }
         }
-        if (!completed) failures++
-        watchCompleted = watchRemainingMillis() > 0L
+        if (!completed) unfinished++
+        watchCompleted = completed && unfinished == unfinishedBeforeWatch
         } finally {
+            // Both behind the profile gate (audit M24: the diagnostics were written after a mode switch), and the cursor only
+            // when it moved (every run wrote it again, and each write made the settings flow emit).
             withContext(NonCancellable) {
-                runCatching { commitGate { store.savePreference("compat.background.watch_board_cursor", watchCursor.orEmpty()) } }
+                if (watchCursor != previousWatchCursor) {
+                    runCatching { commitGate { store.savePreference("compat.background.watch_board_cursor", watchCursor.orEmpty()) } }
+                }
             }
-            recordWatchRunDiagnostics(store, WATCH_RUN_CRAWL_KEY, WatchRunDiagnostics(
+            val diagnostics = WatchRunDiagnostics(
                 checkedAt = nowEpochMillis,
                 outcome = if (!watchCompleted) "中断" else if (failures > failuresBeforeWatch) "一部失敗" else "完了",
                 targets = boards.filter { compatWatchWordsForBoard(watchPreferences, it.key).isNotEmpty() }.map { it.name },
@@ -212,7 +241,10 @@ suspend fun refreshCompatTabsInBackground(
                 matchCount = newWatchMatches.size,
                 failures = if (failures > failuresBeforeWatch) listOf("取得・生存確認の失敗 ${failures - failuresBeforeWatch}件") else emptyList(),
                 matchedTitles = newWatchMatches.map { it.history.title }
-            ))
+            )
+            withContext(NonCancellable) {
+                runCatching { commitGate { recordWatchRunDiagnostics(store, WATCH_RUN_CRAWL_KEY, diagnostics) } }
+            }
         }
     }
 
@@ -235,7 +267,7 @@ suspend fun refreshCompatTabsInBackground(
                 if (boardTabs.isEmpty()) return@boardLoop
                 // No time left before this board started: it was not visited, so the next run starts here.
                 if (minOf(updateRemainingMillis(), remainingMillis()) <= 0L) {
-                    failures++
+                    unfinished++
                     return@boardLoop
                 }
                 // A board that was started counts as visited even if it times out or is cancelled,
@@ -244,7 +276,7 @@ suspend fun refreshCompatTabsInBackground(
                 startedBoards++
                 try {
                     val catalog = withinBudget(updateRemainingMillis()) { fetchCatalog(board.originalUrl, CatalogMode.Catalog) }
-                        ?: run { failures++; return@boardLoop }
+                        ?: run { unfinished++; return@boardLoop }
                     // Canonicalizing every catalog URL is CPU work (thousands of items for a large
                     // catalog); keep it off a caller that runs on the main dispatcher.
                     val (byCanonicalUrl, byThreadId) = withContext(AppDispatchers.parsing) {
@@ -385,11 +417,11 @@ suspend fun refreshCompatTabsInBackground(
                 }
             }
         }
-        if (!completed) failures++
+        if (!completed) unfinished++
     }
 
 
-    return CompatBackgroundRefreshResult(updated, dead, skipped, failures, newWatchMatches)
+    return CompatBackgroundRefreshResult(updated, dead, skipped, failures, newWatchMatches, unfinished)
 }
 
 /**

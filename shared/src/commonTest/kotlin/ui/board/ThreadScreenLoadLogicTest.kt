@@ -279,6 +279,32 @@ class ThreadScreenLoadLogicTest {
         assertNull(timedOutResult)
     }
 
+    /** Re-audit L39: reading follows the list as it is now: a post hidden meanwhile is skipped, a new one is read. */
+    @Test
+    fun runThreadReadAloudSession_followsTheCurrentList() = runBlocking {
+        fun seg(id: String) = ReadAloudSegment(postIndex = id.toInt(), postId = id, body = id)
+        var current = listOf(seg("1"), seg("2"), seg("3"))
+        val spoken = mutableListOf<String>()
+        val result = runThreadReadAloudSession(
+            startIndex = 0,
+            segments = current,
+            isRunnerActive = { true },
+            wasCancelledByUser = { false },
+            callbacks = ThreadReadAloudRunnerCallbacks(
+                onSegmentStart = { _, _ -> },
+                scrollToSegment = {},
+                speakSegment = { segment ->
+                    spoken += segment.postId
+                    // While "1" is read, "2" is hidden by NG and "4" comes in.
+                    if (segment.postId == "1") current = listOf(seg("1"), seg("3"), seg("4"))
+                }
+            ),
+            latestSegments = { current }
+        )
+        assertEquals(listOf("1", "3", "4"), spoken)
+        assertTrue(result.completedNormally)
+    }
+
     @Test
     fun runThreadReadAloudSession_runsSegmentsAndHandlesUserCancellation() = runBlocking {
         val segments = listOf(

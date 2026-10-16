@@ -745,6 +745,39 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun removingSeveralHistoryEntriesWritesOnceAndBlocksStaleUpdates() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val first = historyEntry("111")
+        val second = historyEntry("222")
+        val third = historyEntry("333")
+        store.setHistory(listOf(first, second, third))
+        store.removeHistoryEntries(listOf(first, third))
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+        // 消した行は、遅れて届いた更新でも戻らない（1件の削除と同じ）。
+        store.upsertHistoryEntry(first.copy(title = "stale metadata"))
+        store.updateHistory { it + third.copy(title = "stale bridge") }
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+        store.removeHistoryEntries(emptyList())
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+    }
+
+    @Test
+    fun removingMoreHistoryEntriesThanTheTombstoneCapStillBlocksStaleUpdates() = runBlocking {
+        // 2026-10-14 監査A8：1,024件を超える一括削除では、削除の印が1,024件までしか残らず、遅れた更新で一部が戻った。
+        val store = AppStateStore(FakePlatformStateStorage())
+        val entries = (1..1_500).map { historyEntry("t$it") }
+        store.setHistory(entries + historyEntry("kept"))
+        store.removeHistoryEntries(entries)
+        assertEquals(listOf("kept"), store.history.first().map { it.threadId })
+        store.updateHistory { current -> current + entries }
+        assertEquals(listOf("kept"), store.history.first().map { it.threadId })
+        // その後に1件消しても、直前の一括削除の印は消えない。
+        store.removeHistoryEntry(historyEntry("kept"))
+        store.updateHistory { current -> current + entries }
+        assertEquals(emptyList(), store.history.first().map { it.threadId })
+    }
+
+    @Test
     fun delayedMetadataAndScrollUpdatesDoNotRecreateDeletedHistory() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val entry = historyEntry("111")

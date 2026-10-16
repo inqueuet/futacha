@@ -161,4 +161,37 @@ class FutachaDraftPersistenceTest {
         assertTrue(compatIsBooleanPreference("control", entry))
         assertTrue(compatBooleanPreferenceSummary(FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY).contains("としあき(仮)"))
     }
+
+    /** 監査L31：読み込み待ちの間に打った本文と、保存されていた下書きの両方を残す。 */
+    @Test
+    fun typedTextIsAddedAfterTheStoredDraft() {
+        val stored = FutachaDraftFields("としあき", "", "題", "保存の本文", null)
+        val typed = FutachaDraftFields("", "sage", "", "打った本文", null)
+        val merged = mergeFutachaDraftFields(stored, typed)
+        assertEquals("保存の本文\n打った本文", merged.comment)
+        assertEquals("題", merged.subject)
+        assertEquals("としあき", merged.name)
+        assertEquals("sage", merged.email)
+    }
+
+    /** 再監査L31：プロセスの終了から戻った画面は、保存された本文に続けて打った本文を持つ。二重にしない。 */
+    @Test
+    fun aRestoredFormThatAlreadyHoldsTheStoredTextIsNotDoubled() {
+        val stored = FutachaDraftFields("", "", "", "abc", null)
+        val typed = FutachaDraftFields("", "", "", "abcd", null)
+        assertEquals("abcd", mergeFutachaDraftFields(stored, typed).comment)
+        assertEquals("abc", mergeFutachaDraftFields(stored, stored).comment)
+    }
+
+    /** 監査L31：読み込みに失敗した画面が保存しても、としあき(仮)が書いた削除キーを空で上書きしない。 */
+    @Test
+    fun aScreenWhoseReadFailedKeepsTheStoredDeleteKey() = withStore { store, fs, _ ->
+        openTab(store)
+        store.saveDraft(CompatReplyDraft(tabKey = tabKey, name = "", email = "", subject = "", comment = "としあきの本文",
+            attachmentUri = null, attachmentIsHandwriting = false, deleteKey = "key123", updatedAtEpochMillis = 1L))
+        val session = FutachaDraftSession().apply { allowDelete = false }
+        persistFutachaDraft(store, fs, FutachaDraftOwner.Reply(tabKey), FutachaDraftFields(comment = "ふたちゃの本文"), session)
+        assertEquals("key123", store.loadDraft(tabKey)?.deleteKey)
+        assertEquals("ふたちゃの本文", store.loadDraft(tabKey)?.comment)
+    }
 }

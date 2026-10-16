@@ -126,6 +126,9 @@ internal fun FutachaCatalogFeatureHost(
     }
     LaunchedEffect(state, boardKey, mode) {
         val success = state as? CatalogUiState.Success ?: return@LaunchedEffect
+        // A step of a list still being made is not kept: the reply marks (+N) stay and the history gets the finished list
+        // only (re-audit M32: each step was saved, so the finished list compared with a step and lost its marks).
+        if (success.partial) return@LaunchedEffect
         if (withContext(AppDispatchers.parsing) { success.content.items == latest?.content?.items }) {
             replyDeltas = emptyMap()
             return@LaunchedEffect
@@ -169,7 +172,10 @@ internal fun FutachaCatalogFeatureHost(
             catch (error: Exception) { message = "カタログ履歴を保存できませんでした" }
         }
     }
-    fun savePreference(next: CompatCatalogPreference) { action {
+    // The change is applied to the value stored now, not to what this screen holds: right after the board opens that is
+    // still the default, and the other items were saved with their default values (re-audit L37).
+    fun savePreference(change: (CompatCatalogPreference) -> CompatCatalogPreference) { action {
+        val next = change(features.store.loadCatalogPreference(boardKey))
         features.store.saveCatalogPreference(next); preference = next
     } }
     fun register(item: CatalogItem) { action {
@@ -195,10 +201,12 @@ internal fun FutachaCatalogFeatureHost(
         FutachaThreadTool("更新前のカタログ", Icons.Rounded.History, mode.sharedCatalogSort() != null) { undoOpen = true },
         FutachaThreadTool("消えたスレ・隔離", Icons.Rounded.Inventory2) { droppedOpen = true },
         FutachaThreadTool(if (preference.replyPriorityEnabled) "レス数による優先表示を解除" else "レス数による優先表示", Icons.Rounded.Sort) {
-            savePreference(preference.copy(replyPriorityEnabled = !preference.replyPriorityEnabled))
+            val turnOn = !preference.replyPriorityEnabled
+            savePreference { it.copy(replyPriorityEnabled = turnOn) }
         },
         FutachaThreadTool(if (preference.showNonPriority) "少ないレスを非表示" else "少ないレスも表示", Icons.Rounded.FilterList) {
-            savePreference(preference.copy(showNonPriority = !preference.showNonPriority))
+            val show = !preference.showNonPriority
+            savePreference { it.copy(showNonPriority = show) }
         },
         FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
         FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true },
@@ -298,8 +306,10 @@ internal fun FutachaCatalogFeatureHost(
     }
     val currentLongPress = rememberUpdatedState(longPressHandler)
     val stableLongPress = remember { { item: CatalogItem -> currentLongPress.value(item) } }
-    val replyIndicators = remember(items, tabs, replyDeltas) {
-        buildCatalogReplyIndicators(items, tabs, replyDeltas)
+    // Up to 3,000 thread addresses are normalised for this: done off the main thread, and the marks shown keep the last
+    // ones until the new ones are ready (re-audit L38: rebuilt on the main thread whenever the tabs changed).
+    val replyIndicators by androidx.compose.runtime.produceState(emptyMap<String, CompatCatalogReplyIndicator>(), items, tabs, replyDeltas) {
+        value = kotlinx.coroutines.withContext(AppDispatchers.parsing) { buildCatalogReplyIndicators(items, tabs, replyDeltas) }
     }
     CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
         LocalFutachaCatalogReplyIndicators provides replyIndicators,

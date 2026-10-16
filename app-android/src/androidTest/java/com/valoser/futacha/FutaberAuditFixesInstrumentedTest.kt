@@ -13,6 +13,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
@@ -96,6 +98,41 @@ class FutaberAuditFixesInstrumentedTest {
         Espresso.pressBack()
         waitForNoTag("futaber-post-actions")
         rule.onNodeWithTag("futaber-board-address").assertIsDisplayed()
+    }
+
+    /**
+     * 再監査M10：管理パネルの履歴で、検索して元の（空の）検索に戻すと全件に戻る。以前は開いた時の条件と同じなら計算を省き、
+     * 途中の検索の結果（絞り込んだまま）が残った。
+     */
+    @Test fun clearingTheHistorySearchShowsEveryRowAgain() {
+        val saved = runBlocking { app.appStateStore.history.first() }
+        val now = System.currentTimeMillis()
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.futaber.ext.history", "ON")
+            app.appStateStore.setHistory(listOf("ねこのスレ", "いぬのスレ").mapIndexed { i, title ->
+                com.valoser.futacha.shared.model.ThreadHistoryEntry(
+                    threadId = "${1_000_000_100L + i}", boardId = "", title = title, titleImageUrl = "", boardName = "テスト",
+                    boardUrl = "https://www.example.com/t/res/${1_000_000_100L + i}.htm",
+                    lastVisitedEpochMillis = now - i * 1_000L, replyCount = 2
+                )
+            })
+        }
+        try {
+            openTutorialCatalog()
+            rule.onNodeWithTag("futaber-manage").performClick()
+            waitForTag("futaber-history-band")
+            fun rows() = rule.onAllNodesWithTag("futaber-history-row").fetchSemanticsNodes().size
+            rule.waitUntil(10_000) { rows() == 2 }
+            rule.onNodeWithTag("futaber-history-search").performTextInput("ねこ")
+            rule.waitUntil(10_000) { rows() == 1 }
+            rule.onNodeWithTag("futaber-history-search").performTextClearance()
+            rule.waitUntil(10_000) { rows() == 2 }
+        } finally {
+            runBlocking {
+                app.compatibilityStore.savePreferences(mapOf("compat.futaber.ext.history" to null))
+                app.appStateStore.setHistory(saved)
+            }
+        }
     }
 
     @Test fun anEmptyPartOfThePanelDoesNotOpenTheThreadBehindIt() {

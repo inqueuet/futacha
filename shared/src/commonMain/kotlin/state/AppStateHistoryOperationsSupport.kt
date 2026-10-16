@@ -193,6 +193,35 @@ internal class AppStateHistoryOperations(
         }
     }
 
+    /** Removes several entries with one write. Each removed entry gets a tombstone, as with [removeHistoryEntry]. */
+    suspend fun removeHistoryEntries(entries: Collection<ThreadHistoryEntry>) {
+        if (entries.isEmpty()) return
+        entries.forEach { entry ->
+            scrollPersistenceCoordinator.cancelPendingForHistoryEntry(
+                threadId = entry.threadId,
+                boardId = entry.boardId,
+                boardUrl = entry.boardUrl
+            )
+        }
+        deletionGate.withLock {
+            val keys = entries.map(::historyEntryIdentity).filterTo(mutableSetOf(), String::isNotBlank)
+            if (keys.isEmpty()) return@withLock
+            val deletedAt = Clock.System.now().toEpochMilliseconds()
+            keys.forEach { key -> deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, ++deletionSequence) }
+            trimDeletedHistoryTombstones()
+            runMutation(
+                missingSnapshotMessage = "Skipping history removal due to missing snapshot",
+                buildPlan = { currentHistory ->
+                    val updated = currentHistory.filterNot { historyEntryIdentity(it) in keys }
+                    if (updated.size == currentHistory.size) null
+                    else AppStateHistoryMutationPlan(updatedHistory = updated, metadata = currentHistory.size - updated.size)
+                }
+            ) { count ->
+                "Failed to remove $count history entries"
+            }
+        }
+    }
+
     suspend fun cancelAllPendingScrollUpdates() {
         scrollPersistenceCoordinator.cancelAllPending()
     }
@@ -295,9 +324,13 @@ internal class AppStateHistoryOperations(
         if (deletedHistoryAtByKey.size <= MAX_DELETED_HISTORY_TOMBSTONES) return
         // A running import needs every deletion made after it started.
         val oldestImport = activeImports.minOfOrNull { it.sequence }
+        // Recent deletions are kept whatever their number: a bulk removal of more rows than the cap
+        // (ふたったー風's "delete all") must not let a stale writer still in flight bring part of it back.
+        // Only tombstones older than the retention can go, oldest first.
+        val keepAfterMillis = Clock.System.now().toEpochMilliseconds() - MIN_DELETED_HISTORY_TOMBSTONE_RETENTION_MILLIS
         deletedHistoryAtByKey.entries
-            .filter { oldestImport == null || it.value.sequence <= oldestImport }
-            .sortedBy { it.value.atMillis }
+            .filter { (oldestImport == null || it.value.sequence <= oldestImport) && it.value.atMillis < keepAfterMillis }
+            .sortedWith(compareBy({ it.value.atMillis }, { it.value.sequence }))
             .take(deletedHistoryAtByKey.size - MAX_DELETED_HISTORY_TOMBSTONES)
             .forEach { deletedHistoryAtByKey.remove(it.key) }
     }
@@ -355,6 +388,9 @@ internal class AppStateHistoryOperations(
 
     private companion object {
         const val MAX_DELETED_HISTORY_TOMBSTONES = 1_024
+        // Deletions younger than this are never trimmed (the cap applies to older ones only). History holds at
+        // most a few tens of thousands of rows, so this bounds the map by what was deleted in the last minutes.
+        const val MIN_DELETED_HISTORY_TOMBSTONE_RETENTION_MILLIS = 10 * 60 * 1_000L
         const val MAX_SCROLL_PERSIST_TIMESTAMPS = 256
     }
 }

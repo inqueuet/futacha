@@ -106,10 +106,14 @@ internal fun FutaberVolumeKeyEffect(
     val scope = rememberCoroutineScope()
     val owner = remember { Any() }
     val latestSwitch by rememberUpdatedState(onSwitchThread)
+    // The list of the thread shown now (re-audit M18: after moving to another thread the keys kept scrolling the first
+    // thread's list, which is no longer on screen).
+    val currentListState by rememberUpdatedState(listState)
     DisposableEffect(enabled, mode) {
         if (enabled) {
             CompatVolumeKeyBus.register(owner) { key ->
                 val up = key == CompatVolumeKey.UP
+                val listState = currentListState
                 when (mode) {
                     FutaberVolumeKeyMode.Thread -> {
                         latestSwitch?.invoke(!up)

@@ -161,6 +161,18 @@ internal data class FutaberProjectedCatalog(
     val badges: Map<String, String> = emptyMap()
 )
 
+/**
+ * The last projection kept while [items] are matched again (re-audit M12): its threads that are still listed, in its order
+ * and with its badges. Threads not in it yet come once the new projection is ready.
+ */
+internal fun futaberCarryProjection(previous: FutaberProjectedCatalog, items: List<CatalogItem>): FutaberProjectedCatalog {
+    val listed = items.associateBy { it.id }
+    return FutaberProjectedCatalog(
+        previous.items.mapNotNull { listed[it.id] },
+        previous.badges.filterKeys { it in listed }
+    )
+}
+
 /** "語" or "語 +2": the first matching word (cut short) and how many more matched. */
 internal fun futaberWatchBadgeLabel(words: List<String>): String {
     val first = words.firstOrNull()?.trim().orEmpty()

@@ -238,7 +238,7 @@ class FutaberParityB23Test {
         var stored: String? = null
         val dropped = mutableSetOf<String>()
         fun edit(transform: (List<FutaberDraft>) -> List<FutaberDraft>) = futaberEditDrafts(
-            editPreference = { _, change -> change(stored)?.let { stored = it } },
+            editPreference = { _, change, afterSaved -> change(stored)?.let { stored = it; afterSaved() } },
             onDropped = { dropped += it },
             transform = transform
         )
@@ -303,5 +303,37 @@ class FutaberParityB23Test {
         // Setting "no file" on a draft that has none writes nothing.
         assertEquals(drafts, futaberDraftsWithAttachment(drafts, reply, boards, null, false, 2L))
         assertEquals(emptyList(), futaberDraftsWithAttachment(emptyList(), reply, boards, null, false, 2L))
+    }
+
+    /** 監査M14：下書きの保存に失敗した時は、まだ参照されているファイルを消さない（以前は保存の前に消していた）。 */
+    @Test fun aFailedDraftSaveKeepsTheFilesItStillNotes() {
+        val reply = FutaberPostTarget.Reply("t", "1", "題")
+        val locator = com.valoser.futacha.shared.ui.compat.compatPostAttachmentLocator(FUTABER_DRAFT_ATTACHMENT_OWNER, "a.png")
+        val stored = encodeFutaberDrafts(futaberDraftsWithAttachment(emptyList(), reply, boards, locator, false, 1L))
+        val dropped = mutableSetOf<String>()
+        // 保存が失敗する（afterSaved を呼ばない）。
+        futaberEditDrafts({ _, change, _ -> change(stored) }, { dropped += it }) { futaberDraftsWithAttachment(it, reply, boards, null, false, 2L) }
+        assertTrue(dropped.isEmpty())
+        // 保存できた時だけ消す。
+        futaberEditDrafts({ _, change, afterSaved -> change(stored)?.let { afterSaved() } }, { dropped += it }) {
+            futaberDraftsWithAttachment(it, reply, boards, null, false, 2L)
+        }
+        assertEquals(setOf(locator), dropped)
+    }
+
+    /** 監査M14：どの下書きからも参照されていない、このモードの下書きのファイルを片付ける（としあき(仮)のファイルは触らない）。 */
+    @Test fun staleDraftFilesOfThisModeAreSweptWhileNothingIsAttached() = runBlocking {
+        val fs = InMemoryFileSystem()
+        val noted = persistCompatPostAttachment(fs, FUTABER_DRAFT_ATTACHMENT_OWNER, ImageData(byteArrayOf(1), "a.png")).getOrThrow()
+        val stale = persistCompatPostAttachment(fs, FUTABER_DRAFT_ATTACHMENT_OWNER, ImageData(byteArrayOf(2), "b.png")).getOrThrow()
+        val toshiaki = persistCompatPostAttachment(fs, "compat_tab_0123", ImageData(byteArrayOf(3), "c.png")).getOrThrow()
+        val drafts = listOf(FutaberDraft("a", attachmentLocator = noted))
+        // 書き込み画面に添付がある間は消さない（その添付の保存が途中かもしれない）。
+        assertEquals(0, futaberSweepDraftFiles(fs, drafts) { false })
+        assertTrue(fs.exists(stale))
+        assertEquals(1, futaberSweepDraftFiles(fs, drafts) { true })
+        assertFalse(fs.exists(stale))
+        assertTrue(fs.exists(noted))
+        assertTrue(fs.exists(toshiaki))
     }
 }

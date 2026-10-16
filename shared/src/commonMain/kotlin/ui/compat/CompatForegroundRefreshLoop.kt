@@ -54,6 +54,51 @@ internal fun isCompatForegroundWatchDue(
 )
 
 /**
+ * What a foreground pass has already done, kept by the screen across restarts of the loop (audit M21: opening the viewer,
+ * the post form or the settings cancels the loop; the pass then started again from the first board, so with many boards
+ * or a slow network the later boards were never reached in the foreground). A pass is known by the stored check times it
+ * started from: they change only when a pass completes (or the background refresher records its watch), and then the
+ * next pass starts afresh.
+ */
+internal class CompatForegroundPassProgress {
+    private var passKey: List<String?>? = null
+    private val done = mutableSetOf<String>()
+
+    /** Starts (or goes on with) the pass of [key]. */
+    fun begin(key: List<String?>) {
+        if (key != passKey) {
+            passKey = key
+            done.clear()
+        }
+    }
+
+    fun isDone(step: String): Boolean = step in done
+
+    fun markDone(step: String) {
+        done += step
+    }
+
+    /**
+     * The pass reached its end: the next one starts afresh even when the stored times could not be written (re-audit L10:
+     * with the writes failing, every step stayed "done" and nothing was checked again).
+     */
+    fun finish() {
+        passKey = null
+        done.clear()
+    }
+}
+
+/**
+ * The stored check times a pass starts from (its identity for [CompatForegroundPassProgress]). The watch time is not part
+ * of it: it is written during the pass, after the catalog walk, and a pass cut off later (in the existence probes) then
+ * started again from the first board (re-audit L10). A completed pass clears the progress itself ([finish]).
+ */
+internal fun compatForegroundPassKey(preferences: Map<String, String>): List<String?> = listOf(
+    preferences[COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE],
+    preferences[COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE]
+)
+
+/**
  * The reference app's one-minute foreground TimerTask: tab reply counts, the
  * stale existence probe and the keyword watcher.
  *
@@ -69,7 +114,8 @@ internal suspend fun runCompatForegroundRefreshLoop(
     tabs: () -> List<CompatTab>,
     boards: () -> List<CompatBoard>,
     histories: () -> List<CompatHistoryEntry>,
-    persist: suspend (operation: String, block: suspend () -> Unit) -> Unit
+    persist: suspend (operation: String, block: suspend () -> Unit) -> Unit,
+    progress: CompatForegroundPassProgress = CompatForegroundPassProgress()
 ) {
     var firstTick = true
     while (true) {
@@ -105,6 +151,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
         val watchDue = isCompatForegroundWatchDue(currentPreferences, wifiConnected, now)
         if (!plan.hasWork && !watchDue) continue
         val stored = compatForegroundLastCheckStoredValue(now)
+        progress.begin(compatForegroundPassKey(currentPreferences))
         val tabsToCheck = tabs().filterNot(CompatTab::isDead)
         // Same catalog layout as the catalog screen; a different one makes the
         // repository redo the board's catalog setup (and its Cookie) each time.
@@ -127,6 +174,11 @@ internal suspend fun runCompatForegroundRefreshLoop(
                 val tabBoards = if (plan.checkUpdates) tabsToCheck.groupBy(CompatTab::boardKey) else emptyMap()
                 tabBoards.forEach boardLoop@{ (boardKey, boardTabs) ->
                     val board = currentBoards.firstOrNull { it.key == boardKey } ?: return@boardLoop
+                    // The reply counts and the watch words are marked apart: a pass resumed with the watch due checks
+                    // the words also on the boards whose counts were done before (re-audit L10).
+                    val needCounts = !progress.isDone("tabs:$boardKey")
+                    val needWatch = watchDue && !progress.isDone("watch:$boardKey")
+                    if (!needCounts && !needWatch) return@boardLoop
                     runSuspendCatchingPreservingCancellation { fetchCatalog(board, CatalogMode.Catalog) }
                         .onSuccess { catalog ->
                             val byCanonicalUrl = catalog.mapNotNull { item ->
@@ -140,13 +192,13 @@ internal suspend fun runCompatForegroundRefreshLoop(
                                 if (item.replyCount == checkedTab.replyCount) return@mapNotNull null
                                 CompatCatalogReplyCountUpdate(checkedTab.key, checkedTab.canonicalUrl, item.replyCount)
                             }
-                            if (replyCountUpdates.isNotEmpty()) {
+                            if (needCounts && replyCountUpdates.isNotEmpty()) {
                                 // One write per board; iOS and desktop rewrite their whole state per change.
                                 persist("foreground tab refresh") {
                                     store.applyCatalogReplyCounts(replyCountUpdates)
                                 }
                             }
-                            if (watchDue) {
+                            if (needWatch) {
                                 recordMatches(
                                     collectCompatWatchMatches(
                                         board = board,
@@ -156,16 +208,17 @@ internal suspend fun runCompatForegroundRefreshLoop(
                                         nowEpochMillis = now
                                     )
                                 )
+                                progress.markDone("watch:$boardKey")
                             }
+                            progress.markDone("tabs:$boardKey")
                         }
                 }
                 // A watched board can have no open tabs. It still must be checked
                 // and added to the compatibility watcher's history page, but a
                 // board without applicable rules has nothing to match.
                 if (watchDue) {
-                    val fetchedBoardKeys = tabBoards.keys
                     compatBoardsWithWatchWords(currentBoards, currentPreferences)
-                        .filterNot { board -> board.key in fetchedBoardKeys }
+                        .filterNot { board -> progress.isDone("watch:${board.key}") }
                         .forEach { board ->
                             runSuspendCatchingPreservingCancellation { fetchCatalog(board, CatalogMode.New) }
                                 .onSuccess { catalog ->
@@ -178,6 +231,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
                                             nowEpochMillis = now
                                         )
                                     )
+                                    progress.markDone("watch:${board.key}")
                                 }
                         }
                 }
@@ -193,7 +247,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
         if (plan.checkExistence || plan.checkUpdates) {
             withContext(AppDispatchers.io) {
                 tabsToCheck.filter { tab ->
-                    hasEpochIntervalElapsed(
+                    !progress.isDone("probe:${tab.key}") && hasEpochIntervalElapsed(
                         nowMillis = now,
                         startedAtMillis = tab.contentUpdatedAtEpochMillis,
                         intervalMillis = COMPAT_THREAD_EXISTENCE_STALE_MILLIS
@@ -203,6 +257,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
                         repository.probeThreadGone(checkedTab.originalUrl)
                     }
                         .onSuccess { isGone ->
+                            progress.markDone("probe:${checkedTab.key}")
                             if (isGone) persist("foreground dead-thread update") {
                                 // Write onto the current stored tab: a copy taken before
                                 // the probe would revert favourites/read counts changed
@@ -224,6 +279,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
                 if (plan.checkExistence) put(COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE, stored)
             })
         }
+        progress.finish()
     }
 }
 

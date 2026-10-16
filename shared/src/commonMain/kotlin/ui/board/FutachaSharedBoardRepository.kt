@@ -22,7 +22,8 @@ import kotlin.time.TimeSource
 internal fun rememberFutachaSharedRepository(repository: BoardRepository): BoardRepository {
     val features = LocalFutachaSharedFeatures.current
     return remember(repository, features?.store, features?.httpClient) {
-        if (features == null) repository else FutachaSharedBoardRepository(repository, features.store, features.httpClient, features.catalogCache)
+        // An opened MHT file is the page itself: no shared cache or supplement in front of it (re-audit M30).
+        if (features == null || repository is FutachaStaticThreadRepository) repository else FutachaSharedBoardRepository(repository, features.store, features.httpClient, features.catalogCache)
     }
 }
 

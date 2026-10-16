@@ -125,4 +125,85 @@ class CatalogLoadTimeoutTest {
         assertFalse(isRefreshing)
         assertTrue(runningJob == null)
     }
+
+    /** Re-audit M28: a refresh that fails while nothing is shown yet (it cancelled the first load) leaves an error, not loading. */
+    @Test
+    fun aFailedRefreshDuringTheFirstLoadShowsAnError() = runBlocking {
+        val timeout = timeoutException()
+        var generation = 0L
+        var runningJob: Job? = null
+        var captured: Job? = null
+        var isRefreshing = false
+        var uiState: CatalogUiState = CatalogUiState.Loading
+        val bindings = buildCatalogExecutionBindings(
+            coroutineScope = this,
+            currentIsHistoryRefreshing = { false },
+            setIsHistoryRefreshing = {},
+            onHistoryRefresh = {},
+            showSnackbar = {},
+            currentBoard = { board },
+            currentCatalogMode = { CatalogMode.default },
+            currentIsRefreshing = { isRefreshing },
+            currentCatalogLoadGeneration = { generation },
+            setCatalogLoadGeneration = { generation = it },
+            setIsRefreshing = { isRefreshing = it },
+            currentCatalogLoadJob = { runningJob },
+            setCatalogLoadJob = { runningJob = it; if (it != null) captured = it },
+            setCatalogUiState = { uiState = it },
+            setLastCatalogItems = { _: List<CatalogItem> -> },
+            loadCatalogItems = { _, _, _ -> throw timeout },
+            currentPastSearchRuntimeState = { CatalogPastSearchRuntimeState() },
+            setPastSearchRuntimeState = {},
+            httpClient = null,
+            archiveSearchJson = Json,
+            currentCatalogUiState = { uiState }
+        )
+
+        bindings.performRefresh()
+        captured!!.join()
+
+        assertTrue(uiState is CatalogUiState.Error, uiState.toString())
+        assertFalse(isRefreshing)
+    }
+
+    /** Re-audit M32: the step shown while the watch-word sources are fetched is marked partial; the finished list is not. */
+    @Test
+    fun aRefreshMarksTheStepBeforeTheFinishedListAsPartial() = runBlocking<Unit> {
+        var generation = 0L
+        var runningJob: Job? = null
+        var captured: Job? = null
+        var isRefreshing = false
+        val states = mutableListOf<CatalogUiState>()
+        val step = com.valoser.futacha.shared.model.CatalogPageContent(emptyList())
+        val finished = com.valoser.futacha.shared.model.CatalogPageContent(
+            listOf(CatalogItem("1", "https://example.com/test/res/1.htm", "猫", null, null, replyCount = 1))
+        )
+        val bindings = buildCatalogExecutionBindings(
+            coroutineScope = this,
+            currentIsHistoryRefreshing = { false },
+            setIsHistoryRefreshing = {},
+            onHistoryRefresh = {},
+            showSnackbar = {},
+            currentBoard = { board },
+            currentCatalogMode = { CatalogMode.default },
+            currentIsRefreshing = { isRefreshing },
+            currentCatalogLoadGeneration = { generation },
+            setCatalogLoadGeneration = { generation = it },
+            setIsRefreshing = { isRefreshing = it },
+            currentCatalogLoadJob = { runningJob },
+            setCatalogLoadJob = { runningJob = it; if (it != null) captured = it },
+            setCatalogUiState = { states += it },
+            setLastCatalogItems = { _: List<CatalogItem> -> },
+            loadCatalogItems = { _, _, onPartial -> onPartial(step); finished },
+            currentPastSearchRuntimeState = { CatalogPastSearchRuntimeState() },
+            setPastSearchRuntimeState = {},
+            httpClient = null,
+            archiveSearchJson = Json
+        )
+
+        bindings.performRefresh()
+        captured!!.join()
+
+        assertEquals<List<CatalogUiState>>(listOf(CatalogUiState.Success(step, partial = true), CatalogUiState.Success(finished)), states)
+    }
 }

@@ -711,6 +711,8 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-history-sort").performClick()
         rule.onNodeWithTag("futaber-history-search").performTextInput("存在しないスレタイ")
         waitForTag("futaber-history-status")
+        // The search applies a moment after the last key and the rows are made off the main thread (audit M17).
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("条件に合う履歴はありません").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("条件に合う履歴はありません").assertIsDisplayed()
         capture("54-history-band")
         rule.onNodeWithTag("futaber-history-search").performTextClearance()
@@ -1522,6 +1524,8 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithText("削除キー", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("futaber-post-error").performClick()
         rule.onNodeWithTag("futaber-post-counts").assertIsDisplayed()
+        // 「テスト投稿」は Shift_JIS で10バイト。数えるのは裏で行う（再監査H2）が、表示は打った文字に追いつく。
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("1行 / 10B").fetchSemanticsNodes().isNotEmpty() }
 
         // 書き込み設定で削除キーを入れる。
         rule.onNodeWithTag("futaber-post-settings").performClick()

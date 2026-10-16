@@ -137,6 +137,32 @@ class FutachaSharedPersistenceTest {
         } finally { store.close(); root.deleteRecursively() }
     }
 
+    /**
+     * Re-audit M25: a scroll stop publishes nothing (as on Android): the tab and history lists stay the same objects, so
+     * the としあき(仮) screen is not rebuilt. The anchor is still stored and comes back with the next change and on reopening.
+     */
+    @Test fun aScrollAnchorIsStoredWithoutPublishingTheListsAgain() = runBlocking {
+        val root = Files.createTempDirectory("futacha-scroll-anchor-quiet").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            val url = "https://may.2chan.net/b/res/320.htm"
+            val now = System.currentTimeMillis()
+            val tab = CompatTab(compatTabKey(url), url, url, "b", "板", "320", "スレ", insertedAtEpochMillis = now,
+                contentUpdatedAtEpochMillis = now)
+            store.openTab(tab)
+            val tabsBefore = store.tabs.first()
+            val historyBefore = store.history.first()
+            store.updateScrollAnchor(tab.key, ScrollAnchor(postNo = "330", fallbackIndex = 4, offsetPx = 12))
+            assertSame(tabsBefore, store.tabs.first())
+            assertSame(historyBefore, store.history.first())
+            // The next ordinary change carries it.
+            assertTrue(store.updateTabIfPresent(tab.key) { it.copy(replyCount = 9) })
+            assertEquals("330", store.tabs.first().single().scrollAnchor.postNo)
+            // (That the anchor is stored for the next launch is DesktopRuntimeTest's.)
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
     @Test fun updateTabIfPresentNeverCreatesTabsAndKeepsIdentityAndAnchor() = runBlocking {
         val root = Files.createTempDirectory("futacha-tab-if-present").toFile()
         val store = DesktopCompatibilityStore(JvmFileSystem(root))
@@ -209,7 +235,8 @@ class FutachaSharedPersistenceTest {
                     checkUpdates = true, checkExistence = true, budgetMillis = 200L)
             }
 
-            assertTrue(result.failures >= 1)
+            // What the time cut off is left for the next run, not counted as failed (re-audit M16).
+            assertTrue(result.unfinished >= 1)
         } finally { store.close(); root.deleteRecursively() }
     }
 

@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -182,8 +184,10 @@ internal fun FutaberCatalogScreen(
     var refreshSheet by remember(board.id, sortMode) { mutableStateOf(false) }
     var droppedSheet by remember(board.id, sortMode) { mutableStateOf(false) }
 
-    LaunchedEffect(board.id, board.url, sortMode, view.refreshTick, refreshSignal) {
-        val key = FutaberCatalogFetchKey(board.url, sortMode, view.refreshTick, refreshSignal)
+    // The "監視" order lists the threads matching the watch words, so a change of the words fetches it again (audit L23).
+    val fetchWatchWords = if (sortMode == CatalogMode.WatchWords) watchWords else emptyList()
+    LaunchedEffect(board.id, board.url, sortMode, view.refreshTick, refreshSignal, fetchWatchWords) {
+        val key = FutaberCatalogFetchKey(board.url, sortMode, view.refreshTick, refreshSignal, fetchWatchWords)
         val startedAt = Clock.System.now().toEpochMilliseconds()
         // Coming back from a thread: the catalog on hand is still current, so keep it (and its scroll) as it is.
         if (futaberCatalogCanReuse(view.fetchedKey, key, view.load.items.isNotEmpty(), startedAt - view.fetchedAtMillis)) {
@@ -195,7 +199,10 @@ internal fun FutaberCatalogScreen(
         view.load = view.load.copy(isLoading = true, errorMessage = null)
         try {
             val page = futaberFetchCatalogPage(repository, board.url, sortMode, watchWords)
-            view.history = futaberCatalogHistoryAfterLoad(view.history, view.load.items, page.items)
+            view.history = futaberCatalogHistoryAfterLoad(
+                view.history, view.load.items, page.items,
+                sameQuery = view.fetchedKey == null || view.fetchedKey?.watchWords == key.watchWords
+            )
             view.load = FutaberCatalogLoad(items = page.items, isLoading = false)
             view.fetchedKey = key
             view.fetchedAtMillis = Clock.System.now().toEpochMilliseconds()
@@ -258,7 +265,29 @@ internal fun FutaberCatalogScreen(
         futaberApplyCatalogRules(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds)
     }
     // The B7a reordering (watch words first, few replies later / hidden) runs once per list, before the search.
-    val projected = remember(ngVisibleItems, projection) { futaberProjectCatalog(ngVisibleItems, projection) }
+    // The watch-word matching (every thread against every word and extraction rule) runs on the parsing dispatcher, once
+    // per list and settings (audit L24: it ran in composition, again whenever any setting changed). Until it is ready the
+    // list shows in its own order without badges; the reordering alone (no matching) stays immediate.
+    val needsMatching = projection?.highlight == true && !projection.watch.isEmpty
+    val projectedNow = remember(ngVisibleItems, projection, needsMatching) {
+        if (needsMatching) null else futaberProjectCatalog(ngVisibleItems, projection)
+    }
+    val projectedLater by produceState<Triple<List<CatalogItem>, FutaberCatalogProjection?, FutaberProjectedCatalog>?>(
+        null, ngVisibleItems, projection, needsMatching
+    ) {
+        if (!needsMatching) return@produceState
+        value = Triple(ngVisibleItems, projection, withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) { futaberProjectCatalog(ngVisibleItems, projection) })
+    }
+    // While a new list (a step of the loading, an image NG result) is matched, the last result stays in its order with the
+    // threads no longer listed taken out (re-audit M12: the list went back to its own order, badges gone and hidden threads
+    // shown, then jumped back once matched). A list with other settings starts from its own order as before.
+    val carried = remember(ngVisibleItems, projectedLater, projection) {
+        projectedLater?.takeIf { it.first !== ngVisibleItems && it.second == projection }?.let { futaberCarryProjection(it.third, ngVisibleItems) }
+    }
+    val projected = projectedNow
+        ?: projectedLater?.takeIf { it.first === ngVisibleItems }?.third
+        ?: carried
+        ?: FutaberProjectedCatalog(ngVisibleItems)
     val titleKeys = remember(projected) { futaberCatalogTitleKeys(projected.items) }
     val appliedQuery = rememberFutaberDebouncedQuery(query)
     val visibleItems = remember(projected, titleKeys, appliedQuery) {
@@ -440,8 +469,9 @@ private fun FutaberCatalogBottomBar(
     val longPressHaptic = rememberFutaberLongPressHaptic()
     var styleMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
-    Row(
-        Modifier.futaberFloatingBar(colors)
+    ScrollableToolbarRow(
+        itemCount = 5, minItemWidth = 48.dp,
+        modifier = Modifier.futaberFloatingBar(colors)
             .height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically

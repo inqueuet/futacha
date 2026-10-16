@@ -280,4 +280,18 @@ class FutaberParityB7aTest {
         assertFalse(futaberWatchWordsHint(0).contains("板ごと"))
         assertTrue(futaberWatchWordsHint(2).contains("2板"))
     }
+
+    /** Re-audit M12: while a new list is matched, the last order and badges stay for the threads still listed. */
+    @Test fun theLastProjectionStaysInItsOrderWhileANewListIsMatched() {
+        val previous = FutaberProjectedCatalog(
+            listOf(item("3", "ねこ"), item("1", "いぬ"), item("2", "とり")),
+            mapOf("3" to "ねこ", "2" to "とり")
+        )
+        // "2" left (an image NG), "4" is new, "1" got a reply.
+        val fresh = listOf(item("1", "いぬ", replies = 5), item("3", "ねこ"), item("4", "さかな"))
+        val carried = futaberCarryProjection(previous, fresh)
+        assertEquals(listOf("3", "1"), carried.items.map { it.id })
+        assertEquals(5, carried.items[1].replyCount)
+        assertEquals(mapOf("3" to "ねこ"), carried.badges)
+    }
 }

@@ -208,4 +208,30 @@ class AuditFixes20261007Test {
         assertEquals("saved", chooseNewestOfflineThreadPage(candidate("saved", 1), null)?.threadId)
         assertNull(chooseNewestOfflineThreadPage(null, null))
     }
+
+    // 監査M18（2026-10-14）：共有のスナップショットの方が新しくても、自動保存のコピーにある画像（端末内のファイル）は使う。
+    @Test
+    fun aNewerSharedSnapshotKeepsTheSavedCopysLocalPictures() {
+        fun post(id: String, image: String?, thumb: String?, body: String = "本文$id") = com.valoser.futacha.shared.model.Post(
+            id = id, author = null, subject = null, timestamp = "", posterId = null, messageHtml = body,
+            imageUrl = image, thumbnailUrl = thumb, isDeleted = false, saidaneLabel = null, quoteReferences = emptyList()
+        )
+        fun candidate(at: Long, vararg posts: com.valoser.futacha.shared.model.Post) = OfflineThreadPageCandidate(
+            page = ThreadPage(threadId = "1", boardTitle = null, expiresAtLabel = null, deletedNotice = null, posts = posts.toList()),
+            storedAtEpochMillis = at
+        )
+        val saved = candidate(100, post("1", "file:///saved/1.jpg", "file:///saved/1s.jpg"), post("2", null, null))
+        val shared = candidate(
+            200,
+            post("1", "https://may.2chan.net/b/src/1.jpg", "https://may.2chan.net/b/thumb/1s.jpg", body = "新しい本文"),
+            post("2", null, null),
+            post("3", "https://may.2chan.net/b/src/3.jpg", null)
+        )
+        val shown = chooseNewestOfflineThreadPage(saved, shared)!!
+        assertEquals("新しい本文", shown.posts[0].messageHtml)
+        assertEquals("file:///saved/1.jpg", shown.posts[0].imageUrl)
+        assertEquals("file:///saved/1s.jpg", shown.posts[0].thumbnailUrl)
+        assertEquals("https://may.2chan.net/b/src/3.jpg", shown.posts[2].imageUrl)
+        assertEquals(3, shown.posts.size)
+    }
 }

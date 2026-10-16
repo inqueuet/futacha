@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.ui.compat.compatPreferenceStorageKey
 import com.valoser.futacha.shared.ui.compat.CompatImageNgRegistrationDialog
 import com.valoser.futacha.shared.ui.compat.fetchCompatImagePhash
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
@@ -34,6 +35,11 @@ internal fun FutachaImageNgRegistration(features: FutachaSharedFeatures, boardKe
                     },
                     prepareBoardScope = prepareBoardScope)
                 onDismiss()
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                // A time-out is a kind of cancellation, but this registration was not cancelled: it is said (re-audit L34:
+                // the dialog came back without a word).
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                error = "画像の取得が時間切れになりました。通信を確認してもう一度お試しください"
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { error = failure.message ?: "画像を登録できませんでした" }
             finally { busy = false }

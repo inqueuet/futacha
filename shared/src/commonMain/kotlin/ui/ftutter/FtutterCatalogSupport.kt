@@ -4,7 +4,6 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.ui.futaber.filterFutaberCatalogByKeys
 import com.valoser.futacha.shared.ui.futaber.futaberCatalogTitleKeys
 
 /**
@@ -134,6 +133,13 @@ internal fun ftutterPruneHiddenThreads(hidden: List<String>, boardUrl: String, l
     return hidden.filter { !it.startsWith(prefix) || it in alive }
 }
 
+/** 保存されている非表示の一覧[stored]から、この板で落ちたスレを除いた値。変わらなければ null（書かない）。 */
+internal fun ftutterPrunedHiddenValue(stored: String?, boardUrl: String, loaded: List<CatalogItem>): String? {
+    val hidden = parseFtutterHiddenThreads(stored)
+    val pruned = ftutterPruneHiddenThreads(hidden, boardUrl, loaded)
+    return if (pruned.size == hidden.size) null else encodeFtutterList(pruned)
+}
+
 /** 板のディレクトリのURL（`…/b/`）。`futaba.php` などは取り除く。 */
 internal fun ftutterBoardBaseUrl(boardUrl: String): String {
     val withoutQuery = boardUrl.substringBefore('?')
@@ -163,10 +169,41 @@ internal fun ftutterVisibleCatalog(
     query: String,
     hidden: Set<String>,
     maxCount: Int
+): List<CatalogItem> = ftutterVisibleCatalog(FtutterCatalogSearchIndex.of(items), query, hidden, maxCount)
+
+/**
+ * 検索・非表示の判定に使う、カタログごとに1回だけ作るもの（監査M10：以前は1文字打つたびに、全スレの重複を除き、題名を正規化し、
+ * URLを正規化していた）。[items]は重複を除いたもので、[titleKeys]・[canonicalUrls]は同じ位置。
+ */
+internal class FtutterCatalogSearchIndex private constructor(
+    val source: List<CatalogItem>,
+    val items: List<CatalogItem>,
+    val titleKeys: List<String>,
+    val canonicalUrls: List<String>
+) {
+    companion object {
+        fun of(items: List<CatalogItem>): FtutterCatalogSearchIndex {
+            val distinct = items.distinctBy { it.threadUrl }
+            return FtutterCatalogSearchIndex(items, distinct, futaberCatalogTitleKeys(distinct), distinct.map { ftutterCanonicalThreadUrl(it.threadUrl) })
+        }
+    }
+}
+
+internal fun ftutterVisibleCatalog(
+    index: FtutterCatalogSearchIndex,
+    query: String,
+    hidden: Set<String>,
+    maxCount: Int
 ): List<CatalogItem> {
-    val distinct = items.distinctBy { it.threadUrl }
-    val searched = if (query.isBlank()) distinct else filterFutaberCatalogByKeys(distinct, futaberCatalogTitleKeys(distinct), query)
-    return searched.filter { ftutterCanonicalThreadUrl(it.threadUrl) !in hidden }.take(maxCount)
+    val needle = if (query.isBlank()) "" else com.valoser.futacha.shared.model.normalizeCatalogSearchText(query)
+    val out = ArrayList<CatalogItem>()
+    for (i in index.items.indices) {
+        if (out.size >= maxCount) break
+        if (needle.isNotEmpty() && !index.titleKeys[i].contains(needle)) continue
+        if (index.canonicalUrls[i] in hidden) continue
+        out += index.items[i]
+    }
+    return out
 }
 
 /** カタログの数字：レス数と未読数。 */

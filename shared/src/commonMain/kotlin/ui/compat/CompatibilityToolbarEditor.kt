@@ -91,6 +91,7 @@ import com.valoser.futacha.shared.compat.compatToolbarMaster
 import com.valoser.futacha.shared.compat.compatToolbarGlyph
 import com.valoser.futacha.shared.compat.compatToolbarShowsOverflow
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -407,7 +408,9 @@ private fun CompatToolbarPreviewRow(
     active: Boolean,
     palette: CompatibilityPalette
 ) {
-    Row(
+    if (items.isEmpty() && !showMore) return
+    ScrollableToolbarRow(
+        itemCount = items.size + if (showMore) 1 else 0,
         modifier = Modifier.fillMaxWidth().height(40.dp)
             .background(palette.chrome.copy(alpha = 0.14f))
             .testTag(if (active) "compat-toolbar-preview-active" else "compat-toolbar-preview-inactive"),

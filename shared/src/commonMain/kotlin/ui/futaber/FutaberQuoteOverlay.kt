@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -116,7 +116,10 @@ internal fun FutaberQuoteOverlay(
                 LazyColumn(
                     Modifier.heightIn(max = with(density) { (overlaySize.height * FUTABER_BUBBLE_MAX_HEIGHT_FRACTION).toDp() })
                 ) {
-                    items(layer.posts) { post ->
+                    // Keyed by the post, so a changed list keeps each row's state with its post (audit L26). A post listed
+                    // twice gets its occurrence added, so keys never repeat.
+                    val rowKeys = futaberBubbleRowKeys(layer.posts)
+                    itemsIndexed(layer.posts, key = { index, _ -> rowKeys[index] }) { _, post ->
                         FutaberPostRow(
                             ordinal = ordinals[post.id] ?: 0,
                             post = post,
@@ -158,5 +161,15 @@ internal fun FutaberQuoteOverlay(
                 drawPath(path, colors.background)
             }
         }
+    }
+}
+
+/** Stable, distinct keys of the rows of a bubble: the post number, with "#n" on the n-th repeat of the same number. */
+internal fun futaberBubbleRowKeys(posts: List<com.valoser.futacha.shared.model.Post>): List<String> {
+    val seen = HashMap<String, Int>()
+    return posts.map { post ->
+        val n = seen.getOrElse(post.id) { 0 }
+        seen[post.id] = n + 1
+        if (n == 0) post.id else "${post.id}#$n"
     }
 }

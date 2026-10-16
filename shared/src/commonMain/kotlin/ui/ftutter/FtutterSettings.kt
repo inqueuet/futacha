@@ -170,6 +170,12 @@ internal object FtutterKeys {
 internal fun Map<String, String>.ftutterInt(key: String, default: Int, range: IntRange): Int =
     this[key]?.trim()?.toIntOrNull()?.takeIf { it in range } ?: default
 
+/** 統計の数を1つ増やす。壊れた値は0から数え直し、上限で止める（監査M2：保存されている値に足す）。 */
+internal fun ftutterIncrementedCount(stored: String?): String {
+    val current = stored?.trim()?.toIntOrNull()?.takeIf { it >= 0 } ?: 0
+    return (if (current == Int.MAX_VALUE) current else current + 1).toString()
+}
+
 internal fun Map<String, String>.ftutterDouble(key: String, default: Double, range: ClosedFloatingPointRange<Double>): Double =
     this[key]?.trim()?.toDoubleOrNull()?.takeIf { !it.isNaN() && it in range } ?: default
 

@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.Post
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class FutaberPostSupportTest {
@@ -112,5 +113,25 @@ class FutaberPostSupportTest {
         val saved = futaberUpsertDraft(emptyList(), FutaberDraft("r:b:1", comment = comment)).single()
         assertEquals(FUTABER_DRAFT_MAX_COMMENT_CHARS - 1, saved.comment.length)
         assertTrue(saved.comment.none { it.isSurrogate() })
+    }
+
+    /** Re-audit M13: while a post is sent, a draft for another target (from the AI too) is refused; the same target is not. */
+    @Test
+    fun aDraftForAnotherTargetIsRefusedWhileAPostIsSent() {
+        val sending = FutaberPostTarget.Reply("may-b", "123", "題名")
+        val other = FutaberPostTarget.Reply("may-b", "124", "題名")
+        assertTrue(futaberPostRefusedWhileSending(sending.draftKey, other))
+        assertFalse(futaberPostRefusedWhileSending(sending.draftKey, sending))
+        assertFalse(futaberPostRefusedWhileSending(null, other))
+    }
+
+    /** Re-audit L1: a post that went through after its write screen closed clears the text held for it, not another's. */
+    @Test
+    fun theHeldTextIsClearedOnlyForThePostThatWasSent() {
+        val sent = FutaberPostTarget.Reply("may-b", "123", "題名")
+        val other = FutaberPostTarget.Reply("may-b", "124", "題名")
+        assertTrue(futaberHeldTextBelongsTo(sent.draftKey, sent))
+        assertFalse(futaberHeldTextBelongsTo(other.draftKey, sent))
+        assertFalse(futaberHeldTextBelongsTo(null, sent))
     }
 }

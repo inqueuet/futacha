@@ -27,6 +27,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +46,8 @@ import com.valoser.futacha.shared.ui.futaber.FutaberAttachment
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
@@ -86,14 +90,80 @@ internal fun parseFtutterDrafts(raw: String?): Map<String, FtutterDraft> =
     raw?.takeIf { it.isNotBlank() }?.let { runCatching { draftJson.decodeFromString(draftsSerializer, it) }.getOrNull() }.orEmpty()
 
 /** 下書きを書き換える。空の下書きは消す。新しいものを前に、多すぎる時は古いものから落とす。 */
-internal fun ftutterDraftsWith(drafts: Map<String, FtutterDraft>, key: String, draft: FtutterDraft?): String {
+internal fun ftutterDraftsWith(drafts: Map<String, FtutterDraft>, key: String, draft: FtutterDraft?): String =
+    ftutterDraftsUpdate(drafts, key, draft).encoded
+
+/**
+ * 下書きの保存値は1つの設定（上限2万字）なので、件数・1件の長さ・全体の大きさを決める（ふたばー風の下書きと同じ考え。
+ * 2026-10-14の監査A9：以前は件数の制限しか無く、長い下書きが数件あると以後の保存も送信後の削除も黙って失敗した）。
+ * - 件数は[FTUTTER_DRAFT_LIMIT]まで。全体は[FTUTTER_DRAFT_STORE_MAX_CHARS]まで（新しいものから残し、古いものを落とす）。
+ * - 本文は[FTUTTER_DRAFT_MAX_COMMENT_CHARS]字、題名・名前・メールは[FTUTTER_DRAFT_MAX_FIELD_CHARS]字まで残す。
+ *   切ったり古いものを落としたりした時は[FtutterDraftsUpdate]で知らせる（画面が伝える）。
+ * - 消すだけ（空の下書き）なら、結果は今の保存値より大きくならないので、送信後の削除は必ず保存できる。
+ */
+internal data class FtutterDraftsUpdate(val encoded: String, val truncated: Boolean, val dropped: Int)
+
+internal fun ftutterDraftsUpdate(drafts: Map<String, FtutterDraft>, key: String, draft: FtutterDraft?): FtutterDraftsUpdate {
     val next = LinkedHashMap<String, FtutterDraft>()
-    if (draft != null && !draft.isEmpty) next[key] = draft
-    drafts.forEach { (k, v) -> if (k != key && next.size < FTUTTER_DRAFT_LIMIT) next[k] = v }
-    return draftJson.encodeToString(draftsSerializer, next)
+    var truncated = false
+    if (draft != null && !draft.isEmpty) {
+        val bounded = draft.boundedForStore()
+        truncated = bounded != draft
+        next[key] = bounded
+    }
+    drafts.forEach { (k, v) -> if (k != key) next[k] = v }
+    val result = ftutterBoundDrafts(next)
+    return FtutterDraftsUpdate(result.encoded, truncated || result.truncated, result.dropped)
 }
 
-internal const val FTUTTER_DRAFT_LIMIT = 100
+/** [drafts]（新しい順）を件数と全体の大きさの決まりに合わせる（1件ずつの長さは保存する時に決める）。 */
+internal fun ftutterBoundDrafts(drafts: Map<String, FtutterDraft>): FtutterDraftsUpdate {
+    val entries = drafts.entries.map { it.key to it.value }.toMutableList()
+    var truncated = false
+    var dropped = 0
+    while (entries.size > FTUTTER_DRAFT_LIMIT) { entries.removeAt(entries.lastIndex); dropped++ }
+    fun encode() = draftJson.encodeToString(draftsSerializer, LinkedHashMap<String, FtutterDraft>().apply { entries.forEach { put(it.first, it.second) } })
+    var encoded = encode()
+    while (encoded.length > FTUTTER_DRAFT_STORE_MAX_CHARS && entries.size > 1) {
+        entries.removeAt(entries.lastIndex)
+        dropped++
+        encoded = encode()
+    }
+    // 1件だけでも収まらない（書き出すと長くなる文字ばかりの本文）：本文を半分ずつ縮める。
+    while (encoded.length > FTUTTER_DRAFT_STORE_MAX_CHARS && entries.isNotEmpty()) {
+        val (k, v) = entries[0]
+        entries[0] = k to v.copy(comment = v.comment.ftutterTakeChars(v.comment.length / 2))
+        truncated = true
+        encoded = encode()
+    }
+    return FtutterDraftsUpdate(encoded, truncated, dropped)
+}
+
+private fun FtutterDraft.boundedForStore(): FtutterDraft = FtutterDraft(
+    title = title.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
+    name = name.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
+    mail = mail.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
+    comment = comment.ftutterTakeChars(FTUTTER_DRAFT_MAX_COMMENT_CHARS)
+)
+
+/** 先頭から[limit]字（絵文字などの2つで1文字のものを半分に切らない）。 */
+private fun String.ftutterTakeChars(limit: Int): String {
+    if (limit <= 0) return ""
+    if (length <= limit) return this
+    return if (this[limit - 1].isHighSurrogate() && this[limit].isLowSurrogate()) substring(0, limit - 1) else substring(0, limit)
+}
+
+internal const val FTUTTER_DRAFT_LIMIT = 20
+internal const val FTUTTER_DRAFT_MAX_COMMENT_CHARS = 4_000
+internal const val FTUTTER_DRAFT_MAX_FIELD_CHARS = 200
+internal const val FTUTTER_DRAFT_STORE_MAX_CHARS = 18_000
+
+/** 下書きを残す時に切った・古いものを落とした時の知らせ。何も無ければ null。 */
+internal fun ftutterDraftsNotice(update: FtutterDraftsUpdate): String? = when {
+    update.truncated -> "下書きが長いため、本文は先頭の${FTUTTER_DRAFT_MAX_COMMENT_CHARS}字だけ残しました"
+    update.dropped > 0 -> "下書きを残せる量を超えたため、古い下書きを${update.dropped}件消しました"
+    else -> null
+}
 
 /**
  * 開いた時のコメント：下書きのコメント、（末尾が改行でなければ改行）、引用文（原作どおり）。
@@ -120,7 +190,25 @@ internal fun ftutterGenerateDeleteKey(random: Random = Random.Default): String {
 internal data class FtutterPostInput(val draft: FtutterDraft, val image: ImageData?, val deleteKey: String)
 
 /**
+ * 書き込み画面に出す理由（監査M6）。添付の誤りと、送信の検査・失敗の理由を別々に出す（以前は添付の誤りが1つあると、
+ * 削除キーが空・本文が空・送信の失敗の理由が隠れ、押しても何も起きないように見えた）。
+ */
+internal fun ftutterPostErrors(attachmentError: String?, error: String?): List<String> =
+    listOfNotNull(attachmentError, error).filter { it.isNotBlank() }.distinct()
+
+/** 書き込む・閉じるを押せるか（監査M7：「あぷ小」のアップロード中は、ファイル名が本文に入る前に送る・閉じて放置するのを防ぐ）。 */
+internal fun ftutterPostCanSend(sending: Boolean, attachmentProcessing: Boolean, uploading: Boolean): Boolean =
+    !sending && !attachmentProcessing && !uploading
+
+internal fun ftutterPostCanClose(sending: Boolean, uploading: Boolean): Boolean = !sending && !uploading
+
+/** 打ち終わってから下書きを残すまでの間（監査M5。ふたばー風の下書きと同じ）。 */
+internal const val FTUTTER_DRAFT_AUTOSAVE_DELAY_MS = 400L
+
+/**
  * 書き込みのダイアログ（原作 KakikomiDialog）。スレッドが後ろに見える。閉じる時に下書きを保存し、送信に成功すると消す。
+ * 打っている間も[FTUTTER_DRAFT_AUTOSAVE_DELAY_MS]ごとに残す（監査M5：原作は閉じる時だけで、閉じずに画面から外れる・アプリが
+ * 終わると長文が消えた）。
  * 送信に失敗した時は、原作のように閉じず、理由を出して内容を残す。
  */
 @Composable
@@ -138,7 +226,8 @@ internal fun FtutterPostDialog(
     deviceInfo: () -> String,
     uploadUps: (suspend (ImageData, String) -> Result<String>)?,
     onDeleteKeyChange: (String) -> Unit,
-    onSaveDraft: (FtutterDraft) -> Unit,
+    /** 下書きを残す。[announce]が真の時（閉じた時）だけ、切った・古いものを落とした知らせを出す。 */
+    onSaveDraft: (draft: FtutterDraft, announce: Boolean) -> Unit,
     onSend: suspend (FtutterPostInput) -> Result<String?>,
     onSent: (String?) -> Unit,
     onDismiss: () -> Unit
@@ -157,13 +246,27 @@ internal fun FtutterPostDialog(
     var confirmOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
     var deleteKeyOpen by remember { mutableStateOf(false) }
+    // この画面で変えた削除キーは、保存が届く前でもすぐ使う（監査L11：変えてすぐ送ると古いキーで送っていた）。
+    var deleteKeyNow by remember(deleteKey) { mutableStateOf(deleteKey) }
     var upsBusy by remember { mutableStateOf(false) }
     val attachment = remember { FutaberAttachment(scope) }
+    // 送信に成功した後は、遅れて動く自動保存が送った本文を下書きへ戻さない。
+    var sent by remember { mutableStateOf(false) }
     fun draft() = FtutterDraft(title, name, mail, comment)
     fun close() {
-        if (sending) return
-        onSaveDraft(draft())
+        if (!ftutterPostCanClose(sending, upsBusy)) return
+        onSaveDraft(draft(), true)
         onDismiss()
+    }
+    LaunchedEffect(Unit) {
+        var saved = draft()
+        snapshotFlow { draft() }.collectLatest { current ->
+            if (current == saved) return@collectLatest
+            delay(FTUTTER_DRAFT_AUTOSAVE_DELAY_MS)
+            if (sending || sent) return@collectLatest
+            saved = current
+            onSaveDraft(current, false)
+        }
     }
     val pick = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
         preference = pickerPreference,
@@ -184,7 +287,7 @@ internal fun FtutterPostDialog(
             }
             upsBusy = true
             scope.launch {
-                upload(picked, deleteKey)
+                upload(picked, deleteKeyNow)
                     .onSuccess { file -> comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, file) }
                     .onFailure { error = it.message ?: "アップロードできませんでした" }
                 upsBusy = false
@@ -192,8 +295,10 @@ internal fun FtutterPostDialog(
         }
     )
     fun send() {
-        if (sending) return
-        com.valoser.futacha.shared.ui.board.validateThreadReplyForm(deleteKey, comment)?.let {
+        if (!ftutterPostCanSend(sending, attachment.processing, upsBusy)) return
+        // 拒否された添付の誤りは、添付が付いていないので送信には関わらない。押したら消して、今回の理由を見せる。
+        attachment.clearError()
+        com.valoser.futacha.shared.ui.board.validateThreadReplyForm(deleteKeyNow, comment)?.let {
             error = it
             return
         }
@@ -201,7 +306,7 @@ internal fun FtutterPostDialog(
         error = null
         scope.launch {
             val result = try {
-                onSend(FtutterPostInput(draft(), attachment.image, deleteKey))
+                onSend(FtutterPostInput(draft(), attachment.image, deleteKeyNow))
             } catch (cancelled: CancellationException) {
                 sending = false
                 throw cancelled
@@ -210,7 +315,8 @@ internal fun FtutterPostDialog(
             }
             sending = false
             result.onSuccess { posted ->
-                onSaveDraft(FtutterDraft())
+                sent = true
+                onSaveDraft(FtutterDraft(), false)
                 onSent(posted)
             }.onFailure { error = it.message ?: "書き込みに失敗しました" }
         }
@@ -272,7 +378,16 @@ internal fun FtutterPostDialog(
                         }
                     }
                 }
-                (attachment.error ?: error)?.let { Text(it, color = colors.deleted, modifier = Modifier.testTag("ftutter-post-error")) }
+                if (!(imgB && isReply)) {
+                    // 他のアプリから共有された画像（監査M12：他の3モードと同じく、ここで添付するか破棄する。以前はこのモードに
+                    // ボタンが無く、案内だけ出て添付できず、画像がメモリに残った）。
+                    com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending) {
+                        attachment.offer(it, capabilities, isReply)
+                    }
+                }
+                ftutterPostErrors(attachment.error, error).forEach {
+                    Text(it, color = colors.deleted, modifier = Modifier.testTag("ftutter-post-error"))
+                }
                 attachment.pendingCompression?.let { pending ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("容量を超えています。圧縮しますか？", color = colors.text, modifier = Modifier.weight(1f))
@@ -289,12 +404,12 @@ internal fun FtutterPostDialog(
                 }
                 TextButton(
                     onClick = { if (confirmBeforePost) confirmOpen = true else send() },
-                    enabled = !sending && !attachment.processing,
+                    enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
                     modifier = Modifier.testTag("ftutter-post-send")
                 ) { Text("書き込む") }
             }
         },
-        dismissButton = { TextButton(onClick = ::close, enabled = !sending) { Text("閉じる") } }
+        dismissButton = { TextButton(onClick = ::close, enabled = ftutterPostCanClose(sending, upsBusy)) { Text("閉じる") } }
     ) }
     if (confirmOpen) {
         FutachaAppLockAwareWindow { AlertDialog(
@@ -319,8 +434,9 @@ internal fun FtutterPostDialog(
         ) }
     }
     if (deleteKeyOpen) {
-        FtutterDeleteKeyDialog(deleteKey, onDismiss = { deleteKeyOpen = false }) { key ->
+        FtutterDeleteKeyDialog(deleteKeyNow, onDismiss = { deleteKeyOpen = false }) { key ->
             deleteKeyOpen = false
+            deleteKeyNow = key
             onDeleteKeyChange(key)
         }
     }
@@ -336,7 +452,9 @@ internal fun FtutterDeleteKeyDialog(current: String, onDismiss: () -> Unit, onSa
         title = { Text("削除キー") },
         text = {
             Column {
+                // 英数字のパスワード用キーボード（監査L10：日本語のキーボードの変換中の文字を捨てて文字が重なり、学習辞書にも残った）。
                 OutlinedTextField(value, { value = ftutterNormalizeDeleteKey(it); error = null }, singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth().testTag("ftutter-delete-key"))
                 error?.let { Text(it) }
             }
@@ -361,6 +479,7 @@ internal fun FtutterDeletePostDialog(postNo: String, deleteKey: String, onDismis
             Column {
                 Text("No.$postNo")
                 OutlinedTextField(key, { key = ftutterNormalizeDeleteKey(it) }, label = { Text("削除キー") }, singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                     visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 Row(Modifier.clickable { imageOnly = !imageOnly }, verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.material3.Checkbox(checked = imageOnly, onCheckedChange = { imageOnly = it })

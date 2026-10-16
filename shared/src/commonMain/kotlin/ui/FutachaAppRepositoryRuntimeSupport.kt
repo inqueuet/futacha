@@ -126,6 +126,7 @@ internal suspend fun fetchFutachaUpdateInfoIfEnabled(
     versionChecker: VersionChecker?,
     onFailure: (Throwable) -> Unit = {}
 ): UpdateInfo? {
+    if (!enabled && versionChecker?.mayRequireUpdate == false) return null
     val updateInfo = fetchFutachaUpdateInfo(versionChecker, onFailure)
     return updateInfo?.takeIf { enabled || it.promptStyle == UpdatePromptStyle.IMMEDIATE }
 }

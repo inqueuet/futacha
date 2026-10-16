@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -199,59 +200,61 @@ internal fun CatalogNavigationBar(
     val visibleEntries = remember(menuEntries) {
         resolveCatalogNavBarEntries(menuEntries)
     }
-    NavigationBar(
-        modifier = modifier,
-        containerColor = chromeColors.bottomBar,
-        contentColor = chromeColors.onBar,
-        windowInsets = if (isAndroid()) NavigationBarDefaults.windowInsets else WindowInsets()
-    ) {
-        visibleEntries.forEach { entry ->
-            val meta = entry.id.toMeta()
-            NavigationBarItem(
-                selected = false,
-                enabled = !(isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog),
-                onClick = {
-                    AnalyticsTracker.uiControl("catalog_navigation_action", meta.label)
-                    onNavigate(entry.id)
-                },
-                icon = {
-                    if (isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog) {
-                        CircularProgressIndicator(
-                            // NavigationBar icons occupy a 24dp box. Keep the
-                            // in-progress replacement in that same box so the
-                            // refresh item does not visibly shrink mid-update.
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            color = chromeColors.onBar
-                        )
-                    } else {
-                        Icon(
-                            imageVector = meta.icon,
-                            contentDescription = meta.label
-                        )
-                    }
-                },
-                label = {
-                    Text(
-                        text = if (isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog) {
-                            "更新中"
+    ScrollableToolbarRow(itemCount = visibleEntries.size, modifier = modifier, minItemWidth = 48.dp) {
+        NavigationBar(
+            modifier = Modifier.fillMaxWidth(),
+            containerColor = chromeColors.bottomBar,
+            contentColor = chromeColors.onBar,
+            windowInsets = if (isAndroid()) NavigationBarDefaults.windowInsets else WindowInsets()
+        ) {
+            visibleEntries.forEach { entry ->
+                val meta = entry.id.toMeta()
+                NavigationBarItem(
+                    selected = false,
+                    enabled = !(isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog),
+                    onClick = {
+                        AnalyticsTracker.uiControl("catalog_navigation_action", meta.label)
+                        onNavigate(entry.id)
+                    },
+                    icon = {
+                        if (isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog) {
+                            CircularProgressIndicator(
+                                // NavigationBar icons occupy a 24dp box. Keep the
+                                // in-progress replacement in that same box so the
+                                // refresh item does not visibly shrink mid-update.
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                                color = chromeColors.onBar
+                            )
                         } else {
-                            meta.label
-                        },
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelSmall
+                            Icon(
+                                imageVector = meta.icon,
+                                contentDescription = meta.label
+                            )
+                        }
+                    },
+                    label = {
+                        Text(
+                            text = if (isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog) {
+                                "更新中"
+                            } else {
+                                meta.label
+                            },
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = chromeColors.onBar,
+                        selectedTextColor = chromeColors.onBar,
+                        unselectedIconColor = chromeColors.onBar,
+                        unselectedTextColor = chromeColors.onBar,
+                        indicatorColor = chromeColors.onBar.copy(alpha = 0.14f)
                     )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = chromeColors.onBar,
-                    selectedTextColor = chromeColors.onBar,
-                    unselectedIconColor = chromeColors.onBar,
-                    unselectedTextColor = chromeColors.onBar,
-                    indicatorColor = chromeColors.onBar.copy(alpha = 0.14f)
                 )
-            )
+            }
         }
     }
 }

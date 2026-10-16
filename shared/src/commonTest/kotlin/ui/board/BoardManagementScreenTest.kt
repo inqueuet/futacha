@@ -6,6 +6,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.mutableStateOf
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -473,6 +474,29 @@ class BoardManagementScreenTest {
         )
         assertTrue(isAddDialogVisible)
         assertTrue(isGlobalSettingsVisible)
+    }
+
+    /** Re-audit L36: the drawer closes at once after the batch delete, not when the snackbar goes away. */
+    @Test
+    fun batchDeleteClosesTheDrawerWhileTheSnackbarIsShown() = runBlocking {
+        var drawerClosedCount = 0
+        val snackbarShown = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val callbacks = buildBoardManagementHistoryDrawerCallbacks(
+            coroutineScope = this,
+            closeDrawer = { drawerClosedCount += 1 },
+            onHistoryEntrySelected = {},
+            onHistoryRefresh = {},
+            onHistoryCleared = {},
+            // A snackbar stays until it is dismissed.
+            showSnackbar = { snackbarShown.complete(Unit); kotlinx.coroutines.awaitCancellation() },
+            currentIsHistoryRefreshing = { false },
+            setIsHistoryRefreshing = {}
+        )
+        callbacks.onBatchDeleteClick()
+        snackbarShown.await()
+        yield()
+        assertEquals(1, drawerClosedCount)
+        coroutineContext.cancelChildren()
     }
 
     @Test

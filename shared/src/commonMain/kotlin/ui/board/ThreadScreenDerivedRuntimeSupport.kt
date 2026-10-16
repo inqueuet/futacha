@@ -164,14 +164,14 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         derivedUiState.shouldPrepareReadAloudSegments
     ) {
         derivedStateOf {
-            buildThreadScreenDerivedRuntimeSnapshot(
-                derivedUiState = derivedUiState,
-                isSearchActive = isSearchActive,
-                searchMatches = searchMatches,
-                readAloudSegments = readAloudSegments,
+            // Only the segment index: the search's highlight table was built and thrown away on every scroll frame
+            // (re-audit L30).
+            if (!derivedUiState.shouldPrepareReadAloudSegments || readAloudSegments.isEmpty()) -1
+            else findFirstVisibleReadAloudSegmentIndex(
+                readAloudSegments,
                 // Segment indices count displayed posts, not list rows.
-                firstVisibleItemIndex = lazyListState.firstVisibleItemIndex - readAloudItemsBeforePosts
-            ).firstVisibleSegmentIndex
+                lazyListState.firstVisibleItemIndex - readAloudItemsBeforePosts
+            )
         }
     }
     val firstVisibleSegmentIndex = remember(firstVisibleSegmentIndexState) {

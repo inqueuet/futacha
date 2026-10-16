@@ -68,12 +68,12 @@ internal fun GlobalSettingsCatalogMenuSection(
             }
         }
         HorizontalDivider()
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("バー:")
             if (catalogMenuState.barEntries.isEmpty()) {
@@ -215,12 +215,12 @@ internal fun GlobalSettingsThreadMenuSection(
             }
         }
         HorizontalDivider()
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("バー:")
             if (threadMenuState.barEntries.isEmpty()) {
@@ -232,12 +232,12 @@ internal fun GlobalSettingsThreadMenuSection(
                 }
             }
         }
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("設定:")
             if (threadMenuState.sheetEntries.isEmpty()) {

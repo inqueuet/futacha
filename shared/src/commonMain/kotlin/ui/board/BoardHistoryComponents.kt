@@ -669,8 +669,14 @@ internal fun HistoryExportSelectionDialog(
 ) {
     // Keyed by thread identity and kept while the dialog is open: history
     // changes (visits, refreshes) shift indices and used to reset the choice.
-    var selectedKeys by remember {
-        mutableStateOf(history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey))
+    // Changed in place: a tick of one row no longer copies a set of up to 20,000 keys twice (re-audit L30).
+    val selectedKeys = remember {
+        androidx.compose.runtime.mutableStateMapOf<String, Boolean>().also { selected ->
+            history.forEach { selected[buildHistoryExportSelectionKey(it)] = true }
+        }
+    }
+    val anySelected by remember(history) {
+        androidx.compose.runtime.derivedStateOf { history.any { buildHistoryExportSelectionKey(it) in selectedKeys } }
     }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
@@ -682,7 +688,7 @@ internal fun HistoryExportSelectionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
-                        selectedKeys = history.mapTo(linkedSetOf(), ::buildHistoryExportSelectionKey)
+                        history.forEach { selectedKeys[buildHistoryExportSelectionKey(it)] = true }
                         historyArchiveUiControl(trackAnalytics, 
                             "history_export_selection",
                             "履歴エクスポート対象を全選択",
@@ -692,7 +698,7 @@ internal fun HistoryExportSelectionDialog(
                         Text("全選択")
                     }
                     TextButton(onClick = {
-                        selectedKeys = linkedSetOf()
+                        selectedKeys.clear()
                         historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート対象を全解除")
                     }) {
                         Text("解除")
@@ -711,9 +717,7 @@ internal fun HistoryExportSelectionDialog(
                             entry = entry,
                             checked = key in selectedKeys,
                             onCheckedChange = { checked ->
-                                selectedKeys = selectedKeys.toMutableSet().also { keys ->
-                                    if (checked) keys.add(key) else keys.remove(key)
-                                }.toCollection(linkedSetOf())
+                                if (checked) selectedKeys[key] = true else selectedKeys.remove(key)
                                 historyArchiveUiControl(trackAnalytics, 
                                     "history_export_selection",
                                     if (checked) "履歴をエクスポート対象に追加" else "履歴をエクスポート対象から除外",
@@ -727,7 +731,7 @@ internal fun HistoryExportSelectionDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = history.any { buildHistoryExportSelectionKey(it) in selectedKeys },
+                enabled = anySelected,
                 onClick = {
                     val selectedEntries = history.filter { entry ->
                         buildHistoryExportSelectionKey(entry) in selectedKeys

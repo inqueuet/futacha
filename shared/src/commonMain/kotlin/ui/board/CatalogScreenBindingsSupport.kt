@@ -168,8 +168,9 @@ internal fun buildCatalogHistoryDrawerCallbacks(
             AnalyticsTracker.event("history_drawer_action", mapOf("action" to "clear"))
             coroutineScope.launch {
                 onHistoryCleared()
+                // The drawer closes at once; the snackbar (which waits until it goes away) comes after (re-audit L36).
+                launch { drawerState.close() }
                 showSnackbar("履歴を一括削除しました")
-                drawerState.close()
             }
         },
         onSettingsClick = {

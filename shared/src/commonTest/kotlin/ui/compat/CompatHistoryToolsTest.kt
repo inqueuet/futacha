@@ -180,7 +180,7 @@ class CompatHistoryToolsTest {
     fun importMessagesSayWhatComesBackInThisMode() {
         val done = compatHistoryImportMessage("履歴アーカイブを読み込みました: 3件、追加1件、更新2件")
         assertTrue(done.contains("としあき(仮)では履歴の一覧だけが戻り、保存した本文はふたちゃで開けます"))
-        assertTrue(done.contains("としあき(仮)の履歴は新しい順に200件まで表示されます"))
+        assertTrue(done.contains("としあき(仮)の履歴は新しい順に200件まで保存され、ドロワーには100件まで表示されます"))
         assertEquals("インポートできる履歴アーカイブがありません", compatHistoryImportMessage("インポートできる履歴アーカイブがありません"))
     }
 
@@ -191,5 +191,36 @@ class CompatHistoryToolsTest {
         assertEquals("履歴を更新しました", compatHistoryRefreshResultMessage(old, 100L))
         val now = old.copy(timestamp = 150L)
         assertEquals("履歴を更新しました（5件中2件は取得できませんでした）", compatHistoryRefreshResultMessage(now, 100L))
+    }
+
+    /** 監査M22：裏で作るドロワーの行は、行の対応・絞り込み・印・件数とも以前（画面の中で作っていた）と同じ。 */
+    @Test
+    fun theToolsViewBuiltOffTheMainThreadMatchesTheRows() {
+        val histories = (1..300).map { compat("${1000 + it}", if (it % 3 == 0) "ねこ$it" else "犬$it", visited = it.toLong(), replies = it) }
+        val shared = (1..300 step 2).map { shared("${1000 + it}", dead = it % 4 == 1, saved = it % 5 == 0) }
+        val settings = com.valoser.futacha.shared.ui.board.HistoryViewSettings(titleQuery = "ねこ")
+        val view = buildCompatHistoryToolsView(histories, shared, emptySet(), settings)
+        val rows = buildCompatHistoryToolRows(histories, shared, emptySet())
+        assertEquals(applyCompatHistoryTools(rows, settings).map { it.entry }, view.entries)
+        assertEquals(300, view.totalCount)
+        assertEquals(
+            rows.associate { it.entry.canonicalUrl to com.valoser.futacha.shared.ui.futaber.futaberHistoryMarks(it.view) }.filterValues(String::isNotEmpty),
+            view.marks
+        )
+        assertEquals(true, view.entries.all { it.title.startsWith("ねこ") })
+    }
+
+    /** Re-audit L13: a long build of the drawer's rows checks for cancellation, so it gives way when its inputs change. */
+    @Test
+    fun aLongBuildOfTheRowsGivesWayWhenCancelled() {
+        val histories = (1..1_000).map { compat("$it", "スレ$it", visited = it.toLong()) }
+        var checks = 0
+        kotlin.test.assertFailsWith<kotlinx.coroutines.CancellationException> {
+            buildCompatHistoryToolRows(histories, emptyList(), emptySet()) {
+                checks++
+                if (checks > 1) throw kotlinx.coroutines.CancellationException("inputs changed")
+            }
+        }
+        kotlin.test.assertEquals(2, checks)
     }
 }

@@ -87,4 +87,11 @@ class CompatCatalogExtraModeTest {
         assertEquals(emptyList(), fetchCompatCatalogItems(none, "https://may.2chan.net/b/", CatalogMode.New, CompatCatalogExtraMode.WATCH, settings) { emptyList() })
         assertEquals(emptyList(), none.modes)
     }
+
+    /** Re-audit L14: "前の状態に戻す" says it cannot go back in "そ順"/"監視" instead of showing the board's own order. */
+    @Test
+    fun theExtraOrdersRefuseGoingBack() {
+        kotlin.test.assertNull(compatCatalogRollbackRefusal(null))
+        kotlin.test.assertEquals("「監視」の一覧は前の状態に戻せません", compatCatalogRollbackRefusal(CompatCatalogExtraMode.WATCH))
+    }
 }

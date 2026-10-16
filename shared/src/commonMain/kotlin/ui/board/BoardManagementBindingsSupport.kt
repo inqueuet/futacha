@@ -163,8 +163,9 @@ internal fun buildBoardManagementHistoryDrawerCallbacks(
         onBatchDeleteClick = {
             coroutineScope.launch {
                 onHistoryCleared()
+                // The drawer closes at once; the snackbar (which waits until it goes away) comes after (re-audit L36).
+                launch { closeDrawer() }
                 showSnackbar(buildBoardManagementHistoryBatchDeleteMessage())
-                closeDrawer()
             }
         }
     )

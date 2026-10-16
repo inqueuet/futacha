@@ -370,12 +370,19 @@ internal fun rememberCompatThreadAi(
     var summaryPart by remember(threadKey, service, summaryEnabled) {
         mutableStateOf(CompatThreadAiSummaryPart(running = summaryEnabled && snapshot != null))
     }
-    val orderedIds = remember(displayedPosts) { displayedPosts.map { it.postNo } }
-    val itemKeys = remember(displayedPosts) { displayedPosts.associate { "${it.postNo}:${it.position}" to it.postNo } }
+    // Nothing is copied or compared while the AI is off (re-audit L18).
+    val orderedIds = remember(displayedPosts, moderationEnabled) {
+        if (moderationEnabled) displayedPosts.map { it.postNo } else emptyList()
+    }
+    val itemKeys = remember(displayedPosts, moderationEnabled) {
+        if (moderationEnabled) displayedPosts.associate { "${it.postNo}:${it.position}" to it.postNo } else emptyMap()
+    }
     val nearbyIds = rememberModerationViewport(listState, orderedIds, itemKeys, moderationEnabled)
     // The viewport is followed inside the worker, so scrolling never restarts or cancels a batch.
     // Summary runs beside moderation instead of waiting behind it.
-    val sourceKey = remember(snapshot) { snapshot?.let(::buildCompatThreadAiSourceKey) }
+    val sourceKey = remember(snapshot, summaryEnabled || moderationEnabled) {
+        if (summaryEnabled || moderationEnabled) snapshot?.let(::buildCompatThreadAiSourceKey) else null
+    }
     LaunchedEffect(sourceKey, title, service, summaryEnabled, moderationEnabled, retry) {
         val source = snapshot ?: return@LaunchedEffect
         // Each suspended request cancels by request ID; a service-wide stop can hit its successor.

@@ -29,7 +29,11 @@ import kotlinx.coroutines.Job
 
 internal sealed interface CatalogUiState {
     data object Loading : CatalogUiState
-    data class Success(val content: CatalogPageContent) : CatalogUiState
+    /**
+     * [partial]: a step of a list still being made (the board's own catalog shown while the watch-word sources are
+     * fetched). It is shown, but not kept as the catalog's history (re-audit M32).
+     */
+    data class Success(val content: CatalogPageContent, val partial: Boolean = false) : CatalogUiState
     data class Error(val message: String = "カタログを読み込めませんでした") : CatalogUiState
 }
 

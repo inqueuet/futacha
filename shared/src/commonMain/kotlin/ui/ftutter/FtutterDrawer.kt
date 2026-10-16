@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,6 +37,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DismissibleDrawerSheet
 import androidx.compose.material3.DrawerState
@@ -58,6 +62,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -171,10 +176,24 @@ internal fun FtutterDrawerPanel(
     onOpen: (String) -> Unit,
     onLongPress: (String) -> Unit,
     onClose: (String) -> Unit,
-    onToggleProtect: (String) -> Unit
+    onToggleProtect: (String) -> Unit,
+    /** 拡張「履歴の選択削除・すべて削除」。ONの時だけ「履歴」の上に選択のボタンを出す。 */
+    historyTools: Boolean = false,
+    /** 変わると選択をやめる（ドロワーを閉じた時など）。 */
+    selectionReset: Any? = null,
+    onDeleteHistory: (List<String>) -> Unit = {},
+    onDeleteAllHistory: () -> Unit = {}
 ) {
     val colors = LocalFtutterColors.current
     var searching by remember { mutableStateOf(filter.query.isNotEmpty()) }
+    val toolsShown = historyTools && content == FtutterDrawerContent.HISTORY
+    var selecting by remember(toolsShown, selectionReset) { mutableStateOf(false) }
+    var selected by remember(toolsShown, selectionReset) { mutableStateOf(emptySet<String>()) }
+    var confirmSelected by remember { mutableStateOf(false) }
+    var confirmAll by remember { mutableStateOf(false) }
+    // 見えている行だけを選べる（絞り込みで隠れた行は選択から外す）。
+    val visibleUrls = remember(rows) { rows.map { it.url }.toSet() }
+    val chosen = selected intersect visibleUrls
     Column(Modifier.fillMaxSize().background(colors.background)) {
         Row(
             Modifier.fillMaxWidth().background(colors.toolBar).statusBarsPadding().height(56.dp),
@@ -202,8 +221,17 @@ internal fun FtutterDrawerPanel(
                     }
                 }
             }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                if (closedCount > 0) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (toolsShown && selecting) {
+                    IconButton(onClick = { confirmAll = true }, modifier = Modifier.testTag("ftutter-drawer-history-delete-all")) {
+                        Icon(Icons.Rounded.DeleteSweep, contentDescription = "履歴をすべて削除", tint = colors.onToolBar)
+                    }
+                } else if (toolsShown) {
+                    IconButton(onClick = { selecting = true; selected = emptySet() }, modifier = Modifier.testTag("ftutter-drawer-history-select")) {
+                        Icon(Icons.Rounded.Checklist, contentDescription = "履歴を選んで削除", tint = colors.onToolBar)
+                    }
+                }
+                if (closedCount > 0 && !selecting) {
                     IconButton(onClick = onRestoreClosed, modifier = Modifier.testTag("ftutter-drawer-restore")) {
                         Icon(Icons.Rounded.RestoreFromTrash, contentDescription = "閉じたタブを開く", tint = colors.onToolBar)
                     }
@@ -222,6 +250,15 @@ internal fun FtutterDrawerPanel(
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("ftutter-drawer-list")) {
             items(rows, key = { it.url }) { row ->
+                if (selecting) {
+                    FtutterDrawerRow(
+                        row, design,
+                        onOpen = { url -> selected = if (url in selected) selected - url else selected + url },
+                        onLongPress = {},
+                        checked = row.url in chosen
+                    )
+                    return@items
+                }
                 val swipeable = row.isTab && content != FtutterDrawerContent.HISTORY && dismissDirection != FtutterDismissDirection.NONE
                 if (swipeable) {
                     FtutterSwipeRow(row, dismissDirection, onClose, onToggleProtect) {
@@ -233,24 +270,80 @@ internal fun FtutterDrawerPanel(
             }
         }
         HorizontalDivider(color = colors.outline)
-        Row(Modifier.fillMaxWidth().height(48.dp).background(colors.toolBar).navigationBarsPadding()) {
-            FtutterDrawerCheck("書込", filter.writtenOnly, Modifier.weight(1f).testTag("ftutter-drawer-written")) {
-                onFilterChange(filter.copy(writtenOnly = !filter.writtenOnly))
+        if (selecting) {
+            // 選択中：全選択・全解除／選んだものを削除／やめる。
+            Row(Modifier.fillMaxWidth().height(48.dp).background(colors.toolBar).navigationBarsPadding()) {
+                val allChosen = rows.isNotEmpty() && chosen.size == rows.size
+                FtutterDrawerCheck(if (allChosen) "全解除" else "全選択", allChosen, Modifier.weight(1f).testTag("ftutter-drawer-history-select-all")) {
+                    selected = if (allChosen) emptySet() else visibleUrls
+                }
+                VerticalDivider(color = colors.outline)
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().clickable(enabled = chosen.isNotEmpty()) { confirmSelected = true }
+                        .testTag("ftutter-drawer-history-delete-selected"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "削除（${chosen.size}）", fontSize = 16.sp,
+                        color = if (chosen.isNotEmpty()) colors.onToolBar else colors.onToolBar.copy(alpha = 0.38f)
+                    )
+                }
+                VerticalDivider(color = colors.outline)
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().clickable { selecting = false; selected = emptySet() }
+                        .testTag("ftutter-drawer-history-select-cancel"),
+                    contentAlignment = Alignment.Center
+                ) { Text("やめる", color = colors.onToolBar, fontSize = 16.sp) }
             }
-            VerticalDivider(color = colors.outline)
-            FtutterDrawerCheck("未読", filter.unreadOnly, Modifier.weight(1f).testTag("ftutter-drawer-unread")) {
-                onFilterChange(filter.copy(unreadOnly = !filter.unreadOnly))
+        } else {
+            Row(Modifier.fillMaxWidth().height(48.dp).background(colors.toolBar).navigationBarsPadding()) {
+                FtutterDrawerCheck("書込", filter.writtenOnly, Modifier.weight(1f).testTag("ftutter-drawer-written")) {
+                    onFilterChange(filter.copy(writtenOnly = !filter.writtenOnly))
+                }
+                VerticalDivider(color = colors.outline)
+                FtutterDrawerCheck("未読", filter.unreadOnly, Modifier.weight(1f).testTag("ftutter-drawer-unread")) {
+                    onFilterChange(filter.copy(unreadOnly = !filter.unreadOnly))
+                }
+                VerticalDivider(color = colors.outline)
+                IconButton(
+                    onClick = {
+                        searching = !searching
+                        if (!searching) onFilterChange(filter.copy(query = ""))
+                    },
+                    modifier = Modifier.width(56.dp).fillMaxHeight().testTag("ftutter-drawer-search-toggle")
+                ) {
+                    FtutterToggleIcon(Icons.Rounded.Search, contentDescription = "タイトル検索", active = searching)
+                }
             }
-            VerticalDivider(color = colors.outline)
-            IconButton(
-                onClick = {
-                    searching = !searching
-                    if (!searching) onFilterChange(filter.copy(query = ""))
-                },
-                modifier = Modifier.width(56.dp).fillMaxHeight().testTag("ftutter-drawer-search-toggle")
-            ) {
-                FtutterToggleIcon(Icons.Rounded.Search, contentDescription = "タイトル検索", active = searching)
-            }
+        }
+    }
+    if (confirmSelected) {
+        FtutterConfirmDialog(
+            title = "履歴を削除しますか？",
+            message = "選んだ${chosen.size}件の履歴を削除します。タブも閉じます。",
+            confirmLabel = "OK",
+            onDismiss = { confirmSelected = false }
+        ) {
+            confirmSelected = false
+            onDeleteHistory(rows.map { it.url }.filter { it in chosen })
+            selecting = false
+            selected = emptySet()
+        }
+    }
+    if (confirmAll) {
+        FtutterConfirmDialog(
+            title = "履歴をすべて削除しますか？",
+            // 監査L13：ここに出ていない履歴（未登録の板・絞り込みで隠れた行）も消え、履歴は他のモードと共有であることを伝える。
+            message = "保護したスレッドの履歴は残します。削除した履歴のタブも閉じます。\n" +
+                "ここに出ていない履歴（未登録の板のスレ、絞り込みで隠れているスレ）も消えます。履歴はふたちゃ・ふたばー風と共有なので、" +
+                "そちらの履歴からも消えます。",
+            confirmLabel = "OK",
+            onDismiss = { confirmAll = false }
+        ) {
+            confirmAll = false
+            onDeleteAllHistory()
+            selecting = false
+            selected = emptySet()
         }
     }
 }
@@ -316,16 +409,26 @@ private fun FtutterDrawerRow(
     row: FtutterTabView,
     design: FtutterDesignSettings,
     onOpen: (String) -> Unit,
-    onLongPress: (String) -> Unit
+    onLongPress: (String) -> Unit,
+    /** 選択中だけ値がある（null は通常の行）。 */
+    checked: Boolean? = null
 ) {
     val colors = LocalFtutterColors.current
     val entry = row.entry
     Column(
         Modifier.fillMaxWidth().background(colors.background)
             .combinedClickable(onClick = { onOpen(row.url) }, onLongClick = { onLongPress(row.url) })
-            .testTag("ftutter-drawer-row")
+            .testTag(if (checked == true) "ftutter-drawer-row-checked" else "ftutter-drawer-row")
     ) {
         Row(Modifier.fillMaxWidth().height(66.dp).padding(4.dp)) {
+            if (checked != null) {
+                Icon(
+                    if (checked) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
+                    contentDescription = if (checked) "選択中" else "未選択",
+                    tint = colors.text,
+                    modifier = Modifier.align(Alignment.CenterVertically).padding(end = 4.dp)
+                )
+            }
             Box(Modifier.size(58.dp).clip(RoundedCornerShape(2.dp))) {
                 entry?.titleImageUrl?.takeIf { it.isNotBlank() }?.let { thumb ->
                     CatalogPreviewImage(
@@ -433,45 +536,56 @@ internal fun FtutterTabStrip(
     onOpen: (String) -> Unit,
     onLongPress: (String) -> Unit,
     /** 長押しのまま横へ動かすと並べ替え（原作 DraggableTabbar。`disableDragTab`がONなら並べ替えない）。 */
-    onMove: ((from: Int, to: Int) -> Unit)? = null
+    onMove: ((from: Int, to: Int) -> Unit)? = null,
+    /** タブ帯の位置。スレ画面はスレッドごとに作り直すので、アプリ側で持って渡す（再監査M3：切り替えると先頭に戻った）。 */
+    listState: LazyListState = rememberLazyListState()
 ) {
     val colors = LocalFtutterColors.current
     if (tabs.isEmpty()) return
     var dragging by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableStateOf(0f) }
+    // ジェスチャーの処理は、タブのURLだけを鍵にして続ける。並べ替えの口と並びは最新を読む（監査M8：毎回作り直される口と位置を
+    // 鍵にしていたので、ドラッグ中に履歴の更新などで組み直されると処理が取り消され、ずらした表示が残っていた）。
+    val currentTabs by rememberUpdatedState(tabs)
+    val currentOnMove by rememberUpdatedState(onMove)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
     LazyRow(
-        Modifier.fillMaxWidth().height(settings.tabHeight.dp).background(colors.toolBar).testTag("ftutter-tab-strip")
+        Modifier.fillMaxWidth().height(settings.tabHeight.dp).background(colors.toolBar).testTag("ftutter-tab-strip"),
+        state = listState
     ) {
         items(tabs, key = { it.url }) { tab ->
             val selected = tab.url == opening
-            val index = tabs.indexOf(tab)
             val widthPx = with(androidx.compose.ui.platform.LocalDensity.current) { settings.tabWidth.dp.toPx() }
             Box(
                 Modifier.width(settings.tabWidth.dp).fillMaxHeight().padding(1.dp)
                     .then(if (dragging == tab.url) Modifier.offset { androidx.compose.ui.unit.IntOffset(dragOffset.toInt(), 0) } else Modifier)
                     .then(if (selected) Modifier.border(2.dp, colors.onToolBarActive) else Modifier)
                     .clickable { onOpen(tab.url) }
-                    .pointerInput(tab.url, index, onMove) {
+                    .pointerInput(tab.url) {
                         // 長押しで始まる。動かさずに離せばメニュー、横へ動かせば並べ替え。
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { dragging = tab.url; dragOffset = 0f },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                if (onMove != null) dragOffset += amount.x
-                            },
-                            onDragEnd = {
-                                val moved = (dragOffset / widthPx).let { kotlin.math.round(it).toInt() }
-                                val wasDragged = kotlin.math.abs(dragOffset) > widthPx / 3
+                        try {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { dragging = tab.url; dragOffset = 0f },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    if (currentOnMove != null) dragOffset += amount.x
+                                },
+                                onDragEnd = {
+                                    val move = ftutterTabDragMove(currentTabs.map { it.url }, tab.url, dragOffset, widthPx)
+                                    dragging = null
+                                    dragOffset = 0f
+                                    val onMoveNow = currentOnMove
+                                    if (onMoveNow != null && move != null) onMoveNow(move.first, move.second) else currentOnLongPress(tab.url)
+                                },
+                                onDragCancel = { dragging = null; dragOffset = 0f }
+                            )
+                        } finally {
+                            // 処理が取り消された時も、ずらした表示を残さない。
+                            if (dragging == tab.url) {
                                 dragging = null
                                 dragOffset = 0f
-                                if (onMove != null && wasDragged && moved != 0) {
-                                    onMove(index, (index + moved).coerceIn(0, tabs.lastIndex))
-                                } else {
-                                    onLongPress(tab.url)
-                                }
-                            },
-                            onDragCancel = { dragging = null; dragOffset = 0f }
-                        )
+                            }
+                        }
                     }
                     .semantics { onLongClick(label = "タブの操作") { onLongPress(tab.url); true } }
                     .testTag(if (selected) "ftutter-tab-selected" else "ftutter-tab")

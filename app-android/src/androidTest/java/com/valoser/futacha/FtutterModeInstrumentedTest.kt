@@ -27,6 +27,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import androidx.test.core.app.ApplicationProvider
 import com.valoser.futacha.shared.compat.ExperienceProfile
+import com.valoser.futacha.shared.compat.toCompatHistoryEntry
 import kotlin.math.abs
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -52,8 +53,8 @@ class FtutterModeInstrumentedTest {
         "compat.ftutter.deleteKey", "compat.manualPostMarks", "compat.ftutter.resuDOrderName", "compat.ftutter.resuDOrderBool",
         "compat.ftutter.Gesture12", "compat.ftutter.useTabletMode", "compat.ftutter.sureTBOrderName", "compat.ftutter.sureTBOrderBool",
         "compat.ftutter.gazouItiranRow", "compat.ftutter.showGalleryTab", "compat.ftutter.mainColor", "compat.ftutter.numOnThumb",
-        "compat.ftutter.stats.opened", "compat.ftutter.drawerButtonOnTopLeft"
-    ) + listOf("commonNg", "imageMenu", "readAloud", "autoScroll", "mht", "ai", "watcher", "archiveSearch", "appLock")
+        "compat.ftutter.stats.opened", "compat.ftutter.drawerButtonOnTopLeft", "compat.ftutter.rirekiLimit"
+    ) + listOf("commonNg", "imageMenu", "readAloud", "autoScroll", "mht", "ai", "watcher", "archiveSearch", "appLock", "historyTools")
         .map { "compat.ftutter.ext.$it" }
     /** 共通のNG（拡張「共通のNGを使う」の試験で書く）。前後で元に戻す。 */
     private var originalNg: Triple<List<String>, List<String>, List<String>>? = null
@@ -296,6 +297,8 @@ class FtutterModeInstrumentedTest {
     }
 
     @Test fun openingAThreadAddsItsTabFirstAndTheDrawerListsIt() {
+        // 起動時は履歴に無いタブを閉じる（原作）ので、タブのスレッドは履歴にも入れておく。
+        seedHistory(fakeTab2)
         runBlocking { app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2) }
         openTutorialThread()
         runCatching { rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab2) } }
@@ -312,6 +315,7 @@ class FtutterModeInstrumentedTest {
     }
 
     @Test fun swipingARowClosesItAndTheRestoreButtonPutsItBack() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
         runBlocking { app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n")) }
         openTutorialCatalog()
         openDrawerOnTabs()
@@ -331,6 +335,7 @@ class FtutterModeInstrumentedTest {
     }
 
     @Test fun closeAllKeepsProtectedTabsAndAProtectedTabAsksBeforeClosing() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
         runBlocking {
             app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n"))
             app.compatibilityStore.savePreference("compat.ftutter.protected", fakeTab2)
@@ -426,6 +431,74 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-ng-error")
     }
 
+    /**
+     * 再監査H1：Androidの正規表現は照合を途中で止められない。破滅的なパターンを登録しようとしても、画面は止まらず、
+     * 少しの時間で「時間がかかりすぎます」と断る（以前はOKでメインスレッドが止まり、ANRになり得た）。
+     */
+    @Test fun aCatastrophicRegexIsRefusedWithoutFreezingOnAndroid() {
+        openTutorialThread()
+        longPressPost(2)
+        rule.onNodeWithTag("ftutter-post-menu-ng").performClick()
+        waitForTag("ftutter-choice-0")
+        rule.onNodeWithTag("ftutter-choice-0").performClick()
+        waitForTag("ftutter-ng-dialog")
+        rule.onNodeWithTag("ftutter-ng-text").performTextReplacement("(q+){1,30}r")
+        rule.onNodeWithTag("ftutter-ng-regex").performClick()
+        val started = System.currentTimeMillis()
+        rule.onNodeWithTag("ftutter-ng-save").performClick()
+        rule.waitUntil(15_000) { rule.onAllNodesWithText("時間がかかりすぎます", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue("took ${System.currentTimeMillis() - started} ms", System.currentTimeMillis() - started < 10_000)
+        assertTrue(preference("compat.ftutter.NGList")?.contains("(q+)") != true)
+    }
+
+    /**
+     * 再監査M1：NGタイトルがあっても、スレから戻った最初のコマでカタログが空にならない（以前は照合が終わるまで0件の一覧を
+     * 描き、スクロール位置が先頭に戻った）。時計を止めて、戻った直後の1コマだけを見る。
+     */
+    @Test fun withATitleNgTheCatalogIsNotEmptyInTheFirstFrameAfterComingBack() {
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.NGList", "[{\"text\":\"存在しない題名\",\"type\":0}]") }
+        openTutorialCatalog()
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+            // Frame by frame until the catalog is there, then look at that very first frame (its NG matching has not come
+            // back yet).
+            var frames = 0
+            while (rule.allTagged("ftutter-catalog").fetchSemanticsNodes().isEmpty() && frames < 120) {
+                rule.mainClock.advanceTimeByFrame()
+                frames++
+            }
+            assertTrue(rule.allTagged("ftutter-catalog").fetchSemanticsNodes().isNotEmpty())
+            assertTrue("the catalog was drawn empty", rule.allTagged("ftutter-catalog-item").fetchSemanticsNodes().isNotEmpty())
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    /** 再監査M2：開いていないスレをカタログから「タブに追加」しても、このモードを開き直した時の整理で消えない。 */
+    @Test fun aTabAddedFromTheCatalogSurvivesReopeningTheMode() {
+        // 開いているタブ（履歴にある別のスレ）がある状態で、まだ開いていないスレを足す。
+        seedHistory(fakeTab2)
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2)
+            app.compatibilityStore.savePreference("compat.ftutter.opening", fakeTab2)
+            // 長押しで拡大でなくメニューを出す。
+            app.compatibilityStore.savePreference("compat.ftutter.useKakudai", "false")
+        }
+        openTutorialCatalog()
+        rule.allTagged("ftutter-catalog-item")[0].performTouchInput { longClick() }
+        waitForTag("ftutter-thumb-dialog")
+        rule.onNodeWithTag("ftutter-thumb-ADD_TAB").performClick()
+        rule.waitUntil(10_000) { tutorialUrl in tabs() }
+        // 開き直す（起動時の整理が履歴に無いタブを閉じる）。
+        openTutorialCatalog()
+        rule.waitForIdle()
+        Thread.sleep(1_000)
+        assertTrue(tabs().toString(), tutorialUrl in tabs())
+    }
+
     @Test fun aQuoteReplyKeepsItsDraftAndSendingOnTheTutorialBoardClearsIt() {
         runBlocking { app.appStateStore.setHasShownPostingNotice(true) }
         openTutorialThread()
@@ -445,6 +518,39 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-post-send").performClick()
         rule.waitUntil(10_000) { rule.allTagged("ftutter-post-dialog").fetchSemanticsNodes().isEmpty() }
         rule.waitUntil(10_000) { preference("compat.ftutter.drafts")?.contains(">No.") != true }
+    }
+
+    /** 監査M5：閉じなくても、打っている間に下書きが残る（以前は閉じる時だけで、画面から外れる・アプリが終わると消えた）。 */
+    @Test fun aDraftIsKeptWhileTypingWithoutClosingTheDialog() {
+        runBlocking { app.appStateStore.setHasShownPostingNotice(true) }
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-tool-edit").performClick()
+        waitForTag("ftutter-post-dialog")
+        rule.onNodeWithTag("ftutter-post-comment").performTextInput("閉じずに残す下書き")
+        rule.waitUntil(10_000) { preference("compat.ftutter.drafts")?.contains("閉じずに残す下書き") == true }
+        assertTrue(rule.allTagged("ftutter-post-dialog").fetchSemanticsNodes().isNotEmpty())
+        // 画面を作り直しても（アプリが裏で終わった時と同じく、閉じる処理は通らない）下書きが戻る。
+        rule.activityRule.scenario.recreate()
+        waitForTag("ftutter-board-row")
+        assertTrue(preference("compat.ftutter.drafts")?.contains("閉じずに残す下書き") == true)
+    }
+
+    /** 監査M12：他のアプリから共有された画像を、書き込み画面で添付できる（以前はボタンが無く、案内だけ出た）。 */
+    @Test fun aSharedImageCanBeAttachedFromThePostDialog() {
+        runBlocking { app.appStateStore.setHasShownPostingNotice(true) }
+        val image = com.valoser.futacha.shared.util.ImageData(byteArrayOf(1, 2, 3), "incoming.jpg")
+        try {
+            com.valoser.futacha.shared.ui.board.IncomingSharedAttachment.offer(image)
+            openTutorialThread()
+            rule.onNodeWithTag("ftutter-thread-tool-edit").performClick()
+            waitForTag("ftutter-post-dialog")
+            rule.waitUntil(10_000) { rule.onAllNodesWithText("共有された画像を添付").fetchSemanticsNodes().isNotEmpty() }
+            rule.onNodeWithText("共有された画像を添付").performClick()
+            rule.waitUntil(10_000) { com.valoser.futacha.shared.ui.board.IncomingSharedAttachment.pending.value == null }
+            assertTrue(rule.onAllNodesWithText("共有された画像を添付").fetchSemanticsNodes().isEmpty())
+        } finally {
+            com.valoser.futacha.shared.ui.board.IncomingSharedAttachment.consume(image)
+        }
     }
 
     /** 指で折れ線を描く（[segments]は dp の移動。1区間を細かく分けて動かす）。[beforeUp]は離す前に呼ぶ。 */
@@ -530,6 +636,7 @@ class FtutterModeInstrumentedTest {
     }
 
     @Test fun dragAfterALongPressReordersTheTabStrip() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
         runBlocking {
             app.compatibilityStore.savePreference("compat.ftutter.showTab", "true")
             app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n"))
@@ -544,6 +651,59 @@ class FtutterModeInstrumentedTest {
             up()
         }
         rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab3, fakeTab2) }
+    }
+
+    /**
+     * 監査M8：ドラッグの途中でタブの並びが変わっても（ここでは別の操作で先頭にタブが足される）、並べ替えが最後まで効く。
+     * 以前は位置を鍵にしていたので、並びが変わるとジェスチャーが取り消され、ずれた表示が残り、並べ替えも起きなかった。
+     */
+    @Test fun aTabDragSurvivesTheTabsChangingInTheMiddle() {
+        val fakeTab4 = "https://www.example.com/t/res/1000000004.htm"
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3, fakeTab4)
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.showTab", "true")
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n"))
+        }
+        openTutorialCatalog()
+        waitForTag("ftutter-tab-strip")
+        val tab = rule.allTagged("ftutter-tab")[1]
+        tab.performTouchInput {
+            down(center)
+            advanceEventTime(800)
+            repeat(5) { moveBy(androidx.compose.ui.geometry.Offset(60.dp.toPx() / 10, 0f), delayMillis = 16) }
+        }
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(fakeTab4, tutorialUrl, fakeTab2, fakeTab3).joinToString("\n"))
+        }
+        rule.waitUntil(10_000) { rule.allTagged("ftutter-tab").fetchSemanticsNodes().size + rule.allTagged("ftutter-tab-selected").fetchSemanticsNodes().size == 4 }
+        tab.performTouchInput {
+            repeat(5) { moveBy(androidx.compose.ui.geometry.Offset(60.dp.toPx() / 10, 0f), delayMillis = 16) }
+            up()
+        }
+        rule.waitUntil(10_000) { tabs() == listOf(fakeTab4, tutorialUrl, fakeTab3, fakeTab2) }
+    }
+
+    /**
+     * 再監査M3：スレ画面はスレッドごとに作り直すが、タブ帯の位置は残る。以前はタブ帯の位置がスレ画面と一緒に作り直され、
+     * 奥のタブへ切り替えると帯が先頭に戻って、開いたタブが見えなくなった。
+     */
+    @Test fun theTabStripKeepsItsPositionWhenSwitchingToAFarTab() {
+        val many = listOf(tutorialUrl) + (2..14).map { "https://www.example.com/t/res/10000000%02d.htm".format(it) }
+        seedHistory(*many.toTypedArray())
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.showTab", "true")
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", many.joinToString("\n"))
+        }
+        openTutorialThread()
+        waitForTag("ftutter-tab-strip")
+        rule.onNodeWithTag("ftutter-tab-strip").performScrollToKey(many.last())
+        rule.waitForIdle()
+        val visible = rule.allTagged("ftutter-tab").fetchSemanticsNodes().size
+        rule.allTagged("ftutter-tab")[visible - 1].performClick()
+        rule.waitUntil(10_000) { preference("compat.ftutter.opening") == many.last() }
+        rule.waitForIdle()
+        // 開いたタブ（奥のタブ）がタブ帯に見えたまま。
+        assertTrue(rule.allTagged("ftutter-tab-selected").fetchSemanticsNodes().isNotEmpty())
     }
 
     @Test fun aTappedImageOpensTheViewerWhoseStripCardGoesBackToThePost() {
@@ -801,5 +961,276 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-watcher-manage").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("今すぐ巡回", substring = true).fetchSemanticsNodes().isNotEmpty() }
         saveShot("35-extras-watcher")
+    }
+
+    // ---- 履歴の削除（原作：「履歴」の行の長押し→「履歴から削除」→確認）と、拡張の選択削除・すべて削除 ----
+
+    private val fakeTab4 = "https://www.example.com/t/res/1000000004.htm"
+
+    private fun seedHistory(vararg urls: String) = runBlocking {
+        val now = System.currentTimeMillis()
+        app.appStateStore.setHistory(urls.mapIndexed { i, url ->
+            com.valoser.futacha.shared.model.ThreadHistoryEntry(
+                threadId = url.substringAfterLast("/").removeSuffix(".htm"), boardId = "", title = "履歴$i",
+                titleImageUrl = "", boardName = "チュートリアル", boardUrl = url,
+                lastVisitedEpochMillis = now - i * 1_000L, replyCount = 2
+            )
+        })
+    }
+
+    private fun historyUrls(): List<String> = runBlocking { app.appStateStore.history.first().map { it.boardUrl } }
+
+    private fun openDrawerOnHistory(rows: Int) {
+        rule.onNodeWithTag("ftutter-catalog-tool-drawer").performClick()
+        waitForTag("ftutter-drawer")
+        rule.waitUntil(10_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == rows }
+    }
+
+    @Test fun aHistoryRowLongPressOffersTheThumbMenuWhoseDeleteAsksAndAlsoClosesTheTab() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2) }
+        openTutorialCatalog()
+        openDrawerOnHistory(3)
+        // 拡張がOFFなら、選択のボタンは出ない。
+        assertEquals(0, rule.allTagged("ftutter-drawer-history-select").fetchSemanticsNodes().size)
+        // 履歴にだけある行：原作と同じメニュー。削除は確認の後。
+        rule.allTagged("ftutter-drawer-row")[2].performTouchInput { longClick() }
+        waitForTag("ftutter-thumb-dialog")
+        saveShot("36-history-row-menu")
+        rule.onNodeWithTag("ftutter-thumb-DELETE_HISTORY").performClick()
+        waitForTag("ftutter-confirm-ok")
+        saveShot("37-history-delete-confirm")
+        assertEquals(listOf(tutorialUrl, fakeTab2, fakeTab3), historyUrls())
+        rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+        rule.waitUntil(10_000) { historyUrls() == listOf(tutorialUrl, fakeTab2) }
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 2 }
+        // タブでもある行も、タブのメニューではなく同じメニュー。削除するとタブも閉じる。
+        rule.allTagged("ftutter-drawer-row")[1].performTouchInput { longClick() }
+        waitForTag("ftutter-thumb-dialog")
+        assertEquals(0, rule.allTagged("ftutter-tab-dialog").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("ftutter-thumb-DELETE_HISTORY").performClick()
+        waitForTag("ftutter-confirm-ok")
+        rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+        rule.waitUntil(10_000) { historyUrls() == listOf(tutorialUrl) }
+        rule.waitUntil(10_000) { tabs().isEmpty() }
+    }
+
+    @Test fun theCatalogDeleteFromHistoryAsksFirst() {
+        seedHistory(tutorialUrl)
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.useKakudai", "false") }
+        openTutorialCatalog()
+        rule.allTagged("ftutter-catalog-item")[0].performTouchInput { longClick() }
+        waitForTag("ftutter-thumb-dialog")
+        rule.onNodeWithTag("ftutter-thumb-DELETE_HISTORY").performClick()
+        waitForTag("ftutter-confirm-ok")
+        assertEquals(listOf(tutorialUrl), historyUrls())
+        rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+        rule.waitUntil(10_000) { historyUrls().isEmpty() }
+    }
+
+    @Test fun theHistoryToolsExtraDeletesTheChosenRowsAndAllButProtectedOnes() {
+        enableExtensions("historyTools")
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3, fakeTab4)
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2).joinToString("\n"))
+            app.compatibilityStore.savePreference("compat.ftutter.protected", fakeTab2)
+        }
+        openTutorialCatalog()
+        openDrawerOnHistory(4)
+        rule.onNodeWithTag("ftutter-drawer-history-select").performClick()
+        waitForTag("ftutter-drawer-history-delete-selected")
+        // 選んだ行の印を数える。行のタップは選択の切り替えで、開かない。
+        fun checked() = rule.allTagged("ftutter-drawer-row-checked").fetchSemanticsNodes().size
+        rule.onNodeWithText("履歴0").performClick()
+        rule.onNodeWithText("履歴1").performClick()
+        rule.waitUntil(5_000) { checked() == 2 }
+        rule.onNodeWithText("履歴1").performClick()
+        rule.waitUntil(5_000) { checked() == 1 }
+        rule.onNodeWithText("履歴2").performClick()
+        rule.waitUntil(5_000) { checked() == 2 }
+        // 選んだのは tutorialUrl（履歴0）と fakeTab3（履歴2）。
+        saveShot("38-history-select")
+        assertEquals(0, rule.allTagged("ftutter-thread").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("ftutter-drawer-history-delete-selected").performClick()
+        waitForTag("ftutter-confirm-ok")
+        rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+        rule.waitUntil(10_000) { historyUrls() == listOf(fakeTab2, fakeTab4) }
+        rule.waitUntil(10_000) { tabs() == listOf(fakeTab2) }
+        // すべて削除：保護したスレッド（fakeTab2）は残す。
+        rule.onNodeWithTag("ftutter-drawer-history-select").performClick()
+        waitForTag("ftutter-drawer-history-delete-all")
+        rule.onNodeWithTag("ftutter-drawer-history-delete-all").performClick()
+        waitForTag("ftutter-confirm-ok")
+        saveShot("39-history-delete-all-confirm")
+        rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+        rule.waitUntil(10_000) { historyUrls() == listOf(fakeTab2) }
+        assertEquals(listOf(fakeTab2), tabs())
+    }
+
+    // ---- 2026-10-14の監査（docs/code-audit-2026-10-14.md）A1・A2・A3・A8・A9 ----
+
+    @Test fun startingTheModeClosesTabsMissingFromHistoryAndKeepsTheHistoryLimit() {
+        // 原作：起動時に履歴に無いタブを閉じ、保護していないスレッドは「履歴の保存数」まで。保護したタブは数えない。
+        seedHistory(fakeTab2, fakeTab3, tutorialUrl)
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(fakeTab4, fakeTab3, fakeTab2, tutorialUrl).joinToString("\n"))
+            app.compatibilityStore.savePreference("compat.ftutter.opening", fakeTab2)
+            app.compatibilityStore.savePreference("compat.ftutter.protected", tutorialUrl)
+            app.compatibilityStore.savePreference("compat.ftutter.rirekiLimit", "1")
+        }
+        openTutorialCatalog()
+        runCatching { rule.waitUntil(10_000) { tabs() == listOf(fakeTab2, tutorialUrl) } }
+        assertEquals(listOf(fakeTab2, tutorialUrl), tabs())
+    }
+
+    @Test fun switchingToAnotherTabSavesThePositionOfTheThreadLeft() {
+        seedHistory(fakeTab2)
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.showTab", "true")
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2)
+        }
+        openTutorialThread()
+        waitForTag("ftutter-tab-strip")
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("end")
+        rule.waitForIdle()
+        // タブ帯で別のスレッドへ。同じ画面のまま替わるので、以前は離れたスレッドの位置が保存されなかった。
+        rule.allTagged("ftutter-tab")[0].performClick()
+        rule.waitUntil(10_000) { preference("compat.ftutter.seen")?.contains("1364612020.htm") == true }
+        rule.waitUntil(10_000) {
+            runBlocking { app.appStateStore.history.first() }.firstOrNull { it.threadId == "1364612020" }?.lastReadItemIndex ?: 0 > 0
+        }
+    }
+
+    @Test fun openingTheSettingsFromAThreadSavesItsPosition() {
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("end")
+        rule.waitForIdle()
+        // 画面ごと外れる時も、読み位置の書き込みが取り消されない。
+        rule.onNodeWithTag("ftutter-thread-settings").performClick()
+        waitForTag("ftutter-settings")
+        rule.waitUntil(10_000) {
+            runBlocking { app.appStateStore.history.first() }.firstOrNull { it.threadId == "1364612020" }?.lastReadItemIndex ?: 0 > 0
+        }
+    }
+
+    private fun drawerShown(): Boolean = rule.allTagged("ftutter-drawer").fetchSemanticsNodes().any { it.boundsInRoot.right > 1f }
+
+    @Test fun backClosesTheOpenDrawerBeforeLeavingTheCatalogOrTheThread() {
+        // スレッドのツールバーの「ドロワー」は既定で出ないので、試験では出しておく。
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.sureTBOrderName", "drawer")
+            app.compatibilityStore.savePreference("compat.ftutter.sureTBOrderBool", "true")
+        }
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-drawer").performClick()
+        rule.waitUntil(5_000) { drawerShown() }
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { !drawerShown() }
+        assertTrue(rule.allTagged("ftutter-catalog").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.allTagged("ftutter-board-list").fetchSemanticsNodes().isEmpty())
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        rule.onNodeWithTag("ftutter-thread-tool-drawer").performClick()
+        rule.waitUntil(5_000) { drawerShown() }
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { !drawerShown() }
+        assertTrue(rule.allTagged("ftutter-thread").fetchSemanticsNodes().isNotEmpty())
+        // もう一度戻るとカタログ、さらに板一覧。板一覧から入り直したカタログでは、ドロワーは閉じている。
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-catalog")
+        rule.onNodeWithTag("ftutter-catalog-tool-drawer").performClick()
+        rule.waitUntil(5_000) { drawerShown() }
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { !drawerShown() }
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-board-list")
+        rule.allTagged("ftutter-board-row")[0].performClick()
+        waitForTag("ftutter-catalog")
+        rule.waitForIdle()
+        assertTrue(!drawerShown())
+    }
+
+    @Test fun inTwoPaneBackClosesTheCatalogSearchBeforeLeaving() {
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.useTabletMode", "true") }
+        openTutorialCatalog()
+        waitForTag("ftutter-two-pane")
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        rule.onNodeWithTag("ftutter-catalog-tool-search").performClick()
+        waitForTag("ftutter-search-input")
+        // 以前は後から置いたスレッド側の戻るが先に受け、二画面ごと板一覧へ抜けた。
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-search-input").fetchSemanticsNodes().isEmpty() }
+        assertTrue(rule.allTagged("ftutter-two-pane").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.allTagged("ftutter-board-list").fetchSemanticsNodes().isEmpty())
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-board-list")
+    }
+
+    @Test fun deletingAHistoryRowAlsoDeletesTheOtherModesCopySoItDoesNotComeBack() {
+        // 他モードと共有する履歴は公式の板のスレだけなので、may の番号で作る（通信はしない）。
+        val mayThread = "https://may.2chan.net/b/res/1000000002.htm"
+        seedHistory(tutorialUrl, mayThread)
+        val shared = runBlocking { app.appStateStore.history.first() }.first { it.boardUrl == mayThread }
+        val entry = shared.toCompatHistoryEntry()!!
+        // 他モードの履歴の行は板を参照する（外部キー）。他モードで may を開いた人と同じく、板を板一覧と共有ストアの両方に入れておく
+        // （共有ストアだけだと、起動時の同期で板ごと履歴が消える）。チュートリアル板が先頭のまま、末尾に足す。
+        val may = com.valoser.futacha.shared.model.BoardSummary("ftutter-test-may", "may/b", "", "https://may.2chan.net/b/futaba.php", "")
+        val hadBoard = runBlocking { app.compatibilityStore.boards.first() }.any { it.key == entry.boardKey }
+        runBlocking {
+            if (!hadBoard) {
+                app.appStateStore.updateBoards { boards -> boards + may }
+                app.compatibilityStore.importModernBoards(listOf(may))
+            }
+            assertTrue(app.compatibilityStore.boards.first().any { it.key == entry.boardKey })
+            app.compatibilityStore.recordHistoryVisit(entry)
+        }
+        fun compatHasRow() = runBlocking { app.compatibilityStore.history.first() }.any { it.threadNo == "1000000002" }
+        try {
+            assertTrue(compatHasRow())
+            openTutorialCatalog()
+            openDrawerOnHistory(2)
+            rule.allTagged("ftutter-drawer-row")[1].performTouchInput { longClick() }
+            waitForTag("ftutter-thumb-dialog")
+            rule.onNodeWithTag("ftutter-thumb-DELETE_HISTORY").performClick()
+            waitForTag("ftutter-confirm-ok")
+            rule.onNodeWithTag("ftutter-confirm-ok").performClick()
+            rule.waitUntil(10_000) { historyUrls() == listOf(tutorialUrl) }
+            // 他モードの履歴（共有ストア）からも消えるので、次の起動の統合で戻らない。
+            rule.waitUntil(10_000) { !compatHasRow() }
+        } finally {
+            runBlocking {
+                app.compatibilityStore.deleteHistory(entry.canonicalUrl)
+                if (!hadBoard) {
+                    app.appStateStore.updateBoards { boards -> boards.filterNot { it.id == may.id } }
+                    app.compatibilityStore.deleteBoard(entry.boardKey)
+                }
+            }
+        }
+    }
+
+    @Test fun anNgRuleBeyondWhatCanBeStoredIsRefusedInTheDialog() {
+        // 保存値の上限（2万字）の手前までNGを入れておく。以前は「登録しました」と出るのに保存されなかった。
+        val full = buildString {
+            append("[")
+            var n = 0
+            while (length < 19_900) {
+                if (n > 0) append(",")
+                append("{\"text\":\"既存のNG$n\",\"type\":1}")
+                n++
+            }
+            append("]")
+        }
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.NGList", full) }
+        openTutorialThread()
+        longPressPost(1)
+        rule.onNodeWithTag("ftutter-post-menu-ng").performClick()
+        waitForTag("ftutter-choice-0")
+        rule.onNodeWithTag("ftutter-choice-0").performClick()
+        waitForTag("ftutter-ng-dialog")
+        rule.onNodeWithTag("ftutter-ng-text").performTextReplacement("とても長い新しいNGの言葉".repeat(10))
+        rule.onNodeWithTag("ftutter-ng-save").performClick()
+        waitForTag("ftutter-ng-error")
+        assertEquals(full, preference("compat.ftutter.NGList"))
     }
 }

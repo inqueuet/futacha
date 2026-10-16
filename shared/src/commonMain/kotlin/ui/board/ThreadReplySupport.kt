@@ -246,6 +246,25 @@ internal fun appendQuoteSelectionToReplyDialog(
     )
 }
 
+/**
+ * The reply dialog after a post went through: the sent text is cleared only when the draft is still what was sent. A draft
+ * written on while sending (the dialog opened again) is kept as it is (re-audit M29); null leaves the state alone.
+ */
+internal fun threadReplyStateAfterSuccess(
+    current: ThreadReplyDialogState,
+    sentDraft: ThreadReplyDraft
+): ThreadReplyDialogState? {
+    // What was sent is the text and the picture; the name, mail and key are kept by the clearing anyway. The picture is
+    // compared by what it is, not by object (the form may hold another copy of the same picture).
+    fun sameAttachment(a: com.valoser.futacha.shared.util.ImageData?, b: com.valoser.futacha.shared.util.ImageData?) =
+        if (a == null || b == null) a == null && b == null
+        else a.fileName == b.fileName && a.bytes.size == b.bytes.size
+    val untouched = current.draft.subject == sentDraft.subject && current.draft.comment == sentDraft.comment &&
+        sameAttachment(current.draft.imageData, sentDraft.imageData)
+    if (!untouched) return null
+    return current.copy(draft = clearThreadReplyDraftAfterSubmit(current.draft))
+}
+
 internal fun completeThreadReplyDialogSubmit(
     state: ThreadReplyDialogState
 ): ThreadReplyDialogState {

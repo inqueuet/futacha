@@ -12,7 +12,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import coil3.ImageLoader
 import com.valoser.futacha.compat.AndroidCompatibilityStore
 import com.valoser.futacha.shared.compat.compatTabKey
@@ -97,6 +99,59 @@ class FutachaMhtInstrumentedTest {
         assertTrue("A read-only copy must not register a tab", runBlocking { storage.tabs.first() }.isEmpty())
         val tabKey = compatTabKey("https://may.2chan.net/b/res/555.htm")
         assertNull("A read-only copy must not write a shared snapshot", runBlocking { storage.loadThreadSnapshot(tabKey) })
+    }
+
+    /**
+     * Re-audit M31: the thread menu of an opened MHT file acts on the viewer, not on the real tab of the same thread:
+     * "スレッドを閉じる" closes the viewer and the tab stays; the tab entries are not offered.
+     */
+    @Test fun closingAnOpenedMhtLeavesTheRealTabOfTheSameThread() {
+        val storage = AndroidCompatibilityStore(rule.activity, databaseName = databaseName).also { store = it }
+        runBlocking { storage.initialize() }
+        val threadUrl = "https://may.2chan.net/b/res/555.htm"
+        runBlocking {
+            val boardKey = com.valoser.futacha.shared.compat.compatBoardKey(board.url)
+            storage.upsertBoard(com.valoser.futacha.shared.compat.CompatBoard(boardKey, board.name, board.url, board.url, 0))
+            storage.openTab(
+                com.valoser.futacha.shared.compat.CompatTab(
+                    compatTabKey(threadUrl), threadUrl, threadUrl, com.valoser.futacha.shared.compat.compatBoardKey(board.url),
+                    board.name, "555", "本物のタブ", insertedAtEpochMillis = 1L, contentUpdatedAtEpochMillis = 1L
+                )
+            )
+        }
+        val images = ImageLoader(rule.activity).also { loader = it }
+        val opened = FutaberMhtOpened(
+            thread = FutaberMhtThread(
+                title = "MHTのスレ", boardName = board.name, boardKey = null, boardUrl = board.url, threadId = "555",
+                threadUrl = threadUrl, page = page, pictures = emptyMap()
+            ),
+            page = page
+        )
+        val contract = ScreenContract(
+            history = emptyList(), historyCallbacks = ScreenHistoryCallbacks(),
+            preferencesState = ScreenPreferencesState("test", themeMode = ThemeMode.Light, themePalette = ThemePalette.Current),
+            preferencesCallbacks = ScreenPreferencesCallbacks()
+        )
+        val repository = FutachaStaticThreadRepository(FakeBoardRepository(), page)
+        var closed = false
+        rule.runOnUiThread { rule.activity.setContent {
+            FutachaTheme(ThemeMode.Light, ThemePalette.Current) { CompositionLocalProvider(LocalFutachaImageLoader provides images) {
+                ProvideFutachaSharedFeatures(storage, null, repository, null, null, "test") {
+                    FutachaMhtViewer(board, opened, contract, ThreadScreenDependencies(repository = repository), onBack = { closed = true })
+                }
+            } }
+        } }
+        rule.waitUntil(15_000) { rule.onAllNodesWithText("MHTから読んだ本文です").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(10_000) { rule.onAllNodesWithContentDescription("設定").fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithContentDescription("設定")[0].performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("スレッドを閉じる").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithText("前のスレッド").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText("次のスレッド").fetchSemanticsNodes().isEmpty())
+        // The last entry of a long sheet: brought into view before it is pressed.
+        rule.onNodeWithText("スレッドを閉じる").performScrollTo().performClick()
+        rule.waitUntil(10_000) { closed }
+        Thread.sleep(1_000)
+        assertEquals(listOf(compatTabKey(threadUrl)), runBlocking { storage.tabs.first() }.map { it.key })
     }
 
     @Test fun theSaveFormatDialogOffersMhtOnlyWhereItIsAskedFor() {

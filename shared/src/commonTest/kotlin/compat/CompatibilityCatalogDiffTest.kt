@@ -133,6 +133,8 @@ class CompatibilityCatalogDiffTest {
             ).map(CatalogItem::id)
         )
         assertEquals(live, appendCompatDroppedCatalogItems(live, dropped, enabled = false))
+        // Re-audit M17: a list in "そ順"/"監視" gets none of the board's dropped threads.
+        assertEquals(live, appendCompatDroppedCatalogItems(live, dropped, enabled = true, extraOrder = true))
         assertEquals(
             live,
             appendCompatDroppedCatalogItems(

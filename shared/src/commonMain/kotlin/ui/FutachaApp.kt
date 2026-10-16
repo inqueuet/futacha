@@ -1213,6 +1213,9 @@ private fun FutachaAppContent(
                         is FutachaAiCommandOutcome.NeedsConfirmation -> {
                             if (shouldReplacePendingAiConfirmation(pendingAiConfirmation, outcome)) {
                                 pendingAiConfirmation = outcome.request
+                            } else {
+                                // Said, not dropped without a word (re-audit L45), as in the other modes.
+                                aiResultMessage = buildAiConfirmationBusyMessage(outcome.request)
                             }
                         }
                         is FutachaAiCommandOutcome.NeedsForeground -> {

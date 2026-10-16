@@ -85,6 +85,7 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
                     boardId = deps.boardId,
                     replyDialogBinding = deps.replyDialogBinding,
                     completedState = submitOutcome.completedState,
+                    sentDraft = dismissedState.draft,
                     refreshThread = deps.refreshThread
                 )
             }
@@ -136,6 +137,7 @@ private fun handleReplySuccess(
     boardId: String,
     replyDialogBinding: ThreadReplyDialogStateBinding,
     completedState: ThreadReplyDialogState?,
+    sentDraft: ThreadReplyDraft,
     refreshThread: () -> Unit
 ) {
     if (!thisNo.isNullOrBlank()) {
@@ -150,7 +152,9 @@ private fun handleReplySuccess(
         }
     }
     if (completedState != null) {
-        replyDialogBinding.setState(completedState)
+        // The draft as it is now, not as it was when sent (re-audit M29: a reply opened again and added to while sending
+        // was wiped by the state made at the press).
+        threadReplyStateAfterSuccess(replyDialogBinding.currentState(), sentDraft)?.let(replyDialogBinding.setState)
         refreshThread()
     }
 }

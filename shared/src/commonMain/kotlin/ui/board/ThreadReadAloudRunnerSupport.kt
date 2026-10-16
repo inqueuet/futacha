@@ -59,9 +59,15 @@ internal suspend fun runThreadReadAloudSession(
     segments: List<ReadAloudSegment>,
     isRunnerActive: () -> Boolean,
     wasCancelledByUser: () -> Boolean,
-    callbacks: ThreadReadAloudRunnerCallbacks
+    callbacks: ThreadReadAloudRunnerCallbacks,
+    /**
+     * The segments as they are now, read again after each one is spoken (re-audit L39: the list of the start was read to
+     * the end, posts hidden by NG since were read, and posts that came in were not). Null keeps [segments].
+     */
+    latestSegments: (() -> List<ReadAloudSegment>)? = null
 ): ThreadReadAloudRunResult {
     var index = startIndex.coerceAtLeast(0)
+    var segments = segments
     try {
         while (index < segments.size && isRunnerActive()) {
             val segment = segments[index]
@@ -76,7 +82,13 @@ internal suspend fun runThreadReadAloudSession(
                 if (error is TimeoutCancellationException) throw error
             }
             callbacks.speakSegment(segment)
-            index += 1
+            val refreshed = latestSegments?.invoke()
+            if (refreshed == null || refreshed === segments) {
+                index += 1
+            } else {
+                index = nextReadAloudIndexAfter(segments, index, refreshed)
+                segments = refreshed
+            }
         }
         return if (index >= segments.size && isRunnerActive()) {
             ThreadReadAloudRunResult(
@@ -112,4 +124,18 @@ internal suspend fun runThreadReadAloudSession(
             nextIndex = index
         )
     }
+}
+
+/**
+ * Where reading goes on in [refreshed] after [old]`[spoken]` was read: right after it when it is still there; otherwise at
+ * the first of the segments that were still to come; otherwise at the first new one; otherwise the end.
+ */
+internal fun nextReadAloudIndexAfter(old: List<ReadAloudSegment>, spoken: Int, refreshed: List<ReadAloudSegment>): Int {
+    val same = refreshed.indexOf(old[spoken])
+    if (same >= 0) return same + 1
+    val ahead = old.drop(spoken + 1).toHashSet()
+    refreshed.indexOfFirst { it in ahead }.takeIf { it >= 0 }?.let { return it }
+    val known = old.toHashSet()
+    refreshed.indexOfFirst { it !in known }.takeIf { it >= 0 }?.let { return it }
+    return refreshed.size
 }

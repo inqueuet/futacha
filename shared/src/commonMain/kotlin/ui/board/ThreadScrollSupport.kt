@@ -8,7 +8,9 @@ internal data class ThreadDisplayedPostsLayout(
     val posts: List<Post> = emptyList(),
     val itemsBeforePosts: Int = 0,
     /** Posts currently collapsed by the AI post filter (not revealed by the user). */
-    val collapsedPostIds: Set<String> = emptySet()
+    val collapsedPostIds: Set<String> = emptySet(),
+    /** Posts hidden by NG (and the hidden deleted rows): they leave the attachment list and the viewer too (re-audit M33). */
+    val ngHiddenPostIds: Set<String> = emptySet()
 )
 
 internal data class ThreadScrollRestoreTarget(

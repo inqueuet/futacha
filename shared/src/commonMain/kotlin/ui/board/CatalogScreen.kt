@@ -174,6 +174,8 @@ private fun CatalogScreenContent(
     val onHistoryImportSelected = contextHandles.onHistoryImportSelected
     val onHistoryCleared = contextHandles.onHistoryCleared
     val stateStore = contextHandles.stateStore
+    val postingNoticeShown by (stateStore?.hasShownPostingNotice ?: kotlinx.coroutines.flow.flowOf(true))
+        .collectAsState(initial = false)
     val autoSavedThreadRepository = contextHandles.autoSavedThreadRepository
     val cookieRepository = contextHandles.cookieRepository
     val fileSystem = contextHandles.fileSystem
@@ -355,6 +357,7 @@ private fun CatalogScreenContent(
             currentIsRefreshing = { isRefreshing },
             setIsRefreshing = { isRefreshing = it },
             setCatalogUiState = { uiState.value = it },
+            currentCatalogUiState = { uiState.value },
             setLastCatalogItems = { lastCatalogItems = it },
             loadCatalogItems = ::loadCatalogItems,
             activeRepository = activeRepository,
@@ -651,7 +654,10 @@ private fun CatalogScreenContent(
         } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
         ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
         createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },
-            { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog })
+            { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog },
+            // Sending starts once the first posting notice (if any) was accepted: until then the stored draft stays
+            // (re-audit L32: it went when the send was pressed, and was lost if the app ended after "同意しない").
+            isSubmitting = { isCreateThreadSubmitting && postingNoticeShown })
     ) { projectedState ->
         CatalogScreenScaffold(bindings = scaffoldBindings.copy(uiState = projectedState), modifier = modifier)
         CatalogScreenOverlayHost(bindings = overlayHostBindings)

@@ -75,6 +75,15 @@ internal class FutachaSharedFeatures(
             }
         }.value
 
+    /**
+     * The stored value of [key] as it is (no path or legacy titles), read so that only a change of this key recomposes the
+     * reader (audit M20: reading [preferences] in composition recomposed the thread's feature host on every unrelated write).
+     */
+    fun rawValue(key: String): String? =
+        preferenceReads.getOrPut("\u0001raw/$key") {
+            derivedStateOf(structuralEqualityPolicy()) { preferencesState.value[key] }
+        }.value
+
     fun displayValue(path: String, key: String, vararg legacyTitles: String): String? =
         value(path, key, *legacyTitles)?.let {
             com.valoser.futacha.shared.ui.compat.compatPreferenceDisplayValue(key, it)

@@ -48,7 +48,7 @@ internal fun buildFutachaResolvedDestinationContent(
                         preferencesState = assemblyContext.screenContract.preferencesState,
                         mht = assemblyContext.fileSystem?.let { fileSystem ->
                             FutachaMhtDestinationProps(
-                                library = com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary(fileSystem, assemblyContext.httpClient),
+                                library = futachaMhtLibraryFor(fileSystem, assemblyContext.httpClient),
                                 boards = boards,
                                 screenContract = assemblyContext.screenContract,
                                 dependenciesFor = { board, page ->
@@ -126,4 +126,19 @@ internal fun buildFutachaResolvedDestinationContent(
             )
         }
     }
+}
+
+/**
+ * One MHT library per file system and client: built again on every composition, the saved-threads screen keyed its MHT
+ * section on a new object each time and an unrelated history update reset it (re-audit L42).
+ */
+private var lastFutachaMhtLibrary: Triple<com.valoser.futacha.shared.util.FileSystem, io.ktor.client.HttpClient?, com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary>? = null
+
+private fun futachaMhtLibraryFor(
+    fileSystem: com.valoser.futacha.shared.util.FileSystem,
+    httpClient: io.ktor.client.HttpClient?
+): com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary {
+    lastFutachaMhtLibrary?.let { (fs, client, library) -> if (fs === fileSystem && client === httpClient) return library }
+    return com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary(fileSystem, httpClient)
+        .also { lastFutachaMhtLibrary = Triple(fileSystem, httpClient, it) }
 }

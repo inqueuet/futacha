@@ -98,6 +98,7 @@ import com.valoser.futacha.shared.ui.board.rememberEdgeSwipeRefreshMetrics
 import com.valoser.futacha.shared.ui.board.rememberEdgeSwipeRefreshVisualState
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /** 取得したカタログ（板と並び順ごと）。スレから戻っても取り直さないよう、画面の外で持つ。 */
@@ -117,6 +118,23 @@ internal class FtutterCatalogHolder {
     var ngRemoved by mutableStateOf<List<CatalogItem>>(emptyList())
     val gridState = LazyGridState()
     val staggeredState = LazyStaggeredGridState()
+    /** スクロール位置が属する板（監査L6：板を変えると先頭から。スレッドから戻った時は同じ板なので位置を保つ）。 */
+    var scrolledBoardId: String? = null
+    /**
+     * NGの照合器・題名の照合の結果・最後に出した一覧。カタログは開き直すたびに作り直されるので、ここに持って使い回す
+     * （再監査M1：照合が終わるまで0件の一覧を描き、スクロール位置が先頭に戻っていた）。
+     */
+    var matcher: FtutterNgMatcher? = null
+    var matcherInputs: Pair<List<FtutterNgRule>, String>? = null
+    var titleNg: FtutterCatalogTitleNg? = null
+    var lastNgResult: Pair<String, FtutterCatalogNgResult>? = null
+    /** 履歴から作る、この板のスレの表（再監査M9：開き直すたびにメインで2万件から作っていた）。 */
+    val historyIndexMemo = com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, Map<String, ThreadHistoryEntry>>()
+    /**
+     * カタログの検索中・過去ログ検索の表示中に、戻るでそれを閉じる処理（それ以外は null）。二画面では後から置いた
+     * スレッド側の戻るが先に受けるので、アプリ側がこれを見て先に閉じる（監査A3）。
+     */
+    var paneBack by mutableStateOf<(() -> Unit)?>(null)
 }
 
 /** カタログの長押しダイアログ（原作の ThumbDialog）の項目。長押し拡大がOFFの時に出る。 */
@@ -138,6 +156,8 @@ internal fun FtutterCatalogScreen(
     preferences: Map<String, String>,
     holder: FtutterCatalogHolder,
     savePreference: (String, String) -> Unit,
+    /** 保存されている値に変更を当てる（監査M2）。 */
+    editPreference: (String, (String?) -> String?) -> Unit,
     onBack: () -> Unit,
     onSwitchBoard: (BoardSummary) -> Unit,
     onOpenSettings: () -> Unit,
@@ -153,7 +173,8 @@ internal fun FtutterCatalogScreen(
     tabOnTop: Boolean = false,
     tabStrip: @Composable () -> Unit = {},
     ngRules: List<FtutterNgRule> = emptyList(),
-    onSaveNgRules: (List<FtutterNgRule>) -> Unit = {},
+    /** 保存できた時だけ true（上限を超えて断った時は、呼ばれた側が理由を出す）。 */
+    onSaveNgRules: FtutterNgEdit = { _, _ -> },
     /** スレ立て（ツールバーの「スレ立て」）。 */
     onCreateThread: () -> Unit = {},
     /** del送信（スレの本文＝No.がスレ番号）。確認の後に呼ぶ。 */
@@ -186,10 +207,22 @@ internal fun FtutterCatalogScreen(
     var refreshFromBottom by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val historyIndex = remember(history, board) { ftutterHistoryIndex(history, board) }
+    // 履歴（最大2万件）から作る表は解析用のスレッドで作り、カタログより長く持つ（再監査M9）。前の板の表は出さない。
+    val historyIndex = com.valoser.futacha.shared.ui.rememberOffMain(
+        holder.historyIndexMemo, listOf(com.valoser.futacha.shared.ui.SameInstance(history), board), emptyMap(),
+        usable = { held, wanted -> (held[1] as BoardSummary).id == (wanted[1] as BoardSummary).id }
+    ) { _, _ -> ftutterHistoryIndex(history, board) }
     val key = "${board.id}|${order.name}"
 
     PlatformBackHandler(enabled = searching) { searching = false; query = "" }
+
+    LaunchedEffect(board.id) {
+        if (holder.scrolledBoardId != null && holder.scrolledBoardId != board.id) {
+            holder.gridState.scrollToItem(0)
+            holder.staggeredState.scrollToItem(0)
+        }
+        holder.scrolledBoardId = board.id
+    }
 
     LaunchedEffect(key, holder.refreshTick) {
         val current = holder.load
@@ -199,8 +232,9 @@ internal fun FtutterCatalogScreen(
         try {
             val page = repository.getCatalogPage(board.url, order.mode)
             holder.load = FtutterCatalogLoad(key = key, tick = tick, items = page.items)
-            val pruned = ftutterPruneHiddenThreads(hidden, board.url, page.items)
-            if (pruned.size != hidden.size) savePreference(FtutterKeys.HIDDEN_THREADS, encodeFtutterList(pruned))
+            // 落ちたスレの非表示の記録を消す。取得を始めた時の一覧でなく保存されている一覧から除く（監査M4：取得中に「非表示」に
+            // したスレが、古い一覧で上書きされて戻っていた）。
+            editPreference(FtutterKeys.HIDDEN_THREADS) { stored -> ftutterPrunedHiddenValue(stored, board.url, page.items) }
             if (refreshFromBottom) {
                 // 原作：下に引っ張った更新の後は先頭へ戻る。
                 holder.gridState.scrollToItem(0)
@@ -220,21 +254,70 @@ internal fun FtutterCatalogScreen(
         }
     }
     val load = holder.load?.takeIf { it.key == key }
-    val matcher = remember(ngRules, board.url) { FtutterNgMatcher(ngRules, board.url) }
+    val matcher = remember(ngRules, board.url) {
+        val inputs = ngRules to board.url
+        holder.matcher?.takeIf { holder.matcherInputs == inputs }
+            ?: FtutterNgMatcher(ngRules, board.url).also { holder.matcher = it; holder.matcherInputs = inputs }
+    }
     val pickupOrders = remember(preferences) { parseFtutterPickupOrders(preferences[FtutterKeys.PICKUP_ORDER_MODES]) }
+    // NGタイトル・ピックアップ・共通のカタログNGの照合（正規表現もあり重い）は、題名ごとにメインスレッドの外で1回だけ行い、
+    // 検索語・並び順・非表示が変わってもやり直さない。照合の途中は、同じカタログの前の結果を出したままにする。
+    val items = load?.items.orEmpty()
+    val needsTitleNg = !matcher.isEmpty || commonCatalogNgWords.any { it.isNotBlank() }
+    val titleNg by androidx.compose.runtime.produceState(
+        holder.titleNg?.takeIf { it.isFor(items, matcher, commonCatalogNgWords) }, items, matcher, commonCatalogNgWords
+    ) {
+        if (matcher.isEmpty && commonCatalogNgWords.none { it.isNotBlank() }) {
+            value = null
+            return@produceState
+        }
+        if (value?.isFor(items, matcher, commonCatalogNgWords) == true) return@produceState
+        val job = kotlinx.coroutines.currentCoroutineContext()
+        value = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+            ftutterCatalogTitleNg(items, matcher, commonCatalogNgWords) { job.ensureActive() }
+        }.also { holder.titleNg = it }
+    }
+    val titleNgNow = titleNg?.takeIf { it.isFor(items, matcher, commonCatalogNgWords) }
     // 原作の順：検索→非表示→NGタイトル→ピックアップ→表示数の上限。
-    val ngResult = remember(load?.items, query, hidden, matcher, order, pickupOrders, commonCatalogNgWords) {
-        ftutterApplyCommonCatalogNg(
-            ftutterApplyCatalogNg(ftutterVisibleCatalog(load?.items.orEmpty(), query, hidden.toSet(), Int.MAX_VALUE), matcher, order, pickupOrders),
-            commonCatalogNgWords
+    // 検索は、カタログごとに1回だけ作った題名の正規化・URLで絞り、打ち終わってから効かせる（監査M10：以前は1文字ごとに、全スレの
+    // 題名とURLを正規化し直していた）。
+    val searchIndex = remember(items) { FtutterCatalogSearchIndex.of(items) }
+    val hiddenSet = remember(hidden) { hidden.toSet() }
+    val appliedQuery = com.valoser.futacha.shared.ui.futaber.rememberFutaberDebouncedQuery(query)
+    val computedNg = remember(searchIndex, appliedQuery, hiddenSet, matcher, order, pickupOrders, commonCatalogNgWords, needsTitleNg, titleNgNow) {
+        if (needsTitleNg && titleNgNow == null) null else ftutterApplyCommonCatalogNg(
+            ftutterApplyCatalogNg(ftutterVisibleCatalog(searchIndex, appliedQuery, hiddenSet, Int.MAX_VALUE), matcher, order, pickupOrders, titleNgNow?.byTitle),
+            commonCatalogNgWords,
+            titleNgNow?.byTitle
         )
     }
+    var lastNgResult by remember { mutableStateOf(holder.lastNgResult) }
+    LaunchedEffect(computedNg) { computedNg?.let { lastNgResult = key to it; holder.lastNgResult = key to it } }
+    val ngResult = computedNg ?: lastNgResult?.takeIf { it.first == key }?.second
+        ?: FtutterCatalogNgResult(emptyList(), emptyMap(), emptyList())
+    // 照合に時間がかかりすぎて使わなかったNGの正規表現は、一度だけ知らせる（設定のNGの一覧にも出る）。
+    var slowNgNoticed by remember(matcher) { mutableStateOf(emptySet<FtutterNgRule>()) }
+    LaunchedEffect(titleNg) {
+        val fresh = titleNg?.matcher?.takeIf { it === matcher }?.slowRules.orEmpty().filter { it !in slowNgNoticed }
+        if (fresh.isNotEmpty()) {
+            slowNgNoticed = slowNgNoticed + fresh
+            ftutterSlowNgNotice(fresh)?.let(onNotice)
+        }
+    }
     var archiveQuery by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(ngResult) { holder.ngRemoved = ngResult.ngRemoved }
+    LaunchedEffect(computedNg) { computedNg?.let { holder.ngRemoved = it.ngRemoved } }
     val visible = remember(ngResult, settings.maxThreadCount) { ngResult.items.take(settings.maxThreadCount) }
     var ngDraft by remember { mutableStateOf<FtutterNgRule?>(null) }
     var delTarget by remember { mutableStateOf<CatalogItem?>(null) }
+    var historyDeleteTarget by remember { mutableStateOf<CatalogItem?>(null) }
     fun refresh() { holder.refreshTick++ }
+    val paneBackOpen = (archiveClient != null && archiveQuery != null) || searching
+    androidx.compose.runtime.DisposableEffect(paneBackOpen) {
+        holder.paneBack = if (!paneBackOpen) null else {
+            { if (archiveQuery != null) archiveQuery = null else { searching = false; query = "" } }
+        }
+        onDispose { holder.paneBack = null }
+    }
 
     Column(Modifier.fillMaxSize().testTag("ftutter-catalog")) {
         if (searching) {
@@ -363,12 +446,16 @@ internal fun FtutterCatalogScreen(
                 thumbMenu = null
                 when (action) {
                     FtutterThumbAction.HIDE -> {
-                        val next = (hidden + ftutterCanonicalThreadUrl(item.threadUrl)).distinct()
-                        savePreference(FtutterKeys.HIDDEN_THREADS, encodeFtutterList(next))
-                        onNotice("非表示にしました")
+                        // 保存値の上限に入らなければ、古い記録から消して知らせる（監査A9）。保存されている一覧に足す（監査M2）。
+                        val url = ftutterCanonicalThreadUrl(item.threadUrl)
+                        editPreference(FtutterKeys.HIDDEN_THREADS) { stored ->
+                            val (next, dropped) = ftutterHiddenThreadsWith(parseFtutterHiddenThreads(stored), url)
+                            onNotice(ftutterHiddenNotice(dropped))
+                            encodeFtutterList(next)
+                        }
                     }
-                    // 原作：タブを閉じて履歴から削除する。
-                    FtutterThumbAction.DELETE_HISTORY -> historyIndex[item.id]?.let(onDeleteHistory)
+                    // 原作：確認の後、タブを閉じて履歴から削除する。
+                    FtutterThumbAction.DELETE_HISTORY -> if (historyIndex[item.id] != null) historyDeleteTarget = item
                     FtutterThumbAction.ADD_TAB -> { onAddTab(item); onNotice("タブに追加しました") }
                     FtutterThumbAction.DEL -> delTarget = item
                     FtutterThumbAction.PICKUP -> ngDraft = FtutterNgRule(item.title.orEmpty(), FtutterNgType.PICKUP.stored, ita = FtutterNgBoard(board.name, board.url))
@@ -383,7 +470,7 @@ internal fun FtutterCatalogScreen(
             boards = boards,
             existing = ngRules,
             onDismiss = { ngDraft = null },
-            onSave = { rule -> ngDraft = null; onSaveNgRules(ngRules + rule); onNotice("登録しました") }
+            onSave = { rule -> ngDraft = null; onSaveNgRules({ it + rule }, "登録しました") }
         )
     }
     delTarget?.let { item ->
@@ -394,6 +481,12 @@ internal fun FtutterCatalogScreen(
             confirmLabel = "送る",
             onDismiss = { delTarget = null }
         ) { delTarget = null; onDelThread(item) }
+    }
+    historyDeleteTarget?.let { item ->
+        FtutterHistoryDeleteConfirm(item.title.orEmpty(), onDismiss = { historyDeleteTarget = null }) {
+            historyDeleteTarget = null
+            historyIndex[item.id]?.let(onDeleteHistory)
+        }
     }
     if (openUrlDialog) {
         FtutterOpenUrlDialog(onDismiss = { openUrlDialog = false }, onOpen = { url -> openUrlDialog = false; onOpenUrl(url) })
@@ -680,17 +773,22 @@ private fun FtutterCatalogCell(
             badge(Modifier)
         }
     }
+    // ジェスチャーはスレのURLで続け、押した時の動作は最新を使う（監査L1：最初の構成の動作のまま、古い履歴・設定で開いていた）。
+    val currentItem by androidx.compose.runtime.rememberUpdatedState(item)
+    val currentOnOpen by androidx.compose.runtime.rememberUpdatedState(onOpen)
+    val currentOnZoom by androidx.compose.runtime.rememberUpdatedState(onZoom)
+    val currentOnThumbMenu by androidx.compose.runtime.rememberUpdatedState(onThumbMenu)
     Column(
         Modifier
             .border(0.5.dp, colors.outline)
             .pointerInput(item.threadUrl, settings.useZoom) {
                 detectTapGestures(
-                    onTap = { onOpen(item) },
-                    onLongPress = { if (settings.useZoom) onZoom(item) else onThumbMenu(item) },
+                    onTap = { currentOnOpen(currentItem) },
+                    onLongPress = { if (settings.useZoom) currentOnZoom(currentItem) else currentOnThumbMenu(currentItem) },
                     onPress = {
                         // 原作：長押し拡大は押している間だけ。指を離すと閉じる。
                         tryAwaitRelease()
-                        if (settings.useZoom) onZoom(null)
+                        if (settings.useZoom) currentOnZoom(null)
                     }
                 )
             }
@@ -764,7 +862,7 @@ private fun FtutterCatalogZoom(item: CatalogItem, settings: FtutterCatalogSettin
 }
 
 @Composable
-private fun FtutterThumbDialog(hasHistory: Boolean, onDismiss: () -> Unit, onAction: (FtutterThumbAction) -> Unit) {
+internal fun FtutterThumbDialog(hasHistory: Boolean, onDismiss: () -> Unit, onAction: (FtutterThumbAction) -> Unit) {
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         text = {
@@ -796,6 +894,12 @@ private fun FtutterThumbDialog(hasHistory: Boolean, onDismiss: () -> Unit, onAct
     ) }
 }
 
+/** 原作の「履歴を削除しますか？」。 */
+@Composable
+internal fun FtutterHistoryDeleteConfirm(threadTitle: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    FtutterConfirmDialog(title = "履歴を削除しますか？", message = threadTitle, confirmLabel = "OK", onDismiss = onDismiss, onConfirm = onConfirm)
+}
+
 @Composable
 private fun FtutterOpenUrlDialog(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
     var input by remember { mutableStateOf("") }
@@ -822,7 +926,7 @@ private fun FtutterOpenUrlDialog(onDismiss: () -> Unit, onOpen: (String) -> Unit
 @Composable
 internal fun FtutterHiddenAndNgScreen(
     preferences: Map<String, String>,
-    savePreference: (String, String) -> Unit,
+    editPreference: (String, (String?) -> String?) -> Unit,
     onBack: () -> Unit,
     /** 今の板のカタログでNGタイトルに当たったスレ。 */
     ngRemoved: List<CatalogItem> = emptyList()
@@ -848,7 +952,11 @@ internal fun FtutterHiddenAndNgScreen(
                     Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp).testTag("ftutter-hidden-row"), verticalAlignment = Alignment.CenterVertically) {
                         Text(url, color = colors.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                         TextButton(onClick = {
-                            savePreference(FtutterKeys.HIDDEN_THREADS, encodeFtutterList(hidden - url))
+                            // 保存されている一覧から外す（監査M2：続けて解除すると1件目が戻っていた）。
+                            editPreference(FtutterKeys.HIDDEN_THREADS) { stored ->
+                                val before = parseFtutterHiddenThreads(stored)
+                                if (url in before) encodeFtutterList(before - url) else null
+                            }
                         }, modifier = Modifier.testTag("ftutter-hidden-remove")) { Text("解除") }
                     }
                 }

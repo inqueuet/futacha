@@ -221,12 +221,12 @@ internal fun buildCatalogInitialLoadBindings(
                     // Shown after the refreshing state is cleared: showSnackbar
                     // suspends until the snackbar is dismissed.
                     var resultMessage: String? = null
-                    suspend fun applyCatalog(catalog: CatalogPageContent) {
+                    suspend fun applyCatalog(catalog: CatalogPageContent, partial: Boolean = false) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return
                         }
                         hasAppliedCatalog = true
-                        setCatalogUiState(CatalogUiState.Success(catalog))
+                        setCatalogUiState(CatalogUiState.Success(catalog, partial))
                         setLastCatalogItems(catalog.items)
                     }
                     try {
@@ -239,7 +239,7 @@ internal fun buildCatalogInitialLoadBindings(
                                     "mode" to currentCatalogMode().name.lowercase()
                                 )
                             ) {
-                                loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                                loadCatalogItems(board, currentCatalogMode()) { applyCatalog(it, partial = true) }
                             }
                         }
                         applyCatalog(catalog)
@@ -412,7 +412,9 @@ internal fun buildCatalogExecutionBindings(
     currentPastSearchRuntimeState: () -> CatalogPastSearchRuntimeState,
     setPastSearchRuntimeState: (CatalogPastSearchRuntimeState) -> Unit,
     httpClient: HttpClient?,
-    archiveSearchJson: Json
+    archiveSearchJson: Json,
+    /** What the screen shows now; null when the caller does not say (nothing is changed then). */
+    currentCatalogUiState: () -> CatalogUiState? = { null }
 ): CatalogExecutionBindings {
     return CatalogExecutionBindings(
         handleHistoryRefresh = handleHistoryRefresh@{
@@ -476,12 +478,12 @@ internal fun buildCatalogExecutionBindings(
                     // Shown after the refreshing state is cleared: showSnackbar
                     // suspends until the snackbar is dismissed.
                     var resultMessage: String? = null
-                    suspend fun applyCatalog(catalog: CatalogPageContent) {
+                    suspend fun applyCatalog(catalog: CatalogPageContent, partial: Boolean = false) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return
                         }
                         hasAppliedCatalog = true
-                        setCatalogUiState(CatalogUiState.Success(catalog))
+                        setCatalogUiState(CatalogUiState.Success(catalog, partial))
                         setLastCatalogItems(catalog.items)
                     }
                     try {
@@ -495,7 +497,7 @@ internal fun buildCatalogExecutionBindings(
                                     "mode" to currentCatalogMode().name.lowercase()
                                 )
                             ) {
-                                loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                                loadCatalogItems(board, currentCatalogMode()) { applyCatalog(it, partial = true) }
                             }
                         }
                         applyCatalog(catalog)
@@ -524,6 +526,11 @@ internal fun buildCatalogExecutionBindings(
                                 )
                             )
                             resultMessage = buildCatalogRefreshFailureMessage()
+                            // A refresh pressed during the first load cancelled that load: with nothing shown yet, the
+                            // failure is the screen's state, not only a snackbar (re-audit M28: it stayed loading forever).
+                            if (currentCatalogUiState() is CatalogUiState.Loading) {
+                                setCatalogUiState(CatalogUiState.Error(buildCatalogLoadFailureMessage(e)))
+                            }
                         }
                     } finally {
                         if (

@@ -283,15 +283,20 @@ internal suspend fun findNextFutachaHistoryArchiveDirectory(
     json: Json = Json { ignoreUnknownKeys = true }
 ): String? = withContext(AppDispatchers.io) {
     val currentKeys = stateStore.historyValueKeys()
-    loadFutachaHistoryArchiveManifestCandidates(fileSystem, json)
-        .maxWithOrNull(
-            compareBy<Pair<String, HistoryArchiveManifest>> {
-                it.second.entries.count { entry ->
-                    buildHistoryIdentityKey(entry.historyEntry) !in currentKeys
-                }
-            }.thenBy { it.second.exportedAtEpochMillis }
-        )
-        ?.first
+    // One manifest at a time: each is scored and dropped before the next is read (re-audit M35: all of them, up to 500
+    // of up to 4 MB, were held in memory together just to pick one).
+    var best: Triple<String, Int, Long>? = null
+    forEachFutachaHistoryArchiveManifest(fileSystem, json) { directory, manifest ->
+        val newEntries = manifest.entries.count { entry -> buildHistoryIdentityKey(entry.historyEntry) !in currentKeys }
+        val candidate = Triple(directory, newEntries, manifest.exportedAtEpochMillis)
+        val current = best
+        if (current == null || newEntries > current.second ||
+            (newEntries == current.second && manifest.exportedAtEpochMillis > current.third)
+        ) {
+            best = candidate
+        }
+    }
+    best?.first
 }
 
 internal fun buildImportedHistoryRepository(fileSystem: FileSystem?): SavedThreadRepository? {
@@ -304,21 +309,18 @@ private suspend fun AppStateStore.historyValueKeys(): Set<String> {
     return historyValue().mapTo(linkedSetOf(), ::buildHistoryIdentityKey)
 }
 
-private suspend fun loadFutachaHistoryArchiveManifestCandidates(
+private suspend fun forEachFutachaHistoryArchiveManifest(
     fileSystem: FileSystem,
-    json: Json
-): List<Pair<String, HistoryArchiveManifest>> {
-    return boundedHistoryArchiveCandidateNames(fileSystem)
-        .mapNotNull { fileName ->
-            val archiveName = fileName.trim().trim('/')
-            if (archiveName.isBlank()) {
-                return@mapNotNull null
-            }
-            val archiveDirectory = "$HISTORY_ARCHIVE_DIRECTORY/$archiveName"
-            val manifest = loadBoundedHistoryArchiveManifest(fileSystem, archiveDirectory, json)
-                ?: return@mapNotNull null
-            archiveDirectory to manifest
-        }
+    json: Json,
+    onManifest: (directory: String, manifest: HistoryArchiveManifest) -> Unit
+) {
+    boundedHistoryArchiveCandidateNames(fileSystem).forEach { fileName ->
+        val archiveName = fileName.trim().trim('/')
+        if (archiveName.isBlank()) return@forEach
+        val archiveDirectory = "$HISTORY_ARCHIVE_DIRECTORY/$archiveName"
+        val manifest = loadBoundedHistoryArchiveManifest(fileSystem, archiveDirectory, json) ?: return@forEach
+        onManifest(archiveDirectory, manifest)
+    }
 }
 
 private suspend fun boundedHistoryArchiveCandidateNames(fileSystem: FileSystem): List<String> {

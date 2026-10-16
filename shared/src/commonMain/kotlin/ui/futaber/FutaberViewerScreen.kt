@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -250,7 +252,7 @@ internal fun FutaberViewerScreen(
                             )
                         }
                     }
-                    Row(Modifier.fillMaxWidth().height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ScrollableToolbarRow(itemCount = 4, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp)) {
                         ViewerBarButton(Icons.Outlined.GridView, "画像一覧", "futaber-viewer-grid", Modifier.weight(1f), onClick = onOpenGallery)
                         ViewerBarButton(Icons.Outlined.ChatBubbleOutline, "レスに戻る", "futaber-viewer-post", Modifier.weight(1f)) {
                             current?.let { onShowPost(it.postNo) }

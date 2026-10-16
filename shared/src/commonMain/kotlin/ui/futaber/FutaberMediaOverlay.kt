@@ -86,6 +86,11 @@ internal fun FutaberMediaOverlay(
             compatViewerMediaPosts(posts = it.posts, hiddenImages = hiddenImages, hiddenPostNos = hiddenPostNos)
         }.orEmpty()
     }
+    // The viewer keeps the pictures it was opened with: a refresh or a new NG behind it shifted the pages, so the page on
+    // screen became another picture, and "保存" could save that one (re-audit L8). Back in the list, the list is current.
+    val viewerOpen = viewerIndex != null
+    // (Taken again once the pictures are first known, for a viewer restored before they were.)
+    val viewerMedia = remember(viewerOpen, snapshot == null) { mediaPosts }
     // "ビューアで表示": once the pictures are known, the viewer opens on that post's picture (only once; back goes to the list).
     var initialApplied by rememberSaveable { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(snapshot, mediaPosts, initialPostNo) {
@@ -136,7 +141,7 @@ internal fun FutaberMediaOverlay(
                         viewerIndex != null -> {
                             PlatformBackHandler { viewerIndex = null }
                             FutaberViewerScreen(
-                                mediaPosts = mediaPosts,
+                                mediaPosts = viewerMedia,
                                 initialIndex = viewerIndex ?: 0,
                                 boardKey = tab.boardKey,
                                 threadKey = tab.threadNo,

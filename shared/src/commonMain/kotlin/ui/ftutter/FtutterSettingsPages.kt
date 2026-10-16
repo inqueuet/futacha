@@ -119,7 +119,7 @@ internal fun FtutterCatalogSettingsPage(preferences: Map<String, String>, save: 
         item { FtutterCheckSetting("カタログを引っ張って更新（下部）", FtutterKeys.CATALOG_PULL_BOTTOM, true, preferences, save) }
         ftutterSection("ツールバー")
         item { FtutterNavRow("ボタンの並び", "ftutter-settings-catalog-toolbar", onClick = onEditToolbar) }
-        item { FtutterSliderSetting("ボタンの幅", FtutterKeys.CATALOG_ICON_WIDTH, 30.0, 80.0, 1.0, 45.0, preferences, save) }
+        item { FtutterSliderSetting("ボタンの幅", FtutterKeys.CATALOG_ICON_WIDTH, 40.0, 80.0, 1.0, 45.0, preferences, save) }
         item { FtutterSliderSetting("ボタンの高さ", FtutterKeys.CATALOG_ICON_HEIGHT, 30.0, 80.0, 1.0, 45.0, preferences, save) }
         item { FtutterSliderSetting("スペース（左端）", FtutterKeys.CATALOG_TOOLBAR_LEFT, 0.0, 100.0, 5.0, 5.0, preferences, save) }
         item { FtutterSliderSetting("スペース（右端）", FtutterKeys.CATALOG_TOOLBAR_RIGHT, 0.0, 100.0, 5.0, 5.0, preferences, save) }
@@ -170,12 +170,12 @@ internal fun FtutterThreadSettingsPage(
         ftutterSection("履歴")
         item {
             FtutterSliderSetting("履歴の保存数（保護したタブは除く）", FtutterKeys.HISTORY_LIMIT, 0.0, 1000.0, 10.0, 200.0, preferences, save,
-                note = "履歴は他のモードと共有で、件数の上限は共有の側で決まります")
+                note = "保護していないタブを、最近開いたものからこの数まで残します（起動時は履歴に無いタブも閉じます）。履歴そのものは他のモードと共有で、件数の上限は共有の側で決まります")
         }
         ftutterSection("ツールバー・メニュー")
         item { FtutterNavRow("ボタンの並び", "ftutter-settings-thread-toolbar", onClick = onEditToolbar) }
         item { FtutterNavRow("レス長押しメニューの並び", "ftutter-settings-post-menu", onClick = onEditPostMenu) }
-        item { FtutterSliderSetting("ボタンの幅", FtutterKeys.THREAD_ICON_WIDTH, 30.0, 80.0, 1.0, 45.0, preferences, save) }
+        item { FtutterSliderSetting("ボタンの幅", FtutterKeys.THREAD_ICON_WIDTH, 40.0, 80.0, 1.0, 45.0, preferences, save) }
         item { FtutterSliderSetting("ボタンの高さ", FtutterKeys.THREAD_ICON_HEIGHT, 30.0, 80.0, 1.0, 45.0, preferences, save) }
         item { FtutterSliderSetting("スペース（左端）", FtutterKeys.THREAD_TOOLBAR_LEFT, 0.0, 100.0, 5.0, 5.0, preferences, save) }
         item { FtutterSliderSetting("スペース（右端）", FtutterKeys.THREAD_TOOLBAR_RIGHT, 0.0, 100.0, 5.0, 5.0, preferences, save) }

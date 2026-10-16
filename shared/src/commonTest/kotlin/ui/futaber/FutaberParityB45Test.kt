@@ -228,4 +228,17 @@ class FutaberParityB45Test {
     @Test fun thePatrolNoticeNamesWhereTheResultsAre() {
         assertEquals("巡回で3件のスレッドが見つかりました（管理画面の「通知」）", futaberPatrolMatchNotice(3))
     }
+
+    /** Re-audit L7: while the history work runs, another request says so instead of doing nothing without a word. */
+    @Test
+    fun aSecondHistoryRequestWhileOneRunsIsAnswered() = kotlinx.coroutines.runBlocking<Unit> {
+        val store = com.valoser.futacha.shared.state.AppStateStore(com.valoser.futacha.shared.state.FakePlatformStateStorage())
+        val controller = FutaberHistoryController(this, store)
+        val messages = mutableListOf<String>()
+        controller.onMessage = { messages += it }
+        // The first clear has not run yet (this test's single thread) when the second comes.
+        controller.clearAll()
+        controller.clearAll()
+        kotlin.test.assertTrue(FUTABER_HISTORY_BUSY_NOTICE in messages, messages.toString())
+    }
 }

@@ -749,7 +749,13 @@ private fun ThreadScreenContent(
     )
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
-    val latestMediaPreviewPosts = rememberUpdatedState(derivedUiState.currentPosts)
+    // Posts hidden by NG leave the attachment list and the viewer's paging (re-audit M33; ふたばー風 does the same).
+    val ngHiddenPostIds = displayedPostsLayout.ngHiddenPostIds
+    val mediaPosts = remember(derivedUiState.currentPosts, ngHiddenPostIds) {
+        if (ngHiddenPostIds.isEmpty()) derivedUiState.currentPosts
+        else derivedUiState.currentPosts.filterNot { it.id in ngHiddenPostIds }
+    }
+    val latestMediaPreviewPosts = rememberUpdatedState(mediaPosts)
     var mediaPreviewCollection by remember(threadId) {
         mutableStateOf(
             MediaPreviewCollection(
@@ -785,8 +791,10 @@ private fun ThreadScreenContent(
     }
     val mediaPreviewEntries = mediaPreviewCollection.entries
     var mediaPreviewState by searchStateRefs.mediaPreviewState
-    var restoreGalleryAfterMediaPreview by rememberSaveable { mutableStateOf(false) }
-    var restoreGalleryAfterAttachmentAction by rememberSaveable { mutableStateOf(false) }
+    // These belong to the preview open now, which is not kept across a process ending: kept there too, they opened the
+    // attachment list when an unrelated picture was closed afterwards (re-audit L41).
+    var restoreGalleryAfterMediaPreview by remember { mutableStateOf(false) }
+    var restoreGalleryAfterAttachmentAction by remember { mutableStateOf(false) }
     val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit = { nextState ->
         val isDismissingPreview = mediaPreviewState.previewMediaIndex != null && nextState.previewMediaIndex == null
         mediaPreviewState = nextState
@@ -1398,7 +1406,9 @@ private fun ThreadScreenContent(
             replyDialogState = replyDialogBinding.currentState,
             mediaPreviewState = mediaPreviewState,
             mediaPreviewEntries = mediaPreviewEntries,
-            galleryPosts = currentSuccessState?.page?.posts,
+            galleryPosts = currentSuccessState?.page?.posts?.let { posts ->
+                if (ngHiddenPostIds.isEmpty()) posts else mediaPosts
+            },
             isSingleMediaSaveInProgress = isSingleMediaSaveInProgress,
             readAloudSegments = readAloudSegments,
             currentReadAloudIndex = { currentReadAloudIndex },
@@ -1517,7 +1527,8 @@ private fun ThreadScreenContent(
         effectiveBoardUrl = effectiveBoardUrl,
         isActionInProgress = { actionInProgress },
         setActionInProgress = { actionInProgress = it },
-        replyDraft = replyDialogBinding
+        replyDraft = replyDialogBinding,
+        replySending = { isReplySending }
     ) {
     CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors, LocalJumpHighlightedPostId provides jumpHighlightedPostId) {
         MaterialTheme(

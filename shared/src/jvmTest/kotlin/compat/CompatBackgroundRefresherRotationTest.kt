@@ -100,6 +100,41 @@ class CompatBackgroundRefresherRotationTest {
         } finally { store.close(); root.deleteRecursively() }
     }
 
+    /**
+     * Re-audit M16: a slow watch crawl no longer uses up the whole watch phase; the liveness probes of the watched threads
+     * still run, so a thread that fell is marked so. The time running out is not a failure.
+     */
+    @Test fun aSlowWatchCrawlStillLeavesTimeToFindAFallenWatchedThread() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("futacha-watch-probe-share").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            val url = "https://may.2chan.net/b/"
+            store.importModernBoards(listOf(BoardSummary("may", "may", "", url, "")))
+            CompatWatcherRepository(store).saveRules(listOf(CompatWatchRule("猫")))
+            var slow = false
+            var gone = false
+            val repository = object : BoardRepository by FakeBoardRepository() {
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> {
+                    if (slow) delay(60_000)
+                    return listOf(CatalogItem("333", board + "res/333.htm", "猫のスレ", null, null, replyCount = 1))
+                }
+                override suspend fun probeThreadGone(threadUrl: String) = gone
+            }
+            val now = 10_000_000_000L
+            refreshCompatTabsInBackground(store, repository, nowEpochMillis = now, checkUpdates = false, checkExistence = false,
+                checkWatchWords = true, budgetMillis = 3_000)
+            assertTrue(CompatWatcherRepository(store).load(now).single().active)
+            // The thread fell; the crawl is slow enough to use up any time it is given.
+            slow = true; gone = true
+            val result = refreshCompatTabsInBackground(store, repository, nowEpochMillis = now + 3_600_000L, checkUpdates = false,
+                checkExistence = false, checkWatchWords = true, budgetMillis = 3_000)
+            assertFalse(CompatWatcherRepository(store).load(now + 3_600_000L).single().active)
+            assertEquals(0, result.failures)
+            assertTrue(result.unfinished > 0)
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
     @Test fun cappedUpdatePhaseLeavesTheWatchWordsTimeInAShortRun() = runBlocking {
         val root = Files.createTempDirectory("futacha-bg-phase-budget").toFile()
         val store = DesktopCompatibilityStore(JvmFileSystem(root))
@@ -125,7 +160,72 @@ class CompatBackgroundRefresherRotationTest {
             val result = refreshCompatTabsInBackground(store, repository, nowEpochMillis = 10_000_000_000L,
                 checkExistence = false, checkWatchWords = true, budgetMillis = 5_000L, updateBudgetMillis = 200L)
             assertEquals(listOf("200"), result.newWatchMatches.map { it.history.threadNo })
-            assertTrue(result.failures > 0, "the cut-off catalog is reported")
+            // A catalog cut off by the time is left for the next run, not a failure (re-audit M16).
+            assertTrue(result.unfinished > 0, "the cut-off catalog is reported")
+            assertEquals(0, result.failures)
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
+    /**
+     * Audit M23: a caller that cuts the run off with an outer timeout passes [compatRefreshBudgetWithin], so a slow watch
+     * phase (it runs first) leaves time for the tabs' reply counts. Without a budget the watch used up the timeout.
+     */
+    @Test fun aBudgetWithinTheTimeoutLeavesTimeForTheReplyCountsAfterASlowWatch() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("futacha-bg-budget").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            val url = "https://may.2chan.net/b/"
+            store.importModernBoards(listOf(BoardSummary("may", "may", "", url, "")))
+            CompatWatcherRepository(store).saveRules(listOf(CompatWatchRule("猫")))
+            val threadUrl = "${url}res/100.htm"
+            val tabKey = compatTabKey(threadUrl)
+            store.openTab(CompatTab(tabKey, threadUrl, threadUrl, compatBoardKey(url), "may", "100", "スレ",
+                insertedAtEpochMillis = 1L, contentUpdatedAtEpochMillis = 1L))
+            val repository = object : BoardRepository by FakeBoardRepository() {
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> {
+                    // The watch phase fetches the new/old orders; they hang.
+                    if (mode == CatalogMode.New || mode == CatalogMode.Old) delay(60_000)
+                    return listOf(CatalogItem("100", threadUrl, "スレ", null, null, replyCount = 9))
+                }
+                override suspend fun probeThreadGone(threadUrl: String) = false
+            }
+            val timeout = 4_000L
+            // Without a budget the watch phase uses up the whole timeout.
+            assertNull(kotlinx.coroutines.withTimeoutOrNull(timeout) {
+                refreshCompatTabsInBackground(store, repository, checkUpdates = true, checkExistence = false, checkWatchWords = true)
+            })
+            assertNotEquals(9, store.tabs.first().single().replyCount)
+            val result = kotlinx.coroutines.withTimeout(timeout) {
+                refreshCompatTabsInBackground(store, repository, checkUpdates = true, checkExistence = false, checkWatchWords = true,
+                    budgetMillis = compatRefreshBudgetWithin(timeout))
+            }
+            assertEquals(9, store.tabs.first().single().replyCount)
+            assertTrue(result.updatedTabs >= 1)
+            assertEquals(3_600L, compatRefreshBudgetWithin(4_000L))
+            assertEquals(330_000L, compatRefreshBudgetWithin(6 * 60_000L))
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
+    /** Audit M24: after a mode switch (the gate refuses) nothing is written, not even the watch diagnostics. */
+    @Test fun aClosedGateWritesNoWatchDiagnostics() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("futacha-bg-gate").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            store.importModernBoards(listOf(BoardSummary("may", "may", "", "https://may.2chan.net/b/", "")))
+            CompatWatcherRepository(store).saveRules(listOf(CompatWatchRule("猫")))
+            val repository = object : BoardRepository by FakeBoardRepository() {
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> = emptyList()
+                override suspend fun probeThreadGone(threadUrl: String) = false
+            }
+            refreshCompatTabsInBackground(store, repository, checkUpdates = false, checkExistence = false, checkWatchWords = true,
+                commitGate = { false })
+            assertNull(store.preferences.first()[WATCH_RUN_CRAWL_KEY])
+            assertNull(store.preferences.first()["compat.background.watch_board_cursor"])
+            // With the gate open it is written.
+            refreshCompatTabsInBackground(store, repository, checkUpdates = false, checkExistence = false, checkWatchWords = true)
+            assertNotNull(decodeWatchRunDiagnostics(store.preferences.first()[WATCH_RUN_CRAWL_KEY]))
         } finally { store.close(); root.deleteRecursively() }
     }
 }

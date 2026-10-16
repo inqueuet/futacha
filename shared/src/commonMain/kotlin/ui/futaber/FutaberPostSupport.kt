@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import kotlinx.coroutines.async
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.ui.board.messageHtmlToLines
 import kotlinx.serialization.Serializable
@@ -147,4 +148,46 @@ internal data class FutaberPostSettings(
             confirmBeforeSend = preferences[FutaberPreferenceKeys.POST_CONFIRM] != "OFF"
         )
     }
+}
+
+/** 送信中に別の宛先の書き込み画面を開こうとした時（監査M13）。 */
+/** The write screen's held text and file are [target]'s (they follow the last write screen opened; re-audit L1). */
+internal fun futaberHeldTextBelongsTo(ownerKey: String?, target: FutaberPostTarget): Boolean = ownerKey == target.draftKey
+
+/** A write screen for [target] is not opened while a post to another target is being sent (audit M13, re-audit M13). */
+internal fun futaberPostRefusedWhileSending(postInFlight: String?, target: FutaberPostTarget): Boolean =
+    postInFlight != null && postInFlight != target.draftKey
+
+internal const val FUTABER_POST_IN_FLIGHT_NOTICE = "書き込みを送信中です。終わってからもう一度お試しください"
+
+/** 送信中に書き込み画面が外れ（板の削除など）、その後に送信が済んだ時（監査M13）。 */
+internal const val FUTABER_POST_SENT_AWAY_NOTICE = "書き込みました"
+
+/** 送信中に書き込み画面が外れ、その後に送信が失敗した時（監査M13）。 */
+internal fun futaberPostFailedAwayNotice(error: Throwable): String =
+    "書き込みできませんでした：${error.message ?: "送信に失敗しました"}"
+
+/**
+ * 書き込みを[scope]（書き込み画面より長く続く）で送り、結果を返す（監査M13）。待っている側（書き込み画面）が取り消されても送信は
+ * 最後まで行う。送り終えた時に書き込み画面が外れていれば（[screenStillOpen]が偽）、結果は[onSentAway]・[onFailedAway]で知らせる。
+ */
+internal suspend fun <T> futaberSendOutlivingScreen(
+    scope: kotlinx.coroutines.CoroutineScope,
+    send: suspend () -> Result<T>,
+    screenStillOpen: () -> Boolean,
+    onSentAway: (T) -> Unit,
+    onFailedAway: (Throwable) -> Unit
+): Result<T> {
+    val sending = scope.async {
+        val result = try {
+            send()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+        if (!screenStillOpen()) result.onSuccess(onSentAway).onFailure(onFailedAway)
+        result
+    }
+    return sending.await()
 }

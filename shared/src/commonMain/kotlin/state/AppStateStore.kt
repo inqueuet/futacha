@@ -523,6 +523,10 @@ class AppStateStore internal constructor(
     suspend fun removeSelfPostIdentifiersForThread(threadId: String, boardId: String? = null) =
         preferenceOperations.removeSelfPostIdentifiersForThread(threadId, boardId)
 
+    /** Removes the person's own post numbers of several threads (threadId to boardId) with one write. */
+    suspend fun removeSelfPostIdentifiersForThreads(threads: Collection<Pair<String, String?>>) =
+        preferenceOperations.removeSelfPostIdentifiersForThreads(threads)
+
     suspend fun clearSelfPostIdentifiers() =
         preferenceOperations.clearSelfPostIdentifiers()
 
@@ -543,6 +547,9 @@ class AppStateStore internal constructor(
         historyOperations.mergeHistoryEntries(entries)
 
     suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.removeHistoryEntry(entry)
+
+    suspend fun removeHistoryEntries(entries: Collection<ThreadHistoryEntry>) =
+        historyOperations.removeHistoryEntries(entries)
 
     suspend fun cancelAllPendingHistoryScrollUpdates() =
         historyOperations.cancelAllPendingScrollUpdates()

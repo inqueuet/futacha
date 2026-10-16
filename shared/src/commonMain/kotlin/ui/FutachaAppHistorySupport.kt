@@ -19,7 +19,10 @@ import com.valoser.futacha.shared.state.launchFinalHistoryScrollPersistence
 import com.valoser.futacha.shared.state.launchHistoryScrollPersistence
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class FutachaHistoryMutationCallbacks(
     val onDismissHistoryEntry: (ThreadHistoryEntry) -> Unit,
@@ -36,7 +39,9 @@ internal data class FutachaThreadHistoryContext(
     val title: String,
     val threadUrl: String,
     val replyCount: Int,
-    val thumbnailUrl: String
+    val thumbnailUrl: String,
+    /** False when the thread was opened without its title (from an address in a post): [title] is only a placeholder. */
+    val titleKnown: Boolean = true
 )
 
 internal fun buildFutachaHistoryMutationCallbacks(
@@ -119,6 +124,7 @@ internal fun buildFutachaThreadHistoryContext(
 ): FutachaThreadHistoryContext {
     return FutachaThreadHistoryContext(
         title = navigationState.selectedThreadTitle ?: "無題",
+        titleKnown = navigationState.selectedThreadTitle != null,
         threadUrl = navigationState.selectedThreadUrl ?: board.url,
         replyCount = navigationState.selectedThreadReplies ?: 0,
         thumbnailUrl = navigationState.selectedThreadThumbnailUrl.orEmpty()
@@ -165,7 +171,9 @@ internal fun buildFutachaVisitedHistoryEntry(
     return ThreadHistoryEntry(
         threadId = threadId,
         boardId = board.id,
-        title = context.title,
+        // A thread opened without its title keeps the title it already has in the history (re-audit M34: a failed load
+        // of a thread opened from an address wrote "無題" over it).
+        title = if (context.titleKnown) context.title else existingEntry?.title?.takeIf { it.isNotBlank() } ?: context.title,
         titleImageUrl = context.thumbnailUrl,
         boardName = board.name,
         boardUrl = context.threadUrl,
@@ -325,6 +333,60 @@ internal suspend fun dismissHistoryEntry(
             ).exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
         }
 }
+
+/**
+ * [dismissHistoryEntry] for several rows (ふたったー風's history deletion): the other modes' copy of each row (or the
+ * start-up merge brings it back), the rows themselves in one write, the person's own post numbers and the auto-saved
+ * copies. The shared store is read once and only rows it holds are deleted there.
+ */
+internal suspend fun dismissHistoryEntries(
+    stateStore: AppStateStore,
+    autoSavedThreadRepository: SavedThreadRepository?,
+    importedHistoryRepository: SavedThreadRepository? = null,
+    compatibilityStore: CompatibilityStore? = null,
+    entries: Collection<ThreadHistoryEntry>,
+    onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
+) {
+    if (entries.isEmpty()) return
+    // Once started it goes to the end (re-audit M27: cancelled half way, the other modes' rows were gone and this
+    // mode's stayed), and each store is written once, not once per row.
+    withContext(NonCancellable) {
+        if (compatibilityStore != null) {
+            val wanted = entries.mapNotNullTo(LinkedHashSet()) { it.toCompatHistoryEntry()?.canonicalUrl }
+            if (wanted.isNotEmpty()) {
+                val stored = compatibilityStore.history.first().mapTo(HashSet()) { it.canonicalUrl }
+                val present = wanted.filter { it in stored }
+                if (present.isNotEmpty()) compatibilityStore.deleteHistories(present)
+            }
+        }
+        stateStore.removeHistoryEntries(entries)
+        val threads = entries.map { it.threadId to resolveHistoryEntryBoardId(it) }.distinct()
+        stateStore.removeSelfPostIdentifiersForThreads(threads)
+        listOfNotNull(autoSavedThreadRepository, importedHistoryRepository)
+            .distinct()
+            .forEach { repository ->
+                if (threads.size == 1) {
+                    // One row: also the old and orphan folders of that thread, as ふたちゃ's own deletion does.
+                    val (threadId, boardId) = threads.single()
+                    repository.purgeThreadStorage(threadId = threadId, boardId = boardId)
+                        .exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
+                } else {
+                    // Many rows: one index rewrite per chunk (the folder scan per row made "すべて削除" slow, L20). A chunk
+                    // that fails as a whole is retried row by row.
+                    threads.chunked(DISMISS_HISTORY_PURGE_CHUNK_SIZE).forEach { chunk ->
+                        repository.purgeIndexedThreadsStorage(chunk).onFailure {
+                            chunk.forEach { (threadId, boardId) ->
+                                repository.purgeIndexedThreadStorage(threadId = threadId, boardId = boardId)
+                                    .exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
+                            }
+                        }
+                    }
+                }
+            }
+    }
+}
+
+private const val DISMISS_HISTORY_PURGE_CHUNK_SIZE = 200
 
 internal suspend fun clearHistory(
     stateStore: AppStateStore,

@@ -132,20 +132,37 @@ internal fun futaberCatalogSortFor(
     boardId: String?,
     perBoard: Boolean,
     /** The B7a extension "そ順・監視": without it a stored "そ順" / "監視" reads as "通常". */
-    extraModes: Boolean = false
+    extraModes: Boolean = false,
+    /**
+     * The board's shared key ([futaberStoredBoardId]), read before [boardId] (audit L21: the record was kept under the board
+     * id, which depends on the order boards were added, so after a restore or on another device it went to another board).
+     */
+    storedBoardId: String? = null
 ): CatalogMode {
     val shared = futaberCatalogModeFromPersisted(preferences[FutaberPreferenceKeys.CATALOG_SORT], extraModes)
     if (!perBoard || boardId == null) return shared
-    val own = decodeFutaberSortByBoard(preferences[FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD])[boardId] ?: return shared
+    val records = decodeFutaberSortByBoard(preferences[FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD])
+    val own = storedBoardId?.let(records::get) ?: records[boardId] ?: return shared
     return if (!extraModes && futaberIsExtraCatalogMode(own)) futaberDefaultCatalogMode else own
 }
 
-/** The stored value after [boardId] chose [mode]; the records of boards that are no longer in [boardIds] are dropped. */
-internal fun futaberSortByBoardAfter(stored: String?, boardId: String, mode: CatalogMode, boardIds: Collection<String>): String {
+/**
+ * The stored value after [boardId] chose [mode], written under [storedBoardId] (the shared key) when given, and the old
+ * record under [boardId] goes (audit L21). The records of boards that are no longer in [boardIds] (by id or by shared key)
+ * are dropped.
+ */
+internal fun futaberSortByBoardAfter(
+    stored: String?,
+    boardId: String,
+    mode: CatalogMode,
+    boardIds: Collection<String>,
+    storedBoardId: String? = null
+): String {
     val live = boardIds.toHashSet()
+    val writeKey = storedBoardId ?: boardId
     val next = LinkedHashMap<String, CatalogMode>()
-    decodeFutaberSortByBoard(stored).forEach { (id, value) -> if (id in live && id != boardId) next[id] = value }
-    next[boardId] = mode
+    decodeFutaberSortByBoard(stored).forEach { (id, value) -> if (id in live && id != boardId && id != writeKey) next[id] = value }
+    next[writeKey] = mode
     return encodeFutaberSortByBoard(next)
 }
 
@@ -312,7 +329,13 @@ internal class FutaberMediaSaver {
     internal var choosePhotoSaveDestination: (String, () -> Unit) -> Unit = { _, next -> next() }
     internal var boardKey: String = ""
     internal var threadKey: String = ""
-    internal var onMessage: (String) -> Unit = {}
+    internal var screenOnMessage: (String) -> Unit = {}
+    /** Where a result goes once the screen that asked for it has gone (the app's notice); null drops it. */
+    internal var afterScreenGone: ((String) -> Unit)? = null
+    internal var screenGone = false
+    internal val onMessage: (String) -> Unit = { message ->
+        if (screenGone) afterScreenGone?.invoke(message) else screenOnMessage(message)
+    }
     internal var announceStart: Boolean = false
 
     /** Saves ([shareAfterSave] false) or shares [mediaUrl]; the destination is asked first when there is none yet. */
@@ -342,7 +365,10 @@ internal class FutaberMediaSaver {
                     storageDirectoryOverride = if (shareAfterSave) null else "",
                     useTypeSubdirectory = shareAfterSave
                 ).onSuccess { saved ->
-                    if (shareAfterSave) {
+                    if (shareAfterSave && screenGone) {
+                        // The viewer that asked has closed: its share sheet is gone with it, the file is kept.
+                        onMessage("画像を保存しました（画面を閉じたため共有はしていません）")
+                    } else if (shareAfterSave) {
                         val mime = if (saved.mediaType.name == "VIDEO") "video/*" else "image/*"
                         share(
                             mediaUrl, mime,
@@ -366,6 +392,19 @@ internal class FutaberMediaSaver {
     }
 }
 
+/**
+ * Work of this mode that must outlive the screen that started it (re-audit M19): the history band's "一括更新" and the
+ * viewer's save / share went on in the panel's or the viewer's scope and stopped without a word when it closed. They run in
+ * the app's scope; what they tell after their screen has gone comes as the app's notice.
+ */
+@androidx.compose.runtime.Stable
+internal class FutaberAppTasks(val scope: CoroutineScope, val notify: (String) -> Unit) {
+    var historyRefreshing by androidx.compose.runtime.mutableStateOf(false)
+    var historyRefreshMessage by androidx.compose.runtime.mutableStateOf<String?>(null)
+}
+
+internal val LocalFutaberAppTasks = androidx.compose.runtime.staticCompositionLocalOf<FutaberAppTasks?> { null }
+
 /** A [FutaberMediaSaver] kept for the screen (its destination pickers must stay while they are open). */
 @Composable
 internal fun rememberFutaberMediaSaver(
@@ -380,7 +419,13 @@ internal fun rememberFutaberMediaSaver(
     onMessage: (String) -> Unit
 ): FutaberMediaSaver {
     val holder = remember { FutaberMediaSaver() }
-    val scope = rememberCoroutineScope()
+    val appTasks = LocalFutaberAppTasks.current
+    // The app's scope when there is one, so closing the viewer does not stop a save (re-audit M19).
+    val scope = appTasks?.scope ?: rememberCoroutineScope()
+    androidx.compose.runtime.DisposableEffect(holder) {
+        holder.screenGone = false
+        onDispose { holder.screenGone = true }
+    }
     val share = rememberCompatShareLauncher()
     val saver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) SingleMediaSaveService(httpClient, fileSystem) else null
@@ -398,7 +443,8 @@ internal fun rememberFutaberMediaSaver(
     holder.choosePhotoSaveDestination = choosePhotoSaveDestination
     holder.boardKey = boardKey
     holder.threadKey = threadKey
-    holder.onMessage = onMessage
+    holder.screenOnMessage = onMessage
+    holder.afterScreenGone = appTasks?.notify
     holder.announceStart = announceStart
     return holder
 }

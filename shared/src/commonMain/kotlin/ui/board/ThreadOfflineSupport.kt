@@ -189,8 +189,27 @@ internal fun chooseNewestOfflineThreadPage(
 ): ThreadPage? = when {
     saved == null -> shared?.page
     shared == null -> saved.page
-    shared.storedAtEpochMillis > saved.storedAtEpochMillis -> shared.page
+    shared.storedAtEpochMillis > saved.storedAtEpochMillis -> withSavedMedia(shared.page, saved.page)
     else -> saved.page
+}
+
+/**
+ * The newer shared snapshot's text with the saved copy's pictures (audit M18): the snapshot keeps the pictures' web
+ * addresses, the saved copy the files it downloaded, so offline the snapshot alone showed no pictures for posts the saved
+ * copy has. A post only in the snapshot keeps its addresses.
+ */
+private fun withSavedMedia(newer: ThreadPage, saved: ThreadPage): ThreadPage {
+    val savedById = saved.posts.associateBy { it.id }
+    var changed = false
+    val posts = newer.posts.map { post ->
+        val local = savedById[post.id]
+        if (local == null || (local.imageUrl == null && local.thumbnailUrl == null)) post else {
+            val merged = post.copy(imageUrl = local.imageUrl ?: post.imageUrl, thumbnailUrl = local.thumbnailUrl ?: post.thumbnailUrl)
+            if (merged != post) changed = true
+            merged
+        }
+    }
+    return if (changed) newer.copy(posts = posts) else newer
 }
 
 internal suspend fun loadFirstOfflineThreadPage(

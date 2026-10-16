@@ -236,4 +236,31 @@ class FutaberParityB1bTest {
         assertEquals("保存中…", futaberMediaSaveStartedNotice(false))
         assertEquals("共有の準備中…", futaberMediaSaveStartedNotice(true))
     }
+
+    /** 監査L21：板ごとのソートは共有の板キーで保存し、旧い板IDの記録も読む。 */
+    @Test
+    fun theSortPerBoardIsKeptUnderTheSharedKey() {
+        val old = encodeFutaberSortByBoard(mapOf("may" to CatalogMode.New))
+        // Old record (board id) is still read.
+        assertEquals(CatalogMode.New, futaberCatalogSortFor(mapOf(FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD to old), "may", perBoard = true, storedBoardId = "compat_board_x"))
+        val next = futaberSortByBoardAfter(old, "may", CatalogMode.Old, listOf("may", "compat_board_x"), storedBoardId = "compat_board_x")
+        assertEquals(mapOf("compat_board_x" to CatalogMode.Old), decodeFutaberSortByBoard(next))
+        // After a restore the same board has another id but the same shared key: it keeps its sort.
+        assertEquals(CatalogMode.Old, futaberCatalogSortFor(mapOf(FutaberPreferenceKeys.CATALOG_SORT_BY_BOARD to next), "board-7", perBoard = true, storedBoardId = "compat_board_x"))
+    }
+
+    /** Re-audit M19: what a save tells after its viewer has closed comes as the app's notice instead of being dropped. */
+    @Test
+    fun aSaveResultAfterTheViewerClosedGoesToTheAppNotice() {
+        val saver = FutaberMediaSaver()
+        val onScreen = mutableListOf<String>()
+        val onApp = mutableListOf<String>()
+        saver.screenOnMessage = { onScreen += it }
+        saver.afterScreenGone = { onApp += it }
+        saver.onMessage("保存中…")
+        saver.screenGone = true
+        saver.onMessage("保存しました")
+        assertEquals(listOf("保存中…"), onScreen)
+        assertEquals(listOf("保存しました"), onApp)
+    }
 }

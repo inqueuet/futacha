@@ -152,8 +152,14 @@ internal const val FUTABER_CATALOG_DROPPED_MAX = 50
 internal fun futaberCatalogHistoryAfterLoad(
     history: FutaberCatalogHistory,
     shown: List<CatalogItem>,
-    loaded: List<CatalogItem>
+    loaded: List<CatalogItem>,
+    /**
+     * False when [shown] answered another question ("監視" with other watch words): it is no earlier state of this list,
+     * so the history starts again (re-audit L5: its threads were listed as gone and as the list before the reload).
+     */
+    sameQuery: Boolean = true
 ): FutaberCatalogHistory {
+    if (!sameQuery) return FutaberCatalogHistory()
     if (shown.isEmpty()) return history
     if (shown.map { it.id } == loaded.map { it.id }) return history
     val loadedIds = loaded.mapTo(HashSet()) { it.id }
@@ -181,7 +187,9 @@ internal data class FutaberCatalogFetchKey(
     val boardUrl: String,
     val sortMode: CatalogMode,
     val refreshTick: Int,
-    val refreshSignal: Int
+    val refreshSignal: Int,
+    /** The words of "監視" (empty for the other orders): changing them fetches again (audit L23). */
+    val watchWords: List<String> = emptyList()
 )
 
 /** How long the catalog kept while a thread was open counts as current when coming back (no refetch, no spinner). */

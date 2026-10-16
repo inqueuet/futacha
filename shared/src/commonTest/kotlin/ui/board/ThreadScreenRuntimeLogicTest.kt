@@ -915,4 +915,19 @@ class ThreadScreenRuntimeLogicTest {
         selfIdentifiersFingerprint = 0,
         sortOption = null
     )
+
+    /** Re-audit M29: a draft written on while sending survives the success; an untouched one is cleared as before. */
+    @Test
+    fun aReplyWrittenOnWhileSendingSurvivesTheSuccess() {
+        val sent = ThreadReplyDraft(name = "名前", comment = "送った本文", password = "pw")
+        val untouched = ThreadReplyDialogState(isVisible = false, draft = sent)
+        val cleared = threadReplyStateAfterSuccess(untouched, sent)
+        kotlin.test.assertEquals("", cleared?.draft?.comment)
+        kotlin.test.assertEquals("名前", cleared?.draft?.name)
+        val writtenOn = ThreadReplyDialogState(isVisible = true, draft = sent.copy(comment = "送った本文\n追記"))
+        kotlin.test.assertNull(threadReplyStateAfterSuccess(writtenOn, sent))
+        // A key or name filled in after the press (the last used delete key) is not a new reply: it is still cleared.
+        val keyFilled = ThreadReplyDialogState(isVisible = false, draft = sent.copy(password = "new"))
+        kotlin.test.assertEquals("", threadReplyStateAfterSuccess(keyFilled, sent)?.draft?.comment)
+    }
 }

@@ -19,6 +19,13 @@ fun compatBoardDefaultPreferenceKeys(boardKey: String): List<String> = listOf(
     compatBoardDefaultNamePreferenceKey(boardKey)
 )
 
+/**
+ * Every setting kept under a board's key, in the same order for any key: what a repair of the key moves to the corrected
+ * one. The catalog's "そ順"/"監視" (2026-10-13) is one of them (audit L38: it was left behind under the old key).
+ */
+fun compatBoardScopedPreferenceKeys(boardKey: String): List<String> =
+    compatBoardDefaultPreferenceKeys(boardKey) + compatCatalogExtraModePreferenceKey(boardKey)
+
 fun normalizeCompatBoardDefaultText(raw: String?): String =
     raw.orEmpty().replace(Regex("<[^>]*>"), "").trim { it.isWhitespace() || it == '　' }
 

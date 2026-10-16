@@ -120,6 +120,13 @@ interface CompatibilityStore {
     /** Called on thread activation, before any network request completes. */
     suspend fun recordHistoryVisit(entry: CompatHistoryEntry)
     suspend fun deleteHistory(canonicalUrl: String)
+    /**
+     * Several rows in one change (re-audit M27: one by one, each row re-read and published the whole history). Stores
+     * override it with one write; this default keeps other stores working.
+     */
+    suspend fun deleteHistories(canonicalUrls: Collection<String>) {
+        canonicalUrls.forEach { deleteHistory(it) }
+    }
     suspend fun clearHistory()
 
     suspend fun saveDraft(draft: CompatReplyDraft)

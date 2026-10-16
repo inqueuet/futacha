@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -129,7 +130,16 @@ internal fun FutaberPostScreen(
     // While a post is on its way the screen stays; afterwards Back closes it (the draft is kept).
     PlatformBackHandler(enabled = true) { if (!sending) onClose() }
 
-    val counts = futaberPostCounts(compatPostLineCount(comment), compatPostShiftJisByteCount(comment))
+    // The byte count is a Shift_JIS round trip of the whole text: counted once per edit off the main thread, as としあき(仮)
+    // does (re-audit H2: it ran in composition at every key, which made typing stutter on iOS). The first value is counted
+    // at once so the label never shows nothing.
+    var byteCount by remember { mutableStateOf(compatPostShiftJisByteCount(comment)) }
+    LaunchedEffect(comment) {
+        byteCount = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.textAnnotation) {
+            compatPostShiftJisByteCount(comment)
+        }
+    }
+    val counts = futaberPostCounts(compatPostLineCount(comment), byteCount)
     val validation = com.valoser.futacha.shared.ui.board.validateThreadReplyForm(deleteKey, comment)
     // A post that looks meant for another board (img's "としあき", may's empty 「」) asks first, even without the confirmation.
     val destinationWarning = futaberPostDestinationWarning(boardUrl, comment, destinationConfirm)

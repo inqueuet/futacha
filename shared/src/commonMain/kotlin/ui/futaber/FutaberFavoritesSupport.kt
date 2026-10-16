@@ -109,7 +109,7 @@ internal fun futaberFavoriteViews(
     favorites: List<FutaberFavorite>,
     history: List<ThreadHistoryEntry>
 ): List<FutaberFavoriteView> {
-    val byKey = history.associateBy { FutaberTabKey(it.boardId, it.threadId) }
+    val byKey = futaberHistoryRowsFor(favorites.mapTo(HashSet()) { it.key }, history)
     return favorites.map { favorite ->
         FutaberFavoriteView(favorite, byKey[favorite.key]?.replyCount ?: favorite.replyCount)
     }

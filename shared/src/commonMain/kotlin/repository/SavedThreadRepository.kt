@@ -87,6 +87,10 @@ class SavedThreadRepository(
         private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 30_000L
         private const val INDEX_LOCK_OPERATION_TIMEOUT_MILLIS = 30_000L
         private const val MAX_THREAD_PURGE_CUTOFFS = 1_024
+        /** The cap that holds even for cutoffs too young to drop (a bulk delete of the whole history). */
+        internal const val MAX_THREAD_PURGE_CUTOFFS_HARD = 65_536
+        /** Longer than a save of one thread may run (its media downloads are bounded well below this). */
+        private val THREAD_PURGE_CUTOFF_MIN_AGE = kotlin.time.Duration.parse("10m")
         private const val MAX_ORPHAN_METADATA_SCAN_ENTRIES = 20_000
         private const val MAX_DROPPED_ENTRY_CLEANUP_PER_READ = 20_000
         private const val DROPPED_ENTRY_CLEANUP_LOCK_TIMEOUT_MILLIS = 15_000L
@@ -942,9 +946,13 @@ class SavedThreadRepository(
             state.threadCutoffMillis.remove(identityKey)
             state.threadCutoffMillis[identityKey] = Clock.System.now().toEpochMilliseconds()
             state.threadCutoffMarks[identityKey] = kotlin.time.TimeSource.Monotonic.markNow()
-            // Insertion order is cutoff order: drop the oldest.
+            // Insertion order is cutoff order: drop the oldest, but only those old enough that no save started before
+            // them can still be running (re-audit L21: a bulk delete of more than 1,024 threads dropped the first ones
+            // at once, and a save still running for them could index its copy again). A hard cap bounds the memory.
             while (state.threadCutoffMillis.size > MAX_THREAD_PURGE_CUTOFFS) {
                 val oldest = state.threadCutoffMillis.keys.first()
+                val oldEnough = state.threadCutoffMarks[oldest]?.elapsedNow()?.let { it >= THREAD_PURGE_CUTOFF_MIN_AGE } ?: true
+                if (!oldEnough && state.threadCutoffMillis.size <= MAX_THREAD_PURGE_CUTOFFS_HARD) break
                 state.threadCutoffMillis.remove(oldest)
                 state.threadCutoffMarks.remove(oldest)
             }

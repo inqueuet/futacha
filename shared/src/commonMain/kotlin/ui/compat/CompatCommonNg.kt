@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.testTag
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -97,6 +98,8 @@ internal class CompatCommonNg(
         internal set
     var applyEnabled by mutableStateOf(false)
         internal set
+    /** Told when a change could not be stored (shown by the NG sheet; audit L35). */
+    var failureNotice by mutableStateOf<String?>(null)
     var sheet by mutableStateOf<CompatCommonNgTarget?>(null)
 
     private val filterRulesState = derivedStateOf {
@@ -129,10 +132,15 @@ internal class CompatCommonNg(
     fun toggleApply() {
         val next = !applyEnabled
         applyEnabled = next
-        edit("common NG switch") { store.savePreference(COMPAT_COMMON_NG_APPLY_STORAGE_KEY, if (next) "ON" else "OFF") }
+        // A switch that could not be stored goes back and says so (audit L35: it stayed flipped on screen only, and the
+        // next change of the settings brought the old value back without a word).
+        edit("common NG switch", onFailure = {
+            applyEnabled = !next
+            failureNotice = "NGの有効・無効を保存できませんでした"
+        }) { store.savePreference(COMPAT_COMMON_NG_APPLY_STORAGE_KEY, if (next) "ON" else "OFF") }
     }
 
-    private fun edit(operation: String, block: suspend () -> Unit) {
+    private fun edit(operation: String, onFailure: () -> Unit = { failureNotice = "共通NGを保存できませんでした" }, block: suspend () -> Unit) {
         scope.launch {
             try {
                 block()
@@ -140,6 +148,7 @@ internal class CompatCommonNg(
                 throw cancelled
             } catch (failure: Throwable) {
                 Logger.e("CompatCommonNg", "$operation failed", failure)
+                onFailure()
             }
         }
     }
@@ -182,4 +191,24 @@ internal fun CompatCommonNgSheetHost(commonNg: CompatCommonNg) {
         onToggleFiltering = commonNg::toggleApply,
         includeHeaderSection = !catalog
     )
+    // Shown over the sheet (a later window), not under it (re-audit M15).
+    commonNg.failureNotice?.let { notice ->
+        com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { commonNg.failureNotice = null },
+                text = { androidx.compose.material3.Text(notice) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { commonNg.failureNotice = null }) { androidx.compose.material3.Text("OK") }
+                },
+                modifier = androidx.compose.ui.Modifier.testTag("compat-common-ng-failure")
+            )
+        }
+    }
 }
+
+/**
+ * How long the bottom notice of としあき(仮) stays (re-audit M14): 4 seconds for a short one, longer for a long one (a saved
+ * file's path, a reason), up to 15 seconds.
+ */
+internal fun compatAppNoticeMillis(message: String): Long =
+    (4_000L + (message.length - 30).coerceAtLeast(0) * 80L).coerceAtMost(15_000L)

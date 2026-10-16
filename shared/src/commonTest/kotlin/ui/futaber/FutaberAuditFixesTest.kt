@@ -248,4 +248,14 @@ class FutaberAuditFixesTest {
         val state = futaberAddBoardState(name, "https://may.2chan.net/b/", boards)
         assertEquals(FUTABER_BOARD_NAME_MAX_CHARS - 1, state.resolvedName.length)
     }
+
+    /** Re-audit L5: a reload for other watch words starts the history again instead of listing the old matches as gone. */
+    @Test
+    fun aReloadForOtherWatchWordsStartsTheHistoryAgain() {
+        val before = futaberCatalogHistoryAfterLoad(FutaberCatalogHistory(), listOf(item("1"), item("2")), listOf(item("2"), item("3")))
+        kotlin.test.assertTrue(before.dropped.isNotEmpty())
+        val after = futaberCatalogHistoryAfterLoad(before, listOf(item("2"), item("3")), listOf(item("8"), item("9")), sameQuery = false)
+        kotlin.test.assertTrue(after.dropped.isEmpty())
+        kotlin.test.assertTrue(after.earlier.isEmpty())
+    }
 }

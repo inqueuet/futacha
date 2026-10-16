@@ -265,11 +265,12 @@ internal fun buildThreadScreenControllerInteractionInputs(
         onHistoryBatchDeleteClick = {
             inputs.coroutineScope.launch {
                 inputs.onHistoryCleared()
+                // The drawer closes at once; the snackbar (which waits until it goes away) comes after (re-audit L36).
+                launch { inputs.drawerState.close() }
                 showThreadMessage(
                     buildThreadHistoryBatchDeleteMessage(),
                     inputs.showSnackbar
                 )
-                inputs.drawerState.close()
             }
         },
         onHistoryExportClick = {

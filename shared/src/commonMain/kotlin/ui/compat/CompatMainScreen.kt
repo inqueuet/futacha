@@ -765,7 +765,12 @@ internal fun CompatMainScreen(
     contextBoard?.let { board ->
         CompatLegacyChoiceDialog(
             onDismiss = { contextBoard = null },
-            choices = compatBoardContextChoices(board.key in pinnedBoardKeys, onBoardPinToggle != null),
+            // Only an official board can be pinned (the pin is kept by its shared key); the tutorial board offered it and
+            // nothing happened (audit L36).
+            choices = compatBoardContextChoices(
+                board.key in pinnedBoardKeys,
+                onBoardPinToggle != null && com.valoser.futacha.shared.compat.canonicalizeBoardUrl(board.originalUrl) != null
+            ),
             onChoice = { choice ->
                 contextBoard = null
                 when (choice) {

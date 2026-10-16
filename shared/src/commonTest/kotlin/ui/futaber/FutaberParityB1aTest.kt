@@ -8,6 +8,13 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -191,5 +198,25 @@ class FutaberParityB1aTest {
         assertEquals(0, futaberTapScrollDirection(-1f, 900f))
         assertEquals(0, futaberTapScrollDirection(901f, 900f))
         assertEquals(0, futaberTapScrollDirection(10f, 0f))
+    }
+
+    @Test fun theTsumanneRegistrationReportsItsResultFromTheScopeItIsGivenAfterTheSheetIsGone() = runBlocking {
+        val client = HttpClient(MockEngine { respond("unused") })
+        val notices = mutableListOf<String>()
+        val opened = mutableListOf<String>()
+        val answer = CompletableDeferred<Result<String>>()
+        coroutineScope {
+            // The scope of the thread screen; the sheet (and anything of its own) is gone once the action is picked.
+            val screen = this
+            futaberRegisterTsumanne(screen, client, "https://may.2chan.net/b/res/1.htm", "題", { opened += it }, { notices += it }) { _, url, _ ->
+                assertEquals("https://may.2chan.net/b/res/1.htm", url)
+                answer.await()
+            }
+            assertEquals(listOf("つまんね。に登録しています…"), notices)
+            launch { answer.complete(Result.success("https://tsumanne.net/my/")) }
+        }
+        assertEquals(listOf("つまんね。に登録しています…", "つまんね。に登録しました"), notices)
+        assertEquals(listOf("https://tsumanne.net/my/"), opened)
+        client.close()
     }
 }

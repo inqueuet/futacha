@@ -149,14 +149,15 @@ internal fun rememberFutachaFilteredThreadPage(
             value = normallyFiltered
             return@produceState
         }
-        // Posts the modern NG hides, found only when projectFutachaThread reads them; rules are
-        // canonicalized once and bodies come from the screen's text cache.
-        val modernNgHidden = if (futachaProjectionUsesModernNg(context, settings)) {
-            findNgHiddenPostIds(source.posts, ngHeaders, ngWords, postTextCache)
-        } else {
-            emptySet()
-        }
         value = withContext(AppDispatchers.parsing) {
+            // Posts the modern NG hides, found only when projectFutachaThread reads them; rules are
+            // canonicalized once and bodies come from the screen's text cache (guarded by its lock).
+            // Off the main thread too (re-audit M20: every post was matched there on each open and refresh).
+            val modernNgHidden = if (futachaProjectionUsesModernNg(context, settings)) {
+                findNgHiddenPostIds(source.posts, ngHeaders, ngWords, postTextCache)
+            } else {
+                emptySet()
+            }
             projectFutachaThread(source, normallyFiltered, context, currentRules, settings,
                 phashHidden, modernNgHidden)
         }

@@ -44,9 +44,14 @@ fun appendCompatDroppedCatalogItems(
     dropped: List<CompatDroppedCatalogItem>,
     enabled: Boolean,
     contentReady: Boolean = true,
-    suppressedThreadIds: Set<String> = emptySet()
+    suppressedThreadIds: Set<String> = emptySet(),
+    /**
+     * The list is in an extra order ("そ順"/"監視"): the dropped threads of the board's own order are not added (re-audit
+     * M17: in "監視" every thread that did not match was listed after the matches).
+     */
+    extraOrder: Boolean = false
 ): List<CatalogItem> {
-    if (!enabled || !contentReady || dropped.isEmpty()) return current
+    if (!enabled || extraOrder || !contentReady || dropped.isEmpty()) return current
     val knownIds = current.mapTo(mutableSetOf()) { it.id.ifBlank { it.threadUrl } }
     val appended = dropped
         .asSequence()

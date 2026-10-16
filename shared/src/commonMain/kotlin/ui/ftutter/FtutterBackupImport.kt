@@ -30,12 +30,40 @@ private const val LIST_PREFIX = "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBhIGxpc3Qu"
 private const val DOUBLE_PREFIX = "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBEb3VibGUu"
 private val looseJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
-/** `.ftt` を復号して設定XMLの文字列にする。鍵が違う・壊れたファイル・設定XMLでない時は null。 */
-internal fun ftutterDecryptBackup(bytes: ByteArray, key: ByteArray = FtutterBackupCipher.key, iv: ByteArray = FtutterBackupCipher.iv): String? {
+/**
+ * `.ftt` を復号して設定XMLの文字列にする。鍵が違う・壊れたファイル・設定XMLでない時は null。
+ * 全体を復号する前に、末尾のブロック（PKCS#7の詰め物）と先頭のブロック（XMLの`<`で始まる）だけを復号して確かめ、
+ * 明らかに違うファイル（選択はどの種類のファイルもできるので、無関係な大きなファイルも来る）は全体を復号しない。重いのでメインスレッドの外で呼ぶ。
+ */
+internal fun ftutterDecryptBackup(
+    bytes: ByteArray,
+    key: ByteArray = FtutterBackupCipher.key,
+    iv: ByteArray = FtutterBackupCipher.iv,
+    ensureActive: () -> Unit = {}
+): String? {
     if (bytes.isEmpty() || bytes.size % 16 != 0) return null
-    val plain = ftutterStripPkcs7(FtutterAes(key).ctr(bytes, iv)) ?: return null
+    val aes = FtutterAes(key)
+    if (ftutterStripPkcs7(aes.ctrBlock(bytes, iv, bytes.size / 16 - 1)) == null) return null
+    if (!ftutterLooksLikeXmlStart(aes.ctrBlock(bytes, iv, 0))) return null
+    val plain = ftutterStripPkcs7(aes.ctr(bytes, iv, ensureActive)) ?: return null
+    ensureActive()
     val text = runCatching { plain.decodeToString(throwOnInvalidSequence = true) }.getOrNull() ?: return null
     return text.takeIf { it.contains("<map") }
+}
+
+/** 復号した先頭が設定XMLらしいか（UTF-8のBOMと空白の後が`<`）。原作の設定XMLは`<?xml`で始まる。 */
+internal fun ftutterLooksLikeXmlStart(head: ByteArray): Boolean {
+    var at = 0
+    if (head.size >= 3 && head[0] == 0xEF.toByte() && head[1] == 0xBB.toByte() && head[2] == 0xBF.toByte()) at = 3
+    while (at < head.size) {
+        when (head[at].toInt().toChar()) {
+            ' ', '\t', '\r', '\n' -> at++
+            '<' -> return true
+            else -> return false
+        }
+    }
+    // 先頭のブロックが空白だけ（詰め物を含む短いファイル）は、全体を読んで決める。
+    return true
 }
 
 private val PREF_ELEMENT = Regex(
@@ -44,9 +72,10 @@ private val PREF_ELEMENT = Regex(
 )
 
 /** 設定XMLを読む。キーは`flutter.`を外したもの。原作のリストは接頭辞＋JSON、実数は別の接頭辞の文字列。 */
-internal fun parseFtutterPreferencesXml(xml: String): Map<String, FtutterPrefValue> {
+internal fun parseFtutterPreferencesXml(xml: String, ensureActive: () -> Unit = {}): Map<String, FtutterPrefValue> {
     val result = LinkedHashMap<String, FtutterPrefValue>()
     PREF_ELEMENT.findAll(xml).forEach { match ->
+        ensureActive()
         val (tag, rawName, attrValue, body) = match.destructured
         val name = HtmlEntityDecoder.decode(rawName).removePrefix("flutter.")
         val value = when (tag) {
@@ -120,7 +149,9 @@ internal data class FtutterBackupPlan(
     val history: List<ThreadHistoryEntry>,
     val marks: List<Pair<String, String>>,
     val ngCount: Int,
-    val settingCount: Int
+    val settingCount: Int,
+    /** 取り込まないNG（正規表現が作れない・照合に時間がかかりすぎる等。手で登録する時と同じ検査）。 */
+    val rejectedNg: Int = 0
 ) {
     val summary: String
         get() = buildList {
@@ -129,6 +160,7 @@ internal data class FtutterBackupPlan(
             add("履歴 ${history.size}件")
             preferences[FtutterKeys.TABS]?.let { add("タブ ${decodeFtutterList(it).orEmpty().size}件") }
             add("NG・ピックアップ ${ngCount}件")
+            if (rejectedNg > 0) add("使えないNG ${rejectedNg}件は取り込みません")
             if (marks.isNotEmpty()) add("マーク ${marks.size}件")
         }.joinToString("、")
 }
@@ -147,7 +179,8 @@ internal fun ftutterBackupPlan(
     boards: List<BoardSummary>,
     existingNg: List<FtutterNgRule>,
     existingPreferences: Map<String, String>,
-    now: Long
+    now: Long,
+    ensureActive: () -> Unit = {}
 ): FtutterBackupPlan {
     val out = LinkedHashMap<String, String>()
     fun scalar(value: FtutterPrefValue): String? = when (value) {
@@ -175,14 +208,21 @@ internal fun ftutterBackupPlan(
         out[FtutterKeys.POST_MENU_ORDER] = encodeFtutterList(mapLabels(it, FtutterPostMenuItem.entries, { t -> t.label }, { t -> t.stored }))
     }
     texts("resuDOrderBool")?.let { out[FtutterKeys.POST_MENU_ENABLED] = encodeFtutterList(it) }
-    texts("applyPickupOrderMode")?.let { out[FtutterKeys.PICKUP_ORDER_MODES] = encodeFtutterList(it) }
+    texts("applyPickupOrderMode")?.let { out[FtutterKeys.PICKUP_ORDER_MODES] = if (it.isEmpty()) FTUTTER_PICKUP_ORDERS_NONE else encodeFtutterList(it) }
     // 非表示：今のものに足す。
     texts("hihyouji")?.let { hidden ->
         val merged = (parseFtutterHiddenThreads(existingPreferences[FtutterKeys.HIDDEN_THREADS]) + hidden.map(::ftutterCanonicalThreadUrl)).distinct()
         out[FtutterKeys.HIDDEN_THREADS] = encodeFtutterList(merged)
     }
-    // NG・ピックアップ：1件ずつJSON。今のものに無いものだけ足す。
-    val importedNg = parseFtutterNgList(texts("NGList").orEmpty().joinToString("\n")).filter { it !in existingNg }
+    // NG・ピックアップ：1件ずつJSON。今のものに無いものだけ足す。手で登録する時と同じ検査（正規表現が作れるか、照合に
+    // 時間がかかりすぎないか等）を通らないものは取り込まない（以前は検査なしで保存し、照合で固まり得た）。
+    val importedNg = mutableListOf<FtutterNgRule>()
+    var rejectedNg = 0
+    parseFtutterNgList(texts("NGList").orEmpty().joinToString("\n")).forEach { rule ->
+        ensureActive()
+        if (rule in existingNg || rule in importedNg) return@forEach
+        if (ftutterNgValidationError(rule, emptyList()) != null) rejectedNg++ else importedNg += rule
+    }
     if (importedNg.isNotEmpty()) out[FtutterKeys.NG_LIST] = encodeFtutterNgList(existingNg + importedNg)
 
     // 板：未登録の板を足し、原作のお気に入りは星を付ける。
@@ -216,6 +256,7 @@ internal fun ftutterBackupPlan(
     val marks = mutableListOf<Pair<String, String>>()
     val historyUrls = texts("rirekiUrlList").orEmpty()
     historyUrls.forEachIndexed { order, rawUrl ->
+        ensureActive()
         val data = (prefs[rawUrl] as? FtutterPrefValue.Text)?.value?.let {
             runCatching { looseJson.parseToJsonElement(it) as? JsonObject }.getOrNull()
         } ?: return@forEachIndexed
@@ -243,7 +284,11 @@ internal fun ftutterBackupPlan(
         }
     }
     if (history.isNotEmpty()) {
-        out[FtutterKeys.READ_COUNTS] = encodeFtutterReadCounts(readCounts.entries.take(FTUTTER_IMPORT_READ_COUNT_LIMIT).associate { it.key to it.value })
+        // 取り込んだスレは履歴の上に並ぶので、その既読件数を先に残す（監査L14：今の記録の後ろに足していたので、今の記録が多いと
+        // 上限で取り込んだ分が捨てられた）。
+        val importedUrls = history.mapTo(LinkedHashSet()) { it.boardUrl }
+        val ordered = readCounts.entries.sortedBy { if (it.key in importedUrls) 0 else 1 }
+        out[FtutterKeys.READ_COUNTS] = encodeFtutterReadCounts(ordered.take(FTUTTER_IMPORT_READ_COUNT_LIMIT).associate { it.key to it.value })
     }
     if (protected.isNotEmpty()) out[FtutterKeys.PROTECTED] = encodeFtutterList(protected.toList())
     // タブ：今のタブの前に、原作のタブを（重複を除いて）入れる。
@@ -251,10 +296,10 @@ internal fun ftutterBackupPlan(
         val current = parseFtutterTabs(existingPreferences).urls
         out[FtutterKeys.TABS] = encodeFtutterList((tabs + current).distinct())
     }
-    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount)
+    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount, rejectedNg)
 }
 
-private const val FTUTTER_IMPORT_READ_COUNT_LIMIT = 400
+internal const val FTUTTER_IMPORT_READ_COUNT_LIMIT = 400
 
 private fun draftOf(element: JsonElement): FtutterDraft? {
     val obj = element as? JsonObject ?: return null
@@ -263,4 +308,15 @@ private fun draftOf(element: JsonElement): FtutterDraft? {
         mail = obj.str("mail").orEmpty(), comment = obj.str("comment").orEmpty()
     )
     return draft.takeIf { !it.isEmpty }
+}
+
+/**
+ * The read counts an import writes, against the value stored at that moment: the imported threads' counts from the plan,
+ * then every other count as stored now (re-audit L28), within the import's limit.
+ */
+internal fun ftutterMergeImportedReadCounts(planValue: String, stored: String?, importedUrls: Set<String>): String {
+    val merged = LinkedHashMap<String, Int>()
+    parseFtutterReadCounts(planValue).forEach { (url, count) -> if (url in importedUrls) merged[url] = count }
+    parseFtutterReadCounts(stored).forEach { (url, count) -> if (url !in merged) merged[url] = count }
+    return encodeFtutterReadCounts(merged.entries.take(FTUTTER_IMPORT_READ_COUNT_LIMIT).associate { it.key to it.value })
 }

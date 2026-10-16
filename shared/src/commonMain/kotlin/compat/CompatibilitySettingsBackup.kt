@@ -103,16 +103,24 @@ val COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS = setOf(
  *
  * Unsent Futaber drafts are the user's unfinished post text; a settings file
  * that gets shared must not carry them, and a restore must not bring back
- * stale ones.
+ * stale ones. The same holds for ふたったー風's own drafts (which also name the
+ * attachments kept on this device) and its own delete key: neither is written,
+ * and neither comes back from a file written before they were left out.
  *
  * The start lock's failed-attempt counter and remaining cool-down belong to
  * this device and must not be restored from (or leak into) a backup: restoring
  * one would lock the app, and leaving it out of an export would be no loss.
  */
+/** ふたったー風's delete key and drafts (FtutterKeys.DELETE_KEY / DRAFTS; spelled out here so compat/ needs no UI). */
+private const val COMPAT_BACKUP_FTUTTER_DELETE_KEY = "compat.ftutter.deleteKey"
+private const val COMPAT_BACKUP_FTUTTER_DRAFTS = "compat.ftutter.drafts"
+
 val COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS = setOf(
     "compat.common.commonPostDeleteKey",
     "compat.lastDeleteKey",
     "compat.futaber.drafts",
+    COMPAT_BACKUP_FTUTTER_DELETE_KEY,
+    COMPAT_BACKUP_FTUTTER_DRAFTS,
     "compat.appLock.attempts"
 ) + COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS
 
@@ -121,7 +129,8 @@ fun compatBackupExportPreferences(preferences: Map<String, String>): Map<String,
 
 /** Keys a restore must not apply even when an (older) backup file contains them. */
 private val COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS =
-    COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS + "compat.futaber.drafts" + "compat.appLock.attempts"
+    COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS + "compat.futaber.drafts" + "compat.appLock.attempts" +
+        COMPAT_BACKUP_FTUTTER_DELETE_KEY + COMPAT_BACKUP_FTUTTER_DRAFTS
 
 fun compatBackupRestorePreferences(preferences: Map<String, String>): Map<String, String> =
     preferences.filterKeys { it !in COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS }

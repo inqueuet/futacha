@@ -521,6 +521,20 @@ internal class IosCompatibilityStore(
         )
     }
 
+    override suspend fun deleteHistories(canonicalUrls: Collection<String>) {
+        if (canonicalUrls.isEmpty()) return
+        val urls = canonicalUrls.toHashSet()
+        mutate {
+            val now = nowMillis()
+            state = it.copy(
+                history = it.history.filterNot { entry -> entry.canonicalUrl in urls },
+                historyTombstones = trimHistoryTombstones(
+                    it.historyTombstones + urls.associate { url -> url.take(MAX_COMPAT_URL_CHARS) to now }
+                )
+            )
+        }
+    }
+
     override suspend fun clearHistory() = mutate {
         val tombstones = it.historyTombstones.toMutableMap()
         (it.history.map(CompatHistoryEntry::canonicalUrl) + it.tabs.map(CompatTab::canonicalUrl)).forEach { url ->
@@ -647,15 +661,12 @@ internal class IosCompatibilityStore(
                     updatedAtMillis = nowMillis()
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
-                // Every scroll stop lands here. Patch only the affected tab of
-                // the published (already sorted) list and do not re-emit the
-                // history list: the durable history anchor is kept in `state`
-                // and published with the next ordinary mutation, which always
-                // happens (tab close) before a closed tab can be reopened
-                // from history; an open tab is reopened with the tab anchor.
-                tabsState.value = tabsState.value.map { current ->
-                    if (current.key == tabKey) updatedTab else current
-                }
+                // Every scroll stop lands here. Nothing is published, as on Android
+                // (re-audit M25: a new tab list on each stop made the whole
+                // としあき(仮) screen run its workspace reduction again). The screen
+                // keeps the anchors it saved; `state` carries them into the next
+                // ordinary mutation, which always happens (tab close) before a
+                // closed tab can be reopened from history.
             }
         }
 
@@ -1187,10 +1198,11 @@ internal class IosCompatibilityStore(
         if (!fileSystem.exists(source)) return null
         database.close()
         val target = "$UNREADABLE_COMPATIBILITY_DATABASE_PREFIX${nowMillis()}.db"
-        fileSystem.linkOrCopy(source, target).getOrThrow()
-        if (fileSystem.exists("$source-wal")) {
-            fileSystem.linkOrCopy("$source-wal", "$target-wal").getOrThrow()
-        }
+        // The file is deleted right after this, so when it can be neither linked nor copied (the copy reads the whole
+        // file into memory and refuses a big one) it is moved aside instead (audit L41: initialization then failed on
+        // every launch, the unreadable file staying in place).
+        keepAside(source, target)
+        if (fileSystem.exists("$source-wal")) keepAside("$source-wal", "$target-wal")
         runCatching {
             fileSystem.listFiles("compatibility")
                 .map { it.substringAfterLast('/') }
@@ -1203,6 +1215,13 @@ internal class IosCompatibilityStore(
                 }
         }
         return target
+    }
+
+    private suspend fun keepAside(from: String, to: String) {
+        // The file is replaced right after this, so it is simply moved first; a link or (reading the whole file into
+        // memory) a copy is tried only when the move fails (re-audit L23).
+        if (platform.posix.rename(fileSystem.resolveAbsolutePath(from), fileSystem.resolveAbsolutePath(to)) == 0) return
+        check(fileSystem.linkOrCopy(from, to).isSuccess) { "Could not keep the unreadable compatibility database ($from)" }
     }
 
     private suspend fun ensureInitializedLocked() {

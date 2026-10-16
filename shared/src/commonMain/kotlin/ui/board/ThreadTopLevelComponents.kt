@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.ui.privacy.LocalPrivacyMode
 import com.valoser.futacha.shared.ui.privacy.PrivateTitle
 import com.valoser.futacha.shared.ui.privacy.privateTitleStyle
@@ -409,7 +411,9 @@ internal fun ThreadActionBar(
         modifier = modifier.fillMaxWidth(),
         color = chromeColors.bottomBar
     ) {
-        Row(
+        ScrollableToolbarRow(
+            itemCount = visibleActions.size,
+            minItemWidth = 48.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp)

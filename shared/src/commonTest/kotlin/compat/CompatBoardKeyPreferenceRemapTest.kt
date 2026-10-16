@@ -57,6 +57,12 @@ class CompatBoardKeyPreferenceRemapTest {
         )
     }
 
+    /** 監査L38：板キーを直す時に移す設定に、カタログの「そ順」「監視」も入る。 */
+    @Test
+    fun boardScopedKeysIncludeTheCatalogExtraMode() {
+        assertEquals(compatBoardDefaultPreferenceKeys("b") + compatCatalogExtraModePreferenceKey("b"), compatBoardScopedPreferenceKeys("b"))
+    }
+
     private fun assertNotNullRemap(encoded: String): String =
         kotlin.test.assertNotNull(remapCompatWatchRulesBoardKey(encoded, "old", "new"))
 }

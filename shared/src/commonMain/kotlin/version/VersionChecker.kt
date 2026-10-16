@@ -37,6 +37,12 @@ interface VersionChecker {
 
     /** Called after the update prompt enters the visible, unlocked UI. */
     fun onUpdateShown(info: UpdateInfo) = Unit
+
+    /**
+     * False when this checker never asks for a required update: with "更新を確認" off it is then not asked at all
+     * (re-audit L43: Android outside Google Play asked GitHub on every launch only to drop the answer).
+     */
+    val mayRequireUpdate: Boolean get() = true
 }
 
 /**

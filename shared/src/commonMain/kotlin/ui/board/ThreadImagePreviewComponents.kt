@@ -66,12 +66,18 @@ internal fun ImagePreviewDialog(
     onShowPost: (() -> Unit)? = null,
     onImageSearch: (() -> Unit)? = null,
     isSaveEnabled: Boolean = true,
-    isSaveInProgress: Boolean = false
+    isSaveInProgress: Boolean = false,
+    /**
+     * "画像をコピー" (Desktop). A caller that turns pages passes one remembered above this dialog, so turning to a video
+     * (which replaces this dialog) does not stop a copy in progress (re-audit M26).
+     */
+    copyImage: (() -> Unit)? = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(
+        entry.url, LocalFutachaSharedFeatures.current?.httpClient
+    )
 ) {
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
     val urlLauncher = rememberUrlLauncher()
-    val copyImage = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(entry.url, LocalFutachaSharedFeatures.current?.httpClient)
     var bottomActionsHeightPx by remember(entry.url) { mutableStateOf(0) }
     val navigationBottomPadding = with(LocalDensity.current) { bottomActionsHeightPx.toDp() } + 32.dp
     var isZoomed by remember { mutableStateOf(false) }

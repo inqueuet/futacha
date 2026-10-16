@@ -293,6 +293,36 @@ class FutaberParityB1bInstrumentedTest {
         rule.waitUntil(10_000) { threadTitle() == firstTitle }
     }
 
+    /**
+     * 再監査M18：タブで別のスレへ移った後も、音量キーは今のスレの一覧を動かす。以前は最初のスレの（もう出ていない）一覧を
+     * 動かし、キーは使われたのに何も動かなかった。
+     */
+    @Test fun theVolumeKeysScrollTheThreadMovedToByATab() {
+        runBlocking {
+            app.compatibilityStore.savePreferences(
+                mapOf("compat.futaber.ext.volumeKeys" to "ON", "compat.futaber.ext.volumeKeyMode" to "response")
+            )
+        }
+        openTutorialThread()
+        val first = runBlocking { app.appStateStore.history.first().first() }
+        runBlocking {
+            app.appStateStore.updateHistory { list ->
+                list + first.copy(threadId = "999012", title = "となりのスレ", boardUrl = first.boardUrl.replace(first.threadId, "999012"))
+            }
+            app.compatibilityStore.savePreferences(
+                mapOf("compat.futaber.tabs" to "[\"${first.boardId}\\n${first.threadId}\",\"${first.boardId}\\n999012\"]")
+            )
+        }
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes().size == 2 }
+        rule.onAllNodesWithTag("futaber-tab")[1].performClick()
+        rule.waitUntil(10_000) { threadTitle() == "となりのスレ" }
+        waitForTag("futaber-post")
+        rule.onNodeWithTag("futaber-thread-list").performScrollToIndex(0)
+        val start = listScroll()
+        rule.runOnIdle { assertTrue(CompatVolumeKeyBus.dispatch(CompatVolumeKey.DOWN)) }
+        rule.waitUntil(5_000) { listScroll() > start }
+    }
+
     @Test fun theNgExtractListsOnlyThePostsNgHidesAlsoWithNgSwitchedOff() {
         turnOn("compat.futaber.ext.extract")
         runBlocking { app.appStateStore.setNgWords(listOf("テスト9")) }

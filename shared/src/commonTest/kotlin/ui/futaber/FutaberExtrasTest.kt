@@ -211,4 +211,41 @@ class FutaberExtrasTest {
         assertEquals("Rounded.StarOutline", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.StarOutline).name)
         assertEquals("Rounded.Star", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.Star).name)
     }
+
+    /** 監査M17：管理パネルの履歴の行は、裏で作っても以前（その場でふたちゃの絞り込み・並べ替え→1スレ1行）と同じ。 */
+    @Test
+    fun theManagePanelHistoryRowsMatchTheFilterAndSort() {
+        val history = (0 until 200).map { i ->
+            com.valoser.futacha.shared.model.ThreadHistoryEntry(
+                threadId = "${i % 150}", boardId = "b", title = if (i % 3 == 0) "ねこ$i" else "犬$i", titleImageUrl = "",
+                boardName = "板", boardUrl = "https://may.2chan.net/b/res/${i % 150}.htm", lastVisitedEpochMillis = (i * 37 % 200).toLong(),
+                replyCount = i
+            )
+        }
+        val settings = com.valoser.futacha.shared.ui.board.HistoryViewSettings(titleQuery = "ねこ")
+        assertEquals(
+            futaberDistinctHistoryRows(com.valoser.futacha.shared.ui.board.applyHistoryViewSettings(history, settings)),
+            futaberManageHistoryRows(history, settings, bandOn = true)
+        )
+        assertEquals(futaberDistinctHistoryRows(history), futaberManageHistoryRows(history, settings, bandOn = false))
+    }
+
+    /** 監査L25：タブ・お気に入りに要る行だけを引いても、以前（履歴全件の表、同じスレは後の行）と同じ。 */
+    @Test
+    fun theHistoryRowsOfTheTabsAreTheLastOfEachKey() {
+        val history = (0 until 50).map { i ->
+            com.valoser.futacha.shared.model.ThreadHistoryEntry("${i % 20}", "b", "t$i", "", "", "", i.toLong(), i)
+        }
+        val keys = setOf(FutaberTabKey("b", "3"), FutaberTabKey("b", "99"))
+        val before = history.associateBy { FutaberTabKey(it.boardId, it.threadId) }.filterKeys { it in keys }
+        assertEquals(before, futaberHistoryRowsFor(keys, history))
+    }
+
+    /** 監査L26：吹き出しの行の鍵は重ならない。 */
+    @Test
+    fun bubbleRowKeysAreDistinct() {
+        val post = Post(id = "1", author = null, subject = null, timestamp = "", messageHtml = "", imageUrl = null, thumbnailUrl = null)
+        val keys = futaberBubbleRowKeys(listOf(post, post.copy(id = "2"), post))
+        assertEquals(listOf("1", "2", "1#1"), keys)
+    }
 }

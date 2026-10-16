@@ -351,10 +351,18 @@ fun rememberFutachaImageLoader(
     // Give each loader generation ownership of its MemoryCache. If the platform
     // context or injected HTTP client changes, disposing the old loader must not
     // clear a cache that the replacement loader is already using.
+    // A new generation takes over the pictures of the last one (re-audit L44: when the device tier arrived a moment after
+    // start-up, the loader was built again and the shared memory cache started empty; the old loader's shutdown clears
+    // its own cache, so the pictures are copied before that happens).
+    val previousMemoryCache = remember { arrayOfNulls<MemoryCache>(1) }
     val memoryCache = remember(platformContext, imageHttpClient, originalMediaStore, configurationIdentity) {
         MemoryCache.Builder()
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
+            .also { next ->
+                previousMemoryCache[0]?.let { last -> copyImageMemoryCache(last, next) }
+                previousMemoryCache[0] = next
+            }
     }
     val refreshInterceptor = remember(imageHttpClient, originalMediaStore, configurationIdentity) { ImageRefreshInterceptor() }
     val normalMemoryPolicy = remember(cacheConfig, performanceProfile.totalRamMb) {
@@ -891,5 +899,12 @@ internal fun resolveCacheConfig(
             diskCacheBytes = diskCacheBytesOverride ?: DEFAULT_IMAGE_DISK_CACHE_BYTES,
             parallelism = parallelismOverride?.coerceIn(1, 8) ?: DEFAULT_MAX_PARALLELISM
         )
+    }
+}
+
+/** Copies the pictures of [from] into [to] (bounded by [to]'s own size); a failure leaves [to] as it is. */
+internal fun copyImageMemoryCache(from: MemoryCache, to: MemoryCache) {
+    runCatching {
+        from.keys.forEach { key -> from[key]?.let { value -> to[key] = value } }
     }
 }

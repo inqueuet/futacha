@@ -187,6 +187,7 @@ internal fun CatalogScreenOverlayHost(
             selectedImage = bindings.createThreadImage,
             onImageSelected = createThreadDialogCallbacks.onImageSelected,
             isSubmitEnabled = isCreateThreadSubmitEnabled,
+            attachmentsEnabled = !bindings.isCreateThreadSubmitting,
             onDismiss = createThreadDialogCallbacks.onDismiss,
             onSubmit = createThreadDialogCallbacks.onSubmit,
             onClear = createThreadDialogCallbacks.onClear,

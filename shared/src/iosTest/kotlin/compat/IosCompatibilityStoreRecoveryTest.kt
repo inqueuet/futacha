@@ -64,7 +64,7 @@ class IosCompatibilityStoreRecoveryTest {
     }
 
     @Test
-    fun scrollAnchorUpdatePatchesOnlyTheTabAndKeepsHistoryDurable() = runBlocking {
+    fun scrollAnchorUpdatePublishesNothingAndStaysDurable() = runBlocking {
         val fileSystem = createFileSystem()
         fileSystem.deleteRecursively("compatibility").getOrThrow()
         try {
@@ -80,13 +80,8 @@ class IosCompatibilityStoreRecoveryTest {
             val anchor = ScrollAnchor(postNo = "123460", offsetPx = 12, fallbackIndex = 4)
             store.updateScrollAnchor(compatTabKey(threadUrl), anchor)
 
-            val tabsAfter = store.tabs.first()
-            assertEquals(tabsBefore.map(CompatTab::key), tabsAfter.map(CompatTab::key))
-            assertEquals(anchor, tabsAfter.first { it.canonicalUrl == threadUrl }.scrollAnchor)
-            assertSame(
-                tabsBefore.first { it.canonicalUrl == otherUrl },
-                tabsAfter.first { it.canonicalUrl == otherUrl }
-            )
+            // A scroll stop publishes nothing (re-audit M25: a new tab list on each stop rebuilt the whole screen).
+            assertSame(tabsBefore, store.tabs.first())
             assertSame(historyBefore, store.history.first())
 
             // The durable history anchor survives a relaunch (overlay replay)
@@ -94,6 +89,7 @@ class IosCompatibilityStoreRecoveryTest {
             val relaunched = IosCompatibilityStore(fileSystem, nowMillis = { 2_000L })
             relaunched.initialize()
             assertEquals(anchor, relaunched.history.first().single().scrollAnchor)
+            assertEquals(anchor, relaunched.tabs.first().first { it.canonicalUrl == threadUrl }.scrollAnchor)
             store.closeTabs(setOf(compatTabKey(threadUrl)), 3_000L, emptyMap())
             assertEquals(anchor, store.history.first().single().scrollAnchor)
             assertTrue(store.tabs.first().none { it.canonicalUrl == threadUrl })

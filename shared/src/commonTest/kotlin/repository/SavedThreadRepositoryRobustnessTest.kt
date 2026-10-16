@@ -185,4 +185,20 @@ class SavedThreadRepositoryRobustnessTest {
         assertTrue(files.exists("saved_threads/${buildThreadStorageId("b", "3")}"))
         assertTrue(repository.purgeIndexedThreadsStorage(emptyList()).isSuccess)
     }
+
+    /**
+     * Re-audit L21: after deleting more than 1,024 threads at once, a save of the first one that started before the
+     * deletion still does not index its copy again (the oldest deletion marks were dropped at once).
+     */
+    @Test
+    fun aSaveStartedBeforeABulkDeleteOfManyThreadsDoesNotComeBack() = runBlocking<Unit> {
+        val files = InMemoryFileSystem()
+        val repository = SavedThreadRepository(files, baseDirectory = "saved_threads")
+        val identities = (1..1_500).map { "$it" to "b" }
+        repository.purgeIndexedThreadsStorage(identities).getOrThrow()
+        // A save of thread 1 that started before the deletion (savedAt 100) finishes now.
+        // The save is turned down (a failure the saver reports), and its copy is not indexed.
+        assertTrue(repository.addThreadToIndex(savedThread("1")).isFailure)
+        assertEquals(emptyList(), repository.getAllThreads().map { it.threadId })
+    }
 }

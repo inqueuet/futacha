@@ -63,7 +63,9 @@ internal class FutaberAiInbox {
     /**
      * Waits for the unlock and for the screen ([readyTimeoutMillis] at most), then runs [command] (which reached the
      * app [arrivedAt]; one older than [maxAgeMillis], when its sender gave one, is dropped quietly, and one that waited
-     * behind the app lock for too long is dropped with the other modes' message).
+     * behind the app lock for too long is dropped with the other modes' message). [onTaken] runs once the command is
+     * settled — just before it runs, or when it is dropped — so its sender can hand over the next one while this one is
+     * still running (audit M16: iOS waited for the whole command, so a long one held up the next Shortcut).
      */
     internal suspend fun deliver(
         command: FutachaAiCommand,
@@ -71,16 +73,21 @@ internal class FutaberAiInbox {
         maxAgeMillis: Long?,
         appLock: FutachaAppLockHolder,
         readyTimeoutMillis: Long = AI_SCREEN_COMMAND_EXPIRY_MILLIS,
+        onTaken: () -> Unit = {},
         onNotice: (String) -> Unit
     ) {
         appLock.awaitUnlocked()
-        val ready = withTimeoutOrNull(readyTimeoutMillis) { snapshotFlow { runner }.filterNotNull().first() }
+        val waited = withTimeoutOrNull(readyTimeoutMillis) { snapshotFlow { runner }.filterNotNull().first() }
         appLock.awaitUnlocked()
+        // The screen registered now: the one that took [waited] may have gone while the lock was up (a mode switch), and
+        // running on it lost the command without a word (audit L19). A newer screen takes it instead; none drops it with a word.
+        val ready = if (waited == null) null else runner
         val decision = resolveAiCommandHoldDecision(
             ageMillis = arrivedAt.elapsedNow().inWholeMilliseconds,
             maxAgeMillis = maxAgeMillis,
             wasHeldByLock = appLock.wasHeldByLock(arrivedAt)
         )
+        onTaken()
         when {
             decision == AiCommandHoldDecision.DropExpired -> Logger.w(FUTABER_AI_TAG, "Dropped expired AI command: ${command.action.id}")
             decision == AiCommandHoldDecision.DropHeldByLock -> onNotice(buildAiCommandHeldByLockMessage(command))
@@ -130,10 +137,14 @@ internal class FutaberAiAppActions(
     val openSettings: () -> Unit,
     val openCookies: (() -> Unit)?,
     val openUrl: (String) -> Unit,
-    val deleteHistory: (ThreadHistoryEntry) -> Unit,
+    /** Deletes the row and returns once it is gone (throws if it could not be), so "削除しました" follows only success (audit L18). */
+    val deleteHistory: suspend (ThreadHistoryEntry) -> Unit,
     val clearHistory: () -> Unit,
-    val editBoards: ((List<BoardSummary>) -> List<BoardSummary>) -> Unit,
+    /** Changes the boards and returns once they are stored (throws if they could not be; audit L18). */
+    val editBoards: suspend ((List<BoardSummary>) -> List<BoardSummary>) -> Unit,
     val openDraft: (target: FutaberPostTarget, subject: String, comment: String) -> Unit,
+    /** True while a post to another target is being sent: the draft is not opened then (re-audit M13). */
+    val draftRefused: (FutaberPostTarget) -> Boolean = { false },
     val savedRepository: SavedThreadRepository?,
     val onSavedChanged: () -> Unit
 )
@@ -275,7 +286,11 @@ internal fun FutaberAiCommandHost(
             }
             is FutaberAiEffect.AddBoard -> a.editBoards { futaberAddBoard(it, effect.name, effect.url) }
             is FutaberAiEffect.DeleteBoard -> a.editBoards { futaberDeleteBoard(it, effect.board.id) }
-            is FutaberAiEffect.Draft -> {
+            // While another post is being sent, nothing moves and nothing is written into the write screen (re-audit M13:
+            // the subject went in although the screen was not switched, and "開きました" covered the refusal).
+            is FutaberAiEffect.Draft -> if (a.draftRefused(effect.target)) {
+                message = FUTABER_POST_IN_FLIGHT_NOTICE
+            } else {
                 a.closeOverlays(); a.setDrawerOpen(false)
                 effect.ref?.let { ref -> if (!isCurrent(effect.board, ref)) a.openThread(effect.board, ref) }
                 a.openDraft(effect.target, effect.subject, effect.comment)

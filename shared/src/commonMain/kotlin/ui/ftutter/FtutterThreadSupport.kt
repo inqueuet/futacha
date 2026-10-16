@@ -146,10 +146,61 @@ internal fun ftutterReplyIndex(posts: List<Post>): Map<String, List<Int>> {
 }
 
 /** そのレスが引用しているレスの番号（自分より前だけ）。 */
-internal fun ftutterQuoteTargets(posts: List<Post>, index: Int): List<Int> {
-    val position = posts.withIndex().associate { (i, p) -> p.id to i }
-    return posts[index].quoteReferences.flatMap { it.targetPostIds }.mapNotNull { position[it] }
-        .filter { it < index }.distinct()
+internal fun ftutterQuoteTargets(posts: List<Post>, index: Int): List<Int> = ftutterThreadIndexOf(posts).quoteTargets(index)
+
+/**
+ * スレ全体の引用の対応（レス番号→位置、各レスの引用先、会話の木）を1回だけ作ったもの。以前はレスごとに全レスの対応表を
+ * 作り直していて、会話の木（全レス分）がレス数の2乗になっていた。同じ [posts]（同じ一覧のオブジェクト）には作り直さない。
+ */
+internal class FtutterThreadIndex(val posts: List<Post>) {
+    /** レス番号→位置。同じ番号が2つあれば後のもの（以前の`associate`と同じ）。 */
+    val position: Map<String, Int> = HashMap<String, Int>(posts.size * 2).also { map ->
+        posts.forEachIndexed { i, p -> map[p.id] = i }
+    }
+
+    private val targets: Array<List<Int>> = Array(posts.size) { index ->
+        val refs = posts[index].quoteReferences
+        if (refs.isEmpty()) emptyList() else {
+            val out = ArrayList<Int>(2)
+            refs.forEach { ref ->
+                ref.targetPostIds.forEach { id -> position[id]?.let { at -> if (at < index && at !in out) out += at } }
+            }
+            out
+        }
+    }
+
+    fun quoteTargets(index: Int): List<Int> = targets[index]
+
+    /** 会話の木（引用でつながったレスの集まり）。並びは各木の一番小さい番号の順、木の中は番号の順。 */
+    val groups: List<Set<Int>> by lazy {
+        val parent = IntArray(posts.size) { it }
+        fun find(x: Int): Int {
+            var r = x
+            while (parent[r] != r) r = parent[r]
+            var c = x
+            while (parent[c] != r) { val n = parent[c]; parent[c] = r; c = n }
+            return r
+        }
+        posts.indices.forEach { i -> targets[i].forEach { t -> parent[find(i)] = find(t) } }
+        posts.indices.groupBy { find(it) }.values.map { it.toSet() }
+    }
+
+    /** レスの位置→その会話の木。 */
+    val groupOf: Array<Set<Int>?> by lazy {
+        val out = arrayOfNulls<Set<Int>>(posts.size)
+        groups.forEach { group -> group.forEach { out[it] = group } }
+        out
+    }
+}
+
+@OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+private val lastFtutterThreadIndex = kotlin.concurrent.atomics.AtomicReference<FtutterThreadIndex?>(null)
+
+/** [posts]の [FtutterThreadIndex]。直前と同じ一覧なら作ったものを使う（画面の操作のたびに作り直さない）。 */
+@OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+internal fun ftutterThreadIndexOf(posts: List<Post>): FtutterThreadIndex {
+    lastFtutterThreadIndex.load()?.takeIf { it.posts === posts }?.let { return it }
+    return FtutterThreadIndex(posts).also { lastFtutterThreadIndex.store(it) }
 }
 
 /** IDの (n/m)：何番目と全体の件数。IDが1回しか出ないレスは null。 */
@@ -175,18 +226,7 @@ internal fun ftutterSoudaneCount(label: String?): Int = label.orEmpty().filter {
 // ---- 人気レス（§9） ----
 
 /** 会話の木（引用でつながったレスの集まり）を、レスの番号の集合で返す。 */
-internal fun ftutterConversationGroups(posts: List<Post>): List<Set<Int>> {
-    val parent = IntArray(posts.size) { it }
-    fun find(x: Int): Int {
-        var r = x
-        while (parent[r] != r) r = parent[r]
-        var c = x
-        while (parent[c] != r) { val n = parent[c]; parent[c] = r; c = n }
-        return r
-    }
-    posts.indices.forEach { i -> ftutterQuoteTargets(posts, i).forEach { t -> parent[find(i)] = find(t) } }
-    return posts.indices.groupBy { find(it) }.values.map { it.toSet() }
-}
+internal fun ftutterConversationGroups(posts: List<Post>): List<Set<Int>> = ftutterThreadIndexOf(posts).groups
 
 internal data class FtutterPopular(val main: Set<Int>, val related: Set<Int>)
 
@@ -285,8 +325,30 @@ internal fun ftutterPostSearchText(post: Post): String =
     canonicalThreadSearchText(messageHtmlToPlainText(post.messageHtml).lowercase())
 
 internal fun ftutterMatchesQuery(post: Post, query: String): Boolean {
-    val wanted = canonicalThreadSearchText(query.trim().lowercase())
+    val wanted = ftutterSearchNeedle(query)
     return wanted.isEmpty() || ftutterPostSearchText(post).contains(wanted)
+}
+
+/** 検索語を本文と同じように正規化したもの（空なら絞り込まない）。 */
+internal fun ftutterSearchNeedle(query: String): String = canonicalThreadSearchText(query.trim().lowercase())
+
+/**
+ * スレ内検索の文字列（[ftutterPostSearchText]）を、レスごとに1回だけ作ったもの（[posts]と同じ順）。以前は打鍵のたびに
+ * 全レスの本文の変換と正規化をやり直していた。
+ */
+internal class FtutterPostTexts(val posts: List<Post>, val texts: List<String>)
+
+private const val FTUTTER_POST_TEXTS_CANCEL_CHECK_INTERVAL = 32
+
+/** [posts]の検索の文字列。[previous]と同じレス（スレが伸びただけの時など）はそれを使う。[ensureActive]は取り消しを見る。 */
+internal fun ftutterBuildPostTexts(previous: FtutterPostTexts?, posts: List<Post>, ensureActive: () -> Unit = {}): FtutterPostTexts {
+    val texts = ArrayList<String>(posts.size)
+    posts.forEachIndexed { index, post ->
+        if (index % FTUTTER_POST_TEXTS_CANCEL_CHECK_INTERVAL == 0) ensureActive()
+        val before = previous?.posts?.getOrNull(index)
+        texts += if (previous != null && before != null && (before === post || before == post)) previous.texts[index] else ftutterPostSearchText(post)
+    }
+    return FtutterPostTexts(posts, texts)
 }
 
 /**
@@ -296,17 +358,24 @@ internal fun ftutterMatchesQuery(post: Post, query: String): Boolean {
  *
  * 削除・NGのレス（原作 getAvailableIndexes）：通常表示では行ごと消し、返信は残す。ツリー表示では、見えている返信を
  * 持つものだけ「N  削除」「N  NG」の1行に置き換えて残す（返信はその下に字下げされる）。連鎖で隠したレスは行ごと消す。
+ *
+ * [texts]（この[posts]の検索の文字列）があれば、検索はそれを使う（無ければここで作る。結果は同じ）。重いので画面は
+ * メインスレッドの外で呼ぶ。
  */
 internal suspend fun ftutterBuildRows(
     posts: List<Post>,
     settings: FtutterThreadSettings,
     filter: FtutterThreadFilter,
     readCount: Int,
-    hidden: FtutterHidden = ftutterHidden(posts, settings, emptySet(), ngChain = false)
+    hidden: FtutterHidden = ftutterHidden(posts, settings, emptySet(), ngChain = false),
+    texts: FtutterPostTexts? = null
 ): List<FtutterRow> {
     if (posts.isEmpty()) return emptyList()
-    val position = posts.withIndex().associate { (i, p) -> p.id to i }
+    val position = ftutterThreadIndexOf(posts).position
     val chained = hidden.removed
+    val searching = filter.query.isNotBlank()
+    val needle = if (searching) ftutterSearchNeedle(filter.query) else ""
+    val searchTexts = texts?.takeIf { it.posts === posts }?.texts
     val popular = if (filter.popular) ftutterPopular(posts, settings.popularReplies, settings.popularSoudane) else null
     fun visible(i: Int): Boolean {
         if (i in chained) return false
@@ -315,7 +384,7 @@ internal suspend fun ftutterBuildRows(
             if (!keep) return false
         }
         if (filter.imagesOnly && posts[i].thumbnailUrl.isNullOrBlank() && posts[i].imageUrl.isNullOrBlank()) return false
-        if (filter.query.isNotBlank() && !ftutterMatchesQuery(posts[i], filter.query)) return false
+        if (searching && needle.isNotEmpty() && !(searchTexts?.get(i) ?: ftutterPostSearchText(posts[i])).contains(needle)) return false
         return true
     }
     val read = readCount.coerceIn(0, posts.size)
@@ -342,28 +411,134 @@ internal suspend fun ftutterBuildRows(
         }
     }
     if (!markPlaced) rows += FtutterRow.ReadMark
-    // 置換行は、ツリー表示で直後に字下げされた（見えている）返信がある時だけ残す。置換行の下の置換行が消えると
-    // 親も残す理由が無くなるので、変わらなくなるまで繰り返す。
     if (!settings.isTree) return rows.filter { it !is FtutterRow.HiddenRow }
-    var current: List<FtutterRow> = rows
-    while (true) {
-        val next = current.filterIndexed { at, row ->
-            if (row !is FtutterRow.HiddenRow) return@filterIndexed true
-            val following = current.drop(at + 1).firstOrNull { it !is FtutterRow.ReadMark }
-            val depth = (following as? FtutterRow.PostRow)?.depth ?: (following as? FtutterRow.HiddenRow)?.depth
-            depth != null && depth > row.depth
+    return ftutterThinReplacementRows(rows)
+}
+
+/**
+ * 置換行は、ツリー表示で直後に字下げされた（見えている）返信がある時だけ残す。置換行の下の置換行が消えると親も残す理由が
+ * 無くなる。以前は変わらなくなるまで全体を繰り返し（置換行ごとに一覧を複製し）ていたが、後ろから1回たどれば同じ結果になる：
+ * 各行の「後ろで残る、帯でない最初の行」は、後ろの行の結果だけで決まる。
+ */
+internal fun ftutterThinReplacementRows(rows: List<FtutterRow>): List<FtutterRow> {
+    val keep = BooleanArray(rows.size)
+    var nextDepth: Int? = null
+    for (at in rows.indices.reversed()) {
+        when (val row = rows[at]) {
+            FtutterRow.ReadMark -> keep[at] = true
+            is FtutterRow.PostRow -> { keep[at] = true; nextDepth = row.depth }
+            is FtutterRow.HiddenRow -> {
+                val following = nextDepth
+                if (following != null && following > row.depth) {
+                    keep[at] = true
+                    nextDepth = row.depth
+                }
+            }
         }
-        if (next.size == current.size) return next
-        current = next
     }
+    return rows.filterIndexed { at, _ -> keep[at] }
 }
 
 /** 会話の木のポップアップの中身（そのレスを含む木を、ツリーの深さつきで）。2件未満なら空。 */
 internal suspend fun ftutterConversationOf(posts: List<Post>, index: Int): List<Pair<Int, Int>> {
-    val group = ftutterConversationGroups(posts).firstOrNull { index in it } ?: return emptyList()
+    val threadIndex = ftutterThreadIndexOf(posts)
+    val group = threadIndex.groupOf.getOrNull(index) ?: return emptyList()
     if (group.size < 2) return emptyList()
-    val position = posts.withIndex().associate { (i, p) -> p.id to i }
+    val position = threadIndex.position
     return buildThreadTreeNodes(group.sorted().map { posts[it] }).map { position.getValue(it.post.id) to it.depth }
+}
+
+// ---- スレッド画面の重い計算（メインスレッドの外で行う） ----
+
+/** NGに当たったレス：このモードのNG（[matcher]）と、拡張「共通のNG」のワード・ネーム等。画像NG・AIの結果は含まない。 */
+internal fun ftutterNgPostIndexes(
+    posts: List<Post>,
+    matcher: FtutterNgMatcher,
+    commonWords: List<String>,
+    commonHeaders: List<String>,
+    ensureActive: () -> Unit = {}
+): Set<Int> {
+    val hidden = ftutterCommonNgPosts(posts, commonWords, commonHeaders, ensureActive).toMutableSet()
+    if (!matcher.isEmpty) {
+        matcher.beginPass()
+        posts.indices.filterTo(hidden) { index ->
+            if (index % FTUTTER_POST_TEXTS_CANCEL_CHECK_INTERVAL == 0) ensureActive()
+            matcher.hidesPost(posts[index], ensureActive)
+        }
+    }
+    return hidden
+}
+
+/** 画面に出す行と、その時の隠すレス（[posts]から作ったもの）。 */
+internal class FtutterThreadView(
+    val posts: List<Post>,
+    val hidden: FtutterHidden,
+    val rows: List<FtutterRow>,
+    /** 照合に時間がかかりすぎて使わなかったNGのルール。 */
+    val slowNgRules: List<FtutterNgRule> = emptyList()
+)
+
+private class FtutterNgBase(
+    val posts: List<Post>,
+    val matcher: FtutterNgMatcher,
+    val words: List<String>,
+    val headers: List<String>,
+    val hidden: Set<Int>
+)
+
+/**
+ * スレッド画面の計算の使い回し。レスごとのNGの照合は、レス・NGが変わった時だけやり直し、画像NG・AIの結果が少しずつ届く
+ * たび・検索語や既読が変わるたびにはやり直さない。検索の文字列も、レスが変わった時だけ作る。
+ */
+internal class FtutterThreadWork {
+    @kotlin.concurrent.Volatile
+    private var ng: FtutterNgBase? = null
+
+    @kotlin.concurrent.Volatile
+    private var texts: FtutterPostTexts? = null
+
+    fun ngPostIndexes(
+        posts: List<Post>,
+        matcher: FtutterNgMatcher,
+        words: List<String>,
+        headers: List<String>,
+        ensureActive: () -> Unit = {}
+    ): Set<Int> {
+        ng?.takeIf { it.posts === posts && it.matcher === matcher && it.words == words && it.headers == headers }?.let { return it.hidden }
+        val hidden = ftutterNgPostIndexes(posts, matcher, words, headers, ensureActive)
+        ng = FtutterNgBase(posts, matcher, words, headers, hidden)
+        return hidden
+    }
+
+    fun postTexts(posts: List<Post>, ensureActive: () -> Unit = {}): FtutterPostTexts {
+        val previous = texts
+        if (previous != null && previous.posts === posts) return previous
+        return ftutterBuildPostTexts(previous, posts, ensureActive).also { texts = it }
+    }
+
+    /**
+     * 画面の行。結果は以前の画面の計算（NG→`ftutterHidden`→`ftutterBuildRows`）と同じ。[extraHiddenIds]は画像NG・AIで
+     * 隠すレス（レス番号）。
+     */
+    suspend fun view(
+        posts: List<Post>,
+        settings: FtutterThreadSettings,
+        filter: FtutterThreadFilter,
+        readCount: Int,
+        matcher: FtutterNgMatcher,
+        commonWords: List<String>,
+        commonHeaders: List<String>,
+        extraHiddenIds: Set<String>,
+        ngChain: Boolean,
+        ensureActive: () -> Unit = {}
+    ): FtutterThreadView {
+        val base = ngPostIndexes(posts, matcher, commonWords, commonHeaders, ensureActive)
+        val ngPosts = if (extraHiddenIds.isEmpty()) base else posts.indices.filterTo(base.toMutableSet()) { posts[it].id in extraHiddenIds }
+        val hidden = ftutterHidden(posts, settings, ngPosts, ngChain)
+        val texts = if (filter.query.isNotBlank()) postTexts(posts, ensureActive) else null
+        ensureActive()
+        return FtutterThreadView(posts, hidden, ftutterBuildRows(posts, settings, filter, readCount, hidden, texts), matcher.slowRules)
+    }
 }
 
 /** 「単純な引用を省略」：ツリーの子のレスで、引用の塊が1つだけ解決できている時、引用行を「>....」1行にする。 */
@@ -460,3 +635,11 @@ internal fun ftutterImageBox(post: Post, isOp: Boolean, settings: FtutterThreadS
     val aspect = if (w != null && h != null) (w.toFloat() / h).coerceIn(0.1f, 10f) else 1f
     return FtutterImageBox(maxWidth, height, aspect)
 }
+
+/** No.[id]のレスの今の位置（無ければ -1）。長押しのメニューは位置でなくNo.で持つ（監査M3）。 */
+internal fun ftutterIndexOfPost(posts: List<Post>, id: String?): Int =
+    if (id == null) -1 else posts.indexOfFirst { it.id == id }
+
+/** True when [after] is [before] with posts only added at the end (the same posts keep their positions). */
+internal fun ftutterPostsOnlyGrew(before: List<Post>, after: List<Post>): Boolean =
+    after.size >= before.size && before.indices.all { before[it].id == after[it].id }

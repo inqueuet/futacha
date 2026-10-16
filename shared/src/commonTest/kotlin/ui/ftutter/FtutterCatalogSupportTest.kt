@@ -91,6 +91,21 @@ class FtutterCatalogSupportTest {
         assertEquals(listOf("https://may.2chan.net/27/res/2.htm", "https://img.2chan.net/b/res/9.htm"), pruned)
     }
 
+    /** 監査M4：カタログの取得中に「非表示」にしたスレは、取得後の整理（落ちたスレを除く）で消えない。 */
+    @Test
+    fun aThreadHiddenDuringTheFetchSurvivesTheLaterPrune() {
+        val board = "https://may.2chan.net/27/futaba.php"
+        val atStart = listOf("https://may.2chan.net/27/res/1.htm") // 取得を始めた時の一覧（1は落ちる）
+        val loaded = listOf(item("2", "a"))
+        // 取得中に2を非表示にした保存値。
+        val stored = encodeFtutterList(atStart + "https://may.2chan.net/27/res/2.htm")
+        // 以前の作り方：始めた時の一覧から整理して丸ごと書くので、2が消えていた。
+        assertEquals(emptyList(), ftutterPruneHiddenThreads(atStart, board, loaded))
+        assertEquals(listOf("https://may.2chan.net/27/res/2.htm"), parseFtutterHiddenThreads(ftutterPrunedHiddenValue(stored, board, loaded)))
+        // 落ちたスレが無ければ書かない。
+        assertNull(ftutterPrunedHiddenValue(encodeFtutterList(listOf("https://may.2chan.net/27/res/2.htm")), board, loaded))
+    }
+
     @Test
     fun theVisibleCatalogSearchesHidesAndCuts() {
         val items = listOf(item("1", "ねこ写真"), item("2", "ネコ写真"), item("3", "犬"), item("4", "ABC"))
@@ -166,8 +181,27 @@ class FtutterCatalogSupportTest {
         assertEquals(FtutterCatalogTool.entries.size, parsed.map { it.tool }.toSet().size)
         val (names, switches) = encodeFtutterToolbar(parsed) { it.stored }
         assertEquals(parsed, parseFtutterToolbar(decodeFtutterList(names), decodeFtutterList(switches), FTUTTER_CATALOG_TOOLBAR_DEFAULT) { it.stored })
-        // The original's width: min(45, (width - 5 - 5 - 20 - 64) / 6).
+        // Preserve the original size when it fits; keep 40dp and scroll when it does not.
         assertEquals(45f, ftutterToolbarButtonWidth(411f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
-        assertEquals(30f, ftutterToolbarButtonWidth(274f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
+        assertEquals(40f, ftutterToolbarButtonWidth(274f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
+    }
+
+    /** 監査M10：カタログごとに1回作る表で絞っても、以前（毎回、重複を除き題名とURLを正規化）と同じ結果になる。 */
+    @Test
+    fun theSearchIndexGivesTheSameCatalogAsBefore() {
+        val titles = listOf("ねこ写真", "ネコ写真", "ｎｅｋｏ", "犬", "ABC", "abc def", "", null)
+        val items = (0 until 300).map { i -> item("${i % 280}", titles[i % titles.size]) }
+        val hidden = setOf("https://may.2chan.net/27/res/3.htm", "https://may.2chan.net/27/res/17.htm")
+        val index = FtutterCatalogSearchIndex.of(items)
+        for (query in listOf("", " ", "ねこ", "NEKO", "abc", "写真", "zzz")) {
+            for (max in listOf(5, 500)) {
+                val distinct = items.distinctBy { it.threadUrl }
+                val searched = if (query.isBlank()) distinct else com.valoser.futacha.shared.ui.futaber.filterFutaberCatalogByKeys(
+                    distinct, com.valoser.futacha.shared.ui.futaber.futaberCatalogTitleKeys(distinct), query
+                )
+                val before = searched.filter { ftutterCanonicalThreadUrl(it.threadUrl) !in hidden }.take(max)
+                assertEquals(before, ftutterVisibleCatalog(index, query, hidden, max), "query=$query max=$max")
+            }
+        }
     }
 }

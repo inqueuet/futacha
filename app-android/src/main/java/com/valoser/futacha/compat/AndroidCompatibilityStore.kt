@@ -639,6 +639,17 @@ class AndroidCompatibilityStore(
         db.trimHistoryTombstones()
     }
 
+    override suspend fun deleteHistories(canonicalUrls: Collection<String>) {
+        if (canonicalUrls.isEmpty()) return
+        mutate(refresh = setOf(CompatObservableState.HISTORY)) { db ->
+            canonicalUrls.distinct().forEach { canonicalUrl ->
+                db.putHistoryTombstone(canonicalUrl)
+                db.delete("compat_history", "canonical_url=?", arrayOf(canonicalUrl))
+            }
+            db.trimHistoryTombstones()
+        }
+    }
+
     override suspend fun clearHistory() = mutate(
         refresh = setOf(CompatObservableState.HISTORY)
     ) { db ->
@@ -2513,8 +2524,8 @@ class AndroidCompatibilityStore(
             com.valoser.futacha.shared.compat.remapCompatWatchRulesBoardKey(encoded, fromKey, toKey)
                 ?.let { putPreference(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY, it) }
         }
-        com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(fromKey)
-            .zip(com.valoser.futacha.shared.compat.compatBoardDefaultPreferenceKeys(toKey))
+        com.valoser.futacha.shared.compat.compatBoardScopedPreferenceKeys(fromKey)
+            .zip(com.valoser.futacha.shared.compat.compatBoardScopedPreferenceKeys(toKey))
             .forEach { (from, to) ->
                 val value = readPreferenceValue(from) ?: return@forEach
                 // A value already learned for the corrected board is kept.

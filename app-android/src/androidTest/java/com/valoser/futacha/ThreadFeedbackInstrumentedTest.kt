@@ -131,6 +131,23 @@ class ThreadFeedbackInstrumentedTest {
         rule.waitUntil(5000) { runBlocking { decodeManualPostMarks(store.preferences.first()[MANUAL_POST_MARKS_KEY]).isEmpty() } }
     }
 
+    @Test fun droppedOldMarksNoticeIsInformationAndGoesAway() {
+        // Re-audit L47: the notice used the error colour and stayed until the next press.
+        val full = (1..MANUAL_POST_MARK_LIMIT).joinToString(",", "[", "]") {
+            "{\"threadUrl\":\"https://may.2chan.net/b/res/7.htm\",\"postNo\":\"$it\"}"
+        }
+        runBlocking { store.savePreference(MANUAL_POST_MARKS_KEY, full) }
+        rule.setContent { MaterialTheme {
+            ManualPostMarkActions("96", PostMarkContext(store, url, listOf("96" to "レス"), { }))
+        } }
+        rule.onNodeWithText("☆ レスをマーク").performClick()
+        rule.waitUntil(5000) { rule.onAllNodesWithText("古いマークを", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(MANUAL_POST_MARK_NOTICE_MILLIS + 5000) {
+            rule.onAllNodesWithText("古いマークを", substring = true).fetchSemanticsNodes().isEmpty()
+        }
+        rule.onNodeWithText("★ マーク解除").assertExists()
+    }
+
     @Test fun sharedAttachmentIsOfferedAndOnlyConsumedByAnExplicitTap() {
         val image = com.valoser.futacha.shared.util.ImageData(byteArrayOf(1, 2, 3), "incoming.jpg")
         IncomingSharedAttachment.offer(image)

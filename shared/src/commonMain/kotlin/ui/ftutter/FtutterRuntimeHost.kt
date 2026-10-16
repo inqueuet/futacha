@@ -53,9 +53,7 @@ import com.valoser.futacha.shared.ui.rememberFutachaCoreRuntimeState
 import com.valoser.futacha.shared.util.DevicePerformanceProfile
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 private const val FTUTTER_RUNTIME_TAG = "FtutterRuntime"
 private const val FTUTTER_LIGHTWEIGHT_IMAGE_CACHE_BYTES = 128L * 1024 * 1024
@@ -190,6 +188,16 @@ internal fun FtutterRuntimeHost(
     }
     val highQualityThumbnailMode = rememberHighQualityThumbnailMode(compatibilityStore)
     val currentStore by rememberUpdatedState(compatibilityStore)
+    // The settings of this mode are written one at a time, in order; a change of a list or a count is applied to the value
+    // stored at that moment (audit M2).
+    val preferenceWriter = remember(scope) {
+        FtutterPreferenceWriter(
+            scope = scope,
+            load = { key -> currentStore?.loadPreference(key) },
+            store = { key, value -> currentStore?.savePreference(key, value) },
+            onFailure = { key, error -> Logger.e(FTUTTER_RUNTIME_TAG, "Failed to save $key", error) }
+        )
+    }
     // One object for as long as its parts stay: it is a key of the effects that fetch and hash the thread's pictures
     // (image NG), which must not restart every time the history is saved and this host is composed again.
     val mediaServices = remember(compatibilityStore, httpClient, fileSystem, cookieRepository) {
@@ -246,15 +254,11 @@ internal fun FtutterRuntimeHost(
                     }
                     if (completed == null) throw IllegalStateException("時間内に終わりませんでした")
                 },
-                savePreference = { key, value ->
-                    scope.launch {
-                        try {
-                            currentStore?.savePreference(key, value)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Throwable) {
-                            Logger.e(FTUTTER_RUNTIME_TAG, "Failed to save $key", error)
-                        }
+                savePreference = preferenceWriter::save,
+                editPreference = preferenceWriter::edit,
+                importPreferences = { edits ->
+                    preferenceWriter.editAllNow(edits) { values ->
+                        currentStore?.savePreferences(values) ?: values.forEach { (k, v) -> preferenceWriter.save(k, v) }
                     }
                 }
             )

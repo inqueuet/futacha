@@ -69,9 +69,19 @@ internal fun FutaberHistoryBand(
     onOpenArchive: (() -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
-    val scope = rememberCoroutineScope()
-    var refreshing by remember { mutableStateOf(false) }
-    var refreshMessage by remember { mutableStateOf<String?>(null) }
+    // The refresh runs in the app's scope and its state lives there (re-audit M19: closing the panel stopped it without a
+    // word, and opening it again offered a second run beside the first). Without the app's tasks (previews) it is local.
+    val appTasks = LocalFutaberAppTasks.current
+    val localScope = rememberCoroutineScope()
+    val tasks = appTasks ?: remember(localScope) { FutaberAppTasks(localScope) {} }
+    var bandShown by remember { mutableStateOf(true) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        // A band opened again starts without the last result, as before.
+        if (!tasks.historyRefreshing) tasks.historyRefreshMessage = null
+        onDispose { bandShown = false }
+    }
+    val refreshing = tasks.historyRefreshing
+    val refreshMessage = tasks.historyRefreshMessage
     Column(Modifier.fillMaxWidth().background(colors.bar).padding(horizontal = 12.dp, vertical = 8.dp).testTag("futaber-history-band")) {
         if (showViewTools) Row(
             Modifier.fillMaxWidth().clip(FutaberShapes.pill).background(colors.catalogGap)
@@ -117,20 +127,23 @@ internal fun FutaberHistoryBand(
             }
             if (onRefresh != null) {
                 BandChip(if (refreshing) "更新中…" else "一括更新", "futaber-history-refresh", refreshing) {
-                    if (!refreshing) {
-                        refreshing = true
-                        refreshMessage = null
-                        scope.launch {
-                            try {
+                    if (!tasks.historyRefreshing) {
+                        tasks.historyRefreshing = true
+                        tasks.historyRefreshMessage = null
+                        tasks.scope.launch {
+                            val message = try {
                                 onRefresh()
-                                refreshMessage = "履歴を更新しました"
+                                "履歴を更新しました"
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (error: Throwable) {
-                                refreshMessage = "更新できませんでした：" + futaberFriendlyLoadError(error, "スレッド", "通信を確認してください")
+                                "更新できませんでした：" + futaberFriendlyLoadError(error, "スレッド", "通信を確認してください")
                             } finally {
-                                refreshing = false
+                                tasks.historyRefreshing = false
                             }
+                            // Shown in the band while it is open; told as the app's notice once the panel has closed.
+                            tasks.historyRefreshMessage = message
+                            if (!bandShown) tasks.notify(message)
                         }
                     }
                 }

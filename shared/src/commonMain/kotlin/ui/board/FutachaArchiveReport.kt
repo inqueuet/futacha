@@ -7,7 +7,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,6 +69,17 @@ internal suspend fun enqueueViewedThreadArchiveReport(
     return noted
 }
 
+/** The stored switch once the store has loaded ("OFF" = off); a failed read counts as off, so nothing is sent by mistake. */
+internal suspend fun storedArchiveReportSwitch(store: CompatibilityStore): String? = try {
+    store.isLoaded.first { it }
+    store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY)
+} catch (cancelled: kotlinx.coroutines.CancellationException) {
+    throw cancelled
+} catch (error: Throwable) {
+    Logger.e("FutachaArchiveReport", "Failed to read the archive report switch", error)
+    "OFF"
+}
+
 /** The host's sender of the notes, handed down to ふたちゃ's thread screens through [FutachaSharedFeatures]. */
 internal class FutachaArchiveReportHost {
     /** The number waiting to be sent after a thread was noted; null where the host sends nothing (the default). */
@@ -86,7 +99,9 @@ internal suspend fun FutachaSharedFeatures.noteViewedThreadForArchive(
 ): Boolean = enqueueViewedThreadArchiveReport(
     store = store,
     threadUrl = sourceUrl,
-    enabledPreference = preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY],
+    // Read from the store, not from the screen's copy of the settings: that copy is empty until loaded, and empty reads as
+    // "on", so a thread opened before the settings arrived was noted although the switch was off (audit L27).
+    enabledPreference = storedArchiveReportSwitch(store),
     liveFetch = futachaArchiveReportLive(isCachedPage, isArchived, staticView, restoring),
     nowEpochMillis = nowEpochMillis,
     onEnqueued = archiveReport.onEnqueued
@@ -106,23 +121,48 @@ internal fun FutachaArchiveReportSettingRow() {
     val features = LocalFutachaSharedFeatures.current ?: return
     if (isDesktop()) return
     val scope = rememberCoroutineScope()
-    val stored = features.preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY]
+    // Only this switch's own value is watched (re-audit L33: reading the whole settings map composed this row again on
+    // every write of any setting).
+    val storedKey by remember(features) {
+        androidx.compose.runtime.derivedStateOf { features.preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] }
+    }
+    // The switch shows the stored value once it is read (audit L27: it showed "on" for a moment before the settings arrived).
+    // A read that failed is shown as such, not as "off" (re-audit L33); the sending side still treats it as off.
+    val stored by androidx.compose.runtime.produceState<Pair<Boolean, Result<String?>>>(false to Result.success(null), storedKey) {
+        value = true to try {
+            features.store.isLoaded.first { it }
+            Result.success(features.store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Logger.e("FutachaArchiveReport", "Failed to read the archive report switch", error)
+            Result.failure(error)
+        }
+    }
     var saving by remember { mutableStateOf(false) }
-    val enabled = stored != "OFF"
+    var problem by remember { mutableStateOf<String?>(null) }
+    val readFailed = stored.second.isFailure
+    val enabled = stored.second.getOrNull() != "OFF" && !readFailed
     HorizontalDivider()
     ListItem(
         headlineContent = { Text(VIEWED_THREAD_ARCHIVE_REPORT_LABEL) },
         supportingContent = {
-            Text(
-                text = VIEWED_THREAD_ARCHIVE_REPORT_DESCRIPTION,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column {
+                Text(
+                    text = VIEWED_THREAD_ARCHIVE_REPORT_DESCRIPTION,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                (problem ?: if (readFailed) "設定を読み込めませんでした" else null)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("futacha-archive-report-problem"))
+                }
+            }
         },
         trailingContent = {
             Switch(
                 checked = enabled,
-                enabled = !saving,
+                enabled = !saving && stored.first && !readFailed,
                 modifier = Modifier.testTag("futacha-archive-report-switch"),
                 onCheckedChange = { next ->
                     AnalyticsTracker.uiControl(
@@ -131,6 +171,7 @@ internal fun FutachaArchiveReportSettingRow() {
                         mapOf("setting_label" to "閲覧スレ通知", "setting_value" to if (next) "ON" else "OFF")
                     )
                     saving = true
+                    problem = null
                     scope.launch {
                         try {
                             features.store.savePreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY, if (next) "ON" else "OFF")
@@ -139,6 +180,8 @@ internal fun FutachaArchiveReportSettingRow() {
                             throw cancelled
                         } catch (error: Exception) {
                             Logger.e("FutachaArchiveReport", "Failed to save the archive report switch", error)
+                            // Said, not left looking unchanged (re-audit L33).
+                            problem = "保存できませんでした"
                         } finally {
                             saving = false
                         }

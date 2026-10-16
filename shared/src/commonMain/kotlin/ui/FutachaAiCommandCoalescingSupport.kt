@@ -55,3 +55,10 @@ internal fun isAiCommandForThread(
     }
     return true
 }
+
+/**
+ * What to tell the person when a second confirmation arrives while one is still waiting (re-audit L45): it used to be
+ * dropped without a word, e.g. one sent during the app lock. ふたばー風 says the same.
+ */
+internal fun buildAiConfirmationBusyMessage(request: FutachaAiConfirmationRequest): String =
+    "確認待ちのAI操作があるため「${request.command.action.label}」は実行しませんでした"

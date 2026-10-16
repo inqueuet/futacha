@@ -71,6 +71,14 @@ internal fun resolveFutachaThreadUndoSnapshots(
     return FutachaThreadUndoSnapshots(previous = previous, latest = next, latestGeneration = generation)
 }
 
+/**
+ * Whether a page with the same text as the one shown is still written to the tab (re-audit L46): only a page read from
+ * the board after a device copy that was not written (an open tab's copy). It used to be skipped, and the tab kept the
+ * copy's reply and read counts until the text changed.
+ */
+internal fun futachaSamePageNeedsTabWrite(isCachedPage: Boolean, latestWrittenToTab: Boolean): Boolean =
+    !isCachedPage && !latestWrittenToTab
+
 /** The probe's verdict holds only for the page it was made on; a newer page (manual retry) clears it. */
 internal fun isFutachaThreadConfirmedGone(goneConfirmedFor: ThreadUiState?, shown: ThreadUiState): Boolean =
     goneConfirmedFor != null && goneConfirmedFor === shown
@@ -121,6 +129,8 @@ internal fun FutachaThreadFeatureHost(
     setActionInProgress: (Boolean) -> Unit = {},
     /** The screen's reply form; kept as the tab's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
     replyDraft: ThreadReplyDialogStateBinding? = null,
+    /** True while the reply is being sent (its stored draft goes and is not written meanwhile; audit M19). */
+    replySending: () -> Boolean = { false },
     content: @Composable () -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
@@ -145,7 +155,7 @@ internal fun FutachaThreadFeatureHost(
         FutachaDraftPersistenceEffect(
             features.store, features.fileSystem, FutachaDraftOwner.Reply(tabKey),
             enabled = !staticView && features.value("control", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY) == "ON",
-            form = futachaReplyDraftFormBinding(replyDraft), onMessage = { message = it }
+            form = futachaReplyDraftFormBinding(replyDraft, replySending), onMessage = { message = it }
         )
     }
     var mediaOpen by remember(tabKey) { mutableStateOf(false) }
@@ -174,21 +184,41 @@ internal fun FutachaThreadFeatureHost(
         catch (failure: Exception) { message = failure.message ?: "操作に失敗しました" }
     }
     var latestGeneration by remember(tabKey) { mutableStateOf<Long?>(null) }
+    // Whether the page in [latest] was written to the tab (a device copy of an open tab is not): a board page with the
+    // same text is then written once (re-audit L46).
+    var latestWrittenToTab by remember(tabKey) { mutableStateOf(false) }
     val currentLoadGeneration by rememberUpdatedState(loadGeneration)
     LaunchedEffect(currentState, tabKey, isCachedPage) {
         val next = currentState as? ThreadUiState.Success ?: return@LaunchedEffect
         // Compared once, off the main thread; repeating it here deep-compared
         // up to 2,000 posts on every accepted page.
-        if (withContext(AppDispatchers.parsing) { latest?.page == next.page }) return@LaunchedEffect
-        val snapshots = resolveFutachaThreadUndoSnapshots(
-            FutachaThreadUndoSnapshots(previous, latest, latestGeneration),
-            next, isCachedPage, currentLoadGeneration, restoring
-        )
-        previous = snapshots.previous
-        latest = snapshots.latest
-        latestGeneration = snapshots.latestGeneration
-        val wasRestoring = restoring
-        restoring = false
+        val samePage = withContext(AppDispatchers.parsing) { latest?.page == next.page }
+        if (samePage && !futachaSamePageNeedsTabWrite(isCachedPage, latestWrittenToTab)) {
+            // The same text read from the board after the device's copy was shown is still a viewing of the thread: noted
+            // for "閲覧スレ通知" as well (audit L28; the note skips copies, archives and restores by itself).
+            features.noteViewedThreadForArchive(sourceUrl, isCachedPage, next.isArchived, staticView, restoring,
+                Clock.System.now().toEpochMilliseconds())
+            return@LaunchedEffect
+        }
+        val wasRestoring: Boolean
+        if (samePage) {
+            // The board's page has the device copy's text, but the copy was not written to the tab (re-audit L46): the
+            // tab's reply and read counts are brought up now. The undo snapshots stay as they are (nothing changed).
+            latest = next
+            latestGeneration = currentLoadGeneration
+            wasRestoring = false
+        } else {
+            val snapshots = resolveFutachaThreadUndoSnapshots(
+                FutachaThreadUndoSnapshots(previous, latest, latestGeneration),
+                next, isCachedPage, currentLoadGeneration, restoring
+            )
+            previous = snapshots.previous
+            latest = snapshots.latest
+            latestGeneration = snapshots.latestGeneration
+            wasRestoring = restoring
+            restoring = false
+        }
+        latestWrittenToTab = false
         if (wasRestoring) return@LaunchedEffect
         // A read-only copy (an opened MHT file) is shown as it is: nothing is written to the tabs or the shared snapshots.
         if (staticView) return@LaunchedEffect
@@ -217,6 +247,7 @@ internal fun FutachaThreadFeatureHost(
                 checkedReplyCount = next.page.compatReplyCount(), snapshotRevision = if (snapshotChanged) snapshot.revision else storedSnapshot?.revision ?: snapshot.revision,
                 contentUpdatedAtEpochMillis = if (snapshotChanged) now else existing?.contentUpdatedAtEpochMillis ?: now, thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl)
             if (existing == null) features.store.openTab(updated) else if (updated != existing) features.store.updateTab(updated)
+            latestWrittenToTab = true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
     }
@@ -228,20 +259,32 @@ internal fun FutachaThreadFeatureHost(
     val latestTabs by rememberUpdatedState(tabs)
     val latestRefresh by rememberUpdatedState(onRefresh)
     fun moveThread(direction: Int) {
+        // An opened MHT file is no tab: the tab moves do nothing there (re-audit M31).
+        if (staticView) return
         val index = latestTabs.indexOfFirst { it.key == tabKey }
         latestTabs.getOrNull(index + direction)?.let { onOpenThread(it.toFutachaHistoryEntry()) }
     }
     fun scrollPage(direction: Int) { scope.launch {
         listState.scrollBy((listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset) * direction.toFloat())
     } }
-    fun closeTab(key: String) { launchAction {
-        features.store.closeTabs(setOf(key), Clock.System.now().toEpochMilliseconds())?.let(features.onTabsClosed)
-        if (key == tabKey) {
-            val next = latestTabs.firstOrNull { it.key != key }
-            if (features.value("control", "controlThreadCloseBack") == "ON" || next == null) onClose()
-            else onOpenThread(next.toFutachaHistoryEntry())
+    fun closeTab(key: String) {
+        // An opened MHT file is closed as a screen; the real tab of the same thread stays (re-audit M31: it was closed).
+        if (staticView) { onClose(); return }
+        // While this thread's reply is being sent the screen cannot be left, so closing its tab is refused with a word
+        // (re-audit L40: only the tab went, and the next load brought it back).
+        if (key == tabKey && replySending()) {
+            message = FUTACHA_CLOSE_WHILE_SENDING_NOTICE
+            return
         }
-    } }
+        launchAction {
+            features.store.closeTabs(setOf(key), Clock.System.now().toEpochMilliseconds())?.let(features.onTabsClosed)
+            if (key == tabKey) {
+                val next = latestTabs.firstOrNull { it.key != key }
+                if (features.value("control", "controlThreadCloseBack") == "ON" || next == null) onClose()
+                else onOpenThread(next.toFutachaHistoryEntry())
+            }
+        }
+    }
     val volumeAction = features.displayValue("control", "controlThreadVolumeKey", "ボリュームキー")
     val volumeOwner = remember { Any() }
     DisposableEffect(volumeAction, tabKey) {
@@ -292,8 +335,9 @@ internal fun FutachaThreadFeatureHost(
             } }
         }
     }
-    val manualMarkedNos = remember(features.preferences[MANUAL_POST_MARKS_KEY], sourceUrl) {
-        decodeManualPostMarks(features.preferences[MANUAL_POST_MARKS_KEY]).filter { it.threadUrl == manualMarkThreadUrl(sourceUrl) }.mapTo(mutableSetOf()) { it.postNo }
+    val manualMarksRaw = features.rawValue(MANUAL_POST_MARKS_KEY)
+    val manualMarkedNos = remember(manualMarksRaw, sourceUrl) {
+        decodeManualPostMarks(manualMarksRaw).filter { it.threadUrl == manualMarkThreadUrl(sourceUrl) }.mapTo(mutableSetOf()) { it.postNo }
     }
     val latestMarkJump by rememberUpdatedState(onShowPost)
     val markContext = remember(features.store, sourceUrl, page?.posts) {
@@ -301,13 +345,14 @@ internal fun FutachaThreadFeatureHost(
             { no -> page?.posts?.firstOrNull { it.id == no }?.let(latestMarkJump) })
     }
     if (marksOpen) ManualPostMarkDialog(markContext, onDismiss = { marksOpen = false })
-    val tools = listOf(
+    val tools = listOfNotNull(
         FutachaThreadTool("レスマーク", Icons.Rounded.Star) { marksOpen = true },
         FutachaThreadTool("ブラウザで開く", Icons.Rounded.Link) { openUrl(sourceUrl) },
-        FutachaThreadTool("タブ一覧", Icons.Rounded.Tab) { tabsOpen = true },
-        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
-        FutachaThreadTool("前のスレッド", Icons.AutoMirrored.Rounded.ArrowBack, tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) },
-        FutachaThreadTool("次のスレッド", Icons.AutoMirrored.Rounded.ArrowForward, tabs.indexOfFirst { it.key == tabKey } in 0 until tabs.lastIndex) { moveThread(1) },
+        // The tab entries are not offered for an opened MHT file, which is no tab (re-audit M31).
+        FutachaThreadTool("タブ一覧", Icons.Rounded.Tab) { tabsOpen = true }.takeUnless { staticView },
+        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible }.takeUnless { staticView },
+        FutachaThreadTool("前のスレッド", Icons.AutoMirrored.Rounded.ArrowBack, tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) }.takeUnless { staticView },
+        FutachaThreadTool("次のスレッド", Icons.AutoMirrored.Rounded.ArrowForward, tabs.indexOfFirst { it.key == tabKey } in 0 until tabs.lastIndex) { moveThread(1) }.takeUnless { staticView },
         FutachaThreadTool("更新前に戻す", Icons.AutoMirrored.Rounded.Undo, previous != null) { previous?.let { restoring = true; previous = null; onRestore(it) } },
         FutachaThreadTool("1ページ上へ", Icons.Rounded.ArrowUpward) { scrollPage(-1) },
         FutachaThreadTool("1ページ下へ", Icons.Rounded.ArrowDownward) { scrollPage(1) },
@@ -335,7 +380,7 @@ internal fun FutachaThreadFeatureHost(
         bodyLarge = baseTypography.bodyLarge.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp),
         bodyMedium = baseTypography.bodyMedium.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp),
         bodySmall = baseTypography.bodySmall.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp))
-    val strip: (@Composable () -> Unit)? = if (!stripVisible) null else ({
+    val strip: (@Composable () -> Unit)? = if (!stripVisible || staticView) null else ({
         CompatTabSelector(tabs, tabKey, true, { onOpenThread(it.toFutachaHistoryEntry()) }, { closing -> closeTab(closing.key) },
             onReply = onReply, onCheckUpdates = { launchAction {
                 refreshCompatTabsInBackground(features.store, repository, maxTabs = 100)
@@ -474,3 +519,5 @@ internal fun FutachaThreadFeatureHost(
  * but the screen does not register the thread as a tab or write it to the shared snapshots.
  */
 internal val LocalFutachaStaticThreadView = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+internal const val FUTACHA_CLOSE_WHILE_SENDING_NOTICE = "返信を送信中です。終わってから閉じてください"

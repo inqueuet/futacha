@@ -6,6 +6,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
@@ -894,7 +896,7 @@ internal fun CompatViewerScreen(
                     Modifier.fillMaxWidth().background(Color.Black).navigationBarsPadding()
                         .testTag("compat-viewer-bottom-bar")
                 ) {
-                    Row(Modifier.fillMaxWidth().height(40.dp)) {
+                    ScrollableToolbarRow(itemCount = toolbarItems.count { it.active } + 1, modifier = Modifier.fillMaxWidth().height(40.dp)) {
                         toolbarItems.filter(CompatToolbarItem::active).sortedBy(CompatToolbarItem::position).forEach { item ->
                             ViewerButton(
                                 icon = secondaryToolbarIcon(CompatToolbarSurface.VIEWER, item.key),

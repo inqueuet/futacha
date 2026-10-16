@@ -118,4 +118,34 @@ class FtutterNgSupportTest {
         assertTrue(key.all { it.isLetterOrDigit() && it != 'W' })
         assertEquals("abc12345", ftutterNormalizeDeleteKey("abc-1234567"))
     }
+
+    /** 監査M6：添付の誤りがあっても、送信の検査・失敗の理由が隠れない。 */
+    @Test
+    fun anAttachmentErrorDoesNotHideTheOtherReason() {
+        assertEquals(listOf("サイズが大きすぎます", "削除キーを入力してください"), ftutterPostErrors("サイズが大きすぎます", "削除キーを入力してください"))
+        assertEquals(listOf("削除キーを入力してください"), ftutterPostErrors(null, "削除キーを入力してください"))
+        assertEquals(emptyList(), ftutterPostErrors(null, " "))
+        assertEquals(listOf("同じ"), ftutterPostErrors("同じ", "同じ"))
+    }
+
+    /** 監査M7：「あぷ小」のアップロード中は、書き込むも閉じるも押せない。 */
+    @Test
+    fun anUploadInProgressBlocksSendingAndClosing() {
+        assertTrue(ftutterPostCanSend(sending = false, attachmentProcessing = false, uploading = false))
+        assertFalse(ftutterPostCanSend(sending = false, attachmentProcessing = false, uploading = true))
+        assertFalse(ftutterPostCanSend(sending = true, attachmentProcessing = false, uploading = false))
+        assertFalse(ftutterPostCanSend(sending = false, attachmentProcessing = true, uploading = false))
+        assertTrue(ftutterPostCanClose(sending = false, uploading = false))
+        assertFalse(ftutterPostCanClose(sending = false, uploading = true))
+        assertFalse(ftutterPostCanClose(sending = true, uploading = false))
+    }
+
+    /** 監査L12：ピックアップの並び順をすべて外すと「なし」のまま残る（以前は「全て」に戻った）。 */
+    @Test
+    fun anEmptyPickupSelectionStaysEmpty() {
+        assertEquals(emptySet(), parseFtutterPickupOrders(encodeFtutterPickupOrders(emptySet())))
+        assertEquals(FtutterOrder.entries.toSet(), parseFtutterPickupOrders(null))
+        val one = setOf(FtutterOrder.entries.first())
+        assertEquals(one, parseFtutterPickupOrders(encodeFtutterPickupOrders(one)))
+    }
 }

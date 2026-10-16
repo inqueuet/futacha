@@ -113,6 +113,12 @@ internal fun ThreadMediaPreviewDialog(
         AnalyticsTracker.uiControl("media_preview", "前の添付を表示")
         onNavigatePrevious()
     }
+    // Remembered here, above the image and video dialogs, so turning to a video keeps a copy in progress and its notice
+    // (re-audit M26: the image dialog left, and the copy stopped without a word).
+    val copyImage = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(
+        state.entry.url.takeIf { state.entry.mediaType == MediaType.Image },
+        LocalFutachaSharedFeatures.current?.httpClient
+    )
     when (state.entry.mediaType) {
         MediaType.Image -> {
             val displayTitle by rememberMediaPreviewDisplayTitle(state.entry)
@@ -128,7 +134,8 @@ internal fun ThreadMediaPreviewDialog(
                 onShowPost = onShowPost?.let { show -> { show(state.entry) } },
                 onImageSearch = onImageSearch?.let { search -> { search(state.entry) } },
                 isSaveEnabled = state.isSaveEnabled,
-                isSaveInProgress = state.isSaveInProgress
+                isSaveInProgress = state.isSaveInProgress,
+                copyImage = copyImage
             )
         }
 

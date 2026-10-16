@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.compat.toCompatPlainText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -80,7 +82,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onLongClick
@@ -195,6 +196,8 @@ internal fun FutaberThreadScreen(
     loadOfflineCopy: (suspend () -> ThreadPage?)? = null,
     /** True while something covers the thread (the writing screen, the settings): the auto-scroll, the volume keys and the read-aloud wait. */
     paused: Boolean = false,
+    /** Something drawn over the thread by the host (the board drawer, the manage panel); the volume keys then do nothing. */
+    volumeKeysCovered: Boolean = false,
     /** The shared features the borrowed dialogs read, made once by the mode (null: made here, as before). */
     features: FutachaSharedFeatures? = null,
     /** The volume keys' "タブのスレッドを切り替え": opens the next ([forward]) or previous tab's thread. */
@@ -328,12 +331,19 @@ internal fun FutaberThreadScreen(
     var remoteConfirm by remember(board.id, ref.threadId) { mutableStateOf<Pair<FutaberRemoteAction, Post>?>(null) }
     var remoteNotice by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     var remoteBusy by remember(board.id, ref.threadId) { mutableStateOf(false) }
-    // Sends the action through the shared repository calls ふたちゃ uses; the result is shown as a notice.
+    // Sends the action through the shared repository calls ふたちゃ uses; the result is shown as a notice. It runs in the
+    // app's scope and tells its result as the app's notice when this thread has been left meanwhile (re-audit L3: leaving
+    // cancelled it, and after moving to another thread the result never showed).
+    val appTasks = LocalFutaberAppTasks.current
+    val currentThreadKey by rememberUpdatedState(board.id to ref.threadId)
+    var threadScreenShown by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) { onDispose { threadScreenShown = false } }
     val runRemoteAction: (FutaberRemoteAction, Post, Boolean) -> Unit = { action, target, imageOnly ->
         if (!remoteBusy) {
             remoteBusy = true
             remoteNotice = "処理中です…"
-            scope.launch {
+            val sentFrom = board.id to ref.threadId
+            (appTasks?.scope ?: scope).launch {
                 val result = performThreadAction {
                     requireWritableThreadBoard(board.url)
                     when (action) {
@@ -347,13 +357,16 @@ internal fun FutaberThreadScreen(
                         )
                     }
                 }
-                remoteBusy = false
-                remoteNotice = when (result) {
-                    is ThreadActionRunResult.Success -> {
-                        if (action != FutaberRemoteAction.Report) refreshTick += 1
-                        futaberRemoteSuccessMessage(action, imageOnly)
-                    }
+                val message = when (result) {
+                    is ThreadActionRunResult.Success -> futaberRemoteSuccessMessage(action, imageOnly)
                     is ThreadActionRunResult.Failure -> buildThreadActionFailureMessage(futaberRemoteFailurePrefix(action, imageOnly), result.error)
+                }
+                if (threadScreenShown && currentThreadKey == sentFrom) {
+                    remoteBusy = false
+                    if (result is ThreadActionRunResult.Success && action != FutaberRemoteAction.Report) refreshTick += 1
+                    remoteNotice = message
+                } else {
+                    appTasks?.notify(message)
                 }
             }
         }
@@ -364,10 +377,6 @@ internal fun FutaberThreadScreen(
     // The auto-scroll (an extension): the same loop ふたちゃ and としあき(仮) run, with the amount and the
     // interval they share. It waits while the app is in the background and while a finger drags the list,
     // reloads at the bottom, and stops when the thread is gone.
-    FutaberVolumeKeyEffect(
-        enabled = LocalFutaberDisplaySettings.current.extVolumeKeys && !paused, listState = listState,
-        mode = LocalFutaberDisplaySettings.current.volumeKeyMode, onSwitchThread = onVolumeKeyThread
-    )
     // Behind the writing screen or the settings the thread neither scrolls by itself nor reads aloud.
     LaunchedEffect(paused) { if (paused) reader.stop() }
     FutaberAutoScrollEffect(
@@ -552,7 +561,8 @@ internal fun FutaberThreadScreen(
     }
     FutaberThreadAiCommands(
         link = ai, boardId = board.id, threadId = ref.threadId, ready = restored,
-        failed = load.errorMessage != null && posts.isEmpty() && !load.isLoading,
+        // A load that ended with no post (and no error) fails the command at once instead of after 90 s (audit L20).
+        failed = !load.isLoading && posts.isEmpty() && (load.errorMessage != null || load.page != null),
         listState = listState, reader = reader, rows = rows, query = appliedFilter.query, searchHit = searchHit,
         onSearchHit = { searchHit = it }, onSearch = { filter = filter.copy(query = it) }, onOpenMenu = { menuOpen = true },
         onOpenGallery = { (mediaServices != null && futaberMediaPostCount(posts) > 0).also { if (it) mediaOpen = true } },
@@ -567,6 +577,16 @@ internal fun FutaberThreadScreen(
     // A refreshed thread can drop posts a bubble showed, so bubbles are closed with it.
     LaunchedEffect(refreshTick, refreshSignal) { quoteStack = emptyList() }
     PlatformBackHandler(enabled = quoteStack.isNotEmpty()) { quoteStack = quoteStack.dropLast(1) }
+    FutaberVolumeKeyEffect(
+        // Not while something covers the thread: the picture list / viewer, the menus, the drawer or the panel (audit L17:
+        // the keys scrolled the hidden thread, and "タブのスレッドを切り替え" closed the viewer), nor under "URL・アーカイブ"
+        // or a quote popup (re-audit L2; the tab sheet comes with volumeKeysCovered).
+        enabled = LocalFutaberDisplaySettings.current.extVolumeKeys && !paused && !volumeKeysCovered &&
+            !mediaOpen && !menuOpen && actionPost == null && imagePost == null && !extractOpen &&
+            !archiveOpen && quoteStack.isEmpty(),
+        listState = listState,
+        mode = LocalFutaberDisplaySettings.current.volumeKeyMode, onSwitchThread = onVolumeKeyThread
+    )
     // A swipe in from the left edge opens the board list; while a bubble is open it must not.
     ThreadDrawerBackGestureHandler(enabled = drawerGestureEnabled && quoteStack.isEmpty(), onOpenDrawer = onOpenDrawer)
     val openQuote: (FutaberQuoteKind, List<Post>, FutaberAnchor) -> Unit = { kind, related, anchor ->
@@ -910,7 +930,9 @@ internal fun FutaberThreadScreen(
                 )
             }
             if (archiveOpen) FutaberArchiveMenuSheet(
-                futaberCompatThreadUrl(board, ref.threadId), ref.title, mediaServices?.httpClient, openInBrowser,
+                futaberCompatThreadUrl(board, ref.threadId), ref.title, mediaServices?.httpClient,
+                // The thread screen's scope: the sheet is gone before the registration finishes.
+                scope = scope, openUrl = openInBrowser,
                 onNotice = { remoteNotice = it }, onDismiss = { archiveOpen = false }
             )
             val markContext = mediaServices?.store?.let { store ->
@@ -1097,8 +1119,9 @@ internal fun FutaberThreadScreen(
         }
         tabStrip()
         HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
-        Row(
-            Modifier.futaberFloatingBar(colors).height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp),
+        ScrollableToolbarRow(
+            itemCount = 5, minItemWidth = 48.dp,
+            modifier = Modifier.futaberFloatingBar(colors).height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1212,7 +1235,8 @@ internal fun FutaberPostRow(
 ) {
     val colors = LocalFutaberColors.current
     val display = LocalFutaberDisplaySettings.current
-    val lines = remember(post.messageHtml) { messageHtmlToLines(post.messageHtml) }
+    // Kept across rows leaving and coming back while scrolling (re-audit L29: each row made its lines and links again).
+    val lines = remember(post.messageHtml) { FutaberBodyLineCache.lines(post.messageHtml) }
     val bodyUrlLauncher = com.valoser.futacha.shared.util.rememberUrlLauncher()
     val bodyUrlMenu = com.valoser.futacha.shared.ui.rememberBodyUrlMenu(bodyUrlLauncher)
     val titleLine = remember(post.subject, post.author, display.alwaysShowTitleAndName) { futaberPostTitleLine(post, display.alwaysShowTitleAndName) }
@@ -1252,13 +1276,16 @@ internal fun FutaberPostRow(
             Text(ordinal.toString(), color = colors.ordinal, fontSize = display.sp(12f), fontWeight = FontWeight.Bold)
             Text(futaberTimestampWithoutId(post.timestamp), color = colors.meta, fontSize = display.sp(12f))
             if (replyCount > 0) {
-                var bounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+                // Where it is is read at the tap, not written to a state on every frame of a scroll (re-audit L9).
+                val placed = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .onGloballyPositioned { bounds = it.boundsInRoot() }
+                        .onPlaced { placed[0] = it }
                         .clickable(onClickLabel = "このレスへの返信を表示", role = Role.Button) {
-                            bounds?.let { onRepliesTap(FutaberAnchor(it.left + it.width / 2f, it.top, it.bottom)) }
+                            placed[0]?.takeIf { it.isAttached }?.boundsInRoot()?.let {
+                                onRepliesTap(FutaberAnchor(it.left + it.width / 2f, it.top, it.bottom))
+                            }
                         }
                         .semantics(mergeDescendants = true) { contentDescription = "返信$replyCount" }
                         // A thin outlined pill makes the count read as a control and gives it a larger touch area.
@@ -1306,9 +1333,7 @@ internal fun FutaberPostRow(
         }
         Column(Modifier.padding(top = 4.dp)) {
             lines.forEach { line ->
-                val links = remember(line) {
-                    com.valoser.futacha.shared.compat.compatInlineLinks(line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-                }
+                val links = remember(line) { FutaberBodyLineCache.links(line) }
                 val annotatedLine = remember(line, links, colors.action) { androidx.compose.ui.text.buildAnnotatedString {
                     append(line)
                     links.forEach { link ->
@@ -1320,7 +1345,8 @@ internal fun FutaberPostRow(
                 var lineLayout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
                 val isQuote = isFutaberQuoteLine(line)
                 val canOpen = isQuote && !post.isDeleted && futaberQuoteTargetIds(post, line).isNotEmpty()
-                var bounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+                // Read at the tap, not written to a state on every frame of a scroll (re-audit L9).
+                val placed = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
                 Text(
                     text = annotatedLine,
                     onTextLayout = { lineLayout = it },
@@ -1336,9 +1362,11 @@ internal fun FutaberPostRow(
                             .testTag("futaber-quote-target")
                     } else if (canOpen) {
                         Modifier
-                            .onGloballyPositioned { bounds = it.boundsInRoot() }
+                            .onPlaced { placed[0] = it }
                             .clickable(onClickLabel = "引用元を表示") {
-                                bounds?.let { onQuoteTap(line, FutaberAnchor(it.left + 24f, it.top, it.bottom)) }
+                                placed[0]?.takeIf { it.isAttached }?.boundsInRoot()?.let {
+                                    onQuoteTap(line, FutaberAnchor(it.left + 24f, it.top, it.bottom))
+                                }
                             }
                             .testTag("futaber-quote-line")
                     } else if (links.isNotEmpty()) Modifier.pointerInput(annotatedLine, bodyUrlLauncher) {
@@ -1448,4 +1476,23 @@ private fun ReadingChipAction(label: String, description: String, tag: String, o
         modifier = Modifier.heightIn(min = 40.dp).clickable(onClickLabel = description, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 11.dp).testTag(tag)
     )
+}
+
+/** The lines of a post's body and the links of a line, built lately (re-audit L29). Bounded; used from composition only. */
+private object FutaberBodyLineCache {
+    private const val MAX = 400
+    private val lines = LinkedHashMap<String, List<String>>()
+
+    fun lines(html: String): List<String> = lines.cached(html) { messageHtmlToLines(it) }
+
+    fun links(line: String) = com.valoser.futacha.shared.compat.compatInlineLinksCached(
+        line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+    private fun <V> LinkedHashMap<String, V>.cached(key: String, make: (String) -> V): V {
+        val value = remove(key) ?: make(key)
+        this[key] = value
+        if (size > MAX) remove(keys.first())
+        return value
+    }
 }

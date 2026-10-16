@@ -1175,6 +1175,7 @@ actual fun createFileSystem(platformContext: Any?): FileSystem {
 // A stale bookmark that was re-created is kept here, keyed by the original bookmark text, because
 // the original is stored by callers (settings) that this file system cannot update.
 private const val REFRESHED_BOOKMARKS_KEY = "futacha.refreshedBookmarks.v1"
+private const val REFRESHED_BOOKMARKS_ORDER_KEY = "futacha.refreshedBookmarks.order.v1"
 private const val MAX_REFRESHED_BOOKMARKS = 16
 private val refreshedBookmarkLock = NSLock()
 
@@ -1195,16 +1196,42 @@ private fun persistedRefreshedBookmarks(): Map<String, String> =
 
 private fun persistedRefreshedBookmark(key: String): String? {
     refreshedBookmarkLock.lock()
-    return try { persistedRefreshedBookmarks()[key] } finally { refreshedBookmarkLock.unlock() }
+    return try {
+        val stored = persistedRefreshedBookmarks()
+        stored[key]?.also {
+            // Used now: it goes to the end of the order, so the limit drops the ones not used for longest (re-audit L24:
+            // the order was the order of saving, and a folder in daily use could be the one dropped).
+            val order = refreshedBookmarkOrder(stored.keys)
+            if (order.lastOrNull() != key) {
+                NSUserDefaults.standardUserDefaults.setObject(order - key + key, forKey = REFRESHED_BOOKMARKS_ORDER_KEY)
+            }
+        }
+    } finally {
+        refreshedBookmarkLock.unlock()
+    }
+}
+
+/**
+ * The keys in the order they were stored (oldest first), kept beside the dictionary, which has no order (audit L42: the
+ * "oldest" dropped at the limit was any one, possibly the bookmark of the folder in use). Keys stored before this list
+ * existed come first, in key order, so the result does not depend on the dictionary's order.
+ */
+private fun refreshedBookmarkOrder(present: Set<String>): List<String> {
+    val stored = (NSUserDefaults.standardUserDefaults.arrayForKey(REFRESHED_BOOKMARKS_ORDER_KEY) ?: emptyList<Any?>())
+        .mapNotNull { it as? String }.filter { it in present }.distinct()
+    return (present - stored.toSet()).sorted() + stored
 }
 
 private fun rememberRefreshedBookmark(key: String, bookmark: String) {
     refreshedBookmarkLock.lock()
     try {
-        val updated = LinkedHashMap(persistedRefreshedBookmarks() - key)
-        while (updated.size >= MAX_REFRESHED_BOOKMARKS) updated.remove(updated.keys.first())
+        val updated = HashMap(persistedRefreshedBookmarks() - key)
+        val order = refreshedBookmarkOrder(updated.keys).toMutableList()
+        while (updated.size >= MAX_REFRESHED_BOOKMARKS && order.isNotEmpty()) updated.remove(order.removeAt(0))
         updated[key] = bookmark
+        order += key
         NSUserDefaults.standardUserDefaults.setObject(updated.toMap<Any?, Any?>(), forKey = REFRESHED_BOOKMARKS_KEY)
+        NSUserDefaults.standardUserDefaults.setObject(order, forKey = REFRESHED_BOOKMARKS_ORDER_KEY)
     } finally {
         refreshedBookmarkLock.unlock()
     }

@@ -130,7 +130,7 @@ internal data class FutaberTabView(
 )
 
 internal fun futaberTabViews(keys: List<FutaberTabKey>, history: List<ThreadHistoryEntry>): List<FutaberTabView> {
-    val byKey = history.associateBy { FutaberTabKey(it.boardId, it.threadId) }
+    val byKey = futaberHistoryRowsFor(keys.toHashSet(), history)
     return keys.mapNotNull { key ->
         val entry = byKey[key] ?: return@mapNotNull null
         FutaberTabView(
@@ -192,3 +192,17 @@ internal fun futaberHistoryRowKey(entry: ThreadHistoryEntry): String =
 /** [rows] without a second row of the same key (a lazy list refuses two items with one key). */
 internal fun futaberDistinctHistoryRows(rows: List<ThreadHistoryEntry>): List<ThreadHistoryEntry> =
     rows.distinctBy(::futaberHistoryRowKey)
+
+/**
+ * The history rows of [keys] only (the last row of a key wins, as `associateBy` did). Audit L25: the tab strip and the
+ * favourites need a handful of rows, and a table of the whole history (up to 20,000 rows) was built on every history change.
+ */
+internal fun futaberHistoryRowsFor(keys: Set<FutaberTabKey>, history: List<ThreadHistoryEntry>): Map<FutaberTabKey, ThreadHistoryEntry> {
+    if (keys.isEmpty()) return emptyMap()
+    val out = HashMap<FutaberTabKey, ThreadHistoryEntry>(keys.size * 2)
+    history.forEach { entry ->
+        val key = FutaberTabKey(entry.boardId, entry.threadId)
+        if (key in keys) out[key] = entry
+    }
+    return out
+}

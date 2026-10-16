@@ -52,11 +52,25 @@ internal fun futaberAiDeepLinkNotice(raw: String): String {
  * [inbox]. Reads only while the app is unlocked, so commands sent behind the lock wait in the bridge, as in the other
  * modes. Runs until cancelled.
  */
-internal suspend fun futaberReceiveAiBridgeCommands(inbox: FutaberAiInbox, appLock: FutachaAppLockHolder, onNotice: (String) -> Unit) {
+internal suspend fun futaberReceiveAiBridgeCommands(
+    inbox: FutaberAiInbox,
+    appLock: FutachaAppLockHolder,
+    onNotice: (String) -> Unit
+): Unit = kotlinx.coroutines.coroutineScope {
     while (true) {
         appLock.awaitUnlocked()
         val queued = FutachaAiCommandBridge.receiveQueued()
-        inbox.deliver(queued.command, queued.enqueuedAt, queued.maxAgeMillis, appLock, onNotice = onNotice)
+        // The next command is taken once this one is settled, not once it has run (re-audit L6: on Android a long command
+        // held up the next, as on iOS before audit M16). The order stays: each is handed over before the next is read.
+        val taken = kotlinx.coroutines.CompletableDeferred<Unit>()
+        launch {
+            try {
+                inbox.deliver(queued.command, queued.enqueuedAt, queued.maxAgeMillis, appLock, onTaken = { taken.complete(Unit) }, onNotice = onNotice)
+            } finally {
+                taken.complete(Unit)
+            }
+        }
+        taken.await()
     }
 }
 
@@ -102,8 +116,11 @@ internal fun FutaberAiCommandSink(
     LaunchedEffect(AiCommandEffectKey(platformAiCommand)) {
         val command = platformAiCommand ?: return@LaunchedEffect
         val arrivedAt = FutachaAiCommandArrivals.arrivalOf(command) ?: TimeSource.Monotonic.markNow()
-        inbox.deliver(command, arrivedAt, null, appLock) { notice.value(it) }
-        commandConsumed.value(command)
+        // Taken off the platform's queue once the screen takes it, not after it has run (audit M16: a long command held up
+        // the next one). It runs outside this effect, so the next command arriving does not cancel it.
+        scope.launch {
+            inbox.deliver(command, arrivedAt, null, appLock, onTaken = { commandConsumed.value(command) }) { notice.value(it) }
+        }
     }
 
     if (consumeAiCommandBridge) {

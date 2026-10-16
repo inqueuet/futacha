@@ -261,14 +261,15 @@ class ToshiakiParityBatch48InstrumentedTest {
         rule.onNodeWithText("履歴のエクスポート／インポート…").performClick()
         waitForTag("compat-history-archive-chooser")
         rule.onNodeWithText("としあき(仮)では履歴の一覧だけが戻り、保存した本文はふたちゃで開けます", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("としあき(仮)の履歴は新しい順に200件まで表示されます", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("としあき(仮)の履歴は新しい順に200件まで保存され、ドロワーには100件まで表示されます", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("compat-history-archive-export").performClick()
         waitForText("すべてエクスポート")
         // Export then clear is not offered here (the drawer has its own "全て削除する").
         rule.onAllNodesWithText("エクスポートして一括削除").assertCountEquals(0)
         rule.onNodeWithText("すべてエクスポート").performClick()
         waitForText("履歴アーカイブを作成しました", 20_000)
-        rule.onNodeWithText("OK").performClick()
+        // The result is a notice at the bottom now, not a dialog (audit L34): a tap puts it away.
+        rule.onNodeWithTag("compat-app-notice").performClick()
         val written = archiveRoot.list()?.toSet().orEmpty() - archiveNamesBefore
         assertEquals(1, written.size)
 

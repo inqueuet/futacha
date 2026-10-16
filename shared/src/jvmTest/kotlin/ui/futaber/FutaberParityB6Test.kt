@@ -3,7 +3,9 @@ package com.valoser.futacha.shared.ui.futaber
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.font.FontFamily
 import com.valoser.futacha.shared.compat.DesktopCompatibilityStore
+import com.valoser.futacha.shared.ui.compat.CompatCustomFontRevision
 import com.valoser.futacha.shared.ui.compat.compatibilityTypography
+import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.JvmFileSystem
 import java.io.File
@@ -15,6 +17,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.assertNotEquals
 
 /** ふたばー風 B6：メディアのみ保存とカスタムフォントの拡張（どちらも既定OFF）、共通フォントの書き込み。 */
 class FutaberParityB6Test {
@@ -70,6 +73,53 @@ class FutaberParityB6Test {
             assertTrue(futaberResetCustomFont(store, fileSystem).isSuccess)
             assertFalse(File(directory, "private/compat_font").exists())
             assertEquals("デフォルト", store.loadPreference(FUTABER_CUSTOM_FONT_PREFERENCE_KEY))
+        } finally {
+            store.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aFailedCopyKeepsTheFontInUse() = runBlocking {
+        val directory = Files.createTempDirectory("futaber-font-fail").toFile()
+        val fileSystem = JvmFileSystem(directory)
+        val store = DesktopCompatibilityStore(fileSystem)
+        try {
+            store.initialize()
+            assertTrue(futaberSaveCustomFont(store, fileSystem, ImageData(byteArrayOf(1, 2), "old.otf")).isSuccess)
+            // The copy of the next font fails (a full disk, say): the old file was deleted before it was written.
+            val failingWrite = object : FileSystem by fileSystem {
+                override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> =
+                    if (path.startsWith("private/compat_font/")) Result.failure(java.io.IOException("disk full"))
+                    else fileSystem.writeBytes(path, bytes)
+            }
+            assertTrue(futaberSaveCustomFont(store, failingWrite, ImageData(byteArrayOf(9), "new.ttf")).isFailure)
+            assertTrue(futaberSaveCustomFont(store, failingWrite, ImageData(byteArrayOf(9), "new.otf")).isFailure)
+            assertEquals(listOf("font.otf"), File(directory, "private/compat_font").list()?.toList())
+            assertEquals(listOf<Byte>(1, 2), File(directory, "private/compat_font/font.otf").readBytes().toList())
+            assertEquals("old.otf", store.loadPreference(FUTABER_CUSTOM_FONT_PREFERENCE_KEY))
+        } finally {
+            store.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun replacingTheFontWithOneOfTheSameExtensionTellsTheLoadersToReadItAgain() = runBlocking {
+        val directory = Files.createTempDirectory("futaber-font-revision").toFile()
+        val fileSystem = JvmFileSystem(directory)
+        val store = DesktopCompatibilityStore(fileSystem)
+        try {
+            store.initialize()
+            assertTrue(futaberSaveCustomFont(store, fileSystem, ImageData(byteArrayOf(1), "a.ttf")).isSuccess)
+            val first = CompatCustomFontRevision.value.value
+            // The same path ("font.ttf") holds another font now; a loader keyed on the path alone kept the old one.
+            assertTrue(futaberSaveCustomFont(store, fileSystem, ImageData(byteArrayOf(2, 3), "b.ttf")).isSuccess)
+            assertNotEquals(first, CompatCustomFontRevision.value.value)
+            assertEquals(listOf<Byte>(2, 3), File(directory, "private/compat_font/font.ttf").readBytes().toList())
+            val beforeReset = CompatCustomFontRevision.value.value
+            assertTrue(futaberResetCustomFont(store, fileSystem).isSuccess)
+            assertNotEquals(beforeReset, CompatCustomFontRevision.value.value)
         } finally {
             store.close()
             directory.deleteRecursively()

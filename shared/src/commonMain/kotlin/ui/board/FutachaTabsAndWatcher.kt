@@ -50,10 +50,13 @@ internal fun FutachaTabsDialog(
     var undo by remember { mutableStateOf<ClosedTabBatch?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    // The running action; "キャンセル" stops it (audit L30: the check of every tab went on after cancelling and closed
+    // the tabs it found later, with the buttons off meanwhile).
+    var running by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun perform(block: suspend () -> Unit) {
         if (busy) return
         busy = true
-        scope.launch {
+        running = scope.launch {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { message = failure.message ?: "タブを更新できませんでした" }
@@ -102,7 +105,7 @@ internal fun FutachaTabsDialog(
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
     selected?.let { tab -> FutachaAppLockAwareWindow {
-        AlertDialog(onDismissRequest = { selected = null }, title = { Text("タブを整理") }, text = {
+        AlertDialog(onDismissRequest = { running?.cancel(); running = null; selected = null }, title = { Text("タブを整理") }, text = {
             Column {
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row {
@@ -139,7 +142,7 @@ internal fun FutachaTabsDialog(
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { selected = null }) { Text("キャンセル") } })
+        }, confirmButton = { TextButton(onClick = { running?.cancel(); running = null; selected = null }) { Text("キャンセル") } })
     } }
 }
 
@@ -182,7 +185,9 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
     var managing by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(watcher, refresh, features.preferences) {
+    // Read again only when the watcher's own values change, not on every write of any setting (re-audit L30).
+    val watcherPreferences = remember(features.preferences) { features.preferences.filterKeys { it.startsWith("compat.watcher.") } }
+    LaunchedEffect(watcher, refresh, watcherPreferences) {
         watcher.load().onSuccess { snapshot = it }.onFailure { message = it.message }
     }
     FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = onDismiss, title = { Text("巡回結果") }, text = {

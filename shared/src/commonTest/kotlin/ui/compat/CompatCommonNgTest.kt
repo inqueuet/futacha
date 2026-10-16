@@ -89,4 +89,26 @@ class CompatCommonNgTest {
             compatThreadOtherMenu(CompatOtherMenuRoute.THREAD_ROOT, true, false, 0, commonNgEnabled = true)
         )
     }
+
+    /** Re-audit M14: a long notice (a saved file's path, a reason) stays longer than a short one, up to 15 seconds. */
+    @Test
+    fun aLongNoticeStaysLonger() {
+        assertEquals(4_000L, compatAppNoticeMillis("取り込みました"))
+        val path = "履歴をエクスポートしました: /storage/emulated/0/Download/futacha/history-2026-10-15-120000.json"
+        assertTrue(compatAppNoticeMillis(path) >= 8_000L, compatAppNoticeMillis(path).toString())
+        assertEquals(15_000L, compatAppNoticeMillis("あ".repeat(1_000)))
+    }
+
+    /** Re-audit L17: "全タブ更新確認" tells its end with the counts. */
+    @Test
+    fun theAllTabsCheckTellsItsEnd() {
+        val done = compatRefreshAllTabsDoneNotice(
+            com.valoser.futacha.shared.compat.CompatBackgroundRefreshResult(updatedTabs = 3, deadTabs = 1)
+        )
+        assertEquals("全タブの更新確認が終わりました（更新 3件、終了 1件）", done)
+        val failed = compatRefreshAllTabsDoneNotice(
+            com.valoser.futacha.shared.compat.CompatBackgroundRefreshResult(failures = 2)
+        )
+        assertTrue(failed.contains("失敗 2件"), failed)
+    }
 }

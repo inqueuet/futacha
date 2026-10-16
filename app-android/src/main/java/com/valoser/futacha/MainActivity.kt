@@ -193,9 +193,6 @@ class MainActivity : ComponentActivity() {
                     baseDirectory = AUTO_SAVE_DIRECTORY
                 )
             }
-            val preferredAppIconVariant by stateStore.appIconVariant.collectAsState(
-                initial = com.valoser.futacha.shared.model.AppIconVariant.Current
-            )
             androidx.compose.runtime.LaunchedEffect(stateStore) {
                 stateStore.appIconVariant.collect { variant ->
                     com.valoser.futacha.shared.util.applyAppIconVariant(this@MainActivity, variant)
@@ -347,7 +344,9 @@ class MainActivity : ComponentActivity() {
                             }
                             application.modeSwitchCoordinator.switchTo(
                                 target = target,
-                                preferredFutachaIcon = preferredAppIconVariant,
+                                // Read from the store now: the screen's copy is "Current" until loaded, and a switch made
+                                // right after launch saved that over the chosen icon (audit L40).
+                                preferredFutachaIcon = stateStore.appIconVariant.first(),
                                 quiesceOldProfile = {
                                     if (activeProfile.usesAppStateData) {
                                         withContext(Dispatchers.IO) {

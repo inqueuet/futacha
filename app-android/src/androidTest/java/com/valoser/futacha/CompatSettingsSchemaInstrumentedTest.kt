@@ -346,17 +346,23 @@ class CompatSettingsSchemaInstrumentedTest {
                 ).fetchSemanticsNodes().isNotEmpty()
             }
 
-            val inactivePreview = rule.onNodeWithTag("compat-toolbar-preview-inactive")
-                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             val activePreview = rule.onNodeWithTag("compat-toolbar-preview-active")
                 .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             val expectedHeight = with(rule.density) { 40.dp.toPx() }
-            assertTrue(abs(inactivePreview.height - expectedHeight) <= 1f)
             assertTrue(abs(activePreview.height - expectedHeight) <= 1f)
-            assertTrue(inactivePreview.bottom <= activePreview.top + 1f)
+            val firstPreview = if (items.any { !it.active }) {
+                val inactivePreview = rule.onNodeWithTag("compat-toolbar-preview-inactive")
+                    .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertTrue(abs(inactivePreview.height - expectedHeight) <= 1f)
+                assertTrue(inactivePreview.bottom <= activePreview.top + 1f)
+                inactivePreview
+            } else {
+                rule.onAllNodesWithTag("compat-toolbar-preview-inactive").assertCountEquals(0)
+                activePreview
+            }
             val editorList = rule.onNodeWithTag("compat-toolbar-editor-list")
                 .fetchSemanticsNode().boundsInRoot
-            assertTrue(editorList.bottom <= inactivePreview.top + 1f)
+            assertTrue(editorList.bottom <= firstPreview.top + 1f)
             rule.onAllNodesWithContentDescription("初期設定に戻す").assertCountEquals(0)
 
             val firstRow = rule.onNodeWithTag("compat-toolbar-editor-row-${first.key}", useUnmergedTree = true)
@@ -5572,10 +5578,64 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("compat-thread-list").performScrollToIndex(15)
         rule.onNodeWithText("前の本文-15").assertIsDisplayed()
 
-        rule.onNodeWithTag("compat-thread-pager").performTouchInput { swipeRight() }
+        // From the middle: a swipe from the left edge opens the drawer. (This passed before only because the neighbouring
+        // tab was drawn off screen at rest, so its text was found without any switch; re-audit M24.)
+        rule.onNodeWithTag("compat-thread-pager").performTouchInput {
+            swipe(center, Offset(right - 1f, centerY), durationMillis = 300L)
+        }
         assertTextPresent("現在の本文-0")
-        rule.onNodeWithTag("compat-thread-pager").performTouchInput { swipeLeft() }
+        rule.onNodeWithTag("compat-thread-pager").performTouchInput {
+            swipe(center, Offset(left + 1f, centerY), durationMillis = 300L)
+        }
         assertTextPresent("前の本文-15")
+    }
+
+    /**
+     * Re-audit M24: at rest the neighbouring tab's thread is not drawn off screen (its loading, NG and image matching ran
+     * for two threads); it appears as soon as the page is moved.
+     */
+    @Test
+    fun theNeighbouringTabIsDrawnOnlyWhileThePageIsMoved() {
+        val boardUrl = "https://may.2chan.net/b/"
+        val boardKey = compatBoardKey(boardUrl)
+        val firstUrl = "${boardUrl}res/721.htm"
+        val secondUrl = "${boardUrl}res/722.htm"
+        fun tab(url: String, no: String, inserted: Long) = CompatTab(
+            key = compatTabKey(url), canonicalUrl = url, originalUrl = url, boardKey = boardKey, boardName = "mayb",
+            threadNo = no, title = "スレ$no", replyCount = 3, insertedAtEpochMillis = inserted,
+            contentUpdatedAtEpochMillis = inserted, snapshotRevision = inserted
+        )
+        fun snapshot(url: String, revision: Long, prefix: String) = CompatThreadSnapshot(
+            tabKey = compatTabKey(url), revision = revision, fetchedAtEpochMillis = revision,
+            posts = (0 until 3).map { index ->
+                CompatPostSnapshot(position = index, postNo = "$revision-$index", timestamp = "08/06 12:0$index", messageHtml = "$prefix-$index")
+            }
+        )
+        runBlocking {
+            store.upsertBoard(CompatBoard(boardKey, "mayb", boardUrl, boardUrl, 0))
+            store.openTab(tab(firstUrl, "721", 721L))
+            store.saveThreadSnapshot(snapshot(firstUrl, 721L, "いまの本文"))
+            store.openTab(tab(secondUrl, "722", 722L))
+            store.saveThreadSnapshot(snapshot(secondUrl, 722L, "となりの本文"))
+        }
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme {
+                    CompatibilityApp(store = store, repository = null, initialThreadDeepLink = firstUrl, onExitApplication = {})
+                }
+            }
+        }
+        assertTextPresent("いまの本文-0")
+        // The newer tab is the previous one here, so at rest it was drawn off screen before the fix. Give the neighbour's snapshot time to be read ahead; it is still not drawn.
+        rule.mainClock.advanceTimeBy(1_000L)
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("となりの本文-0").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("compat-thread-pager").performTouchInput {
+            down(center)
+            moveTo(Offset(center.x * 1.6f, center.y), delayMillis = 250L)
+        }
+        assertTextPresent("となりの本文-0")
+        rule.onNodeWithTag("compat-thread-pager").performTouchInput { up() }
     }
 
     @Test

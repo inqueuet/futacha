@@ -114,9 +114,13 @@ internal fun buildThreadLoadRunnerCallbacks(
             onWarning("共有スレキャッシュの読み込みに失敗しました: ${error.message}")
         }.getOrNull()
     }
+    // An opened MHT file is served by its own repository: no other copy on the device is shown in its place, and it is
+    // always read, whatever "開いた時に再読込" says (re-audit M30: a saved copy or the shared snapshot came first, and with
+    // the reload off the file's page never came).
+    val staticFile = repository is FutachaStaticThreadRepository
     // The newer of the saved copy and the shared snapshot (previously a saved copy always won).
     suspend fun loadNewestLocalPage(onBoardMismatch: (SavedThreadMetadata) -> Unit): ThreadPage? =
-        chooseNewestOfflineThreadPage(
+        if (staticFile) null else chooseNewestOfflineThreadPage(
             saved = loadOfflineThreadPageCandidate(
                 threadId = threadId,
                 lookupContext = offlineLookupContext,
@@ -129,7 +133,7 @@ internal fun buildThreadLoadRunnerCallbacks(
 
     return ThreadLoadRunnerCallbacks(
         reloadOnOpenEnabled = {
-            compatibilityStore?.preferences?.first()?.threadReloadOnOpenEnabled() ?: true
+            staticFile || (compatibilityStore?.preferences?.first()?.threadReloadOnOpenEnabled() ?: true)
         },
         supplementRemote = { result ->
             if (result.usedOffline || result.fromArchive || repository !is FutachaSharedBoardRepository) result else {

@@ -104,6 +104,9 @@ class FutachaDraftPersistenceInstrumentedTest {
             messageHtml = "DRAFT-POST-$index", imageUrl = null, thumbnailUrl = null)
     })
 
+    /** While set, a reply waits for it (to leave the screen in the middle of a send). */
+    @Volatile private var replyGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     private val pageRepository = object : BoardRepository by FakeBoardRepository() {
         override suspend fun getThread(board: String, threadId: String) = page()
         override suspend fun getThreadByUrl(threadUrl: String) = page()
@@ -114,6 +117,7 @@ class FutachaDraftPersistenceInstrumentedTest {
             password: String, imageFile: ByteArray?, imageFileName: String?, textOnly: Boolean, handwriting: Boolean
         ): String? {
             replies.incrementAndGet()
+            replyGate?.await()
             return "1003"
         }
     }
@@ -206,6 +210,34 @@ class FutachaDraftPersistenceInstrumentedTest {
         rule.waitForIdle()
         assertEquals("", commentText())
         assertTrue(rule.onAllNodesWithTag("thread-form-attachment-preview").fetchSemanticsNodes().isEmpty())
+    }
+
+    /**
+     * Audit M19: leaving the screen while the reply is being sent (a mode switch, the app ending) does not keep the sent text
+     * as a draft. It used to be written when the screen went and came back on the next opening, inviting a second post.
+     */
+    @Test fun leavingWhileTheReplyIsSentDoesNotKeepTheSentTextAsADraft() {
+        host(mapOf(FUTACHA_DRAFT_PERSIST_STORAGE_KEY to "ON"))
+        waitForThread()
+        rule.waitUntil(10_000) { tabExists() }
+        openReply()
+        rule.onNode(hasSetTextAction() and hasText("コメント")).performTextInput("送る本文")
+        rule.waitUntil(10_000) { runBlocking { store.loadDraft(tabKey) }?.comment == "送る本文" }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        replyGate = gate
+        try {
+            rule.onNode(hasSetTextAction() and hasText("削除キー")).performTextInput("delkey")
+            rule.onAllNodesWithContentDescription("送信する").onFirst().performClick()
+            rule.waitUntil(15_000) { replies.get() == 1 }
+            // Sending: the stored draft is gone, and leaving the screen now does not write it again.
+            rule.waitUntil(10_000) { runBlocking { store.loadDraft(tabKey) } == null }
+            leaveAndReturn()
+            Thread.sleep(2_000)
+            assertNull(runBlocking { store.loadDraft(tabKey) })
+        } finally {
+            gate.complete(Unit)
+            replyGate = null
+        }
     }
 
     @Test fun theSwitchIsOnFutachasControlPageAndOffByDefault() {

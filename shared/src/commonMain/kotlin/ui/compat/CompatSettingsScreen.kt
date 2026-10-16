@@ -620,10 +620,9 @@ internal fun CompatSettingsScreen(
                     runSuspendCatchingPreservingCancellation {
                         // Keep only the selected extension. Otherwise a font
                         // replaced from OTF to TTF could leave two candidates
-                        // and make startup select the stale file.
-                        fileSystem.deleteRecursively("private/compat_font").getOrThrow()
-                        fileSystem.createDirectory("private/compat_font").getOrThrow()
-                        fileSystem.writeBytes("private/compat_font/font.$extension", selected.bytes).getOrThrow()
+                        // and make startup select the stale file. The new file
+                        // is written first, so a failed copy keeps the old font.
+                        replaceCompatCustomFontFile(fileSystem, extension, selected.bytes)
                         store.savePreference(
                             compatPreferenceStorageKey("design", "dummyCustomFont"),
                             selected.fileName
@@ -1633,7 +1632,7 @@ internal fun CompatSettingsScreen(
                         customFontDialogOpen = false
                         launchSettingsSafely {
                             runSuspendCatchingPreservingCancellation {
-                                fileSystem?.deleteRecursively("private/compat_font")?.getOrThrow()
+                                fileSystem?.let { removeCompatCustomFontFiles(it) }
                                 store.savePreference(
                                     compatPreferenceStorageKey("design", "dummyCustomFont"),
                                     "デフォルト"

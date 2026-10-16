@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,9 @@ internal fun FtutterNgDialog(
     var isActive by remember { mutableStateOf(initial.isActive) }
     var board by remember { mutableStateOf(initial.ita) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 正規表現の試しは重くなり得るので、メインスレッドの外で行う（再監査H1：OKを押すと画面が止まった）。
+    var checking by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = colors.popUp,
@@ -124,12 +128,20 @@ internal fun FtutterNgDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            TextButton(enabled = !checking, onClick = {
                 val rule = FtutterNgRule(text, type.stored, isReg && type != FtutterNgType.ID, isActive, board)
-                // 編集では、元のルール自身は重複に数えない。
-                val problem = ftutterNgValidationError(rule, existing - initial)
-                if (problem != null) error = problem else onSave(rule)
-            }, modifier = Modifier.testTag("ftutter-ng-save")) { Text("OK") }
+                checking = true
+                scope.launch {
+                    // 編集では、元のルール自身は重複に数えない。
+                    val problem = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                        ftutterNgValidationError(rule, existing - initial)
+                    }
+                        // 保存値の上限（2万字）に入らなければ、登録の時点で断る（監査A9。以前は保存が黙って失敗した）。
+                        ?: ftutterNgCapacityError((existing - initial) + rule)
+                    checking = false
+                    if (problem != null) error = problem else onSave(rule)
+                }
+            }, modifier = Modifier.testTag("ftutter-ng-save")) { Text(if (checking) "確認中…" else "OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
@@ -140,11 +152,25 @@ internal fun FtutterNgDialog(
 internal fun FtutterNgListScreen(
     rules: List<FtutterNgRule>,
     boards: List<BoardSummary>,
-    onSave: (List<FtutterNgRule>) -> Unit,
+    /** 保存されている一覧に当てる変更（監査M2）。 */
+    onEdit: ((List<FtutterNgRule>) -> List<FtutterNgRule>) -> Unit,
     onBack: () -> Unit
 ) {
     val colors = LocalFtutterColors.current
     var editing by remember { mutableStateOf<Pair<Int, FtutterNgRule>?>(null) }
+    // 削除は確認してから（監査L15：ゴミ箱を押すとすぐ消え、戻せなかった）。
+    var deleting by remember { mutableStateOf<FtutterNgRule?>(null) }
+    deleting?.let { rule ->
+        FtutterConfirmDialog(
+            title = "削除しますか？",
+            message = rule.text,
+            confirmLabel = "削除",
+            onDismiss = { deleting = null }
+        ) {
+            deleting = null
+            onEdit { stored -> ftutterNgWithout(stored, rule) }
+        }
+    }
     Column(Modifier.fillMaxSize().testTag("ftutter-ng-list")) {
         FtutterTopBar(title = "ピックアップ・NG", onBack = onBack) {
             IconButton(onClick = { editing = -1 to FtutterNgRule("", FtutterNgType.WORD.stored) }, modifier = Modifier.testTag("ftutter-ng-add")) {
@@ -175,8 +201,12 @@ internal fun FtutterNgListScreen(
                                 "無効".takeIf { !rule.isActive }
                             )
                             Text(notes.joinToString("・"), color = colors.headerText, fontSize = 12.sp)
+                            // 使われていないルール（正規表現が作れない・照合に時間がかかりすぎて止めた）。
+                            remember(rule) { ftutterNgRuleProblem(rule) }?.let { problem ->
+                                Text(problem, color = colors.deleted, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-ng-row-problem"))
+                            }
                         }
-                        IconButton(onClick = { onSave(rules.filterIndexed { i, _ -> i != index }) }, modifier = Modifier.testTag("ftutter-ng-delete")) {
+                        IconButton(onClick = { deleting = rule }, modifier = Modifier.testTag("ftutter-ng-delete")) {
                             Icon(Icons.Rounded.Delete, contentDescription = "削除", tint = colors.text)
                         }
                     }
@@ -194,7 +224,7 @@ internal fun FtutterNgListScreen(
             onDismiss = { editing = null },
             onSave = { saved ->
                 editing = null
-                onSave(if (index < 0) rules + saved else rules.mapIndexed { i, old -> if (i == index) saved else old })
+                onEdit { stored -> if (index < 0) stored + saved else ftutterNgReplaced(stored, rule, saved) }
             }
         )
     }

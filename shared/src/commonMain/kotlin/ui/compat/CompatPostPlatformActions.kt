@@ -336,7 +336,7 @@ internal fun decideCompatPostAttachment(
     else -> CompatPostAttachmentDecision.AskImageCompression
 }
 
-private const val COMPAT_POST_ATTACHMENT_DIRECTORY = "private/compat_post_attachments"
+internal const val COMPAT_POST_ATTACHMENT_DIRECTORY = "private/compat_post_attachments"
 private val COMPAT_POST_ATTACHMENT_FILE_NAME_REGEX = Regex("[^A-Za-z0-9._-]")
 private val COMPAT_POST_ATTACHMENT_EXTENSION_REGEX = Regex("[^A-Za-z0-9]")
 private val COMPAT_POST_ATTACHMENT_CONTAINER_REGEX = Regex("[0-9a-f]{16}(?:-[0-9a-f]{1,16})?")

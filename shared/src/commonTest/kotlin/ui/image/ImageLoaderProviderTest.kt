@@ -275,4 +275,23 @@ class ImageLoaderProviderTest {
             resolveFutabaExtensionFallbackCandidates("jpg", policy)
         )
     }
+
+    /** Re-audit L44: a new loader generation takes over the pictures held in the last one's memory cache. */
+    @Test
+    fun aNewGenerationTakesOverTheLastMemoryCache() {
+        val picture = object : coil3.Image {
+            override val size: Long = 100
+            override val width: Int = 5
+            override val height: Int = 5
+            override val shareable: Boolean = true
+            override fun draw(canvas: coil3.Canvas) = Unit
+        }
+        val old = MemoryCache.Builder().maxSizeBytes(10_000).build()
+        val key = MemoryCache.Key("thumb")
+        old[key] = MemoryCache.Value(picture)
+        val next = MemoryCache.Builder().maxSizeBytes(10_000).build()
+        copyImageMemoryCache(old, next)
+        old.clear()
+        assertSame(picture, next[key]?.image)
+    }
 }

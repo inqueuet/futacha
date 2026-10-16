@@ -94,6 +94,11 @@ internal fun ThreadFormDialog(
     onClear: () -> Unit,
     isSubmitEnabled: Boolean,
     sendDescription: String,
+    /**
+     * Adding a picture (the shared one, the clipboard) does not wait for the subject or comment (re-audit L35: the shared
+     * picture could not be attached or dropped until something was typed); false only while the post is being sent.
+     */
+    attachmentsEnabled: Boolean = true,
     showSubject: Boolean = true,
     showPassword: Boolean = true,
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
@@ -556,7 +561,7 @@ internal fun ThreadFormDialog(
                         )
                     }
                 }
-                IncomingSharedAttachmentButton(enabled = isSubmitEnabled && !isSanitizingAttachment,
+                IncomingSharedAttachmentButton(enabled = attachmentsEnabled && !isSanitizingAttachment,
                     onAttach = ::acceptPickedImage)
                 HorizontalDivider()
                 Surface(
@@ -571,7 +576,7 @@ internal fun ThreadFormDialog(
                             onChooseVideo = { chooseNormalAttachment(videoPickerLauncher) },
                             onPasteImage = { chooseNormalAttachment(clipboardPaste.paste) }, onSubmit = onSubmit,
                             onClear = { cancelAttachmentProcessing(); onClear() }, onDismiss = onDismiss,
-                            enabled = isSubmitEnabled && !isSanitizingAttachment && !clipboardPaste.busy,
+                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentEnabled = !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentPickerPreference = attachmentPickerPreference,
                             preferredFileManagerPackage = preferredFileManagerPackage
@@ -590,7 +595,7 @@ internal fun ThreadFormDialog(
                                 AnalyticsTracker.uiControl("thread_form_submit", sendDescription)
                                 onSubmit()
                             },
-                            enabled = isSubmitEnabled && !isSanitizingAttachment && !clipboardPaste.busy
+                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,

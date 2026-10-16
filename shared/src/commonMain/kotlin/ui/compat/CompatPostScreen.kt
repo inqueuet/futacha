@@ -6,6 +6,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
@@ -1201,7 +1203,8 @@ internal fun CompatPostScreen(
                 .background(SecondaryTeal).navigationBarsPadding()
                 .testTag("compat-post-bottom-bar")
         ) {
-            Row(
+            ScrollableToolbarRow(
+                itemCount = toolbarItems.count { it.active } + if (compatToolbarShowsOverflow(CompatToolbarSurface.POST, toolbarItems)) 1 else 0,
                 modifier = Modifier.fillMaxWidth().requiredHeight(40.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

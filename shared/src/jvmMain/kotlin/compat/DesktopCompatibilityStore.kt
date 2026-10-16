@@ -486,6 +486,20 @@ internal class DesktopCompatibilityStore(
         )
     }
 
+    override suspend fun deleteHistories(canonicalUrls: Collection<String>) {
+        if (canonicalUrls.isEmpty()) return
+        val urls = canonicalUrls.toHashSet()
+        mutate {
+            val now = nowMillis()
+            state = it.copy(
+                history = it.history.filterNot { entry -> entry.canonicalUrl in urls },
+                historyTombstones = trimHistoryTombstones(
+                    it.historyTombstones + urls.associate { url -> url.take(MAX_COMPAT_URL_CHARS) to now }
+                )
+            )
+        }
+    }
+
     override suspend fun clearHistory() = mutate {
         val tombstones = it.historyTombstones.toMutableMap()
         (it.history.map(CompatHistoryEntry::canonicalUrl) + it.tabs.map(CompatTab::canonicalUrl)).forEach { url ->
@@ -604,8 +618,10 @@ internal class DesktopCompatibilityStore(
                     updatedAtMillis = nowMillis()
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
-                tabsState.value = state.tabs.sortedByDescending(CompatTab::insertedAtEpochMillis)
-                historyState.value = state.history.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
+                // Nothing is published, as on Android (re-audit M25: every scroll stop
+                // sorted the 20,000 history rows again and re-emitted the tabs, so the
+                // whole としあき(仮) screen was rebuilt). `state` carries the anchor into
+                // the next ordinary mutation.
             }
         }
 

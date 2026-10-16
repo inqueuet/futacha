@@ -459,11 +459,19 @@ final class IosAppUITests: XCTestCase {
         add(licenseShot)
     }
 
-    func testFutachaProfileReachesForeground() {
+    func testFutachaProfileReachesForeground() throws {
         let app = makeApplication()
+        // Previous mode tests can leave the persisted board list empty. Use the same
+        // explicit tutorial fixture as the other mode smoke tests.
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
         app.launchArguments += [
             "-experience.active_profile", "futacha",
-            "-experience.profile_generation", "1001"
+            "-experience.profile_generation", "1001",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
         ]
         app.launch()
 
@@ -2740,9 +2748,31 @@ final class IosAppUITests: XCTestCase {
         board.tap()
         XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
 
-        let more = app.buttons["その他"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "The catalog overflow command is missing.")
-        more.tap()
+        func openToolbarOverflow() {
+            let bar = app.descendants(matching: .any).matching(identifier: "compat-main-bottom-bar").firstMatch
+            XCTAssertTrue(bar.waitForExistence(timeout: 10), "The bottom toolbar is missing.")
+            // Use the tagged bottom command: the top app bar also has a button called その他.
+            let more = app.descendants(matching: .any).matching(identifier: "compat-toolbar-command-other").firstMatch
+            // XCTest throws for the activation point of a fully offscreen Compose button,
+            // so scroll first instead of asking isHittable before the swipe.
+            bar.swipeLeft()
+            XCTAssertTrue(more.waitForExistence(timeout: 5), "The catalog overflow command is missing.")
+            XCTAssertTrue(more.isHittable, "The overflow must be reachable by swiping the toolbar.")
+            XCTAssertGreaterThanOrEqual(more.frame.width, 39, "The last button must keep its full width.")
+            XCTAssertLessThanOrEqual(more.frame.maxX, app.windows.firstMatch.frame.maxX + 1)
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "toolbar-overflow-after-horizontal-swipe"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            more.tap()
+            let popup = app.descendants(matching: .any).matching(identifier: "compat-bottom-popup").firstMatch
+            XCTAssertTrue(popup.waitForExistence(timeout: 5), "The bottom toolbar command did not open its menu.")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+            XCTAssertTrue(waitForDisappearance(of: popup, timeout: 5))
+            // Editing is a command of the top app bar's menu; the bottom popup contains content tools.
+            app.buttons["その他"].firstMatch.tap()
+        }
+        openToolbarOverflow()
         let edit = app.buttons["ツールバー編集"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5), "The toolbar editor command is missing.")
         edit.tap()
@@ -2781,7 +2811,7 @@ final class IosAppUITests: XCTestCase {
         )
 
         // Restore the pre-test state so repeated runs and later UI cases are deterministic.
-        app.buttons["その他"].firstMatch.tap()
+        openToolbarOverflow()
         XCTAssertTrue(app.buttons["ツールバー編集"].waitForExistence(timeout: 5))
         app.buttons["ツールバー編集"].tap()
         let restoreToggle = app.descendants(matching: .any)["compat-toolbar-toggle-post"]
