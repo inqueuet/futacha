@@ -67,6 +67,28 @@ class PlatformVideoPlayerAndroidTest {
     }
 
     @Test
+    fun ftutterPlaybackOptionsReachTheNativePlayerAndLoopCanBeChanged() = withBlockingVideoSource { videoUrl ->
+        val options = mutableStateOf(com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(autoPlay = true, loop = true))
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides options.value
+            ) { PlatformVideoPlayer(videoUrl, Modifier.size(100.dp)) }
+        }
+        rule.waitUntil(5_000) {
+            rule.activity.findViewById<ViewGroup>(android.R.id.content).findMedia3PlayerView()?.let(::media3PlayerFromView) != null
+        }
+        fun player() = requireNotNull(media3PlayerFromView(requireNotNull(
+            rule.activity.findViewById<ViewGroup>(android.R.id.content).findMedia3PlayerView())))
+        rule.runOnIdle {
+            assertEquals(true, player().javaClass.getMethod("getPlayWhenReady").invoke(player()))
+            assertEquals(1, player().javaClass.getMethod("getRepeatMode").invoke(player()))
+            options.value = options.value.copy(loop = false)
+        }
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals(0, player().javaClass.getMethod("getRepeatMode").invoke(player())) }
+    }
+
+    @Test
     fun platformVideoPlayer_pausesWhenActivityStopsAndDoesNotResume() =
         withBlockingVideoSource(::assertPlayerPausesOnStop)
 

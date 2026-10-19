@@ -24,12 +24,12 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-actual class TextSpeaker actual constructor(platformContext: Any?) {
-    actual val supportsPitch: Boolean = true
+internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
+    override val supportsPitch: Boolean = true
     @Volatile private var speechSettings = SpeechSettings()
     private var defaultJapaneseVoice: String? = null
-    actual fun configure(settings: SpeechSettings) { speechSettings = settings }
-    actual suspend fun availableVoices(): List<SpeechVoice> {
+    override fun configure(settings: SpeechSettings) { speechSettings = settings }
+    override suspend fun availableVoices(): List<SpeechVoice> {
         val engine = awaitTts()
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             engine.voices.orEmpty().filter { it.locale.language == "ja" }
@@ -202,7 +202,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         if (!keep) lease.close()
     }
 
-    actual suspend fun prepare() {
+    override suspend fun prepare() {
         preparePlayback()
         try { awaitTts() } catch (failure: Throwable) { releasePlayback(); throw failure }
     }
@@ -211,7 +211,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         synchronized(lock) { playbackLease.also { playbackLease = null } }?.close()
     }
 
-    actual suspend fun speak(text: String) {
+    override suspend fun speak(text: String) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
         // タイムアウトを追加してコルーチンがハングするのを防ぐ
@@ -338,13 +338,13 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
     }
 
-    actual fun stop() {
+    override fun stop() {
         releasePlayback()
         cancelPending(CancellationException("ユーザーにより読み上げが停止されました"))
         engineHandler.post { synchronized(lock) { tts }?.stop() }
     }
 
-    actual fun close() {
+    override fun close() {
         releasePlayback()
         val (engine, state) = synchronized(lock) {
             closed = true
@@ -431,4 +431,4 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     }
 }
 
-actual fun createTextSpeaker(platformContext: Any?): TextSpeaker = TextSpeaker(platformContext)
+internal actual fun createSystemSpeechEngine(platformContext: Any?): SpeechBackend = SystemSpeechEngine(platformContext)

@@ -86,4 +86,48 @@ class FtutterBackupImportTest {
         assertEquals(0, plan.ngCount)
         assertNull(plan.preferences[FtutterKeys.NG_LIST])
     }
+
+    @Test
+    fun importKeepsTheSelectedBoardTabFavoritesAndPerBoardStatistics() {
+        val board = BoardSummary("neko", "ねこ", "", "https://may.2chan.net/27/futaba.php", "")
+        val original = parseFtutterPreferencesXml(xml) + mapOf(
+            "openingCatalogUrl" to FtutterPrefValue.Text("http://may.2chan.net/27/"),
+            "opening" to FtutterPrefValue.Text(thread),
+            "useHttps" to FtutterPrefValue.Bool(false),
+            "useChromeCustomTab" to FtutterPrefValue.Bool(false),
+            "itaList" to FtutterPrefValue.Texts(listOf(
+                """{"name":"ねこ","url":"https://may.2chan.net/27/","favorite":true,"sureOpenCount":12,"suretateCount":2,"resuCount":3,"soudaneCount":4}""",
+                """{"name":"二次元裏","url":"https://img.2chan.net/b/","sureOpenCount":5,"suretateCount":6,"resuCount":7,"soudaneCount":8}"""
+            ))
+        )
+        val plan = ftutterBackupPlan(original, listOf(board), emptyList(), emptyMap(), 0)
+        assertTrue(plan.boards.first { it.id == board.id }.pinned)
+        assertEquals(board.id, plan.preferences[FtutterKeys.LAST_BOARD])
+        assertEquals(thread, plan.preferences[FtutterKeys.OPENING])
+        assertEquals(FtutterStats(17, 8, 10, 12), parseFtutterStats(plan.preferences))
+        assertEquals("false", plan.preferences[FtutterKeys.PREFIX + "useHttps"])
+        assertEquals("false", plan.preferences[FtutterKeys.PREFIX + "useChromeCustomTab"])
+        val repeated = ftutterBackupPlan(original, plan.boards, emptyList(), plan.preferences, 0)
+        assertEquals(parseFtutterStats(plan.preferences), parseFtutterStats(repeated.preferences))
+    }
+
+    @Test
+    fun importExplainsRequiredFilesAndPermissionsAndImportsTheIndividualColors() {
+        val original = parseFtutterPreferencesXml(xml) + mapOf(
+            "userFontPath" to FtutterPrefValue.Text("/original/font.ttf"),
+            "savePath" to FtutterPrefValue.Text("content://original/tree/1"),
+            "savePathList" to FtutterPrefValue.Texts(listOf("content://original/tree/1")),
+            "gestureColorOverride" to FtutterPrefValue.Number("4278190080"),
+            thread to FtutterPrefValue.Text("""{"title":"下書き","kakikomiData":{"comment":"本文","upFile":"/original/image.png"}}""")
+        )
+        val plan = ftutterBackupPlan(original, emptyList(), emptyList(), emptyMap(), 0)
+        assertEquals(3, plan.limitations.size)
+        assertTrue(plan.summary.contains("引き継ぎの制限"))
+        assertTrue(plan.limitations.any { it.contains("フォント") })
+        assertTrue(plan.limitations.any { it.contains("保存先") })
+        assertEquals("4278190080", plan.preferences[FtutterKeys.colorOverride("gesture")])
+        assertEquals("/original/font.ttf", plan.preferences[FtutterKeys.PREFIX + "import.userFontPath"])
+        assertTrue(plan.limitations.any { it.contains("添付ファイル") })
+        assertTrue(parseFtutterDrafts(plan.preferences[FtutterKeys.DRAFTS]).values.any { it.comment == "本文" && it.sourceAttachmentPath == "/original/image.png" })
+    }
 }

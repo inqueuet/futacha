@@ -100,6 +100,7 @@ internal fun FutaberRuntimeHost(
     updateMediaFeatures: (suspend ((MediaFeatureSettings) -> MediaFeatureSettings) -> Unit)? = null,
     /** The analysis models the media editors use. */
     analysisModels: ModelStore? = null,
+    speechRuntime: com.valoser.futacha.shared.audio.SpeechRuntime? = null,
     /** A line for the person from the host (an AI command this mode does not run); see [FutaberApp]. */
     externalNotice: String? = null,
     onExternalNoticeShown: () -> Unit = {},
@@ -209,6 +210,7 @@ internal fun FutaberRuntimeHost(
         // The settings of the media features (a setting page of its own in this mode) and the editors' models.
         LocalMediaFeatureUpdater provides updateMediaFeatures,
         LocalAnalysisModelStore provides analysisModels,
+        com.valoser.futacha.shared.audio.LocalSpeechRuntime provides speechRuntime,
         LocalPromptContentVisible provides !promptPrivacyEnabled
     ) {
         val app: @Composable () -> Unit = {

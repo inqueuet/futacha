@@ -832,6 +832,7 @@ private suspend fun seedIosIssue78ArchiveFixture(store: IosCompatibilityStore) {
 }
 
 fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
+    com.valoser.futacha.shared.ui.initializeFutachaPointerDispatch()
     return ComposeUIViewController {
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
@@ -1268,6 +1269,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     LocalIosReviewCompliance provides IosReviewCompliance(isEnabled = true)
                 ) {
                     FutachaApp(
+                        initialPerformanceProfile = com.valoser.futacha.shared.util.iosMemoryPerformanceProfile(),
                         originalMediaSession = originalMediaSession,
                         stateStore = stateStore,
                         versionChecker = versionChecker,

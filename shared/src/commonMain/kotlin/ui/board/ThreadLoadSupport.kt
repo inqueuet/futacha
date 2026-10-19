@@ -9,11 +9,12 @@ import io.ktor.client.plugins.ResponseException
 
 internal sealed interface ThreadUiState {
     data object Loading : ThreadUiState
-    data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
+    data class Error(val message: String = "スレッドを読み込めませんでした", val confirmedGone: Boolean = false) : ThreadUiState
     data class Success(
         val page: ThreadPage,
         val embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
-        val isArchived: Boolean = false
+        val isArchived: Boolean = false,
+        val confirmedGone: Boolean = false
     ) : ThreadUiState
 }
 
@@ -34,7 +35,7 @@ internal fun buildThreadInitialLoadFailureState(
     error: Throwable,
     statusCode: Int?
 ): ThreadUiState.Error {
-    return ThreadUiState.Error(buildThreadInitialLoadErrorMessage(error, statusCode))
+    return ThreadUiState.Error(buildThreadInitialLoadErrorMessage(error, statusCode), confirmedGone = statusCode == 404 || statusCode == 410)
 }
 
 internal data class ThreadLoadSuccessState(

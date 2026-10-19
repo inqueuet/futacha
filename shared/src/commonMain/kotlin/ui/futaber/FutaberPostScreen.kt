@@ -252,7 +252,7 @@ internal fun FutaberPostScreen(
                 BasicTextField(
                     value = subjectIme.value,
                     onValueChange = subjectIme.onValueChange,
-                    visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(subjectIme.value.composition, colors.catalogGap),
+                    visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(subjectIme.value.composition),
                     singleLine = true,
                     textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontWeight = FontWeight.Medium, fontFamily = LocalFutaberCustomFont.current),
                     cursorBrush = SolidColor(colors.accent),
@@ -269,7 +269,7 @@ internal fun FutaberPostScreen(
                 BasicTextField(
                     value = commentIme.value,
                     onValueChange = commentIme.onValueChange,
-                    visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(commentIme.value.composition, colors.catalogGap),
+                    visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(commentIme.value.composition),
                     enabled = !sending,
                     textStyle = TextStyle(color = colors.body, fontSize = 16.sp, fontFamily = LocalFutaberCustomFont.current),
                     cursorBrush = SolidColor(colors.accent),
@@ -525,7 +525,7 @@ internal fun FutaberPostSettingsDialog(
                     OutlinedTextField(
                         value = nameIme.value,
                         onValueChange = nameIme.onValueChange,
-                        visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(nameIme.value.composition, colors.catalogGap),
+                        visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(nameIme.value.composition),
                         label = { Text("名前") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("futaber-post-name")
@@ -533,7 +533,7 @@ internal fun FutaberPostSettingsDialog(
                     OutlinedTextField(
                         value = emailIme.value,
                         onValueChange = emailIme.onValueChange,
-                        visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(emailIme.value.composition, colors.catalogGap),
+                        visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(emailIme.value.composition),
                         label = { Text("メール") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("futaber-post-email")
@@ -555,6 +555,8 @@ internal fun FutaberPostSettingsDialog(
                     }
                     OutlinedTextField(
                         value = key,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false),
                         onValueChange = {
                             key = it.futaberTakeChars(20)
                             onDeleteKeyChange(key)

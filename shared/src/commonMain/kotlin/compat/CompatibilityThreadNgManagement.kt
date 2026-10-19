@@ -24,7 +24,8 @@ fun compatThreadReferenceRules(
 ): List<CompatNgRule> {
     val acceptedKinds = compatThreadReferenceKinds(kind)
     return rules
-        .filter { it.kind in acceptedKinds && (it.scopeKey == threadKey || it.scopeKey == "*") }
+        .filter { it.kind in acceptedKinds && (it.scopeKey == threadKey || it.scopeKey == "*" ||
+            (it.kind == CompatNgKind.THREAD_POST_NO && canonicalizeThreadUrl(it.scopeKey)?.let { url -> compatTabKey(url.canonicalUrl) == threadKey } == true)) }
         .sortedByPrecomputedKey { normalizeCompatSearchText(compatThreadReferenceDisplayValue(it)) }
 }
 

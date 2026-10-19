@@ -126,16 +126,18 @@ internal data class FutaberTabView(
     val replyCount: Int,
     val boardName: String = "",
     /** The thread fell off the board (the refresh found it gone). */
-    val fallen: Boolean = false
+    val fallen: Boolean = false,
+    val status: com.valoser.futacha.shared.model.ThreadStatus? = null
 )
 
-internal fun futaberTabViews(keys: List<FutaberTabKey>, history: List<ThreadHistoryEntry>): List<FutaberTabView> {
+internal fun futaberTabViews(keys: List<FutaberTabKey>, history: List<ThreadHistoryEntry>, showStatus: Boolean = false): List<FutaberTabView> {
     val byKey = futaberHistoryRowsFor(keys.toHashSet(), history)
     return keys.mapNotNull { key ->
         val entry = byKey[key] ?: return@mapNotNull null
         FutaberTabView(
             key, entry.title.ifBlank { "(無題)" }, entry.titleImageUrl, entry.replyCount, entry.boardName,
-            fallen = entry.isAutoRefreshDisabled
+            fallen = entry.isAutoRefreshDisabled,
+            status = entry.threadStatus.takeIf { showStatus }
         )
     }
 }

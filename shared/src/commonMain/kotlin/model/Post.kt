@@ -31,5 +31,9 @@ data class Post(
 @Serializable
 data class QuoteReference(
     val text: String,
-    val targetPostIds: List<String>
+    val targetPostIds: List<String>,
+    /** Nested explicit links remain tappable, but are not direct replies. */
+    val isDirectReply: Boolean = true,
+    /** A copied anchor can link to an ancestor while replying to its immediate source. */
+    val replyTargetPostIds: List<String> = if (isDirectReply) targetPostIds else emptyList()
 )

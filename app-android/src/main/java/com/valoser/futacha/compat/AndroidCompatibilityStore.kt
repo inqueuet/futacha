@@ -390,7 +390,10 @@ class AndroidCompatibilityStore(
                     db.updateClosedBatch(repaired)
                 }
             }
-            db.delete("compat_ng_rule", "scope_key=?", arrayOf(boardKey))
+            db.readNgRules().filter { rule ->
+                rule.scopeKey == boardKey || (rule.kind == CompatNgKind.THREAD_POST_NO &&
+                    com.valoser.futacha.shared.compat.compatPostNgScopeBoardKey(rule.scopeKey) == boardKey)
+            }.forEach { rule -> db.delete("compat_ng_rule", "rule_id=?", arrayOf(rule.id)) }
             // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
             db.delete(
                 "compat_preference",

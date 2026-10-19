@@ -136,6 +136,12 @@ internal object FtutterKeys {
 
     // ジェスチャー
     val USE_GESTURE = k("useGesture")
+    val GESTURE_SENSITIVITY = k("kando")
+    val USE_HTTPS = k("useHttps")
+    val USE_CUSTOM_TAB = k("useChromeCustomTab")
+    val IMAGE_SEARCH_ASCII2D = k("nijigenGazouSyousaiKensaku")
+    val ALBUM_NAME = k("albumName")
+    val DISABLE_ALBUM_NAME = k("disableAlbumName")
     val BACK_BY_PREVIOUS_CATALOG = k("backByPreviousInCatalog")
     val BACK_BY_PREVIOUS_THREAD = k("backByPreviousInSure")
     fun gesture(code: String) = k("Gesture$code")
@@ -239,7 +245,7 @@ internal fun parseFtutterDesign(preferences: Map<String, String>): FtutterDesign
             background = color("background"), text = color("text"), toolBar = color("toolBar"),
             onToolBar = color("onToolBar"), onToolBarActive = color("onToolBarActive"), popUp = color("popUp"),
             highlight = color("highlight"), dividerCard = color("dividerCard"), onDividerCard = color("onDividerCard"),
-            inTab = color("inTab"), outline = color("outline"), kidoku = color("kidoku"), midoku = color("midoku"),
+            inTab = color("inTab"), gesture = color("gesture"), scrollBar = color("scrollBar"), indicator = color("indicator"), outline = color("outline"), kidoku = color("kidoku"), midoku = color("midoku"),
             onMidoku = color("onMidoku"), headerText = color("headerText"),
             resuSuu = color("resuSuu") ?: defaults.resuSuu, onResuSuu = color("onResuSuu") ?: defaults.onResuSuu,
             pickUp = color("pickUp") ?: defaults.pickUp, onPickUp = color("onPickUp") ?: defaults.onPickUp,

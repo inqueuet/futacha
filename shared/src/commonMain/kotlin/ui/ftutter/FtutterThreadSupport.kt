@@ -31,6 +31,10 @@ internal data class FtutterThreadSettings(
     val paddingHeaderText: Int = 3,
     val paddingTextFile: Int = 8,
     val opImageMaxHeight: Double = 500.0,
+    val opImageQuality: Int = 1,
+    val imageQuality: Int = 0,
+    val apuAutoLoad: Int = 1,
+    val apuThumbSize: Int = 120,
     val imagePosition: FtutterImagePosition = FtutterImagePosition.BOTTOM,
     val imageMaxHeight: Double = 300.0,
     val imageMaxWidth: Double = 200.0,
@@ -43,13 +47,15 @@ internal data class FtutterThreadSettings(
     val popularSoudane: Int = 10,
     val isTree: Boolean = false,
     val showTab: Boolean = false,
-    val isPrivacy: Boolean = false
+    val isPrivacy: Boolean = false,
+    val scrollbar: FtutterScrollbarSettings = FtutterScrollbarSettings(true, false, false, 8)
 )
 
 private val PADDING_RANGE = 0..30
 private val IMAGE_SIZE_RANGE = 0.0..1000.0
 
 internal fun parseFtutterThreadSettings(p: Map<String, String>) = FtutterThreadSettings(
+    scrollbar = parseFtutterScrollbar(p, catalog = false),
     showDeleted = p.ftutterBool(FtutterKeys.SHOW_DELETED, false),
     deletedChain = p.ftutterBool(FtutterKeys.DELETED_CHAIN, false),
     quoteShorten = p.ftutterBool(FtutterKeys.QUOTE_SHORTEN, false),
@@ -59,6 +65,10 @@ internal fun parseFtutterThreadSettings(p: Map<String, String>) = FtutterThreadS
     paddingBottom = p.ftutterInt(FtutterKeys.PADDING_BOTTOM, 5, PADDING_RANGE),
     paddingHeaderText = p.ftutterInt(FtutterKeys.PADDING_HEADER_TEXT, 3, PADDING_RANGE),
     paddingTextFile = p.ftutterInt(FtutterKeys.PADDING_TEXT_FILE, 8, PADDING_RANGE),
+    opImageQuality = p.ftutterInt(FtutterKeys.OP_IMAGE_HIGH_RES, 1, 0..2),
+    imageQuality = p.ftutterInt(FtutterKeys.RES_IMAGE_HIGH_RES, 0, 0..2),
+    apuAutoLoad = p.ftutterInt(FtutterKeys.APU_AUTO_LOAD, 1, 0..2),
+    apuThumbSize = p.ftutterInt(FtutterKeys.APU_THUMB_SIZE, 120, 1..1000),
     opImageMaxHeight = p.ftutterDouble(FtutterKeys.OP_IMAGE_MAX_HEIGHT, 500.0, IMAGE_SIZE_RANGE),
     imagePosition = FtutterImagePosition.fromStored(p[FtutterKeys.RES_IMAGE_POSITION]?.trim()?.toIntOrNull()),
     imageMaxHeight = p.ftutterDouble(FtutterKeys.RES_IMAGE_MAX_HEIGHT, 300.0, IMAGE_SIZE_RANGE),
@@ -125,7 +135,7 @@ internal enum class FtutterPostMark { NONE, SELF, REPLY_TO_SELF, CHILD }
 
 internal fun ftutterPostMark(post: Post, selfIds: Set<String>, depth: Int): FtutterPostMark = when {
     post.id in selfIds -> FtutterPostMark.SELF
-    post.quoteReferences.any { ref -> ref.targetPostIds.any { it in selfIds } } -> FtutterPostMark.REPLY_TO_SELF
+    post.quoteReferences.any { ref -> ref.replyTargetPostIds.any { it in selfIds } } -> FtutterPostMark.REPLY_TO_SELF
     depth > 0 -> FtutterPostMark.CHILD
     else -> FtutterPostMark.NONE
 }
@@ -137,7 +147,7 @@ internal fun ftutterReplyIndex(posts: List<Post>): Map<String, List<Int>> {
     val position = posts.withIndex().associate { (i, p) -> p.id to i }
     val index = LinkedHashMap<String, MutableList<Int>>()
     posts.forEachIndexed { i, source ->
-        source.quoteReferences.flatMap { it.targetPostIds }.distinct().forEach { target ->
+        source.quoteReferences.flatMap { it.replyTargetPostIds }.distinct().forEach { target ->
             val at = position[target] ?: return@forEach
             if (at < i) index.getOrPut(target) { mutableListOf() }.add(i)
         }
@@ -163,7 +173,7 @@ internal class FtutterThreadIndex(val posts: List<Post>) {
         if (refs.isEmpty()) emptyList() else {
             val out = ArrayList<Int>(2)
             refs.forEach { ref ->
-                ref.targetPostIds.forEach { id -> position[id]?.let { at -> if (at < index && at !in out) out += at } }
+                ref.replyTargetPostIds.forEach { id -> position[id]?.let { at -> if (at < index && at !in out) out += at } }
             }
             out
         }
@@ -598,7 +608,7 @@ internal fun ftutterRefreshNotice(
     val known = before.map { it.id }.toSet()
     val added = after.filter { it.id !in known }
     if (added.isEmpty()) return null
-    val replies = added.count { post -> post.quoteReferences.any { ref -> ref.targetPostIds.any { it in selfIds } } }
+    val replies = added.count { post -> post.quoteReferences.any { ref -> ref.replyTargetPostIds.any { it in selfIds } } }
     val parts = buildList {
         if (settings.showNewCount) add("新着 ${added.size} 件")
         if (settings.showReplyCount && replies > 0) add("返信 $replies 件")

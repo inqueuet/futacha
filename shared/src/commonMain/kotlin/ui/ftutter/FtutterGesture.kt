@@ -61,12 +61,13 @@ internal fun FtutterGestureLayer(
     val gestureOnState = rememberUpdatedState(enabled && settings.enabled)
     val swipeOnState = rememberUpdatedState(!settings.enabled && settings.moveTabBySwipe && onSwipe != null)
     val mapState = rememberUpdatedState(settings.map)
+    val sensitivityState = rememberUpdatedState(settings.sensitivity)
     Box(
         modifier
             .then(
                 Modifier.pointerInput(Unit) {
-                    val tracker = FtutterGestureTracker()
                     awaitEachGesture {
+                        val tracker = FtutterGestureTracker(sensitivityState.value)
                         val gestureOn = gestureOnState.value
                         val swipeOn = swipeOnState.value
                         val map = mapState.value

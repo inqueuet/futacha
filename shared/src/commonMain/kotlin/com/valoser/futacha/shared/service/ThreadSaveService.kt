@@ -148,7 +148,9 @@ class ThreadSaveService(
         limits: ThreadSaveLimits = ThreadSaveLimits(),
         storageOptions: ThreadSaveStorageOptions = ThreadSaveStorageOptions(),
         writeInitialMetadataBeforeMedia: Boolean = false,
-        onInitialSavedThread: suspend (SavedThread) -> Unit = {}
+        onInitialSavedThread: suspend (SavedThread) -> Unit = {},
+        additionalMediaUrls: List<String> = emptyList(),
+        onMediaPathsSaved: (Set<String>) -> Unit = {}
     ): Result<SavedThread> = withContext(AppDispatchers.io + fileSystem.saveBatchContext()) {
         val effectiveLimits = limits.copy(
             maxMediaItems = limits.maxMediaItems.coerceAtLeast(0),
@@ -192,7 +194,10 @@ class ThreadSaveService(
                 // ダウンロードフェーズ
                 var rawHtmlRelativePath: String? = null
                 val mediaPlan = buildThreadSaveMediaDownloadPlan(
-                    posts = posts,
+                    posts = if (additionalMediaUrls.isEmpty()) posts else posts + additionalMediaUrls.distinct().mapIndexed { index, url ->
+                        Post(id = "extra-$index", author = null, subject = null, timestamp = "",
+                            messageHtml = "", imageUrl = url, thumbnailUrl = null)
+                    },
                     maxMediaItems = effectiveLimits.maxMediaItems
                 )
 
@@ -371,6 +376,7 @@ class ThreadSaveService(
                 )
                 val urlToPathMap = mediaDownloadResult.urlToPathMap
                 val mediaKeyToFileInfoMap = mediaDownloadResult.mediaKeyToFileInfoMap
+                onMediaPathsSaved(urlToPathMap.values.toSet())
                 val mediaCounts = mediaDownloadResult.mediaCounts
                 var totalSize = mediaDownloadResult.totalSizeBytes
                 val downloadFailureCount = mediaDownloadResult.downloadFailureCount

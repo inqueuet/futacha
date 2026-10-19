@@ -325,7 +325,8 @@ internal class HistoryRefreshRunProcessor(
                         key,
                         entry.copy(
                             lastConfirmedAliveEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                            isAutoRefreshDisabled = false
+                            isAutoRefreshDisabled = false,
+                            threadStatus = entry.threadStatus?.copy(isDead = false)
                         )
                     )
                     return
@@ -345,7 +346,10 @@ internal class HistoryRefreshRunProcessor(
                 replyCount = page.resolveHistoryReplyCount(entry.replyCount),
                 lastConfirmedAliveEpochMillis = Clock.System.now().toEpochMilliseconds(),
                 hasAutoSave = entry.hasAutoSave,
-                isAutoRefreshDisabled = false
+                isAutoRefreshDisabled = false,
+                threadStatus = com.valoser.futacha.shared.compat.parseCompatThreadStatusFlags(page.deletedNotice).let { flags ->
+                    com.valoser.futacha.shared.model.ThreadStatus(false, flags.isIsolated, flags.isDeleted, flags.isAdminDeleted)
+                }
             )
             updates.put(key, updatedEntry)
 

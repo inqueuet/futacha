@@ -36,6 +36,7 @@ internal fun mergeAppStateHistoryEntry(
         } else {
             incoming.lastReadPostId
         },
+        threadStatus = incoming.threadStatus ?: existing.threadStatus,
         hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave,
         isAutoRefreshDisabled = existing.isAutoRefreshDisabled ||
             incoming.isAutoRefreshDisabled

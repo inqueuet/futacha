@@ -2670,6 +2670,7 @@
 				F7A1C00DF7A1C00DF7A1C00D /* Embed Watch Content */,
 				1F5F9DF70AF8B3644A4B637F /* Normalize shared framework plist */,
 				DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */,
+				F7A7C001F7A7C001F7A7C001 /* Embed optional speech frameworks */,
 				8D6BAA2E9D694307A68438BF /* Strip shared framework bitcode */,
 				422462CBE098294768EFA5F6 /* Generate shared dSYM */,
 				BBD78EC28F655FC94925BE11 /* [CP] Copy Pods Resources */,
@@ -2911,7 +2912,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nGOOGLE_SERVICE_PLIST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  echo \"note: Skipping Crashlytics dSYM upload for the Debug configuration.\"\n  exit 0\nfi\n# GoogleService-Info.plist is git-ignored; checkouts without it still build.\nif [ ! -f \"$GOOGLE_SERVICE_PLIST\" ]; then\n  echo \"warning: Skipping Crashlytics dSYM upload: $GOOGLE_SERVICE_PLIST is missing.\"\n  exit 0\nfi\n\n\"${PODS_ROOT}/FirebaseCrashlytics/run\" -gsp \"$GOOGLE_SERVICE_PLIST\"\n";
+			shellScript = "set -eu\nGOOGLE_SERVICE_PLIST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n\nif [ \"${CONFIGURATION}\" = \"Debug\" ] || [ \"${CODE_SIGNING_ALLOWED:-}\" = \"NO\" ]; then\n  echo \"note: Skipping Crashlytics dSYM upload for Debug or unsigned verification builds.\"\n  exit 0\nfi\n# GoogleService-Info.plist is git-ignored; checkouts without it still build.\nif [ ! -f \"$GOOGLE_SERVICE_PLIST\" ]; then\n  echo \"warning: Skipping Crashlytics dSYM upload: $GOOGLE_SERVICE_PLIST is missing.\"\n  exit 0\nfi\n\n\"${PODS_ROOT}/FirebaseCrashlytics/run\" -gsp \"$GOOGLE_SERVICE_PLIST\"\n";
 			showEnvVarsInLog = 0;
 		};
 		DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */ = {
@@ -2935,6 +2936,18 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		F7A7C001F7A7C001F7A7C001 /* Embed optional speech frameworks */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            name = "Embed optional speech frameworks";
+            outputPaths = ();
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "\"${SRCROOT}/../tools/embed-ios-voicevox.sh\"";
+        };
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -3013,7 +3026,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "${TEAM_ID}";
+				DEVELOPMENT_TEAM = 8SQY3SQ2M3;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3031,7 +3044,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -3053,7 +3066,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 208;
+				CURRENT_PROJECT_VERSION = 209;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
@@ -3073,11 +3086,12 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.0;
+				MARKETING_VERSION = 13.1;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3098,7 +3112,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 208;
+				CURRENT_PROJECT_VERSION = 209;
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(TEAM_ID)";
@@ -3117,11 +3131,12 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.0;
+				MARKETING_VERSION = 13.1;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3136,7 +3151,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).uitests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -3150,7 +3165,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).uitests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -3199,7 +3214,7 @@
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "${TEAM_ID}";
+				DEVELOPMENT_TEAM = 8SQY3SQ2M3;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3211,7 +3226,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(FUTACHA_IOS_MIN_VERSION)";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -3232,7 +3247,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 208;
+				CURRENT_PROJECT_VERSION = 209;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3269,7 +3284,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 208;
+				CURRENT_PROJECT_VERSION = 209;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;

@@ -238,7 +238,7 @@ private struct SavedHtmlDocumentView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        FutachaNavigationContainer {
             SavedHtmlWebView(url: document.url, onLocalProbe: probeHandler)
                 .overlay(alignment: .bottomLeading) {
                     if !localProbe.isEmpty {
@@ -481,7 +481,7 @@ private struct UserGeneratedContentEulaView: View {
     let onAccept: () -> Void
 
     var body: some View {
-        NavigationStack {
+        FutachaNavigationContainer {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -572,5 +572,23 @@ private struct TermsSection: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct FutachaNavigationContainer<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    private var forceLegacyNavigation: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-futacha.legacyNavigation")
+        #else
+        false
+        #endif
+    }
+    var body: some View {
+        if #available(iOS 16.0, *), !forceLegacyNavigation {
+            NavigationStack { content() }
+        } else {
+            NavigationView { content() }.navigationViewStyle(.stack)
+        }
     }
 }

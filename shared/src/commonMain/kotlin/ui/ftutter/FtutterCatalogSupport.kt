@@ -51,7 +51,8 @@ internal data class FtutterCatalogSettings(
     val pullTop: Boolean = true,
     val pullBottom: Boolean = true,
     val showTab: Boolean = false,
-    val privacy: Boolean = false
+    val privacy: Boolean = false,
+    val scrollbar: FtutterScrollbarSettings = FtutterScrollbarSettings(true, false, false, 8)
 ) {
     /** 起動時の並び：「前回の並び順を保存する」なら前回の値、それ以外はその並び。 */
     val startOrder: FtutterOrder
@@ -59,6 +60,7 @@ internal data class FtutterCatalogSettings(
 }
 
 internal fun parseFtutterCatalogSettings(p: Map<String, String>) = FtutterCatalogSettings(
+    scrollbar = parseFtutterScrollbar(p, catalog = true),
     columnsPortrait = p.ftutterInt(FtutterKeys.CATALOG_ROW, 5, 1..20),
     columnsLandscape = p.ftutterInt(FtutterKeys.CATALOG_ROW_LANDSCAPE, 8, 1..20),
     maxThreadCount = p.ftutterInt(FtutterKeys.MAX_CATALOG_THREAD_COUNT, 500, 50..2000),

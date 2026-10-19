@@ -112,6 +112,7 @@ internal class FutaberCatalogViewState {
     /** The last "scroll to the top" this state already carried out (not state: nothing draws from it). */
     var scrollToTopHandled: Int = 0
     var lastAttemptKey: FutaberCatalogFetchKey? = null
+    var viewedFirstId by mutableStateOf<String?>(null)
     var fetchedKey: FutaberCatalogFetchKey? = null
     var fetchedAtMillis: Long = 0L
     val gridState = LazyGridState()
@@ -167,10 +168,14 @@ internal fun FutaberCatalogScreen(
     projection: FutaberCatalogProjection? = null,
     /** B7a: rows added to the refresh button's sheet, and going back several reloads at once. */
     refreshActions: List<FutaberPostAction> = emptyList(),
-    perGenerationBack: Boolean = false
+    perGenerationBack: Boolean = false,
+    viewedFirstEnabled: Boolean = false,
+    lastViewedThreadId: String? = null,
+    onViewedFirstChange: (Boolean) -> Unit = {}
 ) {
     val colors = LocalFutaberColors.current
     val display = LocalFutaberDisplaySettings.current
+    LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) view.viewedFirstId = null }
     val load = view.load
     val searchOpen = search.open
     val query = search.query
@@ -204,6 +209,7 @@ internal fun FutaberCatalogScreen(
                 sameQuery = view.fetchedKey == null || view.fetchedKey?.watchWords == key.watchWords
             )
             view.load = FutaberCatalogLoad(items = page.items, isLoading = false)
+            if (explicitRefresh) view.viewedFirstId = lastViewedThreadId.takeIf { viewedFirstEnabled }
             view.fetchedKey = key
             view.fetchedAtMillis = Clock.System.now().toEpochMilliseconds()
             if (explicitRefresh && display.scrollCatalogToTopOnRefresh) view.scrollToTopTick += 1
@@ -290,9 +296,12 @@ internal fun FutaberCatalogScreen(
         ?: FutaberProjectedCatalog(ngVisibleItems)
     val titleKeys = remember(projected) { futaberCatalogTitleKeys(projected.items) }
     val appliedQuery = rememberFutaberDebouncedQuery(query)
-    val visibleItems = remember(projected, titleKeys, appliedQuery) {
+    val filteredItems = remember(projected, titleKeys, appliedQuery) {
         filterFutaberCatalogByKeys(projected.items, titleKeys, appliedQuery)
     }
+    val visibleItems = com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(
+        filteredItems, view.viewedFirstId.takeIf { viewedFirstEnabled })
+
     // "消えたスレ" lists the threads that left the catalog, without the ones the person has hidden since.
     val droppedItems = remember(view.history.dropped, catalogNgWords, catalogNgIndex, phashHiddenIds) {
         futaberApplyCatalogRules(view.history.dropped, catalogNgWords, catalogNgIndex, phashHiddenIds)
@@ -384,7 +393,9 @@ internal fun FutaberCatalogScreen(
                 FutaberPostAction(
                     "catalog-dropped", "消えたスレ（${droppedItems.size}件）", enabled = droppedItems.isNotEmpty()
                 ) { refreshSheet = false; droppedSheet = true }
-            ) + refreshActions.map { action -> action.copy(onClick = { refreshSheet = false; action.onClick() }) } + listOf(
+            ) + listOf(FutaberPostAction("viewed-first", "更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF") {
+                refreshSheet = false; onViewedFirstChange(!viewedFirstEnabled)
+            }) + refreshActions.map { action -> action.copy(onClick = { refreshSheet = false; action.onClick() }) } + listOf(
                 FutaberPostAction("cancel", "キャンセル") { refreshSheet = false }
             ),
             onDismiss = { refreshSheet = false },

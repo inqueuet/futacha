@@ -39,6 +39,8 @@ fun buildCompatThreadNgRuleIndex(
 ): CompatThreadNgRuleIndex {
     val scoped = rules.asSequence().filter { rule ->
         when (rule.kind) {
+            CompatNgKind.THREAD_POST_NO -> rule.scopeKey == scopeKey || rule.scopeKey == "*" ||
+                canonicalizeThreadUrl(rule.scopeKey)?.let { compatTabKey(it.canonicalUrl) == scopeKey } == true
             CompatNgKind.THREAD_IMAGE,
             CompatNgKind.THREAD_IMAGE_PHASH -> boardKey?.let { rule.appliesToThreadImage(it, scopeKey) }
                 ?: (rule.scopeKey == scopeKey || rule.scopeKey == "*")

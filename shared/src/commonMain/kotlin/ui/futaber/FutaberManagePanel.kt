@@ -381,7 +381,8 @@ internal fun FutaberManagePanel(
                                 ManageRow(
                                     title = tab.title,
                                     thumbnail = tab.thumbnailUrl,
-                                    subtitle = tab.boardName.ifBlank { null },
+                                    subtitle = listOf(tab.boardName, com.valoser.futacha.shared.ui.board.threadStatusText(tab.status))
+                                        .filter { it.isNotBlank() }.joinToString("・").ifBlank { null },
                                     trailing = null,
                                     count = tab.replyCount,
                                     editing = false,

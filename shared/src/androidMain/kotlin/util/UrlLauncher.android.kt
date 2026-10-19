@@ -10,9 +10,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-actual fun rememberUrlLauncher(): (String) -> Unit {
+actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
     val context = LocalContext.current
-    return remember(context) {
+    return remember(context, customTabs) {
         { url: String ->
             try {
                 val request = resolveUrlLaunchRequest(url)
@@ -29,6 +29,9 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                             UrlLaunchTarget.Mail -> Intent(Intent.ACTION_SENDTO, parsed)
                             UrlLaunchTarget.Browser -> Intent(Intent.ACTION_VIEW, parsed).apply {
                                 addCategory(Intent.CATEGORY_BROWSABLE)
+                                if (customTabs) putExtras(android.os.Bundle().apply {
+                                    putBinder("android.support.customtabs.extra.SESSION", null)
+                                })
                             }
                         }
                         if (context !is Activity) {

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 
@@ -124,7 +125,7 @@ internal fun CatalogPreviewImage(
         imageLoader = imageLoader
     )
     val promptMetadata = rememberGenerationMetadata(fullImageUrl, imageState)
-    Box(modifier) {
+    Box(modifier.privacyMediaFilter()) {
         if (shouldShowFallback) {
             Icon(
                 imageVector = Icons.Outlined.Image,

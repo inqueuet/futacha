@@ -751,6 +751,25 @@ private fun ThreadScreenContent(
     val currentSuccessState = derivedUiState.successState
     // Posts hidden by NG leave the attachment list and the viewer's paging (re-audit M33; ふたばー風 does the same).
     val ngHiddenPostIds = displayedPostsLayout.ngHiddenPostIds
+    val feedbackFeatures = LocalFutachaSharedFeatures.current
+    val feedbackPage = (currentState as? ThreadUiState.Success)?.page
+    val feedbackVisibleIds = remember(displayedPostsLayout.posts) { displayedPostsLayout.posts.mapTo(HashSet()) { it.id } }
+    ThreadOpeningSummaryEffect(
+        "${board.id}/$threadId", knownViewedPostCount(initialHistoryEntry), feedbackPage?.posts, selfPostIdentifierSet,
+        ngHiddenPostIds + displayedPostsLayout.collapsedPostIds,
+        enabled = feedbackFeatures?.rawValue(THREAD_OPEN_SUMMARY_KEY) != "OFF",
+        live = currentState is ThreadUiState.Success && !currentState.isArchived && !currentState.confirmedGone && !isShowingOfflineCopy &&
+            !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current &&
+            feedbackPage?.posts?.all { it.id in feedbackVisibleIds || it.id in ngHiddenPostIds || it.id in displayedPostsLayout.collapsedPostIds } == true,
+        truncated = feedbackPage?.isTruncated == true,
+        onNotice = showMessage
+    )
+    ThreadStatusObservationEffect(feedbackFeatures?.appStateStore, board.id, threadId, feedbackPage,
+        live = currentState is ThreadUiState.Success && !currentState.isArchived && !currentState.confirmedGone && !isShowingOfflineCopy &&
+            !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current,
+        gone = !LocalFutachaStaticThreadView.current && !isShowingRestoredSnapshot &&
+            ((currentState as? ThreadUiState.Error)?.confirmedGone == true || ((currentState as? ThreadUiState.Success)?.let { it.isArchived || it.confirmedGone } == true)))
+
     val mediaPosts = remember(derivedUiState.currentPosts, ngHiddenPostIds) {
         if (ngHiddenPostIds.isEmpty()) derivedUiState.currentPosts
         else derivedUiState.currentPosts.filterNot { it.id in ngHiddenPostIds }

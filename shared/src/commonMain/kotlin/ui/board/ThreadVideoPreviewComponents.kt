@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -136,7 +137,7 @@ internal fun VideoPreviewDialog(
         Box(modifier = Modifier.fillMaxSize()) {
             PlatformVideoPlayer(
                 videoUrl = entry.url,
-                modifier = videoContentModifier.align(Alignment.Center),
+                modifier = videoContentModifier.align(Alignment.Center).privacyMediaFilter(),
                 onStateChanged = { state ->
                     playbackState = state
                     if (state != VideoPlayerState.Error) playbackError = null

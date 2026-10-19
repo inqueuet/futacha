@@ -68,6 +68,7 @@ internal fun parseFtutterGestureMap(p: Map<String, String>): Map<String, Ftutter
 
 internal data class FtutterGestureSettings(
     val enabled: Boolean = true,
+    val sensitivity: Float = FTUTTER_GESTURE_KANDO_DP,
     val backByPreviousInCatalog: Boolean = false,
     val backByPreviousInThread: Boolean = true,
     val moveTabBySwipe: Boolean = true,
@@ -76,6 +77,7 @@ internal data class FtutterGestureSettings(
 
 internal fun parseFtutterGestureSettings(p: Map<String, String>) = FtutterGestureSettings(
     enabled = p.ftutterBool(FtutterKeys.USE_GESTURE, true),
+    sensitivity = p.ftutterDouble(FtutterKeys.GESTURE_SENSITIVITY, 20.0, 0.1..1000.0).toFloat(),
     backByPreviousInCatalog = p.ftutterBool(FtutterKeys.BACK_BY_PREVIOUS_CATALOG, false),
     backByPreviousInThread = p.ftutterBool(FtutterKeys.BACK_BY_PREVIOUS_THREAD, true),
     moveTabBySwipe = p.ftutterBool(FtutterKeys.MOVE_TAB_BY_SWIPE, true),

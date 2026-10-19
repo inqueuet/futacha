@@ -6,7 +6,6 @@ import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -201,16 +200,16 @@ fun CompatPostDrawingScreen(
                     .testTag("compat-drawing-canvas")
                     .onSizeChanged { canvasSize = it }
                     .pointerInput(activeBrush) {
-                        detectDragGestures(
-                            onDragStart = { position ->
+                        detectCompatDrawingStrokes(
+                            onStart = { position ->
                                 currentPoints.clear()
                                 currentPoints.add(CompatDrawingPoint(position.x, position.y))
                             },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                currentPoints.add(CompatDrawingPoint(change.position.x, change.position.y))
+                            onPoint = { position ->
+                                val point = CompatDrawingPoint(position.x, position.y)
+                                if (currentPoints.lastOrNull() != point) currentPoints.add(point)
                             },
-                            onDragEnd = {
+                            onEnd = {
                                 if (currentPoints.isNotEmpty()) {
                                     strokes.add(CompatDrawingStroke(
                                         colorArgb = Color(activeBrush.colorArgb).toArgb(),
@@ -221,7 +220,7 @@ fun CompatPostDrawingScreen(
                                 }
                                 currentPoints.clear()
                             },
-                            onDragCancel = { currentPoints.clear() }
+                            onCancel = { currentPoints.clear() }
                         )
                     }
             ) {

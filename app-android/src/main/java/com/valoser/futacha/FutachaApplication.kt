@@ -199,6 +199,7 @@ class FutachaApplication : Application() {
     internal val startedMainActivities: StateFlow<Int> = startedMainActivitiesValue.asStateFlow()
 
     override fun onCreate() {
+        com.valoser.futacha.shared.ui.initializeFutachaPointerDispatch()
         super.onCreate()
         // Before any profile is read: unfinished (PREVIEW) modes exist only in debuggable builds, and the
         // mobile-only modes (ふたばー風) exist on every Android build.

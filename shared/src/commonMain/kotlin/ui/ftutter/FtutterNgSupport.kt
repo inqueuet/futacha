@@ -250,7 +250,8 @@ internal class FtutterNgMatcher(
     rules: List<FtutterNgRule>,
     boardUrl: String?,
     private val matchLimit: Duration = FTUTTER_NG_REGEX_MATCH_LIMIT,
-    private val ruleBudget: Duration = FTUTTER_NG_REGEX_RULE_BUDGET
+    private val ruleBudget: Duration = FTUTTER_NG_REGEX_RULE_BUDGET,
+    private val timeSource: TimeSource = TimeSource.Monotonic
 ) {
     private class Compiled(val rule: FtutterNgRule, val regex: Regex?, val normalized: String) {
         /** この照合器でこのルールの照合に使った時間（ナノ秒）。 */
@@ -280,7 +281,7 @@ internal class FtutterNgMatcher(
             ftutterMarkSlowNgPattern(c.rule.text)
             return false
         }
-        val started = TimeSource.Monotonic.markNow()
+        val started = timeSource.markNow()
         return try {
             regex.containsMatchIn(FtutterDeadlineCharSequence(text, started + minOf(matchLimit, left), ensureActive))
         } catch (cancelled: CancellationException) {
@@ -314,8 +315,12 @@ internal class FtutterNgMatcher(
 
     /** NGタイトル（カタログの題名だけ）。 */
     fun hidesTitle(title: String, ensureActive: () -> Unit = {}): Boolean {
+        return matchingTitleRule(title, ensureActive) != null
+    }
+
+    fun matchingTitleRule(title: String, ensureActive: () -> Unit = {}): FtutterNgRule? {
         val normalized by lazy { canonicalThreadSearchText(title.lowercase()) }
-        return titles.any { matches(it, title, ensureActive) { normalized } }
+        return titles.firstOrNull { matches(it, title, ensureActive) { normalized } }?.rule
     }
 
     /** ピックアップの一致語（登録順で最初に一致したもの）。 */
@@ -376,7 +381,7 @@ internal fun encodeFtutterPickupOrders(orders: Set<FtutterOrder>): String =
     else encodeFtutterList(PICKUP_ORDER_NAMES.filterValues { it in orders }.keys.toList())
 
 /** 1つの題名の照合の結果（NGタイトル・ピックアップの一致語・共通のカタログNG）。 */
-internal class FtutterTitleNg(val hidden: Boolean, val pickup: String?, val commonHidden: Boolean)
+internal class FtutterTitleNg(val hidden: Boolean, val pickup: String?, val commonHidden: Boolean, val reason: String? = null)
 
 /** [items]の題名ごとの照合の結果。[matcher]・[commonWords]で作ったもの。 */
 internal class FtutterCatalogTitleNg(
@@ -399,7 +404,7 @@ internal fun ftutterCatalogTitleNg(
     commonWords: List<String>,
     ensureActive: () -> Unit = {}
 ): FtutterCatalogTitleNg {
-    val needles = commonWords.map(::normalizeCatalogSearchText).filter { it.isNotEmpty() }
+    val needles = commonWords.map { it to normalizeCatalogSearchText(it) }.filter { it.second.isNotEmpty() }
     matcher.beginPass()
     val byTitle = HashMap<String, FtutterTitleNg>()
     items.forEach { item ->
@@ -407,10 +412,14 @@ internal fun ftutterCatalogTitleNg(
         if (title in byTitle) return@forEach
         ensureActive()
         val normalized = if (needles.isEmpty()) "" else normalizeCatalogSearchText(title)
+        val titleRule = if (matcher.isEmpty) null else matcher.matchingTitleRule(title, ensureActive)
+        val commonWord = needles.firstOrNull { normalized.contains(it.second) }?.first
         byTitle[title] = FtutterTitleNg(
-            hidden = !matcher.isEmpty && matcher.hidesTitle(title, ensureActive),
+            hidden = titleRule != null,
             pickup = if (matcher.isEmpty) null else matcher.pickupWord(title, ensureActive),
-            commonHidden = needles.isNotEmpty() && needles.any { normalized.contains(it) }
+            commonHidden = commonWord != null,
+            reason = if (titleRule != null) "NGタイトル${if (titleRule.isReg) "（正規表現）" else ""}: ${titleRule.text}"
+                else commonWord?.let { "共通のカタログNG: $it" }
         )
     }
     return FtutterCatalogTitleNg(items, matcher, commonWords, byTitle)

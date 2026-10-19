@@ -173,7 +173,8 @@ fun FutachaApp(
      * unlocked). iOS uses it to keep its native saved-HTML sheet, which is
      * presented outside Compose, behind the app lock (H7).
      */
-    onAppUnlockedChanged: (Boolean) -> Unit = {}
+    onAppUnlockedChanged: (Boolean) -> Unit = {},
+    initialPerformanceProfile: DevicePerformanceProfile = DevicePerformanceProfile(false, false)
 ) {
     val platformContext = LocalPlatformContext.current
     LaunchedEffect(platformContext) {
@@ -187,7 +188,7 @@ fun FutachaApp(
         }
     }
     val devicePerformanceProfile by produceState(
-        initialValue = DevicePerformanceProfile(isLowRam = false, isLowStorage = false),
+        initialValue = initialPerformanceProfile,
         key1 = platformContext
     ) {
         value = withContext(AppDispatchers.io) {
@@ -459,6 +460,10 @@ private fun FutachaAppContent(
     val mediaFeatureSettings by stateStore.mediaFeatureSettings.collectAsState(MediaFeatureSettings.Disabled)
     val mediaFeatureGate = remember(stateStore) { MediaFeatureGate() }
     SideEffect { mediaFeatureGate.update(mediaFeatureSettings) }
+    val speechRuntime = remember(platformContext) { com.valoser.futacha.shared.audio.SpeechRuntime(platformContext) }
+    DisposableEffect(speechRuntime) { onDispose { speechRuntime.close() } }
+    LaunchedEffect(isAppUnlocked) { if (!isAppUnlocked) speechRuntime.stop() }
+    com.valoser.futacha.shared.audio.SpeechNoticeHost(speechRuntime)
     val analysisModels = remember(mediaFeatureGate, platformContext) {
         com.valoser.futacha.shared.media.analysis.ModelStore(mediaFeatureGate,
             directory = { com.valoser.futacha.shared.media.analysis.modelStoreDirectory(platformContext) },
@@ -615,7 +620,8 @@ private fun FutachaAppContent(
             LocalMediaFeatureUpdater provides updateMediaFeatures,
             com.valoser.futacha.shared.ui.image.LocalPromptContentVisible provides !promptPrivacyEnabled,
             LocalMediaFeatureGate provides mediaFeatureGate,
-            com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore provides analysisModels
+            com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore provides analysisModels,
+            com.valoser.futacha.shared.audio.LocalSpeechRuntime provides speechRuntime
         ) {
             com.valoser.futacha.shared.ui.media.DeviceImageEditingHost(fileSystem, stateStore) {
             CompatibilityApp(
@@ -733,6 +739,7 @@ private fun FutachaAppContent(
                 onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
                 updateMediaFeatures = updateMediaFeatures,
                 analysisModels = analysisModels,
+                speechRuntime = speechRuntime,
                 externalNotice = futaberAiNotice,
                 onExternalNoticeShown = { futaberAiNotice = null },
                 onArchiveReportEnqueued = onArchiveReportEnqueued,
@@ -770,6 +777,7 @@ private fun FutachaAppContent(
             onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
             updateMediaFeatures = updateMediaFeatures,
             analysisModels = analysisModels,
+                speechRuntime = speechRuntime,
             externalNotice = futaberAiNotice,
             onExternalNoticeShown = { futaberAiNotice = null },
             onArchiveReportEnqueued = onArchiveReportEnqueued,
@@ -906,6 +914,7 @@ private fun FutachaAppContent(
             com.valoser.futacha.shared.ui.image.LocalPromptContentVisible provides !promptPrivacyEnabled,
             LocalMediaFeatureGate provides mediaFeatureGate,
             com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore provides analysisModels,
+            com.valoser.futacha.shared.audio.LocalSpeechRuntime provides speechRuntime,
             LocalHistoryViewSettingsBinding provides HistoryViewSettingsBinding(
                 settings = historyViewSettings,
                 onSettingsChanged = { historyViewSettings = it }

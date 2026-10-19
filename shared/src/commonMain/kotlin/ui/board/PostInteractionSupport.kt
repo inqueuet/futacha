@@ -36,10 +36,10 @@ internal fun PostActionPreview(postNo: String, messageHtml: String, modifier: Mo
 
 /** Includes the selected post, direct sources and direct replies once, in original display order. */
 internal fun relatedThreadPosts(post: Post, posts: Collection<Post>): List<Post> {
-    val parents = post.quoteReferences.flatMap { it.targetPostIds }.toSet()
+    val parents = post.quoteReferences.flatMap { it.replyTargetPostIds }.toSet()
     return posts.filter { candidate ->
         candidate.id == post.id || candidate.id in parents ||
-            candidate.quoteReferences.any { post.id in it.targetPostIds }
+            candidate.quoteReferences.any { post.id in it.replyTargetPostIds }
     }.distinctBy { it.id }
 }
 
@@ -47,7 +47,7 @@ internal suspend fun relatedCompatPosts(postNo: String, posts: List<CompatPostSn
     val selected = posts.firstOrNull { it.postNo == postNo } ?: return emptyList()
     fun targets(post: CompatPostSnapshot): Set<String> {
         if (post.isContentRedacted) return emptySet()
-        if (post.quoteReferences.isNotEmpty()) return post.quoteReferences.flatMap { it.targetPostIds }.toSet()
+        if (post.quoteReferences.isNotEmpty()) return post.quoteReferences.flatMap { it.replyTargetPostIds }.toSet()
         return post.messageHtml.toCompatPlainText().lineSequence().mapNotNull(::compatQuoteQueryForLine)
             .flatMap { resolveCompatQuotePosts(posts, post.position, it).asSequence().map { match -> match.postNo } }.toSet()
     }

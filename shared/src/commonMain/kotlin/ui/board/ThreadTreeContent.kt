@@ -78,7 +78,7 @@ internal suspend fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNod
         }
         val primaryParentId = post.quoteReferences
             .asSequence()
-            .flatMap { it.targetPostIds.asSequence() }
+            .flatMap { it.replyTargetPostIds.asSequence() }
             .mapNotNull { targetId ->
                 val target = postIndex[targetId] ?: return@mapNotNull null
                 val targetIndex = orderIndex[target.id] ?: return@mapNotNull null

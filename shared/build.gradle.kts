@@ -63,6 +63,20 @@ kotlin {
                 "-staticLibrary", "libfutacha_tracking.a")
         }
         tasks.named(trackingInterop.interopProcessingTaskName).configure { dependsOn(buildTracking) }
+        val voiceOutput = layout.buildDirectory.dir("nativeVoicevox/$targetName")
+        val buildVoice = tasks.register<Exec>("buildVoicevox${targetName.replaceFirstChar { name -> name.uppercaseChar() }}") {
+            inputs.dir("src/nativeInterop/voicevox")
+            inputs.files(rootProject.file("tools/build-ios-voicevox.py"), rootProject.file("tools/prepare-voicevox.py"))
+            outputs.file(voiceOutput.map { output -> output.file("libfutacha_voicevox.a") })
+            outputs.dir(rootProject.layout.buildDirectory.dir("voicevox/ios/$targetName"))
+            commandLine("/usr/bin/python3", rootProject.file("tools/build-ios-voicevox.py"), targetName)
+        }
+        val voiceInterop = it.compilations.getByName("main").cinterops.create("voicevox") {
+            defFile(project.file("src/nativeInterop/cinterop/voicevox.def"))
+            includeDirs(project.file("src/nativeInterop/voicevox"))
+            extraOpts("-libraryPath", voiceOutput.get().asFile.absolutePath, "-staticLibrary", "libfutacha_voicevox.a")
+        }
+        tasks.named(voiceInterop.interopProcessingTaskName).configure { dependsOn(buildVoice) }
         it.compilations.getByName("main").cinterops.create("sqlite3") {
             defFile(project.file("src/nativeInterop/cinterop/sqlite3.def"))
         }
@@ -84,7 +98,7 @@ kotlin {
         homepage = "https://github.com/valoser/futacha"
         version = "1.8"
         podfile = project.file("../iosApp/Podfile")
-        // The app already targets iOS 18.2; the CPU inference pod requires 15.1.
+        // Keep the pod minimum aligned with the app; CPU inference requires iOS 15.1.
         ios.deploymentTarget = "15.1"
         // Use the same framework for command-line builds and Xcode. CocoaPods
         // wires its libraries into pod frameworks and test executables only.
@@ -217,6 +231,7 @@ kotlin {
             }
         }
         val jvmTest by getting {
+            kotlin.srcDir("src/skikoTest/kotlin")
             kotlin.srcDir("src/inferenceTestFixtures/kotlin")
             kotlin.srcDir("src/inferenceRuntimeTest/kotlin")
             dependencies {
@@ -225,6 +240,7 @@ kotlin {
             }
         }
         val iosTest by getting {
+            kotlin.srcDir("src/skikoTest/kotlin")
             kotlin.srcDir("src/inferenceTestFixtures/kotlin")
             kotlin.srcDir("src/inferenceRuntimeTest/kotlin")
         }
@@ -538,6 +554,11 @@ tasks.named("check") {
 // simctl's standalone launcher omits them; use a fully booted simulator for native tests.
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
     standalone.set(false)
+    // The 82 MB real voice fixtures are opt-in and never belong in app/test assets.
+    // Exclude this test by default instead of reporting a fixture-free run as PASS.
+    val voiceFixtures = providers.gradleProperty("futacha.voiceTestFixtures").orNull
+    if (voiceFixtures == null) filter.excludeTestsMatching("com.valoser.futacha.shared.audio.voicevox.IosVoicevoxIntegrationTest")
+    else environment("SIMCTL_CHILD_FUTACHA_VOICE_TEST_ROOT", voiceFixtures)
     providers.gradleProperty("futacha.iosTestDevice").orNull?.let { device.set(it) }
     doFirst {
         val target = device.get()

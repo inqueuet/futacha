@@ -126,8 +126,9 @@ internal fun compatPrivacyOverlayAlpha(enabled: Boolean, transparency: Float): F
  * reference alpha and add a small, density-independent blur so the behavior
  * is useful even when a nearly transparent image is still legible.
  */
+@androidx.compose.runtime.Composable
 internal fun Modifier.compatPrivacyImageEffect(contentAlpha: Float): Modifier {
-    val alpha = contentAlpha.coerceIn(0f, 1f)
+    val alpha = com.valoser.futacha.shared.ui.privacy.privacyImageContentAlpha(contentAlpha).coerceIn(0f, 1f)
     if (alpha >= 0.999f) return this
     val blurRadius = ((1f - alpha) * 18f).coerceIn(2f, 18f)
     return blur(blurRadius.dp).graphicsLayer { this.alpha = alpha }

@@ -81,14 +81,18 @@ internal fun ThreadImageSearchDialog(
     imageUrl: String,
     httpClient: HttpClient?,
     cookieRepository: CookieRepository?,
+    preferredTarget: CompatImageSearchTarget? = null,
+    openExternal: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    val openUrl = rememberUrlLauncher()
+    val platformOpenUrl = rememberUrlLauncher()
+    val openUrl = openExternal ?: platformOpenUrl
     val features = LocalFutachaSharedFeatures.current
     val selectedTargets = features?.preferences?.get(COMPAT_CUSTOM_IMAGE_SEARCH_KEY)
-    val targets = remember(imageUrl, selectedTargets) {
+    val targets = remember(imageUrl, selectedTargets, preferredTarget) {
         val supported = threadImageSearchTargets(imageUrl)
-        if (selectedTargets == null) supported else parseCompatImageSearchTargets(selectedTargets).filter { it in supported }
+        if (preferredTarget != null) supported.filter { it == preferredTarget }
+        else if (selectedTargets == null) supported else parseCompatImageSearchTargets(selectedTargets).filter { it in supported }
     }
     var pendingTarget by remember(imageUrl) { mutableStateOf<CompatImageSearchTarget?>(null) }
     var result by remember(imageUrl) { mutableStateOf<CompatImageSearchResult?>(null) }

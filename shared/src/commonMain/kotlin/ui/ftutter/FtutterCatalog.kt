@@ -89,7 +89,6 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.ui.board.CatalogPreviewImage
 import com.valoser.futacha.shared.ui.board.EdgeSwipeRefreshBinding
 import com.valoser.futacha.shared.ui.board.ScrollEdgeStateReader
 import com.valoser.futacha.shared.ui.board.edgeSwipeRefresh
@@ -108,14 +107,35 @@ internal data class FtutterCatalogLoad(
     val tick: Int = 0,
     val items: List<CatalogItem> = emptyList(),
     val loading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val viewedFirstId: String? = null
 )
 
 internal class FtutterCatalogHolder {
-    var load by mutableStateOf<FtutterCatalogLoad?>(null)
+    private val searches = LinkedHashMap<String, com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState>()
+    fun search(boardId: String): com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState {
+        val state = searches.remove(boardId) ?: com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState()
+        searches[boardId] = state
+        while (searches.size > 12) searches.remove(searches.keys.first())
+        return state
+    }
+    private val loaded = LinkedHashMap<String, FtutterCatalogLoad>()
+    private var currentLoad by mutableStateOf<FtutterCatalogLoad?>(null)
+    var load: FtutterCatalogLoad?
+        get() = currentLoad
+        set(value) {
+            currentLoad = value
+            if (value != null && !value.loading && value.error == null) {
+                loaded.remove(value.key); loaded[value.key] = value
+                while (loaded.size > 12) loaded.remove(loaded.keys.first())
+            }
+        }
+    fun cached(key: String) = loaded[key]
+    var manualRefreshKey: String? = null
     var refreshTick by mutableIntStateOf(0)
     /** 直近のカタログでNGタイトルに当たって消えたスレ（「非表示・NG」の画面に出す）。 */
     var ngRemoved by mutableStateOf<List<CatalogItem>>(emptyList())
+    var ngReasons by mutableStateOf<Map<String, String>>(emptyMap())
     val gridState = LazyGridState()
     val staggeredState = LazyStaggeredGridState()
     /** スクロール位置が属する板（監査L6：板を変えると先頭から。スレッドから戻った時は同じ板なので位置を保つ）。 */
@@ -189,7 +209,8 @@ internal fun FtutterCatalogScreen(
     /** 拡張「共通のNGを使う」がONの時の、共有のカタログNGワード（OFFなら空）。 */
     commonCatalogNgWords: List<String> = emptyList(),
     /** 拡張「過去ログ検索」がONの時の通信（OFFなら null で、ボタンを出さない）。 */
-    archiveClient: io.ktor.client.HttpClient? = null
+    archiveClient: io.ktor.client.HttpClient? = null,
+    openTabUrls: Set<String> = emptySet()
 ) {
     val colors = LocalFtutterColors.current
     val design = remember(preferences) { parseFtutterDesign(preferences) }
@@ -199,8 +220,9 @@ internal fun FtutterCatalogScreen(
     val hidden = remember(preferences) { parseFtutterHiddenThreads(preferences[FtutterKeys.HIDDEN_THREADS]) }
     val readCounts = remember(preferences) { parseFtutterReadCounts(preferences[FtutterKeys.READ_COUNTS]) }
     var order by remember { mutableStateOf(settings.startOrder) }
-    var searching by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
+    val search = remember(board.id, holder) { holder.search(board.id) }
+    var searching by search::open
+    var query by search::query
     var zoomed by remember { mutableStateOf<CatalogItem?>(null) }
     var thumbMenu by remember { mutableStateOf<CatalogItem?>(null) }
     var openUrlDialog by remember { mutableStateOf(false) }
@@ -227,11 +249,18 @@ internal fun FtutterCatalogScreen(
     LaunchedEffect(key, holder.refreshTick) {
         val current = holder.load
         val tick = holder.refreshTick
+        if (current?.key != key && !preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false)) {
+            holder.cached(key)?.let { holder.load = it.copy(tick = tick); return@LaunchedEffect }
+        }
         if (current?.key == key && current.tick == tick && current.items.isNotEmpty() && current.error == null) return@LaunchedEffect
         holder.load = FtutterCatalogLoad(key = key, tick = tick, items = current?.takeIf { it.key == key }?.items.orEmpty(), loading = true)
         try {
             val page = repository.getCatalogPage(board.url, order.mode)
-            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = page.items)
+            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = page.items,
+                viewedFirstId = if (holder.manualRefreshKey == key && preferences[com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url)] == "ON")
+                    history.filter { it.boardId == board.id }.maxByOrNull { it.lastVisitedEpochMillis }?.threadId
+                else current?.takeIf { it.key == key }?.viewedFirstId)
+            holder.manualRefreshKey = null
             // 落ちたスレの非表示の記録を消す。取得を始めた時の一覧でなく保存されている一覧から除く（監査M4：取得中に「非表示」に
             // したスレが、古い一覧で上書きされて戻っていた）。
             editPreference(FtutterKeys.HIDDEN_THREADS) { stored -> ftutterPrunedHiddenValue(stored, board.url, page.items) }
@@ -250,7 +279,10 @@ internal fun FtutterCatalogScreen(
                 items = current?.takeIf { it.key == key }?.items.orEmpty(),
                 error = error.message ?: "カタログを取得できませんでした"
             )
+            holder.manualRefreshKey = null
             refreshFromBottom = false
+        } finally {
+            if (holder.manualRefreshKey == key && holder.refreshTick == tick) holder.manualRefreshKey = null
         }
     }
     val load = holder.load?.takeIf { it.key == key }
@@ -292,7 +324,12 @@ internal fun FtutterCatalogScreen(
         )
     }
     var lastNgResult by remember { mutableStateOf(holder.lastNgResult) }
-    LaunchedEffect(computedNg) { computedNg?.let { lastNgResult = key to it; holder.lastNgResult = key to it } }
+    LaunchedEffect(computedNg) { computedNg?.let { result ->
+        lastNgResult = key to result; holder.lastNgResult = key to result
+        holder.ngReasons = result.ngRemoved.mapNotNull { item ->
+            titleNgNow?.byTitle?.get(item.title.orEmpty())?.reason?.let { item.threadUrl to it }
+        }.toMap()
+    } }
     val ngResult = computedNg ?: lastNgResult?.takeIf { it.first == key }?.second
         ?: FtutterCatalogNgResult(emptyList(), emptyMap(), emptyList())
     // 照合に時間がかかりすぎて使わなかったNGの正規表現は、一度だけ知らせる（設定のNGの一覧にも出る）。
@@ -306,17 +343,41 @@ internal fun FtutterCatalogScreen(
     }
     var archiveQuery by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(computedNg) { computedNg?.let { holder.ngRemoved = it.ngRemoved } }
-    val visible = remember(ngResult, settings.maxThreadCount) { ngResult.items.take(settings.maxThreadCount) }
+    val viewedFirstKey = com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url)
+    val viewedFirstEnabled = preferences[viewedFirstKey] == "ON"
+    LaunchedEffect(viewedFirstEnabled, key) {
+        if (!viewedFirstEnabled) holder.load?.takeIf { it.key == key && it.viewedFirstId != null }?.let {
+            holder.load = it.copy(viewedFirstId = null)
+        }
+    }
+    val visible = com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(
+        ngResult.items.take(settings.maxThreadCount), load?.viewedFirstId.takeIf { viewedFirstEnabled })
     var ngDraft by remember { mutableStateOf<FtutterNgRule?>(null) }
     var delTarget by remember { mutableStateOf<CatalogItem?>(null) }
     var historyDeleteTarget by remember { mutableStateOf<CatalogItem?>(null) }
-    fun refresh() { holder.refreshTick++ }
+    fun refresh() { holder.manualRefreshKey = key; holder.refreshTick++ }
     val paneBackOpen = (archiveClient != null && archiveQuery != null) || searching
     androidx.compose.runtime.DisposableEffect(paneBackOpen) {
         holder.paneBack = if (!paneBackOpen) null else {
             { if (archiveQuery != null) archiveQuery = null else { searching = false; query = "" } }
         }
         onDispose { holder.paneBack = null }
+    }
+
+    fun handleGesture(action: FtutterGestureAction) {
+        // カタログでは、ツリー・人気・画像抽出は何もしない（原作）。
+        when (action) {
+            FtutterGestureAction.TOP -> scope.launch { holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0) }
+            FtutterGestureAction.BOTTOM -> scope.launch {
+                val last = (visible.size - 1).coerceAtLeast(0)
+                holder.gridState.scrollToItem(last); holder.staggeredState.scrollToItem(last)
+            }
+            FtutterGestureAction.REFRESH -> { refreshFromBottom = false; refresh() }
+            FtutterGestureAction.SEARCH -> searching = true
+            FtutterGestureAction.EDIT -> onCreateThread()
+            FtutterGestureAction.TREE, FtutterGestureAction.POPULAR, FtutterGestureAction.IMAGES, FtutterGestureAction.NONE -> Unit
+            else -> onAppGesture(action)
+        }
     }
 
     Column(Modifier.fillMaxSize().testTag("ftutter-catalog")) {
@@ -330,21 +391,7 @@ internal fun FtutterCatalogScreen(
         FtutterGestureLayer(
             settings = gesture,
             enabled = zoomed == null && archiveQuery == null,
-            onAction = { action ->
-                // カタログでは、ツリー・人気・画像抽出は何もしない（原作）。
-                when (action) {
-                    FtutterGestureAction.TOP -> scope.launch { holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0) }
-                    FtutterGestureAction.BOTTOM -> scope.launch {
-                        val last = (visible.size - 1).coerceAtLeast(0)
-                        holder.gridState.scrollToItem(last); holder.staggeredState.scrollToItem(last)
-                    }
-                    FtutterGestureAction.REFRESH -> { refreshFromBottom = false; refresh() }
-                    FtutterGestureAction.SEARCH -> searching = true
-                    FtutterGestureAction.EDIT -> onCreateThread()
-                    FtutterGestureAction.TREE, FtutterGestureAction.POPULAR, FtutterGestureAction.IMAGES, FtutterGestureAction.NONE -> Unit
-                    else -> onAppGesture(action)
-                }
-            },
+            onAction = ::handleGesture,
             onSwipe = onSwipeBoard,
             modifier = Modifier.weight(1f).fillMaxWidth().background(colors.background)
         ) {
@@ -355,6 +402,7 @@ internal fun FtutterCatalogScreen(
                 settings = columnsOverride?.let { settings.copy(columnsPortrait = it, columnsLandscape = it) } ?: settings,
                 design = design,
                 historyIndex = historyIndex,
+                openTabUrls = openTabUrls,
                 readCounts = readCounts,
                 pickupWords = ngResult.pickupWords,
                 holder = holder,
@@ -366,7 +414,7 @@ internal fun FtutterCatalogScreen(
                 onThumbMenu = { thumbMenu = it }
             )
             if (isLoading && visible.isEmpty()) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center), color = colors.highlight)
+                CircularProgressIndicator(Modifier.align(Alignment.Center), color = colors.indicator)
             }
             load?.error?.let { message ->
                 if (visible.isEmpty()) {
@@ -402,6 +450,9 @@ internal fun FtutterCatalogScreen(
                 }
                 FtutterCatalogTool.MENU -> FtutterCatalogMenu(
                     privacy = settings.privacy,
+                    viewedFirstEnabled = viewedFirstEnabled,
+                    onToggleViewedFirst = { savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON") },
+                    onGesture = ::handleGesture,
                     onTogglePrivacy = { savePreference(FtutterKeys.IS_PRIVACY, (!settings.privacy).toString()) },
                     onToolbarEdit = onEditToolbar,
                     onHiddenAndNg = onOpenHiddenAndNg,
@@ -614,19 +665,26 @@ private fun FtutterOrderDropdown(order: FtutterOrder, onSelect: (FtutterOrder) -
 @Composable
 private fun FtutterCatalogMenu(
     privacy: Boolean,
+    viewedFirstEnabled: Boolean,
+    onToggleViewedFirst: () -> Unit,
     onTogglePrivacy: () -> Unit,
     onToolbarEdit: () -> Unit,
     onHiddenAndNg: () -> Unit,
     onOpenFromUrl: () -> Unit,
-    onCopyUrl: () -> Unit
+    onCopyUrl: () -> Unit,
+    onGesture: (FtutterGestureAction) -> Unit
 ) {
     val colors = LocalFtutterColors.current
+    var gestureMenu by remember { mutableStateOf(false) }
+    if (gestureMenu) FtutterGestureActionDialog(false, { gestureMenu = false }, onGesture)
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.testTag("ftutter-catalog-tool-menu")) {
             Icon(Icons.Rounded.MoreVert, contentDescription = "メニュー", tint = colors.onToolBar)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text("更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF") },
+                onClick = { open = false; onToggleViewedFirst() }, modifier = Modifier.testTag("ftutter-catalog-viewed-first"))
             DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onToolbarEdit() })
             DropdownMenuItem(
                 text = { Text("プライバシー") },
@@ -640,6 +698,8 @@ private fun FtutterCatalogMenu(
             )
             DropdownMenuItem(text = { Text("URLから開く") }, onClick = { open = false; onOpenFromUrl() })
             DropdownMenuItem(text = { Text("URLをコピー") }, onClick = { open = false; onCopyUrl() })
+            DropdownMenuItem(text = { Text("ジェスチャーの操作を選ぶ") }, onClick = { open = false; gestureMenu = true },
+                modifier = Modifier.testTag("ftutter-catalog-menu-gesture-actions"))
         }
     }
 }
@@ -651,6 +711,7 @@ private fun FtutterCatalogGrid(
     settings: FtutterCatalogSettings,
     design: FtutterDesignSettings,
     historyIndex: Map<String, ThreadHistoryEntry>,
+    openTabUrls: Set<String>,
     readCounts: Map<String, Int>,
     pickupWords: Map<String, String>,
     holder: FtutterCatalogHolder,
@@ -673,6 +734,7 @@ private fun FtutterCatalogGrid(
                 settings = settings,
                 design = design,
                 history = historyIndex[item.id],
+                inTab = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, item.id)) in openTabUrls,
                 readCount = readCounts[ftutterCanonicalThreadUrl(item.threadUrl)],
                 pickupWord = pickupWords[item.threadUrl],
                 targetSizePx = cellPx,
@@ -692,6 +754,7 @@ private fun FtutterCatalogGrid(
             ) {
                 items(items, key = { it.threadUrl }) { cell(it) }
             }
+            FtutterScrollbar(settings.scrollbar, holder.gridState)
         } else {
             val binding = rememberStaggeredRefreshBinding(holder.staggeredState, isRefreshing)
             LazyVerticalStaggeredGrid(
@@ -702,6 +765,7 @@ private fun FtutterCatalogGrid(
             ) {
                 items(items, key = { it.threadUrl }) { cell(it) }
             }
+            FtutterScrollbar(settings.scrollbar, holder.staggeredState)
         }
     }
 }
@@ -742,6 +806,7 @@ private fun FtutterCatalogCell(
     settings: FtutterCatalogSettings,
     design: FtutterDesignSettings,
     history: ThreadHistoryEntry?,
+    inTab: Boolean,
     readCount: Int?,
     pickupWord: String?,
     targetSizePx: Int,
@@ -780,6 +845,7 @@ private fun FtutterCatalogCell(
     val currentOnThumbMenu by androidx.compose.runtime.rememberUpdatedState(onThumbMenu)
     Column(
         Modifier
+            .background(if (inTab) colors.inTab else colors.background)
             .border(0.5.dp, colors.outline)
             .pointerInput(item.threadUrl, settings.useZoom) {
                 detectTapGestures(
@@ -797,9 +863,10 @@ private fun FtutterCatalogCell(
         if (settings.numberPosition == FtutterNumberPosition.ABOVE) numbersRow()
         val aspect = if (settings.sameHeight) 1f else ftutterThumbAspectRatio(item.thumbnailWidth, item.thumbnailHeight, settings)
         Box(Modifier.fillMaxWidth().aspectRatio(aspect)) {
-            CatalogPreviewImage(
+            FtutterThumbnail(
                 thumbnailUrl = item.thumbnailUrl,
                 fullImageUrl = item.fullImageUrl,
+                quality = settings.highRes.ordinal, catalog = true,
                 targetSizePx = targetSizePx,
                 contentDescription = title,
                 modifier = Modifier.fillMaxSize().alpha(imageAlpha)
@@ -845,7 +912,7 @@ private fun FtutterCatalogZoom(item: CatalogItem, settings: FtutterCatalogSettin
     val isVideo = full != null && FTUTTER_VIDEO_EXTENSIONS.any { full.lowercase().substringBefore('?').endsWith(it) }
     val alpha = if (settings.privacy) (1.0 - design.privacyCatalogZoom).toFloat() else 1f
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).testTag("ftutter-catalog-zoom"), contentAlignment = Alignment.Center) {
-        CatalogPreviewImage(
+        FtutterThumbnail(
             thumbnailUrl = if (isVideo) item.thumbnailUrl else full,
             fullImageUrl = item.thumbnailUrl,
             targetSizePx = 1080,
@@ -929,7 +996,8 @@ internal fun FtutterHiddenAndNgScreen(
     editPreference: (String, (String?) -> String?) -> Unit,
     onBack: () -> Unit,
     /** 今の板のカタログでNGタイトルに当たったスレ。 */
-    ngRemoved: List<CatalogItem> = emptyList()
+    ngRemoved: List<CatalogItem> = emptyList(),
+    ngReasons: Map<String, String> = emptyMap()
 ) {
     val colors = LocalFtutterColors.current
     val hidden = remember(preferences) { parseFtutterHiddenThreads(preferences[FtutterKeys.HIDDEN_THREADS]) }
@@ -968,10 +1036,14 @@ internal fun FtutterHiddenAndNgScreen(
                 HorizontalDivider(color = colors.outline)
             }
             items(ngRemoved, key = { "ng-" + it.threadUrl }) { item ->
+                Column {
                 Text(
                     item.title.orEmpty(), color = colors.text, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 8.dp, bottom = 8.dp).testTag("ftutter-ng-removed-row")
                 )
+                ngReasons[item.threadUrl]?.let { reason -> Text(reason, color = colors.text, fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, bottom = 8.dp).testTag("ftutter-ng-removed-reason")) }
+                }
             }
         }
     }

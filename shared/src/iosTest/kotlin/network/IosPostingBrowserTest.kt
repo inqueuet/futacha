@@ -22,6 +22,28 @@ class IosPostingBrowserTest {
             browser.evaluate("https://img.2chan.net/b/",html,"localStorage.removeItem('$key'); 'done'")
         }
     }
+    @OptIn(kotlin.native.runtime.NativeRuntimeApi::class)
+    @Test fun navigationCallbackSurvivesCollectionBeforeWebKitFinishes() = nativeTest {
+        coroutineScope {
+            val browser = IosPostingBrowser()
+            val pending = async(start = CoroutineStart.UNDISPATCHED) { browser.userAgent() }
+            // didFinishNavigation cannot run on main until this coroutine yields.
+            kotlin.native.runtime.GC.collect()
+            delay(20)
+            kotlin.native.runtime.GC.collect()
+            assertTrue(pending.await().contains("AppleWebKit"))
+        }
+    }
+
+    @Test fun navigationCancellationAllowsTheNextRequest() = nativeTest {
+        coroutineScope {
+            val browser = IosPostingBrowser()
+            val pending = async(start = CoroutineStart.UNDISPATCHED) { browser.userAgent() }
+            pending.cancelAndJoin()
+            assertTrue(browser.userAgent().contains("AppleWebKit"))
+        }
+    }
+
     private fun nativeTest(block:suspend ()->Unit) {
         val result=MutableStateFlow<Result<Unit>?>(null)
         val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)

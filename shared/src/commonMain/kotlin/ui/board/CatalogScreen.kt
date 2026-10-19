@@ -199,6 +199,14 @@ private fun CatalogScreenContent(
     val uiState = uiRuntimeStateRefs.uiState
     var catalogMode by uiRuntimeStateRefs.catalogMode
     var isRefreshing by uiRuntimeStateRefs.isRefreshing
+    var viewedFirstThreadId by androidx.compose.runtime.saveable.rememberSaveable(board?.id) { mutableStateOf<String?>(null) }
+    val feedbackFeatures = LocalFutachaSharedFeatures.current
+    val feedbackHistory by (feedbackFeatures?.appStateStore?.history ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+        .collectAsState(emptyList())
+    val latestFeedbackHistory by rememberUpdatedState(feedbackHistory)
+    val viewedFirstEnabled = board?.let { feedbackFeatures?.rawValue(viewedThreadFirstKey(it.url)) == "ON" } == true
+    LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) viewedFirstThreadId = null }
+
     var catalogLoadJob by uiRuntimeStateRefs.catalogLoadJob
     var catalogLoadGeneration by uiRuntimeStateRefs.catalogLoadGeneration
     var isHistoryRefreshing by uiRuntimeStateRefs.isHistoryRefreshing
@@ -356,7 +364,13 @@ private fun CatalogScreenContent(
             setCatalogLoadJob = { catalogLoadJob = it },
             currentIsRefreshing = { isRefreshing },
             setIsRefreshing = { isRefreshing = it },
-            setCatalogUiState = { uiState.value = it },
+            setCatalogUiState = { next ->
+                uiState.value = next
+                if (isRefreshing && next is CatalogUiState.Success && !next.partial && viewedFirstEnabled) {
+                    viewedFirstThreadId = latestFeedbackHistory.filter { it.boardId == board?.id }
+                        .maxByOrNull { it.lastVisitedEpochMillis }?.threadId
+                }
+            },
             currentCatalogUiState = { uiState.value },
             setLastCatalogItems = { lastCatalogItems = it },
             loadCatalogItems = ::loadCatalogItems,
@@ -652,6 +666,7 @@ private fun CatalogScreenContent(
         } }, onScrollTop = { coroutineScope.launch {
             catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
         } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
+        viewedFirstThreadId = viewedFirstThreadId,
         ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
         createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },
             { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog },

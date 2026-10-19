@@ -1082,7 +1082,7 @@ internal fun CompatPostScreen(
             // comment box, which was visibly different on the reference APK.
             TextField(
                 value = commentValue,
-                visualTransformation = com.valoser.futacha.shared.ui.board.ImeCompositionHighlight(commentValue.composition, MaterialTheme.colorScheme.primaryContainer),
+                visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(commentValue.composition),
                 onValueChange = {
                     if (it.text != commentValue.text) editedDraftFields.add(CompatPostDraftField.COMMENT)
                     // Preserve IME composition while the user is converting
@@ -1188,11 +1188,13 @@ internal fun CompatPostScreen(
             )
             Spacer(Modifier.height(10.dp))
             TextField(
-                deleteKey,
-                { editedDraftFields.add(CompatPostDraftField.DELETE_KEY); deleteKey = it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH) },
+                value = deleteKey,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false),
+                onValueChange = { editedDraftFields.add(CompatPostDraftField.DELETE_KEY); deleteKey = it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH) },
                 label = { Text("削除キー", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-delete-key"),
                 colors = postTextFieldColors
             )
             Spacer(Modifier.imePadding())

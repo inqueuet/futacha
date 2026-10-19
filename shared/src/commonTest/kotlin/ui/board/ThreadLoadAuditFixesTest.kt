@@ -344,7 +344,8 @@ class ThreadLoadAuditFixesTest {
         loadBindings.refreshThread()
         harness.refreshThreadJob?.join()
 
-        assertEquals(shown, harness.uiState, "a reload after a reply must not replace the thread with an error (C3)")
+        assertEquals(shown.copy(confirmedGone = true), harness.uiState,
+            "a confirmed 404 keeps the shown page and records the gone status (C3/Q)")
         assertEquals(0, harness.initialFailures)
         assertEquals(listOf("更新に失敗しました: スレッドが見つかりません (404)"), harness.messages)
 

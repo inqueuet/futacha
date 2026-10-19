@@ -40,6 +40,8 @@ import platform.CoreGraphics.CGContextRelease
 import platform.CoreGraphics.CGImageAlphaInfo
 import platform.CoreGraphics.CGImageGetAlphaInfo
 import platform.CoreGraphics.CGImageRelease
+import platform.CoreGraphics.CGLineCap
+import platform.CoreGraphics.CGLineJoin
 import platform.CoreGraphics.kCGBitmapByteOrder32Little
 import platform.Foundation.*
 import platform.UIKit.UIDevice
@@ -275,14 +277,20 @@ internal actual suspend fun renderCompatDrawingPng(
             strokes.forEach { stroke ->
                 val points = stroke.points
                 if (points.isEmpty()) return@forEach
-                val path = UIBezierPath.bezierPath()
-                path.lineWidth = stroke.widthPx.coerceAtLeast(1f).toDouble()
-                path.moveToPoint(CGPointMake(points.first().x.toDouble(), points.first().y.toDouble()))
+                val width = stroke.widthPx.coerceAtLeast(1f).toDouble()
                 if (points.size == 1) {
-                    path.addLineToPoint(CGPointMake(points.first().x.toDouble() + 0.1, points.first().y.toDouble() + 0.1))
-                } else {
-                    points.drop(1).forEach { point -> path.addLineToPoint(CGPointMake(point.x.toDouble(), point.y.toDouble())) }
+                    colorFromArgb(stroke.colorArgb).setFill()
+                    UIBezierPath.bezierPathWithOvalInRect(CGRectMake(
+                        points[0].x.toDouble() - width / 2, points[0].y.toDouble() - width / 2, width, width
+                    )).fill()
+                    return@forEach
                 }
+                val path = UIBezierPath.bezierPath()
+                path.lineWidth = width
+                path.lineCapStyle = CGLineCap.kCGLineCapRound
+                path.lineJoinStyle = CGLineJoin.kCGLineJoinRound
+                path.moveToPoint(CGPointMake(points.first().x.toDouble(), points.first().y.toDouble()))
+                points.drop(1).forEach { point -> path.addLineToPoint(CGPointMake(point.x.toDouble(), point.y.toDouble())) }
                 colorFromArgb(stroke.colorArgb).setStroke()
                 path.stroke()
             }
@@ -315,6 +323,9 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
                     .lowercase().ifBlank { "mp4" }
                 require(extension in setOf("mp4", "m4v", "mov", "webm")) {
                     "対応していない動画形式です"
+                }
+                check(extension != "webm" || com.valoser.futacha.shared.util.iosWebmPlaybackAvailable()) {
+                    com.valoser.futacha.shared.util.IOS_WEBM_PREVIEW_UNAVAILABLE
                 }
                 val safeName = attachment.fileName.replace(compatIosPreviewUnsafeFileNameRegex, "_")
                     .ifBlank { "compat-preview.$extension" }

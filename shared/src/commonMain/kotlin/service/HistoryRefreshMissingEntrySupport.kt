@@ -48,7 +48,8 @@ internal suspend fun handleHistoryRefreshNotFound(
             markHistoryThreadSkipped(dependencies.skipThreadIds, key)
             dependencies.updates.put(
                 key,
-                archiveResult.entry.copy(isAutoRefreshDisabled = true)
+                archiveResult.entry.copy(isAutoRefreshDisabled = true,
+                    threadStatus = (entry.threadStatus ?: com.valoser.futacha.shared.model.ThreadStatus()).copy(isDead = true))
             )
             return
         }
@@ -88,7 +89,8 @@ internal suspend fun handleHistoryRefreshNotFound(
     )
     val updatedEntry = entry.copy(
         hasAutoSave = entry.hasAutoSave || hasAutoSave,
-        isAutoRefreshDisabled = true
+        isAutoRefreshDisabled = true,
+        threadStatus = (entry.threadStatus ?: com.valoser.futacha.shared.model.ThreadStatus()).copy(isDead = true)
     )
     dependencies.updates.put(key, updatedEntry)
     if (hasAutoSave && !entry.hasAutoSave) {

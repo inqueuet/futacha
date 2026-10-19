@@ -30,5 +30,7 @@ data class ThreadHistoryEntry(
     val isAutoRefreshDisabled: Boolean = false,
     val lastConfirmedAliveEpochMillis: Long? = null,
     val hasSelfPost: Boolean = false,
-    val lastSelfPostEpochMillis: Long? = null
+    val lastSelfPostEpochMillis: Long? = null,
+    /** Null in old histories or until a board response confirms the status. */
+    val threadStatus: ThreadStatus? = null
 )

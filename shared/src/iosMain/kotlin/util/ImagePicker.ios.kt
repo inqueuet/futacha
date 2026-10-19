@@ -648,7 +648,17 @@ private fun readPickedFileBytesUpTo(
     val path = url.path ?: return null
     val knownFileSize = resolveFileSizeBytes(url)
     if (knownFileSize != null && (knownFileSize <= 0L || knownFileSize > maxBytes)) return null
-    val capacity = (knownFileSize ?: maxBytes).toInt()
+    if (knownFileSize == null) {
+        val handle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+        return try {
+            readUnknownSizePickedFile(maxBytes) { chunk, requested ->
+                chunk.usePinned { readPickedFileInto(handle, it.addressOf(0), requested) }
+            }
+        } finally {
+            closePickedFileHandle(handle)
+        }
+    }
+    val capacity = knownFileSize.toInt()
     val output = ByteArray(capacity)
     val handle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
     var totalRead = 0

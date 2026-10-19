@@ -17,7 +17,11 @@ internal data class FtutterMediaSettings(
     val galleryColumns: Int = 4,
     /** ビューアの下のサムネイル帯。 */
     val showStrip: Boolean = true,
-    val stripSize: Int = 80
+    val stripSize: Int = 80,
+    val videoAutoPlay: Boolean = false,
+    val videoLoop: Boolean = false,
+    val reduceThumbnail: Boolean = true,
+    val thumbnailPixels: Int = 200
 )
 
 internal fun parseFtutterMediaSettings(p: Map<String, String>) = FtutterMediaSettings(
@@ -26,6 +30,10 @@ internal fun parseFtutterMediaSettings(p: Map<String, String>) = FtutterMediaSet
     // 原作は−が下限1、＋は上限なし。表示が壊れないよう20までにする。
     galleryColumns = p.ftutterInt(FtutterKeys.GALLERY_COLUMNS, 4, 1..20),
     showStrip = p.ftutterBool(FtutterKeys.SHOW_GALLERY_TAB, true),
+    videoAutoPlay = p.ftutterBool(FtutterKeys.VIDEO_AUTO_PLAY, false),
+    videoLoop = p.ftutterBool(FtutterKeys.VIDEO_LOOP, false),
+    reduceThumbnail = p.ftutterBool(FtutterKeys.USE_MEM_SIZE, true),
+    thumbnailPixels = p.ftutterInt(FtutterKeys.MEM_SIZE, 200, 1..4096),
     stripSize = p.ftutterInt(FtutterKeys.GALLERY_TAB_SIZE, 80, 20..300)
 )
 

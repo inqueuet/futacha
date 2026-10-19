@@ -505,7 +505,8 @@ internal fun CompatMainScreen(
     /** Boards pinned in the shared AppState; shown as a small pin beside the name. Empty without a state store. */
     pinnedBoardKeys: Set<String> = emptySet(),
     /** Null where the pin cannot be saved (no state store): the long-press menu then has no pin entry. */
-    onBoardPinToggle: ((CompatBoard) -> Unit)? = null
+    onBoardPinToggle: ((CompatBoard) -> Unit)? = null,
+    boardsFromBottom: Boolean = false
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
     var reorderMode by remember { mutableStateOf(false) }
@@ -597,6 +598,7 @@ internal fun CompatMainScreen(
             }
     ) { padding ->
             LazyColumn(
+                verticalArrangement = if (boardsFromBottom) Arrangement.Bottom else Arrangement.Top,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)

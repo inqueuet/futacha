@@ -1,7 +1,9 @@
 package com.valoser.futacha.shared.ui.board
 
-/** Runtime checks, never a device-model/UA allowlist. The app currently requires iOS 18.2. */
+/** Runtime checks, never a device-model/UA allowlist. */
 internal fun supportsIosWebmPath(major: Long, minor: Long): Boolean = major > 17 || major == 17L && minor >= 4
+
+internal fun supportsIosAsyncVideoComposition(major: Long): Boolean = major >= 16
 
 internal const val WEB_VIDEO_LOAD_TIMEOUT_MS = 20_000L
 internal const val WEB_VIDEO_STALL_TIMEOUT_MS = 15_000L

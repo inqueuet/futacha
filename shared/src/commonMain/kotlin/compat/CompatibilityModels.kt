@@ -343,12 +343,22 @@ fun isCompatNgScopeValid(
     CompatNgKind.THREAD_IMAGE,
     CompatNgKind.THREAD_IMAGE_PHASH -> scopeKey == "*" || scopeKey in boardKeys || scopeKey in tabKeys
 
-    CompatNgKind.THREAD_POST_NO,
+    CompatNgKind.THREAD_POST_NO -> scopeKey == "*" || scopeKey in tabKeys ||
+        compatPostNgScopeBoardKey(scopeKey)?.let { it in boardKeys } == true
+
     CompatNgKind.THREAD_POSTER_ID,
     CompatNgKind.THREAD_WORD,
     CompatNgKind.THREAD_IGNORE,
     CompatNgKind.THREAD_REFUSE -> scopeKey == "*" || scopeKey in tabKeys
 }
+
+/** A post-only URL scope survives closing a tab without creating a tab in another mode's workspace. */
+fun compatPostNgScopeBoardKey(scopeKey: String): String? = canonicalizeThreadUrl(scopeKey)
+    ?.takeIf { it.canonicalUrl == scopeKey }
+    ?.let { compatBoardKey(it.canonicalBoardUrl) }
+
+fun CompatNgRule.isScopedToRemovedBoard(boardKey: String): Boolean = scopeKey == boardKey ||
+    (kind == CompatNgKind.THREAD_POST_NO && compatPostNgScopeBoardKey(scopeKey) == boardKey)
 
 /**
  * 1.apk stores image NG's "この板のみ" scope as the board key. `tabKey` is

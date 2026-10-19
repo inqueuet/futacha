@@ -334,7 +334,7 @@ internal fun ThreadFormDialog(
                     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         TextField(
                             value = commentInputState.value,
-                            visualTransformation = ImeCompositionHighlight(commentInputState.value.composition, MaterialTheme.colorScheme.primaryContainer),
+                            visualTransformation = imeCompositionHighlight(commentInputState.value.composition),
                             onValueChange = { nextValue ->
                                 trackThreadFormFieldState(
                                     fieldLabel = "投稿本文",
@@ -385,7 +385,7 @@ internal fun ThreadFormDialog(
 
                     if (postingCapabilities.nameAllowed) TextField(
                         value = nameInputState.value,
-                            visualTransformation = ImeCompositionHighlight(nameInputState.value.composition, MaterialTheme.colorScheme.primaryContainer),
+                            visualTransformation = imeCompositionHighlight(nameInputState.value.composition),
                         onValueChange = { nextValue ->
                             trackThreadFormFieldState("おなまえ", nameInputState.value.text, nextValue.text)
                             nameInputState.onValueChange(nextValue)
@@ -401,7 +401,7 @@ internal fun ThreadFormDialog(
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         TextField(
                             value = emailInputState.value,
-                            visualTransformation = ImeCompositionHighlight(emailInputState.value.composition, MaterialTheme.colorScheme.primaryContainer),
+                            visualTransformation = imeCompositionHighlight(emailInputState.value.composition),
                             onValueChange = { nextValue ->
                                 trackThreadFormFieldState("メール", emailInputState.value.text, nextValue.text)
                                 emailInputState.onValueChange(nextValue)
@@ -436,7 +436,7 @@ internal fun ThreadFormDialog(
                     if (showSubject && postingCapabilities.subjectAllowed) {
                         TextField(
                             value = subjectInputState.value,
-                            visualTransformation = ImeCompositionHighlight(subjectInputState.value.composition, MaterialTheme.colorScheme.primaryContainer),
+                            visualTransformation = imeCompositionHighlight(subjectInputState.value.composition),
                             onValueChange = { nextValue ->
                                 trackThreadFormFieldState(
                                     fieldLabel = "題名",

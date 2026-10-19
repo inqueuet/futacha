@@ -52,3 +52,15 @@
 # rules, so renaming or shrinking them makes the first native error (including
 # a cancelled detection/contour/tracking run) abort the process.
 -keep class ai.onnxruntime.** { *; }
+
+# R8 9.5.0-dev emits invalid register types when optimizing this large
+# Compose entry point (13.0/220: FutaberThreadRef used by and-int/lit8 at
+# dex PC 0xB2). Static merging also put it in Utf8$Processor's superclass,
+# so Firebase Performance serialization crashed even outside this mode.
+# Keep only this entry point and its holder out of optimization/merging;
+# names may still be obfuscated and other methods remain optimizable.
+-keep,allowobfuscation class com.valoser.futacha.shared.ui.futaber.FutaberThreadKt {
+    public static void FutaberThreadScreen(...);
+}
+# VOICEVOX's small JNI surface is resolved by the native exported method names.
+-keep class com.valoser.futacha.shared.audio.voicevox.VoicevoxNative { *; }

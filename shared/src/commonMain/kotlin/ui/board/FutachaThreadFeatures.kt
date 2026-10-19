@@ -246,10 +246,19 @@ internal fun FutachaThreadFeatureHost(
                 title = threadTitle, replyCount = next.page.compatReplyCount(),
                 checkedReplyCount = next.page.compatReplyCount(), snapshotRevision = if (snapshotChanged) snapshot.revision else storedSnapshot?.revision ?: snapshot.revision,
                 contentUpdatedAtEpochMillis = if (snapshotChanged) now else existing?.contentUpdatedAtEpochMillis ?: now, thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl)
-            if (existing == null) features.store.openTab(updated) else if (updated != existing) features.store.updateTab(updated)
+            val flags = parseCompatThreadStatusFlags(next.page.deletedNotice)
+            val confirmed = if (!isCachedPage && !next.isArchived) updated.copy(
+                isDead = next.confirmedGone, isIsolated = flags.isIsolated, isDeleted = flags.isDeleted, isExploded = flags.isAdminDeleted
+            ) else updated
+            if (existing == null) features.store.openTab(confirmed) else if (confirmed != existing) features.store.updateTab(confirmed)
             latestWrittenToTab = true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
+    }
+    val confirmedGone = !staticView && !restoring &&
+        ((currentState as? ThreadUiState.Error)?.confirmedGone == true || ((currentState as? ThreadUiState.Success)?.let { it.isArchived || it.confirmedGone } == true))
+    LaunchedEffect(confirmedGone, tabKey) {
+        if (confirmedGone) features.store.updateTabIfPresent(tabKey) { it.copy(isDead = true) }
     }
     val page = (currentState as? ThreadUiState.Success)?.page ?: latest?.page
     val tab = tabs.firstOrNull { it.key == tabKey } ?: CompatTab(

@@ -8,6 +8,10 @@ import com.valoser.futacha.shared.media.video.VideoEditPlayback
 import com.valoser.futacha.shared.ui.image.LocalOriginalMediaSource
 import kotlinx.coroutines.*
 
+data class VideoPlaybackOptions(val autoPlay: Boolean = false, val loop: Boolean = false)
+
+val LocalVideoPlaybackOptions = staticCompositionLocalOf<VideoPlaybackOptions?> { null }
+
 enum class VideoPlayerState {
     Idle,
     Buffering,

@@ -18,6 +18,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.microseconds
+import kotlin.time.TestTimeSource
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 /**
@@ -287,20 +291,52 @@ class FtutterFreezeRegressionTest {
         assertTrue(ftutterIsSlowNgPattern(pattern))
     }
 
+    /** Count bounded matching work independently of GC / scheduling and the regex engine's speed. */
+    private class RegexWorkClock : TimeSource {
+        private val ticks = TestTimeSource()
+        private val origin = ticks.markNow()
+        override fun markNow(): TimeMark {
+            val mark = ticks.markNow()
+            return object : TimeMark {
+                override fun elapsedNow(): Duration {
+                    ticks += 100.microseconds
+                    return mark.elapsedNow()
+                }
+            }
+        }
+        fun elapsed(): Duration = origin.elapsedNow()
+    }
+
     /** 再監査M6：時間の予算は照合のまとまりごと。更新を何度繰り返しても、普通の正規表現は止められない。 */
     @Test
     fun aNormalRegexKeepsWorkingOverManyRefreshes() {
         val pattern = "ねこ[0-9]+号M6"
+        val clock = RegexWorkClock()
+        val budget = 100.milliseconds
         val matcher = FtutterNgMatcher(
             listOf(FtutterNgRule(pattern, FtutterNgType.WORD.stored, isReg = true)), null,
-            matchLimit = 30.milliseconds, ruleBudget = 20.milliseconds
+            matchLimit = 30.milliseconds, ruleBudget = budget, timeSource = clock
         )
-        val posts = (1..20).map { post("$it", body = if (it == 7) "ねこ12号M6です" else "ふつうの本文 $it ".repeat(300)) }
-        // 1回の更新はすぐ終わるが、合計は予算を大きく超える。
-        repeat(3_000) { ftutterNgPostIndexes(posts, matcher, emptyList(), emptyList()) }
+        val posts = (1..20).map { post("$it", body = if (it == 7) "ねこ12号M6です" else "ふつうの本文 $it ".repeat(3)) }
+        // Each pass fits; total simulated matching work exceeds the budget even on the fastest engine.
+        // No dependence on whether an OS pause / GC happens during a 20ms real-time window.
+        repeat(100) { ftutterNgPostIndexes(posts, matcher, emptyList(), emptyList()) }
+        assertTrue(clock.elapsed() > budget, "The test must exceed one cumulative rule budget")
         assertFalse(ftutterIsSlowNgPattern(pattern))
         assertEquals(setOf(6), ftutterNgPostIndexes(posts, matcher, emptyList(), emptyList()))
         assertEquals(setOf(6), ftutterNgHiddenPosts(posts, matcher, chain = false))
+    }
+
+    @Test
+    fun onePassStillStopsWhenItsRuleBudgetIsExhausted() {
+        val pattern = "ねこ[0-9]+号OnePassBudget"
+        val matcher = FtutterNgMatcher(
+            listOf(FtutterNgRule(pattern, FtutterNgType.WORD.stored, isReg = true)), null,
+            matchLimit = 30.milliseconds, ruleBudget = 1.milliseconds, timeSource = RegexWorkClock()
+        )
+        matcher.beginPass()
+        repeat(20) { matcher.hidesPost(post("$it", body = "ふつうの本文")) }
+        assertTrue(ftutterIsSlowNgPattern(pattern))
     }
 
     @Test

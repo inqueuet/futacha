@@ -6,10 +6,7 @@ import okhttp3.CookieJar
 import okio.Path
 import okio.Path.Companion.toPath
 
-internal actual fun createModelDownloadClient(): HttpClient = HttpClient(OkHttp) {
-    configureModelDownloads()
-    engine { config { cookieJar(CookieJar.NO_COOKIES); followRedirects(false); followSslRedirects(false) } }
-}
+internal actual fun createModelDownloadClient(): HttpClient = com.valoser.futacha.shared.download.createAssetDownloadClient()
 
 internal actual fun modelStoreDirectory(platformContext: Any?): Path =
     java.io.File(requireNotNull(com.valoser.futacha.shared.desktop.DesktopEnvironment.current) {

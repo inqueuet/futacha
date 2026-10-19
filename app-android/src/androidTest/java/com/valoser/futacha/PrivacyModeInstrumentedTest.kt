@@ -63,7 +63,9 @@ class PrivacyModeInstrumentedTest {
                         }
                     } else {
                         Column(Modifier.fillMaxSize()) {
-                            ThreadTopBar("板", "周囲に見せたくないタイトル", 1, null, false,
+                            if (compat) com.valoser.futacha.shared.ui.compat.CompatTopBar("周囲に見せたくないタイトル", "板", {},
+                                titleAppearance = LocalPrivacyMode.current?.options?.compatTitle ?: PrivateTitle.NORMAL)
+                            else ThreadTopBar("板", "周囲に見せたくないタイトル", 1, null, false,
                                 remember { mutableStateOf("") }, 0, 0, {}, {}, {}, {}, {}, {}, {}, {}, {})
                             Box(Modifier.fillMaxWidth().height(160.dp).background(Color.White).testTag("privacy-pixels")) {
                                 Text("周囲に見せたくない本文", color = Color.Black)
@@ -84,9 +86,10 @@ class PrivacyModeInstrumentedTest {
                 else appState.isPrivacyFilterEnabled.first()
             }
         }
+        rule.onNodeWithTag("privacy-scope-SCREEN").performScrollTo().performClick()
         rule.onNodeWithText("暗くする＋網目").performScrollTo().performClick()
         rule.onNodeWithText("タイトルを隠す").performScrollTo().performClick()
-        rule.waitUntil(5_000) { runBlocking { store.preferences.first()[PRIVACY_TITLE_KEY] == "HIDDEN" } }
+        rule.waitUntil(5_000) { runBlocking { store.preferences.first()[if (compat) PRIVACY_COMPAT_TITLE_KEY else PRIVACY_TITLE_KEY] == "HIDDEN" } }
         rule.onNodeWithText("設定を閉じる").performScrollTo().performClick()
         rule.onNodeWithTag("privacy-screen-filter").assertExists()
         rule.onNodeWithText("周囲に見せたくないタイトル").assertDoesNotExist()

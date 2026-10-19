@@ -32,11 +32,11 @@ private val IOS_SPEECH_BOUNDARY_IMMEDIATE = AVSpeechBoundary.AVSpeechBoundaryImm
 /** How long stop() keeps the session for a following speak (next/previous, N4-7). */
 private const val IOS_SPEECH_RELEASE_GRACE_NANOS = 1_000_000_000L
 
-actual class TextSpeaker actual constructor(platformContext: Any?) {
-    actual val supportsPitch: Boolean = true
+internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
+    override val supportsPitch: Boolean = true
     private var speechSettings = SpeechSettings()
-    actual fun configure(settings: SpeechSettings) { stateLock.withLock { speechSettings = settings } }
-    actual suspend fun availableVoices(): List<SpeechVoice> = AVSpeechSynthesisVoice.speechVoices()
+    override fun configure(settings: SpeechSettings) { stateLock.withLock { speechSettings = settings } }
+    override suspend fun availableVoices(): List<SpeechVoice> = AVSpeechSynthesisVoice.speechVoices()
         .filterIsInstance<AVSpeechSynthesisVoice>().filter { it.language.startsWith("ja") }
         .sortedBy { it.name }.map { SpeechVoice(it.identifier, it.name) }
     private val stateLock = NSLock()
@@ -79,7 +79,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         synthesizer.delegate = delegate
     }
 
-    actual suspend fun prepare() {
+    override suspend fun prepare() {
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
         val held = stateLock.withLock {
             audioLease ?: pendingRelease?.also {
@@ -105,7 +105,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
             ?: throw IllegalStateException(JAPANESE_TTS_UNAVAILABLE_MESSAGE)
     }
 
-    actual suspend fun speak(text: String) {
+    override suspend fun speak(text: String) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
 
@@ -159,7 +159,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
     }
 
-    actual fun stop() {
+    override fun stop() {
         synthesizer.stopSpeakingAtBoundary(IOS_SPEECH_BOUNDARY_IMMEDIATE)
         cancelActive(CancellationException("ユーザーにより読み上げが停止されました"))
         val generation = stateLock.withLock {
@@ -180,7 +180,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         }
     }
 
-    actual fun close() {
+    override fun close() {
         closed = true
         synthesizer.stopSpeakingAtBoundary(IOS_SPEECH_BOUNDARY_IMMEDIATE)
         synthesizer.delegate = null
@@ -255,4 +255,4 @@ private inline fun <T> NSLock.withLock(block: () -> T): T {
     }
 }
 
-actual fun createTextSpeaker(platformContext: Any?): TextSpeaker = TextSpeaker(platformContext)
+internal actual fun createSystemSpeechEngine(platformContext: Any?): SpeechBackend = SystemSpeechEngine(platformContext)

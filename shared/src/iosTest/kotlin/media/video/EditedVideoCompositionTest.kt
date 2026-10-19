@@ -18,7 +18,12 @@ import platform.posix.memcpy
 import kotlin.test.*
 
 class EditedVideoCompositionTest {
-    @Test fun playbackCompositionUsesUprightCoordinatesAndActualFrameTimes(): Unit = runBlocking {
+    @Test fun playbackCompositionUsesUprightCoordinatesAndActualFrameTimes() =
+        verifyComposition(com.valoser.futacha.shared.util.iosAsyncVideoCompositionAvailable())
+
+    @Test fun iosFifteenSynchronousCompositionPreservesRotationAndFrameTimes() = verifyComposition(false)
+
+    private fun verifyComposition(useAsyncComposition: Boolean): Unit = runBlocking {
         val fs = createFileSystem(); val root = "edited_playback_contract"
         try {
             for (name in listOf("variable", "asymmetric-rotated")) {
@@ -30,7 +35,7 @@ class EditedVideoCompositionTest {
                     endUs = if (name == "variable") 1_100_000 else info.frames.durationUs, style = MosaicStyle.BLACK)
                 val doc = MosaicDocument(listOf(region))
                 val editing = VideoEditPlayback(info, doc, 0, {}, {})
-                val item = editedVideoPlayerItem(NSURL.fileURLWithPath(path), editing)
+                val item = editedVideoPlayerItem(NSURL.fileURLWithPath(path), editing, useAsyncComposition)
                 val generator = AVAssetImageGenerator(item.asset).apply {
                     videoComposition = item.videoComposition
                     requestedTimeToleranceBefore = CMTimeMake(1, 1_000_000)
@@ -41,6 +46,7 @@ class EditedVideoCompositionTest {
                         val time = info.frames.timeAt(index)
                         val actual = generator.frame(time)
                         val expected = previewDeviceVideo(path, info, time, doc)
+                        trimIosVideoPreviewMemory()
                         assertEquals(info.width, actual.width, name)
                         assertEquals(info.height, actual.height, name)
                         val a = IntArray(actual.width * actual.height).also { actual.readPixels(it) }

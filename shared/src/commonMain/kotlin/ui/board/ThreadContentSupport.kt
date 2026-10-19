@@ -69,7 +69,7 @@ private fun buildThreadPostDerivedDataCombined(posts: List<Post>): ThreadPostDer
             )
         }
         source.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
-            reference.targetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
+            reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
                 val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
                 if (!seenSourceIds.add(source.id)) return@targetLoop
                 referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
@@ -113,7 +113,7 @@ private suspend fun buildThreadPostDerivedDataCombinedCancellable(posts: List<Po
             )
         }
         source.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
-            reference.targetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
+            reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
                 val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
                 if (!seenSourceIds.add(source.id)) return@targetLoop
                 referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
@@ -264,6 +264,12 @@ internal fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFi
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.thumbnailUrl)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.saidaneLabel)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.quoteReferences.size)
+        post.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
+            rollingHash = mixThreadPostFingerprintHash(rollingHash, if (reference.isDirectReply) 1 else 0)
+            reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach { target ->
+                rollingHash = mixThreadPostFingerprintHash(rollingHash, target)
+            }
+        }
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.referencedCount)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, if (post.isDeleted) 1 else 0)
     }
@@ -299,6 +305,12 @@ internal suspend fun buildThreadPostListFingerprintCancellable(posts: List<Post>
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.thumbnailUrl)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.saidaneLabel)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.quoteReferences.size)
+        post.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
+            rollingHash = mixThreadPostFingerprintHash(rollingHash, if (reference.isDirectReply) 1 else 0)
+            reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach { target ->
+                rollingHash = mixThreadPostFingerprintHash(rollingHash, target)
+            }
+        }
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.referencedCount)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, if (post.isDeleted) 1 else 0)
     }
@@ -337,7 +349,7 @@ internal fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>>
     val seenSourceIdsByTarget = mutableMapOf<String, MutableSet<String>>()
     posts.forEach { source ->
         source.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
-            reference.targetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach { targetId ->
+            reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach { targetId ->
                 val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
                 if (!seenSourceIds.add(source.id)) return@forEach
                 referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)

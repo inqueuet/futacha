@@ -77,7 +77,8 @@ internal fun FutachaTabsDialog(
                     ListItem(
                         headlineContent = { Text(tab.title) },
                         supportingContent = { Column {
-                            Text("${tab.boardName}・${tab.replyCount}レス${if (tab.isDead) "・落ち" else ""}")
+                            val status = threadStatusText(tab.confirmedStatus())
+                            Text("${tab.boardName}・${tab.replyCount}レス${if (status.isEmpty()) "" else "・$status"}")
                             CatalogNewRepliesBadge(tab.unreadCount)
                         } },
                         leadingContent = { TextButton(enabled = !busy, onClick = { perform {

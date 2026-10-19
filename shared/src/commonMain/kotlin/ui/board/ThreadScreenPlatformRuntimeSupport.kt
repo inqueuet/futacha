@@ -32,7 +32,8 @@ internal fun rememberThreadScreenPlatformRuntimeBindings(
         }
     }
     val archiveSearchJson = remember { Json { ignoreUnknownKeys = true } }
-    val textSpeaker = remember(platformContext) { createTextSpeaker(platformContext) }
+    val speechRuntime = com.valoser.futacha.shared.audio.LocalSpeechRuntime.current
+    val textSpeaker = remember(platformContext, speechRuntime) { createTextSpeaker(platformContext, speechRuntime) }
     val speechSettings = com.valoser.futacha.shared.audio.speechSettingsFromPreferences(LocalFutachaSharedFeatures.current?.preferences.orEmpty())
     androidx.compose.runtime.SideEffect { textSpeaker.configure(speechSettings) }
     return remember(

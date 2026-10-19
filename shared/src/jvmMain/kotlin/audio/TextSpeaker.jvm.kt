@@ -5,12 +5,12 @@ import java.util.concurrent.atomic.AtomicReference
 import com.valoser.futacha.shared.desktop.DesktopPlatform
 import java.util.Base64
 
-actual class TextSpeaker actual constructor(platformContext: Any?) {
-    actual val supportsPitch: Boolean = false
+internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
+    override val supportsPitch: Boolean = false
     @Volatile private var settings = SpeechSettings()
     private var voiceCache: List<SpeechVoice>? = null
-    actual fun configure(settings: SpeechSettings) { this.settings = settings }
-    actual suspend fun availableVoices(): List<SpeechVoice> = withContext(Dispatchers.IO) {
+    override fun configure(settings: SpeechSettings) { this.settings = settings }
+    override suspend fun availableVoices(): List<SpeechVoice> = withContext(Dispatchers.IO) {
         voiceCache?.let { return@withContext it }
         val command = if (DesktopPlatform.isWindows) windowsSpeechCommand("""
             Add-Type -AssemblyName System.Speech
@@ -30,10 +30,10 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         } finally { process.destroyForcibly() }
     }
     private val active = AtomicReference<Process?>(null)
-    actual suspend fun prepare() {
+    override suspend fun prepare() {
         if (!DesktopPlatform.isWindows) check(java.io.File("/usr/bin/say").canExecute()) { JAPANESE_TTS_UNAVAILABLE_MESSAGE }
     }
-    actual suspend fun speak(text: String) = withContext(Dispatchers.IO) {
+    override suspend fun speak(text: String) = withContext(Dispatchers.IO) {
         prepare(); stop()
         val current = settings
         val voice = availableVoices().firstOrNull { it.id == current.voiceId }?.id
@@ -67,10 +67,10 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
             check(process.exitValue() == 0) { JAPANESE_TTS_UNAVAILABLE_MESSAGE }
         } finally { active.compareAndSet(process, null); process.destroyForcibly() }
     }
-    actual fun stop() { active.getAndSet(null)?.destroyForcibly() }
-    actual fun close() = stop()
+    override fun stop() { active.getAndSet(null)?.destroyForcibly() }
+    override fun close() = stop()
 }
-actual fun createTextSpeaker(platformContext: Any?): TextSpeaker = TextSpeaker(platformContext)
+internal actual fun createSystemSpeechEngine(platformContext: Any?): SpeechBackend = SystemSpeechEngine(platformContext)
 
 private fun windowsSpeechCommand(script: String) = listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
     Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE)))

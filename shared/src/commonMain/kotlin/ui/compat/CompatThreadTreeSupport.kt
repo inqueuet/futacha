@@ -57,7 +57,7 @@ internal suspend fun relatedCompatPostsIndexed(postNo: String, posts: List<Compa
     val quoteIndex = CompatQuoteIndex(posts)
     fun targets(post: CompatPostSnapshot): Set<String> {
         if (post.isContentRedacted) return emptySet()
-        if (post.quoteReferences.isNotEmpty()) return post.quoteReferences.flatMap { it.targetPostIds }.toSet()
+        if (post.quoteReferences.isNotEmpty()) return post.quoteReferences.flatMap { it.replyTargetPostIds }.toSet()
         return post.messageHtml.toCompatPlainText().lineSequence().mapNotNull(::compatQuoteQueryForLine)
             .flatMap { quoteIndex.resolve(post.position, it).asSequence().map { match -> match.postNo } }.toSet()
     }

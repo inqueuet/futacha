@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import androidx.compose.ui.semantics.contentDescription
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -20,7 +22,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DismissibleDrawerSheet
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DropdownMenu
@@ -59,12 +61,14 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -84,7 +88,6 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.ui.board.CatalogPreviewImage
 
 /** タブ・ドロワーの行の長押しメニュー（原作 TabDialog）。 */
 internal enum class FtutterTabAction { PROTECT, REFRESH_ALL, CLOSE_FALLEN, CLOSE_AFTER, CLOSE_ALL }
@@ -100,7 +103,7 @@ internal data class FtutterTabView(
 
 /**
  * ドロワー（原作 Drawer）。左（設定で右・両方・無効）に、画面の約74%の幅で出す。
- * 上：分類（履歴／タブ／タブ（更新順））と、閉じたタブを1件ずつ戻すボタン。
+ * 上：分類（履歴／タブ／タブ（更新順））。タブ表示の時だけ、閉じたタブを1件ずつ戻すボタン。
  * 下：書込・未読の絞り込みと、題名の検索。
  */
 @Composable
@@ -115,7 +118,8 @@ internal fun FtutterDrawerHost(
         content()
         return
     }
-    val rightSide = settings.drawerSide == FtutterDrawerSide.RIGHT
+    var openedOnRight by remember(settings.drawerSide) { mutableStateOf(false) }
+    val rightSide = settings.drawerSide == FtutterDrawerSide.RIGHT || settings.drawerSide == FtutterDrawerSide.BOTH && openedOnRight
     val outer = LocalLayoutDirection.current
     // 右に出す時は、ドロワーの部品を右から左の向きで置き、中身は元の向きへ戻す。
     CompositionLocalProvider(LocalLayoutDirection provides if (rightSide) LayoutDirection.Rtl else outer) {
@@ -142,18 +146,29 @@ internal fun FtutterDrawerHost(
                     // 端の帯（20dp）。内側へ24dp引いたら開く。右に出す時は、右から左の向きなので右端になる。
                     Box(
                         Modifier.align(Alignment.CenterStart).fillMaxHeight().width(20.dp)
-                            .pointerInput(Unit) {
+                            .pointerInput(rightSide) {
                                 var pulled = 0f
                                 detectHorizontalDragGestures(
                                     onDragStart = { pulled = 0f },
                                     onHorizontalDrag = { change, amount ->
-                                        pulled += amount
+                                        pulled += if (rightSide) -amount else amount
                                         change.consume()
                                         if (pulled > 24.dp.toPx()) scope.launch { drawerState.open() }
                                     }
                                 )
                             }
                             .testTag("ftutter-drawer-edge")
+                    )
+                    if (settings.drawerSide == FtutterDrawerSide.BOTH) Box(
+                        Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(20.dp)
+                            .pointerInput(rightSide) {
+                                var pulled = 0f
+                                detectHorizontalDragGestures(onDragStart = { pulled = 0f }, onHorizontalDrag = { change, amount ->
+                                    pulled += if (rightSide) amount else -amount
+                                    change.consume()
+                                    if (pulled > 24.dp.toPx()) { openedOnRight = !rightSide; scope.launch { drawerState.open() } }
+                                })
+                            }.testTag("ftutter-drawer-other-edge")
                     )
                 }
             }
@@ -172,13 +187,16 @@ internal fun FtutterDrawerPanel(
     design: FtutterDesignSettings,
     onContentChange: (FtutterDrawerContent) -> Unit,
     onFilterChange: (FtutterDrawerFilter) -> Unit,
-    onRestoreClosed: () -> Unit,
+    /** 復元したタブを示す案内。ドロワーの外の通知は背面に隠れるので、ここで表示する。 */
+    onRestoreClosed: () -> String?,
     onOpen: (String) -> Unit,
     onLongPress: (String) -> Unit,
     onClose: (String) -> Unit,
     onToggleProtect: (String) -> Unit,
     /** 拡張「履歴の選択削除・すべて削除」。ONの時だけ「履歴」の上に選択のボタンを出す。 */
     historyTools: Boolean = false,
+    showStatus: Boolean = false,
+    privacy: Boolean = false,
     /** 変わると選択をやめる（ドロワーを閉じた時など）。 */
     selectionReset: Any? = null,
     onDeleteHistory: (List<String>) -> Unit = {},
@@ -195,49 +213,11 @@ internal fun FtutterDrawerPanel(
     val visibleUrls = remember(rows) { rows.map { it.url }.toSet() }
     val chosen = selected intersect visibleUrls
     Column(Modifier.fillMaxSize().background(colors.background)) {
-        Row(
-            Modifier.fillMaxWidth().background(colors.toolBar).statusBarsPadding().height(56.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Spacer(Modifier.weight(1f))
-            var open by remember { mutableStateOf(false) }
-            Box {
-                Row(
-                    Modifier.widthIn(min = 160.dp).clickable { open = true }.padding(horizontal = 16.dp, vertical = 8.dp)
-                        .testTag("ftutter-drawer-content"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(content.label, color = colors.onToolBar, fontSize = 18.sp, modifier = Modifier.weight(1f, fill = false))
-                    Icon(Icons.Rounded.ArrowDropDown, contentDescription = "分類", tint = colors.onToolBar)
-                }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    FtutterDrawerContent.entries.forEach { candidate ->
-                        DropdownMenuItem(
-                            text = { Text(candidate.label) },
-                            onClick = { open = false; onContentChange(candidate) },
-                            modifier = Modifier.testTag("ftutter-drawer-content-${candidate.name}")
-                        )
-                    }
-                }
-            }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                if (toolsShown && selecting) {
-                    IconButton(onClick = { confirmAll = true }, modifier = Modifier.testTag("ftutter-drawer-history-delete-all")) {
-                        Icon(Icons.Rounded.DeleteSweep, contentDescription = "履歴をすべて削除", tint = colors.onToolBar)
-                    }
-                } else if (toolsShown) {
-                    IconButton(onClick = { selecting = true; selected = emptySet() }, modifier = Modifier.testTag("ftutter-drawer-history-select")) {
-                        Icon(Icons.Rounded.Checklist, contentDescription = "履歴を選んで削除", tint = colors.onToolBar)
-                    }
-                }
-                if (closedCount > 0 && !selecting) {
-                    IconButton(onClick = onRestoreClosed, modifier = Modifier.testTag("ftutter-drawer-restore")) {
-                        Icon(Icons.Rounded.RestoreFromTrash, contentDescription = "閉じたタブを開く", tint = colors.onToolBar)
-                    }
-                }
-            }
-        }
+        FtutterDrawerHeader(
+            content, closedCount, toolsShown, selecting, selectionReset, onContentChange, onRestoreClosed,
+            onBeginSelection = { selecting = true; selected = emptySet() },
+            onDeleteAll = { confirmAll = true }
+        )
         if (searching) {
             TextField(
                 value = filter.query,
@@ -253,6 +233,8 @@ internal fun FtutterDrawerPanel(
                 if (selecting) {
                     FtutterDrawerRow(
                         row, design,
+                        privacy = privacy,
+                        showStatus = showStatus,
                         onOpen = { url -> selected = if (url in selected) selected - url else selected + url },
                         onLongPress = {},
                         checked = row.url in chosen
@@ -262,10 +244,10 @@ internal fun FtutterDrawerPanel(
                 val swipeable = row.isTab && content != FtutterDrawerContent.HISTORY && dismissDirection != FtutterDismissDirection.NONE
                 if (swipeable) {
                     FtutterSwipeRow(row, dismissDirection, onClose, onToggleProtect) {
-                        FtutterDrawerRow(row, design, onOpen, onLongPress)
+                        FtutterDrawerRow(row, design, onOpen, onLongPress, privacy = privacy, showStatus = showStatus)
                     }
                 } else {
-                    FtutterDrawerRow(row, design, onOpen, onLongPress)
+                    FtutterDrawerRow(row, design, onOpen, onLongPress, privacy = privacy, showStatus = showStatus)
                 }
             }
         }
@@ -348,6 +330,92 @@ internal fun FtutterDrawerPanel(
     }
 }
 
+/** Keep the header and its transient feedback separate from the history list's selection state. */
+@Composable
+private fun FtutterDrawerHeader(
+    content: FtutterDrawerContent,
+    closedCount: Int,
+    toolsShown: Boolean,
+    selecting: Boolean,
+    selectionReset: Any?,
+    onContentChange: (FtutterDrawerContent) -> Unit,
+    onRestoreClosed: () -> String?,
+    onBeginSelection: () -> Unit,
+    onDeleteAll: () -> Unit
+) {
+    val colors = LocalFtutterColors.current
+    val restoreNoticeHolder = remember(content, selectionReset) { FtutterNoticeHolder() }
+    var restoreNotice by restoreNoticeHolder
+    LaunchedEffect(restoreNoticeHolder.serial) {
+        if (restoreNotice != null) {
+            kotlinx.coroutines.delay(4_000)
+            restoreNotice = null
+        }
+    }
+    Column {
+        Row(
+            Modifier.fillMaxWidth().background(colors.toolBar).statusBarsPadding().height(56.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            var open by remember { mutableStateOf(false) }
+            Box(Modifier.weight(1f)) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 8.dp, vertical = 8.dp)
+                        .testTag("ftutter-drawer-content"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(content.label, color = colors.onToolBar, fontSize = 18.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Icon(Icons.Rounded.ArrowDropDown, contentDescription = "分類", tint = colors.onToolBar)
+                }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    FtutterDrawerContent.entries.forEach { candidate ->
+                        DropdownMenuItem(
+                            text = { Text(candidate.label) },
+                            onClick = { open = false; onContentChange(candidate) },
+                            modifier = Modifier.testTag("ftutter-drawer-content-${candidate.name}")
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (toolsShown && selecting) {
+                    IconButton(onClick = { onDeleteAll() }, modifier = Modifier.testTag("ftutter-drawer-history-delete-all")) {
+                        Icon(Icons.Rounded.DeleteSweep, contentDescription = "履歴をすべて削除", tint = colors.onToolBar)
+                    }
+                } else if (toolsShown) {
+                    IconButton(onClick = { onBeginSelection() }, modifier = Modifier.testTag("ftutter-drawer-history-select")) {
+                        Icon(Icons.Rounded.Checklist, contentDescription = "履歴を選んで削除", tint = colors.onToolBar)
+                    }
+                }
+                // 原作 Drawer.dart は履歴ではこのボタンを出さない。履歴の削除・復元ではなく、タブを閉じた操作のUndo。
+                if (content != FtutterDrawerContent.HISTORY) {
+                    TextButton(
+                        onClick = { restoreNotice = onRestoreClosed() },
+                        enabled = closedCount > 0,
+                        colors = ButtonDefaults.textButtonColors(contentColor = colors.onToolBar,
+                            disabledContentColor = colors.onToolBar.copy(alpha = 0.38f)),
+                        modifier = Modifier.testTag("ftutter-drawer-restore")
+                    ) {
+                        Icon(Icons.Rounded.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("タブを戻す", fontSize = 12.sp, maxLines = 1)
+                            Text("残り${closedCount}件", fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+        restoreNotice?.let { message ->
+            Text(message, color = colors.text, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().background(colors.popUp).padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("ftutter-drawer-restore-notice"))
+        }
+    }
+}
+
 @Composable
 private fun FtutterDrawerCheck(label: String, checked: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = LocalFtutterColors.current
@@ -411,10 +479,14 @@ private fun FtutterDrawerRow(
     onOpen: (String) -> Unit,
     onLongPress: (String) -> Unit,
     /** 選択中だけ値がある（null は通常の行）。 */
-    checked: Boolean? = null
+    checked: Boolean? = null,
+    privacy: Boolean = false,
+    showStatus: Boolean = false
 ) {
     val colors = LocalFtutterColors.current
     val entry = row.entry
+    val status = if (showStatus) com.valoser.futacha.shared.ui.board.threadStatusText(entry?.threadStatus)
+        else if (entry?.isAutoRefreshDisabled == true) "落ち" else ""
     Column(
         Modifier.fillMaxWidth().background(colors.background)
             .combinedClickable(onClick = { onOpen(row.url) }, onLongClick = { onLongPress(row.url) })
@@ -431,10 +503,10 @@ private fun FtutterDrawerRow(
             }
             Box(Modifier.size(58.dp).clip(RoundedCornerShape(2.dp))) {
                 entry?.titleImageUrl?.takeIf { it.isNotBlank() }?.let { thumb ->
-                    CatalogPreviewImage(
+                    FtutterThumbnail(
                         thumbnailUrl = thumb, fullImageUrl = null, targetSizePx = 160, contentDescription = "",
                         modifier = Modifier.fillMaxSize().then(
-                            Modifier.background(Color.Transparent)
+                            Modifier.alpha(if (privacy) (1.0 - design.privacyTabDrawer).toFloat() else 1f)
                         )
                     )
                 }
@@ -450,8 +522,9 @@ private fun FtutterDrawerRow(
                     if (row.protected) {
                         Icon(Icons.Rounded.Lock, contentDescription = "保護", tint = colors.headerText, modifier = Modifier.size(14.dp).testTag("ftutter-drawer-protected"))
                     }
-                    if (entry?.isAutoRefreshDisabled == true) {
-                        Text("落ち", color = colors.deleted, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp))
+                    if (status.isNotEmpty()) {
+                        Text(status, color = colors.text, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp)
+                            .testTag("ftutter-drawer-status"))
                     }
                     Spacer(Modifier.weight(1f))
                     Text(entry?.boardName.orEmpty(), color = colors.text, fontSize = 13.sp, maxLines = 1)
@@ -538,7 +611,8 @@ internal fun FtutterTabStrip(
     /** 長押しのまま横へ動かすと並べ替え（原作 DraggableTabbar。`disableDragTab`がONなら並べ替えない）。 */
     onMove: ((from: Int, to: Int) -> Unit)? = null,
     /** タブ帯の位置。スレ画面はスレッドごとに作り直すので、アプリ側で持って渡す（再監査M3：切り替えると先頭に戻った）。 */
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState = rememberLazyListState(),
+    showStatus: Boolean = false
 ) {
     val colors = LocalFtutterColors.current
     if (tabs.isEmpty()) return
@@ -587,18 +661,34 @@ internal fun FtutterTabStrip(
                             }
                         }
                     }
-                    .semantics { onLongClick(label = "タブの操作") { onLongPress(tab.url); true } }
+                    .semantics {
+                        contentDescription = tab.entry?.title.orEmpty() +
+                            if (showStatus) "、" + com.valoser.futacha.shared.ui.board.threadStatusText(tab.entry?.threadStatus) else ""
+                        onLongClick(label = "タブの操作") { onLongPress(tab.url); true }
+                    }
                     .testTag(if (selected) "ftutter-tab-selected" else "ftutter-tab")
             ) {
                 val thumb = tab.entry?.titleImageUrl.orEmpty()
+                val titleBesideUnread = thumb.isBlank() && showStatus &&
+                    com.valoser.futacha.shared.ui.board.threadStatusBadgeText(tab.entry?.threadStatus).isNotEmpty()
                 if (thumb.isNotBlank()) {
-                    CatalogPreviewImage(thumbnailUrl = thumb, fullImageUrl = null, targetSizePx = 120, contentDescription = tab.entry?.title.orEmpty(),
-                        modifier = Modifier.fillMaxSize())
+                    FtutterThumbnail(thumbnailUrl = thumb, fullImageUrl = null, targetSizePx = 120, contentDescription = tab.entry?.title.orEmpty(),
+                        modifier = Modifier.fillMaxSize().alpha(if (settings.privacy) (1.0 - design.privacyTabDrawer).toFloat() else 1f))
+                } else if (titleBesideUnread) {
+                    Row(Modifier.fillMaxWidth().align(Alignment.BottomStart), verticalAlignment = Alignment.Bottom) {
+                        Text(tab.entry?.title.orEmpty(), color = colors.onToolBar, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(2.dp))
+                        tab.numbers.unread?.let { unread ->
+                            Text("$unread", color = colors.onMidoku, fontSize = (design.catalogNumberFontSize - 2).coerceAtLeast(8).sp,
+                                lineHeight = design.catalogNumberFontSize.coerceAtLeast(10).sp,
+                                modifier = Modifier.background(colors.midoku).padding(horizontal = 2.dp))
+                        }
+                    }
                 } else {
                     Text(tab.entry?.title.orEmpty(), color = colors.onToolBar, fontSize = 10.sp, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(2.dp))
                 }
-                tab.numbers.unread?.let { unread ->
+                tab.numbers.unread?.takeUnless { titleBesideUnread }?.let { unread ->
                     Text(
                         "$unread", color = colors.onMidoku, fontSize = (design.catalogNumberFontSize - 2).coerceAtLeast(8).sp,
                         modifier = Modifier.align(Alignment.BottomEnd).background(colors.midoku).padding(horizontal = 2.dp)
@@ -607,6 +697,12 @@ internal fun FtutterTabStrip(
                 if (tab.protected) {
                     Icon(Icons.Rounded.Lock, contentDescription = "保護", tint = colors.onToolBar,
                         modifier = Modifier.align(Alignment.TopEnd).size(12.dp).background(colors.toolBar))
+                }
+                if (showStatus) {
+                    val status = com.valoser.futacha.shared.ui.board.threadStatusBadgeText(tab.entry?.threadStatus)
+                    if (status.isNotEmpty()) Text(status, color = colors.onToolBar, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.TopStart).background(colors.toolBar)
+                            .testTag("ftutter-tab-status"))
                 }
             }
         }

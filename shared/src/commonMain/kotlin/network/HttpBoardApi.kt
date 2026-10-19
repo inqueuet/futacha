@@ -442,9 +442,11 @@ class HttpBoardApi(
         }
         val browser = client.attributes.getOrNull(PostingBrowserKey)
         val (postingUserAgent, postingConfig) = try {
-            val agent = browser?.userAgent() ?: DEFAULT_USER_AGENT
-            val fetched = fetchPostingConfig(submission.board, submission.threadId, agent)
-            agent to if (browser != null) prepareOfficialPostingEnvironment(client, browser, referer, fetched, agent) else applyLegacyPostingEnvironment(fetched)
+            withPostingPreparationReadRetry {
+                val agent = browser?.userAgent() ?: DEFAULT_USER_AGENT
+                val fetched = fetchPostingConfig(submission.board, submission.threadId, agent)
+                agent to if (browser != null) prepareOfficialPostingEnvironment(client, browser, referer, fetched, agent) else applyLegacyPostingEnvironment(fetched)
+            }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             throw NetworkException("投稿の準備ができないため送信していません。下書きを保持しています: ${e.message}", cause = e)

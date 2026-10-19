@@ -212,6 +212,8 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     onStateChanged: (VideoPlayerState) -> Unit, onVideoSizeKnown: (Int, Int) -> Unit, areControlsVisible: Boolean,
     onControlsVisibilityChanged: (Boolean) -> Unit, volume: Float, isMuted: Boolean,
     onMediaInfoKnown: (VideoMediaInfo) -> Unit, onPlaybackError: (VideoPlaybackError) -> Unit, editing: VideoEditPlayback?) {
+    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions(autoPlay = true)
+    val currentOptions by rememberUpdatedState(options)
     val mailbox = remember(videoUrl, playback, editing) { DesktopVideoFrameMailbox() }
     val frames = remember(mailbox) { DesktopVideoFramePresentation() }
     var frame by remember(mailbox) { mutableStateOf<DesktopVideoFrame?>(null) }
@@ -268,6 +270,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                 openedPath = File(path).absolutePath.also(DesktopVideoFiles::opened)
                 owned = DesktopVideoSession { image, w, h -> mailbox.publish(DesktopVideoFrame(image, w, h)) }
                 owned!!.play(path)
+                if (!options.autoPlay && editing == null) owned!!.withPlayer { it.controls().setPause(true) }
                 session = owned
             }
             val active = requireNotNull(owned)
@@ -293,7 +296,11 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
                     info(VideoMediaInfo(width = frame?.width, height = frame?.height, durationMillis = duration))
                 }
                 editing?.position(position * 1000)
-                if (active.ended.get()) { editing?.ended(); playing = false }
+                if (active.ended.get()) {
+                    if (currentOptions.loop && editing == null) active.withPlayer {
+                        active.ended.set(false); it.controls().setTime(0); it.controls().play()
+                    } else { editing?.ended(); playing = false }
+                }
                 delay(80)
             }
         } catch (cancelled: CancellationException) { throw cancelled }

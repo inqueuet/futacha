@@ -52,6 +52,7 @@ internal actual fun NativePlatformVideoPlayer(
     onPlaybackError: (VideoPlaybackError) -> Unit,
     editing: VideoEditPlayback?
 ) {
+    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions()
     val context = LocalContext.current
     val currentCallback by rememberUpdatedState(onStateChanged)
     val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
@@ -88,7 +89,7 @@ internal actual fun NativePlatformVideoPlayer(
             .setSeekForwardIncrementMs(REFERENCE_VIDEO_SEEK_STEP_MILLIS)
             .build()
             .apply {
-            playWhenReady = FUTACHA_VIDEO_PREVIEW_AUTOPLAY
+            playWhenReady = options.autoPlay
         } } catch (failure: Throwable) { pin?.close(); editPin?.close(); throw failure }
         player = createdPlayer
         onDispose {
@@ -104,7 +105,7 @@ internal actual fun NativePlatformVideoPlayer(
         MediaItem.fromUri(if (playback == null) videoUrl else "futacha-original://media/asset.$extension")
     }
 
-    LaunchedEffect(mediaItem, player, editing) {
+    LaunchedEffect(mediaItem, player, editing, options.autoPlay) {
         val activePlayer = player ?: return@LaunchedEffect
         currentCallback(VideoPlayerState.Buffering)
         // The legacy viewer opens a video on its first frame.  Preparing the
@@ -112,7 +113,7 @@ internal actual fun NativePlatformVideoPlayer(
         editing?.let { activePlayer.setVideoEffects(listOf(MosaicEffect(AtomicReference(it.document), it.info.frames.timeAt(0)))) }
         activePlayer.setMediaItem(mediaItem)
         editing?.let { activePlayer.seekTo(((it.startUs - it.info.frames.timeAt(0)).coerceAtLeast(0)) / 1000) }
-        activePlayer.playWhenReady = editing != null || FUTACHA_VIDEO_PREVIEW_AUTOPLAY
+        activePlayer.playWhenReady = editing != null || options.autoPlay
         activePlayer.prepare()
     }
 
@@ -130,6 +131,10 @@ internal actual fun NativePlatformVideoPlayer(
                 delay(33)
             }
         } finally { preview.pausePlayer = null }
+    }
+
+    LaunchedEffect(player, options.loop) {
+        player?.repeatMode = if (options.loop && editing == null) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
     }
 
     LaunchedEffect(volume, isMuted, player) {

@@ -31,9 +31,12 @@ private data class ThreadQuoteLineResolution(
 
 private data class ThreadLineTargets(
     val plain: MutableSet<String> = mutableSetOf(),
-    val quoted: MutableSet<String> = mutableSetOf()
+    val quoted: MutableSet<String> = mutableSetOf(),
+    val byDepth: MutableMap<Int, MutableSet<String>> = mutableMapOf()
 ) {
-    fun resolve(): Set<String> = if (plain.isNotEmpty()) plain else quoted
+    fun resolve(depth: Int = 0): Set<String> = if (depth == 0) {
+        if (plain.isNotEmpty()) plain else quoted
+    } else byDepth[depth].orEmpty()
 }
 
 internal fun buildThreadReferenceData(
@@ -67,6 +70,7 @@ internal fun buildThreadReferenceData(
         val lines = decodeHtmlEntities(stripTags(post.messageHtml)).lines()
         if (lines.isEmpty()) continue
 
+        var quoteBlockDepth: Int? = null
         val postReferences = mutableListOf<QuoteReference>()
         val referencedTargets = mutableSetOf<String>()
         val pendingContentLines = mutableListOf<String>()
@@ -107,8 +111,12 @@ internal fun buildThreadReferenceData(
             if (trimmedLine.isBlank()) continue
             if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
                 flushPendingContentBlock()
+                quoteBlockDepth = null
                 continue
             }
+            val depth = threadQuoteDepth(trimmedLine)
+            quoteBlockDepth = minOf(quoteBlockDepth ?: depth, depth)
+            val isDirectAnchor = depth <= quoteBlockDepth
 
             val resolution = resolveThreadQuoteTargets(
                 quoteLine = trimmedLine,
@@ -121,13 +129,21 @@ internal fun buildThreadReferenceData(
             if (resolution.isExplicit) {
                 flushPendingContentBlock()
                 if (resolution.targets.isNotEmpty()) {
+                    val content = trimmedLine.trimStart { it == '>' || it == '＞' }.trim()
+                    val copiedFrom = if (depth > 1) messageLineIndex[
+                        normalizeThreadQuoteText(content, config.whitespaceRegex)
+                    ]?.byDepth?.get(depth - 1).orEmpty() else emptySet()
+                    val directTargets = if (copiedFrom.isNotEmpty()) copiedFrom
+                        else if (isDirectAnchor) resolution.targets else emptySet()
                     postReferences.add(
                         QuoteReference(
                             text = trimmedLine.trim(),
-                            targetPostIds = resolution.targets.toList()
+                            targetPostIds = resolution.targets.toList(),
+                            isDirectReply = isDirectAnchor && copiedFrom.isEmpty(),
+                            replyTargetPostIds = directTargets.toList()
                         )
                     )
-                    referencedTargets += resolution.targets
+                    referencedTargets += directTargets
                 }
                 continue
             }
@@ -219,6 +235,7 @@ private fun addMessageLinesToThreadReferenceIndex(
         if (normalized.isBlank()) continue
         val bucket = index.getOrPut(normalized) { ThreadLineTargets() }
         if (isQuoted) bucket.quoted.add(post.id) else bucket.plain.add(post.id)
+        bucket.byDepth.getOrPut(threadQuoteDepth(trimmed)) { mutableSetOf() }.add(post.id)
     }
     return true
 }
@@ -261,11 +278,12 @@ private fun resolveThreadQuoteTargets(
     }
     val normalized = normalizeThreadQuoteText(content, config.whitespaceRegex)
     if (normalized.isBlank()) return ThreadQuoteLineResolution(emptySet(), isExplicit = false)
-    val targets = messageLineIndex[normalized]?.resolve()
+    val sourceDepth = (threadQuoteDepth(trimmed) - 1).coerceAtLeast(0)
+    val targets = messageLineIndex[normalized]?.resolve(sourceDepth)
     if (!targets.isNullOrEmpty()) {
         return ThreadQuoteLineResolution(targets, isExplicit = false)
     }
-    val partialTargets = findThreadPartialLineTargets(normalized, messageLineIndex, config)
+    val partialTargets = findThreadPartialLineTargets(normalized, messageLineIndex, config, sourceDepth)
     return ThreadQuoteLineResolution(partialTargets, isExplicit = false)
 }
 
@@ -309,7 +327,8 @@ private fun normalizeThreadQuoteText(value: String, whitespaceRegex: Regex): Str
 private fun findThreadPartialLineTargets(
     normalizedQuote: String,
     index: Map<String, ThreadLineTargets>,
-    config: ThreadReferenceBuildConfig
+    config: ThreadReferenceBuildConfig,
+    sourceDepth: Int
 ): Set<String> {
     if (normalizedQuote.length < config.minPartialMatchLength) return emptySet()
     if (index.isEmpty()) return emptySet()
@@ -318,7 +337,7 @@ private fun findThreadPartialLineTargets(
     index.forEach { (line, ids) ->
         if (line.length < config.minPartialMatchLength) return@forEach
         if (line.contains(normalizedQuote) || normalizedQuote.contains(line)) {
-            targets += ids.resolve()
+            targets += ids.resolve(sourceDepth)
         }
     }
     return targets
@@ -345,3 +364,6 @@ private fun extractThreadMediaFileName(url: String?, mediaFilenameRegex: Regex):
     val match = mediaFilenameRegex.matchEntire(lower) ?: return null
     return match.value
 }
+
+/** Only leading markers contribute to nesting; full-width quotes behave identically. */
+private fun threadQuoteDepth(line: String): Int = line.takeWhile { it == '>' || it == '＞' }.length

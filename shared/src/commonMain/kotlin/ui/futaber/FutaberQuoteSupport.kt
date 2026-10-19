@@ -78,7 +78,7 @@ internal fun futaberQuoteTargetIds(post: Post, line: String): List<String> {
 internal fun futaberReplyIndex(posts: List<Post>): Map<String, List<Post>> {
     val index = LinkedHashMap<String, MutableList<Post>>()
     posts.forEach { source ->
-        source.quoteReferences.flatMap { it.targetPostIds }.distinct().forEach { targetId ->
+        source.quoteReferences.flatMap { it.replyTargetPostIds }.distinct().forEach { targetId ->
             if (targetId != source.id) index.getOrPut(targetId) { mutableListOf() }.add(source)
         }
     }

@@ -39,7 +39,7 @@ internal enum class FtutterSettingsPage(val title: String, val tag: String) {
 private val HIGH_RES_OPTIONS = listOf(0 to "低画質", 1 to "WiFi時に高画質", 2 to "高画質")
 
 @Composable
-internal fun FtutterDesignSettings(preferences: Map<String, String>, save: (String, String) -> Unit, onBack: () -> Unit) {
+internal fun FtutterDesignSettings(preferences: Map<String, String>, save: (String, String) -> Unit, onBack: () -> Unit, onChooseFont: (() -> Unit)? = null) {
     val colors = LocalFtutterColors.current
     val design = parseFtutterDesign(preferences)
     FtutterSettingsPage("デザイン", "ftutter-settings-page-design", onBack) {
@@ -62,6 +62,10 @@ internal fun FtutterDesignSettings(preferences: Map<String, String>, save: (Stri
                 listOf(0 to "ライトモード", 1 to "ダークモード", 2 to "ダークモード（背景真っ黒）"), 0, preferences, save)
         }
         ftutterSection("フォント")
+        preferences[FtutterKeys.PREFIX + "import.userFontPath"]?.takeIf { it.isNotBlank() }?.let { original ->
+            item { Text("取り込み元のフォント: $original\nフォントファイルを選択してください。", color = colors.text, modifier = Modifier.padding(16.dp)) }
+        }
+        if (onChooseFont != null) item { FtutterNavRow("カスタムフォント", "ftutter-settings-font", onClick = onChooseFont) }
         item { FtutterSliderSetting("カタログのフォントサイズ", FtutterKeys.CATALOG_FONT_SIZE, 1.0, 40.0, 1.0, 15.0, preferences, save) }
         item { FtutterSliderSetting("カタログ（数字）のフォントサイズ", FtutterKeys.CATALOG_NUMBER_FONT_SIZE, 1.0, 40.0, 1.0, 14.0, preferences, save) }
         item { FtutterSliderSetting("レスヘッダーのフォントサイズ", FtutterKeys.RESU_HEADER_FONT_SIZE, 1.0, 40.0, 1.0, 13.0, preferences, save) }
@@ -79,7 +83,9 @@ internal fun FtutterDesignSettings(preferences: Map<String, String>, save: (Stri
             "ツールバー上（文字、アイコン）" to ("onToolBar" to colors.onToolBar), "ツールバー上（アイコン有効時）" to ("onToolBarActive" to colors.onToolBarActive),
             "ポップアップ" to ("popUp" to colors.popUp), "ハイライト" to ("highlight" to colors.highlight),
             "ここまで読んだ、見出し" to ("dividerCard" to colors.dividerCard), "ここまで読んだ、見出し（文字）" to ("onDividerCard" to colors.onDividerCard),
-            "カタログ（タブ内時）" to ("inTab" to colors.inTab), "枠線" to ("outline" to colors.outline), "既読" to ("kidoku" to colors.kidoku),
+            "カタログ（タブ内時）" to ("inTab" to colors.inTab),
+            "ジェスチャー" to ("gesture" to colors.gesture), "スクロールバー" to ("scrollBar" to colors.scrollBar),
+            "読み込み表示" to ("indicator" to colors.indicator), "枠線" to ("outline" to colors.outline), "既読" to ("kidoku" to colors.kidoku),
             "未読数（背景）" to ("midoku" to colors.midoku), "未読数（文字）" to ("onMidoku" to colors.onMidoku), "ヘッダー" to ("headerText" to colors.headerText),
             "レス数（背景）" to ("resuSuu" to colors.resuSuu), "レス数（文字）" to ("onResuSuu" to colors.onResuSuu),
             "ピックアップ" to ("pickUp" to colors.pickUp), "ピックアップ（文字）" to ("onPickUp" to colors.onPickUp),
@@ -101,7 +107,7 @@ internal fun FtutterCatalogSettingsPage(preferences: Map<String, String>, save: 
             FtutterChoiceSetting("デフォルトの並び順", FtutterKeys.DEFAULT_ORDER_MODE,
                 FtutterOrder.entries.map { it.stored to it.label } + (FtutterOrder.PREVIOUS to "前回の並び順を保存する"), FtutterOrder.PREVIOUS, preferences, save)
         }
-        item { FtutterChoiceSetting("サムネイルの画質設定", FtutterKeys.CATALOG_HIGH_RES, HIGH_RES_OPTIONS, 1, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterChoiceSetting("サムネイルの画質設定", FtutterKeys.CATALOG_HIGH_RES, HIGH_RES_OPTIONS, 1, preferences, save) }
         item { FtutterSliderSetting("サムネイルの最大高さ", FtutterKeys.MAX_THUMB_HEIGHT, 1.0, 5.0, 0.1, 1.2, preferences, save, integer = false) }
         item { FtutterSliderSetting("サムネイルの最小高さ", FtutterKeys.MIN_THUMB_HEIGHT, 0.0, 1.0, 0.1, 0.8, preferences, save, integer = false) }
         item { FtutterCheckSetting("長押しで拡大表示する", FtutterKeys.USE_ZOOM, true, preferences, save) }
@@ -114,7 +120,8 @@ internal fun FtutterCatalogSettingsPage(preferences: Map<String, String>, save: 
         item { FtutterCheckSetting("文字数を制限する", FtutterKeys.LIMIT_TITLE_LETTERS, false, preferences, save) }
         item { FtutterSliderSetting("文字数", FtutterKeys.MAX_TITLE_LETTERS, 0.0, 20.0, 1.0, 4.0, preferences, save) }
         ftutterSection("スクロール・更新")
-        item { FtutterCheckSetting("スクロールバーを使用する", FtutterKeys.CATALOG_SCROLLBAR, true, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterCheckSetting("スクロールバーを使用する", FtutterKeys.CATALOG_SCROLLBAR, true, preferences, save) }
+        ftutterScrollbarRows(true, preferences, save)
         item { FtutterCheckSetting("カタログを引っ張って更新（上部）", FtutterKeys.CATALOG_PULL_TOP, true, preferences, save) }
         item { FtutterCheckSetting("カタログを引っ張って更新（下部）", FtutterKeys.CATALOG_PULL_BOTTOM, true, preferences, save) }
         ftutterSection("ツールバー")
@@ -144,9 +151,9 @@ internal fun FtutterThreadSettingsPage(
             item(key = pair.second) { FtutterSliderSetting(pair.first, pair.second, 0.0, 30.0, 1.0, default, preferences, save) }
         }
         ftutterSection("画像")
-        item { FtutterChoiceSetting("スレ画の画質設定", FtutterKeys.OP_IMAGE_HIGH_RES, HIGH_RES_OPTIONS, 1, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterChoiceSetting("スレ画の画質設定", FtutterKeys.OP_IMAGE_HIGH_RES, HIGH_RES_OPTIONS, 1, preferences, save) }
         item { FtutterSliderSetting("スレ画の最大高さ", FtutterKeys.OP_IMAGE_MAX_HEIGHT, 0.0, 1000.0, 20.0, 500.0, preferences, save) }
-        item { FtutterChoiceSetting("レス画像の画質設定", FtutterKeys.RES_IMAGE_HIGH_RES, HIGH_RES_OPTIONS, 0, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterChoiceSetting("レス画像の画質設定", FtutterKeys.RES_IMAGE_HIGH_RES, HIGH_RES_OPTIONS, 0, preferences, save) }
         item {
             FtutterChoiceSetting("レス画像の位置", FtutterKeys.RES_IMAGE_POSITION,
                 listOf(0 to "レスの上", 1 to "レスの左", 2 to "レスの右", 3 to "レスの下"), 3, preferences, save)
@@ -155,11 +162,12 @@ internal fun FtutterThreadSettingsPage(
         item { FtutterSliderSetting("レス画像の最大幅", FtutterKeys.RES_IMAGE_MAX_WIDTH, 0.0, 1000.0, 20.0, 200.0, preferences, save) }
         item { FtutterCheckSetting("レス画像の幅を常に固定する", FtutterKeys.RES_IMAGE_FIXED_WIDTH, false, preferences, save) }
         item {
-            FtutterChoiceSetting("あぷ小の画像読み込み", FtutterKeys.APU_AUTO_LOAD, listOf(0 to "手動", 1 to "WiFi時に自動", 2 to "自動"), 1, preferences, save,
-                note = FTUTTER_NOT_USED_NOTE)
+            FtutterChoiceSetting("あぷ小の画像読み込み", FtutterKeys.APU_AUTO_LOAD, listOf(0 to "手動", 1 to "WiFi時に自動", 2 to "自動"), 1, preferences, save)
         }
+        item { FtutterSliderSetting("あぷ小の画像の大きさ", FtutterKeys.APU_THUMB_SIZE, 1.0, 1000.0, 1.0, 120.0, preferences, save) }
         ftutterSection("スクロール・更新")
-        item { FtutterCheckSetting("スクロールバーを使用する", FtutterKeys.THREAD_SCROLLBAR, true, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterCheckSetting("スクロールバーを使用する", FtutterKeys.THREAD_SCROLLBAR, true, preferences, save) }
+        ftutterScrollbarRows(false, preferences, save)
         item { FtutterCheckSetting("スレを引っ張って更新（上部）", FtutterKeys.THREAD_PULL_TOP, false, preferences, save) }
         item { FtutterCheckSetting("スレを引っ張って更新（下部）", FtutterKeys.THREAD_PULL_BOTTOM, true, preferences, save) }
         item { FtutterCheckSetting("更新時に新着レスの件数を表示する", FtutterKeys.SHOW_NEW_COUNT, false, preferences, save) }
@@ -170,7 +178,7 @@ internal fun FtutterThreadSettingsPage(
         ftutterSection("履歴")
         item {
             FtutterSliderSetting("履歴の保存数（保護したタブは除く）", FtutterKeys.HISTORY_LIMIT, 0.0, 1000.0, 10.0, 200.0, preferences, save,
-                note = "保護していないタブを、最近開いたものからこの数まで残します（起動時は履歴に無いタブも閉じます）。履歴そのものは他のモードと共有で、件数の上限は共有の側で決まります")
+                note = "このモードの履歴とタブを、保護したスレッドを除いて最近開いた順にこの数まで表示します。他のモードの履歴は残します。")
         }
         ftutterSection("ツールバー・メニュー")
         item { FtutterNavRow("ボタンの並び", "ftutter-settings-thread-toolbar", onClick = onEditToolbar) }
@@ -191,15 +199,14 @@ internal fun FtutterTabDrawerSettingsPage(preferences: Map<String, String>, save
         item { FtutterSliderSetting("タブの幅", FtutterKeys.TAB_WIDTH, 10.0, 200.0, 10.0, 60.0, preferences, save) }
         item { FtutterCheckSetting("スワイプで隣のタブへ移動する（※ジェスチャー無効時）", FtutterKeys.MOVE_TAB_BY_SWIPE, true, preferences, save) }
         item {
-            FtutterCheckSetting("タブ移動時に更新する（カタログ）", FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false, preferences, save,
-                note = "このモードはタブを開くたびにスレッドを取り直すので、常に更新されます")
+            FtutterCheckSetting("タブ移動時に更新する（カタログ）", FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false, preferences, save)
         }
+        item { FtutterCheckSetting("タブ移動時に更新する（スレッド）", FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false, preferences, save) }
         item { FtutterCheckSetting("タブのドラッグでの並べ替えを無効にする", FtutterKeys.DISABLE_TAB_DRAG, false, preferences, save) }
         item { FtutterCheckSetting("タブがない時に自動でカタログまで戻る", FtutterKeys.BACK_WHEN_NO_TAB, true, preferences, save) }
         ftutterSection("ドロワー")
         item {
-            FtutterChoiceSetting("ドロワーを出す場所", FtutterKeys.DRAWER_SIDE, listOf(0 to "左", 1 to "右", 2 to "両方", 3 to "無効"), 0, preferences, save,
-                note = "「両方」は左に出します")
+            FtutterChoiceSetting("ドロワーを出す場所", FtutterKeys.DRAWER_SIDE, listOf(0 to "左", 1 to "右", 2 to "両方", 3 to "無効"), 0, preferences, save)
         }
         item { FtutterCheckSetting("端を引っ張ってドロワーを開く", FtutterKeys.DRAWER_OPEN_BY_DRAG, true, preferences, save) }
         item {
@@ -216,12 +223,13 @@ internal fun FtutterMediaSettingsPage(preferences: Map<String, String>, save: (S
         item { FtutterCheckSetting("スレ内の画像を全て繋げて表示する", FtutterKeys.CONNECT_ALL_IMAGES, true, preferences, save) }
         item { FtutterCheckSetting("削除されたレスの画像を一覧に表示しない", FtutterKeys.EXCLUDE_DELETED_IMAGES, true, preferences, save) }
         item {
-            FtutterCheckSetting("動画を自動再生する", FtutterKeys.VIDEO_AUTO_PLAY, false, preferences, save,
-                note = "共有の再生部品を使うため、開いた時は止まっています")
+            FtutterCheckSetting("動画を自動再生する", FtutterKeys.VIDEO_AUTO_PLAY, false, preferences, save)
         }
-        item { FtutterCheckSetting("動画をループ再生する", FtutterKeys.VIDEO_LOOP, false, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterCheckSetting("動画をループ再生する", FtutterKeys.VIDEO_LOOP, false, preferences, save) }
         item { FtutterSliderSetting("ビューワー内のタブの大きさ", FtutterKeys.GALLERY_TAB_SIZE, 20.0, 300.0, 10.0, 80.0, preferences, save) }
-        item { FtutterCheckSetting("サムネイルの画質を下げる", FtutterKeys.USE_MEM_SIZE, true, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterCheckSetting("サムネイルの画質を下げる", FtutterKeys.USE_MEM_SIZE, true, preferences, save) }
+        item { FtutterSliderSetting("サムネイルの解像度", FtutterKeys.MEM_SIZE, 1.0, 4096.0, 1.0, 200.0, preferences, save) }
+        item { FtutterCheckSetting("画像検索にascii2dを使用する", FtutterKeys.IMAGE_SEARCH_ASCII2D, false, preferences, save) }
     }
 }
 
@@ -253,10 +261,9 @@ internal fun FtutterNetworkSettingsPage(
     var keyOpen by remember { mutableStateOf(false) }
     FtutterSettingsPage("ネットワーク・投稿", "ftutter-settings-page-network", onBack) {
         item {
-            FtutterCheckSetting("https版のサイトにアクセスする", "compat.ftutter.useHttps", true, preferences, save,
-                note = "このモードは、ふたちゃと同じ通信（https）を使います")
+            FtutterCheckSetting("https版のサイトにアクセスする", FtutterKeys.USE_HTTPS, false, preferences, save)
         }
-        item { FtutterCheckSetting("URLを開く際アプリ内ブラウザを使用する", "compat.ftutter.useChromeCustomTab", true, preferences, save, note = FTUTTER_NOT_USED_NOTE) }
+        item { FtutterCheckSetting("URLを開く際アプリ内ブラウザを使用する", FtutterKeys.USE_CUSTOM_TAB, true, preferences, save) }
         item { FtutterCheckSetting("書き込み前に確認する", FtutterKeys.CONFIRM_BEFORE_POST, false, preferences, save) }
         item { FtutterNavRow("削除キー", "ftutter-settings-delete-key", detail = "●".repeat(deleteKey.length)) { keyOpen = true } }
         onOpenCookies?.let { open -> item { FtutterNavRow("クッキーの管理", "ftutter-settings-cookies", onClick = open) } }
@@ -296,3 +303,10 @@ private fun Map<String, String>.boolAsInt(key: String): Map<String, String> =
     this + (key to if (ftutterBool(key, false)) "1" else "0")
 
 private fun boolSaver(save: (String, String) -> Unit): (String, String) -> Unit = { key, value -> save(key, (value == "1").toString()) }
+
+private fun androidx.compose.foundation.lazy.LazyListScope.ftutterScrollbarRows(catalog: Boolean,
+    p: Map<String, String>, save: (String, String) -> Unit) {
+    item { FtutterCheckSetting("スクロールバーを常に表示", if (catalog) FtutterKeys.CATALOG_SCROLLBAR_ALWAYS else FtutterKeys.THREAD_SCROLLBAR_ALWAYS, false, p, save) }
+    item { FtutterCheckSetting("スクロールバーを左に表示", if (catalog) FtutterKeys.CATALOG_SCROLLBAR_LEFT else FtutterKeys.THREAD_SCROLLBAR_LEFT, false, p, save) }
+    item { FtutterSliderSetting("スクロールバーの幅", if (catalog) FtutterKeys.CATALOG_SCROLLBAR_THICKNESS else FtutterKeys.THREAD_SCROLLBAR_THICKNESS, 1.0, 100.0, 1.0, 8.0, p, save) }
+}

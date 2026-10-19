@@ -342,7 +342,8 @@ internal fun BoardManagementBoardList(
     onDismissDrawerTap: () -> Unit,
     boardListCallbacks: BoardManagementBoardListCallbacks,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(vertical = 12.dp)
+    contentPadding: PaddingValues = PaddingValues(vertical = 12.dp),
+    bottomAligned: Boolean = boardsFromBottom(LocalFutachaSharedFeatures.current?.preferences.orEmpty())
 ) {
     val listState = rememberLazyListState()
     var draggedBoardId by remember { mutableStateOf<String?>(null) }
@@ -368,7 +369,8 @@ internal fun BoardManagementBoardList(
                 onDismissDrawerTap()
             }
         },
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp,
+            if (bottomAligned) Alignment.Bottom else Alignment.Top),
         contentPadding = contentPadding
     ) {
         itemsIndexed(

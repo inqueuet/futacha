@@ -4,8 +4,15 @@ import kotlin.test.*
 
 class WebVideoPlaybackSupportTest {
     @Test fun webmOsBoundaryDoesNotUseDeviceModel() {
+        assertFalse(supportsIosWebmPath(15, 1)); assertFalse(supportsIosWebmPath(16, 7))
         assertFalse(supportsIosWebmPath(15, 9)); assertFalse(supportsIosWebmPath(17, 3))
         assertTrue(supportsIosWebmPath(17, 4)); assertTrue(supportsIosWebmPath(18, 0))
+    }
+
+    @Test fun asynchronousVideoCompositionStartsAtIosSixteen() {
+        assertFalse(supportsIosAsyncVideoComposition(15))
+        assertTrue(supportsIosAsyncVideoComposition(16))
+        assertTrue(supportsIosAsyncVideoComposition(26))
     }
 
     @Test fun fallbackOnlyUsesExplicitDistinctAppleContainerUrls() {

@@ -249,7 +249,7 @@ private fun Throwable.isZipEntrySkipped(): Boolean {
     return false
 }
 
-private class StreamingStoredZipWriter(
+internal class StreamingStoredZipWriter(
     private val sink: com.valoser.futacha.shared.util.FileWriteSink
 ) {
     private val entries = mutableListOf<StoredZipEntry>()

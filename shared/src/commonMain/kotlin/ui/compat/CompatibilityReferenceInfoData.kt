@@ -31,6 +31,41 @@ internal val FUTACHA_CHANGE_LOG_HTML: String = """
         </style>
     </head>
     <body>
+    <h2>13.1</h2>
+    <ul>
+        <li>4モードの読み上げの声に「ずんだもん・ノーマル」を追加しました。設定から約82MBの音声データを取得すると、端末内で合成し、オフラインでも利用できます。保存容量は約166MBです。Android 10以降の64bit端末・iOS 16以降が対象で、従来の端末音声も選べます。</li>
+        <li>手書きで、触れた直後の点や短い線、細かな連続した線が欠けにくくなるよう改善しました。iOSで保存する画像にも丸い点・線端を反映します。ふたったー風モードでは、拡張機能の「手書き」をオンにすると投稿画面から使えます。</li>
+        <li>4モードに「板一覧を下寄せ」を追加しました。板が少ない時に、並び順を変えずに画面の下へ寄せられます。最初はオフです。</li>
+        <li>板ごとに、手動更新の成功後に閲覧スレッドをカタログの先頭へ置く設定を追加しました。最初はオフで、検索やNGで隠れたスレッドは対象にしません。</li>
+        <li>スレッドを開いた時、前回から増えたレス数と、その中の自分の投稿への直接返信数を知らせる機能を追加しました。ふたばー風・ふたったー風モードでは拡張機能から有効にできます。</li>
+        <li>タブ帯・一覧で、確認できた隔離・削除・管理者削除・落ちの状態を分かりやすく表示するようにしました。ふたばー風・ふたったー風モードでは拡張機能から有効にできます。通信失敗だけで落ちと判定しません。</li>
+        <li>ふたばー風・ふたったー風モードにも、delの確認時に対象レスをNG登録する拡張機能を追加しました。確認画面で選択でき、NGは対象のスレッド内だけに適用されます。</li>
+        <li>ふたちゃ・としあき（仮）・ふたばー風モードの共通プライバシー設定で、「画像のみ」「画面全体」を選び、画像の隠し方の強さを調整できるようにしました。保存済みの設定は維持します。</li>
+        <li>としあき（仮）モードでも、スレッド上部のタイトルを小さくする・薄くする・隠す設定を使えるようにしました。</li>
+        <li>ヘルプに、各モードの投稿・添付・画像保存・戻る・ジェスチャーなどを説明する操作ガイドと、「不具合を報告」を追加しました。報告内容は確認してコピーやメール作成に使え、自動では送信しません。</li>
+        <li>ふたったー風モードで、「書き込む」「画像一覧を開く」「ジェスチャーの操作を選ぶ」を文字のメニューから選べるようにしました。線を描く代わりに、同じ操作をメニューから実行できます。</li>
+        <li>ふたったー風モードのバックアップ（.ftt）の設定反映を拡充しました。画質、スクロールバー、動画の自動再生・ループ、移動時の更新、HTML・ZIP保存、個別の色、ジェスチャー感度などを反映します。フォントや保存先など、ファイル本体やアクセス権が含まれないものは選び直しを案内します。</li>
+        <li>ふたったー風モードの履歴の長押し削除、選択削除・すべて削除と確認表示を整理しました。「履歴の道具」は、設定が未保存の場合は最初から有効になります。明示したオフは維持し、すべて削除でも保護したスレッドは残します。</li>
+        <li>ふたったー風モードで、閉じたタブを1件戻すボタンはタブの一覧だけに表示し、残り件数と戻したスレッド名を案内するようにしました。</li>
+        <li>ふたったー風モードで、タブを切り替えた時の読み位置・既読数、タブの並びや保護が保存されない問題と、閉じたタブが戻ってしまう問題を修正しました。保存上限や、バックアップから取り込めない件数も案内します。</li>
+        <li>ふたったー風モードで、スレッド更新後のメニューが別のレスを対象にする問題、画像選択のずれ、戻る操作や二画面表示の状態が崩れる問題を修正しました。</li>
+        <li>ふたったー風モードで、重いNG正規表現で画面が固まる問題と、通常のルールが更新を重ねると無効になる問題を改善しました。カタログでNGタイトルが適用された理由も確認できます。</li>
+        <li>投稿欄の日本語変換中の文字を見やすくしました。Androidでは、ふたったー風モードの投稿・削除キー設定のボタンがキーボードに隠れる問題も修正しました。</li>
+        <li>ふたったー風モードで削除キーが未設定の時は、理由と設定への入口を表示するようにしました。削除キー欄の伏せ字や変更直後の反映も改善し、本文や添付を残したまま設定できます。</li>
+        <li>投稿前のフォームや準備処理の取得が一時的に切れた場合に、1回だけ準備をやり直すようにしました。投稿そのものの自動再送は行いません。</li>
+        <li>下書きの自動保存・復元を改善し、送信中に追記した本文が消える問題、復元時に本文が重複する問題、送信後に古い下書きが残る問題を修正しました。他アプリから共有された画像も添付しやすくしました。</li>
+        <li>削除した履歴が再起動や大量削除後に戻る問題を修正しました。共通の設定バックアップには、ふたったー風モードの削除キー・未送信の下書きを含めないようにしました。</li>
+        <li>としあき（仮）・ふたばー風モードで、画像ビューアを閉じると保存が中断される問題を修正しました。画像一覧の更新で別の画像を保存してしまう問題や、NGで隠したレスの画像の扱いも改善しました。</li>
+        <li>多重引用の返信先判定を改善しました。自分への直接返信の見落としや、引用の引用を自分への返信として数える問題を修正し、返信数・関連レス・ツリーへ反映します。</li>
+        <li>としあき（仮）・ふたったー風モードで、スレッドからカタログへ戻った時も検索内容を保持するようにしました。「監視」「そ順」の並び・落ち判定・更新中の切り替えも改善しました。</li>
+        <li>ふたちゃモードでMHTを開いた時に別の端末内コピーが表示される問題と、MHTの操作が通常のタブに影響する問題を修正しました。</li>
+        <li>小さい画面やボタンを多く表示する設定でも、ツールバーを横スクロールして操作できるようにしました。ふたったー風モードの空のツールバーと、設定末尾がナビゲーション帯に隠れる問題も修正しました。</li>
+        <li>カスタムフォントの選択・差し替え・解除、音量キーでのスクロール、モード切り替え時のアイコン保持、通知や失敗案内の表示を改善しました。</li>
+        <li>長いスレッド・大量の履歴・検索・NG・AI判定などの再計算を減らし、スクロールや文字入力中の引っかかりを抑えました。巡回・履歴更新・読み上げ中のレス更新への追従も改善しました。</li>
+        <li>Android製品版で、アプリが突然終了することがある問題を修正しました。現行アイコンのテーマ付き表示も修正しました。</li>
+        <li>iOS 15.1以降向けの互換対応を追加しました。メモリが少ない端末での画像キャッシュ・同時処理・ファイル読み込みを改善し、投稿準備が時間切れになる条件と保存先のアクセス記録の扱いも修正しました。</li>
+        <li>デスクトップ版で、画像のコピー中に動画へ移ってもコピーが中断されないようにしました。</li>
+    </ul>
     <h2>13.0</h2>
     <ul>
         <li>新しいモード「ふたったー風モード」を追加しました（Android・iOS）。設定の「モード」から切り替えられます。デスクトップ版では選べません。</li>
@@ -876,6 +911,13 @@ internal data class FutachaLicenseAsset(val id: String, val text: String, val re
  * the reference application's dependency list (FFmpeg, Glide, Picasso, etc.).
  */
 internal val FUTACHA_LICENSE_ASSETS: List<FutachaLicenseAsset> = listOf(
+    FutachaLicenseAsset("voicevox-credit", "VOICEVOX:ずんだもん\n音声ライブラリ：ずんだもん（ノーマル）\nhttps://voicevox.hiroshiba.jp/\nhttps://zunko.jp/con_ongen_kiyaku.html\nhttps://zunko.jp/guideline.html"),
+    FutachaLicenseAsset("voicevox-core-license", "VOICEVOX CORE 0.17.0 — MIT License", "files/licenses/voicevox-core-LICENSE.txt"),
+    FutachaLicenseAsset("voicevox-core-notices", "VOICEVOX CORE — Third-party notices", "files/licenses/voicevox-core-ThirdPartyNotices.txt"),
+    FutachaLicenseAsset("voicevox-runtime-terms", "VOICEVOX ONNX Runtime 1.23.2 — 利用規約", "files/licenses/voicevox-runtime-TERMS.txt"),
+    FutachaLicenseAsset("voicevox-runtime-notices", "VOICEVOX ONNX Runtime — Third-party notices", "files/licenses/voicevox-runtime-ThirdPartyNotices.txt"),
+    FutachaLicenseAsset("voicevox-model-terms", "VOICEVOX 音声モデル — 利用規約", "files/licenses/voicevox-model-TERMS.txt"),
+    FutachaLicenseAsset("open-jtalk-dictionary-license", "Open JTalk / MeCab NAIST辞書 — Copyright / License", "files/licenses/open-jtalk-dictionary-COPYING.txt"),
     FutachaLicenseAsset("onnxruntime-license", "ONNX Runtime 1.30.0 — MIT License", "files/licenses/onnxruntime-LICENSE.txt"),
     FutachaLicenseAsset("onnxruntime-notices", "ONNX Runtime — Third-party notices", "files/licenses/onnxruntime-ThirdPartyNotices.txt"),
     FutachaLicenseAsset("opencv-notices", "OpenCV 5.0.0 — Apache License 2.0 / Copyright / Third-party notices", "files/licenses/opencv-NOTICES.txt"),

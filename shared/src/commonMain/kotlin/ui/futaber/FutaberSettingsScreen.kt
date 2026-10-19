@@ -158,6 +158,7 @@ internal fun FutaberSettingsScreen(
     boardWatchWordCount: Int = 0,
     onEditWatchWords: (((List<String>) -> List<String>) -> Unit)? = null
 ) {
+    val boardPlacementPreferences = mediaServices?.store?.preferences?.collectAsState(emptyMap<String, String>())?.value.orEmpty()
     val colors = LocalFutaberColors.current
     var route by rememberSaveable { mutableStateOf(SettingsRoute.Root) }
     var postingOpen by rememberSaveable { mutableStateOf(false) }
@@ -448,6 +449,18 @@ internal fun FutaberSettingsScreen(
                                     }
                                 }
                             }
+                        }
+                        SwitchRow("板一覧を下寄せ", "boards-from-bottom", com.valoser.futacha.shared.ui.board.boardsFromBottom(boardPlacementPreferences)) {
+                            onSettingChange(com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY, it.toString())
+                        }
+                        SwitchRow("開いた時の新着・自分への返信件数", "ext-open-summary", settings.extOpenSummary) {
+                            onSettingChange(FutaberSettingKeys.EXT_OPEN_SUMMARY, if (it) "ON" else "OFF")
+                        }
+                        SwitchRow("タブの隔離・落ち状態を表示", "ext-tab-status", settings.extTabStatus) {
+                            onSettingChange(FutaberSettingKeys.EXT_TAB_STATUS, if (it) "ON" else "OFF")
+                        }
+                        SwitchRow("delの確認でこのレスをNGにも登録", "ext-report-ng", settings.extReportNg) {
+                            onSettingChange(FutaberSettingKeys.EXT_REPORT_NG, if (it) "ON" else "OFF")
                         }
                         SwitchRow("検索結果の前後移動（▲▼）", "ext-search-nav", settings.extSearchNav) {
                             onSettingChange(FutaberSettingKeys.EXT_SEARCH_NAV, if (it) "ON" else "OFF")
@@ -1064,14 +1077,14 @@ internal fun FutaberSharedSettingsHost(
                 Surface(Modifier.fillMaxSize().testTag("futaber-viewer-settings"), color = colors.background) {
                     PlatformBackHandler(onBack = back)
                     when (val path = paths.last()) {
-                        "help" -> CompatHelpScreen(onBack = back, onOpenChangeLog = { paths = paths + "changelog" })
+                        "help" -> CompatHelpScreen(appVersion = appVersion, onBack = back, onOpenChangeLog = { paths = paths + "changelog" })
                         "changelog" -> CompatChangeLogScreen(
                             appVersion = appVersion, store = services.store,
                             onOpenHelp = { paths = paths + "help" }, onBack = back
                         )
                         "license" -> CompatLicenseScreen(onBack = back)
                         "cookies" -> services.cookieRepository?.let { CookieManagementScreen(onBack = back, repository = it) }
-                            ?: CompatHelpScreen(onBack = back)
+                            ?: CompatHelpScreen(appVersion = appVersion, onBack = back)
                         else -> CompatSettingsScreen(
                             path = path,
                             store = services.store,

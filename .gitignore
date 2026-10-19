@@ -24,6 +24,7 @@ app-android/nonMinifiedRelease/
 /artifacts/
 iosApp/Pods/
 iosApp/iosApp.xcworkspace/
+/iosApp/iosApp copy-Info.plist
 *.dSYM/
 
 ### Android ###

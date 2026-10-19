@@ -114,7 +114,7 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = rootProject.file("shared/src/nativeInterop/tracking/CMakeLists.txt")
+            path = rootProject.file("shared/src/nativeInterop/CMakeLists.txt")
             version = "3.22.1"
         }
     }
@@ -134,7 +134,7 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 220
+        versionCode = 226
         versionName = "13.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -142,13 +142,16 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf(
+                    "-DVOICEVOX_ROOT=${rootProject.file("build/voicevox").invariantSeparatorsPath}",
                     "-DOPENCV_SOURCE=${rootProject.file("build/android-tracking/opencv").invariantSeparatorsPath}",
                     "-DANDROID_STL=c++_static", "-DWITH_KLEIDICV=OFF", "-DWITH_CAROTENE=OFF"
                 )
-                targets += "futacha_tracking_bridge"
+                targets += "futacha_native"
             }
         }
     }
+
+    sourceSets.getByName("main").jniLibs.srcDir(rootProject.file("build/voicevox/android/jniLibs"))
 
     signingConfigs {
         if (hasReleaseSigningConfig) {
@@ -209,6 +212,20 @@ val testNativeSymbolPackaging = tasks.register<Exec>("testNativeSymbolPackaging"
 tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(testNativeSymbolPackaging) }
 tasks.matching { it.name.startsWith("configureCMake") || it.name == "preBuild" }.configureEach {
     dependsOn(prepareAndroidTracking)
+}
+
+val prepareAndroidVoicevox by tasks.registering(Exec::class) {
+    inputs.file(rootProject.file("tools/prepare-voicevox.py"))
+    inputs.property("ndkVersion", "29.0.14206865")
+    outputs.dir(rootProject.layout.buildDirectory.dir("voicevox/android/jniLibs"))
+    outputs.file(rootProject.layout.buildDirectory.file("voicevox/include/voicevox_core.h"))
+    val sdk = localProperties.getProperty("sdk.dir") ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: System.getenv("ANDROID_HOME") ?: "${System.getProperty("user.home")}/Library/Android/sdk"
+    commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3",
+        rootProject.file("tools/prepare-voicevox.py"), "--android", "--ndk", "$sdk/ndk/29.0.14206865")
+}
+tasks.matching { it.name.startsWith("configureCMake") || it.name == "preBuild" || it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(prepareAndroidVoicevox)
 }
 
 // AGP's SYMBOL_TABLE extraction also copies stripped third-party binaries.

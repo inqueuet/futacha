@@ -59,6 +59,14 @@ internal fun buildThreadScreenLoadBindings(
     stateBindings: ThreadScreenLoadStateBindings,
     uiCallbacks: ThreadScreenLoadUiCallbacks
 ): ThreadScreenLoadBindings {
+    fun markGoneIfConfirmed(error: Throwable) {
+        val code = error.statusCodeOrNull()
+        if (code == 404 || code == 410) {
+            (stateBindings.currentUiState() as? ThreadUiState.Success)?.let {
+                stateBindings.setUiState(it.copy(confirmedGone = true))
+            }
+        }
+    }
     val analyticsContext = mapOf(
         "board_kind" to analyticsBoardKind(board.url),
         "board_context" to analyticsSessionContextId("board", board.id, board.url),
@@ -180,6 +188,7 @@ internal fun buildThreadScreenLoadBindings(
                         "error_type" to (e::class.simpleName ?: "unknown")
                     )
                 )
+                markGoneIfConfirmed(e)
                 uiCallbacks.onManualRefreshFailure(
                     buildThreadManualRefreshFailureUiOutcome(
                         error = e,
@@ -300,6 +309,7 @@ internal fun buildThreadScreenLoadBindings(
                     if (stateBindings.currentUiState() is ThreadUiState.Success) {
                         // A reload after a reply, auto-scroll or a local copy keeps
                         // the page on screen, as a manual refresh does (C3).
+                        markGoneIfConfirmed(e)
                         uiCallbacks.onManualRefreshFailure(
                             buildThreadManualRefreshFailureUiOutcome(
                                 error = e,

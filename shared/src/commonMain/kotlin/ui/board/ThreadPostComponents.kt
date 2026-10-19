@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -285,7 +286,7 @@ internal fun ThreadPostCard(
                     .fillMaxSize()
                     .clip(MaterialTheme.shapes.small)
                     .background(backgroundColor)
-                Box(modifier = imageContainerModifier) {
+                Box(modifier = imageContainerModifier.privacyMediaFilter()) {
                     if (shouldShowThumbnailFallback) {
                         MediaThumbnailFallbackIcon(
                             url = displayUrl,

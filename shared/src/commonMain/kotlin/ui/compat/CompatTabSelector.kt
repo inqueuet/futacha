@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.foundation.layout.widthIn
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
@@ -893,7 +895,11 @@ private val CompatAccelerateDecelerateEasing = Easing { fraction ->
 @Composable
 private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext: Boolean) {
     val palette = LocalCompatibilityPalette.current
-    Box(Modifier.fillMaxSize()) {
+    val status = com.valoser.futacha.shared.ui.board.threadStatusText(
+        com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded))
+    Box(Modifier.fillMaxSize().semantics {
+        contentDescription = "${tab.title}、未読${tab.unreadCount}件" + if (status.isEmpty()) "" else "、$status"
+    }) {
         AsyncImage(
             model = tab.thumbnailUrl,
             contentDescription = null,
@@ -923,6 +929,14 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
                 modifier = Modifier.testTag("compat-tab-title-${tab.key}")
             )
         }
+        if (status.isNotEmpty()) Text(
+            com.valoser.futacha.shared.ui.board.threadStatusBadgeText(
+                com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded)),
+            color = Color.White, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.TopStart).widthIn(max = if (tab.unreadCount > 0) 30.dp else 56.dp)
+                .background(Color.Black.copy(alpha = 0.85f))
+                .testTag("compat-tab-status-${tab.key}")
+        )
         if (tab.unreadCount > 0) {
             Text(
                 "+${tab.unreadCount}",

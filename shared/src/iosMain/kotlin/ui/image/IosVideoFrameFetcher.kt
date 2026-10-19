@@ -25,6 +25,9 @@ import kotlinx.cinterop.value
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okio.Buffer
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.iosMemoryPerformanceProfile
+import com.valoser.futacha.shared.util.iosWebmPlaybackAvailable
+import com.valoser.futacha.shared.util.IOS_WEBM_PREVIEW_UNAVAILABLE
 import platform.AVFoundation.AVAssetImageGenerator
 import platform.AVFoundation.AVAssetImageGeneratorSucceeded
 import platform.AVFoundation.AVURLAsset
@@ -61,12 +64,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal class IosVideoFrameFetcher(
     private val url: NSURL,
     private val options: Options,
-    private val dataSource: DataSource
+    private val dataSource: DataSource,
+    private val webmPlaybackAvailable: () -> Boolean = ::iosWebmPlaybackAvailable
 ) : Fetcher {
     override suspend fun fetch(): FetchResult {
         val extension = url.pathExtension?.lowercase().orEmpty()
         val data = when (extension) {
-            "webm" -> createCachedWebKitThumbnail(url, options)
+            "webm" -> createCachedWebKitThumbnail(url, options, webmPlaybackAvailable)
             else -> createAvFoundationThumbnail(url, options)
         }
         return SourceFetchResult(
@@ -180,7 +184,8 @@ private suspend fun createAvFoundationThumbnail(
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private suspend fun createCachedWebKitThumbnail(
     url: NSURL,
-    options: Options
+    options: Options,
+    playbackAvailable: () -> Boolean
 ): NSData {
     val (targetWidth, targetHeight) = resolveWebKitThumbnailSize(options)
     val cacheKey = buildWebKitThumbnailCacheKey(url, targetWidth, targetHeight)
@@ -189,6 +194,8 @@ private suspend fun createCachedWebKitThumbnail(
         rememberWebKitThumbnail(cacheKey, data)
         return data
     }
+    // A PNG cached by another session is still usable; do not start WebKit decoding on iOS 15/16.
+    check(playbackAvailable()) { IOS_WEBM_PREVIEW_UNAVAILABLE }
     return webKitThumbnailPriorityGate.withPermit(options.videoThumbnailRequestPriority()) {
         readCachedWebKitThumbnail(cacheKey)?.let { return@withPermit it }
         readDiskCachedWebKitThumbnail(cacheKey)?.let { data ->
@@ -224,7 +231,7 @@ private suspend fun rememberWebKitThumbnail(cacheKey: String, data: NSData) {
         webKitThumbnailCacheBytes += data.length.toLong()
         while (
             webKitThumbnailCache.size > WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES ||
-            webKitThumbnailCacheBytes > WEBKIT_THUMBNAIL_MEMORY_CACHE_MAX_BYTES
+            webKitThumbnailCacheBytes > webKitThumbnailMemoryBudget()
         ) {
             val eldestKey = webKitThumbnailCache.keys.firstOrNull() ?: break
             webKitThumbnailCache.remove(eldestKey)?.let { removed ->
@@ -435,15 +442,34 @@ private const val FNV_1A_64_PRIME = 1099511628211L
 @OptIn(ExperimentalForeignApi::class)
 private class WebKitThumbnailWebViewPool {
     private var webView: WKWebView? = null
+    private var inUse = false
+    private var discardOnRelease = false
 
     fun acquire(
         targetWidth: Double,
         targetHeight: Double
     ): WKWebView {
-        return (webView ?: createWebView().also { webView = it }).also {
+        check(!inUse) { "WebM thumbnail view is already in use" }
+        val view = webView ?: createWebView().also { webView = it }
+        inUse = true
+        return view.also {
             it.setFrame(CGRectMake(0.0, 0.0, targetWidth, targetHeight))
             it.navigationDelegate = null
         }
+    }
+
+    fun release(view: WKWebView) {
+        check(inUse && webView === view)
+        inUse = false
+        if (discardOnRelease) {
+            webView = null
+            discardOnRelease = false
+        }
+    }
+
+    fun trimWhenIdle() {
+        if (inUse) discardOnRelease = true
+        else webView = null
     }
 
     private fun createWebView(): WKWebView {
@@ -608,6 +634,22 @@ private class WebmThumbnailNavigationDelegate(
             completionHandler = null
         )
         webView.navigationDelegate = null
+        webKitThumbnailWebViewPool.release(webView)
+    }
+}
+
+private fun webKitThumbnailMemoryBudget(): Long =
+    if (iosMemoryPerformanceProfile().isLowRam) 4L * 1024 * 1024
+    else WEBKIT_THUMBNAIL_MEMORY_CACHE_MAX_BYTES
+
+/** Drop only disposable memory; an active snapshot keeps its view until delegate cleanup. */
+internal suspend fun trimIosVideoThumbnailMemory() {
+    webKitThumbnailCacheMutex.withLock {
+        webKitThumbnailCache.clear()
+        webKitThumbnailCacheBytes = 0
+    }
+    withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+        webKitThumbnailWebViewPool.trimWhenIdle()
     }
 }
 

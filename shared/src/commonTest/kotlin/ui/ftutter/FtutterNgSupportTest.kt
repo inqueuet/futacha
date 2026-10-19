@@ -10,6 +10,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FtutterNgSupportTest {
+    @Test fun hiddenCatalogReasonsComeFromTheSameScopedMatcherAndCommonWords() {
+        val items = listOf(item("1", "ネコの話"), item("2", "共通ワード"), item("3", "残す"))
+        val rules = listOf(FtutterNgRule("ねこ", 0), FtutterNgRule("残す", 0, ita = FtutterNgBoard("img", "https://img.2chan.net/b/")))
+        val table = ftutterCatalogTitleNg(items, FtutterNgMatcher(rules, may), listOf("共通"))
+        assertEquals("NGタイトル: ねこ", table.byTitle.getValue("ネコの話").reason)
+        assertEquals("共通のカタログNG: 共通", table.byTitle.getValue("共通ワード").reason)
+        assertFalse(table.byTitle.getValue("残す").hidden)
+        assertNull(table.byTitle.getValue("残す").reason)
+    }
+
+    @Test fun catalogSearchSessionIsKeptPerBoardAcrossScreenRecreation() {
+        val holder = FtutterCatalogHolder()
+        holder.search("a").apply { open = true; query = "候補" }
+        holder.search("b").apply { query = "別の板" }
+        assertEquals("候補", holder.search("a").query)
+        assertTrue(holder.search("a").open)
+    }
     private val may = "https://may.2chan.net/b/futaba.php"
     private fun post(id: String, body: String = "本文", posterId: String? = null) = Post(
         id = id, author = null, subject = null, timestamp = "", posterId = posterId, messageHtml = body, imageUrl = null, thumbnailUrl = null

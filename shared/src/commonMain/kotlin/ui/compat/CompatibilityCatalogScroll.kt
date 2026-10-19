@@ -639,7 +639,11 @@ internal fun BoxScope.CompatFastScrollbar(
     firstVisibleItemIndex: Int,
     visibleItemCount: Int,
     isScrollInProgress: Boolean,
-    onScrollToItem: suspend (Int) -> Unit
+    onScrollToItem: suspend (Int) -> Unit,
+    alwaysVisible: Boolean = false,
+    onLeft: Boolean = false,
+    thickness: androidx.compose.ui.unit.Dp = 6.dp,
+    thumbColor: Color = Color(0xFF757575)
 ) {
     if (!enabled || totalItems <= visibleItemCount || visibleItemCount <= 0) return
     val scope = rememberCoroutineScope()
@@ -652,8 +656,8 @@ internal fun BoxScope.CompatFastScrollbar(
     var opacity by remember { mutableFloatStateOf(0f) }
     var scrollJob by remember { mutableStateOf<Job?>(null) }
 
-    LaunchedEffect(isScrollInProgress, dragging) {
-        if (isScrollInProgress || dragging) {
+    LaunchedEffect(isScrollInProgress, dragging, alwaysVisible) {
+        if (isScrollInProgress || dragging || alwaysVisible) {
             visible = true
             animate(opacity, 1f, animationSpec = tween(COMPAT_FAST_SCROLL_FADE_MILLIS)) { value, _ ->
                 opacity = value
@@ -717,30 +721,30 @@ internal fun BoxScope.CompatFastScrollbar(
     }
     Box(
         modifier = Modifier
-            .align(Alignment.CenterEnd)
-            .width(24.dp)
+            .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
+            .width(maxOf(24.dp, thickness + 6.dp))
             .fillMaxHeight()
             .testTag("compat-fast-scrollbar")
             .onSizeChanged { trackHeightPx = it.height }
     ) {
         Box(
             Modifier
-                .align(Alignment.TopEnd)
-                .width(18.dp)
+                .align(if (onLeft) Alignment.TopStart else Alignment.TopEnd)
+                .width(maxOf(18.dp, thickness + 6.dp))
                 .fillMaxHeight(thumbFraction)
                 .graphicsLayer {
                     alpha = opacity
                     translationY = (trackHeightPx * (1f - thumbFraction) * travelFraction)
                 }
                 .then(if (visible || opacity > 0.01f) thumbGestureModifier else Modifier),
-            contentAlignment = Alignment.CenterEnd
+            contentAlignment = if (onLeft) Alignment.CenterStart else Alignment.CenterEnd
         ) {
             Box(
                 Modifier
-                    .padding(end = 3.dp)
-                    .width(6.dp)
+                    .padding(horizontal = 3.dp)
+                    .width(thickness)
                     .fillMaxHeight()
-                    .background(Color(0xFF757575), RoundedCornerShape(3.dp))
+                    .background(thumbColor, RoundedCornerShape(thickness / 2))
             )
         }
     }

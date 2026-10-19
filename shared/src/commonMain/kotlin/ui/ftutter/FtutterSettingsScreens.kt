@@ -115,6 +115,7 @@ internal fun FtutterGestureSettingsScreen(
                 FtutterCheckRow("左にタブがない時に戻る（スレ）", settings.backByPreviousInThread, "ftutter-gesture-back-thread") {
                     savePreference(FtutterKeys.BACK_BY_PREVIOUS_THREAD, it.toString())
                 }
+                FtutterSliderSetting("方向を切り替える距離", FtutterKeys.GESTURE_SENSITIVITY, 0.1, 1000.0, 0.1, 20.0, preferences, savePreference, integer = false)
                 FtutterSectionTitle("割り当て")
                 Text(
                     "割り当てのリセット", color = colors.text, fontSize = 15.sp,

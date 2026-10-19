@@ -100,7 +100,7 @@ internal fun parseFtutterPreferencesXml(xml: String, ensureActive: () -> Unit = 
 }
 
 /** そのまま同じ名前で入れられる設定（このモードの`compat.ftutter.<原作の名前>`）。 */
-private val SAME_NAME_SETTINGS: List<String> = listOf(
+internal val FTUTTER_BACKUP_SAME_NAME_SETTINGS: List<String> = listOf(
     FtutterKeys.MAIN_COLOR, FtutterKeys.THEME_MODE, FtutterKeys.CATALOG_FONT_SIZE, FtutterKeys.CATALOG_NUMBER_FONT_SIZE,
     FtutterKeys.RESU_HEADER_FONT_SIZE, FtutterKeys.RESU_CONTENT_FONT_SIZE, FtutterKeys.PRIVACY_CATALOG, FtutterKeys.PRIVACY_CATALOG_ZOOM,
     FtutterKeys.PRIVACY_THREAD, FtutterKeys.PRIVACY_THREAD_ZOOM, FtutterKeys.PRIVACY_TAB_DRAWER, FtutterKeys.DISABLE_STRETCH_ANIMATION,
@@ -127,13 +127,15 @@ private val SAME_NAME_SETTINGS: List<String> = listOf(
     FtutterKeys.SAVE_HTML_THUMB, FtutterKeys.SAVE_HTML_FILE, FtutterKeys.SAVE_HTML_APU, FtutterKeys.SAVE_HTML_ZIP,
     FtutterKeys.NG_CHAIN, FtutterKeys.CONFIRM_BEFORE_POST, FtutterKeys.USE_GESTURE, FtutterKeys.BACK_BY_PREVIOUS_CATALOG,
     FtutterKeys.BACK_BY_PREVIOUS_THREAD, FtutterKeys.USE_TABLET, FtutterKeys.TABLET_MIN_WIDTH, FtutterKeys.TABLET_ROW_PORTRAIT,
-    FtutterKeys.TABLET_ROW_LANDSCAPE, FtutterKeys.THREAD_ON_LEFT, FtutterKeys.DIVIDE_PERCENTAGE, FtutterKeys.DELETE_KEY
+    FtutterKeys.TABLET_ROW_LANDSCAPE, FtutterKeys.THREAD_ON_LEFT, FtutterKeys.DIVIDE_PERCENTAGE, FtutterKeys.DELETE_KEY,
+    FtutterKeys.USE_HTTPS, FtutterKeys.USE_CUSTOM_TAB, FtutterKeys.GESTURE_SENSITIVITY,
+    FtutterKeys.IMAGE_SEARCH_ASCII2D, FtutterKeys.ALBUM_NAME, FtutterKeys.DISABLE_ALBUM_NAME
 ) + FTUTTER_GESTURE_DEFAULTS.keys.map(FtutterKeys::gesture)
 
 /** 色の個別設定：原作は`<名前>ColorOverride`（既定なし）と`<名前>Color`（既定あり）。 */
 private val OVERRIDE_COLORS = listOf(
     "background", "text", "toolBar", "onToolBar", "onToolBarActive", "popUp", "highlight", "dividerCard", "onDividerCard",
-    "inTab", "outline", "kidoku", "midoku", "onMidoku", "headerText"
+    "inTab", "gesture", "scrollBar", "indicator", "outline", "kidoku", "midoku", "onMidoku", "headerText"
 )
 private val PLAIN_COLORS = listOf("resuSuu", "onResuSuu", "pickUp", "onPickUp", "kakikomi", "henshin")
 
@@ -151,8 +153,14 @@ internal data class FtutterBackupPlan(
     val ngCount: Int,
     val settingCount: Int,
     /** 取り込まないNG（正規表現が作れない・照合に時間がかかりすぎる等。手で登録する時と同じ検査）。 */
-    val rejectedNg: Int = 0
+    val rejectedNg: Int = 0,
+    /** 追加のファイル選択やアクセス許可が必要なもの。取り込み前に知らせる。 */
+    val limitations: List<String> = emptyList(),
+    /** Header only; import into the shared cookie jar without logging its contents. */
+    val cookieHeader: String? = null
 ) {
+    override fun toString(): String = summary
+
     val summary: String
         get() = buildList {
             add("設定 ${settingCount}項目")
@@ -162,7 +170,7 @@ internal data class FtutterBackupPlan(
             add("NG・ピックアップ ${ngCount}件")
             if (rejectedNg > 0) add("使えないNG ${rejectedNg}件は取り込みません")
             if (marks.isNotEmpty()) add("マーク ${marks.size}件")
-        }.joinToString("、")
+        }.joinToString("、") + if (limitations.isEmpty()) "" else "\n引き継ぎの制限：${limitations.joinToString("、")}"
 }
 
 private fun JsonElement?.text(): String? = (this as? JsonPrimitive)?.takeIf { it.isString || it.content != "null" }?.content
@@ -189,12 +197,11 @@ internal fun ftutterBackupPlan(
         is FtutterPrefValue.Text -> value.value
         is FtutterPrefValue.Texts -> null
     }
-    SAME_NAME_SETTINGS.forEach { key ->
+    FTUTTER_BACKUP_SAME_NAME_SETTINGS.forEach { key ->
         prefs[key.removePrefix(FtutterKeys.PREFIX)]?.let(::scalar)?.let { out[key] = it }
     }
     OVERRIDE_COLORS.forEach { name -> prefs["${name}ColorOverride"]?.let(::scalar)?.let { out[FtutterKeys.colorOverride(name)] = it } }
     PLAIN_COLORS.forEach { name -> prefs["${name}Color"]?.let(::scalar)?.let { out[FtutterKeys.colorOverride(name)] = it } }
-    val settingCount = out.size
     fun texts(name: String): List<String>? = (prefs[name] as? FtutterPrefValue.Texts)?.values
     texts("catTBOrderName")?.let {
         out[FtutterKeys.CATALOG_TOOLBAR_ORDER] = encodeFtutterList(mapLabels(it, FtutterCatalogTool.entries, { t -> t.label }, { t -> t.stored }))
@@ -209,6 +216,12 @@ internal fun ftutterBackupPlan(
     }
     texts("resuDOrderBool")?.let { out[FtutterKeys.POST_MENU_ENABLED] = encodeFtutterList(it) }
     texts("applyPickupOrderMode")?.let { out[FtutterKeys.PICKUP_ORDER_MODES] = if (it.isEmpty()) FTUTTER_PICKUP_ORDERS_NONE else encodeFtutterList(it) }
+    val settingCount = out.size
+    var hasDraftAttachment = false
+    fun importedDraft(element: JsonElement): FtutterDraft? {
+        if ((element as? JsonObject)?.str("upFile")?.isNotBlank() == true) hasDraftAttachment = true
+        return draftOf(element)
+    }
     // 非表示：今のものに足す。
     texts("hihyouji")?.let { hidden ->
         val merged = (parseFtutterHiddenThreads(existingPreferences[FtutterKeys.HIDDEN_THREADS]) + hidden.map(::ftutterCanonicalThreadUrl)).distinct()
@@ -228,6 +241,11 @@ internal fun ftutterBackupPlan(
     // 板：未登録の板を足し、原作のお気に入りは星を付ける。
     var nextBoards = boards
     var added = 0
+    val totals = linkedMapOf(
+        "sureOpenCount" to FtutterKeys.STATS_OPENED, "suretateCount" to FtutterKeys.STATS_CREATED,
+        "resuCount" to FtutterKeys.STATS_REPLIED, "soudaneCount" to FtutterKeys.STATS_SOUDANE
+    )
+    val counts = mutableMapOf<String, Long>()
     texts("itaList").orEmpty().mapNotNull { runCatching { looseJson.parseToJsonElement(it) as? JsonObject }.getOrNull() }.forEach { ita ->
         val url = ita.str("url") ?: return@forEach
         val name = ita.str("name").orEmpty()
@@ -241,7 +259,16 @@ internal fun ftutterBackupPlan(
                 } else grown
             }
         }
-        ita["kakikomiData"]?.let { draftOf(it) }?.let { draft ->
+        if (ita.bool("favorite") == true) {
+            val id = ftutterBoardForUrl(nextBoards, url)?.id
+            nextBoards = nextBoards.map { if (it.id == id) it.copy(pinned = true) else it }
+        }
+        totals.forEach { (original, target) ->
+            ita.int(original)?.takeIf { it >= 0 }?.let { count ->
+                counts[target] = ((counts[target] ?: 0L) + count).coerceAtMost(Int.MAX_VALUE.toLong())
+            }
+        }
+        ita["kakikomiData"]?.let(::importedDraft)?.let { draft ->
             ftutterBoardForUrl(nextBoards, url)?.let { board ->
                 out[FtutterKeys.DRAFTS] = ftutterDraftsWith(parseFtutterDrafts(out[FtutterKeys.DRAFTS] ?: existingPreferences[FtutterKeys.DRAFTS]),
                     ftutterDraftKey(FtutterPostTarget.Create(board.id), board.url), draft)
@@ -249,6 +276,10 @@ internal fun ftutterBackupPlan(
         }
     }
 
+    counts.forEach { (key, value) -> out[key] = value.toString() }
+    (prefs["openingCatalogUrl"] as? FtutterPrefValue.Text)?.value?.let { url ->
+        ftutterBoardForUrl(nextBoards, url)?.let { out[FtutterKeys.LAST_BOARD] = it.id }
+    }
     // 履歴・既読・保護・マーク・返信の下書き：スレッドのデータ（キー＝スレのURL）から。
     val history = mutableListOf<ThreadHistoryEntry>()
     val readCounts = parseFtutterReadCounts(existingPreferences[FtutterKeys.READ_COUNTS]).toMutableMap()
@@ -278,7 +309,7 @@ internal fun ftutterBackupPlan(
         data.int("kokomade")?.takeIf { it >= 0 }?.let { readCounts[url] = maxOf(readCounts[url] ?: 0, it) }
         if (data.bool("protected") == true) protected += url
         posts.filter { it.int("marked") == 1 }.mapNotNull { it.int("no")?.toString() }.forEach { marks += url to it }
-        data["kakikomiData"]?.let { draftOf(it) }?.let { draft ->
+        data["kakikomiData"]?.let(::importedDraft)?.let { draft ->
             out[FtutterKeys.DRAFTS] = ftutterDraftsWith(parseFtutterDrafts(out[FtutterKeys.DRAFTS] ?: existingPreferences[FtutterKeys.DRAFTS]),
                 ftutterDraftKey(FtutterPostTarget.Reply(board.id, threadId), board.url), draft)
         }
@@ -296,7 +327,29 @@ internal fun ftutterBackupPlan(
         val current = parseFtutterTabs(existingPreferences).urls
         out[FtutterKeys.TABS] = encodeFtutterList((tabs + current).distinct())
     }
-    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount, rejectedNg)
+    (prefs["opening"] as? FtutterPrefValue.Text)?.value?.let(::ftutterCanonicalThreadUrl)?.let { opening ->
+        if (opening in decodeFtutterList(out[FtutterKeys.TABS] ?: existingPreferences[FtutterKeys.TABS]).orEmpty()) {
+            out[FtutterKeys.OPENING] = opening
+        }
+    }
+    val limitations = linkedSetOf<String>()
+    fun hasValue(key: String): Boolean = prefs[key]?.let {
+        when (it) {
+            is FtutterPrefValue.Text -> it.value.isNotBlank()
+            is FtutterPrefValue.Texts -> it.values.isNotEmpty()
+            else -> true
+        }
+    } == true
+    mapOf(
+        "userFontPath" to "フォントのファイル（デザイン→カスタムフォントから再選択）",
+        "savePath" to "画像の保存先（保存先・キャッシュから再選択）",
+        "savePathList" to "画像の保存先（保存先・キャッシュから再選択）"
+    ).forEach { (key, label) -> if (hasValue(key)) limitations += label }
+    // Preserve source paths as recovery information; a copied URI does not confer the source app's grant.
+    listOf("userFontPath", "savePath").forEach { key -> prefs[key]?.let(::scalar)?.let { out[FtutterKeys.PREFIX + "import." + key] = it } }
+    texts("savePathList")?.let { out[FtutterKeys.PREFIX + "import.savePathList"] = encodeFtutterList(it) }
+    if (hasDraftAttachment) limitations += "下書きの添付ファイル（本文は取り込みます）"
+    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount, rejectedNg, limitations.toList(), (prefs["cookie"] as? FtutterPrefValue.Text)?.value)
 }
 
 internal const val FTUTTER_IMPORT_READ_COUNT_LIMIT = 400
@@ -305,7 +358,8 @@ private fun draftOf(element: JsonElement): FtutterDraft? {
     val obj = element as? JsonObject ?: return null
     val draft = FtutterDraft(
         title = obj.str("title").orEmpty(), name = obj.str("name").orEmpty(),
-        mail = obj.str("mail").orEmpty(), comment = obj.str("comment").orEmpty()
+        mail = obj.str("mail").orEmpty(), comment = obj.str("comment").orEmpty(),
+        sourceAttachmentPath = obj.str("upFile").orEmpty()
     )
     return draft.takeIf { !it.isEmpty }
 }

@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.ui.ftutter
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -150,8 +152,9 @@ internal fun FtutterApp(
     }
 
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val openUrl = com.valoser.futacha.shared.util.rememberUrlLauncher()
+    val openUrl = rememberFtutterUrlLauncher(preferences)
     val catalogHolder = remember { FtutterCatalogHolder() }
+    val threadMemory = remember { FtutterThreadMemory() }
     // スレ画面・タブ帯より長く持つもの（再監査M3）：送信・過去ログ取得の受け皿と、タブ帯の位置。
     val threadActions = remember(scope) { FtutterThreadActions(scope) }
     val tabStripState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -195,7 +198,8 @@ internal fun FtutterApp(
     }
     val selfPostMap by stateStore.selfPostIdentifiersByThread.collectAsState(emptyMap<String, List<String>>())
     // スレッドを開くと履歴の先頭へ（原作：開く・個別に更新するたびに先頭へ移る）。閲覧時刻は開いた時だけ書く。
-    fun openThread(board: BoardSummary, ref: FtutterThreadRef, back: FtutterScreen) {
+    fun openThread(board: BoardSummary, ref: FtutterThreadRef, back: FtutterScreen, refreshOnOpen: Boolean = true) {
+        threadMemory.open(ftutterCanonicalThreadUrl(ftutterThreadUrl(board, ref.threadId)), refreshOnOpen)
         screen = FtutterScreen.Thread(board.id, ref, back)
         countStat(FtutterKeys.STATS_OPENED)
         val url = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, ref.threadId))
@@ -270,7 +274,8 @@ internal fun FtutterApp(
     fun repositoryFor(board: BoardSummary) = if (board.isMockBoard()) mockRepository else repository
     // 送信は、ふたちゃ・ふたばー風と同じ共有の処理（公式の送信前処理・フォームの取得・自動再送の抑止を含む）。
     suspend fun sendPost(target: FtutterPostTarget, input: FtutterPostInput): Result<String?> {
-        val board = boards.firstOrNull { it.id == target.boardId } ?: return Result.failure(IllegalStateException("板が登録されていません"))
+        val originalBoard = boards.firstOrNull { it.id == target.boardId } ?: return Result.failure(IllegalStateException("板が登録されていません"))
+        val board = originalBoard.copy(url = ftutterNetworkUrl(originalBoard.url, preferences.ftutterBool(FtutterKeys.USE_HTTPS, false)))
         val noticeAgreed = try {
             com.valoser.futacha.shared.ui.board.checkPostingNoticeIfNeeded(stateStore)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -383,9 +388,17 @@ internal fun FtutterApp(
                     mediaServices?.store?.savePreferences(fitted.preferences) ?: fitted.preferences.forEach { (k, v) -> savePreference(k, v) }
                 }
                 stateStore.updateBoards { current ->
-                    current + plan.boards.filter { candidate -> current.none { it.id == candidate.id } && ftutterBoardForUrl(current, candidate.url) == null }
+                    val favorites = plan.boards.filter { it.pinned }.map { it.url }
+                    current.map { board ->
+                        if (favorites.any { ftutterBoardForUrl(listOf(board), it) != null }) board.copy(pinned = true) else board
+                    } + plan.boards.filter { candidate -> current.none { it.id == candidate.id } && ftutterBoardForUrl(current, candidate.url) == null }
                 }
                 if (plan.history.isNotEmpty()) stateStore.prependOrReplaceHistoryEntries(plan.history)
+                plan.cookieHeader?.let { header ->
+                    mediaServices?.cookieRepository?.let { cookies ->
+                        ftutterImportCookies(cookies, header)
+                    }
+                }
                 // Marks beyond the limit push the oldest out: said with the rest, not dropped without a word (re-audit L22).
                 val droppedMarks = mediaServices?.store?.let { store ->
                     plan.marks.sumOf { (url, no) -> com.valoser.futacha.shared.compat.setManualPostMark(store, url, no, true) }
@@ -434,7 +447,12 @@ internal fun FtutterApp(
             return
         }
         val entry = historyByUrl[url]
-        openThread(board, FtutterThreadRef(board.id, threadId, entry?.title.orEmpty(), entry?.titleImageUrl.orEmpty()), FtutterScreen.Catalog(board.id))
+        val current = screen as? FtutterScreen.Thread
+        if (current?.boardId == board.id && current.ref.threadId == threadId &&
+            preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false)) threadRefreshSignal++
+        openThread(board, FtutterThreadRef(board.id, threadId, entry?.title.orEmpty(), entry?.titleImageUrl.orEmpty()), FtutterScreen.Catalog(board.id),
+            refreshOnOpen = preferences.ftutterBool(
+                FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false))
     }
     // 開いているスレッドのタブが閉じられた時：残りがあれば同じ位置のタブへ、無ければ（設定ON）カタログへ1段だけ戻る。
     fun afterClose(before: List<String>) {
@@ -463,8 +481,8 @@ internal fun FtutterApp(
         tabState.close(targets.filter { it !in tabState.protected })
         afterClose(before)
     }
-    fun restoreClosed() {
-        val url = tabState.restore() ?: return
+    fun restoreClosed(): String? {
+        val url = tabState.restore() ?: return null
         if (historyByUrl[url] == null) {
             // 履歴に無ければ履歴にも戻す（原作どおり）。
             val threadId = ftutterThreadIdFromUrl(url)
@@ -482,6 +500,9 @@ internal fun FtutterApp(
             }
         }
         if (screen is FtutterScreen.Thread) openTabUrl(url)
+        val title = historyByUrl[url]?.title?.takeIf { it.isNotBlank() } ?: ftutterThreadIdFromUrl(url).orEmpty()
+        val message = "タブを戻しました：$title"
+        return message
     }
     // 履歴の行を消す：ふたちゃ・ふたばー風の削除と同じく、他モードの履歴（共有ストア。残すと次の起動の統合で戻る）、
     // 自分の書き込みの記録、自動保存した本文も消す（監査A8。以前は共有の履歴だけを消していた）。
@@ -589,6 +610,7 @@ internal fun FtutterApp(
                 tabs = tabState.urls.map(::tabView),
                 opening = currentThreadUrl,
                 listState = tabStripState,
+                showStatus = FtutterExtension.TAB_STATUS in extensions,
                 settings = tabSettings,
                 design = design,
                 onOpen = ::openTabUrl,
@@ -626,7 +648,7 @@ internal fun FtutterApp(
                     screen = current.back
                 }
             }
-            FtutterGestureAction.REOPEN_TAB -> restoreClosed()
+            FtutterGestureAction.REOPEN_TAB -> restoreClosed()?.let { notice = it }
             FtutterGestureAction.MOST_LEFT -> tabState.urls.firstOrNull()?.let(::openTabUrl)
             FtutterGestureAction.MOST_RIGHT -> tabState.urls.lastOrNull()?.let(::openTabUrl)
             FtutterGestureAction.REFRESH_ALL_TABS -> refreshAllTabs()
@@ -649,7 +671,7 @@ internal fun FtutterApp(
             // カタログで「タブを閉じる」は、最後に開いたスレッドのタブを閉じる（画面は移らない）。
             FtutterGestureAction.CLOSE_TAB, FtutterGestureAction.CLOSE_TAB_AND_BACK ->
                 preferences[FtutterKeys.OPENING]?.let(::ftutterCanonicalThreadUrl)?.takeIf { it in tabState.urls }?.let(::closeTab)
-            FtutterGestureAction.REOPEN_TAB -> restoreClosed()
+            FtutterGestureAction.REOPEN_TAB -> restoreClosed()?.let { notice = it }
             FtutterGestureAction.MOST_LEFT -> tabState.urls.firstOrNull()?.let(::openTabUrl)
             FtutterGestureAction.MOST_RIGHT -> tabState.urls.lastOrNull()?.let(::openTabUrl)
             FtutterGestureAction.REFRESH_ALL_TABS -> refreshAllTabs()
@@ -675,6 +697,7 @@ internal fun FtutterApp(
 
     @Composable
     fun CatalogPane(board: BoardSummary, current: FtutterScreen, columnsOverride: Int?, strip: @Composable () -> Unit) {
+        val board = board.copy(url = ftutterNetworkUrl(board.url, preferences.ftutterBool(FtutterKeys.USE_HTTPS, false)))
         LaunchedEffect(board.id) { lastCatalogBoardId = board.id }
         FtutterCatalogScreen(
             board = board,
@@ -732,6 +755,7 @@ internal fun FtutterApp(
             onSwipeBoard = { forward -> catalogGesture(if (forward) FtutterGestureAction.NEXT else FtutterGestureAction.PREVIOUS, board) },
             onEditToolbar = { toolbarEditor = FtutterOrderEditorKind.CATALOG },
             columnsOverride = columnsOverride,
+            openTabUrls = tabUrlSet,
             commonCatalogNgWords = if (commonNgOn) sharedCatalogNgWords else emptyList(),
             archiveClient = if (FtutterExtension.ARCHIVE_SEARCH in extensions && !board.isMockBoard()) httpClient else null,
             ngRules = ngRules,
@@ -743,9 +767,15 @@ internal fun FtutterApp(
 
     @Composable
     fun ThreadPane(board: BoardSummary, current: FtutterScreen.Thread, strip: @Composable () -> Unit, twoPane: Boolean) {
+        val board = board.copy(url = ftutterNetworkUrl(board.url, preferences.ftutterBool(FtutterKeys.USE_HTTPS, false)))
+        val url = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, current.ref.threadId))
+        val refreshOnOpen = remember(current) { threadMemory.takeRefresh(url) }
         FtutterThreadHost(
             board = board,
             ref = current.ref,
+            initialPage = threadMemory.page(url),
+            refreshOnOpen = refreshOnOpen,
+            onPageSnapshot = { threadMemory.put(url, it) },
             repository = if (board.isMockBoard()) mockRepository else threadRepository,
             httpClient = httpClient,
             stateStore = stateStore,
@@ -786,11 +816,14 @@ internal fun FtutterApp(
         )
     }
 
-    FtutterTheme(mainColor = design.mainColor, brightness = design.brightness, overrides = design.overrides) {
+    FtutterTheme(mainColor = design.mainColor, brightness = design.brightness, overrides = design.overrides, disableStretch = design.disableStretchAnimation,
+        fontFamily = LocalFtutterFont.current, preferences = preferences) {
         val colors = LocalFtutterColors.current
         // iOSのホームバーの帯（Composeが描かない下端）を、下のツールバーと同じ色にする（ふたばー風と同じ仕組み。iOS以外は何もしない）。
         com.valoser.futacha.shared.ui.futaber.ApplyFutaberHostBackground(colors.toolBar)
-        val historyUrls = remember(historyByUrl) { historyByUrl.keys.toList() }
+        val historyUrls = remember(historyByUrl, tabState.protected, historyLimit) {
+            ftutterLimitedHistoryUrls(historyByUrl.keys.toList(), tabState.protected, historyLimit)
+        }
         FtutterDrawerHost(
             drawerState = drawerState,
             settings = tabSettings,
@@ -819,6 +852,7 @@ internal fun FtutterApp(
                     }
                 }
                 FtutterDrawerPanel(
+                    showStatus = FtutterExtension.TAB_STATUS in extensions,
                     content = drawerContent,
                     rows = rows,
                     filter = drawerFilter,
@@ -837,6 +871,7 @@ internal fun FtutterApp(
                     onClose = ::closeTab,
                     onToggleProtect = { url -> tabState.toggleProtect(url) },
                     historyTools = FtutterExtension.HISTORY_TOOLS in extensions,
+                    privacy = preferences.ftutterBool(FtutterKeys.IS_PRIVACY, false),
                     selectionReset = drawerState.isOpen,
                     onDeleteHistory = ::deleteHistoryUrls,
                     onDeleteAllHistory = ::deleteAllHistory
@@ -849,6 +884,7 @@ internal fun FtutterApp(
             val tabletColumns = if (maxWidth > maxHeight) tablet.columnsLandscape else tablet.columnsPortrait
             when (val current = screen) {
                 FtutterScreen.Boards -> FtutterBoardListScreen(
+                    boardsFromBottom = com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences),
                     boards = boards,
                     httpClient = httpClient,
                     onOpenBoard = ::openCatalog,
@@ -886,7 +922,7 @@ internal fun FtutterApp(
                 }
                 is FtutterScreen.HiddenAndNg -> {
                     PlatformBackHandler(enabled = true) { screen = current.back }
-                    FtutterHiddenAndNgScreen(preferences, editPreference, onBack = { screen = current.back }, ngRemoved = catalogHolder.ngRemoved)
+                    FtutterHiddenAndNgScreen(preferences, editPreference, onBack = { screen = current.back }, ngRemoved = catalogHolder.ngRemoved, ngReasons = catalogHolder.ngReasons)
                 }
                 is FtutterScreen.Settings -> {
                     FtutterSettingsHost(
@@ -898,7 +934,7 @@ internal fun FtutterApp(
                         ngRules = ngRules,
                         onSaveNgRules = saveNgRules,
                         deleteKey = deleteKey.orEmpty(),
-                        ngRemoved = catalogHolder.ngRemoved,
+                        ngRemoved = catalogHolder.ngRemoved, ngReasons = catalogHolder.ngReasons,
                         services = mediaServices,
                         stateStore = stateStore,
                         onEditToolbar = { toolbarEditor = it },
@@ -1076,7 +1112,8 @@ internal fun FtutterApp(
                 modifier = Modifier.testTag("ftutter-backup-confirm"),
                 title = { Text("ふたったーのバックアップを取り込みますか？") },
                 // 監査L14：取り込んだ履歴は今の履歴の上に並ぶ（確認文と実際を合わせた）。
-                text = { Text("${plan.summary}\n\n今の設定・板・履歴は残し、足りないものを足します（同じ設定は取り込んだ値になります）。取り込んだ履歴は、今の履歴の上に並びます。") },
+                text = { Text("${plan.summary}\n\n今の設定・板・履歴は残し、足りないものを足します（同じ設定は取り込んだ値になります）。取り込んだ履歴は、今の履歴の上に並びます。",
+                    modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = {
                     androidx.compose.material3.TextButton(onClick = { backupPlan = null; applyBackup(plan) },
                         modifier = Modifier.testTag("ftutter-backup-confirm-ok")) { Text("取り込む") }
@@ -1147,7 +1184,23 @@ internal fun FtutterApp(
                             }
                         }
                     },
-                    onDismiss = { postRequest = null }
+                    onDismiss = { postRequest = null },
+                    handwritingEnabled = FtutterExtension.HANDWRITING in extensions,
+                    onHandwritingSaved = { image ->
+                        val fs = mediaServices?.fileSystem
+                        if (fs != null) scope.launch {
+                            try {
+                                com.valoser.futacha.shared.ui.compat.persistCompatDrawingCopy(
+                                    fs, com.valoser.futacha.shared.ui.futaber.futaberDrawingCopyLocation(preferences),
+                                    image, kotlin.time.Clock.System.now().toEpochMilliseconds()
+                                )?.getOrThrow()
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Throwable) {
+                                notice = "手書き画像のコピーを保存できませんでした（添付はそのままです）"
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -1159,7 +1212,8 @@ internal fun FtutterApp(
 private suspend fun markFallen(stateStore: AppStateStore, boardId: String, threadId: String) {
     try {
         stateStore.updateHistory { list ->
-            list.map { if (it.threadId == threadId && it.boardId == boardId) it.copy(isAutoRefreshDisabled = true) else it }
+            list.map { if (it.threadId == threadId && it.boardId == boardId) it.copy(isAutoRefreshDisabled = true,
+                threadStatus = (it.threadStatus ?: com.valoser.futacha.shared.model.ThreadStatus()).copy(isDead = true)) else it }
         }
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
         throw cancelled
@@ -1210,6 +1264,9 @@ internal fun FtutterTopBar(
 private fun FtutterThreadHost(
     board: BoardSummary,
     ref: FtutterThreadRef,
+    initialPage: com.valoser.futacha.shared.model.ThreadPage?,
+    refreshOnOpen: Boolean,
+    onPageSnapshot: (com.valoser.futacha.shared.model.ThreadPage) -> Unit,
     repository: BoardRepository,
     httpClient: io.ktor.client.HttpClient?,
     stateStore: AppStateStore,
@@ -1309,7 +1366,9 @@ private fun FtutterThreadHost(
                 com.valoser.futacha.shared.ui.compat.LocalCompatibilityPalette provides ftutterMediaPalette(colors),
                 com.valoser.futacha.shared.ui.board.LocalFutachaSharedFeatures provides features
             ) {
-                com.valoser.futacha.shared.ui.board.ThreadImageSearchDialog(url, client, mediaServices.cookieRepository) { searchUrl = null }
+                com.valoser.futacha.shared.ui.board.ThreadImageSearchDialog(url, client, mediaServices.cookieRepository,
+                    onDismiss = { searchUrl = null }, openExternal = rememberFtutterUrlLauncher(preferences), preferredTarget = if (preferences.ftutterBool(FtutterKeys.IMAGE_SEARCH_ASCII2D, false))
+                        com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget.ASCII2D_URL else com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget.GOOGLE_URL)
             }
         } else {
             LaunchedEffect(url) { searchUrl = null; onNotice("画像検索は使えません") }
@@ -1320,7 +1379,8 @@ private fun FtutterThreadHost(
             androidx.compose.runtime.CompositionLocalProvider(
                 com.valoser.futacha.shared.ui.compat.LocalCompatibilityPalette provides ftutterMediaPalette(colors)
             ) {
-                com.valoser.futacha.shared.ui.board.FutachaPageSaveDialog(
+                FtutterHtmlSaveDialog(
+                    preferences = preferences, save = savePreference,
                     features = features,
                     page = page,
                     boardKey = com.valoser.futacha.shared.ui.futaber.futaberCompatBoardKey(board),
@@ -1458,6 +1518,9 @@ private fun FtutterThreadHost(
     FtutterThreadScreen(
         board = board,
         ref = ref,
+        initialPage = initialPage,
+        refreshOnOpen = refreshOnOpen,
+        onPageSnapshot = onPageSnapshot,
         repository = repository,
         httpClient = httpClient,
         preferences = preferences,
@@ -1553,6 +1616,11 @@ private fun FtutterThreadHost(
         compatStore = mediaServices?.store,
         onRegisterImageNg = { url, postId -> imageNgTarget = url to postId },
         onSaveMht = { mhtPage = it; mhtFull = null },
+        historyStateStore = stateStore,
+        reportedPostNgRules = compatNgRules.filter {
+            it.kind == com.valoser.futacha.shared.compat.CompatNgKind.THREAD_POST_NO &&
+                com.valoser.futacha.shared.compat.compatPostNgScopeBoardKey(it.scopeKey) != null
+        },
         aiStateStore = if (FtutterExtension.AI in extensions) stateStore else null,
         threadActions = threadActions
     )

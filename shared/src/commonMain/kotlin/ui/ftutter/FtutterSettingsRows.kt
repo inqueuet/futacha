@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,7 +42,9 @@ internal fun FtutterSettingsPage(title: String, tag: String, onBack: () -> Unit,
     val colors = LocalFtutterColors.current
     Column(Modifier.fillMaxSize().background(colors.background).testTag(tag)) {
         FtutterTopBar(title = title, onBack = onBack)
-        LazyColumn(Modifier.fillMaxSize().testTag("$tag-list"), content = content)
+        // Keep the last setting tappable above Android's navigation bar and the
+        // iOS home indicator; the edge-to-edge theme only paints their background.
+        LazyColumn(Modifier.fillMaxSize().navigationBarsPadding().testTag("$tag-list"), content = content)
     }
 }
 
@@ -246,4 +249,3 @@ internal fun FtutterMultiChoiceSetting(label: String, tag: String, options: List
 }
 
 /** このモードでまだ使われない設定に付ける補足。 */
-internal const val FTUTTER_NOT_USED_NOTE = "このモードでは使われません（原作のバックアップを取り込んだ時のために保存します）"

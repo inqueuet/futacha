@@ -214,10 +214,13 @@ internal fun FutaberThreadScreen(
     /** B8: the AI command forwarded to this thread (FutaberAiHost.kt); null receives none. */
     ai: FutaberAiThreadLink? = null,
     /** B9: auto-saves the live page as ふたちゃ does (the extension "閲覧中のスレッドを自動保存"); null saves nothing. */
-    autoSave: FutaberAutoSaveLink? = null
+    autoSave: FutaberAutoSaveLink? = null,
+    initialKnownPostCount: Int? = null
 ) {
     val colors = LocalFutaberColors.current
     var load by remember(board.id, ref.threadId) { mutableStateOf(FutaberThreadLoad()) }
+    var liveConfirmed by remember(board.id, ref.threadId) { mutableStateOf(false) }
+    var confirmedGone by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var refreshTick by remember(board.id, ref.threadId) { mutableIntStateOf(0) }
     // One list state per thread: switching threads (tabs, history) must not carry the previous thread's scroll position over.
     val listState = key(board.id, ref.threadId) { rememberLazyListState() }
@@ -260,6 +263,8 @@ internal fun FutaberThreadScreen(
                     fetched
                 }
             } ?: fetched
+            liveConfirmed = true
+            confirmedGone = false
             archiveNotice = null
             offlineCopyNotice = null
             val shown = load.page
@@ -275,6 +280,8 @@ internal fun FutaberThreadScreen(
             // A thread that has fallen off the board (404/410) is looked up in the archives ふたちゃ and としあき(仮)
             // use; the page on screen, if any, is kept when none has it.
             val fallback = resolveThreadLoadFallbackState(error, allowOfflineFallback = true)
+            liveConfirmed = false
+            confirmedGone = fallback.shouldTryArchiveFallback
             val archived = if (fallback.shouldTryArchiveFallback) {
                 futaberArchivedThread(archiveHttpClient, repository, ref.threadId, board.url, archiveSearchJson)
             } else null
@@ -313,11 +320,12 @@ internal fun FutaberThreadScreen(
     val replyIndex = remember(posts) { futaberReplyIndex(posts) }
     var menuOpen by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var pendingScrollOrdinal by remember(board.id, ref.threadId) { mutableStateOf<Int?>(null) }
+    val speechRuntime = com.valoser.futacha.shared.audio.LocalSpeechRuntime.current
     val platformContext = LocalPlatformContext.current
     val liveSpeechSettings = rememberUpdatedState(com.valoser.futacha.shared.audio.speechSettingsFromPreferences(
         (mediaServices?.store?.preferences ?: kotlinx.coroutines.flow.flowOf(emptyMap<String, String>())).collectAsState(emptyMap()).value))
     val reader = remember(board.id, ref.threadId) {
-        FutaberReadAloud(scope, { createTextSpeaker(platformContext).asFutaberEngine { liveSpeechSettings.value } })
+        FutaberReadAloud(scope, { createTextSpeaker(platformContext, speechRuntime).asFutaberEngine { liveSpeechSettings.value } })
     }
     // Leaving the screen, or locking the app, stops the voice and releases the speaker.
     DisposableEffect(reader) { onDispose { reader.dispose() } }
@@ -344,21 +352,30 @@ internal fun FutaberThreadScreen(
             remoteNotice = "処理中です…"
             val sentFrom = board.id to ref.threadId
             (appTasks?.scope ?: scope).launch {
+                var reportResult: String? = null
                 val result = performThreadAction {
                     requireWritableThreadBoard(board.url)
+                    if (action == FutaberRemoteAction.Report) {
+                        reportResult = com.valoser.futacha.shared.ui.board.sendReportAndOptionalNg(
+                            alsoNg = imageOnly,
+                            send = { repository.requestDeletion(board.url, ref.threadId, target.id, DEFAULT_DEL_REASON_CODE) },
+                            registerNg = {
+                                val store = mediaServices?.store ?: features?.store ?: error("設定の保存先を利用できません")
+                                com.valoser.futacha.shared.ui.board.registerReportedThreadPostNg(store, board, ref.threadId, target.id)
+                            }
+                        )
+                    }
                     when (action) {
                         FutaberRemoteAction.Saidane -> repository.voteSaidane(board.url, ref.threadId, target.id)
                         FutaberRemoteAction.DeleteOwn -> repository.deleteByUser(
                             board = board.url, threadId = ref.threadId, postId = target.id,
                             password = deleteKey, imageOnly = imageOnly
                         )
-                        FutaberRemoteAction.Report -> repository.requestDeletion(
-                            board.url, ref.threadId, target.id, DEFAULT_DEL_REASON_CODE
-                        )
+                        FutaberRemoteAction.Report -> Unit
                     }
                 }
                 val message = when (result) {
-                    is ThreadActionRunResult.Success -> futaberRemoteSuccessMessage(action, imageOnly)
+                    is ThreadActionRunResult.Success -> reportResult ?: futaberRemoteSuccessMessage(action, imageOnly)
                     is ThreadActionRunResult.Failure -> buildThreadActionFailureMessage(futaberRemoteFailurePrefix(action, imageOnly), result.error)
                 }
                 if (threadScreenShown && currentThreadKey == sentFrom) {
@@ -480,6 +497,17 @@ internal fun FutaberThreadScreen(
         futaberHiddenWithAi(ngBaseHidden, phashHidden, threadAi.hidden)
     }
     val activeHidden = if (ngDisabled) emptySet() else hidden
+    com.valoser.futacha.shared.ui.board.ThreadStatusObservationEffect(
+        stateStore, board.id, ref.threadId, load.page, liveConfirmed && offlineNotice == null,
+        gone = confirmedGone && offlineNotice == null
+    )
+    com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryEffect(
+        tabKeyForNg, initialKnownPostCount, posts, selfPostIds, activeHidden,
+        enabled = display.extOpenSummary,
+        live = liveConfirmed && !load.isLoading && !ngWaiting && offlineNotice == null && archiveNotice == null && offlineCopyNotice == null,
+        truncated = load.page?.isTruncated == true,
+        onNotice = { remoteNotice = it }
+    )
     // The tree view (an extension, off by default): replies listed under the post they quote.
     val treeNodes by produceState(emptyList<ThreadTreeNode>(), posts, display.extTree) {
         value = if (display.extTree) buildThreadTreeNodes(posts) else emptyList()
@@ -1043,7 +1071,8 @@ internal fun FutaberThreadScreen(
                     postNumber = target.id,
                     onConfirm = { imageOnly -> remoteConfirm = null; runRemoteAction(action, target, imageOnly) },
                     onDismiss = { remoteConfirm = null },
-                    offerImageOnly = futaberOffersImageOnlyDelete(display.extPostDetailOps, action, target)
+                    offerImageOnly = futaberOffersImageOnlyDelete(display.extPostDetailOps, action, target),
+                    offerReportNg = display.extReportNg && action == FutaberRemoteAction.Report
                 )
             }
             remoteNotice?.let { notice ->

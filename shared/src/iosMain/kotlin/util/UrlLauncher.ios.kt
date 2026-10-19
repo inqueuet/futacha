@@ -6,8 +6,8 @@ import platform.Foundation.NSURL
 import platform.UIKit.UIApplication
 
 @Composable
-actual fun rememberUrlLauncher(): (String) -> Unit {
-    return remember {
+actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
+    return remember(customTabs) {
         { url: String ->
             try {
                 val request = resolveUrlLaunchRequest(url)
@@ -20,7 +20,10 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                 } else {
                     val nsUrl = NSURL.URLWithString(request.normalizedUrl)
                     if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
-                        UIApplication.sharedApplication.openURL(
+                        val parent = if (customTabs) findIosTopViewController() else null
+                        if (parent != null && request.target == UrlLaunchTarget.Browser) {
+                            parent.presentViewController(platform.SafariServices.SFSafariViewController(uRL = nsUrl), true, null)
+                        } else UIApplication.sharedApplication.openURL(
                             nsUrl,
                             options = emptyMap<Any?, Any?>(),
                             completionHandler = null

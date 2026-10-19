@@ -63,6 +63,19 @@ private object VideoPreviewRenderer {
     private var generation = 0L
     private var releaseJob: Job? = null
 
+    suspend fun trimMemory() = withContext(AppDispatchers.io) {
+        // Wait off-main for a render to finish. The renderer owns these objects under this lock.
+        lock.lock()
+        try {
+            generation += 1
+            releaseJob?.cancel()
+            releaseJob = null
+            context?.clearCaches()
+            context = null
+            kernel = null
+        } finally { lock.unlock() }
+    }
+
     fun render(image: CGImageRef?, document: MosaicDocument, timeUs: Long): ImageBitmap {
         lock.lock()
         try {
@@ -110,6 +123,8 @@ private object VideoPreviewRenderer {
         return try { skia.toComposeImageBitmap() } finally { skia.close() }
     }
 }
+
+internal suspend fun trimIosVideoPreviewMemory() = VideoPreviewRenderer.trimMemory()
 
 internal actual suspend fun exportDeviceVideo(context: Any?, path: String, info: VideoEditInfo,
     document: MosaicDocument, output: String, onProgress: (Float) -> Unit): Unit = withContext(AppDispatchers.io) {

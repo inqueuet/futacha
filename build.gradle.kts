@@ -134,7 +134,7 @@ val validateQualityContracts by tasks.registering {
             "Feature inventory is missing mandatory groups: ${requiredFeatureIds - featureIds.toSet()}"
         }
         featureRows.forEach { row ->
-            require(row[2] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FTUTTER")) {
+            require(row[2] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
                 "${row[0]} has invalid mode scope ${row[2]}"
             }
             require(row[3] in setOf("BOTH", "ANDROID", "IOS")) {
@@ -160,7 +160,7 @@ val validateQualityContracts by tasks.registering {
             val feature = requireNotNull(featureById[row[1]]) {
                 "$behaviorId references unknown feature ${row[1]}"
             }
-            require(row[3] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FTUTTER")) {
+            require(row[3] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
                 "$behaviorId has invalid mode scope ${row[3]}"
             }
             require(row[4] in setOf("BOTH", "ANDROID", "IOS")) {

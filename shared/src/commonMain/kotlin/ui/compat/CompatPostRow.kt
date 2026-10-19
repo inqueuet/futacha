@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.foundation.layout.widthIn
+
 import com.valoser.futacha.shared.ui.board.postPressFeedback
 
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
@@ -329,6 +331,7 @@ import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatNgRuleId
 import com.valoser.futacha.shared.compat.reduceCompatibilityWorkspace
 import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
+import com.valoser.futacha.shared.compat.compatQuoteQueryForPostLine
 import com.valoser.futacha.shared.compat.compatQuoteQueryForLine
 import com.valoser.futacha.shared.compat.compatQuoteQueryPostNo
 import com.valoser.futacha.shared.compat.resolveCompatQuotePosts
@@ -503,10 +506,9 @@ internal fun compatPostQuotesOwnPost(
     ownPostNos: Set<String>
 ): Boolean {
     if (ownPostNos.isEmpty() || post.postNo in ownPostNos) return false
-    if (post.quoteReferences.any { reference ->
-            reference.targetPostIds.any(ownPostNos::contains)
+    if (post.quoteReferences.isNotEmpty()) return post.quoteReferences.any { reference ->
+            reference.replyTargetPostIds.any(ownPostNos::contains)
         }
-    ) return true
     return post.messageHtml.toCompatPlainTextCached().lineSequence().any { line ->
         val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
         compatQuoteQueryPostNo(query)?.let { it in ownPostNos } == true
@@ -573,10 +575,10 @@ internal fun CompatPostRow(
                     identity == compatMediaFileIdentity(post.thumbnailUrl)
             }
     }
-    val firstQuoteQuery = remember(post.messageHtml) {
+    val firstQuoteQuery = remember(post.messageHtml, post.quoteReferences) {
         post.messageHtml.toCompatPlainTextCached()
             .lineSequence()
-            .mapNotNull(::compatQuoteQueryForLine)
+            .mapNotNull { compatQuoteQueryForPostLine(post, it) }
             .firstOrNull()
     }
     val mediaAwareUrlClick: (String) -> Unit = remember(onUrlClick, onMediaUrlClick) {
@@ -1138,6 +1140,7 @@ private fun CompatMessageText(
         compatDeletedNoticeRanges(post, message)
     }
     val annotated = remember(
+        post.quoteReferences,
         message,
         inlineLinks,
         searchRanges,
@@ -1161,7 +1164,7 @@ private fun CompatMessageText(
                     val markerIndex = line.indexOfFirst { it == '>' || it == '＞' }
                     val start = offset + markerIndex
                     val end = offset + line.length
-                    val quoteQuery = compatQuoteQueryForLine(trimmed)
+                    val quoteQuery = compatQuoteQueryForPostLine(post, trimmed)
                     if (quoteQuery == null) return@fold offset + line.length + 1
                     addStringAnnotation(
                         tag = "compat_quote",
@@ -1239,7 +1242,7 @@ private fun CompatMessageText(
                 onClickLabel = "引用を表示",
                 onClick = {
                     message.lineSequence()
-                        .mapNotNull(::compatQuoteQueryForLine)
+                        .mapNotNull { compatQuoteQueryForPostLine(post, it) }
                         .firstOrNull()
                         ?.let(onQuoteClick)
                         ?: inlineLinks.firstOrNull()?.url?.let(onUrlClick)
@@ -1269,7 +1272,7 @@ private fun CompatMessageText(
                             // glyph on some Android text engines. Recover the
                             // complete line so a >>No link remains tappable
                             // even when its annotation range misses that edge.
-                            compatQuoteQueryForLine(compatMessageLineAtOffset(message, offset))
+                            compatQuoteQueryForPostLine(post, compatMessageLineAtOffset(message, offset))
                                 ?.let(latestQuoteClick)
                                 ?: latestClick()
                         }
@@ -1326,11 +1329,11 @@ internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLong
                 modifier = Modifier.testTag("compat-drawer-tab-subtitle-${tab.key}")
             )
         }
-        if (tab.isDeleted) Text("消", color = Color(0xFFB71C1C), fontSize = 13.sp)
-        else if (tab.isIsolated) Text("隔", color = Color(0xFFE65100), fontSize = 13.sp)
-        else if (tab.isExploded) Text("爆", color = Color.Red, fontSize = 13.sp)
-        else if (tab.isDead) Text("落", color = Color.Red, fontSize = 13.sp)
-        else if (tab.isOld) Text("古", color = Color(0xFFE65100), fontSize = 13.sp)
+        val status = com.valoser.futacha.shared.ui.board.threadStatusText(
+            com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded))
+        if (status.isNotEmpty()) Text(status, color = palette.text, fontSize = 12.sp, maxLines = 2,
+            modifier = Modifier.widthIn(max = 60.dp).testTag("compat-drawer-tab-status-${tab.key}"))
+        else if (tab.isOld) Text("古", color = palette.uiSecondaryText, fontSize = 13.sp)
         Column(Modifier.width(76.dp).testTag("compat-drawer-tab-replies-${tab.key}"), horizontalAlignment = Alignment.End) {
             Text(reply.readCount, maxLines = 1, fontSize = 16.sp, color = if (live) Color(0xFF00897B) else Color(0xFFCCCCCC))
             CompatNewRepliesBadge(tab.unreadCount, label = true)

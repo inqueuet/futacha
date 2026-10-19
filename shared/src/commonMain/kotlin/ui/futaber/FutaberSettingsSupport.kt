@@ -32,6 +32,9 @@ internal object FutaberSettingKeys {
     const val EXT_TABS = "compat.futaber.ext.tabs"
     const val EXT_VIDEO = "compat.futaber.ext.video"
     const val EXT_TABS_MANAGE = "compat.futaber.ext.tabsManage"
+    const val EXT_OPEN_SUMMARY = "compat.futaber.ext.openSummary"
+    const val EXT_TAB_STATUS = "compat.futaber.ext.tabStatus"
+    const val EXT_REPORT_NG = "compat.futaber.ext.reportNg"
     const val EXT_ARCHIVE_MENU = "compat.futaber.ext.archiveMenu"
     const val EXT_SAVED_DETAIL = "compat.futaber.ext.savedDetail"
     const val EXT_OTHER_FAVORITES = "compat.futaber.ext.otherFavorites"
@@ -217,7 +220,10 @@ internal data class FutaberDisplaySettings(
     val catalogFine: FutaberCatalogFineTune = FutaberCatalogFineTune(),
     val extAutoSaveView: Boolean = false,
     /** The shared "レス数で優先ソート" value (0 = no thread counts as few). */
-    val replyPriorityThreshold: Int = 0
+    val replyPriorityThreshold: Int = 0,
+    val extOpenSummary: Boolean = false,
+    val extTabStatus: Boolean = false,
+    val extReportNg: Boolean = false
 ) {
     /** [base] is a size at the default font size; the result follows the chosen one. */
     fun sp(base: Float): TextUnit = (base * fontSize / FUTABER_FONT_SIZE_DEFAULT).sp
@@ -274,6 +280,9 @@ internal data class FutaberDisplaySettings(
                 ?.takeIf { it in FUTABER_AUTO_SCROLL_PIXEL_MIN..FUTABER_AUTO_SCROLL_PIXEL_MAX } ?: FUTABER_AUTO_SCROLL_PIXEL_DEFAULT,
             autoScrollSpeedMillis = preferences[FutaberSettingKeys.AUTO_SCROLL_SPEED]?.filter(Char::isDigit)?.toIntOrNull()
                 ?.takeIf { it in FUTABER_AUTO_SCROLL_SPEED_MIN..FUTABER_AUTO_SCROLL_SPEED_MAX } ?: FUTABER_AUTO_SCROLL_SPEED_DEFAULT,
+            extOpenSummary = preferences[FutaberSettingKeys.EXT_OPEN_SUMMARY] == "ON",
+            extTabStatus = preferences[FutaberSettingKeys.EXT_TAB_STATUS] == "ON",
+            extReportNg = preferences[FutaberSettingKeys.EXT_REPORT_NG] == "ON",
             extCatalogModes = preferences[FutaberSettingKeys.EXT_CATALOG_MODES] == "ON",
             extCatalogWatchHighlight = preferences[FutaberSettingKeys.EXT_CATALOG_WATCH_HIGHLIGHT] == "ON",
             extReplyPriority = preferences[FutaberSettingKeys.EXT_REPLY_PRIORITY] == "ON",

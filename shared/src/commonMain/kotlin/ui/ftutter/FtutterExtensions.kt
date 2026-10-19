@@ -71,10 +71,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 拡張機能（原作に無く、ほかの3モードにある機能）。どれも既定OFFのスイッチで、OFFの間は原作どおりの画面・操作のまま。
+ * 拡張機能（原作に無く、ほかの3モードにある機能）。履歴の道具だけ既定ON。他は既定OFF。
  * 保存は`compat.ftutter.ext.<名前>`（"true"/"false"）。中身は他モードと共有の部品と設定を使う。
  */
-internal enum class FtutterExtension(val stored: String, val title: String, val description: String) {
+internal enum class FtutterExtension(val stored: String, val title: String, val description: String, val enabledByDefault: Boolean = false) {
+    HANDWRITING("handwriting", "手書き", "書き込み画面のメニューから手書き画像を添付できます。img板の返信でも使えます"),
+    OPEN_SUMMARY("openSummary", "開いた時の新着・自分への返信件数", "前回までの取得記録と比べ、新しいレスと、その中の自分の投稿への直接返信を一度だけ知らせます"),
+    TAB_STATUS("tabStatus", "タブの隔離・落ち状態", "取得して確認できた隔離・削除・落ちを、タブ帯とドロワーにも文字で表示します"),
+    REPORT_NG("reportNg", "delとこのレスのNGをまとめる", "delの確認画面で、このスレッドのこのレスだけをNGにも登録できます。送信とNGの成否は別々に表示します"),
     COMMON_NG(
         "commonNg", "共通のNGを使う",
         "ふたちゃ・ふたばー風と共有のNGワード・NGネーム等（レス）とカタログNGワードを、このモードのNGに加えて使います。編集は他のモードで行います"
@@ -93,7 +97,8 @@ internal enum class FtutterExtension(val stored: String, val title: String, val 
     WATCHER("watcher", "キーワード通知・巡回", "他のモードと共有のキーワード巡回の管理と結果の一覧を、この画面から開けるようにします"),
     HISTORY_TOOLS(
         "historyTools", "履歴の選択削除・すべて削除",
-        "ドロワーの「履歴」の上に選択のボタンを出します。選んだ履歴をまとめて消すことと、すべて消すこと（保護したスレッドは残します）ができます"
+        "ドロワーの「履歴」の上に選択のボタンを出します。選んだ履歴をまとめて消すことと、すべて消すこと（保護したスレッドは残します）ができます",
+        enabledByDefault = true
     ),
     ARCHIVE_SEARCH("archiveSearch", "過去ログ検索", "カタログの検索に語を入れた時、その語で過去ログを探すボタンを出します"),
     APP_LOCK("appLock", "起動ロック・アプリアイコン", "他のモードと共有の起動ロック（パスワード）とアプリアイコンの選択を、この画面から設定できるようにします");
@@ -102,15 +107,15 @@ internal enum class FtutterExtension(val stored: String, val title: String, val 
 }
 
 /** オンの拡張機能。 */
-internal data class FtutterExtensions(val enabled: Set<FtutterExtension> = emptySet()) {
+internal data class FtutterExtensions(val enabled: Set<FtutterExtension> = FtutterExtension.entries.filterTo(mutableSetOf()) { it.enabledByDefault }) {
     operator fun contains(extension: FtutterExtension): Boolean = extension in enabled
 }
 
 internal fun parseFtutterExtensions(preferences: Map<String, String>): FtutterExtensions =
-    FtutterExtensions(FtutterExtension.entries.filterTo(mutableSetOf()) { preferences.ftutterBool(it.key, false) })
+    FtutterExtensions(FtutterExtension.entries.filterTo(mutableSetOf()) { preferences.ftutterBool(it.key, it.enabledByDefault) })
 
 /** 拡張機能の画面の冒頭の説明。 */
-internal const val FTUTTER_EXTRAS_INTRO = "原作のふたったーに無い機能です。どれも最初はOFFで、OFFのままなら画面と操作は原作どおりです。"
+internal const val FTUTTER_EXTRAS_INTRO = "原作のふたったーに無い機能です。「履歴の選択削除・すべて削除」は最初からONです。他の機能は最初はOFFで、必要なものをONにできます。"
 
 /**
  * 設定→拡張機能。スイッチの下に、オンの時だけ開ける画面（巡回・起動ロック・AIの設定）の行を出す。
@@ -124,7 +129,8 @@ internal fun FtutterExtrasSettingsPage(
     onOpenWatcher: () -> Unit,
     onOpenSharedAi: () -> Unit,
     onBack: () -> Unit,
-    onOpenSharedSpeech: () -> Unit = {}
+    onOpenSharedSpeech: () -> Unit = {},
+    compatStore: CompatibilityStore? = null
 ) {
     val colors = LocalFtutterColors.current
     val extensions = remember(preferences) { parseFtutterExtensions(preferences) }
@@ -134,9 +140,14 @@ internal fun FtutterExtrasSettingsPage(
         item(key = "intro") {
             Text(FTUTTER_EXTRAS_INTRO, color = colors.text, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
         }
+        item(key = "boards-from-bottom") {
+            FtutterCheckSetting("板一覧を下寄せ", com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY,
+                false, preferences, save, note = "板が少ない時に下へ寄せます。並び順は変わりません。")
+        }
         FtutterExtension.entries.forEach { extension ->
             item(key = extension.stored) {
-                FtutterCheckSetting(extension.title, extension.key, false, preferences, save, note = extension.description)
+                FtutterCheckSetting(extension.title, extension.key, extension.enabledByDefault, preferences, save, note = extension.description)
+                if (extension == FtutterExtension.REPORT_NG) com.valoser.futacha.shared.ui.board.ReportedPostNgSettings(compatStore)
                 if (extension in extensions) {
                     when (extension) {
                         FtutterExtension.WATCHER -> if (sharedAvailable) {

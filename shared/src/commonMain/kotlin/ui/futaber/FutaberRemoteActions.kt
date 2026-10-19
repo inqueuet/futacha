@@ -73,7 +73,8 @@ internal fun FutaberRemoteActionDialog(
     onConfirm: (imageOnly: Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** Shows "画像だけ消す" (the post detail extension, for an own post that has a picture). */
-    offerImageOnly: Boolean = false
+    offerImageOnly: Boolean = false,
+    offerReportNg: Boolean = false
 ) {
     val colors = LocalFutaberColors.current
     var imageOnly by remember(action, postNumber) { mutableStateOf(false) }
@@ -85,17 +86,18 @@ internal fun FutaberRemoteActionDialog(
             textContentColor = colors.body,
             title = { Text(action.confirmTitle.orEmpty()) },
             text = {
-                if (offerImageOnly) {
+                if (offerImageOnly || offerReportNg) {
                     Column {
                         Text("No.$postNumber\n${action.confirmBody}")
-                        FutaberImageOnlyCheckRow(imageOnly) { imageOnly = it }
+                        if (offerImageOnly) FutaberImageOnlyCheckRow(imageOnly) { imageOnly = it }
+                        if (offerReportNg) com.valoser.futacha.shared.ui.board.ReportPostNgCheckRow(imageOnly) { imageOnly = it }
                     }
                 } else {
                     Text("No.$postNumber\n${action.confirmBody}")
                 }
             },
             confirmButton = {
-                TextButton(onClick = { onConfirm(offerImageOnly && imageOnly) }, modifier = Modifier.testTag("futaber-remote-confirm")) {
+                TextButton(onClick = { onConfirm((offerImageOnly || offerReportNg) && imageOnly) }, modifier = Modifier.testTag("futaber-remote-confirm")) {
                     Text(action.confirmLabel, color = colors.accent)
                 }
             },

@@ -141,7 +141,8 @@ internal fun FtutterBoardListScreen(
     onEditBoards: ((List<BoardSummary>) -> List<BoardSummary>) -> Unit,
     onBulkAdd: (suspend () -> Result<Int>)?,
     onOpenUrl: (String) -> Unit,
-    onNotice: (String) -> Unit
+    onNotice: (String) -> Unit,
+    boardsFromBottom: Boolean = false
 ) {
     val colors = LocalFtutterColors.current
     var adding by remember { mutableStateOf(false) }
@@ -158,7 +159,8 @@ internal fun FtutterBoardListScreen(
                 Icon(Icons.Rounded.Settings, contentDescription = "設定", tint = colors.onToolBar)
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("ftutter-board-list")) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("ftutter-board-list"),
+            verticalArrangement = if (boardsFromBottom) androidx.compose.foundation.layout.Arrangement.Bottom else androidx.compose.foundation.layout.Arrangement.Top) {
             item(key = "favorites-header") { FtutterDividerCard("お気に入り") }
             items(favorites, key = { "fav-" + it.id }) { board ->
                 FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up })

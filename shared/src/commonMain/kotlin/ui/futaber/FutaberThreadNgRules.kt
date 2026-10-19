@@ -57,7 +57,9 @@ internal fun futaberThreadNgScopeTitles(
 /** Where a rule applies: every thread, the thread or board [scopeTitles] knows by its key, or "スレ別" for a thread it does not know. */
 internal fun futaberThreadDetailNgScopeLabel(rule: CompatNgRule, scopeTitles: Map<String, String>): String = when {
     rule.scopeKey == "*" -> "全スレッド"
-    else -> scopeTitles[rule.scopeKey]?.takeIf { it.isNotBlank() } ?: "スレ別"
+    else -> (scopeTitles[rule.scopeKey] ?: com.valoser.futacha.shared.compat.canonicalizeThreadUrl(rule.scopeKey)?.let {
+        scopeTitles[com.valoser.futacha.shared.compat.compatTabKey(it.canonicalUrl)] ?: it.canonicalUrl
+    })?.takeIf { it.isNotBlank() } ?: "スレ別"
 }
 
 /**

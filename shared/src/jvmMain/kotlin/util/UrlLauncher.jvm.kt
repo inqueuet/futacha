@@ -6,7 +6,7 @@ import kotlinx.coroutines.*
 import javax.swing.JOptionPane
 
 @Composable
-actual fun rememberUrlLauncher(): (String) -> Unit {
+actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
     val scope = rememberCoroutineScope()
     return remember(scope) { { value: String -> scope.launch {
         try { withContext(Dispatchers.IO) { openDesktopUrl(value) } }

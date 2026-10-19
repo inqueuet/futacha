@@ -54,6 +54,9 @@ data class FtutterColorOverrides(
     val dividerCard: Long? = null,
     val onDividerCard: Long? = null,
     val inTab: Long? = null,
+    val gesture: Long? = null,
+    val scrollBar: Long? = null,
+    val indicator: Long? = null,
     val outline: Long? = null,
     val kidoku: Long? = null,
     val midoku: Long? = null,
@@ -95,6 +98,7 @@ data class FtutterColors(
     val henshin: Color,
     val gesture: Color,
     val scrollBar: Color,
+    val indicator: Color = gesture,
     /** 本文の色（原作の固定値）。 */
     val deleted: Color = Color(0xFFF44336),
     val link: Color = Color(0xFF03A9F4),
@@ -207,10 +211,13 @@ internal fun ftutterColors(
         onPickUp = Color(overrides.onPickUp.toInt()),
         kakikomi = Color(overrides.kakikomi.toInt()),
         henshin = Color(overrides.henshin.toInt()),
-        gesture = scheme.primary,
-        scrollBar = scheme.primary.copy(alpha = 0.7f)
+        gesture = overrides.gesture.asColor() ?: scheme.primary,
+        scrollBar = overrides.scrollBar.asColor() ?: scheme.primary.copy(alpha = 0.7f),
+        indicator = overrides.indicator.asColor() ?: scheme.primary
     )
 }
+
+internal val LocalFtutterFont = staticCompositionLocalOf<androidx.compose.ui.text.font.FontFamily?> { null }
 
 internal val LocalFtutterColors = staticCompositionLocalOf { ftutterColors(null, FtutterBrightness.LIGHT) }
 
@@ -223,14 +230,23 @@ internal fun FtutterTheme(
     mainColor: Long?,
     brightness: FtutterBrightness,
     overrides: FtutterColorOverrides = FtutterColorOverrides(),
+    disableStretch: Boolean = true,
+    fontFamily: androidx.compose.ui.text.font.FontFamily? = null,
+    preferences: Map<String, String> = emptyMap(),
     content: @Composable () -> Unit
 ) {
     val scheme = remember(mainColor, brightness) { ftutterColorScheme(mainColor, brightness) }
     val colors = remember(mainColor, brightness, overrides) { ftutterColors(mainColor, brightness, overrides) }
     val barColor = colors.toolBar
     ApplyFutachaSystemBars(systemBarColor = barColor, useDarkIcons = barColor.luminance() > 0.5f)
-    CompositionLocalProvider(LocalFtutterColors provides colors) {
-        MaterialTheme(colorScheme = scheme.copy(background = colors.background)) {
+    @Suppress("DEPRECATION")
+    CompositionLocalProvider(
+        LocalFtutterColors provides colors,
+        LocalFtutterPreferences provides preferences,
+        androidx.compose.foundation.LocalOverscrollFactory provides if (disableStretch) null else androidx.compose.foundation.LocalOverscrollFactory.current
+    ) {
+        MaterialTheme(colorScheme = scheme.copy(background = colors.background),
+            typography = com.valoser.futacha.shared.ui.compat.compatibilityTypography(fontFamily)) {
             Box(Modifier.fillMaxSize().background(colors.background)) {
                 content()
                 // Edge-to-edge hosts leave the system bars transparent; paint them with the bar colour.

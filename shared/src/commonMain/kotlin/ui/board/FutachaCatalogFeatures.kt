@@ -56,6 +56,7 @@ internal fun FutachaCatalogFeatureHost(
     ngFilteringEnabled: Boolean = true,
     /** The screen's new-thread form; kept as the board's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
     createThreadDraft: FutachaDraftFormBinding? = null,
+    viewedFirstThreadId: String? = null,
     content: @Composable (CatalogUiState) -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
@@ -196,7 +197,12 @@ internal fun FutachaCatalogFeatureHost(
         selected = null
         message = "DEL依頼を送信しました"
     } }
+    val viewedFirstKey = viewedThreadFirstKey(board.url)
+    val viewedFirstEnabled = features.rawValue(viewedFirstKey) == "ON"
     val tools = listOf(
+        FutachaThreadTool("更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF", Icons.Rounded.VerticalAlignTop) {
+            action { features.store.savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON") }
+        },
         FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible },
         FutachaThreadTool("更新前のカタログ", Icons.Rounded.History, mode.sharedCatalogSort() != null) { undoOpen = true },
         FutachaThreadTool("消えたスレ・隔離", Icons.Rounded.Inventory2) { droppedOpen = true },
@@ -320,7 +326,7 @@ internal fun FutachaCatalogFeatureHost(
             state !is CatalogUiState.Success -> state
             // Not projected yet: showing the raw items would flash NG'd threads.
             projected == null -> CatalogUiState.Loading
-            else -> state.copy(content = state.content.copy(items = projected))
+            else -> state.copy(content = state.content.copy(items = catalogWithViewedThreadFirst(projected, viewedFirstThreadId.takeIf { viewedFirstEnabled })))
         })
     }
     if (undoOpen) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { undoOpen = false }, title = { Text("更新前のカタログ") }, text = {

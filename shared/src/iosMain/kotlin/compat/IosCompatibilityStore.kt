@@ -336,7 +336,7 @@ internal class IosCompatibilityStore(
             catalogPreferences = it.catalogPreferences.filterNot { pref -> pref.boardKey == boardKey },
             catalogSnapshots = it.catalogSnapshots.filterNot { snapshot -> snapshot.boardKey == boardKey },
             droppedItems = it.droppedItems.filterNot { dropped -> dropped.boardKey == boardKey },
-            ngRules = it.ngRules.filterNot { rule -> rule.scopeKey == boardKey },
+            ngRules = it.ngRules.filterNot { rule -> rule.isScopedToRemovedBoard(boardKey) },
             // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
             preferences = compatCatalogExtraModePreferenceKey(boardKey).let { key ->
                 if (key in it.preferences) it.preferences - key else it.preferences

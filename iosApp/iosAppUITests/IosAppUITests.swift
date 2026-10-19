@@ -9,6 +9,103 @@ import UIKit
  * Xcode can install and launch the complete SwiftUI/Compose application.
  */
 final class IosAppUITests: XCTestCase {
+    func testFutachaRapidHandwritingKeepsDotsAndAttaches() throws { try verifyRapidHandwriting(profile: "futacha") }
+    func testToshiakiRapidHandwritingKeepsDotsAndAttaches() throws { try verifyRapidHandwriting(profile: "toshiaki_compat") }
+    func testFutaberRapidHandwritingKeepsDotsAndAttaches() throws { try verifyRapidHandwriting(profile: "futaber") }
+    func testFtutterRapidHandwritingKeepsDotsAndAttaches() throws { try verifyRapidHandwriting(profile: "ftutter") }
+
+    private func verifyRapidHandwriting(profile: String) throws {
+        let app: XCUIApplication
+        if profile == "toshiaki_compat" {
+            app = try launchToshiakiTutorialApp(generation: "2026101902")
+        } else {
+            app = try futaberTutorialApp(generation: "2026101901", profile: profile)
+            if profile == "futaber" {
+                // Mock content with img's posting capabilities: the drawing is available with extensions OFF.
+                let boards = [["id": "t", "name": "手書き検証板", "category": "チュートリアル",
+                    "url": "https://img.2chan.net/b/futaba.php?mock=example.com", "description": "チュートリアル"]]
+                let json = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+                let argument = String(data: try JSONEncoder().encode(json), encoding: .utf8)!
+                if let i = app.launchArguments.firstIndex(of: "-boards_json") { app.launchArguments[i + 1] = argument }
+            }
+            app.launch()
+        }
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func tap(_ target: XCUIElement) {
+            _ = target.waitForExistence(timeout: 10)
+            for _ in 0..<12 where !target.isHittable { app.swipeUp() }
+            XCTAssertTrue(target.waitForExistence(timeout: 10), app.debugDescription)
+            target.tap()
+        }
+        switch profile {
+        case "futacha":
+            tap(boardCard(in: app, url: "https://www.example.com/t/futaba.php"))
+            tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch)
+            tap(app.buttons["返信"])
+            tap(app.buttons["手書き"])
+        case "toshiaki_compat":
+            let list = compatibilityBoardListAfterUnwinding(in: app)
+            XCTAssertTrue(list.waitForExistence(timeout: 15))
+            tap(list.buttons.firstMatch)
+            let catalogItem = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "compat-catalog-item-")).firstMatch
+            tap(catalogItem)
+            tap(app.buttons["書き込み"])
+            tap(app.buttons["手書き"])
+        case "futaber":
+            if element("futaber-drawer-board").waitForExistence(timeout: 8) { tap(element("futaber-drawer-board")) }
+            tap(element("futaber-catalog-item"))
+            tap(element("futaber-thread-menu"))
+            tap(element("futaber-menu-write"))
+            tap(element("futaber-post-attach"))
+            tap(element("futaber-action-tool-drawing"))
+        default:
+            tap(element("ftutter-board-row"))
+            tap(element("ftutter-catalog-item"))
+            tap(element("ftutter-thread-settings"))
+            tap(element("ftutter-settings-extras"))
+            let extrasPage = element("ftutter-settings-page-extras")
+            if !extrasPage.waitForExistence(timeout: 3) { tap(element("ftutter-settings-extras")) }
+            XCTAssertTrue(extrasPage.waitForExistence(timeout: 10), app.debugDescription)
+            let toggle = element("ftutter-setting-compat.ftutter.ext.handwriting")
+            for _ in 0..<8 where !toggle.exists { extrasPage.swipeDown() }
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10), app.debugDescription)
+            func handwritingIsOn() -> Bool {
+                // Compose exposes the nested checkbox beside the clickable row in
+                // UIKit's accessibility tree, so it need not be a row descendant.
+                app.descendants(matching: .any).matching(NSPredicate(format: "selected == YES"))
+                    .allElementsBoundByIndex.contains {
+                        toggle.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+                    }
+            }
+            if !handwritingIsOn() { tap(toggle) }
+            XCTAssertTrue(handwritingIsOn(), app.debugDescription)
+            app.buttons["戻る"].firstMatch.tap(); app.buttons["戻る"].firstMatch.tap()
+            tap(element("ftutter-thread-tool-menu"))
+            tap(element("ftutter-thread-menu-gesture-actions"))
+            tap(element("ftutter-gesture-action-14"))
+            tap(element("ftutter-post-menu"))
+            tap(element("ftutter-post-handwriting"))
+        }
+        let canvas = element("compat-drawing-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10), app.debugDescription)
+        for i in 0..<6 {
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.15 + Double(i) * 0.13, dy: 0.5)).tap()
+        }
+        let undo = app.buttons["元に戻す"]
+        let redo = app.buttons["やり直す"]
+        for _ in 0..<6 { XCTAssertTrue(undo.isEnabled); undo.tap() }
+        XCTAssertFalse(undo.isEnabled, "Every contact must be one stroke.")
+        for _ in 0..<6 { XCTAssertTrue(redo.isEnabled); redo.tap() }
+        mhtAttach(app, "handwriting-\(profile)-six-dots")
+        tap(app.buttons["その他"].firstMatch)
+        tap(app.buttons["保存する"].firstMatch)
+        tap(app.buttons["保存する"].firstMatch)
+        let filename = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "drawing_")).firstMatch
+        XCTAssertTrue(filename.waitForExistence(timeout: 15), app.debugDescription)
+        mhtAttach(app, "handwriting-\(profile)-attached")
+    }
+
     func testCompatAiSettingsUseNgHidingAndDefaultOff() throws {
 #if targetEnvironment(simulator)
         let app = makeApplication()
@@ -113,6 +210,110 @@ final class IosAppUITests: XCTestCase {
 #else
         throw XCTSkip("This test registers a synthetic key on an isolated simulator.")
 #endif
+    }
+
+    func testFeedback1442001717PhotoReturnToolbar() throws {
+#if targetEnvironment(simulator)
+        executionTimeAllowance = 90
+        let app = try launchToshiakiTutorialApp(generation: "1442001717")
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15)); board.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 10))
+        app.buttons["書き込み"].firstMatch.tap()
+        let comment = app.textViews["compat-post-comment-field"]
+        XCTAssertTrue(comment.waitForExistence(timeout: 10))
+        // A previous run may have left its test image in the persisted draft.
+        if app.buttons["添付削除"].firstMatch.exists { app.buttons["添付削除"].firstMatch.tap() }
+        comment.tap()
+        comment.typeText("photo-return-check")
+        func checkToolbar(_ phase: String) {
+            let keyboard = app.keyboards.firstMatch
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 10))
+            let send = app.buttons["送信する"].firstMatch
+            XCTAssertTrue(send.waitForExistence(timeout: 5)); XCTAssertTrue(send.isHittable)
+            Thread.sleep(forTimeInterval: 1)
+            let gap = keyboard.frame.minY - send.frame.maxY
+            print("FEEDBACK1442001717 phase=\(phase) keyboard=\(keyboard.frame) send=\(send.frame) gap=\(gap)")
+            mhtAttach(app, "feedback1442001717-\(phase)")
+            XCTAssertGreaterThanOrEqual(gap, -8, "Toolbar intersects the standard keyboard after \(phase)")
+            XCTAssertLessThanOrEqual(gap, 60, "Toolbar floats above the keyboard after \(phase)")
+            let more = app.buttons.matching(NSPredicate(format: "label == %@", "その他"))
+            let bottom = (0..<more.count).map { more.element(boundBy: $0) }.max { $0.frame.midY < $1.frame.midY }
+            XCTAssertNotNil(bottom); XCTAssertTrue(bottom!.isHittable); bottom!.tap()
+            XCTAssertTrue(app.buttons["画像を貼り付け"].firstMatch.waitForExistence(timeout: 5))
+            mhtAttach(app, "feedback1442001717-\(phase)-menu-tapped")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.15)).tap()
+        }
+        checkToolbar("before-picker")
+        for selectPhoto in [false, true] {
+            app.buttons["添付画像"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["フォトライブラリ"].firstMatch.waitForExistence(timeout: 5))
+            app.buttons["フォトライブラリ"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["写真"].firstMatch.waitForExistence(timeout: 5))
+            app.buttons["写真"].firstMatch.tap()
+            // iOS 26 exposes picker assets as Images; the keyboard candidate
+            // strip is a CollectionView and must not be mistaken for the picker.
+            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+            if selectPhoto {
+                let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+                XCTAssertTrue(photo.waitForExistence(timeout: 15), "Seed a local test photo before this test.\n" + app.debugDescription)
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: photo.frame.midX, dy: photo.frame.midY)).tap()
+                XCTAssertTrue(app.otherElements["compat-post-attachment-preview"].waitForExistence(timeout: 15))
+            } else {
+                let cancel = ["キャンセル", "Cancel", "閉じる", "Close"].map { app.buttons[$0].firstMatch }.first { $0.exists && $0.isHittable }
+                XCTAssertNotNil(cancel, app.debugDescription); cancel!.tap()
+            }
+            XCTAssertTrue(comment.waitForExistence(timeout: 10))
+            let phase = selectPhoto ? "selected-photo-return" : "cancelled-picker-return"
+            print("FEEDBACK1442001717 phase=\(phase) keyboardVisibleImmediately=\(app.keyboards.firstMatch.exists)")
+            mhtAttach(app, "feedback1442001717-\(phase)-immediate")
+            comment.tap()
+            checkToolbar(phase)
+            XCTAssertTrue((comment.value as? String ?? "").contains("photo-return-check"))
+        }
+        if app.buttons["添付削除"].firstMatch.exists { app.buttons["添付削除"].firstMatch.tap() }
+        app.terminate()
+#else
+        throw XCTSkip("This test is scoped to the isolated simulator.")
+#endif
+    }
+
+    func testToshiakiImageOnlyPrivacyAndSmallTitlePersist() throws {
+        let app = try launchToshiakiTutorialApp(generation: "1442001718")
+        XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15))
+        app.buttons["その他"].firstMatch.tap()
+        app.staticTexts["設定"].firstMatch.tap()
+        func tagged(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func tap(_ element: XCUIElement) {
+            for _ in 0..<20 {
+                if element.exists && element.isHittable && app.windows.firstMatch.frame.insetBy(dx: 0, dy: 70).contains(element.frame) { break }
+                let frame = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 70)
+                let up = !element.exists || element.frame.midY > frame.midY
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.75 : 0.30))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: up ? 0.30 : 0.75)), withVelocity: .slow, thenHoldForDuration: 0.6)
+            }
+            XCTAssertTrue(element.isHittable); Thread.sleep(forTimeInterval: 1.0); element.tap()
+        }
+        tap(tagged("compat-setting-プライバシー表示"))
+        XCTAssertTrue(tagged("privacy-mode-toggle").waitForExistence(timeout: 10))
+        let toggle = tagged("privacy-mode-toggle")
+        if !toggle.isSelected && toggle.value as? String != "1" { tap(toggle) }
+        tap(tagged("privacy-scope-IMAGES"))
+        tap(tagged("privacy-title-SMALL"))
+        mhtAttach(app, "feedback1442001717-images-only-settings")
+        app.buttons["戻る"].firstMatch.tap(); app.buttons["戻る"].firstMatch.tap()
+        XCTAssertFalse(tagged("privacy-screen-filter").exists)
+        let board = compatibilityBoardCardAfterUnwinding(in: app); XCTAssertTrue(board.waitForExistence(timeout: 10)); board.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 10))
+        XCTAssertFalse(tagged("privacy-screen-filter").exists)
+        mhtAttach(app, "feedback1442001717-images-only-small-title")
+        app.terminate(); app.launch()
+        XCTAssertFalse(tagged("privacy-screen-filter").exists)
+        app.terminate()
     }
 
     override func setUpWithError() throws {
@@ -653,6 +854,158 @@ final class IosAppUITests: XCTestCase {
     }
 
     /// ふたばー風モード（開発版のみ）の縦の導線。Compose の testTag は accessibilityIdentifier として公開される。
+    func testFtutterBoardBottomPlacementPersistsAndKeepsBoardReachable() throws {
+        print("BOARD_PLACEMENT_UI_V2")
+        let app = try futaberTutorialApp(generation: "1442001721", profile: "ftutter")
+        app.launchArguments += ["-privacy_filter_enabled", "false"]
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func openPlacement() {
+            element("ftutter-open-settings").tap()
+            let extras = element("ftutter-settings-extras")
+            for _ in 0..<12 where !(extras.exists && extras.isHittable) { app.swipeUp() }
+            XCTAssertTrue(extras.isHittable, app.debugDescription)
+            extras.tap()
+            let page = element("ftutter-settings-page-extras")
+            if !page.waitForExistence(timeout: 3) { extras.tap() }
+            XCTAssertTrue(page.waitForExistence(timeout: 8), app.debugDescription)
+            let row = element("ftutter-setting-compat.control.controlBoardsFromBottom")
+            for _ in 0..<12 where !(row.exists && row.isHittable) { app.swipeDown() }
+            XCTAssertTrue(row.isHittable, app.debugDescription)
+        }
+        func returnToBoards() {
+            element("ftutter-back").tap()
+            element("ftutter-back").tap()
+            XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 10))
+        }
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 20))
+        openPlacement()
+        let setting = element("ftutter-setting-compat.control.controlBoardsFromBottom")
+        XCTAssertTrue(setting.waitForExistence(timeout: 10))
+        // Normalize the shared switch to OFF before measuring (other UI tests reuse this app).
+        let toggle = setting.descendants(matching: .switch).firstMatch
+        if toggle.exists && toggle.value as? String == "1" { setting.tap() }
+        returnToBoards()
+        let topY = element("ftutter-board-row").frame.minY
+        openPlacement(); setting.tap(); returnToBoards()
+        let bottomFrame = element("ftutter-board-row").frame
+        XCTAssertGreaterThan(bottomFrame.minY, topY + 100)
+        XCTAssertLessThanOrEqual(bottomFrame.maxY, element("ftutter-board-list").frame.maxY + 1)
+        mhtAttach(app, "feedback-stu-board-bottom-placement")
+        app.terminate(); app.launch()
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 20))
+        XCTAssertEqual(element("ftutter-board-row").frame.minY, bottomFrame.minY, accuracy: 2)
+        openPlacement(); setting.tap(); returnToBoards()
+        XCTAssertEqual(element("ftutter-board-row").frame.minY, topY, accuracy: 2)
+    }
+
+    func testFtutterAdditionalFeedbackSettingsAndCatalogOrder() throws {
+        let app = try futaberTutorialApp(generation: "1442001720", profile: "ftutter")
+        app.launchArguments += ["-privacy_filter_enabled", "false"]
+        app.launch()
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func tapVisible(_ target: XCUIElement) {
+            for _ in 0..<15 {
+                let area = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 32)
+                if target.exists && target.isHittable && area.contains(CGPoint(x: target.frame.midX, y: target.frame.midY)) { break }
+                let up = !target.exists || target.frame.midY > area.midY
+                let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.maxX - 16, dy: area.minY + area.height * (up ? 0.8 : 0.2)))
+                let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.maxX - 16, dy: area.minY + area.height * (up ? 0.2 : 0.8)))
+                from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.5)
+            }
+            XCTAssertTrue(target.isHittable, app.debugDescription)
+            target.tap()
+        }
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 20))
+        tapVisible(element("ftutter-board-row"))
+        XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20))
+        tapVisible(element("ftutter-catalog-tool-menu"))
+        let setting = element("ftutter-catalog-viewed-first")
+        XCTAssertTrue(setting.waitForExistence(timeout: 5))
+        tapVisible(setting)
+        tapVisible(element("ftutter-catalog-tool-menu"))
+        XCTAssertTrue(app.staticTexts["更新時に閲覧スレを先頭へ：ON"].waitForExistence(timeout: 5), app.debugDescription)
+        mhtAttach(app, "feedback-opqr-catalog-board-option")
+        tapVisible(setting) // restore OFF
+        element("ftutter-catalog-item").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+        XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 15))
+        tapVisible(element("ftutter-thread-settings"))
+        tapVisible(element("ftutter-settings-extras"))
+        XCTAssertTrue(element("ftutter-settings-page-extras").waitForExistence(timeout: 10))
+        for key in ["openSummary", "tabStatus", "reportNg"] {
+            let row = element("ftutter-setting-compat.ftutter.ext." + key)
+            tapVisible(row)
+        }
+        XCTAssertTrue(app.staticTexts["delと一緒に登録したレスNG：0件"].exists, app.debugDescription)
+        mhtAttach(app, "feedback-opqr-three-extensions-enabled")
+        for key in ["reportNg", "tabStatus", "openSummary"] {
+            tapVisible(element("ftutter-setting-compat.ftutter.ext." + key))
+        }
+    }
+
+    func testFtutterTextActionsKeySettingsAndOperationGuide() throws {
+        let app = try futaberTutorialApp(generation: "1442001719", profile: "ftutter")
+        app.launch()
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        func tap(_ target: XCUIElement) {
+            for _ in 0..<18 {
+                let frame = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 20)
+                if target.exists && target.isHittable && frame.contains(CGPoint(x: target.frame.midX, y: target.frame.midY)) { break }
+                let up = !target.exists || target.frame.midY > frame.midY
+                let list = element("ftutter-gesture-action-list")
+                let guide = element("operation-guide-content")
+                let area = list.exists ? list.frame : (guide.exists ? guide.frame : frame)
+                let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.maxX - 16, dy: area.minY + area.height * (up ? 0.8 : 0.2)))
+                let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.maxX - 16, dy: area.minY + area.height * (up ? 0.2 : 0.8)))
+                from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.6)
+            }
+            XCTAssertTrue(target.isHittable, app.debugDescription)
+            Thread.sleep(forTimeInterval: 1)
+            target.tap()
+        }
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 20))
+        tap(element("ftutter-board-row"))
+        XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20))
+        tap(element("ftutter-catalog-tool-menu"))
+        tap(element("ftutter-catalog-menu-gesture-actions"))
+        tap(element("ftutter-gesture-action-15"))
+        XCTAssertTrue(element("ftutter-search-input").waitForExistence(timeout: 5))
+        tap(element("ftutter-search-close"))
+        // XCUI's default point for this container falls inside the 20pt drawer edge; tap its visible title.
+        element("ftutter-catalog-item").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+        XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 15))
+        tap(element("ftutter-thread-tool-menu"))
+        tap(element("ftutter-thread-menu-gesture-actions"))
+        tap(element("ftutter-gesture-action-14"))
+        XCTAssertTrue(element("ftutter-post-dialog").waitForExistence(timeout: 5))
+        let comment = app.textViews["ftutter-post-comment"]
+        tap(comment); comment.typeText("keep-this-draft")
+        // Compare the actual input before/after settings, independently of Japanese IME composition.
+        let draftBeforeKey = comment.value as? String ?? ""
+        XCTAssertTrue(draftBeforeKey.contains("draft"), app.debugDescription)
+        tap(element("ftutter-post-menu"))
+        tap(app.buttons["削除キー"].firstMatch)
+        let key = element("ftutter-delete-key")
+        XCTAssertTrue(key.waitForExistence(timeout: 5)); tap(key)
+        app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "TEST1234")
+        tap(app.buttons["OK"].firstMatch)
+        XCTAssertTrue(comment.waitForExistence(timeout: 5))
+        XCTAssertEqual(comment.value as? String ?? "", draftBeforeKey, app.debugDescription)
+        mhtAttach(app, "feedback-ftutter-key-return-keeps-draft")
+        tap(app.buttons["閉じる"].firstMatch)
+        tap(element("ftutter-thread-settings"))
+        tap(element("ftutter-shared-help"))
+        tap(element("help-operation-guide"))
+        XCTAssertTrue(app.staticTexts["操作ガイド：ふたったー風モード"].waitForExistence(timeout: 5))
+        tap(element("operation-guide-gesture"))
+        mhtAttach(app, "feedback-ftutter-operation-guide")
+        tap(element("operation-guide-close"))
+        XCTAssertTrue(element("help-operation-guide").exists)
+        app.terminate()
+    }
+
     func testFtutterModeReachesBoardsCatalogThreadAndExtras() throws {
         let app = makeApplication()
         let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
@@ -5103,6 +5456,7 @@ final class IosAppUITests: XCTestCase {
         let toggle = tagged("privacy-mode-toggle")
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         if !toggle.isSelected && toggle.value as? String != "1" { tap(toggle) }
+        tap(tagged("privacy-scope-SCREEN"))
         let mesh = tagged("privacy-filter-MESH")
         tap(mesh)
         let title = tagged("privacy-title-HIDDEN")
@@ -5270,6 +5624,87 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["設定"].waitForExistence(timeout: 5),
             "Cancelling the mode switch did not keep the user in settings."
         )
+    }
+
+    /// Real, explicitly requested model download and playback through the bundled iOS frameworks.
+    func testZundamonDownloadsSelectsPlaysAndDeletesItsVoiceData() throws {
+        try zundamonSettingsFlow(checkPlayback: true)
+    }
+
+    func testZundamonDownloadsSelectsAndDeletesItsVoiceData() throws {
+        try zundamonSettingsFlow(checkPlayback: false)
+    }
+
+    private func zundamonSettingsFlow(checkPlayback: Bool) throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        let boards = [["id": "speech-test", "name": "チュートリアル", "category": "テスト",
+                       "url": "https://www.example.com/speech-test/futaba.php", "description": "読み上げ設定確認"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false",
+                                "-commonUsedVersion", Self.alreadyReadChangeLogVersion, "-boards_json", boardArgument]
+        app.launch()
+        XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 20), app.debugDescription)
+        app.buttons["メニュー"].tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5)); settings.tap()
+        let display = app.staticTexts["表示"].firstMatch
+        for _ in 0..<8 where !display.isHittable { app.swipeUp() }
+        XCTAssertTrue(display.isHittable); display.tap()
+        func visible(_ item: XCUIElement) -> Bool {
+            item.exists && item.isHittable && item.frame.minY > 90 && item.frame.maxY < app.frame.maxY - 24
+        }
+        let speech = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "読み上げ,")).firstMatch
+        for _ in 0..<10 where !visible(speech) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.5) }
+        XCTAssertTrue(visible(speech), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.8); speech.tap()
+        XCTAssertTrue(app.buttons["‹ 設定"].waitForExistence(timeout: 10), app.debugDescription)
+        let download = app.buttons["speech-zundamon-download"].firstMatch
+        let delete = app.buttons["speech-zundamon-delete"].firstMatch
+        // Clear a former opt-in run so every execution checks the explicit download.
+        if delete.exists {
+            for _ in 0..<8 where !visible(delete) { app.swipeUp() }
+            delete.tap(); app.buttons["削除"].tap()
+            XCTAssertTrue(download.waitForExistence(timeout: 15), app.debugDescription)
+        }
+        for _ in 0..<8 where !visible(download) { app.swipeUp() }
+        XCTAssertTrue(visible(download), app.debugDescription)
+        let select = app.buttons["speech-zundamon-select"].firstMatch
+        XCTAssertFalse(select.isEnabled)
+        mhtAttach(app, "zundamon-before-explicit-download")
+        download.tap()
+        let ready = app.staticTexts["音声データ：準備済み"]
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), app.debugDescription)
+        for _ in 0..<10 where !visible(select) { app.swipeDown() }
+        XCTAssertTrue(select.isEnabled); select.tap()
+        if checkPlayback {
+        #if !targetEnvironment(simulator)
+        let outputVolume = AVAudioSession.sharedInstance().outputVolume
+        print("Zundamon physical-device output volume before playback: \(outputVolume)")
+        XCTAssertEqual(outputVolume, 0, "Physical-device speech checks must remain silent")
+        guard outputVolume == 0 else { return }
+        #endif
+        let sample = app.buttons["試聴"].firstMatch
+        for _ in 0..<12 where !visible(sample) { app.swipeUp() }
+        XCTAssertTrue(visible(sample), app.debugDescription)
+        mhtAttach(app, "zundamon-selected")
+        sample.tap()
+        let stop = app.buttons["試聴を停止"].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), app.debugDescription)
+        let finished = NSPredicate { _, _ in sample.exists && !stop.exists }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: finished, object: nil)], timeout: 60), .completed)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "speech-sample-finished").firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "speech-error").firstMatch.exists, app.debugDescription)
+        #if !targetEnvironment(simulator)
+        XCTAssertEqual(AVAudioSession.sharedInstance().outputVolume, 0)
+        #endif
+        }
+        for _ in 0..<12 where !visible(delete) { app.swipeDown() }
+        XCTAssertTrue(visible(delete), app.debugDescription)
+        delete.tap(); app.buttons["削除"].tap()
+        XCTAssertTrue(download.waitForExistence(timeout: 15), app.debugDescription)
+        mhtAttach(app, "zundamon-data-deleted")
     }
 
     /// ふたちゃの設定から読み上げの速さを変更し、開き直した後も値が残り、標準へ戻せる。
@@ -5522,7 +5957,16 @@ final class IosAppUITests: XCTestCase {
     }
 
     func testFirstLaunchRequiresUserGeneratedContentEulaAgreement() {
+        verifyFirstLaunchEula(legacyNavigation: false)
+    }
+
+    func testLegacyNavigationRequiresEulaAgreementBeforeBrowsing() {
+        verifyFirstLaunchEula(legacyNavigation: true)
+    }
+
+    private func verifyFirstLaunchEula(legacyNavigation: Bool) {
         let app = XCUIApplication()
+        if legacyNavigation { app.launchArguments.append("-futacha.legacyNavigation") }
         app.launchArguments += [
             "-review.ugc_eula_accepted_version", "2026-08-22",
             "-review.force_ugc_eula",
@@ -5617,6 +6061,20 @@ final class IosAppUITests: XCTestCase {
         )
     }
 
+    func testLegacyNavigationSavedHtmlKeepsItsCloseButton() {
+        let app = makeApplication()
+        app.launchArguments += ["-futacha.legacyNavigation", "-futacha.issue78.saved_html_fixture"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["保存済みスレ"].waitForExistence(timeout: 20))
+        let close = app.navigationBars["保存済みスレ"].buttons["閉じる"]
+        XCTAssertTrue(close.exists)
+        close.tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.navigationBars["保存済みスレ"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 10), .completed)
+    }
+
     /// S-3: a saved page opened from Files must not reach the network (IP and
     /// viewing time), while its local images keep loading.
     func testSavedHtmlViewerBlocksRemoteRequestsAndKeepsLocalImages() throws {
@@ -5656,6 +6114,9 @@ final class IosAppUITests: XCTestCase {
     /// injects both URLs into the generated xctestrun environment. Ordinary CI
     /// remains deterministic because direct runs still skip without those URLs.
     func testRealColdThreadsLoadWithoutManualRefresh() throws {
+        guard #available(iOS 16.4, *) else {
+            throw XCTSkip("XCUIApplication.open(URL) requires iOS 16.4; other UI tests remain available on iOS 15.")
+        }
         let environment = ProcessInfo.processInfo.environment
         guard
             let compatibilityUrlValue = environment["FUTACHA_REAL_THREAD_URL_COMPAT"],

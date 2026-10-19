@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
 import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
 
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
@@ -232,7 +233,7 @@ private fun GalleryAttachmentItem(
                             ThreadGalleryThumbnailMode.Fit -> ContentScale.Fit
                             ThreadGalleryThumbnailMode.CropSquare -> ContentScale.Crop
                         },
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize().privacyMediaFilter()
                     )
                 } else {
                     Box(

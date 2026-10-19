@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 
 import androidx.compose.foundation.Image
@@ -311,7 +312,7 @@ private fun ImagePreviewTransformSurface(
 
     Box(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxSize().privacyMediaFilter()
             .pointerInput(resetKey, viewportSize) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)

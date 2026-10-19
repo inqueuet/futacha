@@ -66,7 +66,8 @@ internal fun FutaberBoardDrawer(
     /** Changes the name of a board (tap its name while editing). */
     onRenameBoard: (BoardSummary, name: String) -> Unit = { _, _ -> },
     /** Adds the boards of the official list that are not registered yet and returns how many were added; null = unavailable. */
-    onBulkAdd: (suspend () -> Result<Int>)? = null
+    onBulkAdd: (suspend () -> Result<Int>)? = null,
+    boardsFromBottom: Boolean = false
 ) {
     val colors = LocalFutaberColors.current
     var editing by rememberSaveable { mutableStateOf(false) }
@@ -103,7 +104,8 @@ internal fun FutaberBoardDrawer(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(16.dp)
             )
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding().testTag("futaber-board-list"),
+                verticalArrangement = if (boardsFromBottom) androidx.compose.foundation.layout.Arrangement.Bottom else androidx.compose.foundation.layout.Arrangement.Top) {
                 itemsIndexed(shownBoards, key = { _, item -> item.id }) { index, item ->
                     val selected = item.id == selectedBoardId
                     Row(

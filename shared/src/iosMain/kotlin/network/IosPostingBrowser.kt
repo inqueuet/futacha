@@ -12,6 +12,10 @@ import platform.darwin.NSObject
 
 internal class IosPostingBrowser : PostingBrowser {
     private val mutex = Mutex()
+    // WKWebView.navigationDelegate is weak. Retain it across the suspended await;
+    // a local whose last use is the assignment can be collected before didFinish.
+    // Access is serialized by mutex and confined to Dispatchers.Main.
+    private var activeNavigationDelegate: NSObject? = null
     override suspend fun userAgent(): String = evaluate("https://www.2chan.net/", "<html></html>", "navigator.userAgent")
 
     override suspend fun evaluate(pageUrl: String, html: String, script: String): String = mutex.withLock {
@@ -30,12 +34,14 @@ internal class IosPostingBrowser : PostingBrowser {
                 }
             }
             try {
+                activeNavigationDelegate = delegate
                 view.navigationDelegate = delegate
                 view.loadHTMLString(html, NSURL.URLWithString(pageUrl))
                 withTimeoutOrNull(15_000) { result.await() } ?: throw NetworkException("投稿準備が時間内に完了しなかったため送信していません")
             } finally {
                 view.stopLoading()
                 view.navigationDelegate = null
+                activeNavigationDelegate = null
             }
         }
     }

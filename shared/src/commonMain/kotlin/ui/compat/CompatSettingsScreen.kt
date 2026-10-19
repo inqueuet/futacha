@@ -759,6 +759,25 @@ internal fun CompatSettingsScreen(
             if (path == "catalog") item(key = "catalog-layout-guide") {
                 com.valoser.futacha.shared.ui.board.CatalogLayoutGuide()
             }
+            if (path == "control") item(key = "boards-from-bottom") {
+                val key = com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("板一覧を下寄せ", Modifier.weight(1f))
+                    androidx.compose.material3.Switch(com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences), onCheckedChange = { enabled ->
+                        launchSettingsSafely { store.savePreference(key, enabled.toString()) }
+                    })
+                }
+                Text("板が少ない時に下へ寄せます。並び順は変わりません。", Modifier.padding(horizontal = 16.dp))
+            }
+            if (path == "thread") item(key = "thread-opening-summary") {
+                val key = com.valoser.futacha.shared.ui.board.THREAD_OPEN_SUMMARY_KEY
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("開いた時の新着・自分への返信件数", Modifier.weight(1f))
+                    androidx.compose.material3.Switch(preferences[key] != "OFF", onCheckedChange = { enabled ->
+                        launchSettingsSafely { store.savePreference(key, if (enabled) "ON" else "OFF") }
+                    })
+                }
+            }
             if (path == "thread") item(key = "thread-settings-guide") {
                 Column(Modifier.padding(16.dp)) {
                     Text(if (modernPresentation) "通常／ツリー表示は、共通設定の「スレ表示モード」で選べます。"
@@ -1714,11 +1733,20 @@ internal fun CompatCacheServerWarningDialog(
 @Composable
 internal fun CompatHelpScreen(
     onBack: () -> Unit,
-    onOpenChangeLog: (() -> Unit)? = null
+    onOpenChangeLog: (() -> Unit)? = null,
+    appVersion: String = com.valoser.futacha.shared.ui.board.LocalFutachaSharedFeatures.current?.appVersion.orEmpty()
 ) {
     val openUrl = rememberUrlLauncher()
     val palette = LocalCompatibilityPalette.current
     val helpHtml = remember(palette) { compatibilityReferenceHelpHtml(palette) }
+    var reportOpen by remember { mutableStateOf(false) }
+    var operationGuideOpen by remember { mutableStateOf(false) }
+    if (operationGuideOpen) com.valoser.futacha.shared.ui.board.ModeOperationGuideDialog(
+        com.valoser.futacha.shared.compat.LocalExperienceProfileUiController.current.activeProfile,
+        onDismiss = { operationGuideOpen = false })
+    if (reportOpen) com.valoser.futacha.shared.ui.board.BugReportDialog(appVersion,
+        listOf("default" to "標準", "mono" to "モノクロ", "futaba" to "ふたば", "blue" to "ブルー", "pink" to "ピンク", "black" to "ブラック")
+            .firstOrNull { compatibilityPaletteFor(it.first).chrome == palette.chrome }?.second ?: "カスタム", onDismiss = { reportOpen = false })
     Scaffold(
         containerColor = palette.background,
         topBar = {
@@ -1731,6 +1759,9 @@ internal fun CompatHelpScreen(
                     }
                 },
                 actions = {
+                    TextButton(onClick = { reportOpen = true }, modifier = Modifier.testTag("help-report-bug")) {
+                        Text("不具合を報告", color = SecondaryChromeContent)
+                    }
                     IconButton(onClick = {
                         onOpenChangeLog?.invoke()
                             ?: openUrl("https://github.com/inqueuet/futacha/releases")
@@ -1752,14 +1783,18 @@ internal fun CompatHelpScreen(
             )
         }
     ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+        TextButton(onClick = { operationGuideOpen = true }, modifier = Modifier.fillMaxWidth().testTag("help-operation-guide")) {
+            Text("操作ガイド：書き込み・添付・保存・戻る", color = palette.text)
+        }
         SearchableHelpContent(
             html = helpHtml,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+                .fillMaxWidth().weight(1f)
                 .testTag("help-screen"),
             onLinkClicked = openUrl
         )
+        }
     }
 }
 

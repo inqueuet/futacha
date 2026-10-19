@@ -217,7 +217,7 @@ internal fun ThreadScreenOverlayHost(
         )
     }
 
-    if (bindings.isPrivacyFilterEnabled) {
+    if (bindings.isPrivacyFilterEnabled && com.valoser.futacha.shared.ui.privacy.LocalPrivacyMode.current == null) {
         val opacity = LocalFutachaSharedFeatures.current?.intValue("thread", "commonPrivacyAlpha", 0..100)?.let { 1f - it / 100f } ?: 0.5f
         Canvas(
             modifier = Modifier.fillMaxSize()

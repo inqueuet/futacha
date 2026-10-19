@@ -326,13 +326,15 @@ fun rememberFutachaImageLoader(
         lightweightMode,
         performanceProfile,
         diskCacheBytesOverride,
-        parallelismOverride
+        parallelismOverride,
+        diskCacheDirectoryName
     ) {
         resolveCacheConfig(
             lightweightMode = lightweightMode,
             performanceProfile = performanceProfile,
             diskCacheBytesOverride = diskCacheBytesOverride,
-            parallelismOverride = parallelismOverride
+            parallelismOverride = parallelismOverride,
+            diskCacheDirectoryName = diskCacheDirectoryName
         )
     }
     val fetcherDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
@@ -884,10 +886,11 @@ internal fun resolveCacheConfig(
     lightweightMode: Boolean,
     performanceProfile: DevicePerformanceProfile,
     diskCacheBytesOverride: Long? = null,
-    parallelismOverride: Int? = null
+    parallelismOverride: Int? = null,
+    diskCacheDirectoryName: String = IMAGE_DISK_CACHE_DIR
 ): ImageCacheConfig {
     val useLight = lightweightMode || performanceProfile.isLowSpec
-    return if (useLight) {
+    val base = if (useLight) {
         ImageCacheConfig(
             memoryCacheBytes = LIGHT_IMAGE_MEMORY_CACHE_BYTES,
             diskCacheBytes = diskCacheBytesOverride ?: LIGHT_IMAGE_DISK_CACHE_BYTES,
@@ -900,6 +903,15 @@ internal fun resolveCacheConfig(
             parallelism = parallelismOverride?.coerceIn(1, 8) ?: DEFAULT_MAX_PARALLELISM
         )
     }
+    val budget = performanceProfile.imageMemoryBudgetBytes?.coerceAtLeast(4L * 1024 * 1024)
+    // Only iOS low-RAM profiles opt in. Keep saved disk quotas and parallelism values intact.
+    val memoryBytes = budget?.let {
+        if (diskCacheDirectoryName == CATALOG_IMAGE_DISK_CACHE_DIR) it / 4 else it - it / 4
+    } ?: base.memoryCacheBytes
+    val parallelism = performanceProfile.imageRequestParallelismLimit?.let {
+        minOf(base.parallelism, it.coerceAtLeast(1))
+    } ?: base.parallelism
+    return base.copy(memoryCacheBytes = memoryBytes, parallelism = parallelism)
 }
 
 /** Copies the pictures of [from] into [to] (bounded by [to]'s own size); a failure leaves [to] as it is. */

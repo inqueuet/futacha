@@ -9,18 +9,7 @@ import okio.Path
 import okio.Path.Companion.toPath
 import platform.Foundation.*
 
-internal actual fun createModelDownloadClient(): HttpClient = HttpClient(Darwin) {
-    configureModelDownloads()
-    engine {
-        configureSession {
-            HTTPCookieStorage = null
-            HTTPShouldSetCookies = false
-            URLCredentialStorage = null
-            URLCache = null
-            requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData
-        }
-    }
-}
+internal actual fun createModelDownloadClient(): HttpClient = com.valoser.futacha.shared.download.createAssetDownloadClient()
 
 internal actual fun modelStoreDirectory(platformContext: Any?): Path {
     val base = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).firstOrNull() as? String

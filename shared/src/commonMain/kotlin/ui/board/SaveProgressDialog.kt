@@ -52,7 +52,8 @@ internal fun saveProgressPhaseTitle(phase: SavePhase): String {
 fun SaveProgressDialog(
     progress: SaveProgress?,
     onDismissRequest: () -> Unit,
-    onCancelRequest: (() -> Unit)? = null
+    onCancelRequest: (() -> Unit)? = null,
+    trackAnalytics: Boolean = true
 ) {
     if (progress == null) return
 
@@ -64,11 +65,11 @@ fun SaveProgressDialog(
         onDismissRequest = {
             when (resolveSaveProgressDismissAction(progress, hasCancelRequest = onCancelRequest != null)) {
                 SaveProgressDismissAction.Dismiss -> {
-                    AnalyticsTracker.uiControl("save_progress", "保存完了画面を閉じる")
+                    if (trackAnalytics) AnalyticsTracker.uiControl("save_progress", "保存完了画面を閉じる")
                     onDismissRequest()
                 }
                 SaveProgressDismissAction.Cancel -> {
-                    AnalyticsTracker.uiControl("save_progress", "スレッド保存をキャンセル")
+                    if (trackAnalytics) AnalyticsTracker.uiControl("save_progress", "スレッド保存をキャンセル")
                     onCancelRequest?.invoke()
                 }
                 SaveProgressDismissAction.None -> Unit
@@ -119,7 +120,7 @@ fun SaveProgressDialog(
             if (isCompleted) {
                 TextButton(
                     onClick = {
-                        AnalyticsTracker.uiControl("save_progress", "保存完了画面を閉じる")
+                        if (trackAnalytics) AnalyticsTracker.uiControl("save_progress", "保存完了画面を閉じる")
                         onDismissRequest()
                     },
                     colors = buttonColors
@@ -132,7 +133,7 @@ fun SaveProgressDialog(
             if (!isCompleted && onCancelRequest != null) {
                 TextButton(
                     onClick = {
-                        AnalyticsTracker.uiControl("save_progress", "スレッド保存をキャンセル")
+                        if (trackAnalytics) AnalyticsTracker.uiControl("save_progress", "スレッド保存をキャンセル")
                         onCancelRequest()
                     },
                     colors = buttonColors

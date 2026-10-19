@@ -1402,7 +1402,7 @@ class ThreadScreenLoadLogicTest {
         assertEquals("スレッドを更新しました", refreshOutcome.snackbarMessage)
 
         assertEquals(
-            ThreadUiState.Error("スレッドが見つかりません (404)"),
+            ThreadUiState.Error("スレッドが見つかりません (404)", confirmedGone = true),
             buildThreadInitialLoadFailureState(
                 error = IllegalStateException("x"),
                 statusCode = 404
@@ -1410,7 +1410,7 @@ class ThreadScreenLoadLogicTest {
         )
         assertEquals(
             ThreadLoadUiOutcome(
-                uiState = ThreadUiState.Error("スレッドが見つかりません (404)"),
+                uiState = ThreadUiState.Error("スレッドが見つかりません (404)", confirmedGone = true),
                 snackbarMessage = "スレッドが見つかりません (404)"
             ),
             buildThreadInitialLoadFailureUiOutcome(

@@ -281,10 +281,14 @@ internal fun CompatViewerScreen(
     onOpenSettings: () -> Unit,
     onOpenCommonSettings: () -> Unit,
     onOpenHelp: () -> Unit = {},
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
+    onSaveNotice: (String) -> Unit = {}
 ) {
     val tabKey = tab.key
     val scope = rememberCoroutineScope()
+    val screenPresent = remember { booleanArrayOf(true) }
+    DisposableEffect(Unit) { onDispose { screenPresent[0] = false } }
     val openUrl = rememberUrlLauncher()
     val share = rememberCompatShareLauncher()
     val clipboard = LocalClipboardManager.current
@@ -528,7 +532,10 @@ internal fun CompatViewerScreen(
         if (isSaving) return
         // Claim the guard before the coroutine is dispatched (E-13).
         isSaving = true
-        launchScreenAction {
+        (if (shareAfterSave) scope else saveCoroutineScope ?: scope).launchCompatScreenAction("CompatViewerSave", { failure ->
+            val text = failure.toCompatUserMessage("画像を保存できませんでした")
+            if (screenPresent[0]) message = text else onSaveNotice(text)
+        }) {
             try {
                 val saver = mediaSaver
                 val fs = fileSystem
@@ -552,14 +559,18 @@ internal fun CompatViewerScreen(
                                     fs.resolveSavedFile(selectedLocation ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
                                 )
                             } else {
-                                message = compatMediaSaveCompletionMessage(saved, fs, selectedLocation)
-                                messageState.attach(CompatSaveResultAction.Share(saved, selectedLocation))
+                                val text = compatMediaSaveCompletionMessage(saved, fs, selectedLocation)
+                                if (screenPresent[0]) {
+                                    message = text
+                                    messageState.attach(CompatSaveResultAction.Share(saved, selectedLocation))
+                                } else onSaveNotice(text)
                             }
                         }
                         .onFailure {
-                            message = it.toCompatUserMessage(
+                            val text = it.toCompatUserMessage(
                                 if (shareAfterSave) "画像を共有できませんでした" else "画像を保存できませんでした"
                             )
+                            if (screenPresent[0]) message = text else onSaveNotice(text)
                         }
                 }
             } finally { isSaving = false }
@@ -1077,9 +1088,8 @@ internal fun CompatViewerScreen(
                         visible = page == pagerState.currentPage && !threadPrivacyEnabled)
                     val posterUrl = post?.thumbnailUrl
                         ?.takeIf { it.isNotBlank() && it != mediaUrl }
-                    val privacyOverlayAlpha = compatPrivacyOverlayAlpha(
-                        enabled = threadPrivacyEnabled,
-                        transparency = threadPrivacyAlpha
+                    val privacyOverlayAlpha = 1f - com.valoser.futacha.shared.ui.privacy.privacyImageContentAlpha(
+                        compatPrivacyRenderAlpha(threadPrivacyEnabled, threadPrivacyAlpha)
                     )
                     Box(modifier = Modifier.fillMaxSize()) {
                         PlatformVideoPlayer(
@@ -1431,6 +1441,7 @@ internal fun CompatViewerImagePage(
         // Render the active bitmap through exactly one transform. Keeping one
         // Image node avoids replacing a transformed thumbnail with a second
         // transformed node when the original finishes loading.
+        @Composable
         fun imageRenderModifier(alpha: Float = 1f): Modifier = Modifier
             .fillMaxSize()
             .compatPrivacyImageEffect(compatPrivacyRenderAlpha(privacyEnabled, privacyAlpha))

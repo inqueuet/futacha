@@ -62,6 +62,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -498,7 +499,8 @@ internal fun CompatTopBar(
     onDisplayOptions: (() -> Unit)? = null,
     onToolbarEdit: (() -> Unit)? = null,
     onSettings: (() -> Unit)? = null,
-    onOpenHelp: (() -> Unit)? = null
+    onOpenHelp: (() -> Unit)? = null,
+    titleAppearance: com.valoser.futacha.shared.ui.privacy.PrivateTitle = com.valoser.futacha.shared.ui.privacy.PrivateTitle.NORMAL
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
     val topBarHeight = compatTopBarHeightDp(LocalDensity.current.fontScale).dp
@@ -547,7 +549,11 @@ internal fun CompatTopBar(
                 modifier = Modifier.weight(1f).padding(start = 16.dp),
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(title, maxLines = 1, fontSize = 20.sp, color = Color.White, overflow = TextOverflow.Ellipsis)
+                val hidden = titleAppearance == com.valoser.futacha.shared.ui.privacy.PrivateTitle.HIDDEN
+                Text(if (hidden) "スレッド" else title, maxLines = 1,
+                    style = com.valoser.futacha.shared.ui.privacy.privateTitleStyle(androidx.compose.ui.text.TextStyle(fontSize = 20.sp), titleAppearance),
+                    modifier = Modifier.alpha(if (hidden) 1f else com.valoser.futacha.shared.ui.privacy.privateTitleAlpha(titleAppearance)),
+                    color = Color.White, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, fontSize = 12.sp, color = Color.White, maxLines = 1)
             }
             if (onSearch != null) {

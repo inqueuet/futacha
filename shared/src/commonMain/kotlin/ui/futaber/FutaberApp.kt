@@ -642,7 +642,7 @@ internal fun FutaberApp(
     val tabKeys = remember(preferences[FutaberPreferenceKeys.TABS], boards) {
         futaberTabsFromStore(preferences[FutaberPreferenceKeys.TABS], boards)
     }
-    val tabViews = remember(tabKeys, history) { futaberTabViews(tabKeys, history) }
+    val tabViews = remember(tabKeys, history, displaySettings.extTabStatus) { futaberTabViews(tabKeys, history, displaySettings.extTabStatus) }
     // The tabs closed during this run, the latest first ("閉じたタブを元に戻す", an extension). Only a person's own
     // closing is kept: the clean-up of tabs whose thread is gone does not remember anything.
     var closedTabs by remember { mutableStateOf(emptyList<FutaberTabKey>()) }
@@ -1017,6 +1017,7 @@ internal fun FutaberApp(
             val drawerDrawn by remember { androidx.compose.runtime.derivedStateOf { drawerProgress > 0f } }
             if (drawerDrawn) {
                 FutaberBoardDrawer(
+                    boardsFromBottom = com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences),
                     boards = boards,
                     selectedBoardId = board?.id,
                     modifier = Modifier.width(drawerWidth).fillMaxHeight(),
@@ -1087,6 +1088,8 @@ internal fun FutaberApp(
                         onOpenSettings = { settingsOpen = true }
                     )
                     thread != null -> FutaberThreadScreen(
+                        initialKnownPostCount = com.valoser.futacha.shared.ui.board.knownViewedPostCount(
+                            history.firstOrNull { it.boardId == board.id && it.threadId == thread.threadId }),
                         board = board,
                         ref = thread,
                         repository = if (board.isMockBoard()) mockRepository else threadRepository,
@@ -1192,6 +1195,9 @@ internal fun FutaberApp(
                         }
                     )
                     else -> FutaberCatalogScreen(
+                        viewedFirstEnabled = preferences[com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url)] == "ON",
+                        lastViewedThreadId = history.filter { it.boardId == board.id }.maxByOrNull { it.lastVisitedEpochMillis }?.threadId,
+                        onViewedFirstChange = { writePreference(com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url), if (it) "ON" else "OFF") },
                         board = board,
                         repository = if (board.isMockBoard()) mockRepository else repository,
                         displayStyle = displayStyle,

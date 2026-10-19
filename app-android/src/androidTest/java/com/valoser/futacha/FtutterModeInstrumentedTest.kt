@@ -1,21 +1,29 @@
 package com.valoser.futacha
 
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertIsEnabled
+
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeDown
@@ -53,7 +61,10 @@ class FtutterModeInstrumentedTest {
         "compat.ftutter.deleteKey", "compat.manualPostMarks", "compat.ftutter.resuDOrderName", "compat.ftutter.resuDOrderBool",
         "compat.ftutter.Gesture12", "compat.ftutter.useTabletMode", "compat.ftutter.sureTBOrderName", "compat.ftutter.sureTBOrderBool",
         "compat.ftutter.gazouItiranRow", "compat.ftutter.showGalleryTab", "compat.ftutter.mainColor", "compat.ftutter.numOnThumb",
-        "compat.ftutter.stats.opened", "compat.ftutter.drawerButtonOnTopLeft", "compat.ftutter.rirekiLimit"
+        "compat.ftutter.stats.opened", "compat.ftutter.drawerButtonOnTopLeft", "compat.ftutter.rirekiLimit",
+        "compat.ftutter.useScrollbar", "compat.ftutter.alwaysShowScrollbar", "compat.ftutter.putScrollbarLeft",
+        "compat.ftutter.scrollbarThickness", "compat.ftutter.saveHtmlWithThumb", "compat.ftutter.saveHtmlWithFile",
+        "compat.ftutter.saveHtmlWithApusyou", "compat.ftutter.saveHtmlZip", "compat.ftutter.drawerLeftOrRight", "compat.ftutter.color.inTab"
     ) + listOf("commonNg", "imageMenu", "readAloud", "autoScroll", "mht", "ai", "watcher", "archiveSearch", "appLock", "historyTools")
         .map { "compat.ftutter.ext.$it" }
     /** 共通のNG（拡張「共通のNGを使う」の試験で書く）。前後で元に戻す。 */
@@ -61,13 +72,16 @@ class FtutterModeInstrumentedTest {
     private var originalNoticeShown: Boolean? = null
     /** スレッドを開くと履歴に書くので、試験の前の履歴に戻す。 */
     private var originalHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>? = null
+    private var originalFtutterPreferences: Map<String, String> = emptyMap()
 
     @Before fun prepare() {
         app = ApplicationProvider.getApplicationContext()
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(ftutterKeys.associateWith { null })
+            originalFtutterPreferences = app.compatibilityStore.preferences.first()
+                .filterKeys { it.startsWith("compat.ftutter.") || it == "compat.manualPostMarks" }
+            app.compatibilityStore.savePreferences((originalFtutterPreferences.keys + ftutterKeys).associateWith { null })
             originalHistory = app.appStateStore.history.first()
             originalNoticeShown = app.appStateStore.hasShownPostingNotice.first()
             originalNg = Triple(app.appStateStore.ngWords.first(), app.appStateStore.ngHeaders.first(), app.appStateStore.catalogNgWords.first())
@@ -81,7 +95,8 @@ class FtutterModeInstrumentedTest {
         // 進まない。後片付けを試験のスレッドで待つと、その保存が鍵を持ったまま止まって互いに待つので、別のスレッドで行い、
         // 時計を進めながら終わりを待つ。
         val cleanup = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            app.compatibilityStore.savePreferences(ftutterKeys.associateWith { null })
+            val currentKeys = app.compatibilityStore.preferences.first().keys.filter { it.startsWith("compat.ftutter.") }
+            app.compatibilityStore.savePreferences((currentKeys + ftutterKeys).associateWith<String, String?> { null } + originalFtutterPreferences)
             originalHistory?.let { app.appStateStore.setHistory(it) }
             originalNoticeShown?.let { app.appStateStore.setHasShownPostingNotice(it) }
             originalNg?.let { (words, headers, catalog) ->
@@ -150,6 +165,27 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-board-list")
     }
 
+    @Test fun settingsModeRowStaysAboveTheNavigationBarAndCanBeTapped() {
+        openSettingsRoot()
+        val list = rule.onNodeWithTag("ftutter-settings-list")
+        list.performScrollToNode(androidx.compose.ui.test.hasTestTag("settings-section-モード"))
+        val section = rule.onNodeWithTag("settings-section-モード")
+        val navigationBottom = androidx.core.view.ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
+            ?.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
+        val safeBottom = rule.onRoot().fetchSemanticsNode().boundsInRoot.bottom - navigationBottom
+        assertTrue(
+            "mode row must stay above navigation bar: ${section.fetchSemanticsNode().boundsInRoot.bottom} <= $safeBottom",
+            section.fetchSemanticsNode().boundsInRoot.bottom <= safeBottom + 1f
+        )
+        // A semantics click would bypass the system navigation bar's hit area.
+        section.performTouchInput { click(center) }
+        list.performScrollToNode(androidx.compose.ui.test.hasText("ふたばー風モード"))
+        rule.onNodeWithText("ふたばー風モード").performTouchInput { click(center) }
+        rule.onNodeWithText("ふたばー風モードへ切り替えますか？").assertIsDisplayed()
+        rule.onNodeWithText("キャンセル").performClick()
+        assertEquals(ExperienceProfile.FTUTTER, app.experienceProfileStore.readActiveProfile())
+    }
+
     @Test fun theBoardListOpensTheTutorialCatalogWhoseSortSearchAndZoomWork() {
         openTutorialCatalog()
         saveShot("03-catalog")
@@ -165,7 +201,7 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-catalog-item")
 
         // The search narrows the tiles; closing it brings them back.
-        rule.onNodeWithTag("ftutter-catalog-tool-search").performClick()
+        rule.onNodeWithTag("ftutter-catalog-tool-search").performScrollTo().performClick()
         rule.onNodeWithTag("ftutter-search-input").performTextInput("zzzz-no-such-thread")
         rule.waitUntil(5_000) { rule.allTagged("ftutter-catalog-item").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("ftutter-search-close").performClick()
@@ -206,6 +242,67 @@ class FtutterModeInstrumentedTest {
         rule.allTagged("ftutter-catalog-item")[0].performClick()
         waitForTag("ftutter-thread")
         waitForTag("ftutter-post")
+    }
+
+    @Test fun importedScrollbarAndHtmlSaveChoicesHaveWorkingControls() {
+        runBlocking { app.compatibilityStore.savePreferences(mapOf(
+            "compat.ftutter.useScrollbar" to "true", "compat.ftutter.alwaysShowScrollbar" to "true",
+            "compat.ftutter.putScrollbarLeft" to "true", "compat.ftutter.scrollbarThickness" to "12",
+            "compat.ftutter.saveHtmlWithThumb" to "false", "compat.ftutter.saveHtmlWithFile" to "true",
+            "compat.ftutter.saveHtmlWithApusyou" to "true", "compat.ftutter.saveHtmlZip" to "true"
+        )) }
+        openTutorialThread()
+        waitForTag("compat-fast-scrollbar")
+        val bar = rule.onNodeWithTag("compat-fast-scrollbar").fetchSemanticsNode().boundsInRoot
+        assertTrue("scrollbar is on the left", bar.left < 10.dp.value * rule.density.density)
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.useScrollbar", "false") }
+        rule.waitUntil(10_000) { rule.allTagged("compat-fast-scrollbar").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithText("スレを保存").performClick()
+        rule.onNodeWithText("サムネイルを含める").assertIsDisplayed()
+        rule.onNodeWithText("元ファイルを含める").assertIsDisplayed()
+        rule.onNodeWithText("あぷ小を含める").assertIsDisplayed()
+        rule.onNodeWithText("ZIPで保存").assertIsDisplayed()
+        // Checkbox state reflects the imported four independent choices.
+        val checkboxes = rule.onAllNodes(androidx.compose.ui.test.isToggleable()).fetchSemanticsNodes()
+        assertEquals(4, checkboxes.size)
+        val states = checkboxes.map { it.config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState] }
+        assertEquals(listOf(androidx.compose.ui.state.ToggleableState.Off,
+            androidx.compose.ui.state.ToggleableState.On, androidx.compose.ui.state.ToggleableState.On,
+            androidx.compose.ui.state.ToggleableState.On), states)
+        saveShot("imported-scrollbar-html-options")
+    }
+
+    @Test fun anOpenTabsCatalogCellUsesItsImportedBackgroundColor() {
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.color.inTab", "4290435669") }
+        openTutorialThread()
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-catalog-item")
+        rule.waitUntil(10_000) { tutorialUrl in tabs() }
+        rule.waitForIdle()
+        saveShot("imported-open-tab-background")
+        val pixels = rule.allTagged("ftutter-catalog-item")[0].captureToImage().toPixelMap()
+        var matches = 0
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val color = pixels[x, y]
+            if (kotlin.math.abs(color.red - 186f / 255) < 0.01f &&
+                kotlin.math.abs(color.green - 218f / 255) < 0.01f && kotlin.math.abs(color.blue - 85f / 255) < 0.01f) matches++
+        }
+        assertTrue("the open tab's catalogue background is painted", matches > 10)
+        saveShot("imported-open-tab-background")
+    }
+
+    @Test fun importedHistoryLimitHidesOlderRowsAndKeepsProtectedRows() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
+        runBlocking { app.compatibilityStore.savePreferences(mapOf(
+            "compat.ftutter.rirekiLimit" to "1", "compat.ftutter.protected" to fakeTab3
+        )) }
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-drawer").performClick()
+        waitForTag("ftutter-drawer-list")
+        rule.waitUntil(10_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 2 }
+        assertEquals(3, historyUrls().size)
+        saveShot("imported-history-limit")
     }
 
     @Test fun theTutorialThreadShowsItsPostsAndTheQuotePopupsStackAndCloseOneByOne() {
@@ -332,6 +429,43 @@ class FtutterModeInstrumentedTest {
         assertEquals(fakeTab3, preference("compat.ftutter.protected"))
         assertEquals(3, tabs().size)
         saveShot("12-drawer-protected")
+    }
+
+    @Test fun tabUndoIsAbsentFromHistoryAndExplainsEachRestoredTabWithoutDeletingHistory() {
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n")) }
+        openTutorialCatalog()
+        openDrawerOnTabs()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 3 }
+        rule.onNodeWithTag("ftutter-drawer-restore").assertIsNotEnabled()
+        rule.onNodeWithText("タブを戻す").assertIsDisplayed()
+        val historyBefore = runBlocking { app.appStateStore.history.first() }
+        rule.allTagged("ftutter-drawer-swipe")[1].performTouchInput { swipeRight() }
+        rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab3) }
+        rule.allTagged("ftutter-drawer-swipe")[1].performTouchInput { swipeRight() }
+        rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl) }
+        rule.onNodeWithText("残り2件").assertIsDisplayed()
+        rule.onNodeWithTag("ftutter-drawer-content").performClick()
+        rule.onNodeWithTag("ftutter-drawer-content-HISTORY").performClick()
+        rule.onNodeWithTag("ftutter-drawer-restore").assertDoesNotExist()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 3 }
+        saveShot("history-without-tab-undo")
+        rule.onNodeWithTag("ftutter-drawer-content").performClick()
+        rule.onNodeWithTag("ftutter-drawer-content-TABS").performClick()
+        rule.onNodeWithTag("ftutter-drawer-restore").performClick()
+        rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab3) && preference("compat.ftutter.opening") == fakeTab3 }
+        assertEquals(fakeTab3, preference("compat.ftutter.opening"))
+        rule.onNodeWithText("残り1件").assertIsDisplayed()
+        rule.onNodeWithTag("ftutter-drawer-restore-notice").assertIsDisplayed()
+        saveShot("tab-undo-one-remaining")
+        rule.onNodeWithTag("ftutter-drawer-content").performClick()
+        rule.onNodeWithTag("ftutter-drawer-content-TABS_BY_ACCESS").performClick()
+        rule.onNodeWithTag("ftutter-drawer-restore").performClick()
+        rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab2, fakeTab3) && preference("compat.ftutter.opening") == fakeTab2 }
+        assertEquals(fakeTab2, preference("compat.ftutter.opening"))
+        rule.onNodeWithTag("ftutter-drawer-restore").assertIsNotEnabled()
+        rule.onNodeWithText("残り0件").assertIsDisplayed()
+        assertEquals(historyBefore, runBlocking { app.appStateStore.history.first() })
     }
 
     @Test fun closeAllKeepsProtectedTabsAndAProtectedTabAsksBeforeClosing() {
@@ -497,6 +631,49 @@ class FtutterModeInstrumentedTest {
         rule.waitForIdle()
         Thread.sleep(1_000)
         assertTrue(tabs().toString(), tutorialUrl in tabs())
+    }
+
+    @Test fun catalogSearchSurvivesOpeningAThreadAndReturning() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-search").performScrollTo().performClick()
+        rule.onNodeWithTag("ftutter-search-input").performTextInput("チュートリアル")
+        waitForTag("ftutter-catalog-item")
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-catalog")
+        rule.onNodeWithTag("ftutter-search-input").assertTextContains("チュートリアル")
+        waitForTag("ftutter-catalog-item")
+        saveShot("feedback1442001717-search-return")
+    }
+
+    @Test fun gestureActionsCanBeRunFromTextMenusWithoutDrawingAGesture() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-catalog-menu-gesture-actions").performClick()
+        rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-15"))
+        rule.onNodeWithTag("ftutter-gesture-action-15").performClick()
+        waitForTag("ftutter-search-input")
+        rule.onNodeWithTag("ftutter-search-close").performClick()
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        assertEquals(androidx.compose.ui.semantics.Role.Button,
+            rule.onNodeWithTag("ftutter-thread-tool-edit").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Role])
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-gesture-actions").performClick()
+        rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-14"))
+        rule.onNodeWithTag("ftutter-gesture-action-14").performClick()
+        waitForTag("ftutter-post-dialog")
+        saveShot("feedback-gesture-menu-opens-reply")
+    }
+
+    @Test fun theThreadMenuHasATextEntryToWriteAReply() {
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-reply").performScrollTo().performClick()
+        waitForTag("ftutter-post-dialog")
+        rule.onNodeWithTag("ftutter-post-send").assertIsEnabled()
+        saveShot("feedback1442001717-reply-text-entry")
     }
 
     @Test fun aQuoteReplyKeepsItsDraftAndSendingOnTheTutorialBoardClearsIt() {
@@ -988,7 +1165,10 @@ class FtutterModeInstrumentedTest {
 
     @Test fun aHistoryRowLongPressOffersTheThumbMenuWhoseDeleteAsksAndAlsoClosesTheTab() {
         seedHistory(tutorialUrl, fakeTab2, fakeTab3)
-        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2) }
+        runBlocking {
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", fakeTab2)
+            app.compatibilityStore.savePreference("compat.ftutter.ext.historyTools", "false")
+        }
         openTutorialCatalog()
         openDrawerOnHistory(3)
         // 拡張がOFFなら、選択のボタンは出ない。
@@ -1029,7 +1209,7 @@ class FtutterModeInstrumentedTest {
     }
 
     @Test fun theHistoryToolsExtraDeletesTheChosenRowsAndAllButProtectedOnes() {
-        enableExtensions("historyTools")
+        assertEquals(null, preference("compat.ftutter.ext.historyTools"))
         seedHistory(tutorialUrl, fakeTab2, fakeTab3, fakeTab4)
         runBlocking {
             app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(tutorialUrl, fakeTab2).joinToString("\n"))
@@ -1156,7 +1336,7 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-two-pane")
         rule.allTagged("ftutter-catalog-item")[0].performClick()
         waitForTag("ftutter-post")
-        rule.onNodeWithTag("ftutter-catalog-tool-search").performClick()
+        rule.onNodeWithTag("ftutter-catalog-tool-search").performScrollTo().performClick()
         waitForTag("ftutter-search-input")
         // 以前は後から置いたスレッド側の戻るが先に受け、二画面ごと板一覧へ抜けた。
         androidx.test.espresso.Espresso.pressBack()

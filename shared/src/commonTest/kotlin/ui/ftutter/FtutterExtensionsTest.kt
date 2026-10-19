@@ -18,11 +18,11 @@ class FtutterExtensionsTest {
     )
 
     @Test
-    fun everyExtensionIsOffByDefault() {
-        assertTrue(parseFtutterExtensions(emptyMap()).enabled.isEmpty())
-        // 読めない値・"false" もOFF。
-        val p = FtutterExtension.entries.associate { it.key to "x" } + (FtutterExtension.MHT.key to "false")
-        assertTrue(parseFtutterExtensions(p).enabled.isEmpty())
+    fun historyToolsAreOnByDefaultAndExplicitOffIsRespected() {
+        assertEquals(setOf(FtutterExtension.HISTORY_TOOLS), parseFtutterExtensions(emptyMap()).enabled)
+        assertEquals(setOf(FtutterExtension.HISTORY_TOOLS), parseFtutterExtensions(FtutterExtension.entries.associate { it.key to "x" }).enabled)
+        assertTrue(parseFtutterExtensions(mapOf(FtutterExtension.HISTORY_TOOLS.key to "false")).enabled.isEmpty())
+        assertTrue(parseFtutterExtensions(FtutterExtension.entries.associate { it.key to "false" }).enabled.isEmpty())
     }
 
     @Test
@@ -33,6 +33,13 @@ class FtutterExtensionsTest {
         assertTrue(FtutterExtension.READ_ALOUD in on)
         assertTrue(FtutterExtension.AI in on)
         assertFalse(FtutterExtension.MHT in on)
+    }
+
+    @Test
+    fun handwritingMustBeExplicitlyEnabled() {
+        assertFalse(FtutterExtension.HANDWRITING in parseFtutterExtensions(emptyMap()))
+        assertTrue(FtutterExtension.HANDWRITING in parseFtutterExtensions(mapOf("compat.ftutter.ext.handwriting" to "true")))
+        assertFalse(FtutterExtension.HANDWRITING in parseFtutterExtensions(mapOf("compat.ftutter.ext.handwriting" to "false")))
     }
 
     @Test

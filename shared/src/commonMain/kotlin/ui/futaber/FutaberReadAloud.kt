@@ -33,7 +33,7 @@ internal interface FutaberSpeechEngine {
 }
 
 internal fun TextSpeaker.asFutaberEngine(settings: () -> com.valoser.futacha.shared.audio.SpeechSettings = { com.valoser.futacha.shared.audio.SpeechSettings() }): FutaberSpeechEngine = object : FutaberSpeechEngine {
-    override suspend fun prepare() = this@asFutaberEngine.prepare()
+    override suspend fun prepare() { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.prepare() }
     override suspend fun speak(text: String) { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.speak(text) }
     override fun stop() = this@asFutaberEngine.stop()
     override fun close() = this@asFutaberEngine.close()

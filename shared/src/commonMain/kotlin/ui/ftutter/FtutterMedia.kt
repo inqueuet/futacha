@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayCircleOutline
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Tab
@@ -78,7 +79,6 @@ import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveLocation
-import com.valoser.futacha.shared.ui.board.CatalogPreviewImage
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
 import com.valoser.futacha.shared.ui.compat.CompatViewerImagePage
@@ -115,13 +115,14 @@ private fun FtutterIndexCard(position: Int, modifier: Modifier = Modifier, onTap
 
 /** 一覧・帯の1枚。動画には再生の印を重ねる。 */
 @Composable
-private fun FtutterMediaCell(post: CompatPostSnapshot, privacyAlpha: Float, modifier: Modifier = Modifier) {
+private fun FtutterMediaCell(post: CompatPostSnapshot, privacyAlpha: Float, modifier: Modifier = Modifier, thumbnailPixels: Int = 250, useOriginal: Boolean = false) {
     val url = resolveCompatViewerMediaUrl(post)
     Box(modifier) {
-        CatalogPreviewImage(
+        FtutterThumbnail(
             thumbnailUrl = post.thumbnailUrl ?: url.orEmpty(),
-            fullImageUrl = null,
-            targetSizePx = 250,
+            fullImageUrl = url?.takeUnless(::isCompatVideoMediaUrl),
+            quality = if (useOriginal) 2 else 0,
+            targetSizePx = thumbnailPixels,
             contentDescription = "No.${post.postNo}",
             modifier = Modifier.fillMaxSize().alpha(privacyAlpha)
         )
@@ -156,6 +157,7 @@ internal fun FtutterGalleryScreen(
     onRefresh: () -> Unit = {},
     media: List<CompatPostSnapshot>,
     columns: Int,
+    settings: FtutterMediaSettings = FtutterMediaSettings(),
     privacyAlpha: Float,
     tools: FtutterMediaSaveTools,
     onColumns: (Int) -> Unit,
@@ -220,7 +222,7 @@ internal fun FtutterGalleryScreen(
                             )
                             .testTag("ftutter-gallery-cell")
                     ) {
-                        FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize())
+                        FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = if (settings.reduceThumbnail) settings.thumbnailPixels else 4096, useOriginal = !settings.reduceThumbnail)
                         if (selecting) {
                             Checkbox(checked = selected[keyOf(post)] == true, onCheckedChange = { selected[keyOf(post)] = it }, modifier = Modifier.align(Alignment.TopEnd))
                         } else {
@@ -322,6 +324,8 @@ internal fun FtutterViewerScreen(
     }
     val current = media.getOrNull(pager.currentPage)
     val currentUrl = current?.let(::resolveCompatViewerMediaUrl)
+    var loop by remember(currentUrl) { mutableStateOf(settings.videoLoop) }
+    val isVideo = currentUrl?.let(::isCompatVideoMediaUrl) == true
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).testTag("ftutter-viewer")) {
         val heightPx = constraints.maxHeight.toFloat()
         Column(Modifier.fillMaxSize()) {
@@ -352,8 +356,13 @@ internal fun FtutterViewerScreen(
                     val url = post?.let(::resolveCompatViewerMediaUrl)
                     Box(Modifier.fillMaxSize().alpha(privacyAlpha)) {
                         if (url != null && isCompatVideoMediaUrl(url)) {
-                            // 動画は共有の再生部品（開いた時は止まっている＝原作の「自動再生」既定OFFと同じ）。
-                            PlatformVideoPlayer(videoUrl = url, isActive = page == pager.currentPage, modifier = Modifier.fillMaxSize().testTag("ftutter-viewer-video"))
+                            // 自動再生・ループは原作の設定から端末の再生部品へ渡す。
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
+                                    com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(settings.videoAutoPlay, loop)
+                            ) {
+                                PlatformVideoPlayer(videoUrl = url, isActive = page == pager.currentPage, modifier = Modifier.fillMaxSize().testTag("ftutter-viewer-video"))
+                            }
                         } else {
                             CompatViewerImagePage(
                                 post = post,
@@ -393,13 +402,13 @@ internal fun FtutterViewerScreen(
                                     .then(if (selected) Modifier.border(1.5.dp, colors.highlight).background(colors.highlight.copy(alpha = 0.3f)) else Modifier)
                                     .clickable { scope.launch { pager.scrollToPage(index) } }
                             ) {
-                                FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize())
+                                FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = if (settings.reduceThumbnail) settings.thumbnailPixels else 4096, useOriginal = !settings.reduceThumbnail)
                                 FtutterIndexCard(post.position, Modifier.align(Alignment.TopStart)) { onBackToPost(post.position) }
                             }
                         }
                     }
                 }
-                ScrollableToolbarRow(itemCount = 6, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                ScrollableToolbarRow(itemCount = if (isVideo) 7 else 6, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     FtutterDestinationButton(tools, Modifier.weight(1f))
                     IconButton(onClick = { currentUrl?.let(tools.saveOne) }, enabled = !tools.isSaving, modifier = Modifier.testTag("ftutter-viewer-save")) {
                         Icon(Icons.Rounded.Download, contentDescription = "保存", tint = colors.onToolBar)
@@ -414,6 +423,9 @@ internal fun FtutterViewerScreen(
                     }
                     IconButton(onClick = { currentUrl?.let(onSearch) }, modifier = Modifier.testTag("ftutter-viewer-search")) {
                         Icon(Icons.Rounded.Search, contentDescription = "画像検索", tint = colors.onToolBar)
+                    }
+                    if (isVideo) IconButton(onClick = { loop = !loop }, modifier = Modifier.testTag("ftutter-viewer-loop")) {
+                        FtutterToggleIcon(Icons.Rounded.Repeat, contentDescription = "ループ再生", active = loop)
                     }
                     var menu by remember { mutableStateOf(false) }
                     Box {

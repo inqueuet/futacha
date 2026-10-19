@@ -44,6 +44,28 @@ class FtutterTabsSupportTest {
     }
 
     @Test
+    fun tabUndoConsumesOneClosureSelectsItAndDoesNotPersistTheUndoQueue() {
+        val saved = mutableMapOf<String, String>()
+        val tabs = listOf(url(1), url(2), url(3))
+        val state = FtutterTabState(FtutterTabs(tabs, url(1)), setOf(url(2))) { key, value -> saved[key] = value }
+        state.close(listOf(url(2), url(3)))
+        assertEquals(listOf(url(1)), state.urls)
+        assertEquals(emptySet(), state.protected)
+        assertEquals(url(3), state.restore())
+        assertEquals(listOf(url(1), url(3)), state.urls)
+        assertEquals(url(3), saved[FtutterKeys.OPENING])
+        assertEquals(1, state.closed.size)
+        val restarted = FtutterTabState(parseFtutterTabs(saved), parseFtutterProtected(saved)) { _, _ -> }
+        assertNull(restarted.restore())
+        assertEquals(state.urls, restarted.urls)
+        assertEquals(url(2), state.restore())
+        assertEquals(tabs, state.urls)
+        assertEquals(emptySet(), state.protected)
+        assertNull(state.restore())
+        assertEquals(setOf(FtutterKeys.TABS, FtutterKeys.OPENING, FtutterKeys.PROTECTED), saved.keys)
+    }
+
+    @Test
     fun theTabsAfterOneFollowTheOrderShown() {
         assertEquals(listOf(url(3), url(4)), ftutterTabsAfter(listOf(url(1), url(2), url(3), url(4)), url(2)))
         assertEquals(emptyList(), ftutterTabsAfter(listOf(url(1)), url(5)))

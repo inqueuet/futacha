@@ -7,8 +7,28 @@ import coil3.toUri
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
+import kotlin.test.assertEquals
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import coil3.decode.DataSource
+import platform.Foundation.NSURL
+import com.valoser.futacha.shared.util.IOS_WEBM_PREVIEW_UNAVAILABLE
 
 class IosVideoFrameFetcherFactoryTest {
+    @Test
+    fun unsupportedWebmFailsBeforeStartingTheTenSecondWebKitAttempt(): Unit = runBlocking {
+        withTimeout(5_000) {
+            val fetcher = IosVideoFrameFetcher(
+                NSURL.fileURLWithPath("/nonexistent/ios15-unsupported-webm.webm"),
+                Options(context = PlatformContext.INSTANCE), DataSource.DISK,
+                webmPlaybackAvailable = { false }
+            )
+            val error = assertFailsWith<IllegalStateException> { fetcher.fetch() }
+            assertEquals(IOS_WEBM_PREVIEW_UNAVAILABLE, error.message)
+        }
+    }
+
     @Test
     fun coilUriMappingStillRoutesSupportedVideosToTheThumbnailFetcher() {
         val imageLoader = ImageLoader.Builder(PlatformContext.INSTANCE).build()

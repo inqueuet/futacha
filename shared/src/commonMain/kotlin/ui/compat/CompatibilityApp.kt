@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.toThreadPage
+
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
 import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
@@ -2455,6 +2457,7 @@ private fun CompatibilityAppContent(
         ) {
         when (val host = state.host) {
             CompatHost.Main -> CompatMainScreen(
+                boardsFromBottom = com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences),
                 pinnedBoardKeys = boardPins?.pinnedKeys.orEmpty(),
                 onBoardPinToggle = boardPins?.toggle,
                 boards = boards,
@@ -3234,6 +3237,8 @@ private fun CompatibilityAppContent(
                         httpClient = httpClient,
                         fileSystem = fileSystem,
                         cookieRepository = cookieRepository,
+                        saveCoroutineScope = scope,
+                        onSaveNotice = { boardUpdateNotice = it },
                         onToolbarEdit = {
                             dispatch(
                                 CompatibilityEvent.OpenHost(
@@ -3357,6 +3362,7 @@ private fun CompatibilityAppContent(
                 }
             )
             is CompatHost.Help -> CompatHelpScreen(
+                appVersion = appVersion,
                 onOpenChangeLog = {
                     dispatch(CompatibilityEvent.OpenHost(CompatHost.ChangeLog(host)))
                 },
@@ -3832,6 +3838,11 @@ private fun CompatCatalogScreen(
     val effectiveRepository = remember(board.key, repository) {
         if (isCompatFixtureBoard(board)) FakeBoardRepository() else repository
     }
+    val viewedFirstKey = com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.originalUrl)
+    val viewedFirstEnabled = preferences[viewedFirstKey] == "ON"
+    var viewedFirstId by rememberSaveable(board.key) { mutableStateOf<String?>(null) }
+    LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) viewedFirstId = null }
+    val latestViewedHistory by rememberUpdatedState(localHistory)
     var items by remember(board.key) { mutableStateOf<List<CatalogItem>>(emptyList()) }
     var catalogReplyDeltas by remember(board.key) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     // The extra order ("そ順"/"監視") the shown list was fetched in; null for the board's own order (a snapshot).
@@ -3855,8 +3866,8 @@ private fun CompatCatalogScreen(
     var catalogHistoryGeneration by remember(board.key) { mutableIntStateOf(0) }
     var catalogRefreshGeneration by remember(board.key) { mutableIntStateOf(0) }
     var error by remember(board.key) { mutableStateOf<String?>(null) }
-    var searchActive by remember(board.key) { mutableStateOf(false) }
-    var searchQuery by remember(board.key) { mutableStateOf("") }
+    var searchActive by rememberSaveable(board.key) { mutableStateOf(false) }
+    var searchQuery by rememberSaveable(board.key) { mutableStateOf("") }
     var sortDialogOpen by remember { mutableStateOf(false) }
     // State, so a refresh started right after the choice reads it before the stored value comes back.
     var catalogExtraMode by remember(board.key, catalogExtraModesEnabled, preferences[compatCatalogExtraModeKey(board.key)]) {
@@ -4032,7 +4043,7 @@ private fun CompatCatalogScreen(
             catalogSourceTitleLength = catalogSourceTitleLength
         )
     }
-    val visibleItems by key(board.key) {
+    val projectedVisibleItems by key(board.key) {
         produceState(
             initialValue = emptyList<CatalogItem>(),
             key1 = catalogProjectionRequest
@@ -4040,6 +4051,9 @@ private fun CompatCatalogScreen(
             value = calculateCompatCatalogProjection(catalogProjectionRequest)
         }
     }
+    val visibleItems = com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(
+        projectedVisibleItems, viewedFirstId.takeIf { viewedFirstEnabled })
+
 
     // Some boards (notably img.2chan.net) expose only the reply-count badge
     // in the catalog cell. Resolve the subject from the thread head for the
@@ -4326,7 +4340,7 @@ private fun CompatCatalogScreen(
             else -> contextItem = item
         }
     }
-    suspend fun refresh(sort: CompatCatalogSort = preference.sort) {
+    suspend fun refresh(sort: CompatCatalogSort = preference.sort, manual: Boolean = false) {
         if (!refreshMutex.tryLock()) {
             if (runningRefresh[0] != (sort to catalogExtraMode)) {
                 // Another order: fetched as soon as the running load ends.
@@ -4402,6 +4416,8 @@ private fun CompatCatalogScreen(
                 if (shownNow()) {
                     catalogReplyDeltas = nextReplyDeltas
                     items = loadedItems
+                    if (manual && viewedFirstEnabled) viewedFirstId = latestViewedHistory.filter { it.boardKey == board.key }
+                        .maxByOrNull { it.lastVisitedEpochMillis }?.threadNo
                     itemsExtraMode = fetchedExtraMode
                     catalogHistoryGeneration = 0
                     // The timestamp in the legacy toolbar describes the cached
@@ -4685,7 +4701,7 @@ private fun CompatCatalogScreen(
     }
     val catalogCommands = listOf(
         CompatToolbarCommand("post", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "post"), "スレ立て", onClick = onOpenBuild),
-        CompatToolbarCommand("reload", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "reload"), "リロード") { if (!loading) scope.launch { refresh() } },
+        CompatToolbarCommand("reload", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "reload"), "リロード") { if (!loading) scope.launch { refresh(manual = true) } },
         CompatToolbarCommand("search", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "search"), "スレッド検索") { searchActive = true },
         CompatToolbarCommand("sort", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "sort"), "表示順") { sortDialogOpen = true },
         CompatToolbarCommand("board", compatToolbarArtwork(CompatToolbarSurface.CATALOG, "board"), "板一覧", onClick = { boardSelectorOpen = true }),
@@ -4810,7 +4826,7 @@ private fun CompatCatalogScreen(
                     onSelect = onSelectTab,
                     onClose = onCloseTab,
                     onCheckUpdates = onCheckUpdates,
-                    onReload = { scope.launch { refresh() } },
+                    onReload = { scope.launch { refresh(manual = true) } },
                     longTapAction = selectorLongTapAction
                 )
                 CompatToolbar(
@@ -4897,7 +4913,7 @@ private fun CompatCatalogScreen(
                     if (catalogLayout == CompatCatalogLayout.GRID) catalogGridState.canScrollForward
                     else catalogListState.canScrollForward
                 },
-                onRefresh = { refresh() },
+                onRefresh = { refresh(manual = true) },
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (catalogLayout == CompatCatalogLayout.GRID) {
@@ -4984,7 +5000,7 @@ private fun CompatCatalogScreen(
                     onSelect = onSelectTab,
                     onClose = onCloseTab,
                     onCheckUpdates = onCheckUpdates,
-                    onReload = { scope.launch { refresh() } },
+                    onReload = { scope.launch { refresh(manual = true) } },
                     longTapAction = selectorLongTapAction,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
@@ -5029,6 +5045,12 @@ private fun CompatCatalogScreen(
     if (sortDialogOpen) {
         CompatCatalogSortDialog(
             selected = preference.sort,
+            viewedFirstEnabled = viewedFirstEnabled,
+            onToggleViewedFirst = {
+                launchCatalogStoreSafely("viewed thread order persistence") {
+                    store.savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON")
+                }
+            },
             onDismiss = { sortDialogOpen = false },
             onSelected = { selected ->
                 sortDialogOpen = false
@@ -5754,6 +5776,13 @@ private fun CompatThreadScreen(
     }
     val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var snapshot by snapshotState
+    val openingTracker = remember(tab.key) { com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryTracker(
+        tab.checkedReplyCount.takeIf { it > 0 || tab.snapshotRevision > 0 }?.plus(1)) }
+    var openingLiveSnapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    var openingNotice by remember(tab.key) { mutableStateOf<String?>(null) }
+    LaunchedEffect(openingNotice) {
+        if (openingNotice != null) { delay(5000); openingNotice = null }
+    }
     var aiRetry by remember(tab.key) { mutableStateOf(0) }
     var visiblePosts by remember(tab.key) {
         mutableStateOf<List<CompatPostSnapshot>>(emptyList())
@@ -6083,11 +6112,12 @@ private fun CompatThreadScreen(
         }
     }
     CompatTextSpeakerDisposal(textSpeaker)
+    val speechRuntime = com.valoser.futacha.shared.audio.LocalSpeechRuntime.current
     val speechSettings = com.valoser.futacha.shared.audio.speechSettingsFromPreferences(preferences)
     SideEffect { textSpeaker?.configure(speechSettings) }
     DisposableEffect(tab.key) { onDispose { readAloudJob?.cancel() } }
 
-    fun ensureTextSpeaker(): TextSpeaker = textSpeaker ?: createTextSpeaker(platformContext).also {
+    fun ensureTextSpeaker(): TextSpeaker = textSpeaker ?: createTextSpeaker(platformContext, speechRuntime).also {
         it.configure(speechSettings)
         textSpeaker = it
     }
@@ -6491,6 +6521,7 @@ private fun CompatThreadScreen(
                         manualRefreshNotice = notices.manualRefresh
                     }
                     if (committed) {
+                        openingLiveSnapshot = if (!loadedFromArchive && !archiveSupplemented && !primaryThreadGone && !page.isTruncated) newSnapshot else null
                         val replyCount = page.compatReplyCount()
                         val statusFlags = parseCompatThreadStatusFlags(page.deletedNotice)
                         val thumbnailUrl = com.valoser.futacha.shared.ui.image.updatedHistoryThumbnailUrl(
@@ -6913,6 +6944,14 @@ private fun CompatThreadScreen(
         }
         treeDepthByPostNo = display.depthByPostNo
         visiblePosts = nextVisiblePosts
+        val openingPage = snapshot?.takeIf { it === openingLiveSnapshot }
+        if (openingPage != null && preferences[com.valoser.futacha.shared.ui.board.THREAD_OPEN_SUMMARY_KEY] != "OFF") {
+            val shownIds = nextVisiblePosts.mapTo(HashSet()) { it.postNo }
+            val openingHiddenIds = openingPage.posts.filter { it.postNo !in shownIds }.mapTo(HashSet()) { it.postNo }
+            openingTracker.accept(openingPage.toThreadPage(tab.threadNo).posts, ownPostNos, openingHiddenIds)?.let {
+                openingNotice = it.text
+            }
+        }
         if (replacementAnchor != null && nextVisiblePosts.isNotEmpty()) {
             yield()
             resolveCompatThreadListTarget(
@@ -7671,7 +7710,9 @@ private fun CompatThreadScreen(
                             onToolbarEdit = onToolbarEdit,
                             onDisplayOptions = onOpenDisplayOptions,
                             onSettings = onOpenSettings,
-                            onOpenHelp = onOpenHelp
+                            onOpenHelp = onOpenHelp,
+                            titleAppearance = com.valoser.futacha.shared.ui.privacy.LocalPrivacyMode.current?.options?.compatTitle
+                                ?: com.valoser.futacha.shared.ui.privacy.PrivateTitle.NORMAL
                         )
                     }
                     if (readingAloud && !readAloudDialogOpen) Row {
@@ -8016,6 +8057,8 @@ private fun CompatThreadScreen(
                         .testTag("compat-thread-initial-loading"),
                     size = 50.dp
                 )
+                openingNotice?.let { Text(it, Modifier.align(Alignment.BottomCenter).background(Color(0xFF343434))
+                    .padding(12.dp).testTag("compat-thread-opening-summary"), color = Color.White) }
                 error?.let { Text(it, modifier = Modifier.align(Alignment.Center).background(Color(0xFF646464), RoundedCornerShape(22.dp)).padding(12.dp), color = Color.White) }
             }
             // The OVER selector is owned by the Activity-level workspace in
@@ -9808,13 +9851,19 @@ private fun CompatCatalogSortDialog(
     onSelected: (CompatCatalogSort) -> Unit,
     /** Rows after the six orders (そ順・監視); none by default. */
     extraModes: List<CompatCatalogExtraMode> = emptyList(),
-    onExtraSelected: (CompatCatalogExtraMode) -> Unit = {}
+    onExtraSelected: (CompatCatalogExtraMode) -> Unit = {},
+    viewedFirstEnabled: Boolean = false,
+    onToggleViewedFirst: (() -> Unit)? = null
 ) {
     val palette = LocalCompatibilityPalette.current
     CompatBottomPopup(
         alignment = Alignment.BottomCenter,
         onDismiss = onDismiss
     ) {
+        if (onToggleViewedFirst != null) TextButton(onClick = onToggleViewedFirst,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("compat-catalog-viewed-first")) {
+            Text("更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF", color = compatibilityPopupContent(palette))
+        }
         CompatCatalogSort.entries.forEach { sort ->
             TextButton(
                 onClick = { onSelected(sort) },

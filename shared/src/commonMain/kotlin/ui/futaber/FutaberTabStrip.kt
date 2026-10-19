@@ -64,7 +64,8 @@ internal fun FutaberTabStrip(
                             )
                             .semantics {
                                 this.selected = selected
-                                contentDescription = "${tab.title}、${tab.replyCount}レス"
+                                contentDescription = "${tab.title}、${tab.replyCount}レス" +
+                                    com.valoser.futacha.shared.ui.board.threadStatusText(tab.status).takeIf { it.isNotEmpty() }?.let { "、$it" }.orEmpty()
                             }
                             .padding(horizontal = 6.dp)
                             .testTag("futaber-tab"),
@@ -87,7 +88,8 @@ internal fun FutaberTabStrip(
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                             Text(
-                                "${tab.replyCount} レス", color = colors.meta, fontSize = 10.sp,
+                                listOf(com.valoser.futacha.shared.ui.board.threadStatusText(tab.status), "${tab.replyCount} レス")
+                                    .filter { it.isNotEmpty() }.joinToString("・"), color = colors.meta, fontSize = 10.sp,
                                 modifier = Modifier.align(Alignment.End).padding(bottom = 3.dp)
                             )
                         }

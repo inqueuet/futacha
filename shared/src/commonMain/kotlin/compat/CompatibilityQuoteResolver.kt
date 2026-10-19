@@ -60,6 +60,15 @@ fun String.normalizeCompatQuoteText(): String = trim().replace(compatQuoteWhites
 /** 1.apk intentionally does nothing when a tapped quote has no source post. */
 fun compatMissingQuoteNotice(): String? = null
 
+/** Prefer the parser's block/depth-aware mapping over an independent text search. */
+fun compatQuoteQueryForPostLine(post: CompatPostSnapshot, line: String): String? {
+    val wanted = line.trim()
+    val targets = post.quoteReferences.asSequence()
+        .filter { ref -> ref.text.lineSequence().any { it.trim() == wanted } }
+        .flatMap { it.targetPostIds.asSequence() }.distinct().toList()
+    return targets.singleOrNull()?.let { "no:$it" } ?: compatQuoteQueryForLine(line)
+}
+
 /** Encodes a displayed quote line into the resolver query used by recursive quote popups. */
 fun compatQuoteQueryForLine(line: String): String? {
     val trimmed = line.trimStart()

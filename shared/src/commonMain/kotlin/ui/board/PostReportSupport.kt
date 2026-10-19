@@ -12,9 +12,24 @@ internal val LocalDelPostAndNg = compositionLocalOf<((Post) -> Unit)?> { null }
 
 /** A local post-only rule never hides every post by the same person. */
 internal suspend fun registerReportedPostNg(store: CompatibilityStore, tabKey: String, postNo: String) {
+    require(tabKey.isNotBlank() && tabKey != "*") { "対象のスレッドを確認できませんでした" }
     val kind = CompatNgKind.THREAD_POST_NO
-    store.upsertNgRule(CompatNgRule(id = compatNgRuleId(kind, tabKey, postNo), kind = kind,
-        scopeKey = tabKey, normalizedValue = postNo, createdAtEpochMillis = Clock.System.now().toEpochMilliseconds()))
+    check(store.upsertNgRule(CompatNgRule(id = compatNgRuleId(kind, tabKey, postNo), kind = kind,
+        scopeKey = tabKey, normalizedValue = postNo, createdAtEpochMillis = Clock.System.now().toEpochMilliseconds()))) {
+        "このレスのNGを保存できませんでした"
+    }
+}
+
+/** No wildcard and no implicit tab creation: the canonical thread URL is an independently validated post-only scope. */
+internal suspend fun registerReportedThreadPostNg(
+    store: CompatibilityStore, board: com.valoser.futacha.shared.model.BoardSummary, threadId: String, postNo: String
+) {
+    val boardUrl = canonicalizeBoardUrl(board.url) ?: error("対象の板を確認できませんでした")
+    val url = canonicalizeThreadUrl("${boardUrl}res/$threadId.htm")?.canonicalUrl
+        ?: error("対象のスレッドを確認できませんでした")
+    require(postNo.isNotBlank() && postNo.all(Char::isDigit)) { "対象のレスを確認できませんでした" }
+    store.importModernBoards(listOf(board))
+    registerReportedPostNg(store, url, postNo)
 }
 
 internal suspend fun sendReportAndOptionalNg(

@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.padding
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -60,7 +63,8 @@ internal fun FtutterSettingsHost(
     onBack: () -> Unit,
     /** 拡張機能の巡回の結果から開く（設定を閉じてスレッドへ）。 */
     repository: com.valoser.futacha.shared.repo.BoardRepository? = null,
-    onOpenThread: (BoardSummary, threadId: String, title: String) -> Unit = { _, _, _ -> }
+    onOpenThread: (BoardSummary, threadId: String, title: String) -> Unit = { _, _, _ -> },
+    ngReasons: Map<String, String> = emptyMap()
 ) {
     var stack by remember { mutableStateOf(listOf<FtutterSettingsRoute>(FtutterSettingsRoute.Root)) }
     var sharedPath by remember { mutableStateOf<String?>(null) }
@@ -82,6 +86,15 @@ internal fun FtutterSettingsHost(
             if (services != null) {
                 ftutterSection("他のモードと共有の設定")
                 item { FtutterNavRow("保存先・キャッシュ", "ftutter-shared-storage") { sharedPath = "storage" } }
+                preferences[FtutterKeys.PREFIX + "import.savePath"]?.takeIf { it.isNotBlank() }?.let { original ->
+                    item { androidx.compose.material3.Text("取り込み元の保存先: $original\n使用するフォルダを「保存先・キャッシュ」で選択してください。", color = LocalFtutterColors.current.text,
+                        modifier = androidx.compose.ui.Modifier.padding(16.dp)) }
+                }
+                preferences[FtutterKeys.PREFIX + "import.savePathList"]?.let { paths ->
+                    decodeFtutterList(paths).orEmpty().forEachIndexed { index, original ->
+                        item { FtutterNavRow("取り込み元の保存先 ${index + 1}", "ftutter-import-location-$index", detail = original) { sharedPath = "storage" } }
+                    }
+                }
                 item { FtutterNavRow("ネットワーク", "ftutter-shared-network") { sharedPath = "network" } }
                 item { FtutterNavRow("画像検索", "ftutter-shared-image-search") { sharedPath = "image_search" } }
                 item { FtutterNavRow("プライバシー表示", "ftutter-shared-privacy") { sharedPath = "privacy" } }
@@ -94,7 +107,7 @@ internal fun FtutterSettingsHost(
             item { GlobalSettingsModeSection() }
         }
         is FtutterSettingsRoute.Page -> when (route.page) {
-            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back)
+            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back, onChooseFont = { sharedPath = "design" })
             FtutterSettingsPage.CATALOG -> FtutterCatalogSettingsPage(preferences, save, { onEditToolbar(FtutterOrderEditorKind.CATALOG) }, back)
             FtutterSettingsPage.THREAD -> FtutterThreadSettingsPage(
                 preferences, save, { onEditToolbar(FtutterOrderEditorKind.THREAD) }, { onEditToolbar(FtutterOrderEditorKind.POST_MENU) }, back
@@ -122,7 +135,7 @@ internal fun FtutterSettingsHost(
             FtutterSettingsPage.STATS -> FtutterStatsPage(preferences, appVersion, back)
         }
         FtutterSettingsRoute.NgList -> FtutterNgListScreen(ngRules, boards, onEdit = { onSaveNgRules(it, null) }, onBack = back)
-        FtutterSettingsRoute.Hidden -> FtutterHiddenAndNgScreen(preferences, edit, onBack = back, ngRemoved = ngRemoved)
+        FtutterSettingsRoute.Hidden -> FtutterHiddenAndNgScreen(preferences, edit, onBack = back, ngRemoved = ngRemoved, ngReasons = ngReasons)
         FtutterSettingsRoute.Gesture -> FtutterGestureSettingsScreen(preferences, save, onBack = back)
         FtutterSettingsRoute.Tablet -> FtutterTabletSettingsScreen(preferences, save, onBack = back)
         FtutterSettingsRoute.Extras -> FtutterExtrasSettingsPage(
@@ -131,7 +144,8 @@ internal fun FtutterSettingsHost(
             onOpenWatcher = { push(FtutterSettingsRoute.Watcher) },
             onOpenSharedAi = { sharedPath = "ai" },
             onBack = back,
-            onOpenSharedSpeech = { sharedPath = "speech" }
+            onOpenSharedSpeech = { sharedPath = "speech" },
+            compatStore = services?.store
         )
         FtutterSettingsRoute.Watcher -> {
             val store = services?.store
@@ -172,14 +186,14 @@ private fun FtutterSharedSettingsHost(
             Surface(Modifier.fillMaxSize().testTag("ftutter-shared-settings"), color = colors.background) {
                 PlatformBackHandler(onBack = back)
                 when (val path = paths.last()) {
-                    "help" -> CompatHelpScreen(onBack = back, onOpenChangeLog = { paths = paths + "changelog" })
+                    "help" -> CompatHelpScreen(appVersion = appVersion, onBack = back, onOpenChangeLog = { paths = paths + "changelog" })
                     "changelog" -> CompatChangeLogScreen(
                         appVersion = appVersion, store = services.store,
                         onOpenHelp = { paths = paths + "help" }, onBack = back
                     )
                     "license" -> CompatLicenseScreen(onBack = back)
                     "cookies" -> services.cookieRepository?.let { CookieManagementScreen(onBack = back, repository = it) }
-                        ?: CompatHelpScreen(onBack = back)
+                        ?: CompatHelpScreen(appVersion = appVersion, onBack = back)
                     else -> CompatSettingsScreen(
                         path = path,
                         store = services.store,

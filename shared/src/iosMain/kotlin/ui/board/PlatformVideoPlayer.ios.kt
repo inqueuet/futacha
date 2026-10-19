@@ -191,6 +191,7 @@ private fun NativeAvVideoPlayer(
     isMuted: Boolean,
     editing: VideoEditPlayback?
 ) {
+    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions()
     val url = remember(videoUrl) { NSURL.URLWithString(videoUrl) }
     if (url == null) {
         LaunchedEffect(videoUrl) {
@@ -270,6 +271,20 @@ private fun NativeAvVideoPlayer(
             player.pause()
             if (controller.player === player) controller.player = null
         }
+    }
+    LaunchedEffect(player, options.autoPlay) {
+        if (options.autoPlay && editing == null) player.play()
+    }
+    DisposableEffect(player, options.loop, editing) {
+        val center = NSNotificationCenter.defaultCenter
+        var alive = true
+        val observer = if (options.loop && editing == null) center.addObserverForName(
+            name = platform.AVFoundation.AVPlayerItemDidPlayToEndTimeNotification,
+            `object` = player.currentItem, queue = null
+        ) {
+            player.seekToTime(CMTimeMakeWithSeconds(0.0, 600)) { finished -> if (finished && alive) player.play() }
+        } else null
+        onDispose { alive = false; observer?.let(center::removeObserver) }
     }
     LaunchedEffect(player, editing) {
         val preview = editing ?: return@LaunchedEffect
@@ -446,9 +461,7 @@ private fun WebVideoPlayer(
     volume: Float,
     isMuted: Boolean
 ) {
-    val webmAllowed = remember {
-        NSProcessInfo.processInfo.operatingSystemVersion.useContents { supportsIosWebmPath(majorVersion, minorVersion) }
-    }
+    val webmAllowed = remember { com.valoser.futacha.shared.util.iosWebmPlaybackAvailable() }
     if (extractVideoUrlExtension(videoUrl) == "webm" && !webmAllowed) {
         LaunchedEffect(videoUrl) {
             onPlaybackError(VideoPlaybackError("webm_os_version", "WebMの再生にはiOS 17.4以降が必要です"))

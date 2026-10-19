@@ -8,6 +8,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 internal enum class ImageMemoryPressureLevel(val severity: Int) {
@@ -49,6 +51,20 @@ internal enum class ImageRequestWorkload {
     ORIGINAL,
     ANIMATED,
     VIDEO
+}
+
+/** One process-wide instance is shared by the iOS general and catalog loaders on low RAM. */
+internal class LowMemoryImageRequestGate {
+    private val requests = Semaphore(2)
+    private val heavyRequests = Semaphore(1)
+
+    suspend fun <T> withPermit(workload: ImageRequestWorkload, block: suspend () -> T): T =
+        if (workload == ImageRequestWorkload.BOUNDED) {
+            requests.withPermit { block() }
+        } else {
+            // A queued heavy request must not reserve the second slot needed by a thumbnail.
+            heavyRequests.withPermit { requests.withPermit { block() } }
+        }
 }
 
 internal data class ImageMemoryPressurePolicy(

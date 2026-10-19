@@ -299,6 +299,7 @@ internal enum class FtutterDrawerSide(val stored: Int) {
 
 internal data class FtutterTabSettings(
     val showTab: Boolean = false,
+    val privacy: Boolean = false,
     val tabOnTop: Boolean = false,
     val tabHeight: Int = 40,
     val tabWidth: Int = 60,
@@ -312,6 +313,7 @@ internal data class FtutterTabSettings(
 private val TAB_SIZE_RANGE = 10..200
 
 internal fun parseFtutterTabSettings(p: Map<String, String>) = FtutterTabSettings(
+    privacy = p.ftutterBool(FtutterKeys.IS_PRIVACY, false),
     showTab = p.ftutterBool(FtutterKeys.SHOW_TAB, false),
     tabOnTop = p.ftutterBool(FtutterKeys.TAB_ON_TOP, false),
     tabHeight = p.ftutterInt(FtutterKeys.TAB_HEIGHT, 40, TAB_SIZE_RANGE),
@@ -481,4 +483,10 @@ internal fun ftutterTabDragMove(urls: List<String>, url: String, dragOffset: Flo
     if (from < 0 || tabWidthPx <= 0f || kotlin.math.abs(dragOffset) <= tabWidthPx / 3) return null
     val to = (from + kotlin.math.round(dragOffset / tabWidthPx).toInt()).coerceIn(0, urls.lastIndex)
     return if (to == from) null else from to to
+}
+
+/** Limit this mode's visible history without deleting records belonging to the other modes. */
+internal fun ftutterLimitedHistoryUrls(urls: List<String>, protected: Set<String>, limit: Int): List<String> {
+    var ordinary = 0
+    return urls.filter { it in protected || ordinary++ < limit.coerceAtLeast(0) }
 }
