@@ -514,6 +514,14 @@ internal fun String.normalizeCompatNgValue(): String = normalizeCompatSearchText
 internal fun Throwable.toCompatUserMessage(fallback: String): String {
     val raw = message.orEmpty()
     return when {
+        this is com.valoser.futacha.shared.service.MediaSaveDestinationException -> raw
+        // Another save holds the save: nothing was tried, so not "…できませんでした" (L142).
+        this is com.valoser.futacha.shared.service.ThreadSaveAlreadyRunningException -> "別の保存を実行中です"
+        // A deletion, del request or vote whose answer could not be read may have been applied
+        // (L83): not "…できませんでした", and not naming del (shown as 通報 under review mode).
+        this is com.valoser.futacha.shared.network.NetworkException &&
+            raw.contains(com.valoser.futacha.shared.network.HTTP_BOARD_API_ACTION_RESULT_UNCONFIRMED) ->
+            "送信しましたが、結果を確認できませんでした。スレッドを再読み込みして確認してください"
         raw == JAPANESE_TTS_UNAVAILABLE_MESSAGE -> JAPANESE_TTS_UNAVAILABLE_MESSAGE
         raw.contains(compatAppHttp404Regex) -> "ページは見つかりません（404）"
         raw.contains(compatAppHttp410Regex) -> "ページは消えています（410）"

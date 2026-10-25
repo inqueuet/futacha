@@ -33,6 +33,8 @@ class AndroidSpeechPlaybackService : Service() {
     private var focus: AudioFocusRequest? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var pausedForFocusLoss = false
+    /** Paused for this app's own video with sound (L117); resumed when the video stops. */
+    private var pausedForAppVideo = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -80,14 +82,10 @@ class AndroidSpeechPlaybackService : Service() {
                 finishPlayback()
                 return START_NOT_STICKY
             }
-            if (focus == null) {
-                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(speechAudioAttributes())
-                    .setOnAudioFocusChangeListener { change -> onAudioFocusChange(change) }.build()
-                if (getSystemService(AudioManager::class.java).requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                    throw IOException("他の音声を再生中のため読み上げを開始できません")
-                }
-                focus = request
+            // A reading started while this app's video is heard takes the focus as any reading does; the video pauses
+            // for it, and the readings paused for the video resume when it lets go of its hold.
+            if (focus == null && !requestSpeechFocus()) {
+                throw IOException("他の音声を再生中のため読み上げを開始できません")
             }
             if (wakeLock == null) {
                 wakeLock = getSystemService(PowerManager::class.java)
@@ -147,6 +145,48 @@ class AndroidSpeechPlaybackService : Service() {
         }
     }
 
+    private fun requestSpeechFocus(): Boolean {
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(speechAudioAttributes())
+            .setOnAudioFocusChangeListener { change -> onAudioFocusChange(change) }.build()
+        if (getSystemService(AudioManager::class.java).requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            return false
+        }
+        focus = request
+        return true
+    }
+
+    /**
+     * This app's own video is about to be heard (L117): the reading pauses where it is and gives the focus up, so
+     * the video's request does not end it as another player's would. Sessions that cannot pause are left to that
+     * request, as before.
+     */
+    private fun pauseForAppVideo() {
+        val current = sessions.values.toList()
+        if (current.isEmpty() || current.any { it.onFocusPause == null || it.onFocusResume == null }) return
+        mainHandler.removeCallbacks(giveUpAfterFocusLoss)
+        if (!pausedForFocusLoss) current.forEach { it.onFocusPause?.invoke() }
+        pausedForFocusLoss = false
+        pausedForAppVideo = true
+        focus?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
+        focus = null
+    }
+
+    /** The video is no longer heard: the reading takes the focus back and goes on from where it paused. */
+    private fun resumeAfterAppVideo() {
+        if (!pausedForAppVideo) return
+        pausedForAppVideo = false
+        if (sessions.isEmpty()) {
+            finishPlayback()
+        } else if (focus == null && !requestSpeechFocus()) {
+            // Another app holds the focus now (a call): stop, as a reading that could not start does.
+            stopSessions()
+            finishPlayback()
+        } else {
+            sessions.values.toList().forEach { it.onFocusResume?.invoke() }
+        }
+    }
+
     private val giveUpAfterFocusLoss = Runnable {
         clearFocusPause()
         stopSessions()
@@ -178,6 +218,7 @@ class AndroidSpeechPlaybackService : Service() {
 
     private fun releaseResources() {
         clearFocusPause()
+        pausedForAppVideo = false
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         focus?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
@@ -228,6 +269,30 @@ class AndroidSpeechPlaybackService : Service() {
             } catch (failure: Throwable) {
                 release(id)
                 throw failure
+            }
+        }
+
+        /** Main thread only, like the service's own callbacks. */
+        private var appVideoHolds = 0
+
+        /**
+         * Held by this app's video player while it is heard (L117). The reading aloud pauses while any is held and
+         * resumes when the last is closed. Call on the main thread, before the video requests the audio focus.
+         */
+        internal fun holdForAppVideo(): AutoCloseable {
+            check(Looper.myLooper() == Looper.getMainLooper()) { "holdForAppVideo must be called on the main thread" }
+            appVideoHolds += 1
+            if (appVideoHolds == 1) instance?.pauseForAppVideo()
+            var closed = false
+            return AutoCloseable {
+                val close = Runnable {
+                    if (!closed) {
+                        closed = true
+                        appVideoHolds -= 1
+                        if (appVideoHolds == 0) instance?.resumeAfterAppVideo()
+                    }
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) close.run() else mainHandler.post(close)
             }
         }
 

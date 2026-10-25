@@ -142,7 +142,7 @@ internal fun FtutterExtrasSettingsPage(
         }
         item(key = "boards-from-bottom") {
             FtutterCheckSetting("板一覧を下寄せ", com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY,
-                false, preferences, save, note = "板が少ない時に下へ寄せます。並び順は変わりません。")
+                false, preferences, save, note = com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_NOTE)
         }
         FtutterExtension.entries.forEach { extension ->
             item(key = extension.stored) {

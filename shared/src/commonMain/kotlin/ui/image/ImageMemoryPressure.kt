@@ -8,8 +8,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 
 internal enum class ImageMemoryPressureLevel(val severity: Int) {
@@ -53,18 +57,79 @@ internal enum class ImageRequestWorkload {
     VIDEO
 }
 
-/** One process-wide instance is shared by the iOS general and catalog loaders on low RAM. */
+/**
+ * Atomically admits decode/native work against both the process low-RAM budget and
+ * the loader's pressure budget. Queued work owns no part of either budget.
+ */
 internal class LowMemoryImageRequestGate {
-    private val requests = Semaphore(2)
-    private val heavyRequests = Semaphore(1)
+    private class Request(
+        val workload: ImageRequestWorkload,
+        val prefetch: Boolean,
+        val lowRam: Boolean,
+        val pressureGate: AdaptiveImageRequestGate?,
+        val exclusiveResource: Any?,
+        val signal: CompletableDeferred<Unit> = CompletableDeferred()
+    )
+    private val mutex = Mutex()
+    private val waiting = mutableListOf<Request>()
+    private val active = mutableListOf<Request>()
 
-    suspend fun <T> withPermit(workload: ImageRequestWorkload, block: suspend () -> T): T =
-        if (workload == ImageRequestWorkload.BOUNDED) {
-            requests.withPermit { block() }
-        } else {
-            // A queued heavy request must not reserve the second slot needed by a thumbnail.
-            heavyRequests.withPermit { requests.withPermit { block() } }
+    suspend fun <T> withPermit(
+        workload: ImageRequestWorkload,
+        prefetch: Boolean = false,
+        lowRam: Boolean = true,
+        pressureGate: AdaptiveImageRequestGate? = null,
+        exclusiveResource: Any? = null,
+        block: suspend () -> T
+    ): T = coroutineScope {
+        // A pressure recovery must wake queued requests even if every active request
+        // is still running. The observer belongs to this call and cannot outlive it.
+        val policyObserver = pressureGate?.let { gate ->
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                gate.policyChanges.collect { mutex.withLock { grantLocked() } }
+            }
         }
+        val request = Request(workload, prefetch, lowRam, pressureGate, exclusiveResource)
+        try {
+            mutex.withLock { waiting.add(request); grantLocked() }
+            request.signal.await()
+            block()
+        } finally {
+            policyObserver?.cancel()
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    waiting.remove(request)
+                    active.remove(request)
+                    grantLocked()
+                }
+            }
+        }
+    }
+
+    private fun fits(request: Request): Boolean {
+        if (request.exclusiveResource != null && active.any { it.exclusiveResource === request.exclusiveResource }) return false
+        if (request.lowRam) {
+            if (active.size >= 2) return false
+            if (request.workload != ImageRequestWorkload.BOUNDED &&
+                active.any { it.workload != ImageRequestWorkload.BOUNDED }) return false
+        }
+        val gate = request.pressureGate ?: return true
+        val policy = gate.policy()
+        if (policy.level == ImageMemoryPressureLevel.NORMAL) return true
+        val used = active.filter { it.pressureGate === gate }.sumOf { policy.weightFor(it.workload) }
+        return used + policy.weightFor(request.workload) <= policy.maxParallelism
+    }
+
+    private fun grantLocked() {
+        while (true) {
+            // FIFO within each priority; blocked heavy work never reserves a general slot.
+            val next = waiting.firstOrNull { !it.prefetch && fits(it) }
+                ?: waiting.firstOrNull { it.prefetch && fits(it) } ?: return
+            waiting.remove(next)
+            active.add(next)
+            next.signal.complete(Unit)
+        }
+    }
 }
 
 internal data class ImageMemoryPressurePolicy(
@@ -180,11 +245,15 @@ internal class AdaptiveImageRequestGate(initialPolicy: ImageMemoryPressurePolicy
     @kotlin.concurrent.Volatile
     private var currentPolicy = initialPolicy
 
+    private val policyState = MutableStateFlow(initialPolicy)
+    val policyChanges = policyState.asStateFlow()
+
     fun policy(): ImageMemoryPressurePolicy = currentPolicy
 
     suspend fun updatePolicy(policy: ImageMemoryPressurePolicy) {
         mutex.withLock {
             currentPolicy = policy
+            policyState.value = policy
             grantWaitersLocked()
         }
     }

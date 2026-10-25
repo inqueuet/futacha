@@ -54,7 +54,7 @@ class ThreadFeedbackSupportTest {
         val posts = listOf(post("1"), post("2"), post("3"))
         assertNull(tracker.accept(posts, emptySet(), live = false))
         assertNull(tracker.accept(posts, emptySet(), truncated = true))
-        assertNull(tracker.accept(posts.take(1), emptySet()))
+        assertNull(tracker.accept(posts.take(1), emptySet(), truncated = true))
         assertEquals(1, tracker.accept(posts, emptySet())?.newPosts)
     }
     @Test fun noNewPostsDoesNotNotifyOnViewerReturnOrRecomposition() {
@@ -82,8 +82,9 @@ class ThreadFeedbackSupportTest {
     @Test fun aCatalogCreatedHistoryCountIsNotAPreviousRead() {
         val entry = ThreadHistoryEntry("1", "may", "題名", "", "板", "https://may.2chan.net/b/", 1, 42)
         assertNull(knownViewedPostCount(entry))
-        assertEquals(42, knownViewedPostCount(entry.copy(lastConfirmedAliveEpochMillis = 1)))
-        assertEquals(42, knownViewedPostCount(entry.copy(lastReadPostId = "2")))
+        assertNull(knownViewedPostCount(entry.copy(lastConfirmedAliveEpochMillis = 1)))
+        assertNull(knownViewedPostCount(entry.copy(lastReadPostId = "2")))
+        assertEquals(42, knownViewedPostCount(entry.copy(lastViewedSnapshot = ThreadViewedSnapshot(42, "44", 1))))
     }
 
     @Test fun onlyExplicitGoneResponsesConfirmDeathAndUnknownMetadataPreservesStatus() {

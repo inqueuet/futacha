@@ -52,6 +52,7 @@ class HttpBoardApi(
         val formParameters: Parameters,
         val requestFailureMessage: String,
         val responseFailureMessage: String,
+        val actionLabel: String,
         val encodedBody: String? = null
     )
 
@@ -341,7 +342,15 @@ class HttpBoardApi(
                     val suffix = detail?.let { ": $it" }.orEmpty()
                     throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
                 }
-                val result = readSmallResponseBody(response)?.trim().orEmpty()
+                // A 2xx whose body cannot be read may already have counted the vote:
+                // say so instead of a failure that invites another tap (L83).
+                val result = try {
+                    readSmallResponseBody(response).trim()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw unconfirmedHttpBoardApiActionResult("そうだね", "（加算されている可能性があります）", e)
+                }
                 if (!isSuccessfulHttpBoardApiSaidaneResponse(result)) {
                     throw NetworkException("そうだね投票に失敗しました (応答: '${result.take(160)}')")
                 }
@@ -365,8 +374,9 @@ class HttpBoardApi(
         )
     }
 
-    private suspend fun readSmallResponseBody(response: HttpResponse): String? {
-        return readSmallHttpBoardApiResponseBody(
+    /** Throws when the body cannot be read; deletions and votes must tell that from an empty body (L83). */
+    private suspend fun readSmallResponseBody(response: HttpResponse): String {
+        return readSmallHttpBoardApiResponseBodyOrThrow(
             response = response,
             responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
             maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
@@ -497,7 +507,15 @@ class HttpBoardApi(
                     } ?: prefix
                 )
             }
-            val responseBody = readResponseBodyAsString(response)
+            // A 2xx header is not proof of acceptance or refusal. If the body
+            // cannot be read, the post may already exist; never imply it is safe to resend.
+            val responseBody = try {
+                readResponseBodyAsString(response)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw unconfirmedHttpBoardApiPostResult(submission.requestFailureMessage, e)
+            }
             resolveHttpBoardApiPostResponseOrThrow(
                 mode = submission.responseMode,
                 responseBody = responseBody,
@@ -516,6 +534,7 @@ class HttpBoardApi(
                 formParameters = submission.formParameters,
                 failureMessage = submission.requestFailureMessage,
                 responseFailureMessage = submission.responseFailureMessage,
+                actionLabel = submission.actionLabel,
                 encodedBody = submission.encodedBody
             ),
             userAgent = DEFAULT_USER_AGENT,
@@ -547,7 +566,8 @@ class HttpBoardApi(
                     append("responsemode", "ajax")
                 },
                 requestFailureMessage = "Failed to send del request",
-                responseFailureMessage = "del依頼に失敗しました"
+                responseFailureMessage = "del依頼に失敗しました",
+                actionLabel = "del依頼"
             )
         )
     }
@@ -605,6 +625,7 @@ class HttpBoardApi(
                 },
                 requestFailureMessage = "Failed to delete post",
                 responseFailureMessage = "本人削除に失敗しました",
+                actionLabel = "本人削除",
                 encodedBody = encodedBody
             )
         )

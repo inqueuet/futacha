@@ -62,8 +62,17 @@ internal fun FtutterDesignSettings(preferences: Map<String, String>, save: (Stri
                 listOf(0 to "ライトモード", 1 to "ダークモード", 2 to "ダークモード（背景真っ黒）"), 0, preferences, save)
         }
         ftutterSection("フォント")
-        preferences[FtutterKeys.PREFIX + "import.userFontPath"]?.takeIf { it.isNotBlank() }?.let { original ->
-            item { Text("取り込み元のフォント: $original\nフォントファイルを選択してください。", color = colors.text, modifier = Modifier.padding(16.dp)) }
+        // 取り込み元のフォントの案内は、フォントを選び直すまで（L19）。「案内を消す」でも消せる。
+        preferences[FtutterKeys.PREFIX + "import.userFontPath"]?.takeIf {
+            ftutterImportNoticePending(it, preferences[FTUTTER_IMPORT_FONT_CHOSEN],
+                preferences[com.valoser.futacha.shared.ui.futaber.FUTABER_CUSTOM_FONT_PREFERENCE_KEY])
+        }?.let { original ->
+            item { Text("取り込み元のフォント: $original\nフォントファイルを選択してください。", color = colors.text,
+                modifier = Modifier.padding(16.dp).testTag("ftutter-import-font-notice")) }
+            item {
+                androidx.compose.material3.TextButton(onClick = { save(FtutterKeys.PREFIX + "import.userFontPath", "") },
+                    modifier = Modifier.testTag("ftutter-import-font-dismiss")) { Text("案内を消す", color = colors.text) }
+            }
         }
         if (onChooseFont != null) item { FtutterNavRow("カスタムフォント", "ftutter-settings-font", onClick = onChooseFont) }
         item { FtutterSliderSetting("カタログのフォントサイズ", FtutterKeys.CATALOG_FONT_SIZE, 1.0, 40.0, 1.0, 15.0, preferences, save) }
@@ -177,8 +186,13 @@ internal fun FtutterThreadSettingsPage(
         item { FtutterSliderSetting("そうだねの数", FtutterKeys.POPULAR_SOUDANE, 0.0, 100.0, 5.0, 10.0, preferences, save) }
         ftutterSection("履歴")
         item {
+            // 下げてタブが閉じられる時は、件数を示して確かめる（L130：以前は確認なしで閉じられ、戻せなかった）。
             FtutterSliderSetting("履歴の保存数（保護したタブは除く）", FtutterKeys.HISTORY_LIMIT, 0.0, 1000.0, 10.0, 200.0, preferences, save,
-                note = "このモードの履歴とタブを、保護したスレッドを除いて最近開いた順にこの数まで表示します。他のモードの履歴は残します。")
+                note = "このモードの履歴とタブを、保護したスレッドを除いて最近開いた順にこの数まで残します。超えた古いタブ（保護していないもの）は閉じます。他のモードの履歴は残します。",
+                confirm = { limit ->
+                    ftutterTabsClosedByLimit(parseFtutterTabs(preferences), parseFtutterProtected(preferences), limit.toInt())
+                        .takeIf { it > 0 }?.let { "保護していないタブが${it}件閉じられます。閉じたタブは戻せません。" }
+                })
         }
         ftutterSection("ツールバー・メニュー")
         item { FtutterNavRow("ボタンの並び", "ftutter-settings-thread-toolbar", onClick = onEditToolbar) }
@@ -260,9 +274,7 @@ internal fun FtutterNetworkSettingsPage(
 ) {
     var keyOpen by remember { mutableStateOf(false) }
     FtutterSettingsPage("ネットワーク・投稿", "ftutter-settings-page-network", onBack) {
-        item {
-            FtutterCheckSetting("https版のサイトにアクセスする", FtutterKeys.USE_HTTPS, false, preferences, save)
-        }
+        item { Text("ふたばへの通信には常にHTTPSを使用します", color = LocalFtutterColors.current.text, modifier = Modifier.padding(16.dp)) }
         item { FtutterCheckSetting("URLを開く際アプリ内ブラウザを使用する", FtutterKeys.USE_CUSTOM_TAB, true, preferences, save) }
         item { FtutterCheckSetting("書き込み前に確認する", FtutterKeys.CONFIRM_BEFORE_POST, false, preferences, save) }
         item { FtutterNavRow("削除キー", "ftutter-settings-delete-key", detail = "●".repeat(deleteKey.length)) { keyOpen = true } }

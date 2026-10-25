@@ -40,7 +40,12 @@ class ThreadFeedbackOpqrInstrumentedTest {
     private val entry = ThreadHistoryEntry("3", board.id, "THREAD-3", "", board.name, board.url, 10, 2)
     private var fail = false
     private var fetches = 0
+    private var creates = 0
     private val repo = object : BoardRepository by FakeBoardRepository() {
+        override suspend fun createThread(board: String, name: String, email: String, subject: String, comment: String,
+            password: String, imageFile: ByteArray?, imageFileName: String?, textOnly: Boolean, handwriting: Boolean): String? {
+            creates++; return "4"
+        }
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
             fetches++; if (fail) error("模擬通信失敗")
             return CatalogPageContent(items)
@@ -252,6 +257,105 @@ class ThreadFeedbackOpqrInstrumentedTest {
         assertOrder("THREAD-3", "THREAD-1")
         capture("futacha-manual-refresh-pins-viewed")
     }
+    /** The ふたちゃ catalog with the viewed thread (No.3) put first by a manual refresh. */
+    private fun pinnedFutachaCatalog() {
+        val state = com.valoser.futacha.shared.state.AppStateStore(com.valoser.futacha.shared.state.BaseInMemoryPlatformStateStorage())
+        runBlocking {
+            state.updateBoards { listOf(board) }; state.updateHistory { listOf(entry) }
+            state.setHasShownPostingNotice(true)
+            store.savePreference(viewedThreadFirstKey(board.url), "ON")
+        }
+        rule.setContent { Images {
+            ProvideFutachaSharedFeatures(store, null, repo, null, null, "test", appStateStore = state) {
+                CatalogScreen(board, listOf(entry), {}, {}, repository = repo, stateStore = state,
+                    preferencesState = ScreenPreferencesState("test"))
+            }
+        } }
+        waitTitle(); assertOrder("THREAD-1", "THREAD-3")
+        rule.onNodeWithContentDescription("カタログ更新", useUnmergedTree = true).performClick()
+        rule.waitUntil(15_000) { pinned("THREAD-3", "THREAD-1") }
+    }
+    private fun pinned(first: String, second: String): Boolean {
+        val a = titleBounds(first)
+        val b = titleBounds(second)
+        return a != null && b != null && precedes(a, b)
+    }
+    private fun clickNav(label: String) {
+        val node = hasClickAction() and (hasContentDescription(label) or hasText(label))
+        rule.waitUntil(5_000) { rule.onAllNodes(node).fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodes(node).onFirst().performClick()
+    }
+
+    /** L37: another order drops the placement, and coming back to the first order does not bring it back. */
+    @Test fun futachaCatalogDropsTheViewedPlacementForAnotherOrder() {
+        pinnedFutachaCatalog()
+        val before = fetches
+        clickNav("モード")
+        rule.onNodeWithText("新順").performClick()
+        rule.waitUntil(15_000) { fetches > before && pinned("THREAD-1", "THREAD-3") }
+        val again = fetches
+        clickNav("モード")
+        rule.onNodeWithText("多い順").performClick()
+        rule.waitUntil(15_000) { fetches > again && titleBounds("THREAD-1") != null }
+        rule.waitForIdle()
+        assertOrder("THREAD-1", "THREAD-3")
+    }
+
+    /** L37: the refresh after creating a thread does not put the last viewed thread above the new one. */
+    @Test fun futachaCatalogDoesNotPinTheViewedThreadAfterCreatingOne() {
+        pinnedFutachaCatalog()
+        val before = fetches
+        clickNav("スレッド作成")
+        rule.onNode(hasSetTextAction() and hasText("コメント")).performTextInput("L37")
+        rule.onNode(hasSetTextAction() and hasText("削除キー")).performTextReplacement("l37key")
+        rule.onAllNodesWithContentDescription("送信する").onFirst().performClick()
+        rule.waitUntil(10_000) { creates == 1 || rule.onAllNodesWithText("投稿の確認").fetchSemanticsNodes().isNotEmpty() }
+        if (creates == 0) rule.onAllNodesWithText("送信する").onLast().performClick()
+        rule.waitUntil(15_000) { creates == 1 && fetches > before && pinned("THREAD-1", "THREAD-3") }
+    }
+
+    /** L37: ふたばー風's reload after a created thread does not pin the last viewed thread again. */
+    @Test fun futaberDoesNotPinTheViewedThreadAfterCreatingOne() {
+        val view = FutaberCatalogViewState()
+        val search = FutaberCatalogSearchState()
+        var signal by mutableStateOf(0)
+        rule.setContent { Images { FutaberTheme(FutaberThemeMode.Light) {
+            FutaberCatalogScreen(board, repo, FutaberCatalogDisplayStyle.Row1, CatalogMode.default,
+                {}, {}, {}, {}, {}, {}, signal, onOpenThread = {}, view = view, search = search,
+                viewedFirstEnabled = true, lastViewedThreadId = "3")
+        } } }
+        waitTitle()
+        rule.onNodeWithTag("futaber-refresh").performClick()
+        rule.waitUntil(15_000) { view.viewedFirstId == "3" && !view.load.isLoading }
+        val before = fetches
+        // As FutaberApp does when a thread was created on this board.
+        rule.runOnUiThread { view.afterThreadCreated(); signal++ }
+        rule.waitUntil(15_000) { fetches > before && !view.load.isLoading }
+        rule.waitForIdle()
+        assertEquals(null, view.viewedFirstId)
+        assertOrder("THREAD-1", "THREAD-3")
+    }
+
+    /** L37: ふたったー風's reload after a created thread does not keep the last viewed thread first. */
+    @Test fun ftutterDoesNotKeepTheViewedThreadFirstAfterCreatingOne() {
+        val holder = FtutterCatalogHolder()
+        val prefs = mapOf(viewedThreadFirstKey(board.url) to "ON")
+        rule.setContent { Images { FtutterTheme(null, FtutterBrightness.LIGHT) {
+            FtutterCatalogScreen(board, listOf(board), repo, listOf(entry), prefs, holder,
+                { _, _ -> }, { _, _ -> }, {}, {}, {}, {}, {}, {}, {}, {}, columnsOverride = 3)
+        } } }
+        waitTitle()
+        rule.runOnUiThread { holder.manualRefreshKey = holder.load?.key; holder.refreshTick++ }
+        rule.waitUntil(15_000) { holder.load?.viewedFirstId == "3" && holder.load?.loading == false }
+        val before = fetches
+        // As FtutterApp does when a thread was created, followed by its reload.
+        rule.runOnUiThread { holder.afterThreadCreated(); holder.refreshTick++ }
+        rule.waitUntil(15_000) { fetches > before && holder.load?.loading == false }
+        rule.waitForIdle()
+        assertEquals(null, holder.load?.viewedFirstId)
+        assertOrder("THREAD-1", "THREAD-3")
+    }
+
     @Test fun toshiakiCatalogPinsOnManualRefreshWithSharedBoardSetting() {
         runBlocking {
             store.savePreference(viewedThreadFirstKey(board.url), "ON")
@@ -268,6 +372,75 @@ class ThreadFeedbackOpqrInstrumentedTest {
         rule.waitUntil(15_000) { precedes(bounds("3"), bounds("1")) }
         assertTrue(precedes(bounds("3"), bounds("1")))
         capture("toshiaki-manual-refresh-pins-viewed")
+    }
+
+    private var toshiakiAiCommand by mutableStateOf<com.valoser.futacha.shared.ai.FutachaAiCommand?>(null)
+    private fun toshiakiBounds(id: String) =
+        rule.onNodeWithTag("compat-catalog-item-$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    private fun toshiakiPinned(first: String, second: String): Boolean =
+        rule.onAllNodesWithTag("compat-catalog-item-$first", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+            rule.onAllNodesWithTag("compat-catalog-item-$second", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+            precedes(toshiakiBounds(first), toshiakiBounds(second))
+    /** としあき(仮)'s catalog, optionally with the viewed thread (No.3) put first by the toolbar's reload. */
+    private fun toshiakiCatalog(pin: Boolean = true, aiEnabled: Boolean = false) {
+        // "AIアプリ操作" (shared by every mode) is kept in the app state; it is off unless turned on.
+        val state = if (!aiEnabled) null else com.valoser.futacha.shared.state.AppStateStore(
+            com.valoser.futacha.shared.state.BaseInMemoryPlatformStateStorage())
+        runBlocking {
+            store.savePreference(viewedThreadFirstKey(board.url), "ON")
+            store.upsertHistory(CompatHistoryEntry("${board.url}res/3.htm", "${board.url}res/3.htm",
+                compatBoardKey(board.url), board.name, "3", "THREAD-3", contentUpdatedAtEpochMillis = 10))
+            state?.updateBoards { listOf(board) }
+            state?.setAiCommandEnabled(true)
+        }
+        rule.setContent { Images { CompatibilityApp(store = store, repository = repo, stateStore = state, onExitApplication = {},
+            platformAiCommand = toshiakiAiCommand, onPlatformAiCommandConsumed = { toshiakiAiCommand = null }) } }
+        rule.onNodeWithText(board.url).performClick()
+        rule.waitUntil(15_000) { toshiakiPinned("1", "3") }
+        if (pin) {
+            rule.onNodeWithContentDescription("リロード").performClick()
+            rule.waitUntil(15_000) { toshiakiPinned("3", "1") }
+        }
+    }
+
+    /** L37: another order drops the placement, and coming back to the first order does not bring it back. */
+    @Test fun toshiakiCatalogDropsTheViewedPlacementForAnotherOrder() {
+        toshiakiCatalog()
+        val before = fetches
+        rule.onNodeWithContentDescription("表示順").performClick()
+        rule.onAllNodesWithText("新しい順").onLast().performClick()
+        rule.waitUntil(15_000) { fetches > before && toshiakiPinned("1", "3") }
+        rule.onNodeWithContentDescription("表示順").performClick()
+        rule.onAllNodesWithText("カタログ").onLast().performClick()
+        // The first order's catalog may come from its stored copy, without a new request.
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("compat-catalog-item-1", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
+        assertTrue(toshiakiPinned("1", "3"))
+    }
+
+    /** L37: after a thread is created, the catalog no longer keeps the last viewed thread first. */
+    @Test fun toshiakiCatalogDropsTheViewedPlacementAfterCreatingAThread() {
+        toshiakiCatalog()
+        rule.onNodeWithContentDescription("スレ立て").performClick()
+        rule.onNode(hasSetTextAction() and hasText("コメント")).performTextInput("L37")
+        rule.onNode(hasSetTextAction() and hasText("削除キー")).performTextReplacement("l37key")
+        rule.onAllNodesWithContentDescription("送信する").onFirst().performClick()
+        rule.waitUntil(10_000) { creates == 1 || rule.onAllNodesWithText("送信する").fetchSemanticsNodes().isNotEmpty() }
+        if (creates == 0) rule.onAllNodesWithText("送信する").onLast().performClick()
+        rule.waitUntil(15_000) { creates == 1 }
+        // The new thread opens; back on the catalog the placement is gone.
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("compat-catalog-grid").fetchSemanticsNodes().isEmpty() }
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("compat-catalog-grid").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(15_000) { toshiakiPinned("1", "3") }
+    }
+
+    /** L37: the AI "カタログ更新" is a manual refresh, so it puts the viewed thread first like the toolbar's reload. */
+    @Test fun toshiakiAiCatalogRefreshPinsTheViewedThread() {
+        toshiakiCatalog(pin = false, aiEnabled = true)
+        val before = fetches
+        rule.runOnUiThread { toshiakiAiCommand = com.valoser.futacha.shared.ai.parseFutachaAiDeepLink("futacha://ai?action=refresh_catalog") }
+        rule.waitUntil(15_000) { fetches > before && toshiakiPinned("3", "1") }
     }
 
     @Test fun futaberReportDialogKeepsNgOptionalAndForwardsOnlyTheConfirmedChoice() {
@@ -310,6 +483,20 @@ class ThreadFeedbackOpqrInstrumentedTest {
         capture("ftutter-tab-status-larger-font")
         assertFalse("Badge overlaps title: $badge $title", badge.overlaps(title))
         assertFalse("Title overlaps unread: $title $unread", title.overlaps(unread))
+    }
+
+    /** L18: an earlier fall record (isAutoRefreshDisabled only, e.g. .ftt sureOti) still shows 「落ち」 with the extension ON. */
+    @Test fun ftutterStatusExtensionKeepsAnEarlierFallRecord() {
+        val url = "${board.url}res/4.htm"
+        val tab = FtutterTabView(url, entry.copy(title = "以前の落ち", isAutoRefreshDisabled = true, threadStatus = null),
+            FtutterTabNumbers(12, null), false, false)
+        rule.setContent { Images { FtutterTheme(null, FtutterBrightness.LIGHT) {
+            Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                FtutterTabStrip(listOf(tab), url, FtutterTabSettings(showTab = true), parseFtutterDesign(emptyMap()), {}, {}, showStatus = true)
+            }
+        } } }
+        rule.onNodeWithTag("ftutter-tab-status", useUnmergedTree = true).assertTextEquals("落ち")
+        rule.onNodeWithContentDescription("以前の落ち、落ち").assertExists()
     }
 
 }

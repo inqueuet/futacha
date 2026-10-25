@@ -137,6 +137,8 @@ internal fun compatToolbarDragPlacement(
 fun CompatToolbarEditorScreen(
     surface: CompatToolbarSurface,
     store: CompatibilityStore,
+    /** The items as the calling mode names them (ふたちゃ's post toolbar names "discard" "閉じる"). */
+    master: List<com.valoser.futacha.shared.compat.CompatToolbarMasterItem> = compatToolbarMaster(surface),
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -146,7 +148,7 @@ fun CompatToolbarEditorScreen(
     val edgeScrollStepPx = with(density) { 6.dp.toPx() }
     val edgeScrollZonePx = with(density) { 56.dp.toPx() }
     val listState = rememberLazyListState()
-    val master = remember(surface) { compatToolbarMaster(surface).associateBy { it.key } }
+    val masterByKey = remember(master) { master.associateBy { it.key } }
     var items by remember(surface) { mutableStateOf<List<CompatToolbarItem>>(emptyList()) }
     var loaded by remember(surface) { mutableStateOf(false) }
     var operationError by remember(surface) { mutableStateOf<String?>(null) }
@@ -210,7 +212,12 @@ fun CompatToolbarEditorScreen(
         }
     }
 
+    // Leaves once: a second back while the last write ends is taken here and ignored (L57: each press launched its
+    // own leave, so two quick presses went back two screens).
+    var leaving by remember { mutableStateOf(false) }
     fun leaveAfterSaving() {
+        if (leaving) return
+        leaving = true
         updateEdgeScroll(0)
         val lastWrite = pendingPersist
         scope.launch {
@@ -319,7 +326,7 @@ fun CompatToolbarEditorScreen(
                                     modifier = Modifier.size(30.dp).testTag("compat-toolbar-editor-icon-${item.key}")
                                 )
                                 Text(
-                                    master[item.key]?.label ?: item.key,
+                                    masterByKey[item.key]?.label ?: item.key,
                                     modifier = Modifier.weight(1f),
                                     fontSize = 14.sp,
                                     maxLines = 1
@@ -327,7 +334,7 @@ fun CompatToolbarEditorScreen(
                             }
                             Icon(
                                 Icons.Filled.DragHandle,
-                                contentDescription = "${master[item.key]?.label ?: item.key}を並び替え",
+                                contentDescription = "${masterByKey[item.key]?.label ?: item.key}を並び替え",
                                 tint = palette.text.copy(alpha = 0.62f),
                                 modifier = Modifier.size(50.dp).testTag("compat-toolbar-handle-${item.key}")
                                     .onGloballyPositioned { itemHandleTop = it.boundsInRoot().top }
@@ -381,7 +388,7 @@ fun CompatToolbarEditorScreen(
                 CompatToolbarPreviewRow(
                     surface = surface,
                     items = items.filterNot(CompatToolbarItem::active),
-                    master = master,
+                    master = masterByKey,
                     showMore = false,
                     active = false,
                     palette = palette
@@ -389,7 +396,7 @@ fun CompatToolbarEditorScreen(
                 CompatToolbarPreviewRow(
                     surface = surface,
                     items = items.filter(CompatToolbarItem::active),
-                    master = master,
+                    master = masterByKey,
                     showMore = compatToolbarShowsOverflow(surface, items),
                     active = true,
                     palette = palette

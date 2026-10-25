@@ -283,6 +283,7 @@ internal fun CompatViewerScreen(
     onOpenHelp: () -> Unit = {},
     onBack: () -> Unit,
     saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
+    returnPosition: CompatViewerReturnPosition? = null,
     onSaveNotice: (String) -> Unit = {}
 ) {
     val tabKey = tab.key
@@ -315,7 +316,8 @@ internal fun CompatViewerScreen(
             message = failure.toCompatUserMessage("操作に失敗しました")
         }, block)
     var infoOpen by remember { mutableStateOf(false) }
-    var infoLoading by remember { mutableStateOf(false) }
+    // Per image: reading one image's information no longer keeps the next one's from being read (L56).
+    var infoLoadingUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
     var remoteMediaInfo by remember { mutableStateOf<Map<String, CompatRemoteMediaInfo>>(emptyMap()) }
     var remoteExifInfo by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     // Dimensions are only metadata for the optional information dialog. They
@@ -489,8 +491,14 @@ internal fun CompatViewerScreen(
     // Resolve the actual media identity before the very first pager measure.
     // No corrective scroll (and no intervening wrong-image frame) is needed.
     val pagerState = rememberPagerState(
-        initialPage = compatViewerInitialPage(posts, initialPostNo, initialIndex)
+        initialPage = compatViewerInitialPage(posts,
+            returnPosition?.mediaIdentity ?: initialPostNo, returnPosition?.index ?: initialIndex)
     ) { posts.size }
+    val returnIndex = pagerState.currentPage
+    val returnIdentity = posts.getOrNull(returnIndex)?.let(::compatMediaIdentity)
+    androidx.compose.runtime.SideEffect {
+        if (returnIdentity != null) returnPosition?.update(returnIndex, returnIdentity)
+    }
     val canDismissVertically = verticalSwipeCloseEnabled && !isZoomed
     ApplyCompatViewerSystemBars(hidden = !chromeVisible)
     PlatformBackHandler(enabled = !chromeVisible) { chromeVisible = true }
@@ -724,24 +732,34 @@ internal fun CompatViewerScreen(
             imageSearchSelectorOpen = true
         }
     }
-    fun showCurrentInfo() {
-        infoOpen = true
+    fun readCurrentInfo() {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) ?: return
         val client = httpClient ?: return
-        if (mediaUrl in remoteMediaInfo && mediaUrl in remoteExifInfo || infoLoading) return
+        if (mediaUrl in remoteMediaInfo && mediaUrl in remoteExifInfo || mediaUrl in infoLoadingUrls) return
+        infoLoadingUrls = infoLoadingUrls + mediaUrl
         launchScreenAction {
-            infoLoading = true
-            fetchCompatRemoteMediaInfo(client, mediaUrl)
-                .onSuccess { info -> remoteMediaInfo = remoteMediaInfo + (mediaUrl to info) }
-            if (!isCompatVideoMediaUrl(mediaUrl)) {
-                fetchCompatExifSummary(client, mediaUrl)
-                    .onSuccess { info -> remoteExifInfo = remoteExifInfo + (mediaUrl to info) }
-                    .onFailure { remoteExifInfo = remoteExifInfo + (mediaUrl to "取得できません") }
-            } else {
-                remoteExifInfo = remoteExifInfo + (mediaUrl to "動画のため対象外")
+            try {
+                fetchCompatRemoteMediaInfo(client, mediaUrl)
+                    .onSuccess { info -> remoteMediaInfo = remoteMediaInfo + (mediaUrl to info) }
+                if (!isCompatVideoMediaUrl(mediaUrl)) {
+                    fetchCompatExifSummary(client, mediaUrl)
+                        .onSuccess { info -> remoteExifInfo = remoteExifInfo + (mediaUrl to info) }
+                        .onFailure { remoteExifInfo = remoteExifInfo + (mediaUrl to "取得できません") }
+                } else {
+                    remoteExifInfo = remoteExifInfo + (mediaUrl to "動画のため対象外")
+                }
+            } finally {
+                infoLoadingUrls = infoLoadingUrls - mediaUrl
             }
-            infoLoading = false
         }
+    }
+    fun showCurrentInfo() {
+        infoOpen = true
+        readCurrentInfo()
+    }
+    // A page turned while the information is shown reads that image's too.
+    LaunchedEffect(infoOpen, pagerState.currentPage) {
+        if (infoOpen) readCurrentInfo()
     }
     if (imageSearchSelectorOpen) {
         CompatLegacyChoiceDialog(
@@ -1020,16 +1038,10 @@ internal fun CompatViewerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    // PlatformVideoPlayer is backed by a native view (PlayerView on
-                    // Android and WKWebView on iOS), so it does not inherit the
-                    // image page's Compose gesture handler.  Observe the gesture
-                    // from this parent at the Initial pass without consuming it:
-                    // the player retains its own controls while horizontal drags
-                    // still page through mixed image/video attachments.
-                    // Restart the recognizer when Pager changes page. Nearby
-                    // video pages are composed ahead of time, and otherwise a
-                    // page that was initially off-screen would never start its
-                    // recognizer after becoming current.
+                    // Native player controls own consumed gestures. Observe at Final
+                    // so seeking never becomes a page swipe on release; unconsumed
+                    // background drags may still move mixed image/video attachments.
+                    // Restart when a composed adjacent page becomes current.
                     .pointerInput(mediaUrl, page, posts.size, pagerState.currentPage) {
                         if (mediaUrl == null || !isCompatVideoMediaUrl(mediaUrl) ||
                             page != pagerState.currentPage
@@ -1039,21 +1051,21 @@ internal fun CompatViewerScreen(
                         awaitEachGesture {
                             awaitFirstDown(
                                 requireUnconsumed = false,
-                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                             )
                             var horizontalDragDistance = 0f
                             var verticalDragDistance = 0f
                             var cancelled = false
                             do {
                                 val event = awaitPointerEvent(
-                                    pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                    pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                                 )
                                 val pointerCount = event.changes.count { it.pressed }
-                                if (pointerCount == 0) break
-                                if (pointerCount >= 2) {
+                                if (event.changes.any { it.isConsumed } || pointerCount >= 2) {
                                     cancelled = true
                                     break
                                 }
+                                if (pointerCount == 0) break
                                 val pan = event.calculatePan()
                                 horizontalDragDistance += pan.x
                                 verticalDragDistance += pan.y
@@ -1239,6 +1251,7 @@ internal fun CompatViewerScreen(
         val dimensions = mediaUrl?.let(mediaDimensions::get)
         val videoInfo = mediaUrl?.let(videoMediaInfo::get)
         val isVideo = mediaUrl?.let(::isCompatVideoMediaUrl) == true
+        val infoLoading = mediaUrl != null && mediaUrl in infoLoadingUrls
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { infoOpen = false },
             title = { Text(if (isVideo) "動画情報" else "画像情報") },

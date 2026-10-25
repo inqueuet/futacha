@@ -36,19 +36,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil3.compose.AsyncImage
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.VideoPlaybackError
 import com.valoser.futacha.shared.ui.board.VideoPlayerState
 import com.valoser.futacha.shared.ui.board.formatVideoPlaybackError
-import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.privacy.PrivacyVideoOverlay
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -123,12 +121,9 @@ fun FutaberVideoPlayer(
             isMuted = muted
         )
         if (buffering && !posterUrl.isNullOrBlank()) {
-            AsyncImage(
-                // Read only here: the host always provides the loader, and a video without a poster needs none.
-                model = posterUrl, imageLoader = LocalFutachaImageLoader.current, contentDescription = "動画のプレビュー",
-                contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()
-            )
+            FutaberVideoPoster(posterUrl, Modifier.fillMaxSize())
         }
+        PrivacyVideoOverlay()
         if (state == VideoPlayerState.Ready && !controlsVisible) {
             // The platform controls are hidden: a tap anywhere shows them again.
             Box(Modifier.fillMaxSize().pointerInput(videoUrl) { detectTapGestures { controlsVisible = true } })

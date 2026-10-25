@@ -21,6 +21,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.compat.AndroidCompatibilityStore
 import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.ui.board.ThreadActionBar
 import com.valoser.futacha.shared.ui.compat.CompatToolbarEditorScreen
@@ -99,17 +100,68 @@ class ToolbarLayoutInstrumentedTest {
     }
 
     @Test fun futachaNarrowThreadBarKeepsTheSettingsActionReachable() {
+        val tapped = mutableListOf<ThreadMenuEntryId>()
         rule.setContent {
             MaterialTheme {
                 Box(Modifier.width(240.dp)) {
-                    ThreadActionBar(defaultThreadMenuEntries(), onAction = {}, applyNavigationBarsPadding = false)
+                    ThreadActionBar(defaultThreadMenuEntries(), onAction = { tapped += it }, applyNavigationBarsPadding = false)
                 }
             }
         }
-        rule.onNodeWithContentDescription("設定").performScrollTo().assertIsDisplayed()
+        // (L67) 設定 keeps a fixed slot at the right end, so it shows without scrolling; the other
+        // actions scroll beside it and the edge hint says more are there.
+        rule.onNodeWithContentDescription("設定").assertIsDisplayed()
+        assertFullyInsideTheThreadBar("設定")
+        rule.onNodeWithTag("scrollable-toolbar-more-end", useUnmergedTree = true).assertExists()
         saveShot("futacha-narrow-thread-bar")
         val width = rule.onNodeWithContentDescription("設定").fetchSemanticsNode().size.width
         assertTrue("settings icon width $width", width / rule.density.density >= 23.9f)
+        // Scrolled by a swipe, as a person does. (performScrollTo never ends here: the last scrolling button's 48dp
+        // touch area is wider than its 36dp slot, so it can never be "fully" inside the scrolled row.)
+        val bar = rule.onNodeWithTag("futacha-thread-action-bar").fetchSemanticsNode().boundsInRoot
+        rule.onRoot().performTouchInput {
+            swipeLeft(startX = bar.left + bar.width * 0.6f, endX = bar.left + 2f, durationMillis = 300)
+        }
+        rule.onNodeWithContentDescription("レスフィルター").assertIsDisplayed().performClick()
+        rule.runOnIdle { assertTrue("tapped $tapped", tapped.size == 1) }
+    }
+
+    @Test fun futachaDefaultThreadBarShowsAllEightAt360AndPinsSettings() {
+        // (L67) Before, the bar scrolled below 400dp and only 8dp of 設定 showed at 360dp.
+        val barWidth = mutableStateOf(360.dp)
+        val tapped = mutableListOf<ThreadMenuEntryId>()
+        rule.setContent {
+            MaterialTheme {
+                Box(Modifier.width(barWidth.value)) {
+                    ThreadActionBar(defaultThreadMenuEntries(), onAction = { tapped += it }, applyNavigationBarsPadding = false)
+                }
+            }
+        }
+        listOf(360.dp, 320.dp).forEach { target ->
+            rule.runOnIdle { barWidth.value = target }
+            rule.waitForIdle()
+            listOf("返信", "最上部", "最下部", "更新", "添付", "保存", "レスフィルター", "設定").forEach { label ->
+                rule.onNodeWithContentDescription(label).assertIsDisplayed()
+                assertFullyInsideTheThreadBar(label)
+            }
+            assertTrue("the bar scrolls at $target", rule.onAllNodesWithTag("scrollable-toolbar-more-end",
+                useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+            saveShot("futacha-thread-bar-${target.value.toInt()}")
+        }
+        rule.onNodeWithContentDescription("設定").performClick()
+        rule.runOnIdle { assertEquals(listOf(ThreadMenuEntryId.Settings), tapped) }
+    }
+
+    /** Unclipped bounds: boundsInRoot is clipped by the scroll viewport and would hide a cut-off button. */
+    private fun assertFullyInsideTheThreadBar(label: String) {
+        val bar = rule.onNodeWithTag("futacha-thread-action-bar").fetchSemanticsNode()
+        val node = rule.onNodeWithContentDescription(label).fetchSemanticsNode()
+        val left = node.positionInRoot.x
+        val right = left + node.size.width
+        val barLeft = bar.positionInRoot.x
+        val barRight = barLeft + bar.size.width
+        assertTrue("$label $left..$right is outside the bar $barLeft..$barRight",
+            left >= barLeft - 0.5f && right <= barRight + 0.5f)
     }
 
     @Test fun toshiakiAllOnToolbarPreviewKeepsTheLastIconReachable() {
@@ -186,9 +238,9 @@ class ToolbarLayoutInstrumentedTest {
             }
         }
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("compat-thread-post-811", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("compat-toolbar-command-other").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("compat-toolbar-command-other").assertIsDisplayed()
         saveShot("toshiaki-thread-all-on")
-        assertTrue(rule.onNodeWithTag("compat-toolbar-command-other").fetchSemanticsNode().size.width / rule.density.density >= 39.9f)
+        assertTrue(rule.onNodeWithTag("compat-toolbar-command-other").fetchSemanticsNode().size.width / rule.density.density >= 23.9f)
         rule.onNodeWithTag("compat-toolbar-command-post").performScrollTo().assertIsDisplayed()
         assertEquals(19, runBlocking { storage.loadToolbar(CompatToolbarSurface.THREAD).count { it.active } })
     }

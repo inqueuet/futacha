@@ -44,4 +44,6 @@ internal actual fun parseXmpDocument(bytes: ByteArray, sink: XmpEventSink) {
     parser.entityResolver = handler
     try { parser.parse(InputSource(bytes.inputStream())) }
     catch (_: SAXException) { throw callbackFailure ?: InvalidMetadata() }
+    // An encoding the parser cannot read is a broken packet, not a failure of the whole read (L118).
+    catch (_: java.io.IOException) { throw InvalidMetadata() }
 }

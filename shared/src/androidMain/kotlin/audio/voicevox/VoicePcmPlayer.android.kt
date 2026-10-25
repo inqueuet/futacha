@@ -32,35 +32,69 @@ internal class AndroidVoicePcmPlayer(private val context: Context) : VoicePcmPla
         }
     }
     override suspend fun play(wav: ByteArray) = withContext(Dispatchers.IO) {
+        ensureActive()
         val pcm = voicePcm(wav)
-        val output = AudioTrack.Builder().setAudioAttributes(speechAudioAttributes())
-            .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(pcm.sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(maxOf(16384, AudioTrack.getMinBufferSize(pcm.sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)))
-            .build()
+        val (output, static) = createOutput(pcm)
         try {
             ensureActive()
             check(!closed && track.compareAndSet(null, output))
-            if (!paused.value) output.play()
+            val watchdog = VoicePcmPlaybackWatchdog()
             var written = 0
-            while (written < pcm.bytes) {
+            if (static) {
+                // A static write replaces the shared buffer, so load the complete
+                // clip in one call before play (including a one-frame clip).
+                written = output.write(wav, pcm.offset, pcm.bytes, AudioTrack.WRITE_NON_BLOCKING)
+                check(written == pcm.bytes) { "音声データを準備できませんでした" }
                 ensureActive()
-                val count = output.write(wav, pcm.offset + written, minOf(8192, pcm.bytes - written), AudioTrack.WRITE_NON_BLOCKING)
-                check(count >= 0) { "音声を再生できませんでした" }
-                written += count
-                if (count == 0) delay(10)
+                if (!paused.value) output.play()
+            } else {
+                if (!paused.value) output.play()
+                while (written < pcm.bytes) {
+                    ensureActive()
+                    val count = output.write(wav, pcm.offset + written, minOf(8192, pcm.bytes - written), AudioTrack.WRITE_NON_BLOCKING)
+                    check(count >= 0) { "音声を再生できませんでした" }
+                    written += count
+                    watchdog.observe(written, output.playbackHeadPosition.toLong() and 0xffffffffL, paused.value)
+                    if (count == 0) delay(10)
+                }
             }
-            while ((output.playbackHeadPosition.toLong() and 0xffffffffL) < pcm.bytes / 2) { ensureActive(); delay(10) }
+            while (true) {
+                ensureActive()
+                val played = output.playbackHeadPosition.toLong() and 0xffffffffL
+                if (played >= pcm.bytes / 2) break
+                watchdog.observe(written, played, paused.value)
+                delay(10)
+            }
         } finally {
             track.compareAndSet(output, null)
             runCatching { output.stop() }
             output.release()
         }
     }
-    override fun stop() {
+
+    private fun createOutput(pcm: VoicePcm): Pair<AudioTrack, Boolean> {
+        fun build(mode: Int, bytes: Int): AudioTrack = AudioTrack.Builder()
+            .setAudioAttributes(speechAudioAttributes())
+            .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(pcm.sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+            .setTransferMode(mode).setBufferSizeInBytes(bytes).build()
+        val bufferBytes = maxOf(16384, AudioTrack.getMinBufferSize(pcm.sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT))
+        val streaming = build(AudioTrack.MODE_STREAM, bufferBytes)
+        val fillsBuffer = try { pcm.bytes / 2 >= streaming.bufferCapacityInFrames }
+        catch (failure: Throwable) { streaming.release(); throw failure }
+        if (fillsBuffer) return streaming to false
+        // The actual capacity may be rounded up by the output device. Short clips
+        // use a fully preloaded static buffer, supported on every voice-capable OS.
+        streaming.release()
+        return build(AudioTrack.MODE_STATIC, pcm.bytes) to true
+    }
+    override fun interrupt() {
         runCatching { track.value?.pause() }
         runCatching { track.value?.flush() }
+    }
+    override fun stop() {
+        interrupt()
         lease.exchange(null)?.close()
     }
     override fun close() { closed = true; stop() }

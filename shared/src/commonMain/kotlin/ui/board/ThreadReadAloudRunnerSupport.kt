@@ -131,11 +131,13 @@ internal suspend fun runThreadReadAloudSession(
  * the first of the segments that were still to come; otherwise at the first new one; otherwise the end.
  */
 internal fun nextReadAloudIndexAfter(old: List<ReadAloudSegment>, spoken: Int, refreshed: List<ReadAloudSegment>): Int {
-    val same = refreshed.indexOf(old[spoken])
+    // Posts are matched by their id (L12): an updated text or a moved list position is still the same post.
+    val spokenId = old[spoken].postId
+    val same = refreshed.indexOfFirst { it.postId == spokenId }
     if (same >= 0) return same + 1
-    val ahead = old.drop(spoken + 1).toHashSet()
-    refreshed.indexOfFirst { it in ahead }.takeIf { it >= 0 }?.let { return it }
-    val known = old.toHashSet()
-    refreshed.indexOfFirst { it !in known }.takeIf { it >= 0 }?.let { return it }
+    val ahead = old.drop(spoken + 1).mapTo(HashSet()) { it.postId }
+    refreshed.indexOfFirst { it.postId in ahead }.takeIf { it >= 0 }?.let { return it }
+    val known = old.mapTo(HashSet()) { it.postId }
+    refreshed.indexOfFirst { it.postId !in known }.takeIf { it >= 0 }?.let { return it }
     return refreshed.size
 }

@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.ui.util.TOOLBAR_MIN_ITEM_WIDTH_DP
+import com.valoser.futacha.shared.ui.util.ToolbarOverflowHints
 
 /**
  * 原作のツールバーの項目。並び・ON/OFFは `catTBOrderName`／`catTBOrderBool`（スレッドは `sureTB…`）に保存する。
@@ -204,8 +205,9 @@ internal fun <T> FtutterBottomToolbar(
         val contentWidth = maxOf(maxWidth.value, fittedMetrics.leftSpace + fittedMetrics.rightSpace +
             buttonCount * width.value + (if (hasSpace) FTUTTER_TOOLBAR_SPACE_MIN else 0) +
             (if (hasOrder) FTUTTER_TOOLBAR_ORDER_WIDTH else 0)).dp
+        val scroll = rememberScrollState()
         Row(
-            Modifier.horizontalScroll(rememberScrollState()).width(contentWidth).height(metrics.iconHeight.dp),
+            Modifier.horizontalScroll(scroll).width(contentWidth).height(metrics.iconHeight.dp),
             horizontalArrangement = if (hasSpace) Arrangement.Start else Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -219,5 +221,6 @@ internal fun <T> FtutterBottomToolbar(
             }
             Spacer(Modifier.width(fittedMetrics.rightSpace.dp))
         }
+        ToolbarOverflowHints(scroll)
     }
 }

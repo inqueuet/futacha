@@ -222,6 +222,9 @@ internal class CompatHistoryTools(
     internal val filterRowsMemo = com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, List<ThreadHistoryEntry>>()
     var refreshing by mutableStateOf(false)
         private set
+    /** The history archive's export or import running now ("エクスポート"/"インポート"), or null (L60). */
+    var archiving by mutableStateOf<String?>(null)
+        private set
     internal var fileSystem: FileSystem? = null
     internal var sourceRepositories: List<SavedThreadRepository> = emptyList()
     internal var importedHistoryRepository: SavedThreadRepository? = null
@@ -279,8 +282,16 @@ internal class CompatHistoryTools(
         selectedSnapshotIds = snapshotIds
     )
 
+    // One export or import at a time, told as it starts, as the refresh below is (L60: each press started one more,
+    // all writing at once, and nothing was shown until one ended).
     private fun runArchive(actionLabel: String, block: suspend () -> String) {
         dialog = null
+        archiving?.let { running ->
+            onMessage("履歴の${running}はすでに実行中です")
+            return
+        }
+        archiving = actionLabel
+        onMessage("履歴の${actionLabel}を開始しました")
         scope.launch {
             val message = try {
                 block()
@@ -288,6 +299,8 @@ internal class CompatHistoryTools(
                 throw cancelled
             } catch (failure: Exception) {
                 buildBoardManagementHistoryArchiveFailureMessage(actionLabel, failure)
+            } finally {
+                archiving = null
             }
             if (message.isNotBlank()) onMessage(message)
         }
@@ -599,4 +612,14 @@ internal fun CompatHistoryMarksLine(canonicalUrl: String, marks: String) {
         fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp),
         color = LocalCompatibilityPalette.current.uiSecondaryText
     )
+}
+
+/** The confirmation of the drawer's "全て削除する" (L61): how many rows, and what else goes with a shared history. */
+internal fun compatHistoryClearConfirmation(count: Int, reachesEveryMode: Boolean): String = buildString {
+    append("この履歴${count}件をすべて削除します。")
+    if (reachesEveryMode) {
+        append("\n履歴はふたちゃ・ふたばー風・ふたったー風と共有なので、そちらの履歴からも消えます。")
+        append("自分の書き込みの記録と、自動保存したコピーも消えます。")
+    }
+    append("\n取り消せません。")
 }

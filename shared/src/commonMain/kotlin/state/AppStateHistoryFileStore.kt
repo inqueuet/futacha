@@ -22,7 +22,7 @@ private const val HISTORY_FILE_STORE_DIR = "private/history_store"
 private const val HISTORY_FILE_STORE_ENTRIES_DIR = "$HISTORY_FILE_STORE_DIR/entries"
 private const val HISTORY_FILE_STORE_MANIFEST_PATH = "$HISTORY_FILE_STORE_DIR/manifest.json"
 private const val HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH = "$HISTORY_FILE_STORE_DIR/manifest.json.backup"
-private const val HISTORY_FILE_STORE_VERSION = 1
+private const val HISTORY_FILE_STORE_VERSION = 2
 private const val HISTORY_FILE_KEY_PREFIX_MAX_LENGTH = 48
 private const val HISTORY_FILE_STORE_MAX_ENTRIES = APP_STATE_HISTORY_MAX_ENTRIES
 private const val HISTORY_FILE_STORE_MAX_MANIFEST_BYTES = 8L * 1024L * 1024L
@@ -31,9 +31,13 @@ private const val HISTORY_FILE_STORE_MAX_KEY_LENGTH = 96
 private const val HISTORY_FILE_STORE_MAX_IDENTITY_LENGTH = 8_192
 private const val HISTORY_FILE_STORE_READ_PARALLELISM = 8
 
+/** Existing split history is unavailable, rather than an uninitialized store. */
+internal class AppStateHistoryUnavailableException : IllegalStateException("保存済みの履歴の目録を読み込めませんでした。履歴は変更していません")
+
 @Serializable
 private data class AppStateHistoryFileManifest(
-    val version: Int = HISTORY_FILE_STORE_VERSION,
+    // Builds before independent backups omitted their default version=1.
+    val version: Int = 1,
     val revision: Long = 0L,
     val orderedEntries: List<AppStateHistoryFileManifestEntry> = emptyList()
 )
@@ -63,6 +67,8 @@ internal class AppStateHistoryFileStore(
     private val cachedEntriesByKey = HashMap<String, ThreadHistoryEntry>()
     private val manifestEntryByIdentity = mutableMapOf<String, AppStateHistoryFileManifestEntry>()
     private var legacyHistoryCleared = false
+    /** The backup missed the last change of the threads in it (its write failed); written again at the next write. */
+    private var backupBehind = false
 
     /**
      * Manifest entries whose file exists but could not be read (an I/O failure, not a missing
@@ -283,6 +289,7 @@ internal class AppStateHistoryFileStore(
 
         if (history.isEmpty() || !orderUnchanged) {
             val nextManifest = AppStateHistoryFileManifest(
+                version = HISTORY_FILE_STORE_VERSION,
                 revision = (previousManifest?.revision ?: 0L) + 1L,
                 orderedEntries = manifestEntries
             )
@@ -296,9 +303,12 @@ internal class AppStateHistoryFileStore(
                 // A stale backup is a recovery source. Clearing is not durable
                 // until both manifests explicitly point at the empty set.
                 fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest).getOrThrow()
-            } else {
+            } else if (membershipChanged || backupBehind) {
                 updateManifestBackup(encodedManifest)
             }
+            // A reorder only (a thread in the history opened again) leaves the backup: it was written in full on every
+            // reorder, up to megabytes twice (L135). As a recovery source it still holds every thread, in an older order;
+            // a backup that missed a change of the threads (its write failed) is written again at the next write.
         }
 
         if (history.isEmpty()) {
@@ -342,19 +352,17 @@ internal class AppStateHistoryFileStore(
         cachedEntriesByKey[key] = entry
     }
 
-    /**
-     * Points the backup at the manifest just written. Writes are atomic
-     * (a temporary file renamed over the target), so a hard link keeps this
-     * version even after the next manifest replaces the primary, without
-     * writing the whole manifest a second time. Providers without links copy.
-     */
+    /** Writes an independent current backup; entry-only changes skip this write. */
     private suspend fun updateManifestBackup(encodedManifest: String) {
-        val linked = fileSystem.linkOrCopy(HISTORY_FILE_STORE_MANIFEST_PATH, HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH)
-        if (linked.isSuccess) return
-        Logger.w(tag, "Failed to link split history manifest backup: ${linked.exceptionOrNull()?.message}")
-        fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest).onFailure { error ->
-            Logger.w(tag, "Failed to update split history manifest backup: ${error.message}")
-        }
+        // A hard link aliases the live manifest: in-place corruption destroys
+        // both recovery sources. The local file systems writeString atomically,
+        // so this replaces even a backup linked by an older build independently.
+        fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encodedManifest)
+            .onSuccess { backupBehind = false }
+            .onFailure { error ->
+                backupBehind = true
+                Logger.w(tag, "Failed to update split history manifest backup: ${error.message}")
+            }
     }
 
     private suspend fun readCurrentEntryHash(path: String): String? {
@@ -403,16 +411,112 @@ internal class AppStateHistoryFileStore(
     }
 
     private suspend fun readManifestOrNull(): AppStateHistoryFileManifest? {
-        return readManifestFile(HISTORY_FILE_STORE_MANIFEST_PATH)
-            ?: readManifestFile(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH)
+        val main = readManifestFile(HISTORY_FILE_STORE_MANIFEST_PATH)
+        main.manifest?.let { return upgradeLegacyManifestBackup(it) }
+        val backup = readManifestFile(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH)
+        backup.manifest?.let { return upgradeLegacyManifestBackup(it) }
+        // Only a genuinely absent split store may fall back to legacy JSON.
+        // Do not cache [], re-import stale legacy data, or replace an unreadable
+        // manifest on the next mutation. A later read can retry without restart.
+        if (main == ManifestRead.Absent && backup == ManifestRead.Absent) return null
+        // Both are there but broken (read, not decodable): a later read would find them broken again, and the history
+        // would never come, so a mode switch, the export and clearing waited for ever (L134). The manifest is made
+        // again from the entry files, newest visit first. A read that failed (it may pass later) still waits.
+        if (main != ManifestRead.Unreadable && backup != ManifestRead.Unreadable) {
+            rebuildManifestFromEntries()?.let { return it }
+        }
+        throw AppStateHistoryUnavailableException()
     }
 
-    private suspend fun readManifestFile(path: String): AppStateHistoryFileManifest? {
-        if (!fileSystem.exists(path)) return null
-        val raw = readBoundedString(path, HISTORY_FILE_STORE_MAX_MANIFEST_BYTES).getOrElse { error ->
-            Logger.w(tag, "Failed to read split history manifest '$path': ${error.message}")
+    /**
+     * The manifest made again from the entry files on disk, newest visit first, written as a fresh pair (a failed
+     * write still lets this start read the history). Null when entry files are there but none can be read: that may
+     * pass, so nothing is replaced.
+     */
+    private suspend fun rebuildManifestFromEntries(): AppStateHistoryFileManifest? {
+        val names = runSuspendCatchingPreservingCancellation {
+            if (fileSystem.exists(HISTORY_FILE_STORE_ENTRIES_DIR)) fileSystem.listFiles(HISTORY_FILE_STORE_ENTRIES_DIR) else emptyList()
+        }.getOrElse { error ->
+            Logger.w(tag, "Failed to list split history entries: ${error.message}")
             return null
         }
+        val keys = names.filter { it.endsWith(".json") }.map { it.removeSuffix(".json") }
+            .filter { it.length in 1..HISTORY_FILE_STORE_MAX_KEY_LENGTH && '/' !in it && '\\' !in it }
+        val gate = Semaphore(HISTORY_FILE_STORE_READ_PARALLELISM)
+        val loaded = coroutineScope {
+            keys.map { key ->
+                async {
+                    gate.withPermit {
+                        val raw = readBoundedString(historyEntryPath(key), HISTORY_FILE_STORE_MAX_ENTRY_BYTES).getOrNull()
+                            ?: return@withPermit null
+                        withContext(AppDispatchers.io) {
+                            runCatching { json.decodeFromString(ThreadHistoryEntry.serializer(), raw) }.getOrNull()
+                        }?.let { key to it }
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+        if (keys.isNotEmpty() && loaded.isEmpty()) return null
+        val seen = HashSet<String>()
+        val orderedEntries = loaded.sortedByDescending { (_, entry) -> entry.lastVisitedEpochMillis }
+            .mapNotNull { (key, entry) ->
+                val identity = historyEntryIdentity(entry).ifBlank { "entry::rebuilt::$key" }
+                if (seen.add(identity)) AppStateHistoryFileManifestEntry(key, identity) else null
+            }
+            .take(HISTORY_FILE_STORE_MAX_ENTRIES)
+        val rebuilt = AppStateHistoryFileManifest(version = HISTORY_FILE_STORE_VERSION, revision = 1L, orderedEntries = orderedEntries)
+        runSuspendCatchingPreservingCancellation {
+            val encoded = json.encodeToString(AppStateHistoryFileManifest.serializer(), rebuilt)
+            require(encoded.encodeToByteArray().size.toLong() <= HISTORY_FILE_STORE_MAX_MANIFEST_BYTES) {
+                "Rebuilt history manifest exceeds the read limit"
+            }
+            fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encoded).getOrThrow()
+            fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_PATH, encoded).getOrThrow()
+        }.onFailure { error ->
+            Logger.w(tag, "Failed to write the rebuilt history manifest: ${error.message}")
+        }
+        Logger.w(tag, "Rebuilt the broken history manifest from ${orderedEntries.size} entry files")
+        return rebuilt
+    }
+
+    private suspend fun upgradeLegacyManifestBackup(manifest: AppStateHistoryFileManifest): AppStateHistoryFileManifest {
+        if (manifest.version >= HISTORY_FILE_STORE_VERSION) return manifest
+        val upgraded = manifest.copy(version = HISTORY_FILE_STORE_VERSION)
+        val encoded = json.encodeToString(AppStateHistoryFileManifest.serializer(), upgraded)
+        return runSuspendCatchingPreservingCancellation {
+            require(encoded.encodeToByteArray().size.toLong() <= HISTORY_FILE_STORE_MAX_MANIFEST_BYTES) {
+                "Upgraded history manifest exceeds the read limit"
+            }
+            // Break an old shared inode before marking the live manifest as
+            // upgraded. Read-only/full storage must still allow readable history.
+            fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_BACKUP_PATH, encoded).getOrThrow()
+            fileSystem.writeString(HISTORY_FILE_STORE_MANIFEST_PATH, encoded).getOrThrow()
+            upgraded
+        }.onFailure { error ->
+            Logger.w(tag, "Failed to separate legacy history manifest backup: ${error.message}")
+        }.getOrDefault(manifest)
+    }
+
+    /** A manifest file: read, absent, there but not readable now, or read but broken. */
+    private sealed interface ManifestRead {
+        val manifest: AppStateHistoryFileManifest? get() = null
+        class Loaded(override val manifest: AppStateHistoryFileManifest) : ManifestRead
+        data object Absent : ManifestRead
+        data object Unreadable : ManifestRead
+        data object Broken : ManifestRead
+    }
+
+    private suspend fun readManifestFile(path: String): ManifestRead {
+        if (!fileSystem.exists(path)) return ManifestRead.Absent
+        val raw = readBoundedString(path, HISTORY_FILE_STORE_MAX_MANIFEST_BYTES).getOrElse { error ->
+            Logger.w(tag, "Failed to read split history manifest '$path': ${error.message}")
+            // Over the size limit is broken for good; anything else may pass on a later read.
+            return if (error is IllegalArgumentException) ManifestRead.Broken else ManifestRead.Unreadable
+        }
+        return decodeManifest(path, raw)?.let(ManifestRead::Loaded) ?: ManifestRead.Broken
+    }
+
+    private suspend fun decodeManifest(path: String, raw: String): AppStateHistoryFileManifest? {
         return withContext(AppDispatchers.io) {
             runCatching {
                 json.decodeFromString(AppStateHistoryFileManifest.serializer(), raw)

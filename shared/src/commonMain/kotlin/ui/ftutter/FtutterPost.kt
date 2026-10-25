@@ -99,6 +99,9 @@ internal fun ftutterDraftKey(target: FtutterPostTarget, boardUrl: String): Strin
 internal fun parseFtutterDrafts(raw: String?): Map<String, FtutterDraft> =
     raw?.takeIf { it.isNotBlank() }?.let { runCatching { draftJson.decodeFromString(draftsSerializer, it) }.getOrNull() }.orEmpty()
 
+internal fun encodeFtutterDraftsForStore(drafts: Map<String, FtutterDraft>): String =
+    draftJson.encodeToString(draftsSerializer, drafts)
+
 /** 下書きを書き換える。空の下書きは消す。新しいものを前に、多すぎる時は古いものから落とす。 */
 internal fun ftutterDraftsWith(drafts: Map<String, FtutterDraft>, key: String, draft: FtutterDraft?): String =
     ftutterDraftsUpdate(drafts, key, draft).encoded
@@ -150,7 +153,7 @@ internal fun ftutterBoundDrafts(drafts: Map<String, FtutterDraft>): FtutterDraft
     return FtutterDraftsUpdate(encoded, truncated, dropped)
 }
 
-private fun FtutterDraft.boundedForStore(): FtutterDraft = FtutterDraft(
+internal fun FtutterDraft.boundedForStore(): FtutterDraft = FtutterDraft(
     title = title.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
     name = name.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
     mail = mail.ftutterTakeChars(FTUTTER_DRAFT_MAX_FIELD_CHARS),
@@ -205,8 +208,12 @@ internal data class FtutterPostInput(val draft: FtutterDraft, val image: ImageDa
  * 書き込み画面に出す理由（監査M6）。添付の誤りと、送信の検査・失敗の理由を別々に出す（以前は添付の誤りが1つあると、
  * 削除キーが空・本文が空・送信の失敗の理由が隠れ、押しても何も起きないように見えた）。
  */
-internal fun ftutterPostErrors(attachmentError: String?, error: String?): List<String> =
-    listOfNotNull(attachmentError, error).filter { it.isNotBlank() }.distinct()
+internal fun ftutterPostErrors(vararg errors: String?): List<String> =
+    errors.filterNotNull().filter { it.isNotBlank() }.distinct()
+
+internal fun ftutterSourceAttachmentNotice(fileName: String, canAttach: Boolean): String =
+    if (canAttach) "取り込み元の添付: $fileName\nファイル本体はバックアップに含まれません。添付ボタンから選び直してください。"
+    else "取り込み元の添付: $fileName\nこの板の返信には画像を添付できないため、取り込み元の添付は使われません。"
 
 /** 書き込む・閉じるを押せるか（監査M7：「あぷ小」のアップロード中は、ファイル名が本文に入る前に送る・閉じて放置するのを防ぐ）。 */
 internal fun ftutterPostCanSend(sending: Boolean, attachmentProcessing: Boolean, uploading: Boolean): Boolean =
@@ -244,7 +251,10 @@ internal fun FtutterPostDialog(
     onSent: (String?) -> Unit,
     onDismiss: () -> Unit,
     handwritingEnabled: Boolean = false,
-    onHandwritingSaved: (ImageData) -> Unit = {}
+    /** 手書きのコピーを保存する。失敗した時はその文を返し、書き込み画面の中に出す（L22）。 */
+    onHandwritingSaved: suspend (ImageData) -> String? = { null },
+    /** 書いている手書きを残す場所。アプリと一緒に消えた手書きを、次に開いた時に復元できる（L69）。null なら残さない。 */
+    drawingRecoveryFileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()
@@ -260,8 +270,10 @@ internal fun FtutterPostDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var confirmOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
+    var closeConfirmOpen by remember { mutableStateOf(false) }
     var deleteKeyOpen by remember { mutableStateOf(false) }
     var drawingOpen by remember { mutableStateOf(false) }
+    var handwritingError by remember { mutableStateOf<String?>(null) }
     // この画面で変えた削除キーは、保存が届く前でもすぐ使う（監査L11：変えてすぐ送ると古いキーで送っていた）。
     var deleteKeyNow by remember(deleteKey) { mutableStateOf(deleteKey) }
     var upsBusy by remember { mutableStateOf(false) }
@@ -270,10 +282,21 @@ internal fun FtutterPostDialog(
     var sent by remember { mutableStateOf(false) }
     fun draft() = FtutterDraft(title, name, mail, comment, sourceAttachmentPath)
     LaunchedEffect(attachment.image) { if (attachment.image != null) sourceAttachmentPath = "" }
-    fun close() {
+    fun saveAndClose() {
         if (!ftutterPostCanClose(sending, upsBusy)) return
         onSaveDraft(draft(), true)
+        attachment.clear()
         onDismiss()
+    }
+    fun close() {
+        if (!ftutterPostCanClose(sending, upsBusy)) return
+        // 下書きにファイル本体は残らない。戻る・枠外・閉じるのどこからでも、失う前に確認する（監査M32）。
+        // 選んだ直後の処理中や、圧縮の返答待ちのファイルも対象にする。
+        if (attachment.image != null || attachment.processing || attachment.pendingCompression != null) {
+            closeConfirmOpen = true
+        } else {
+            saveAndClose()
+        }
     }
     LaunchedEffect(Unit) {
         var saved = draft()
@@ -385,9 +408,6 @@ internal fun FtutterPostDialog(
                     modifier = Modifier.fillMaxWidth().testTag("ftutter-post-mail"))
                 com.valoser.futacha.shared.ui.board.ImeOutlinedTextField(comment, { comment = it }, label = { Text("コメント") },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("ftutter-post-comment"))
-                if (sourceAttachmentPath.isNotEmpty()) Text(
-                    "取り込み元の添付: ${sourceAttachmentPath.substringAfterLast('/')}\nファイル本体はバックアップに含まれません。添付ボタンから選び直してください。",
-                    color = colors.text, modifier = Modifier.testTag("ftutter-draft-attachment-reselect"))
                 if (!(imgB && isReply) || attachment.image?.isHandwriting == true) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
@@ -398,7 +418,7 @@ internal fun FtutterPostDialog(
                             color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                         )
                         if (attachment.image != null) {
-                            IconButton(onClick = { attachment.clear() }, modifier = Modifier.testTag("ftutter-post-detach")) {
+                            IconButton(onClick = { attachment.clear(); handwritingError = null }, modifier = Modifier.testTag("ftutter-post-detach")) {
                                 Icon(Icons.Rounded.Close, contentDescription = "添付を外す", tint = colors.text)
                             }
                         }
@@ -409,9 +429,14 @@ internal fun FtutterPostDialog(
                         }
                     }
                 }
-                if (sourceAttachmentPath.isNotEmpty()) Text(
-                    "取り込み元の添付: ${sourceAttachmentPath.substringAfterLast('/')}\nファイル本体はバックアップに含まれません。添付ボタンから選び直してください。",
-                    color = colors.text, modifier = Modifier.testTag("ftutter-draft-attachment-reselect"))
+                // 取り込み元の添付の案内は1つだけ。この板の返信のように添付できない時は、選び直せとは言わず消せるようにする（L15）。
+                if (sourceAttachmentPath.isNotEmpty()) {
+                    val canAttach = !(imgB && isReply)
+                    Text(ftutterSourceAttachmentNotice(sourceAttachmentPath.substringAfterLast('/'), canAttach),
+                        color = colors.text, modifier = Modifier.testTag("ftutter-draft-attachment-reselect"))
+                    if (!canAttach) TextButton(onClick = { sourceAttachmentPath = "" },
+                        modifier = Modifier.testTag("ftutter-draft-attachment-dismiss")) { Text("案内を消す") }
+                }
                 if (!(imgB && isReply)) {
                     // 他のアプリから共有された画像（監査M12：他の3モードと同じく、ここで添付するか破棄する。以前はこのモードに
                     // ボタンが無く、案内だけ出て添付できず、画像がメモリに残った）。
@@ -419,7 +444,7 @@ internal fun FtutterPostDialog(
                         attachment.offer(it, capabilities, isReply)
                     }
                 }
-                ftutterPostErrors(attachment.error, error).forEach {
+                ftutterPostErrors(attachment.error, handwritingError, error).forEach {
                     Text(it, color = colors.deleted, modifier = Modifier.testTag("ftutter-post-error"))
                 }
                 if (attachment.processing || upsBusy) Text(
@@ -477,9 +502,14 @@ internal fun FtutterPostDialog(
                         onSaved = { image ->
                             attachment.offer(image, capabilities, isReply)
                             drawingOpen = false
-                            onHandwritingSaved(image)
+                            handwritingError = null
+                            // The copy's result comes later; the drawing screen does not wait for it (L39).
+                            scope.launch { onHandwritingSaved(image)?.let { handwritingError = it } }
                         },
-                        onBack = { drawingOpen = false }
+                        onBack = { drawingOpen = false },
+                        // 参照ヘルプの「手書き」の節だけを出す（L70。としあき(仮)のヘルプ全体を開いていた）。
+                        helpSectionId = com.valoser.futacha.shared.ui.compat.COMPAT_DRAWING_HELP_SECTION,
+                        recoveryFileSystem = drawingRecoveryFileSystem
                     )
                 }
             }
@@ -491,6 +521,20 @@ internal fun FtutterPostDialog(
             title = { Text("この内容で書き込みますか？") },
             confirmButton = { TextButton(onClick = { confirmOpen = false; send() }, modifier = Modifier.testTag("ftutter-post-confirm")) { Text("OK") } },
             dismissButton = { TextButton(onClick = { confirmOpen = false }) { Text("キャンセル") } }
+        ) }
+    }
+    if (closeConfirmOpen) {
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { closeConfirmOpen = false },
+            title = { Text("添付ファイルを破棄して閉じますか？") },
+            text = { Text("添付ファイルは下書きに残りません。文字の下書きは保存します。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    closeConfirmOpen = false
+                    saveAndClose()
+                }) { Text("破棄して閉じる") }
+            },
+            dismissButton = { TextButton(onClick = { closeConfirmOpen = false }) { Text("キャンセル") } }
         ) }
     }
     if (clearOpen) {

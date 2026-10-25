@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.futaber
 
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
+import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.compatImageNgDisplayTitle
 import com.valoser.futacha.shared.compat.compatThreadReferenceDisplayValue
 import com.valoser.futacha.shared.model.BoardSummary
@@ -40,16 +41,27 @@ internal fun futaberThreadDetailNgKindLabel(kind: CompatNgKind): String = when (
 /** What a rule's scope key stands for: a thread (its title) or a board (its name), keyed as the shared rules are. */
 internal fun futaberThreadNgScopeTitles(
     history: List<ThreadHistoryEntry>,
-    boards: List<BoardSummary>
+    boards: List<BoardSummary>,
+    /** Only these keys are needed; the history is not looked at further once all are found (L110). Null: every key. */
+    wanted: Set<String>? = null
 ): Map<String, String> {
     val titles = HashMap<String, String>()
     val boardsById = boards.associateBy { it.id }
     boards.forEach { board -> futaberNgScopeKey(board)?.let { if (it !in titles) titles[it] = board.name } }
-    history.forEach { entry ->
-        val board = boardsById[entry.boardId] ?: return@forEach
+    fun allFound() = wanted != null && wanted.all { it in titles }
+    if (allFound()) return titles
+    // Each board's canonical address is worked out once, not once per history row.
+    val threadUrlPrefix = HashMap<String, String?>()
+    for (entry in history) {
+        val board = boardsById[entry.boardId] ?: continue
+        val prefix = threadUrlPrefix.getOrPut(board.id) { canonicalizeBoardUrl(board.url)?.let { "${it}res/" } }
+        val threadUrl = prefix?.let { "$it${entry.threadId}.htm" } ?: futaberHistoryThreadUrl(board, entry.threadId)
         // Rows that key to the same thread carry the same title; the first one is used.
-        val threadKey = futaberCompatTabKey(board, entry.threadId)
-        if (threadKey !in titles) titles[threadKey] = entry.title.ifBlank { "(無題)" }
+        val threadKey = com.valoser.futacha.shared.compat.compatTabKey(threadUrl)
+        if (threadKey !in titles) {
+            titles[threadKey] = entry.title.ifBlank { "(無題)" }
+            if (wanted != null && threadKey in wanted && allFound()) break
+        }
     }
     return titles
 }

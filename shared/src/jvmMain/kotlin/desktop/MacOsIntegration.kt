@@ -62,10 +62,11 @@ object MacOsIntegration {
 
     suspend fun notificationSettings() { MacNative.call("notificationSettings").checked() }
 
-    suspend fun notify(identifier: String, title: String, body: String, threadUrl: String) {
-        require(com.valoser.futacha.shared.compat.canonicalizeThreadUrl(threadUrl) != null)
+    suspend fun notify(identifier: String, title: String, body: String, threadUrl: String?) {
+        require(threadUrl == null || com.valoser.futacha.shared.compat.canonicalizeThreadUrl(threadUrl) != null)
+        // The helper queues no link for an empty URL, so a click only activates the app (L126).
         MacNative.operation("notify", "notificationId" to identifier, "title" to title.take(120),
-            "body" to body.take(1000), "url" to threadUrl)
+            "body" to body.take(1000), "url" to threadUrl.orEmpty())
     }
 
     suspend fun share(text: String, file: String?) {

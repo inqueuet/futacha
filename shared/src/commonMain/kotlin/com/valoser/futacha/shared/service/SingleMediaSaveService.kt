@@ -24,9 +24,12 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-/**
- * Single media (image/video) save service used from media preview dialogs.
- */
+/** A destination failure aborts a batch instead of downloading every remaining item. */
+class MediaSaveDestinationException(cause: Throwable) : IllegalStateException(
+    "保存先に書き込めません。設定の「保存先」でフォルダを選び直してください。", cause
+)
+
+/** Single media (image/video) save service used from media preview dialogs. */
 @OptIn(ExperimentalTime::class)
 class SingleMediaSaveService(
     private val httpClient: HttpClient,
@@ -65,6 +68,7 @@ class SingleMediaSaveService(
         ) {
                 try {
                     Result.success(run {
+                        requireWritableDestination(baseSaveLocation)
                         val startedAtMillis = Clock.System.now().toEpochMilliseconds()
                         withMediaSaveSource(httpClient, fileSystem, normalizedUrl, originalMediaSource) { source ->
                             val headerContentLength = source.declaredSize
@@ -173,6 +177,18 @@ class SingleMediaSaveService(
     }
 
     private class StreamedPayload(val byteSize: Long, val savedRelativePath: String?)
+
+    /** In particular, SAF checks its write grant here, before opening a network source. */
+    private suspend fun requireWritableDestination(location: SaveLocation?) {
+        if (location == null) return
+        try {
+            fileSystem.createDirectory(location, "").getOrThrow()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw MediaSaveDestinationException(failure)
+        }
+    }
 
     /**
      * Streams [source] to [binaryTarget]. With [replaceLocation] the bytes are written beside an

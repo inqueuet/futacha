@@ -219,7 +219,7 @@ internal fun buildSavedThreadFallbackBoard(
         id = normalizedId,
         name = normalizedName,
         category = "",
-        url = "https://saved.invalid/$urlSegment",
+        url = "https://${com.valoser.futacha.shared.model.SAVED_THREAD_PLACEHOLDER_HOST}/$urlSegment",
         description = "Temporary board context for saved thread playback",
         pinned = false
     )

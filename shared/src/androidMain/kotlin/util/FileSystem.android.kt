@@ -542,7 +542,7 @@ class AndroidFileSystem(
         parentDir: DocumentFile,
         fileName: String
     ): DocumentFile {
-        val existing = findTreeChild(parentDir, fileName)
+        val existing = findTreeChildForChange(parentDir, fileName)
         return existing?.takeIf { file -> !runInterruptible { file.isDirectory } }
             ?: (runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
                 ?.also { recordTreeChild(parentDir, fileName, it) })
@@ -585,6 +585,29 @@ class AndroidFileSystem(
         return index.listings.child(parent.uri.toString(), name) { listTreeChildren(parent) }
     }
 
+    /**
+     * The file a write or a delete is about to change. Outside a save batch only [name] is asked for, in one query
+     * (L71: findFile asked every child's name, so each single save at a folder's root grew with the files there).
+     * Inside a batch the listed file is checked to still have [name]: some providers keep a document's ID when it
+     * is renamed outside the app, and the stale entry then pointed at that renamed file (L73: it was deleted or
+     * overwritten as the old file).
+     */
+    private suspend fun findTreeChildForChange(parent: DocumentFile, name: String): DocumentFile? {
+        if (coroutineContext[SafTreeIndex] == null) {
+            return try {
+                listTreeChildren(parent, setOf(name))[name]
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                runInterruptible { parent.findFile(name) }
+            }
+        }
+        val listed = findTreeChild(parent, name) ?: return null
+        if (runInterruptible { listed.name } == name) return listed
+        forgetTreeChild(parent, name)
+        return listTreeChildren(parent, setOf(name))[name]?.also { recordTreeChild(parent, name, it) }
+    }
+
     private suspend fun recordTreeChild(parent: DocumentFile, name: String, child: DocumentFile) {
         coroutineContext[SafTreeIndex]?.listings?.record(parent.uri.toString(), name, child)
     }
@@ -594,7 +617,10 @@ class AndroidFileSystem(
     }
 
     /** One provider query for all children of [parent], keyed by display name (first match wins). */
-    private suspend fun listTreeChildren(parent: DocumentFile): Map<String, DocumentFile> = runInterruptible {
+    private suspend fun listTreeChildren(
+        parent: DocumentFile,
+        requestedNames: Set<String>? = null
+    ): Map<String, DocumentFile> = runInterruptible {
         val parentUri = parent.uri
         val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
             parentUri, android.provider.DocumentsContract.getDocumentId(parentUri)
@@ -613,6 +639,9 @@ class AndroidFileSystem(
             while (cursor.moveToNext()) {
                 val documentId = cursor.getString(0) ?: continue
                 val name = cursor.getString(1) ?: continue
+                // fromTreeUri checks the provider through PackageManager. A fresh
+                // rename scan only needs its two names, not a wrapper for every row.
+                if (requestedNames != null && name !in requestedNames) continue
                 if (name in children) continue
                 val childUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
                 DocumentFile.fromTreeUri(context, childUri)?.let { children[name] = it }
@@ -909,16 +938,27 @@ class AndroidFileSystem(
                     resolveTreeParentDirectory(baseDir = baseDir, relativePath = fromRelative, createDirectories = false)
                 }
                 val targetName = toRelative.substringAfterLast('/')
-                val source = withSafWriteTimeout { parentDir.findFile(fileName) }
+                // Check the provider afresh so a file created outside this save is never
+                // replaced based on a cached absence. findFile asks for every child's
+                // name separately; one two-column query resolves both names instead.
+                val children = withSafWriteTimeout { listTreeChildren(parentDir, setOf(fileName, targetName)) }
+                val source = children[fileName]
                     ?: throw IllegalStateException("File to rename is missing: $fromRelative")
-                if (withSafWriteTimeout { parentDir.findFile(targetName) } != null) {
+                val existingTarget = children[targetName]
+                if (existingTarget != null) {
+                    recordTreeChild(parentDir, targetName, existingTarget)
                     return@runTreeUriCatching null
                 }
+                forgetTreeChild(parentDir, targetName)
                 // Providers without rename support return false or throw; the
                 // complete file then simply keeps its alternate name.
                 val renamed = withSafWriteTimeout { runCatching { source.renameTo(targetName) }.getOrDefault(false) }
                 if (!renamed) return@runTreeUriCatching null
                 val actualName = source.name ?: targetName
+                // renameTo can change the document URI. Drop the old name and index
+                // the renamed DocumentFile so a later overwrite uses the new URI.
+                forgetTreeChild(parentDir, fileName)
+                recordTreeChild(parentDir, actualName, source)
                 siblingSavedFilePath(fromRelative, actualName)
             }
             is SaveLocation.Bookmark -> Result.success(null)
@@ -1167,7 +1207,7 @@ class AndroidFileSystem(
                         relativePath = relativePath,
                         createDirectories = false
                     )
-                    val target = findTreeChild(parentDir, fileName) ?: return@runTreeUriCatching Unit
+                    val target = findTreeChildForChange(parentDir, fileName) ?: return@runTreeUriCatching Unit
                     forgetTreeChild(parentDir, fileName)
 
                     if (!deleteDocumentRecursively(target)) {

@@ -35,9 +35,16 @@ class VoicevoxInstrumentedTest {
     private val fixtures = arguments.getString("voiceFixtureRoot")?.let(::File)
         ?: File(context.getExternalFilesDir(null), "voice-fixtures")
     private val transfers = AtomicInteger()
+    private val nativeCreations = AtomicInteger()
     private val platform: VoicePlatform by lazy {
         val real = createVoicePlatform(context)
-        object : VoicePlatform by real { override fun directory() = root.absolutePath.toPath() }
+        object : VoicePlatform by real {
+            override fun directory() = root.absolutePath.toPath()
+            override fun createNative(pack: VoicePack): VoiceNativeSession {
+                nativeCreations.incrementAndGet()
+                return real.createNative(pack)
+            }
+        }
     }
     private val assets: VoiceAssetStore by lazy { VoiceAssetStore({ platform.directory() }, { Long.MAX_VALUE }, downloader = {
         object : AssetDownloader {
@@ -63,7 +70,7 @@ class VoicevoxInstrumentedTest {
             assertEquals("Physical-device checks must remain silent", 0, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
         }
     }
-    @After fun cleanup() { runtime?.close(); root.deleteRecursively() }
+    @After fun cleanup() { runtime?.close(); runBlocking { assets.delete() }; root.deleteRecursively() }
     private fun runtime(): SpeechRuntime = SpeechRuntime(context, platform, assets).also { runtime = it }
 
     @Test fun explicitDownloadSelectDeleteAndDownloadAgain() {
@@ -103,9 +110,18 @@ class VoicevoxInstrumentedTest {
         try {
             speaker.configure(SpeechSettings(engine = SpeechEngineKind.VOICEVOX_ZUNDAMON))
             withTimeout(60_000) { speaker.speak("ふたちゃの読み上げ音声を確認しています。") }
+            val notifications = context.getSystemService(android.app.NotificationManager::class.java)
+            delay(100) // Let a wrongly released foreground lease remove its notification.
+            val retainedNotification = notifications.activeNotifications.singleOrNull { it.id == 4204 }
+            assertNotNull("Playback protection must stay active between replies", retainedNotification)
             image.nativeExecutionReusesCallerBuffersAndSurvivesInvalidRequests()
             speaker.configure(SpeechSettings(rate = 1.5f, engine = SpeechEngineKind.VOICEVOX_ZUNDAMON, voicevoxPitch = 0.1f))
             withTimeout(60_000) { speaker.speak("速度と声の高さを変えて再生します。😀") }
+            assertEquals("The foreground service must not restart between replies", retainedNotification!!.postTime,
+                notifications.activeNotifications.single { it.id == 4204 }.postTime)
+            speaker.stop()
+            withTimeout(5_000) { while (notifications.activeNotifications.any { it.id == 4204 }) delay(10) }
+            assertEquals("Consecutive replies must reuse the native model", 1, nativeCreations.get())
             assertEquals("Playback must never download", 2, transfers.get())
         } finally { speaker.close() }
     }

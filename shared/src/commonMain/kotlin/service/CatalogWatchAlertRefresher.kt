@@ -43,6 +43,11 @@ class CatalogWatchAlertRefresher(
      * match of a cut-off run; one call keeps one summary notification per run.
      */
     suspend fun refresh(
+        /**
+         * Platform hosts pass their experience-profile gate, as to the other refreshers: the cursor and the diagnostics
+         * written at the end are refused after a mode switch (re-audit L82). The default writes as before.
+         */
+        commitGate: suspend (suspend () -> Unit) -> Boolean = { commit -> commit(); true },
         onMatchesFound: (suspend (List<CatalogWatchAlertMatch>) -> Unit)? = null
     ): CatalogWatchAlertRefreshResult {
         if (!refreshMutex.tryLock()) {
@@ -62,18 +67,26 @@ class CatalogWatchAlertRefresher(
             return result
         } finally {
             try { withContext(NonCancellable) { kotlinx.coroutines.withTimeoutOrNull(1000) { runCatching {
-            diagnosticsStore?.savePreference("compat.background.catalog_watch_cursor", if (interrupted) lastStartedBoardId.orEmpty() else "")
-            com.valoser.futacha.shared.compat.recordWatchRunDiagnostics(diagnosticsStore,
-                com.valoser.futacha.shared.compat.WATCH_RUN_CATALOG_KEY,
-                com.valoser.futacha.shared.compat.WatchRunDiagnostics(
-                    checkedAt = Clock.System.now().toEpochMilliseconds(),
-                    outcome = if (interrupted) "中断" else if (result?.failures.orEmpty().isNotEmpty()) "一部失敗" else "完了",
-                    targets = runTargetNames,
-                    words = runWords,
-                    matchCount = result?.matches?.size ?: detected.size,
-                    failures = result?.failures.orEmpty().map { "${it.boardName}: ${it.message}" },
-                    matchedTitles = (result?.matches ?: detected).map { it.title }
-                ))
+            val store = diagnosticsStore ?: return@runCatching
+            val cursor = if (interrupted) lastStartedBoardId.orEmpty() else ""
+            // Both behind the gate, and the cursor only when it moved: every run wrote "" again, and each write made
+            // the settings flow emit (re-audit L82, as M24 for the shared patrol).
+            commitGate {
+                if (store.preferences.first()[CATALOG_WATCH_CURSOR_KEY].orEmpty() != cursor) {
+                    store.savePreference(CATALOG_WATCH_CURSOR_KEY, cursor)
+                }
+                com.valoser.futacha.shared.compat.recordWatchRunDiagnostics(store,
+                    com.valoser.futacha.shared.compat.WATCH_RUN_CATALOG_KEY,
+                    com.valoser.futacha.shared.compat.WatchRunDiagnostics(
+                        checkedAt = Clock.System.now().toEpochMilliseconds(),
+                        outcome = if (interrupted) "中断" else if (result?.failures.orEmpty().isNotEmpty()) "一部失敗" else "完了",
+                        targets = runTargetNames,
+                        words = runWords,
+                        matchCount = result?.matches?.size ?: detected.size,
+                        failures = result?.failures.orEmpty().map { "${it.boardName}: ${it.message}" },
+                        matchedTitles = (result?.matches ?: detected).map { it.title }
+                    ))
+            }
             } } } } finally { refreshMutex.unlock() }
         }
     }
@@ -101,7 +114,7 @@ class CatalogWatchAlertRefresher(
                     WatchAlertBoardTarget(board, normalizedWatchWords)
                 }
             }
-        val cursor = diagnosticsStore?.preferences?.first()?.get("compat.background.catalog_watch_cursor")
+        val cursor = diagnosticsStore?.preferences?.first()?.get(CATALOG_WATCH_CURSOR_KEY)
         val cursorIndex = originalTargets.indexOfFirst { it.board.id == cursor }
         val targets = if (cursorIndex >= 0) originalTargets.drop(cursorIndex + 1) + originalTargets.take(cursorIndex + 1) else originalTargets
         runTargetNames = targets.map { it.board.name }
@@ -258,6 +271,8 @@ private sealed interface WatchAlertCatalogFetchOutcome {
 }
 
 internal const val MAX_WATCH_ALERT_MATCHES_PER_RUN = 5_000
+/** The last board a cut-off check started; the next check begins after it (empty = from the top). */
+private const val CATALOG_WATCH_CURSOR_KEY = "compat.background.catalog_watch_cursor"
 private const val CATALOG_WATCH_ALERT_TAG = "CatalogWatchAlertRefresher"
 
 

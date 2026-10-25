@@ -4,8 +4,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.time.Clock
 
 const val COMPAT_WATCH_RULES_KEY = "compat.watcher.rules"
 const val COMPAT_WATCH_ENABLED_KEY = "compat.watcher.enabled"
@@ -15,6 +17,8 @@ const val COMPAT_WATCH_NOTIFY_KEY = "compat.watcher.notify"
 private const val RESULT_PREFIX = "compat.watcher.result."
 internal const val MAX_COMPAT_WATCH_RESULTS = 500
 internal const val COMPAT_WATCH_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
+/** Joins the words one thread matched into [CompatWatchResult.keyword]. */
+internal const val COMPAT_WATCH_KEYWORD_SEPARATOR = " / "
 private val watcherJson = Json { ignoreUnknownKeys = true }
 private val watcherMutex = Mutex()
 
@@ -27,7 +31,15 @@ data class CompatWatchResult(
     val keyword: String,
     val insertedAtEpochMillis: Long,
     val active: Boolean = true,
-    val checkedAtEpochMillis: Long = 0
+    val checkedAtEpochMillis: Long = 0,
+    /**
+     * When the person deleted this result (L97). The row is kept, hidden from [CompatWatcherRepository.load], so a
+     * later patrol that still finds the thread in the catalog neither lists nor notifies it again. It is forgotten
+     * [COMPAT_WATCH_RETENTION_MILLIS] after the deletion, or sooner when a new result needs its slot.
+     */
+    val dismissedAtEpochMillis: Long? = null,
+    /** Opaque identity of a provider row, independent of its thread/keyword; never stored as an internal patrol result. */
+    @Transient val externalEntryKey: String? = null
 )
 
 internal const val MAX_COMPAT_WATCH_RULES = 500
@@ -104,7 +116,27 @@ fun compatWatchEnabled(preferences: Map<String, String>): Boolean =
 fun compatWatchAllowed(preferences: Map<String, String>, wifi: Boolean): Boolean =
     compatWatchEnabled(preferences) && (preferences[COMPAT_WATCH_WIFI_KEY] != "ON" || wifi)
 
-/** Fixed slots bound preference growth. Results never alias or delete browsing history. */
+/** A row's 7-day retention runs from its first detection, or from its deletion once deleted. */
+private val CompatWatchResult.retainedSinceEpochMillis: Long get() = dismissedAtEpochMillis ?: insertedAtEpochMillis
+
+private fun compatWatchKeywordWords(keyword: String): Set<String> = keyword.split(COMPAT_WATCH_KEYWORD_SEPARATOR)
+    .map(::normalizeCompatWatchText).filter(String::isNotBlank).toSet()
+
+/**
+ * Whether a thread the person deleted comes back: only when it now matches a word its deleted result did not
+ * (a keyword added or enabled since). The words it was deleted with never bring it back.
+ */
+private fun matchesWordNotDismissed(matchKeyword: String, dismissed: CompatWatchResult): Boolean =
+    !compatWatchKeywordWords(dismissed.keyword).containsAll(compatWatchKeywordWords(matchKeyword))
+
+/**
+ * Fixed slots bound preference growth. Results never alias or delete browsing history.
+ *
+ * Deleting a result (one or all) keeps its row as a hidden, dated record instead of removing it (L97), so the next
+ * patrol does not bring back a thread the person already dismissed while it is still in the catalog; new threads
+ * matching the same words still appear. The records share the result slots, give way first when a new result needs
+ * a slot (so the visible list keeps the same 500-row room as before), and expire 7 days after the deletion.
+ */
 class CompatWatcherRepository(private val store: CompatibilityStore) {
     suspend fun saveRules(rules: List<CompatWatchRule>) {
         store.savePreference(COMPAT_WATCH_RULES_KEY, encodeValidCompatWatchRules(rules))
@@ -128,7 +160,7 @@ class CompatWatcherRepository(private val store: CompatibilityStore) {
         preferences.filter { (key, value) -> key.startsWith(RESULT_PREFIX) && value.isBlank() }
             .keys.forEach { removals[it] = null }
         val all = decodeSlots(preferences)
-        val expired = all.filterValues { now - it.insertedAtEpochMillis > COMPAT_WATCH_RETENTION_MILLIS }
+        val expired = all.filterValues { now - it.retainedSinceEpochMillis > COMPAT_WATCH_RETENTION_MILLIS }
         expired.keys.forEach { removals[it] = null }
         return all - expired.keys
     }
@@ -137,7 +169,8 @@ class CompatWatcherRepository(private val store: CompatibilityStore) {
         val removals = mutableMapOf<String, String?>()
         val live = pruneInto(now, removals)
         if (removals.isNotEmpty()) store.savePreferences(removals)
-        live.values.sortedByDescending { it.history.contentUpdatedAtEpochMillis }
+        live.values.filter { it.dismissedAtEpochMillis == null }
+            .sortedByDescending { it.history.contentUpdatedAtEpochMillis }
     }
 
     /** Returns true for a newly detected URL, independently of whether it has been read. */
@@ -157,31 +190,50 @@ class CompatWatcherRepository(private val store: CompatibilityStore) {
             val now = match.history.contentUpdatedAtEpochMillis
             val previous = live.entries.firstOrNull { it.value.history.canonicalUrl == match.history.canonicalUrl }
             if (previous != null && previous.value.history.contentUpdatedAtEpochMillis > now) return@forEach
-            val slot = previous?.key ?: (0 until MAX_COMPAT_WATCH_RESULTS)
-                .map { "$RESULT_PREFIX$it" }.firstOrNull { it !in live }
-                ?: live.minBy { it.value.insertedAtEpochMillis }.key
+            // A thread the person deleted stays out, unless it now matches a word it was not deleted with.
+            if (previous?.value?.dismissedAtEpochMillis != null && !matchesWordNotDismissed(match.keyword, previous.value)) {
+                return@forEach
+            }
+            val shown = previous?.value?.takeIf { it.dismissedAtEpochMillis == null }
+            val slot = previous?.key ?: freeSlot(live)
             val result = CompatWatchResult(
                 history = match.history.copy(title = match.history.title.take(1000), scrollAnchor = ScrollAnchor()),
                 keyword = match.keyword.take(1000),
-                insertedAtEpochMillis = previous?.value?.insertedAtEpochMillis ?: now,
+                insertedAtEpochMillis = shown?.insertedAtEpochMillis ?: now,
                 checkedAtEpochMillis = now
             )
             live[slot] = result
             writes[slot] = watcherJson.encodeToString(result)
-            if (previous == null) newUrls += match.history.canonicalUrl
+            if (shown == null) newUrls += match.history.canonicalUrl
         }
         if (writes.isNotEmpty()) store.savePreferences(writes)
         newUrls
     }
 
-    suspend fun delete(url: String) = watcherMutex.withLock {
-        val keys = slots().filterValues { it.history.canonicalUrl == url }.keys
-        if (keys.isNotEmpty()) store.savePreferences(keys.associateWith { null })
+    /**
+     * A slot for a new result: a free one, else the oldest deleted thread's record, else the oldest result.
+     * Records of deletions give way before any shown result, so remembering them never costs a result its place.
+     */
+    private fun freeSlot(live: Map<String, CompatWatchResult>): String =
+        (0 until MAX_COMPAT_WATCH_RESULTS).map { "$RESULT_PREFIX$it" }.firstOrNull { it !in live }
+            ?: live.entries.filter { it.value.dismissedAtEpochMillis != null }
+                .minByOrNull { it.value.dismissedAtEpochMillis ?: 0L }?.key
+            ?: live.minBy { it.value.insertedAtEpochMillis }.key
+
+    /** Hides the result of [url] and remembers it was deleted, so later patrols do not record it again (L97). */
+    suspend fun delete(url: String, now: Long = Clock.System.now().toEpochMilliseconds()) = watcherMutex.withLock {
+        dismiss(slots().filterValues { it.history.canonicalUrl == url }, now)
     }
 
-    suspend fun deleteAll() = watcherMutex.withLock {
-        val keys = slots().keys
-        if (keys.isNotEmpty()) store.savePreferences(keys.associateWith { null })
+    /** "すべて削除": every shown result is hidden and remembered the same way as a single deletion. */
+    suspend fun deleteAll(now: Long = Clock.System.now().toEpochMilliseconds()) = watcherMutex.withLock {
+        dismiss(slots(), now)
+    }
+
+    private suspend fun dismiss(rows: Map<String, CompatWatchResult>, now: Long) {
+        val writes = rows.filterValues { it.dismissedAtEpochMillis == null }
+            .mapValues { (_, result) -> watcherJson.encodeToString(result.copy(dismissedAtEpochMillis = now)) }
+        if (writes.isNotEmpty()) store.savePreferences(writes)
     }
 
     suspend fun markGone(checked: CompatWatchResult) = markChecked(checked, true, checked.history.contentUpdatedAtEpochMillis)

@@ -4,6 +4,212 @@ import Foundation
 import WebKit
 import shared
 
+// BEGIN APP LOCK SNAPSHOT PROTECTION
+/// Covers native sheets as well as Compose; the window never becomes key, so presenters keep their state/focus.
+final class FutachaAppSnapshotProtection {
+    static let shared = FutachaAppSnapshotProtection()
+    private var installed = false
+    private var enabled = true // Unknown/unreadable configuration fails closed until the direct Flow collector resolves it.
+    private var observers: [NSObjectProtocol] = []
+    private var scenes: [String: FutachaSnapshotScene] = [:]
+
+    func install() {
+        guard !installed else { return }
+        installed = true
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: Notification.Name("com.valoser.futacha.app-lock-snapshot-configuration"), object: nil, queue: .main) { [weak self] note in
+            self?.setEnabled((note.userInfo?["enabled"] as? NSNumber)?.boolValue ?? true)
+        })
+        observers.append(center.addObserver(forName: Notification.Name("com.valoser.futacha.app-lock-snapshot-frame"), object: nil, queue: .main) { [weak self] note in
+            if let identifier = note.userInfo?["sceneIdentifier"] as? String { self?.lockFrameDidDraw(sceneIdentifier: identifier) }
+        })
+        for name in [UIScene.willDeactivateNotification, UIScene.didEnterBackgroundNotification, UIScene.didActivateNotification, UIScene.didDisconnectNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self, let scene = note.object as? UIWindowScene else { return }
+                switch note.name {
+                case UIScene.willDeactivateNotification: self.willDeactivate(scene)
+                case UIScene.didEnterBackgroundNotification: self.didEnterBackground(scene)
+                case UIScene.didActivateNotification: self.didActivate(scene)
+                default:
+                    self.scenes.removeValue(forKey: scene.session.persistentIdentifier)?.hide()
+                }
+            })
+        }
+    }
+
+    private func state(_ scene: UIWindowScene) -> FutachaSnapshotScene {
+        let key = scene.session.persistentIdentifier
+        if let existing = scenes[key] { return existing }
+        let state = FutachaSnapshotScene(scene: scene, owner: self)
+        scenes[key] = state
+        return state
+    }
+    func setEnabled(_ enabled: Bool) {
+        self.enabled = enabled
+        if !enabled { SavedHtmlDocumentStore.shared.protectionDisabled() }
+        for state in scenes.values {
+            if !enabled { state.hide() }
+            else if !state.active {
+                if state.scene?.activationState == .background { state.backgrounded = true; state.lockFrameReady = false; SavedHtmlDocumentStore.shared.protectBackground() }
+                state.show()
+            }
+        }
+    }
+    func willDeactivate(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = false
+        state.eulaFrameReady = false
+        state.cancelRelease()
+        if enabled { state.show() }
+    }
+    func didEnterBackground(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = false
+        state.backgrounded = true
+        state.lockFrameReady = false
+        state.eulaFrameReady = false
+        state.cancelRelease()
+        if enabled { state.show(); SavedHtmlDocumentStore.shared.protectBackground() }
+    }
+    func didActivate(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = true
+        if !enabled || !state.backgrounded { state.hide(); return }
+        // A static, already-locked Compose screen also has to draw a fresh foreground frame.
+        NotificationCenter.default.post(name: Notification.Name("com.valoser.futacha.app-lock-snapshot-redraw"), object: nil)
+        state.eulaHost?.setNeedsDisplay()
+        tryRelease(state)
+    }
+    func lockFrameDidDraw(sceneIdentifier: String) {
+        guard let state = scenes[sceneIdentifier], state.active, state.backgrounded, enabled else { return }
+        state.lockFrameReady = true
+        SavedHtmlDocumentStore.shared.lockPresentationDidDraw()
+        tryRelease(state)
+    }
+    func savedHtmlPresentationChanged() { for state in scenes.values { tryRelease(state) } }
+    fileprivate func canRelease(_ state: FutachaSnapshotScene) -> Bool {
+        let safeEula = state.eulaFrameReady && state.eulaHost?.mayAcknowledge == true
+        return enabled && state.active && state.backgrounded && (state.lockFrameReady || safeEula) && !SavedHtmlDocumentStore.shared.isSheetPresented
+    }
+    private func tryRelease(_ state: FutachaSnapshotScene) {
+        if canRelease(state) { state.releaseAfterPresentedFrame() }
+    }
+    fileprivate func eulaHostAttached(_ host: FutachaEulaSnapshotDrawView) {
+        guard host.mayAcknowledge, let scene = host.window?.windowScene else { return }
+        let state = state(scene)
+        if state.eulaHost !== host {
+            state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = host
+        }
+    }
+    fileprivate func eulaHostDidDraw(_ host: FutachaEulaSnapshotDrawView) {
+        guard let identifier = host.window?.windowScene?.session.persistentIdentifier,
+              let state = scenes[identifier], state.eulaHost === host, host.mayAcknowledge,
+              enabled, state.active, state.backgrounded else { return }
+        state.eulaFrameReady = true
+        SavedHtmlDocumentStore.shared.eulaPresentationDidDraw()
+        tryRelease(state)
+    }
+    fileprivate func eulaHostDetached(_ host: FutachaEulaSnapshotDrawView) {
+        for state in scenes.values where state.eulaHost === host {
+            state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = nil
+        }
+    }
+    /// Revoke synchronously before accepting the EULA can create any private Compose content.
+    func leaveEula() {
+        for state in scenes.values {
+            state.eulaHost?.mayAcknowledge = false
+            if state.eulaHost != nil {
+                state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = nil
+            }
+        }
+    }
+}
+
+private final class FutachaSnapshotScene: NSObject {
+    weak var scene: UIWindowScene?
+    unowned let owner: FutachaAppSnapshotProtection
+    var active: Bool
+    var backgrounded = false
+    var lockFrameReady = false
+    weak var eulaHost: FutachaEulaSnapshotDrawView?
+    var eulaFrameReady = false
+    private var cover: UIWindow?
+    private var releaseLink: CADisplayLink?
+    private var presentedFrames = 0
+
+    init(scene: UIWindowScene, owner: FutachaAppSnapshotProtection) {
+        self.scene = scene; self.owner = owner; active = scene.activationState == .foregroundActive
+    }
+    func show() {
+        guard cover == nil, let scene else { return }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let controller = UIViewController()
+        controller.view.backgroundColor = .systemBackground
+        controller.view.accessibilityIdentifier = "app-lock-snapshot-cover"
+        controller.view.isAccessibilityElement = true
+        controller.view.accessibilityLabel = "ロック画面を準備しています"
+        controller.view.accessibilityViewIsModal = true
+        window.rootViewController = controller
+        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+        window.isHidden = false // Do not call makeKeyAndVisible: share/picker/sheet ownership stays unchanged.
+        cover = window
+    }
+    func hide() {
+        cancelRelease()
+        cover?.isHidden = true
+        cover = nil
+        backgrounded = false
+        lockFrameReady = false
+        eulaFrameReady = false
+    }
+    func cancelRelease() { releaseLink?.invalidate(); releaseLink = nil; presentedFrames = 0 }
+    func releaseAfterPresentedFrame() {
+        guard cover != nil, releaseLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(presentationTick))
+        releaseLink = link
+        link.add(to: .main, forMode: .common)
+    }
+    @objc private func presentationTick() {
+        guard owner.canRelease(self) else { cancelRelease(); return }
+        presentedFrames += 1
+        // The acknowledgement came from draw, not layout. Keep covering at least the next display interval.
+        if presentedFrames >= 2 { hide() }
+    }
+}
+
+/// Only the public, pre-Root EULA installs this view. Absence of a Root alone
+/// never authorises release, and a removed/revoked host cannot acknowledge a later draw.
+private final class FutachaEulaSnapshotDrawView: UIView {
+    var mayAcknowledge = true
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        FutachaAppSnapshotProtection.shared.eulaHostDetached(self)
+        if window != nil && mayAcknowledge {
+            FutachaAppSnapshotProtection.shared.eulaHostAttached(self)
+            setNeedsDisplay()
+        }
+    }
+    override func draw(_ rect: CGRect) {
+        super.draw(rect)
+        FutachaAppSnapshotProtection.shared.eulaHostDidDraw(self)
+    }
+    func revoke() {
+        mayAcknowledge = false
+        FutachaAppSnapshotProtection.shared.eulaHostDetached(self)
+    }
+}
+private struct FutachaEulaSnapshotDraw: UIViewRepresentable {
+    func makeUIView(context: Context) -> FutachaEulaSnapshotDrawView {
+        let view = FutachaEulaSnapshotDrawView()
+        view.isOpaque = false; view.backgroundColor = .clear; view.isUserInteractionEnabled = false
+        return view
+    }
+    func updateUIView(_ uiView: FutachaEulaSnapshotDrawView, context: Context) {}
+    static func dismantleUIView(_ uiView: FutachaEulaSnapshotDrawView, coordinator: ()) { uiView.revoke() }
+}
+// END APP LOCK SNAPSHOT PROTECTION
+
 struct SavedHtmlDocument: Identifiable {
     let id = UUID()
     let url: URL
@@ -18,6 +224,8 @@ final class SavedHtmlDocumentStore: ObservableObject {
     @Published private(set) var isAppUnlocked = false
     private var securityScopedURL: URL?
     private var appLockObserver: NSObjectProtocol?
+    private var awaitingLockFrame = false
+    private(set) var isSheetPresented = false
 
     private init() {
         appLockObserver = NotificationCenter.default.addObserver(
@@ -26,6 +234,7 @@ final class SavedHtmlDocumentStore: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             let unlocked = (notification.userInfo?["unlocked"] as? NSNumber)?.boolValue ?? false
+            if unlocked && self?.awaitingLockFrame == true { return } // Discard a pre-background unlock notification.
             if self?.isAppUnlocked != unlocked {
                 self?.isAppUnlocked = unlocked
             }
@@ -47,10 +256,26 @@ final class SavedHtmlDocumentStore: ObservableObject {
         return true
     }
 
+    func protectBackground() {
+        awaitingLockFrame = true
+        isAppUnlocked = false
+    }
+    func lockPresentationDidDraw() { awaitingLockFrame = false }
+    // The EULA itself remains a separate presentation gate. This permits a
+    // future Root unlock notification; it neither unlocks nor presents HTML.
+    func eulaPresentationDidDraw() { awaitingLockFrame = false }
+    func protectionDisabled() { awaitingLockFrame = false }
+    func sheetPresented() {
+        isSheetPresented = true
+        FutachaAppSnapshotProtection.shared.savedHtmlPresentationChanged()
+    }
+
     /// onDismiss of the sheet. SwiftUI clears the binding before calling it when
     /// the user closes the sheet; when the document was replaced, the old sheet
     /// is dismissed while `document` already holds the new one, which stays open.
     func sheetDismissed() {
+        isSheetPresented = false
+        FutachaAppSnapshotProtection.shared.savedHtmlPresentationChanged()
         guard document == nil else { return }
         releaseSecurityScopedAccess()
     }
@@ -420,13 +645,16 @@ struct ContentView: View {
                     }
             } else {
                 UserGeneratedContentEulaView {
+                    FutachaAppSnapshotProtection.shared.leaveEula()
                     acceptedEulaVersion = ugcEulaCurrentVersion
                     isUiTestEulaOverrideActive = false
                 }
+                .background(FutachaEulaSnapshotDraw().allowsHitTesting(false))
             }
         }
         .sheet(item: presentedSavedHtmlDocument, onDismiss: savedHtmlStore.sheetDismissed) { document in
             SavedHtmlDocumentView(document: document)
+                .onAppear { savedHtmlStore.sheetPresented() }
         }
         .onAppear {
 #if DEBUG

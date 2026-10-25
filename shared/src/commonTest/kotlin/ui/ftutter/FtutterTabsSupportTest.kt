@@ -65,6 +65,33 @@ class FtutterTabsSupportTest {
         assertEquals(setOf(FtutterKeys.TABS, FtutterKeys.OPENING, FtutterKeys.PROTECTED), saved.keys)
     }
 
+    /** L17(b): a restored tab whose history row was removed comes back with the title it had when it was closed. */
+    @Test
+    fun aRestoredTabBringsBackItsHistoryRowWithItsTitle() {
+        val entry = ThreadHistoryEntry("2", "may-27", "閉じたスレの題名", "https://may.2chan.net/27/thumb/2s.jpg", "may 27",
+            url(2), lastVisitedEpochMillis = 5, replyCount = 10)
+        val state = FtutterTabState(FtutterTabs(listOf(url(1), url(2)), url(1)), emptySet()) { _, _ -> }
+        state.entryOf = { if (it == url(2)) entry else null }
+        state.close(listOf(url(2)))
+        val restored = state.restoreTab()
+        assertEquals(entry, restored?.entry)
+        val board = BoardSummary("may-27", "may 27", "", "https://may.2chan.net/27/futaba.php", "")
+        val row = ftutterRestoredHistoryEntry(restored?.entry, board, "2", now = 99)
+        assertEquals("閉じたスレの題名", row.title)
+        assertEquals(entry.titleImageUrl, row.titleImageUrl)
+        assertEquals(99, row.lastVisitedEpochMillis)
+        assertEquals("", ftutterRestoredHistoryEntry(null, board, "2", now = 99).title, "Without a row the original's empty row is used")
+    }
+
+    /** L130: the confirmation counts the tabs a lower limit closes, leaving out the protected and the open tab. */
+    @Test
+    fun theTabsALowerLimitClosesAreCountedWithoutProtectedOrOpenTabs() {
+        val tabs = FtutterTabs((1..5).map(::url), url(1))
+        assertEquals(2, ftutterTabsClosedByLimit(tabs, setOf(url(2)), 2))
+        assertEquals(0, ftutterTabsClosedByLimit(tabs, setOf(url(2)), 10))
+        assertEquals(3, ftutterTabsClosedByLimit(tabs, setOf(url(2)), 0))
+    }
+
     @Test
     fun theTabsAfterOneFollowTheOrderShown() {
         assertEquals(listOf(url(3), url(4)), ftutterTabsAfter(listOf(url(1), url(2), url(3), url(4)), url(2)))

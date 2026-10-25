@@ -84,4 +84,17 @@ class WebVideoJavaScriptTest {
             check("errors().length===0 && messages.indexOf('ready')>=0 && messages[messages.length-1]==='idle'")
         }
     }
+
+    /** L116: the start script runs in JavaScriptCore: it sets loop, and calls play() once only when asked. */
+    @Test fun theStartScriptSetsLoopAndPlaysOnlyWhenAsked() {
+        player().apply {
+            evaluateScript("var playCalls=0; v.loop=false; v.play=function(){playCalls++; return {catch:function(){}};};")
+            evaluateScript(buildWebVideoStartJavaScript(loop = true, autoPlay = false))
+            check("v.loop===true && playCalls===0")
+            evaluateScript(buildWebVideoStartJavaScript(loop = false, autoPlay = true))
+            check("v.loop===false && playCalls===1")
+            evaluateScript(buildWebVideoSyncJavaScript(resolveVideoPlayerWebSyncState(1f, false, true, loop = true)))
+            check("v.loop===true && playCalls===1")
+        }
+    }
 }

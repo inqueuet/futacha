@@ -218,21 +218,27 @@ internal object ThreadHtmlParserCore {
     )
 
     // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
-    suspend fun parseThread(html: String, baseUrl: String? = null): ThreadPage = kotlinx.coroutines.withContext(AppDispatchers.parsing) {
+    suspend fun parseThread(html: String, baseUrl: String? = null): ThreadPage =
+        parseThread(html, baseUrl, MAX_REFERENCE_BUILD_TIME_MS)
+
+    /** [referenceBuildTimeMs] is the time budget for the quote links; a test passes a negative one to run out of it. */
+    internal suspend fun parseThread(html: String, baseUrl: String?, referenceBuildTimeMs: Long): ThreadPage =
+        kotlinx.coroutines.withContext(AppDispatchers.parsing) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
         val parseStartedAt = TimeSource.Monotonic.markNow()
         withTimeoutOrNull(MAX_PARSE_TIME_MS) {
-            parseThreadWithinBudget(html, baseUrl, parseStartedAt)
+            parseThreadWithinBudget(html, baseUrl, parseStartedAt, referenceBuildTimeMs)
         } ?: throw ParserException("Thread parse timed out after ${MAX_PARSE_TIME_MS}ms")
     }
 
     private suspend fun parseThreadWithinBudget(
         html: String,
         fallbackBaseUrl: String?,
-        parseStartedAt: TimeMark
+        parseStartedAt: TimeMark,
+        referenceBuildTimeMs: Long = MAX_REFERENCE_BUILD_TIME_MS
     ): ThreadPage {
         return try {
             val normalized = normalizeLineBreaksIfNeeded(html)
@@ -296,12 +302,11 @@ internal object ThreadHtmlParserCore {
             }
 
             // FIX: Build references and counts in a single pass to reduce CPU usage
-            val referenceData = buildReferencesAndCounts(posts)
+            val referenceData = buildReferencesAndCounts(posts, referenceBuildTimeMs)
             if (referenceData.timedOut) {
-                isTruncated = true
-                if (truncationReason.isNullOrBlank()) {
-                    truncationReason = "Reference rebuild exceeded time budget (${MAX_REFERENCE_BUILD_TIME_MS}ms)"
-                }
+                // Every post was read; only some quote links are missing, which is not a page cut short (L103: a
+                // complete thread was fetched again for supplements and labelled as partial). Nothing is shown for it.
+                Logger.w(TAG, "Reference rebuild exceeded time budget (${referenceBuildTimeMs}ms); posts are complete")
             }
             val postsWithReferences = posts.map { post ->
                 post.copy(
@@ -601,10 +606,10 @@ internal object ThreadHtmlParserCore {
         }
     }
 
-    private fun buildReferencesAndCounts(posts: List<Post>): ThreadReferenceData {
+    private fun buildReferencesAndCounts(posts: List<Post>, referenceBuildTimeMs: Long): ThreadReferenceData {
         return buildThreadReferenceData(
             posts = posts,
-            config = buildThreadReferenceConfig(),
+            config = buildThreadReferenceConfig(referenceBuildTimeMs),
             decodeHtmlEntities = ::decodeHtmlEntities,
             stripTags = ::stripTags
         )
@@ -668,10 +673,12 @@ internal object ThreadHtmlParserCore {
         return if (slashIndex == -1) url else url.substring(0, slashIndex)
     }
 
-    private fun buildThreadReferenceConfig(): ThreadReferenceBuildConfig {
+    private fun buildThreadReferenceConfig(
+        referenceBuildTimeMs: Long = MAX_REFERENCE_BUILD_TIME_MS
+    ): ThreadReferenceBuildConfig {
         return ThreadReferenceBuildConfig(
             tag = TAG,
-            maxReferenceBuildTimeMs = MAX_REFERENCE_BUILD_TIME_MS,
+            maxReferenceBuildTimeMs = referenceBuildTimeMs,
             maxPartialMatchScanLines = MAX_PARTIAL_MATCH_SCAN_LINES,
             minPartialMatchLength = MIN_PARTIAL_MATCH_LENGTH,
             noReferenceRegex = noReferenceRegex,

@@ -93,11 +93,19 @@ internal fun futaberToggleFavorite(favorites: List<FutaberFavorite>, favorite: F
 internal fun futaberRemoveFavorite(favorites: List<FutaberFavorite>, key: FutaberTabKey): List<FutaberFavorite> =
     favorites.filterNot { it.key == key }
 
-/** A removed board takes its favourites with it; deleting a thread from the history does not. */
+/**
+ * A removed board takes its favourites with it; deleting a thread from the history does not. An empty board list is not
+ * taken as every board removed (L113: an unread or undecodable list emptied every favourite); a board deleted in this
+ * mode drops its favourites explicitly ([futaberFavoritesWithoutBoard]), the last one included.
+ */
 internal fun futaberPruneFavorites(favorites: List<FutaberFavorite>, boards: List<BoardSummary>): List<FutaberFavorite> {
+    if (boards.isEmpty()) return favorites
     val boardIds = boards.mapTo(HashSet()) { it.id }
     return favorites.filter { it.boardId in boardIds }
 }
+
+internal fun futaberFavoritesWithoutBoard(favorites: List<FutaberFavorite>, boardId: String): List<FutaberFavorite> =
+    favorites.filterNot { it.boardId == boardId }
 
 /** What one favourite row shows; the count follows the history when the thread was read since. */
 internal data class FutaberFavoriteView(

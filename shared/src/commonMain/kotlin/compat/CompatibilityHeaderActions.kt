@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.compat
 
+import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+
 enum class CompatHeaderExtractionKind { QUOTE, ID, IP }
 
 sealed interface CompatHeaderTapTarget {
@@ -42,11 +44,15 @@ private val compatHeaderIdentityPattern = Regex("(?:ID|IP):[^\\s<]+", RegexOptio
  * Returns every visible ID/IP token in source order.  New parser snapshots normally keep
  * an ID in posterId, while IP (and older cached IDs) can still be present in timestamp.
  */
-fun compatPosterIdentities(post: CompatPostSnapshot): List<CompatPosterIdentity> {
-    val fromTimestamp = compatHeaderIdentityPattern.findAll(post.timestamp)
+fun compatPosterIdentities(post: CompatPostSnapshot): List<CompatPosterIdentity> =
+    compatPosterIdentities(post.timestamp, post.posterId)
+
+/** Header fields only: callers with a live Post need not allocate a compatibility snapshot. */
+internal fun compatPosterIdentities(timestamp: String, posterId: String?): List<CompatPosterIdentity> {
+    val fromTimestamp = compatHeaderIdentityPattern.findAll(timestamp)
         .mapNotNull { parseCompatPosterIdentity(it.value) }
         .toList()
-    return (fromTimestamp + listOfNotNull(parseCompatPosterIdentity(post.posterId)))
+    return (fromTimestamp + listOfNotNull(parseCompatPosterIdentity(posterId)))
         .distinct()
 }
 
@@ -175,8 +181,39 @@ private fun compatQuoteReplyPredicate(source: CompatPostSnapshot, posts: List<Co
     val sourceFileNames by lazy(LazyThreadSafetyMode.NONE) { compatPostMediaFileNames(source) }
     val sourceIdentities by lazy(LazyThreadSafetyMode.NONE) { compatPosterIdentities(source) }
     val sourceMatcher by lazy(LazyThreadSafetyMode.NONE) { CompatQuoteTextMatcher(source) }
-    return { candidate ->
-        candidate.position > source.position && candidate.messageHtml.toCompatPlainText().lineSequence().any { line ->
+    // Old snapshots have no parsed mappings. Rebuild once only if one of their
+    // nested quotes needs the same depth/block semantics as the displayed count.
+    val rebuiltReferences by lazy(LazyThreadSafetyMode.NONE) {
+        val page = CompatThreadSnapshot("", 0L, 0L, posts = posts.sortedBy { it.position }).toThreadPage("")
+        ThreadHtmlParserCore.rebuildReferences(page.posts).associate { it.id to it.quoteReferences }
+    }
+    // A thread read by the current parser carries quote mappings; a post of it without one only has quotes the parser
+    // could not resolve, which the "Nレス" count leaves out. Older caches have none anywhere and keep the compatibility
+    // matching below (M12).
+    val parsedThread = posts.any { it.quoteReferences.isNotEmpty() }
+    return predicate@{ candidate ->
+        if (candidate.position <= source.position) return@predicate false
+        if (candidate.quoteReferences.isNotEmpty()) {
+            return@predicate candidate.quoteReferences.any { source.postNo in it.replyTargetPostIds }
+        }
+        val plainText = candidate.messageHtml.toCompatPlainText()
+        if (parsedThread) {
+            // L138: no unbounded partial-text match for those (it listed posts the count did not include); an IP quote
+            // is still listed, as before (the decision for L138).
+            return@predicate plainText.lineSequence().any { line ->
+                val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
+                query.startsWith("ip:", ignoreCase = true) && query.substringAfter(':').trim().let { value ->
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
+                }
+            }
+        }
+        if (plainText.lineSequence().any { line -> line.trimStart().takeWhile { it == '>' || it == '＞' }.length > 1 }) {
+            val references = rebuiltReferences[candidate.postNo].orEmpty()
+            if (references.isNotEmpty()) return@predicate references.any { source.postNo in it.replyTargetPostIds }
+        }
+        // Keep the compatibility resolver's number-led text, IP, header and
+        // partial-text fallbacks for legacy lines with no parsed mapping.
+        plainText.lineSequence().any { line ->
             val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
             when {
                 query.startsWith("no:", ignoreCase = true) ->

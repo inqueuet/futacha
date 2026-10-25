@@ -172,4 +172,16 @@ class CompatBoardUpdateTest {
         assertEquals(512, boards.size)
         assertTrue(boards.all { it.name.length <= 256 })
     }
+
+    @Test
+    fun menuUpdatesOnlyAddBoardsThatFitWithoutDroppingExistingOnes() {
+        fun board(index: Int) = CompatBoard("b$index", "板$index", "https://may.2chan.net/board$index/",
+            "https://may.2chan.net/board$index/", index)
+        val latest = (0 until com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS).map(::board)
+        val discovered = (30_000..30_002).map(::board)
+        assertEquals(emptyList(), planCompatBoardMenuUpsert(discovered, emptyList(), latest))
+        val added = planCompatBoardMenuUpsert(discovered, emptyList(), latest.dropLast(1))
+        assertEquals(listOf(discovered.first().key), added.map { it.key })
+        assertEquals(latest.lastIndex, added.single().sortOrder)
+    }
 }

@@ -192,6 +192,7 @@ internal fun rememberGlobalSettingsScreenRuntime(
         historyJsonByteSize = historyJsonSize,
         showHistoryDiagnostics = shouldShowHistoryDiagnostics
     )
+    val cleanupState = remember { GlobalSettingsCleanupState() }
     val callbackBundle = buildGlobalSettingsCallbackBundle(
         inputs = GlobalSettingsCallbackBundleInputs(
             currentManualSaveInput = { manualSaveInput },
@@ -219,7 +220,8 @@ internal fun rememberGlobalSettingsScreenRuntime(
             },
             refreshAutoSavedStats = {
                 refreshAutoSavedStatsWithDiagnostics()
-            }
+            },
+            cleanupState = cleanupState
         )
     )
     val scaffoldBindings = buildGlobalSettingsScaffoldBindings(

@@ -48,6 +48,20 @@ internal fun threadImageSearchTargets(imageUrl: String): List<CompatImageSearchT
         )
     }
 
+/** Shared choices and media support decide availability; a mode preference only changes their order. */
+internal fun threadImageSearchDialogTargets(
+    imageUrl: String,
+    selectedTargets: String?,
+    preferredTarget: CompatImageSearchTarget?
+): List<CompatImageSearchTarget> {
+    val supported = threadImageSearchTargets(imageUrl)
+    val selected = if (selectedTargets == null) supported
+        else parseCompatImageSearchTargets(selectedTargets).filter { it in supported }
+    return if (preferredTarget != null && preferredTarget in selected) {
+        listOf(preferredTarget) + selected.filter { it != preferredTarget }
+    } else selected
+}
+
 internal suspend fun searchThreadImage(
     httpClient: HttpClient?,
     imageUrl: String,
@@ -90,9 +104,7 @@ internal fun ThreadImageSearchDialog(
     val features = LocalFutachaSharedFeatures.current
     val selectedTargets = features?.preferences?.get(COMPAT_CUSTOM_IMAGE_SEARCH_KEY)
     val targets = remember(imageUrl, selectedTargets, preferredTarget) {
-        val supported = threadImageSearchTargets(imageUrl)
-        if (preferredTarget != null) supported.filter { it == preferredTarget }
-        else if (selectedTargets == null) supported else parseCompatImageSearchTargets(selectedTargets).filter { it in supported }
+        threadImageSearchDialogTargets(imageUrl, selectedTargets, preferredTarget)
     }
     var pendingTarget by remember(imageUrl) { mutableStateOf<CompatImageSearchTarget?>(null) }
     var result by remember(imageUrl) { mutableStateOf<CompatImageSearchResult?>(null) }

@@ -16,7 +16,8 @@ internal class VideoMosaicKernel {
         append(") { vec2 xy=destCoord(); vec2 p=vec2(xy.x/size.x,1.0-xy.y/size.y); float block=0.0; float darkness=0.0;\n")
         repeat(16) { i ->
             append("{ vec2 d=(p-r$i.xy)/r$i.zw; bool inside=s$i.x>0.5 && s$i.x<1.5 ? dot(d,d)<=1.0 : max(abs(d.x),abs(d.y))<=1.0; ")
-            append("if(inside && s$i.x>1.5) { vec2 cell=min(floor((d*0.5+0.5)*128.0),vec2(127.0)); inside=sample(masks,samplerTransform(masks,vec2(${i%4*128}.0,${i/4*128}.0)+cell+0.5)).r>0.5; } ")
+            // Atlas bytes and local mask cells count from the top; Core Image samples from the bottom.
+            append("if(inside && s$i.x>1.5) { vec2 cell=min(floor((d*0.5+0.5)*128.0),vec2(127.0)); vec2 m=vec2(${i%4*128}.0,${i/4*128}.0)+cell+0.5; m.y=512.0-m.y; inside=sample(masks,samplerTransform(masks,m)).r>0.5; } ")
             append("if(inside) { block=max(block,s$i.y); darkness=max(darkness,s$i.z); } }\n")
         }
         append("vec2 q=xy; if(block>0.0) { float cell=block*min(size.x,size.y); q=clamp((floor(xy/cell)+0.5)*cell,vec2(0.5),size-vec2(0.5)); } vec4 c=sample(image,samplerTransform(image,q)); return vec4(c.rgb*(1.0-darkness),c.a); }")

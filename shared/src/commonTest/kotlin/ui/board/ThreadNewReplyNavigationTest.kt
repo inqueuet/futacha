@@ -21,7 +21,7 @@ class ThreadNewReplyNavigationTest {
 
     @Test fun reopeningUsesHistoryCountAndWaitsThroughShorterCachedCopies() {
         val tracker = ThreadNewPostTracker(initialKnownPostCount = 3)
-        tracker.onPostsLoaded(posts(1, 2))
+        tracker.onPostsLoaded(posts(1, 2), complete = false)
         assertTrue(tracker.newPostIds.isEmpty())
         tracker.onPostsLoaded(posts(1, 2, 3, 4, 5))
         assertEquals(setOf("4", "5"), tracker.newPostIds)

@@ -137,6 +137,7 @@ internal object FtutterKeys {
     // ジェスチャー
     val USE_GESTURE = k("useGesture")
     val GESTURE_SENSITIVITY = k("kando")
+    // Legacy key only. Transport always uses HTTPS; backups no longer import this value.
     val USE_HTTPS = k("useHttps")
     val USE_CUSTOM_TAB = k("useChromeCustomTab")
     val IMAGE_SEARCH_ASCII2D = k("nijigenGazouSyousaiKensaku")

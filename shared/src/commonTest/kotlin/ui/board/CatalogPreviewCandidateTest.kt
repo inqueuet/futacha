@@ -32,4 +32,16 @@ class CatalogPreviewCandidateTest {
         assertFalse(shouldAdvanceCatalogPreviewCandidate(1, candidates, full, IllegalStateException("timeout")))
         assertFalse(shouldAdvanceCatalogPreviewCandidate(2, candidates, full, HttpException(NetworkResponse(code = 404))))
     }
+
+    @Test
+    fun anExplicitThumbnailFallbackIsSafeAfterAnyOriginalFailure() {
+        val candidates = listOf(full, thumb)
+        for (error in listOf(HttpException(NetworkResponse(code = 500)), IllegalStateException("timeout"),
+            IllegalArgumentException("decode failed"))) {
+            assertTrue(shouldAdvanceCatalogPreviewCandidate(0, candidates, thumb, error,
+                allowThumbnailFallbackOnError = true))
+            assertFalse(shouldAdvanceCatalogPreviewCandidate(1, candidates, thumb, error,
+                allowThumbnailFallbackOnError = true))
+        }
+    }
 }

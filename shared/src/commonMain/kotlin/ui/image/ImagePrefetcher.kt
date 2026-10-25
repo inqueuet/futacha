@@ -6,6 +6,7 @@ import coil3.getExtra
 import coil3.intercept.Interceptor
 import coil3.request.ImageRequest
 import coil3.request.ImageResult
+import coil3.request.Options
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -14,6 +15,9 @@ import kotlinx.coroutines.sync.withPermit
 
 private val PrefetchRequest = Extras.Key(false)
 private val prefetchPermit = Semaphore(1)
+
+internal fun ImageRequest.Builder.imagePrefetchRequest() = apply { extras[PrefetchRequest] = true }
+internal fun Options.isImagePrefetchRequest(): Boolean = getExtra(PrefetchRequest)
 
 /** Counts consumers, not decoded images: Coil still owns size/key-specific caching. */
 internal object VisibleImageRequests {
@@ -59,7 +63,7 @@ internal class ImagePrefetcher(private val imageLoader: ImageLoader) {
                                 val job = scope.launch(start = CoroutineStart.LAZY) {
                                     try {
                                         prefetchPermit.withPermit {
-                                            imageLoader.execute(request.newBuilder().apply { extras[PrefetchRequest] = true }.build())
+                                            imageLoader.execute(request.newBuilder().imagePrefetchRequest().build())
                                         }
                                     } finally { completed.update { it + 1 } }
                                 }

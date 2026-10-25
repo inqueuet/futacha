@@ -653,7 +653,8 @@ class WatchSyncManager(
 
     private fun openMainActivity(): Boolean {
         val intent = Intent(context, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            // CLEAR_TOP|SINGLE_TOP: the existing root receives it, never a second MainActivity above a picker (M79).
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return runCatching {
             context.startActivity(intent)
         }.onFailure { error ->

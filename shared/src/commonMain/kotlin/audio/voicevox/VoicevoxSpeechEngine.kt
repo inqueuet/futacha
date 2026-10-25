@@ -1,74 +1,173 @@
 package com.valoser.futacha.shared.audio.voicevox
 
 import com.valoser.futacha.shared.audio.*
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
 // Includes old roots whose cancelled synchronous native call has not returned yet.
 private val nativeExecution = Mutex()
+private val voicePlayback = Mutex()
+private class SharedVoiceModel(val key: Pair<VoicePlatform, VoicePack>, val session: VoiceNativeSession, var users: Int = 0)
+// Multiple speakers in one root (thread and settings sample) share the loaded model.
+// Access, reference counts and all C calls are serialized by nativeExecution.
+private val nativeModels = mutableMapOf<Pair<VoicePlatform, VoicePack>, SharedVoiceModel>()
 
-internal class VoicevoxSpeechEngine(private val runtime: SpeechRuntime) : SpeechBackend {
+internal class VoicevoxSpeechEngine(
+    private val runtime: SpeechRuntime,
+    private val acquirePack: suspend () -> VoicePackLease = runtime.assets::acquireVerifiedPack
+) : SpeechBackend {
     override val supportsPitch = true
-    private var settings = SpeechSettings()
-    private val active = MutableStateFlow<Job?>(null)
-    private var player: VoicePcmPlayer? = null
-    private var closed = false
-    override fun configure(settings: SpeechSettings) { this.settings = settings }
+    private val settings = MutableStateFlow(SpeechSettings())
+    private class Utterance(val job: Job) { val retainModel = MutableStateFlow(false) }
+    private data class Resources(val generation: Long, val pack: VoicePackLease, val native: SharedVoiceModel)
+    private val active = MutableStateFlow<Utterance?>(null)
+    private val player = MutableStateFlow<VoicePcmPlayer?>(null)
+    private val closed = MutableStateFlow(false)
+    private val generation = MutableStateFlow(0L)
+    private val execution = Mutex()
+    private val prepareLock = Mutex()
+    // Resources are only read/changed under execution, on the native dispatcher.
+    private var resources: Resources? = null
+    private val cleanup = CoroutineScope(SupervisorJob() + voiceNativeDispatcher + CoroutineExceptionHandler { _, failure ->
+        Logger.e("VoicevoxSpeechEngine", "音声エンジンの解放に失敗しました", failure)
+    })
+
+    override fun configure(settings: SpeechSettings) { this.settings.value = settings }
     override suspend fun availableVoices(): List<SpeechVoice> = emptyList()
-    override suspend fun prepare() {
-        check(!closed && runtime.platform.available) { runtime.platform.unavailableReason }
-        if (player == null) player = runtime.platform.createPlayer()
+    override suspend fun prepare() = prepareLock.withLock {
+        check(!closed.value && runtime.platform.available) { runtime.platform.unavailableReason }
+        if (player.value == null) {
+            val created = runtime.platform.createPlayer()
+            if (closed.value || !player.compareAndSet(null, created)) created.close()
+        }
+        check(!closed.value)
     }
+
     override suspend fun speak(text: String) = coroutineScope {
-        check(!closed)
-        val job = currentCoroutineContext()[Job]!!
-        active.exchange(job)?.takeIf { it !== job }?.cancel()
-        val configuration = settings
+        check(!closed.value)
+        val call = Utterance(currentCoroutineContext()[Job]!!)
+        active.exchange(call)?.job?.cancel()
+        val configuration = settings.value
+        val run = generation.value
         try {
-            runtime.assets.withVerifiedPack { pack ->
-                nativeExecution.withLock {
-                    withContext(voiceNativeDispatcher) {
-                        // Local lifetime/finally also runs when a caller cancels
-                        // during a synchronous C call. No native handle is returned
-                        // across a cancellable dispatcher boundary.
-                        val output = requireNotNull(player)
-                        output.prepare(::stop)
-                        var session: VoiceNativeSession? = null
+            withContext(voiceNativeDispatcher) {
+                execution.withLock {
+                    voicePlayback.withLock {
+                        ensureActive()
+                        if (closed.value || run != generation.value) throw CancellationException("読み上げを停止しました")
+                        val output = requireNotNull(player.value)
+                        var completed = false
                         try {
-                            session = runtime.platform.createNative(pack)
+                            output.prepare(::stop)
+                            if (resources?.generation != run) {
+                                releaseResources()
+                                val pack = acquirePack()
+                                try {
+                                    nativeExecution.withLock {
+                                        val key = runtime.platform to pack.pack
+                                        val native = nativeModels.getOrPut(key) { SharedVoiceModel(key, runtime.platform.createNative(pack.pack)) }
+                                        native.users++
+                                        // Own synchronous creates before checking cancellation.
+                                        resources = Resources(run, pack, native)
+                                        try { ensureActive() }
+                                        catch (cancelled: CancellationException) {
+                                            if (!call.retainModel.value) releaseResourcesLocked()
+                                            throw cancelled
+                                        }
+                                    }
+                                } catch (failure: Throwable) {
+                                    if (resources?.pack !== pack) pack.close()
+                                    throw failure
+                                }
+                            }
+                            val native = requireNotNull(resources).native.session
                             for (chunk in voicevoxTextChunks(text)) {
                                 ensureActive()
                                 if (!voicevoxHasSpokenText(chunk)) continue
-                                val original = Json.parseToJsonElement(session.query(chunk)).jsonObject
-                                val query = JsonObject(original + mapOf(
-                                    "speedScale" to JsonPrimitive(configuration.rate.coerceIn(0.5f, 2f)),
-                                    "pitchScale" to JsonPrimitive(configuration.voicevoxPitch.coerceIn(-0.15f, 0.15f)),
-                                    "outputSamplingRate" to JsonPrimitive(24000),
-                                    "outputStereo" to JsonPrimitive(false)
-                                )).toString()
-                                ensureActive()
-                                val wav = session.synthesize(query)
+                                val wav = nativeExecution.withLock {
+                                    ensureActive()
+                                    val analyzed = try { native.query(chunk) }
+                                    catch (_: VoiceTextAnalysisException) { return@withLock null }
+                                    val original = Json.parseToJsonElement(analyzed).jsonObject
+                                    val query = JsonObject(original + mapOf(
+                                        "speedScale" to JsonPrimitive(configuration.rate.coerceIn(0.5f, 2f)),
+                                        "pitchScale" to JsonPrimitive(configuration.voicevoxPitch.coerceIn(-0.15f, 0.15f)),
+                                        "outputSamplingRate" to JsonPrimitive(24000),
+                                        "outputStereo" to JsonPrimitive(false)
+                                    )).toString()
+                                    ensureActive()
+                                    val result = native.synthesize(query)
+                                    ensureActive()
+                                    result
+                                }
                                 ensureActive() // A stopped call never emits its late result.
+                                if (wav == null) continue
                                 require(wav.size in 44..16 * 1024 * 1024) { "音声データの長さが不正です" }
                                 output.play(wav)
                             }
-                        } finally { session?.close(); output.stop() }
+                            completed = true
+                        } finally {
+                            if (!completed) {
+                                try { if (call.retainModel.value) output.interrupt() else output.stop() }
+                                finally { if (!call.retainModel.value) releaseResources() }
+                            }
+                        }
                     }
                 }
             }
-        } finally { active.compareAndSet(job, null) }
+        } finally { active.compareAndSet(call, null) }
     }
+
+    /** Skip/seek cancels the current utterance while keeping the verified model. */
+    override fun interrupt() {
+        active.exchange(null)?.let { call ->
+            call.retainModel.value = true
+            call.job.cancel(CancellationException("読み上げ位置を変更しました"))
+        }
+        player.value?.interrupt()
+    }
+
     override fun stop() {
-        active.exchange(null)?.cancel(CancellationException("読み上げを停止しました"))
-        player?.stop()
+        val stopped = generation.updateAndGet { it + 1 }
+        active.exchange(null)?.job?.cancel(CancellationException("読み上げを停止しました"))
+        player.value?.stop()
+        cleanup.launch {
+            execution.withLock {
+                if (resources?.generation?.let { it < stopped } == true) withContext(NonCancellable) { releaseResources() }
+            }
+        }
     }
+
+    // Native destruction and releasing the pack are ordered after any synchronous
+    // query/synthesis. Deletion cannot remove files which that call is still using.
+    private suspend fun releaseResources() = withContext(NonCancellable) {
+        nativeExecution.withLock { releaseResourcesLocked() }
+    }
+
+    private fun releaseResourcesLocked() {
+        val old = resources ?: return
+        resources = null
+        try {
+            if (--old.native.users == 0) {
+                nativeModels.remove(old.native.key)
+                old.native.session.close()
+            }
+        } finally { old.pack.close() }
+    }
+
     override fun close() {
-        closed = true
+        if (!closed.compareAndSet(false, true)) return
         stop()
-        player?.close(); player = null
+        player.exchange(null)?.close()
+        cleanup.launch {
+            try { execution.withLock { withContext(NonCancellable) { releaseResources() } } }
+            finally { cleanup.cancel() }
+        }
         runtime.remove(this)
     }
 }

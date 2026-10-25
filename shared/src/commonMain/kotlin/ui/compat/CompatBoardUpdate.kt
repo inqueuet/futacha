@@ -194,6 +194,7 @@ internal fun planCompatBoardMenuUpsert(
     var nextSortOrder = (latest.maxOfOrNull(CompatBoard::sortOrder) ?: -1) + 1
     return discovered
         .filter { board -> board.canonicalUrl !in staleUrls && board.canonicalUrl !in latestUrls }
+        .take((com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS - latest.size).coerceAtLeast(0))
         .map { board -> board.copy(sortOrder = nextSortOrder++) }
 }
 

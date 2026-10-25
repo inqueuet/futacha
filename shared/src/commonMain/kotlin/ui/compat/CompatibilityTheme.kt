@@ -116,6 +116,9 @@ internal fun compatibilityPopupContent(palette: CompatibilityPalette): Color =
 
 internal fun compatibilitySettingsCategoryColor(palette: CompatibilityPalette): Color = palette.uiPrimaryText
 
+/** Help actions are UI text, independent of the optional thread/catalog body text colour. */
+internal fun compatibilityHelpEntryColor(palette: CompatibilityPalette): Color = compatibilityPopupContent(palette)
+
 /** Colours of the thread/catalog search bar (E-8). */
 internal data class CompatibilitySearchBarColors(
     val container: Color,

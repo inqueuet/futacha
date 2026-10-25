@@ -59,6 +59,10 @@ internal class FutachaSharedFeatures(
     val onTabsClosed: (com.valoser.futacha.shared.compat.ClosedTabBatch) -> Unit = {},
     val ngRulesState: State<List<com.valoser.futacha.shared.compat.CompatNgRule>?>? = null,
     val appStateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
+    /** Work that must outlive a screen (the copy of a handwritten picture, L39); null runs it on the caller's scope. */
+    val lastingScope: kotlinx.coroutines.CoroutineScope? = null,
+    /** The mode's notice at the bottom of the screen. */
+    val notify: (String) -> Unit = {},
     /** The host's sender of "閲覧スレ通知" (FutachaArchiveReport.kt); kept current by [ProvideFutachaSharedFeatures]. */
     val archiveReport: FutachaArchiveReportHost = FutachaArchiveReportHost()
 ) {
@@ -204,7 +208,8 @@ internal fun ProvideFutachaSharedFeatures(
     val scope = rememberCoroutineScope()
     val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion, appStateStore) {
         FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
-            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState, appStateStore = appStateStore)
+            cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState, appStateStore = appStateStore,
+            lastingScope = scope, notify = { notification = it })
     }
     SideEffect {
         features.archiveReport.onEnqueued = onArchiveReportEnqueued
@@ -324,7 +329,10 @@ internal fun ProvideFutachaSharedFeatures(
                         onOpenHelp = { settingsPaths = settingsPaths + "help" },
                         onNavigate = { settingsPaths = settingsPaths + it }, onBack = close,
                         // Only for the restore: the boards it brings are added to the AppStateStore's list (the AI page keeps its state).
-                        restoreBoardsInto = appStateStore
+                        restoreBoardsInto = appStateStore,
+                        // Work started here goes on after the settings are closed, its result told here (L58).
+                        lastingScope = scope,
+                        onLastingNotice = { notification = it }
                     )
                 }
             } }

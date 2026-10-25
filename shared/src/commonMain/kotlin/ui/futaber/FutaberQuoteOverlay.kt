@@ -56,7 +56,10 @@ internal fun FutaberQuoteOverlay(
     idLabels: Map<String, PosterIdLabel>,
     replyIndex: Map<String, List<Post>>,
     onNested: (FutaberQuoteKind, List<Post>, FutaberAnchor) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** A picture in a bubble opens the viewer / the picture menu like one in the thread (L145). */
+    onImageTap: ((Post) -> Unit)? = null,
+    onImageLongPress: ((Post) -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
     val density = LocalDensity.current
@@ -134,7 +137,9 @@ internal fun FutaberQuoteOverlay(
                             },
                             onRepliesTap = { nested ->
                                 onNested(FutaberQuoteKind.Replies, replyIndex[post.id].orEmpty(), nested)
-                            }
+                            },
+                            onImageTap = onImageTap?.takeIf { futaberImageUrlOf(post) != null }?.let { tap -> { tap(post) } },
+                            onImageLongPress = onImageLongPress?.takeIf { futaberImageUrlOf(post) != null }?.let { press -> { press(post) } }
                         )
                         HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
                     }

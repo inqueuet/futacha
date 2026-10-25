@@ -57,4 +57,30 @@ class FutachaAiScreenCommandSourceContractTest {
         assertTrue(body.contains("compatPlatformAiDisabledRejection(command, enabled)"))
         assertTrue(compat.contains("LaunchedEffect(platformAiDeepLink)"), "Android links are not handled")
     }
+
+    private val futaberSink by lazy { source("src/commonMain/kotlin/ui/futaber/FutaberAiCommands.kt") }
+
+    private fun linkEffect(text: String, end: String): String {
+        val start = text.indexOf("LaunchedEffect(platformAiDeepLink)")
+        assertTrue(start >= 0)
+        return text.substring(start, text.indexOf(end, start))
+    }
+
+    /**
+     * L121: the watch's "スマホで開く" link is run (or left to the watch's own copy) only in ふたちゃ mode; the other
+     * modes tell the person to use ふたちゃ mode instead of "AIアプリ操作は設定でOFFです" or running it.
+     */
+    @Test
+    fun aWatchRelayLinkIsAnsweredOutsideFutachaAndLeftAsItWasInFutacha() {
+        val compatBody = linkEffect(compat, "fun openSavedThread(")
+        val compatNotice = compatBody.indexOf("watchRelayLinkNoticeOutsideFutacha()")
+        assertTrue(compatNotice in 0 until compatBody.indexOf("deliverPlatformAiCommand(command, arrivedAt)"),
+            "としあき(仮) runs the watch relay link")
+        val sinkBody = linkEffect(futaberSink, "LaunchedEffect(AiCommandEffectKey(platformAiCommand))")
+        val sinkNotice = sinkBody.indexOf("watchRelayLinkNoticeOutsideFutacha()")
+        assertTrue(sinkNotice in 0 until sinkBody.indexOf("inbox.deliver("), "ふたばー風・ふたったー風 run the watch relay link")
+        val futachaBody = linkEffect(app, "LaunchedEffect(AiCommandEffectKey(platformAiCommand))")
+        assertTrue(futachaBody.contains("command.isWatchRelayLink()"))
+        assertFalse(futachaBody.contains("watchRelayLinkNoticeOutsideFutacha"), "ふたちゃ keeps its own handling")
+    }
 }

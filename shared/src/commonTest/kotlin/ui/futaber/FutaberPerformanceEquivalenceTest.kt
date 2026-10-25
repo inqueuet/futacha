@@ -432,9 +432,9 @@ class FutaberPerformanceEquivalenceTest {
         // A background refresh moved the shared count to 120; the person had seen 100.
         assertEquals(100, futaberRefWithHistory(ref, row, seenCount = 100).seenCount)
         assertEquals(100, futaberFirstNewIndex(futaberRefWithHistory(ref, row, seenCount = 100).seenCount, 120))
-        // No record of this mode: the history row's count, as before.
-        assertEquals(120, futaberRefWithHistory(ref, row, seenCount = null).seenCount)
-        assertEquals(120, futaberRefWithHistory(ref, row).seenCount)
+        // Without a foreground marker, background metadata is not evidence of reading.
+        assertEquals(0, futaberRefWithHistory(ref, row, seenCount = null).seenCount)
+        assertEquals(0, futaberRefWithHistory(ref, row).seenCount)
         // A thread not in the history is new.
         assertEquals(0, futaberRefWithHistory(ref, null, seenCount = 100).seenCount)
     }

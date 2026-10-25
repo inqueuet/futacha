@@ -107,7 +107,6 @@ import com.valoser.futacha.shared.ui.board.statusCodeOrNull
 import com.valoser.futacha.shared.ui.futaber.futaberArchivedThread
 import com.valoser.futacha.shared.ui.futaber.futaberCompatThreadUrl
 import com.valoser.futacha.shared.ui.futaber.futaberFriendlyLoadError
-import com.valoser.futacha.shared.ui.futaber.futaberTimestampWithoutId
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.CancellationException
@@ -184,7 +183,9 @@ private class FtutterPostActions(
     val onHiddenTap: (index: Int, anchorTop: Float) -> Unit,
     /** 画像の長押し（拡張「画像の長押しメニュー」がONの時だけ何かする）。 */
     val onImageLongPress: (index: Int) -> Unit = {},
-    val onInlineImageTap: (index: Int, url: String) -> Unit = { _, _ -> }
+    val onInlineImageTap: (index: Int, url: String) -> Unit = { _, _ -> },
+    /** 手動で読み込んだあぷ小の URL（スレ単位。行が画面外へ出て作り直されても読み込み済みのまま。L24）。 */
+    val apuLoaded: MutableSet<String> = androidx.compose.runtime.mutableStateSetOf()
 )
 
 /**
@@ -196,28 +197,36 @@ private class FtutterPostActions(
 internal class FtutterThreadActions(private val scope: kotlinx.coroutines.CoroutineScope) {
     private val busy = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
     private val archivedPages = androidx.compose.runtime.mutableStateMapOf<String, ThreadPage>()
+    // 状態の Map は入れた順を持たないので、捨てる順は別に持つ（L133）。
+    private val archiveOrder = ArrayDeque<String>()
 
     fun isBusy(key: String): Boolean = busy[key] == true
 
-    /** [key]の処理が進行中なら何もしない。 */
-    fun run(key: String, block: suspend () -> Unit) {
-        if (busy[key] == true) return
+    /** [key]の処理が進行中なら何もせず false を返す（呼び出し側が断ったことを知らせる。L16）。 */
+    fun run(key: String, block: suspend () -> Unit): Boolean {
+        if (busy[key] == true) return false
         busy[key] = true
         scope.launch {
             try { block() } finally { busy.remove(key) }
         }
+        return true
     }
 
     fun archived(thread: String): ThreadPage? = archivedPages[thread]
 
     fun putArchived(thread: String, page: ThreadPage) {
         archivedPages.remove(thread)
-        while (archivedPages.size >= FTUTTER_HELD_ARCHIVES) archivedPages.remove(archivedPages.keys.first())
+        archiveOrder.remove(thread)
+        while (archiveOrder.size >= FTUTTER_HELD_ARCHIVES) archivedPages.remove(archiveOrder.removeFirst())
         archivedPages[thread] = page
+        archiveOrder.addLast(thread)
     }
 }
 
 private const val FTUTTER_HELD_ARCHIVES = 8
+
+internal const val FTUTTER_REMOTE_BUSY_NOTICE = "別の送信が終わってからもう一度お試しください"
+internal const val FTUTTER_REMOTE_BUSY_REPORT_NG_NOTICE = "送信中のため、delとNGの登録は行いませんでした。別の送信が終わってからもう一度お試しください"
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -261,6 +270,8 @@ internal fun FtutterThreadScreen(
     /** 折れ線ジェスチャーの設定と、タブや板をまたぐ操作（前へ・次へ・タブを閉じる・ドロワーなど）。 */
     gesture: FtutterGestureSettings = FtutterGestureSettings(enabled = false),
     onAppGesture: (FtutterGestureAction) -> Unit = {},
+    /** 「ジェスチャーの操作を選ぶ」から選んだ時（実行できなければ理由を知らせる。L17）。 */
+    onAppMenuGesture: (FtutterGestureAction) -> Unit = onAppGesture,
     /** ジェスチャーがOFFの時の左右スワイプ（隣のタブへ）。 */
     onSwipeTab: ((forward: Boolean) -> Unit)? = null,
     /** ツールバー編集を開く（並びの保存はアプリ側）。 */
@@ -291,7 +302,10 @@ internal fun FtutterThreadScreen(
     refreshOnOpen: Boolean = true,
     onPageSnapshot: (ThreadPage) -> Unit = {},
     historyStateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
-    reportedPostNgRules: List<com.valoser.futacha.shared.compat.CompatNgRule> = emptyList()
+    reportedPostNgRules: List<com.valoser.futacha.shared.compat.CompatNgRule> = emptyList(),
+    openingTracker: com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryTracker? = null,
+    onReadBoundary: (Int, String) -> Unit = { _, _ -> },
+    confirmedFallen: Boolean = ftutterHistoryIsFallen(history)
 ) {
     val colors = LocalFtutterColors.current
     val settings = remember(preferences) { parseFtutterThreadSettings(preferences) }
@@ -303,11 +317,16 @@ internal fun FtutterThreadScreen(
     val clipboard = LocalClipboardManager.current
     val openUrl = rememberFtutterUrlLauncher()
 
-    var page by remember(board.id, ref.threadId) { mutableStateOf<ThreadPage?>(initialPage) }
+    // Keep the held body as the refresh baseline (and offline fallback), but
+    // never let stale history suppress the required fetch below.
+    var page by remember(board.id, ref.threadId) { mutableStateOf(initialPage) }
     var liveConfirmed by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var loading by remember(board.id, ref.threadId) { mutableStateOf(true) }
     var errorText by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
-    var fallen by remember(board.id, ref.threadId) { mutableStateOf(false) }
+    var fallen by remember(board.id, ref.threadId) { mutableStateOf(confirmedFallen) }
+    LaunchedEffect(confirmedFallen) {
+        if (confirmedFallen) fallen = true
+    }
     var archived by remember(board.id, ref.threadId) { mutableStateOf(false) }
     val archiveBusy = remoteActions.isBusy("$actionKey:archive")
     var refreshTick by remember(board.id, ref.threadId) { mutableIntStateOf(0) }
@@ -323,6 +342,11 @@ internal fun FtutterThreadScreen(
     var idMenu by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     val listState = remember(board.id, ref.threadId) { LazyListState() }
 
+    val localOpeningTracker = remember(board.id, ref.threadId) {
+        com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryTracker(storedReadCount,
+            history?.lastViewedSnapshot?.lastPostId?.takeIf { history.lastViewedSnapshot?.postCount == storedReadCount })
+    }
+    val visitTracker = openingTracker ?: localOpeningTracker
     val loadedPosts = page?.posts.orEmpty()
     val ngChain = remember(preferences) { preferences.ftutterBool(FtutterKeys.NG_CHAIN, false) }
     val matcher = remember(ngRules, board.url) { FtutterNgMatcher(ngRules, board.url) }
@@ -377,12 +401,16 @@ internal fun FtutterThreadScreen(
         live = liveConfirmed && !archived, gone = fallen
     )
     com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryEffect(
-        tabKeyForNg, storedReadCount?.takeIf { it > 0 }?.let { history?.replyCount ?: it }, loadedPosts, selfIds,
+        tabKeyForNg, storedReadCount, loadedPosts, selfIds,
         hiddenIds = loadedPosts.indices.filter { hidden.isHidden(it) }.mapTo(mutableSetOf()) { loadedPosts[it].id },
         enabled = FtutterExtension.OPEN_SUMMARY in extensions,
-        live = liveConfirmed && !loading && !archived && !fallen && view?.posts === loadedPosts &&
+        live = (liveConfirmed || (initialPage != null && !refreshOnOpen)) && !loading && !archived && !fallen && view?.posts === loadedPosts &&
             reportedHidden?.first === loadedPosts,
-        truncated = page?.isTruncated == true, onNotice = onNotice
+        truncated = page?.isTruncated == true, onNotice = onNotice, openingTracker = visitTracker
+    )
+    com.valoser.futacha.shared.ui.board.ThreadViewedObservationEffect(
+        historyStateStore, board.id, ref.threadId, page,
+        live = (liveConfirmed || (initialPage != null && !refreshOnOpen)) && !loading && !archived && !fallen
     )
     // The popups hold positions in the list: kept while new posts are only added at the end, closed when the list was
     // replaced by another (an archive, a shorter page), where the same positions are other posts (re-audit L26).
@@ -444,6 +472,7 @@ internal fun FtutterThreadScreen(
                 readCount = next
             }
             onReadCount(next)
+            if (next == seen + 1) all.getOrNull(seen)?.id?.let { onReadBoundary(next, it) }
         }
     }
     val storeOnLeave by rememberUpdatedState(::storePosition)
@@ -451,12 +480,16 @@ internal fun FtutterThreadScreen(
 
     val initialRefreshSignal = remember(board.id, ref.threadId) { refreshSignal }
     LaunchedEffect(board.id, ref.threadId, refreshTick, refreshSignal) {
-        if (page != null && !refreshOnOpen && refreshTick == 0 && refreshSignal == initialRefreshSignal) {
+        val held = page
+        if (held != null && !ftutterThreadPageIsStale(held, history) && !refreshOnOpen &&
+            refreshTick == 0 && refreshSignal == initialRefreshSignal) {
             loading = false
             return@LaunchedEffect
         }
         loading = true
         val before = page?.posts.orEmpty()
+        val openingFetch = !visitTracker.isCompleted && FtutterExtension.OPEN_SUMMARY in extensions &&
+            storedReadCount != null && storedReadCount > 0
         try {
             val fetched = repository.getThreadContent(board.url, ref.threadId)
             val content = (repository as? FutachaSharedBoardRepository)?.let { shared ->
@@ -476,7 +509,7 @@ internal fun FtutterThreadScreen(
                 errorText = null
                 onPageLoaded(content.page.posts)
                 onLivePageConfirmed()
-                if (before.isNotEmpty()) {
+                if (before.isNotEmpty() && !openingFetch) {
                     ftutterRefreshNotice(before, content.page.posts, selfIds, settings)?.let(onNotice)
                 }
             }
@@ -546,6 +579,9 @@ internal fun FtutterThreadScreen(
     var galleryOpen by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var viewer by remember(board.id, ref.threadId) { mutableStateOf<Pair<List<com.valoser.futacha.shared.compat.CompatPostSnapshot>, Int>?>(null) }
     val mediaSettings = remember(preferences) { parseFtutterMediaSettings(preferences) }
+    val mediaHiddenIds = remember(posts, hidden) {
+        hidden.ngIncludingChained.mapNotNullTo(HashSet()) { posts.getOrNull(it)?.id }
+    }
     val galleryMemo = remember(board.id, ref.threadId) {
         com.valoser.futacha.shared.ui.OffMainMemo<List<Any?>, List<com.valoser.futacha.shared.compat.CompatPostSnapshot>?>()
     }
@@ -560,8 +596,10 @@ internal fun FtutterThreadScreen(
     // そうだね・del・削除は、ふたちゃと共有の通信（requireWritableThreadBoard・repository）で送る。
     // 送信は画面より長く続ける（再監査M3）。結果の知らせはアプリ側、取り直しは開いている画面だけ。
     val currentRefresh by rememberUpdatedState { refreshTick++ }
-    fun runRemote(label: String, success: String, refreshAfter: Boolean, resultMessage: () -> String = { success }, block: suspend () -> Unit) {
-        remoteActions.run("$actionKey:remote") {
+    fun runRemote(label: String, success: String, refreshAfter: Boolean, resultMessage: () -> String = { success },
+        busyMessage: String = FTUTTER_REMOTE_BUSY_NOTICE, block: suspend () -> Unit) {
+        // 別の送信の途中に押した時は、送らなかったことを知らせる（L16。以前は何も起きず知らせも無かった）。
+        val started = remoteActions.run("$actionKey:remote") {
             val result = com.valoser.futacha.shared.ui.board.performThreadAction {
                 com.valoser.futacha.shared.ui.board.requireWritableThreadBoard(board.url)
                 block()
@@ -575,6 +613,7 @@ internal fun FtutterThreadScreen(
                     onNotice(com.valoser.futacha.shared.ui.board.buildThreadActionFailureMessage(label, result.error))
             }
         }
+        if (!started) onNotice(busyMessage)
     }
     // 拡張「画像の長押しメニュー」：長押しした画像のレス。
     var imageMenuFor by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
@@ -582,8 +621,10 @@ internal fun FtutterThreadScreen(
     val showMyself: (Float?) -> Unit = { anchor ->
         pushLayer(FtutterPopupLayer(selfIndexes.map { it to 0 }, anchorTop = anchor, forceShow = true))
     }
-    val actions = remember(posts, context) {
+    val apuLoaded = remember(board.id, ref.threadId) { androidx.compose.runtime.mutableStateSetOf<String>() }
+    val actions = remember(posts, context, mediaSettings, mediaHiddenIds, apuLoaded) {
         FtutterPostActions(
+            apuLoaded = apuLoaded,
             onPostTap = { index, anchor ->
                 scope.launch {
                     val tree = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
@@ -597,26 +638,23 @@ internal fun FtutterThreadScreen(
                 pushLayer(FtutterPopupLayer(context.replies[posts[index].id].orEmpty().map { it to 0 }, anchorTop = anchor))
             },
             onIdTap = { index, anchor ->
-                val id = context.idCounts[posts[index].id]?.id
-                if (id != null) {
+                val identity = context.idCounts[posts[index].id]
+                if (identity != null) {
                     pushLayer(FtutterPopupLayer(
-                        posts.indices.filter { context.idCounts[posts[it].id]?.id == id }.map { it to 0 },
+                        posts.indices.filter { context.idCounts[posts[it].id]?.let { id -> id.kind == identity.kind && id.id == identity.id } == true }.map { it to 0 },
                         highlight = index, anchorTop = anchor
                     ))
                 }
             },
             onIdLongPress = { index -> idMenu = posts.getOrNull(index)?.id },
             onQuoteTap = { index, line, anchor ->
-                val trimmed = line.trim().trimStart('>', '＞').trim()
-                val targets = when {
-                    trimmed.startsWith("ID:") || trimmed.startsWith("IP:") -> {
-                        val wanted = trimmed.substring(3).trim()
-                        posts.indices.filter { i -> i < index && context.idCounts[posts[i].id]?.id?.startsWith(wanted) == true }
+                scope.launch {
+                    val targets = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                        if (line.trim() == ">....") ftutterQuoteTargets(posts, index)
+                        else ftutterQuoteLineTargets(posts, index, line)
                     }
-                    line.trim() == ">...." -> ftutterQuoteTargets(posts, index)
-                    else -> ftutterQuoteLineTargets(posts, index, line)
+                    pushLayer(FtutterPopupLayer(targets.map { it to 0 }, anchorTop = anchor))
                 }
-                pushLayer(FtutterPopupLayer(targets.map { it to 0 }, anchorTop = anchor))
             },
             onUrlTap = { url -> if (ftutterIsThreadUrl(url)) onOpenThreadUrl(url) else openUrl(url) },
             onImageTap = { index ->
@@ -631,7 +669,7 @@ internal fun FtutterThreadScreen(
                         val media = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
                             ftutterMediaPosts(tappedPosts, excludeDeleted, keepPostId = post.id, onlyPostId = if (connectAll) null else post.id)
                         }
-                        val at = media.indexOfFirst { it.position == index }
+                        val at = media.indexOfFirst { it.position == index && it.postNo !in mediaHiddenIds }
                         if (at >= 0) viewer = media to at
                     }
                 }
@@ -645,7 +683,7 @@ internal fun FtutterThreadScreen(
                         ftutterMediaPosts(posts, mediaSettings.excludeDeleted, keepPostId = post.id,
                             onlyPostId = if (mediaSettings.connectAll) null else post.id)
                     }
-                    val at = media.indexOfFirst { com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl(it) == url }
+                    val at = media.indexOfFirst { it.postNo !in mediaHiddenIds && com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl(it) == url }
                     if (at >= 0) viewer = media to at
                 }
             }
@@ -662,8 +700,7 @@ internal fun FtutterThreadScreen(
         })
     }
     DisposableEffect(reader) { onDispose { reader.dispose() } }
-    val appUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
-    LaunchedEffect(appUnlocked) { if (!appUnlocked) reader.stop() }
+    com.valoser.futacha.shared.ui.futaber.FutaberReadAloudAppLockEffect(reader)
     LaunchedEffect(FtutterExtension.READ_ALOUD in extensions) { if (FtutterExtension.READ_ALOUD !in extensions) reader.stop() }
     reader.message?.let { message -> LaunchedEffect(message) { onNotice(message); reader.clearMessage() } }
     var autoScrolling by remember(board.id, ref.threadId) { mutableStateOf(false) }
@@ -680,7 +717,7 @@ internal fun FtutterThreadScreen(
     }
 
     // 画面の中で済む操作はここで、タブや板をまたぐ操作はアプリへ（原作 SurePage の割り当て先）。
-    fun handleGesture(action: FtutterGestureAction) {
+    fun handleGesture(action: FtutterGestureAction, fromMenu: Boolean = false) {
         when (action) {
             FtutterGestureAction.TOP -> scope.launch { listState.scrollToItem(0) }
             FtutterGestureAction.BOTTOM -> scope.launch { listState.scrollToItem((rows.size + 1).coerceAtLeast(0)) }
@@ -691,7 +728,7 @@ internal fun FtutterThreadScreen(
             FtutterGestureAction.POPULAR -> filter = filter.copy(popular = !filter.popular)
             FtutterGestureAction.IMAGES -> filter = filter.copy(imagesOnly = !filter.imagesOnly)
             FtutterGestureAction.NONE -> Unit
-            else -> { storePosition(); onAppGesture(action) }
+            else -> { storePosition(); if (fromMenu) onAppMenuGesture(action) else onAppGesture(action) }
         }
     }
     PlatformBackHandler(enabled = layers.isNotEmpty()) { layers.removeAt(layers.lastIndex) }
@@ -845,7 +882,7 @@ internal fun FtutterThreadScreen(
                 extensions = extensions,
                 reading = reader.isReading,
                 autoScrolling = autoScrolling,
-                onGesture = ::handleGesture,
+                onGesture = { handleGesture(it, fromMenu = true) },
                 onTool = { tool ->
                     when (tool) {
                         FtutterThreadTool.DRAWER -> onOpenDrawer()
@@ -912,7 +949,7 @@ internal fun FtutterThreadScreen(
                 )
             }
         }
-        val tools = mediaTools ?: FtutterMediaSaveTools("既定の保存先", {}, {}, { _, _ -> 0 }, false)
+        val tools = mediaTools ?: FtutterMediaSaveTools("既定の保存先", {}, {}, { _, _ -> FtutterBatchSaveResult(0, 0) }, false)
         val mediaAlpha = if (settings.isPrivacy) (1.0 - design.privacyThreadZoom).toFloat() else 1f
         // 番号カードのタップ：一覧・ビューアを閉じて、スレのそのレスへ移って強調する。
         val backToPost: (Int) -> Unit = { position ->
@@ -923,9 +960,15 @@ internal fun FtutterThreadScreen(
         }
         if (galleryOpen) {
             // 解析用のスレッドで作り、スレの画面の間は持っておく（再監査M23）。できるまでは一覧を出さない。
-            val galleryMedia = com.valoser.futacha.shared.ui.rememberOffMain<List<Any?>, List<com.valoser.futacha.shared.compat.CompatPostSnapshot>?>(
+            val heldGalleryMedia = com.valoser.futacha.shared.ui.rememberOffMain<List<Any?>, List<com.valoser.futacha.shared.compat.CompatPostSnapshot>?>(
                 galleryMemo, listOf(com.valoser.futacha.shared.ui.SameInstance(posts), mediaSettings.excludeDeleted), null
             ) { _, _ -> ftutterMediaPosts(posts, mediaSettings.excludeDeleted) }
+            // Keep the conversion cached independently of NG, but never show that raw snapshot.
+            // Filtering here also applies late image/AI results immediately, and restores
+            // media on unhide without losing the gallery selection or rebuilding every post.
+            val galleryMedia = remember(heldGalleryMedia, mediaHiddenIds) {
+                heldGalleryMedia?.let { ftutterVisibleMedia(it, mediaHiddenIds) }
+            }
             if (galleryMedia != null) FtutterGalleryScreen(
                 gesture = gesture,
                 onRefresh = { refresh(fromBottom = false) },
@@ -936,15 +979,22 @@ internal fun FtutterThreadScreen(
                 tools = tools,
                 onColumns = { savePreference(FtutterKeys.GALLERY_COLUMNS, it.toString()) },
                 // 一覧から開くビューアは、設定に関係なくスレ全体（原作）。
-                onOpenViewer = { index -> viewer = galleryMedia to index },
+                onOpenViewer = { index ->
+                    val base = heldGalleryMedia.orEmpty()
+                    val originalIndex = galleryMedia.getOrNull(index)?.let(base::indexOf) ?: -1
+                    if (originalIndex >= 0) viewer = base to originalIndex
+                },
                 onBackToPost = backToPost,
                 onClose = { galleryOpen = false }
             )
         }
         viewer?.let { (media, index) ->
-            FtutterViewerScreen(
-                media = media,
-                initialIndex = index,
+            val visibleMedia = remember(media, mediaHiddenIds) { ftutterVisibleMedia(media, mediaHiddenIds) }
+            if (visibleMedia.isEmpty()) {
+                LaunchedEffect(media, mediaHiddenIds) { viewer = null }
+            } else FtutterViewerScreen(
+                media = visibleMedia,
+                initialIndex = media.getOrNull(index)?.let(visibleMedia::indexOf)?.coerceAtLeast(0) ?: 0,
                 settings = mediaSettings,
                 privacyAlpha = mediaAlpha,
                 tools = tools,
@@ -979,7 +1029,7 @@ internal fun FtutterThreadScreen(
                         }.padding(vertical = 12.dp).testTag("ftutter-id-copy"))
                         Text("NG", modifier = Modifier.fillMaxWidth().clickable {
                             idMenu = null
-                            ngDraft = FtutterNgRule(posts[index].posterId?.trim().orEmpty(), FtutterNgType.ID.stored, ita = FtutterNgBoard(board.name, board.url))
+                            ngDraft = FtutterNgRule(ftutterPosterIdentity(posts[index])?.display.orEmpty(), FtutterNgType.ID.stored, ita = FtutterNgBoard(board.name, board.url))
                         }.padding(vertical = 12.dp).testTag("ftutter-id-ng"))
                     }
                 },
@@ -1021,7 +1071,7 @@ internal fun FtutterThreadScreen(
                         FtutterPostMenuItem.DEL -> delConfirm = post
                         FtutterPostMenuItem.MARK -> onToggleMark(post.id, post.id !in manualMarks)
                         FtutterPostMenuItem.COPY -> copyFor = post
-                        FtutterPostMenuItem.NG -> if (post.posterId.isNullOrBlank()) {
+                        FtutterPostMenuItem.NG -> if (ftutterPosterIdentity(post) == null) {
                             ngDraft = FtutterNgRule(lines.joinToString("\n"), FtutterNgType.WORD.stored, ita = FtutterNgBoard(board.name, board.url))
                         } else ngKindFor = post
                     }
@@ -1050,7 +1100,7 @@ internal fun FtutterThreadScreen(
     }
     chooseQuoteFor?.let { post ->
         val candidates = buildList {
-            post.posterId?.trim()?.takeIf { it.isNotEmpty() }?.let(::add)
+            addAll(ftutterPosterIdentities(post).map { it.display })
             post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let(::add)
             addAll(com.valoser.futacha.shared.ui.board.messageHtmlToLines(post.messageHtml).filter { it.isNotBlank() })
         }
@@ -1091,7 +1141,8 @@ internal fun FtutterThreadScreen(
         ) { alsoNg ->
             delConfirm = null
             var outcome = ""
-            runRemote("delに失敗しました", "", refreshAfter = false, resultMessage = { outcome }) {
+            runRemote("delに失敗しました", "", refreshAfter = false, resultMessage = { outcome },
+                busyMessage = if (alsoNg) FTUTTER_REMOTE_BUSY_REPORT_NG_NOTICE else FTUTTER_REMOTE_BUSY_NOTICE) {
                 outcome = com.valoser.futacha.shared.ui.board.sendReportAndOptionalNg(alsoNg,
                     send = { repository.requestDeletion(board.url, ref.threadId, post.id, com.valoser.futacha.shared.ui.board.DEFAULT_DEL_REASON_CODE) },
                     registerNg = {
@@ -1113,7 +1164,7 @@ internal fun FtutterThreadScreen(
         val values = buildList {
             post.mail?.takeIf { it.isNotBlank() }?.let { add("E-Mail" to it) }
             add("No" to "No.${post.id}")
-            post.posterId?.trim()?.takeIf { it.isNotEmpty() }?.let { add("ID" to it) }
+            ftutterPosterIdentities(post).forEach { add(it.kind.name to it.display) }
             post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let { add("ファイル" to it) }
             add("本文" to com.valoser.futacha.shared.ui.board.messageHtmlToPlainText(post.messageHtml))
         }
@@ -1130,7 +1181,7 @@ internal fun FtutterThreadScreen(
             ngDraft = if (choice == 0) {
                 FtutterNgRule(com.valoser.futacha.shared.ui.board.messageHtmlToPlainText(post.messageHtml), FtutterNgType.WORD.stored, ita = ngBoard)
             } else {
-                FtutterNgRule(post.posterId?.trim().orEmpty(), FtutterNgType.ID.stored, ita = ngBoard)
+                FtutterNgRule(ftutterPosterIdentity(post)?.display.orEmpty(), FtutterNgType.ID.stored, ita = ngBoard)
             }
         }
     }
@@ -1269,7 +1320,7 @@ private fun FtutterPostView(
                 Spacer(Modifier.height(settings.paddingTextFile.dp)); image()
             }
             FtutterApuPreviews(post.messageHtml, settings,
-                if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f) { url -> actions.onInlineImageTap(index, url) }
+                if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f, actions.apuLoaded) { url -> actions.onInlineImageTap(index, url) }
         }
         HorizontalDivider(color = colors.outline)
     }
@@ -1312,9 +1363,9 @@ private fun FtutterPostHeader(
                 modifier = Modifier.clickable { ftutterMailTarget(mail)?.let(openUrl) }
             )
         }
-        Text(futaberTimestampWithoutId(post.timestamp), color = base, fontSize = size)
+        Text(ftutterTimestampWithoutIdentity(post), color = base, fontSize = size)
         context.idCounts[post.id]?.let { id ->
-            val label = if (id.total > 1) "ID:${id.id} (${id.nth}/${id.total})" else "ID:${id.id}"
+            val label = if (id.total > 1) "${id.display} (${id.nth}/${id.total})" else id.display
             Text(
                 label, color = ftutterIdCountColor(id.total) ?: base, fontSize = size,
                 modifier = Modifier.combinedClickable(

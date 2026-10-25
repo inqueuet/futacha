@@ -71,7 +71,6 @@ import platform.WebKit.WKWebViewConfiguration
 import platform.darwin.NSObject
 
 private const val VIDEO_STATE_MESSAGE_HANDLER = "futachaVideoState"
-private const val WEB_VIDEO_SYNC_APPLIED_RESULT = "applied"
 /** A remote original that delivers no verified bytes for this long is treated as stalled. */
 private const val ORIGINAL_DOWNLOAD_STALL_MS = 20_000L
 
@@ -91,6 +90,12 @@ internal actual fun NativePlatformVideoPlayer(
     onPlaybackError: (VideoPlaybackError) -> Unit,
     editing: VideoEditPlayback?
 ) {
+    // Direct native callers must reject unsupported formats before bookmarks or AVAudioSession are touched.
+    val unsupported = platformVideoPlaybackCapabilityError(videoUrl)
+    if (unsupported != null) {
+        UnsupportedVideoPlayerContent(videoUrl, unsupported, modifier, onStateChanged, onPlaybackError)
+        return
+    }
     // WKWebView calls these from a delegate that outlives individual Compose
     // recompositions.  Keep it pointed at the latest UI callbacks just as the
     // Android player does, so a reload/navigation cannot update stale state.
@@ -100,19 +105,36 @@ internal actual fun NativePlatformVideoPlayer(
     val currentMediaInfoCallback by rememberUpdatedState(onMediaInfoKnown)
     val currentErrorCallback by rememberUpdatedState(onPlaybackError)
     var sourceReady by remember(videoUrl) { mutableStateOf(false) }
-    LaunchedEffect(videoUrl) {
-        val path = NSURL.URLWithString(videoUrl)?.takeIf { it.fileURL }?.path
-        // Resolving a remembered bookmark is a file-system round trip: never on the main thread (G4-5).
-        val directory = path?.let { com.valoser.futacha.shared.util.resolveBookmarkedMediaDirectory(it) }
-        val started = directory?.startAccessingSecurityScopedResource() == true
+    LaunchedEffect(videoUrl, playback) {
+        var directory: NSURL? = null
+        var started = false
         try {
-            sourceReady = directory == null || started
-            if (!sourceReady) {
-                currentErrorCallback(VideoPlaybackError("saved_folder_permission", "保存フォルダへのアクセス権を取得できませんでした"))
-                currentCallback(VideoPlayerState.Error)
+            val info = playback?.let { withTimeout(20_000) { it.info() } }
+            prepareVideoPlaybackResource(videoUrl, info) {
+                val path = NSURL.URLWithString(videoUrl)?.takeIf { it.fileURL }?.path
+                // Resolving a remembered bookmark is a file-system round trip: never on the main thread (G4-5).
+                directory = path?.let { com.valoser.futacha.shared.util.resolveBookmarkedMediaDirectory(it) }
+                started = directory?.startAccessingSecurityScopedResource() == true
+                sourceReady = directory == null || started
+                if (!sourceReady) {
+                    currentErrorCallback(VideoPlaybackError("saved_folder_permission", "保存フォルダへのアクセス権を取得できませんでした"))
+                    currentCallback(VideoPlayerState.Error)
+                }
             }
             awaitCancellation()
-        } finally { if (started) directory?.stopAccessingSecurityScopedResource() }
+        } catch (unsupported: UnsupportedVideoPlayback) {
+            playback?.rejectAsUnsupported()
+            currentErrorCallback(unsupported.error)
+            currentCallback(VideoPlayerState.Error)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            currentErrorCallback(VideoPlaybackError("original_media", "動画データを読み込めませんでした"))
+            currentCallback(VideoPlayerState.Error)
+        } finally {
+            sourceReady = false
+            if (started) directory?.stopAccessingSecurityScopedResource()
+        }
     }
     // Held while this player is shown and released on dispose, so other apps'
     // audio resumes afterwards; muted playback mixes instead of interrupting
@@ -121,12 +143,15 @@ internal actual fun NativePlatformVideoPlayer(
     var audioLease by remember(videoUrl) { mutableStateOf<IosPlaybackAudioLease?>(null) }
     val mixWithOthers = normalizeVideoPlayerVolume(volume, isMuted) <= 0f
     val currentMixWithOthers by rememberUpdatedState(mixWithOthers)
-    LaunchedEffect(videoUrl) {
+    LaunchedEffect(videoUrl, sourceReady) {
+        if (!sourceReady) return@LaunchedEffect
         var lease: IosPlaybackAudioLease? = null
         try {
-            // Assigned inside the block: a cancelled caller discards withContext's result.
-            withContext(NonCancellable + AppDispatchers.io) {
-                lease = acquireIosPlaybackAudioSession(currentMixWithOthers)
+            prepareVideoPlaybackResource(videoUrl) {
+                // Assigned inside the block: a cancelled caller discards withContext's result.
+                withContext(NonCancellable + AppDispatchers.io) {
+                    lease = acquireIosPlaybackAudioSession(currentMixWithOthers)
+                }
             }
             audioLease = lease
             awaitCancellation()
@@ -461,14 +486,6 @@ private fun WebVideoPlayer(
     volume: Float,
     isMuted: Boolean
 ) {
-    val webmAllowed = remember { com.valoser.futacha.shared.util.iosWebmPlaybackAvailable() }
-    if (extractVideoUrlExtension(videoUrl) == "webm" && !webmAllowed) {
-        LaunchedEffect(videoUrl) {
-            onPlaybackError(VideoPlaybackError("webm_os_version", "WebMの再生にはiOS 17.4以降が必要です"))
-            onStateChanged(VideoPlayerState.Error)
-        }
-        Box(modifier); return
-    }
     val localUrl = remember(videoUrl) { NSURL.URLWithString(videoUrl)?.takeIf { it.fileURL } }
     val needsDocument = playback != null || localUrl != null
     var document by remember { mutableStateOf<IosLocalVideoDocument?>(null) }
@@ -481,13 +498,20 @@ private fun WebVideoPlayer(
             // time, so a large WebM on a slow link can finish; the store keeps the transfer
             // running briefly after a failure so a retry continues it.
             // Assign inside each block: a document created as the limit fires is still closed below.
-            if (playback != null) playback.withDownloadStallTimeout(ORIGINAL_DOWNLOAD_STALL_MS) {
-                owned = IosLocalVideoDocument.create(playback, extension)
-            } else withTimeout(30_000) { owned = IosLocalVideoDocument.createLocal(requireNotNull(localUrl?.path), extension) }
+            val info = playback?.info()
+            prepareVideoPlaybackResource(videoUrl, info) {
+                if (playback != null) playback.withDownloadStallTimeout(ORIGINAL_DOWNLOAD_STALL_MS) {
+                    owned = IosLocalVideoDocument.create(playback, extension)
+                } else withTimeout(30_000) { owned = IosLocalVideoDocument.createLocal(requireNotNull(localUrl?.path), extension) }
+            }
             logVideoPlaybackDiagnostic("source", "transport=${if (playback != null) "shared-original" else "local-file"} contentType=${playback?.info()?.mimeType} tracks=${owned?.webmInfo}")
             owned?.webmInfo?.let { onMediaInfoKnown(it.mediaInfo()) }
             document = owned
             awaitCancellation()
+        } catch (unsupported: UnsupportedVideoPlayback) {
+            playback?.rejectAsUnsupported()
+            onPlaybackError(unsupported.error)
+            onStateChanged(VideoPlayerState.Error)
         } catch (_: TimeoutCancellationException) {
             currentCoroutineContext().ensureActive()
             onPlaybackError(VideoPlaybackError("original_timeout", "動画の読み込みが時間内に完了しませんでした"))
@@ -508,7 +532,11 @@ private fun WebVideoPlayer(
     val delegate = remember { WebVideoNavigationDelegate() }
     val syncTracker = remember { WebVideoSyncStateTracker() }
     val html = remember(videoUrl) { buildEmbeddedVideoHtml(videoUrl) }
+    // ふたったー風の「自動再生」「ループ」（L116：以前は MP4 にだけ効き、WebM では効かなかった）。他のモードは渡さない。
+    val playbackOptions = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions()
     SideEffect {
+        delegate.autoPlay = playbackOptions.autoPlay
+        delegate.loop = playbackOptions.loop
         delegate.onStateChanged = onStateChanged
         delegate.onVideoSizeKnown = onVideoSizeKnown
         delegate.onControlsVisibilityChanged = onControlsVisibilityChanged
@@ -537,7 +565,8 @@ private fun WebVideoPlayer(
                 allowsInlineMediaPlayback = true
                 // Preserve WebKit's existing default. Explicitly requiring gestures for ALL
                 // media also prevents metadata preload on some iOS versions. The generated
-                // page has no automatic play call; playback starts from the user's controls.
+                // page has no automatic play call; playback starts from the user's controls,
+                // unless the mode's own autoplay option asks for it once the page has loaded.
                 this.userContentController = userContentController
             }
             WKWebView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0), configuration = configuration).apply {
@@ -570,7 +599,8 @@ private fun WebVideoPlayer(
                 val syncState = resolveVideoPlayerWebSyncState(
                     volume = volume,
                     isMuted = isMuted,
-                    areControlsVisible = areControlsVisible
+                    areControlsVisible = areControlsVisible,
+                    loop = playbackOptions.loop
                 )
                 if (syncTracker.shouldApply(syncState)) {
                     syncTracker.markPending(syncState)
@@ -624,21 +654,6 @@ private class WebVideoSyncStateTracker {
     }
 }
 
-private fun buildWebVideoSyncJavaScript(state: VideoPlayerWebSyncState): String {
-    val mutedFlag = if (state.isMuted) "true" else "false"
-    val controlsFlag = if (state.areControlsVisible) "true" else "false"
-    return """
-        (function(){
-            var v=document.querySelector('video');
-            if(!v){return 'missing';}
-            v.muted=$mutedFlag;
-            v.volume=${state.volume};
-            v.controls=$controlsFlag;
-            return '$WEB_VIDEO_SYNC_APPLIED_RESULT';
-        })()
-    """.trimIndent()
-}
-
 @OptIn(ExperimentalForeignApi::class)
 private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProtocol, WKScriptMessageHandlerProtocol {
     var onStateChanged: ((VideoPlayerState) -> Unit)? = null
@@ -649,6 +664,8 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
     var metadataReceived = false
         private set
     private var terminal = false
+    var autoPlay = false
+    var loop = false
 
     fun fail(error: VideoPlaybackError) {
         if (terminal) return
@@ -720,6 +737,8 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
         // HTML navigation finishing says nothing about the media's readiness.
         if (terminal) return
+        // The mode's loop and autoplay options take effect once the page exists (L116).
+        if (autoPlay || loop) webView.evaluateJavaScript(buildWebVideoStartJavaScript(loop, autoPlay), completionHandler = null)
         webView.evaluateJavaScript(
             "(function(){var v=document.querySelector('video'); if(!v){return '';} return String(v.videoWidth||0)+','+String(v.videoHeight||0);})()"
         ) { result, error ->

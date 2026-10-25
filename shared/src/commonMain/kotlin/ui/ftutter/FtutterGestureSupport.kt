@@ -101,6 +101,8 @@ internal class FtutterGestureTracker(private val kando: Float = FTUTTER_GESTURE_
     val code: String get() = directions.joinToString("")
 
     fun update(dx: Float, dy: Float) {
+        // 位置不変のMOVEは区間の向きも累積距離も変えない。微小な非ゼロ移動はこれまでどおり数える（監査M35）。
+        if (dx == 0f && dy == 0f) return
         if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
             if (accX * dx > 0) accX += dx else { accX = dx; accY = 0f }
         } else {
@@ -162,6 +164,31 @@ internal sealed interface FtutterBoardStep {
     data object Back : FtutterBoardStep
     data object Stay : FtutterBoardStep
 }
+
+/**
+ * Why an operation chosen from 「ジェスチャーの操作を選ぶ」 did nothing (L17). A drawn gesture stays silent like the
+ * original; the menu is this app's addition, so it says why instead of doing nothing.
+ */
+internal fun ftutterGestureUnavailableReason(action: FtutterGestureAction, isThread: Boolean, hasFavorites: Boolean = true): String =
+    when (action) {
+        FtutterGestureAction.PREVIOUS -> when {
+            isThread -> "前のタブがありません"
+            hasFavorites -> "前のお気に入りの板がありません"
+            else -> "お気に入りの板がありません"
+        }
+        FtutterGestureAction.NEXT -> when {
+            isThread -> "次のタブがありません"
+            hasFavorites -> "次のお気に入りの板がありません"
+            else -> "お気に入りの板がありません"
+        }
+        FtutterGestureAction.REOPEN_TAB -> "閉じたタブはありません"
+        FtutterGestureAction.MOST_LEFT, FtutterGestureAction.MOST_RIGHT -> "タブがありません"
+        FtutterGestureAction.CLOSE_TAB, FtutterGestureAction.CLOSE_TAB_AND_BACK -> "閉じるタブがありません"
+        FtutterGestureAction.OPEN_DRAWER -> FTUTTER_DRAWER_DISABLED_NOTICE
+        else -> "この画面では使えません"
+    }
+
+internal const val FTUTTER_DRAWER_DISABLED_NOTICE = "ドロワーは設定で無効です"
 
 internal fun ftutterBoardStep(favoriteIds: List<String>, current: String, forward: Boolean, backByPrevious: Boolean): FtutterBoardStep {
     val at = favoriteIds.indexOf(current)

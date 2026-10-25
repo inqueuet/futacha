@@ -7,7 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY
+import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.compat.compatWatchEnabled
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.service.CatalogWatchAlertMatch
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.NonCancellable
@@ -28,6 +30,8 @@ import platform.UserNotifications.UNAuthorizationStatusAuthorized
 import platform.UserNotifications.UNAuthorizationStatusEphemeral
 import platform.UserNotifications.UNAuthorizationStatusNotDetermined
 import platform.UserNotifications.UNAuthorizationStatusProvisional
+import platform.UserNotifications.UNMutableNotificationContent
+import platform.UserNotifications.UNNotificationSound
 import platform.UserNotifications.UNUserNotificationCenter
 import kotlin.coroutines.resume
 
@@ -68,6 +72,50 @@ internal class IosWatchAlertNotificationDispatcher(
         }
     }
 }
+
+/** userInfo key of the thread a watch notification for one match opens (L119). */
+internal const val IOS_WATCH_ALERT_THREAD_URL_KEY = "threadUrl"
+
+/**
+ * The thread one watch match opens, as Android and Desktop do: an official 2chan thread URL, or null when none can
+ * be made (a tap then just opens the app).
+ */
+internal fun iosWatchAlertThreadUrl(match: CatalogWatchAlertMatch): String? {
+    val threadId = match.threadId.trim()
+    if (threadId.isEmpty() || !threadId.all { it in '0'..'9' }) return null
+    return runCatching { BoardUrlResolver.resolveThreadUrl(match.boardUrl, threadId) }.getOrNull()
+        ?.let { url -> canonicalizeThreadUrl(url)?.canonicalUrl }
+}
+
+/**
+ * The notification for [matches]. One match carries its thread under [IOS_WATCH_ALERT_THREAD_URL_KEY], so a tap
+ * opens it (L119: the notification named no thread and a tap only brought the app forward); several matches open
+ * the app, as on Android.
+ */
+internal fun buildIosWatchAlertNotificationContent(matches: List<CatalogWatchAlertMatch>): UNMutableNotificationContent {
+    val first = matches.first()
+    val title = if (matches.size == 1) {
+        "監視ワードに一致しました"
+    } else {
+        "監視ワードに ${matches.size} 件一致しました"
+    }
+    val body = if (matches.size == 1) {
+        "${first.boardName}: ${first.title}"
+    } else {
+        "${first.boardName}: ${first.title} ほか"
+    }
+    val threadUrl = matches.singleOrNull()?.let(::iosWatchAlertThreadUrl)
+    return UNMutableNotificationContent().apply {
+        setTitle(title)
+        setBody(body)
+        setSound(UNNotificationSound.defaultSound())
+        if (threadUrl != null) setUserInfo(mapOf<Any?, Any?>(IOS_WATCH_ALERT_THREAD_URL_KEY to threadUrl))
+    }
+}
+
+/** The thread a tapped notification names, if any; see [buildIosWatchAlertNotificationContent]. */
+internal fun iosNotificationThreadUrl(userInfo: Map<Any?, *>): String? =
+    (userInfo[IOS_WATCH_ALERT_THREAD_URL_KEY] as? String)?.takeIf(String::isNotBlank)
 
 internal fun isIosNotificationAuthorizationUsable(status: UNAuthorizationStatus): Boolean =
     status == UNAuthorizationStatusAuthorized ||

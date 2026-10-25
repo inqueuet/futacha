@@ -10,11 +10,19 @@ import com.valoser.futacha.shared.service.*
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.board.FutachaSharedFeatures
 import com.valoser.futacha.shared.ui.board.SaveProgressDialog
+import com.valoser.futacha.shared.ui.board.isSaveProgressCompleted
 import com.valoser.futacha.shared.ui.compat.*
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 internal data class FtutterHtmlOptions(val thumbnails: Boolean = true, val files: Boolean = true,
@@ -26,9 +34,36 @@ internal fun ftutterHtmlPosts(page: ThreadPage, options: FtutterHtmlOptions) = p
     it.copy(thumbnailUrl = it.thumbnailUrl.takeIf { options.thumbnails }, imageUrl = it.imageUrl.takeIf { options.files })
 }
 
+/** Backend completion precedes indexing and ZIP creation; the whole job is still cancellable. */
+internal fun ftutterHtmlActiveSaveProgress(progress: SaveProgress?, zipBuilding: Boolean): SaveProgress? = when {
+    zipBuilding -> SaveProgress(SavePhase.FINALIZING, 0, 1, "ZIPを作成しています")
+    isSaveProgressCompleted(progress) -> progress?.copy(current = 0, total = 1, currentItem = "保存結果をまとめています")
+    else -> progress
+}
+
+/**
+ * The result of a save (L13). Once the HTML and its index entry are saved, a ZIP that fails or is cancelled no
+ * longer replaces that result: it is added below it with a reason a person can act on, never a raw exception text.
+ */
+internal fun ftutterHtmlSaveResultMessage(completed: String?, zipPath: String?, failure: Throwable?, cancelled: Boolean): String = when {
+    completed == null && cancelled -> "保存を中止しました"
+    completed == null -> failure?.message ?: "保存できませんでした"
+    cancelled -> "$completed\nZIPの作成を中止しました（HTMLは保存済みです）"
+    failure != null -> "$completed\nZIPは作成できませんでした：${ftutterZipFailureReason(failure)}"
+    else -> completed + (zipPath?.let { "\nZIP: $it" } ?: "")
+}
+
+internal fun ftutterZipFailureReason(failure: Throwable): String = when (failure) {
+    is ThreadSaveAlreadyRunningException -> "別の保存を実行中です"
+    is com.valoser.futacha.shared.service.MediaSaveDestinationException -> failure.message ?: "保存先を確認してください"
+    // Our own checks (a file too large or a name that cannot go in a ZIP) carry their reason.
+    is IllegalArgumentException -> failure.message?.takeIf { it.isNotBlank() && it != "Failed requirement." } ?: "保存先を確認してください"
+    else -> "保存先を確認してください"
+}
+
 /** Archive the files from this save only; each media file is read separately and the ZIP is streamed to storage. */
 internal suspend fun ftutterZipSavedThread(fs: FileSystem, base: SaveLocation, id: String,
-    mediaPaths: Set<String>): String {
+    mediaPaths: Set<String>): String = withContext(fs.saveBatchContext()) {
     val metadata = Json { ignoreUnknownKeys = true }.decodeFromString<SavedThreadMetadata>(
         fs.readString(base, "$id/metadata.json").getOrThrow())
     val paths = linkedSetOf("metadata.json").apply {
@@ -42,7 +77,7 @@ internal suspend fun ftutterZipSavedThread(fs: FileSystem, base: SaveLocation, i
         fs.writeByteStream(base, zipPath) { sink ->
             val zip = StreamingStoredZipWriter(sink)
             paths.forEach { path ->
-                require(!path.startsWith('/') && path.split('/').none { it == ".." })
+                require(!path.startsWith('/') && path.split('/').none { it == ".." }) { "ZIPに含められないファイル名があります" }
                 val size = fs.getFileSize(base, "$id/$path")
                 require(size <= 64L * 1024 * 1024) { "ZIPに含めるファイルが大きすぎます" }
                 val bytes = fs.readBytes(base, "$id/$path").getOrThrow()
@@ -64,7 +99,7 @@ internal suspend fun ftutterZipSavedThread(fs: FileSystem, base: SaveLocation, i
             }
         }
     }
-    return zipPath
+    zipPath
 }
 
 @Composable
@@ -79,8 +114,15 @@ internal fun FtutterHtmlSaveDialog(features: FutachaSharedFeatures, page: Thread
         return
     }
     val saver = remember(client, fs) { ThreadSaveService(client, fs) }
-    val progress by saver.saveProgress.collectAsState()
-    val scope = rememberCoroutineScope()
+    // Compose's UI dispatcher can pause while the Activity is stopped. Storage,
+    // notification progress and cancellation cleanup must continue without frames.
+    val scope = rememberCoroutineScope { AppDispatchers.io }
+    val zipBuilding = remember { MutableStateFlow(false) }
+    val protectedProgress = remember(saver, scope) {
+        combine(saver.saveProgress, zipBuilding, ::ftutterHtmlActiveSaveProgress)
+            .stateIn(scope, SharingStarted.Eagerly, null)
+    }
+    val progress by protectedProgress.collectAsState()
     var options by remember { mutableStateOf(parseFtutterHtmlOptions(preferences)) }
     var job by remember { mutableStateOf<Job?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -104,23 +146,31 @@ internal fun FtutterHtmlSaveDialog(features: FutachaSharedFeatures, page: Thread
             }
         }, confirmButton = { TextButton(onClick = {
             destination { location ->
-                job = scope.launch {
+                scope.launch(start = CoroutineStart.LAZY) {
+                    var completed: String? = null
+                    var zipPath: String? = null
                     try {
-                        var mediaPaths = emptySet<String>()
-                        val saved = saver.saveThread(page.threadId, boardKey, boardName, boardUrl, title,
-                            page.expiresAtLabel, ftutterHtmlPosts(page, options), page.isTruncated, page.truncationReason,
-                            baseSaveLocation = location, baseDirectory = MANUAL_SAVE_DIRECTORY, writeMetadata = true,
-                            rawHtmlOptions = RawHtmlSaveOptions(enable = true, stripExternalResources = true),
-                            additionalMediaUrls = if (options.apu) page.posts.flatMap { ftutterApuImages(it.messageHtml) }.distinct() else emptyList(),
-                            onMediaPathsSaved = { mediaPaths = it }).getOrThrow()
-                        val completed = completeCompatThreadSave(saved, fs, location)
-                        val zip = if (options.zip) ftutterZipSavedThread(fs, location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY),
-                            requireNotNull(saved.storageId), mediaPaths) else null
-                        message = completed + (zip?.let { "\nZIP: $it" } ?: "")
-                    } catch (cancelled: CancellationException) { message = "保存を中止しました"; throw cancelled }
-                    catch (failure: Exception) { message = failure.message ?: "保存できませんでした" }
-                    finally { job = null }
-                }
+                        runProtectedThreadSave(title, protectedProgress) {
+                            var mediaPaths = emptySet<String>()
+                            val saved = saver.saveThread(page.threadId, boardKey, boardName, boardUrl, title,
+                                page.expiresAtLabel, ftutterHtmlPosts(page, options), page.isTruncated, page.truncationReason,
+                                baseSaveLocation = location, baseDirectory = MANUAL_SAVE_DIRECTORY, writeMetadata = true,
+                                rawHtmlOptions = RawHtmlSaveOptions(enable = true, stripExternalResources = true),
+                                additionalMediaUrls = if (options.apu) page.posts.flatMap { ftutterApuImages(it.messageHtml) }.distinct() else emptyList(),
+                                onMediaPathsSaved = { mediaPaths = it }).getOrThrow()
+                            completed = completeCompatThreadSave(saved, fs, location)
+                            if (options.zip) {
+                                zipBuilding.value = true
+                                zipPath = ftutterZipSavedThread(fs, location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY),
+                                    requireNotNull(saved.storageId), mediaPaths)
+                            }
+                        }
+                        message = ftutterHtmlSaveResultMessage(completed, zipPath, null, cancelled = false)
+                    } catch (cancelled: CancellationException) {
+                        message = ftutterHtmlSaveResultMessage(completed, null, null, cancelled = true); throw cancelled
+                    } catch (failure: Exception) { message = ftutterHtmlSaveResultMessage(completed, null, failure, cancelled = false) }
+                    finally { zipBuilding.value = false; job = null }
+                }.also { job = it; it.start() }
             }
         }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }

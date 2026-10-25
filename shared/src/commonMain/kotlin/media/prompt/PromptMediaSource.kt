@@ -184,7 +184,8 @@ class PromptMediaSource(
             return
         }
         val request = mutex.withLock {
-            val actual = aliases[url] ?: url
+            val key = promptAliasKey(url)
+            val actual = aliases[key] ?: key
             known[actual]?.request ?: OriginalMediaRequest(actual)
         }.copy(allowNetwork = false, reloadToken = 0)
         try {
@@ -195,10 +196,15 @@ class PromptMediaSource(
     }
 
     suspend fun bindSuccessfulUrl(requested: String, actual: String) {
-        if (requested == actual) return
+        // Both sides in the form the originals are keyed by, without UI fragments such as `#compat-reload=N` (L115:
+        // a reload bound the original to its fragment form, which no original is stored under, so the generation
+        // information disappeared until the alias was pushed out).
+        val from = promptAliasKey(requested)
+        val to = promptAliasKey(actual)
+        if (from == to) return
         mutex.withLock {
-            aliases.remove(requested)
-            aliases[requested] = actual
+            aliases.remove(from)
+            aliases[from] = to
             while (aliases.size > 512) aliases.remove(aliases.keys.first())
             revision.value++
         }
@@ -206,7 +212,7 @@ class PromptMediaSource(
 
     suspend fun metadata(url: String): GenerationMetadata? = mutex.withLock {
         if (gate.permit(MediaFeature.PROMPT) == null) null
-        else known[aliases[url] ?: url]?.identity?.let { identity ->
+        else known[promptAliasKey(url).let { aliases[it] ?: it }]?.identity?.let { identity ->
             results[identity] ?: budgetExceeded[identity]?.takeIf { it > nowMillis() }
                 ?.let { GenerationMetadata(coverage = MetadataCoverage.BUDGET_EXCEEDED) }
         }
@@ -238,3 +244,7 @@ class PromptMediaSource(
 
     override fun close() { scope.cancel() }
 }
+
+/** The key an original is known by: a remote URL without its UI fragment; a local path as it is. */
+private fun promptAliasKey(url: String): String =
+    if (isLocalPromptMediaUrl(url)) url else originalMediaRequestFromUrl(url).url

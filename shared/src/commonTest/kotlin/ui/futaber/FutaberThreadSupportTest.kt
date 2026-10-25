@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -126,7 +127,9 @@ class FutaberThreadSupportTest {
             lastReadItemIndex = 12, lastReadItemOffset = 34, lastReadPostId = "99"
         )
         val carried = futaberRefWithHistory(ref, existing)
-        assertEquals(40, carried.seenCount)
+        assertEquals(0, carried.seenCount)
+        assertEquals(40, futaberRefWithHistory(ref, existing.copy(lastViewedSnapshot =
+            com.valoser.futacha.shared.model.ThreadViewedSnapshot(40, "140", 1))).seenCount)
         assertEquals("99", carried.resumePostId)
         assertEquals(12, carried.resumeIndex)
         assertEquals(34, carried.resumeOffset)
@@ -214,6 +217,16 @@ class FutaberThreadSupportTest {
         assertFalse(result[1].isAutoRefreshDisabled)
         // Only that: the visit, position and title are the entry's own.
         assertEquals(fallen.copy(lastConfirmedAliveEpochMillis = 99L, isAutoRefreshDisabled = false), result[1])
+    }
+
+    /** L108: a thread confirmed gone on screen gets both fall records; other rows and fields stay. */
+    @Test
+    fun aThreadConfirmedGoneIsMarkedFallenAndNothingElseChanges() {
+        val shown = ThreadHistoryEntry("123", "may-b", "題", "", "n", "u", 5L, 3, lastConfirmedAliveEpochMillis = 10L)
+        val other = ThreadHistoryEntry("124", "may-b", "他", "", "n", "u", 6L, 1)
+        val result = futaberHistoryMarkFallen(listOf(other, shown), "may-b", "123")
+        assertSame(other, result[0])
+        assertEquals(shown.copy(isAutoRefreshDisabled = true, threadStatus = com.valoser.futacha.shared.model.ThreadStatus(isDead = true)), result[1])
     }
 
     @Test

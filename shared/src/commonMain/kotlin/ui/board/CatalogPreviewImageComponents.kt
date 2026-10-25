@@ -40,7 +40,9 @@ internal fun CatalogPreviewImage(
     targetSizePx: Int,
     contentDescription: String,
     modifier: Modifier = Modifier,
-    fallbackTint: Color = Color.Gray
+    fallbackTint: Color = Color.Gray,
+    /** The secondary URL is a cheaper thumbnail, so it is safe after any primary-image failure. */
+    allowThumbnailFallbackOnError: Boolean = false
 ) {
     val platformContext = LocalPlatformContext.current
     val features = LocalFutachaSharedFeatures.current
@@ -86,7 +88,7 @@ internal fun CatalogPreviewImage(
 
     val failure = (imageState as? AsyncImagePainter.State.Error)?.result?.throwable
     val canAdvance = imageState is AsyncImagePainter.State.Error &&
-        shouldAdvanceCatalogPreviewCandidate(candidateIndex, candidates, fullImageUrl, failure)
+        shouldAdvanceCatalogPreviewCandidate(candidateIndex, candidates, fullImageUrl, failure, allowThumbnailFallbackOnError)
     LaunchedEffect(imageState, activeUrl, candidateIndex, candidates.size) {
         if (activeUrl.isNullOrBlank()) return@LaunchedEffect
         if (canAdvance) {
@@ -158,8 +160,9 @@ internal fun shouldAdvanceCatalogPreviewCandidate(
     candidateIndex: Int,
     candidates: List<String>,
     fullImageUrl: String?,
-    failure: Throwable?
+    failure: Throwable?,
+    allowThumbnailFallbackOnError: Boolean = false
 ): Boolean {
     val next = candidates.getOrNull(candidateIndex + 1) ?: return false
-    return next != fullImageUrl || com.valoser.futacha.shared.ui.image.isMissingImage(failure)
+    return allowThumbnailFallbackOnError || next != fullImageUrl || com.valoser.futacha.shared.ui.image.isMissingImage(failure)
 }

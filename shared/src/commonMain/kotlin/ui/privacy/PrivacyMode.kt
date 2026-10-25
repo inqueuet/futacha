@@ -84,6 +84,13 @@ internal fun PrivacyModeHost(
         ?: remember { mutableStateOf(false) }
     val options by remember(preferences) { derivedStateOf { privacyOptions(preferences.value) } }
     val compatEnabled by remember(preferences) { derivedStateOf { preferences.value.compatPrivacyEnabled() } }
+    // Read through a derived state like the options: reading the preferences here recomposed this host on every
+    // saved preference, which handed every LocalPrivacyMode reader (each image cell, the title bars) a new state (L66).
+    val inheritedImageStrength by remember(preferences, compatibilityMode) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            if (compatibilityMode) ((1f - parseCompatPercent(preferences.value.compatPreferenceValue("thread", "commonPrivacyAlpha"))) * 100f).toInt() else 50
+        }
+    }
     val enabled = if (compatibilityMode) compatEnabled else modernEnabled
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -95,14 +102,21 @@ internal fun PrivacyModeHost(
             catch (_: Exception) { error = "プライバシー設定を保存できませんでした。もう一度お試しください。" }
         }
     }
-    val state = PrivacyModeState(enabled, options, compatibilityMode,
-        setEnabled = { next -> persist {
+    val setEnabled: (Boolean) -> Unit = remember(store, stateStore, compatibilityMode, scope) {
+        { next -> persist {
             if (compatibilityMode) store.savePreference(COMPAT_COMMON_PRIVACY_STORAGE_KEY, if (next) "ON" else "OFF")
             else stateStore?.setPrivacyFilterEnabled(next)
-        } },
-        save = { key, value -> persist { store.savePreference(key, value) } }, error = error,
-        settingsWindows = settingsWindows,
-        inheritedImageStrength = if (compatibilityMode) ((1f - parseCompatPercent(preferences.value.compatPreferenceValue("thread", "commonPrivacyAlpha"))) * 100f).toInt() else 50)
+        } }
+    }
+    val save: (String, String) -> Unit = remember(store, scope) { { key, value -> persist { store.savePreference(key, value) } } }
+    // A new state only when something it holds changes, so a preference unrelated to privacy recomposes no reader (L66).
+    val state = remember(enabled, options, compatibilityMode, error, inheritedImageStrength, setEnabled, save, settingsWindows) {
+        PrivacyModeState(enabled, options, compatibilityMode,
+            setEnabled = setEnabled,
+            save = save, error = error,
+            settingsWindows = settingsWindows,
+            inheritedImageStrength = inheritedImageStrength)
+    }
     CompositionLocalProvider(LocalPrivacyMode provides state) {
         val draw = enabled && options.scope == PrivacyScope.SCREEN && settingsWindows.intValue == 0
         Box(Modifier.fillMaxSize().then(if (draw) Modifier.privacyFilter(options) else Modifier)) {

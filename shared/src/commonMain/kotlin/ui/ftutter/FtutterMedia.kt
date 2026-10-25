@@ -79,7 +79,6 @@ import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveLocation
-import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
 import com.valoser.futacha.shared.ui.compat.CompatViewerImagePage
 import com.valoser.futacha.shared.ui.compat.CompatViewerTransform
@@ -87,6 +86,7 @@ import com.valoser.futacha.shared.ui.compat.compatUniqueMediaKeys
 import com.valoser.futacha.shared.ui.compat.isCompatVideoMediaUrl
 import com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** 保存のための道具（保存先・1件の保存・まとめての保存）。アプリ側で作って渡す。 */
@@ -97,8 +97,8 @@ internal class FtutterMediaSaveTools(
     val chooseDestination: () -> Unit,
     /** 1件を保存する（保存先が未設定なら先に選ぶ）。 */
     val saveOne: (url: String) -> Unit,
-    /** まとめて保存する。結果は保存できた数。 */
-    val saveMany: suspend (urls: List<String>, onProgress: (done: Int) -> Unit) -> Int,
+    /** まとめて保存する。結果は保存できた数・できなかった数と、途中で止まった理由。 */
+    val saveMany: suspend (urls: List<String>, onProgress: (done: Int) -> Unit) -> FtutterBatchSaveResult,
     val isSaving: Boolean
 )
 
@@ -118,14 +118,17 @@ private fun FtutterIndexCard(position: Int, modifier: Modifier = Modifier, onTap
 private fun FtutterMediaCell(post: CompatPostSnapshot, privacyAlpha: Float, modifier: Modifier = Modifier, thumbnailPixels: Int = 250, useOriginal: Boolean = false) {
     val url = resolveCompatViewerMediaUrl(post)
     Box(modifier) {
-        FtutterThumbnail(
-            thumbnailUrl = post.thumbnailUrl ?: url.orEmpty(),
-            fullImageUrl = url?.takeUnless(::isCompatVideoMediaUrl),
-            quality = if (useOriginal) 2 else 0,
-            targetSizePx = thumbnailPixels,
-            contentDescription = "No.${post.postNo}",
-            modifier = Modifier.fillMaxSize().alpha(privacyAlpha)
-        )
+        if (useOriginal) {
+            FtutterMediaHighQualityThumbnail(post, Modifier.fillMaxSize().alpha(privacyAlpha))
+        } else {
+            FtutterThumbnail(
+                thumbnailUrl = post.thumbnailUrl ?: url.orEmpty(),
+                fullImageUrl = url?.takeUnless(::isCompatVideoMediaUrl),
+                targetSizePx = thumbnailPixels,
+                contentDescription = "No.${post.postNo}",
+                modifier = Modifier.fillMaxSize().alpha(privacyAlpha)
+            )
+        }
         if (url != null && isCompatVideoMediaUrl(url)) {
             Icon(Icons.Rounded.PlayCircleOutline, contentDescription = "動画", tint = Color.White, modifier = Modifier.align(Alignment.Center).size(36.dp))
         }
@@ -173,6 +176,7 @@ internal fun FtutterGalleryScreen(
     fun keyOf(post: CompatPostSnapshot): String = resolveCompatViewerMediaUrl(post) ?: "#${post.position}"
     var confirm by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var saveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     PlatformBackHandler(enabled = true) {
         if (selecting) { selecting = false; selected.clear() } else onClose()
@@ -222,7 +226,7 @@ internal fun FtutterGalleryScreen(
                             )
                             .testTag("ftutter-gallery-cell")
                     ) {
-                        FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = if (settings.reduceThumbnail) settings.thumbnailPixels else 4096, useOriginal = !settings.reduceThumbnail)
+                        FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = settings.thumbnailPixels, useOriginal = !settings.reduceThumbnail)
                         if (selecting) {
                             Checkbox(checked = selected[keyOf(post)] == true, onCheckedChange = { selected[keyOf(post)] = it }, modifier = Modifier.align(Alignment.TopEnd))
                         } else {
@@ -235,7 +239,7 @@ internal fun FtutterGalleryScreen(
             if (selecting) {
                 ScrollableToolbarRow(
                     itemCount = 4, minItemWidth = 48.dp,
-                    modifier = Modifier.fillMaxWidth().height(50.dp).background(colors.toolBar).navigationBarsPadding(),
+                    modifier = Modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding().height(50.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     FtutterDestinationButton(tools, Modifier.weight(1f))
@@ -274,17 +278,30 @@ internal fun FtutterGalleryScreen(
                 TextButton(enabled = progress == null, onClick = {
                     val urls = chosen.mapNotNull(::resolveCompatViewerMediaUrl).distinct()
                     progress = 0 to urls.size
-                    scope.launch {
-                        val saved = tools.saveMany(urls) { done -> progress = done to urls.size }
-                        progress = null
-                        confirm = false
-                        selecting = false
-                        selected.clear()
-                        message = "${saved}個のファイルを保存しました"
+                    saveJob = scope.launch {
+                        try {
+                            val result = tools.saveMany(urls) { done -> progress = done to urls.size }
+                            // A save stopped early (destination lost, another save) keeps the selection for a retry.
+                            if (result.error == null) {
+                                selecting = false
+                                selected.clear()
+                            }
+                            message = ftutterBatchSaveMessage(result)
+                        } catch (cancelled: CancellationException) {
+                            message = "保存を中止しました（中止までに保存したファイルは残ります）"
+                            throw cancelled
+                        } finally {
+                            progress = null
+                            confirm = false
+                            saveJob = null
+                        }
                     }
                 }, modifier = Modifier.testTag("ftutter-gallery-save-ok")) { Text("OK") }
             },
-            dismissButton = { TextButton(enabled = progress == null, onClick = { confirm = false }) { Text("キャンセル") } }
+            dismissButton = {
+                if (progress != null) TextButton(onClick = { saveJob?.cancel() }, modifier = Modifier.testTag("ftutter-gallery-save-cancel")) { Text("中止") }
+                else TextButton(onClick = { confirm = false }) { Text("キャンセル") }
+            }
         ) }
     }
 }
@@ -351,17 +368,26 @@ internal fun FtutterViewerScreen(
                         }
                     }
             ) {
-                HorizontalPager(state = pager, key = { keys[it] }, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()) { page ->
+                // Pager's item provider can still enumerate the previous count while
+                // a smaller media list/key lambda is being applied (late NG results).
+                // Existing media retain their stable String key and URL transform;
+                // obsolete slots get a saveable Int key and empty content below.
+                HorizontalPager(state = pager, key = { page -> keys.getOrNull(page) ?: page }, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()) { page ->
                     val post = media.getOrNull(page)
                     val url = post?.let(::resolveCompatViewerMediaUrl)
-                    Box(Modifier.fillMaxSize().alpha(privacyAlpha)) {
+                    // Static images keep the legacy alpha. Native video uses a veil above its
+                    // surface instead, so opacity is effective without dimming the outer toolbar.
+                    Box(Modifier.fillMaxSize().then(
+                        if (url != null && isCompatVideoMediaUrl(url)) Modifier else Modifier.alpha(privacyAlpha)
+                    )) {
                         if (url != null && isCompatVideoMediaUrl(url)) {
                             // 自動再生・ループは原作の設定から端末の再生部品へ渡す。
                             androidx.compose.runtime.CompositionLocalProvider(
                                 com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
                                     com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(settings.videoAutoPlay, loop)
                             ) {
-                                PlatformVideoPlayer(videoUrl = url, isActive = page == pager.currentPage, modifier = Modifier.fillMaxSize().testTag("ftutter-viewer-video"))
+                                FtutterViewerVideoPage(videoUrl = url, isActive = page == pager.currentPage,
+                                    privacyAlpha = privacyAlpha, onOpenBrowser = onOpenBrowser)
                             }
                         } else {
                             CompatViewerImagePage(
@@ -402,7 +428,7 @@ internal fun FtutterViewerScreen(
                                     .then(if (selected) Modifier.border(1.5.dp, colors.highlight).background(colors.highlight.copy(alpha = 0.3f)) else Modifier)
                                     .clickable { scope.launch { pager.scrollToPage(index) } }
                             ) {
-                                FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = if (settings.reduceThumbnail) settings.thumbnailPixels else 4096, useOriginal = !settings.reduceThumbnail)
+                                FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = settings.thumbnailPixels, useOriginal = !settings.reduceThumbnail)
                                 FtutterIndexCard(post.position, Modifier.align(Alignment.TopStart)) { onBackToPost(post.position) }
                             }
                         }

@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.media.FUTABA_VIDEO_EXTENSIONS
 import com.valoser.futacha.shared.network.defaultBoardPostingCapabilities
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.util.ImageData
@@ -15,6 +16,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
@@ -135,6 +137,21 @@ internal val compatDrawingReferencePresets: List<Long> = listOf(
     0xFF64AD3B, 0xFF0791CC, 0xFF7C3692, 0xFFF19EC2
 )
 
+internal fun compatDrawingReferencePoint(point: CompatDrawingPoint, canvasWidthPx: Int, canvasHeightPx: Int): CompatDrawingPoint {
+    require(canvasWidthPx > 0 && canvasHeightPx > 0) { "キャンバスを初期化できませんでした" }
+    return CompatDrawingPoint(
+        point.x * COMPAT_DRAWING_OUTPUT_WIDTH_PX / canvasWidthPx,
+        point.y * COMPAT_DRAWING_OUTPUT_HEIGHT_PX / canvasHeightPx
+    )
+}
+
+/** Fixed at pen-down: resizing must not change the width halfway through one stroke. */
+internal fun compatDrawingReferenceWidth(widthPx: Float, canvasWidthPx: Int, canvasHeightPx: Int): Float {
+    require(canvasWidthPx > 0 && canvasHeightPx > 0) { "キャンバスを初期化できませんでした" }
+    return widthPx * (COMPAT_DRAWING_OUTPUT_WIDTH_PX.toFloat() / canvasWidthPx +
+        COMPAT_DRAWING_OUTPUT_HEIGHT_PX.toFloat() / canvasHeightPx) / 2f
+}
+
 internal fun scaleCompatDrawingStrokesForReferencePng(
     strokes: List<CompatDrawingStroke>,
     sourceWidthPx: Int,
@@ -174,8 +191,9 @@ internal fun compatDrawingFileName(
 }
 
 private const val COMPAT_DRAWING_MAX_PIXELS = 16_000_000L
-private const val COMPAT_DRAWING_MAX_STROKES = 100_000
-private const val COMPAT_DRAWING_MAX_POINTS = 2_000_000L
+// Also the limits of the drawing kept for recovery (L69), so whatever comes back can be saved.
+internal const val COMPAT_DRAWING_MAX_STROKES = 100_000
+internal const val COMPAT_DRAWING_MAX_POINTS = 2_000_000L
 
 internal fun validateCompatDrawingRender(
     strokes: List<CompatDrawingStroke>,
@@ -400,14 +418,17 @@ private fun compatPostAttachmentPayloadHash(bytes: ByteArray): String {
 internal suspend fun persistCompatPostAttachment(
     fileSystem: FileSystem,
     tabKey: String,
-    attachment: ImageData
+    attachment: ImageData,
+    payloadHash: (ByteArray) -> String = ::compatPostAttachmentPayloadHash
 ): Result<String> {
+    val savedAt = Clock.System.now().toEpochMilliseconds()
+    // The hash reads the whole attachment (up to about 8 MB) on every save: away from the caller, the screen's
+    // thread (L54). [payloadHash] is replaced only by tests.
+    val digest = withContext(AppDispatchers.parsing) { payloadHash(attachment.bytes) }
     val locator = compatPostAttachmentLocator(
         tabKey = tabKey,
         fileName = attachment.fileName,
-        payloadHash = stableCompatHash(
-            "${Clock.System.now().toEpochMilliseconds()}:${compatPostAttachmentPayloadHash(attachment.bytes)}"
-        )
+        payloadHash = stableCompatHash("$savedAt:$digest")
     )
     return fileSystem.writeBytes(locator, attachment.bytes).map { locator }
 }

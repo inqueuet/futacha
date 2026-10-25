@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.util.ToolbarOverflowHints
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -339,8 +340,11 @@ internal fun FutaberPostScreen(
             ) {
                 // The tools take what the send button leaves (it is measured first, being the only fixed-size child):
                 // on a narrow screen or with large text they scroll sideways instead of squeezing "送信" away.
+                val toolsScroll = rememberScrollState()
+                // The shared edge hints show that more tools are off screen (L150).
+                Box(Modifier.weight(1f)) {
                 Row(
-                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    Modifier.horizontalScroll(toolsScroll),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -376,6 +380,8 @@ internal fun FutaberPostScreen(
                     IconButton(onClick = { settingsOpen = true }, enabled = !sending, modifier = Modifier.testTag("futaber-post-settings")) {
                         FutaberIcon(Icons.Outlined.Settings, contentDescription = "書き込み設定", tint = colors.icon)
                     }
+                }
+                ToolbarOverflowHints(toolsScroll)
                 }
                 val canSend = !sending && !attachment.processing
                 Box(

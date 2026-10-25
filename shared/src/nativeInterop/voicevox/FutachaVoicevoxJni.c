@@ -28,6 +28,9 @@ JNIEXPORT jbyteArray JNICALL JNI(query)(JNIEnv *env, jobject self, jlong handle,
     char *text = utf8(env, bytes), *json = NULL;
     if (!text) return NULL;
     int status = futacha_voice_query((FutachaVoiceSession *)(intptr_t)handle, text, &json); free(text);
+    /* Empty bytes mark a text-analysis failure; successful queries are nonempty JSON.
+     * Kotlin constructs the typed exception, avoiding a reflective class name under R8. */
+    if (status == FUTACHA_VOICE_TEXT_ANALYSIS_ERROR) return (*env)->NewByteArray(env, 0);
     if (status) { fail(env); return NULL; }
     jbyteArray output = (*env)->NewByteArray(env, (jsize)strlen(json));
     if (output) (*env)->SetByteArrayRegion(env, output, 0, (jsize)strlen(json), (jbyte *)json);

@@ -84,9 +84,12 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 
 /** タブ・ドロワーの行の長押しメニュー（原作 TabDialog）。 */
@@ -119,6 +122,7 @@ internal fun FtutterDrawerHost(
         return
     }
     var openedOnRight by remember(settings.drawerSide) { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val rightSide = settings.drawerSide == FtutterDrawerSide.RIGHT || settings.drawerSide == FtutterDrawerSide.BOTH && openedOnRight
     val outer = LocalLayoutDirection.current
     // 右に出す時は、ドロワーの部品を右から左の向きで置き、中身は元の向きへ戻す。
@@ -139,38 +143,53 @@ internal fun FtutterDrawerHost(
                 }
             }
         ) {
-            Box(Modifier.fillMaxSize()) {
-                CompositionLocalProvider(LocalLayoutDirection provides outer) { content() }
-                if (settings.drawerOpenByDrag && !drawerState.isOpen) {
-                    val scope = androidx.compose.runtime.rememberCoroutineScope()
-                    // 端の帯（20dp）。内側へ24dp引いたら開く。右に出す時は、右から左の向きなので右端になる。
-                    Box(
-                        Modifier.align(Alignment.CenterStart).fillMaxHeight().width(20.dp)
-                            .pointerInput(rightSide) {
-                                var pulled = 0f
-                                detectHorizontalDragGestures(
-                                    onDragStart = { pulled = 0f },
-                                    onHorizontalDrag = { change, amount ->
-                                        pulled += if (rightSide) -amount else amount
-                                        change.consume()
-                                        if (pulled > 24.dp.toPx()) scope.launch { drawerState.open() }
-                                    }
-                                )
+            // Observe from the content's ancestor. A transparent sibling edge strip wins hit testing
+            // before its gesture detector runs, so even unconsumed taps cannot reach the controls below.
+            val edgeGestures = if (settings.drawerOpenByDrag && !drawerState.isOpen) {
+                Modifier.pointerInput(settings.drawerSide) {
+                    val edgeWidth = 20.dp.toPx()
+                    val openDistance = 24.dp.toPx()
+                    val slop = viewConfiguration.touchSlop
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val fromRight = when {
+                            down.position.x <= edgeWidth && settings.drawerSide != FtutterDrawerSide.RIGHT -> false
+                            down.position.x >= size.width - edgeWidth && settings.drawerSide != FtutterDrawerSide.LEFT -> true
+                            else -> return@awaitEachGesture
+                        }
+                        var horizontal = false
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            val delta = change.position - down.position
+                            val inward = if (fromRight) -delta.x else delta.x
+                            if (!horizontal) {
+                                // Leave vertical reading/scrollbar drags and outward swipes to the child.
+                                if ((abs(delta.y) > slop && abs(delta.y) >= abs(delta.x)) || inward < -slop) break
+                                horizontal = inward > slop && inward > abs(delta.y)
                             }
-                            .testTag("ftutter-drawer-edge")
-                    )
-                    if (settings.drawerSide == FtutterDrawerSide.BOTH) Box(
-                        Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(20.dp)
-                            .pointerInput(rightSide) {
-                                var pulled = 0f
-                                detectHorizontalDragGestures(onDragStart = { pulled = 0f }, onHorizontalDrag = { change, amount ->
-                                    pulled += if (rightSide) amount else -amount
-                                    change.consume()
-                                    if (pulled > 24.dp.toPx()) { openedOnRight = !rightSide; scope.launch { drawerState.open() } }
-                                })
-                            }.testTag("ftutter-drawer-other-edge")
-                    )
+                            if (horizontal) {
+                                change.consume()
+                                if (inward > openDistance) {
+                                    openedOnRight = fromRight
+                                    scope.launch { drawerState.open() }
+                                    // The rest of this swipe belongs to the drawer: unconsumed, the gesture layer
+                                    // below also took it as a swipe to the next tab or back to the catalog (M78).
+                                    while (true) {
+                                        val rest = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                                        rest.consume()
+                                        if (!rest.pressed) break
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    }
                 }
+            } else Modifier
+            Box(Modifier.fillMaxSize().then(edgeGestures)) {
+                CompositionLocalProvider(LocalLayoutDirection provides outer) { content() }
             }
         }
     }
@@ -485,7 +504,7 @@ private fun FtutterDrawerRow(
 ) {
     val colors = LocalFtutterColors.current
     val entry = row.entry
-    val status = if (showStatus) com.valoser.futacha.shared.ui.board.threadStatusText(entry?.threadStatus)
+    val status = if (showStatus) com.valoser.futacha.shared.ui.board.threadStatusText(ftutterDisplayStatus(entry))
         else if (entry?.isAutoRefreshDisabled == true) "落ち" else ""
     Column(
         Modifier.fillMaxWidth().background(colors.background)
@@ -663,14 +682,14 @@ internal fun FtutterTabStrip(
                     }
                     .semantics {
                         contentDescription = tab.entry?.title.orEmpty() +
-                            if (showStatus) "、" + com.valoser.futacha.shared.ui.board.threadStatusText(tab.entry?.threadStatus) else ""
+                            if (showStatus) "、" + com.valoser.futacha.shared.ui.board.threadStatusText(ftutterDisplayStatus(tab.entry)) else ""
                         onLongClick(label = "タブの操作") { onLongPress(tab.url); true }
                     }
                     .testTag(if (selected) "ftutter-tab-selected" else "ftutter-tab")
             ) {
                 val thumb = tab.entry?.titleImageUrl.orEmpty()
                 val titleBesideUnread = thumb.isBlank() && showStatus &&
-                    com.valoser.futacha.shared.ui.board.threadStatusBadgeText(tab.entry?.threadStatus).isNotEmpty()
+                    com.valoser.futacha.shared.ui.board.threadStatusBadgeText(ftutterDisplayStatus(tab.entry)).isNotEmpty()
                 if (thumb.isNotBlank()) {
                     FtutterThumbnail(thumbnailUrl = thumb, fullImageUrl = null, targetSizePx = 120, contentDescription = tab.entry?.title.orEmpty(),
                         modifier = Modifier.fillMaxSize().alpha(if (settings.privacy) (1.0 - design.privacyTabDrawer).toFloat() else 1f))
@@ -699,7 +718,7 @@ internal fun FtutterTabStrip(
                         modifier = Modifier.align(Alignment.TopEnd).size(12.dp).background(colors.toolBar))
                 }
                 if (showStatus) {
-                    val status = com.valoser.futacha.shared.ui.board.threadStatusBadgeText(tab.entry?.threadStatus)
+                    val status = com.valoser.futacha.shared.ui.board.threadStatusBadgeText(ftutterDisplayStatus(tab.entry))
                     if (status.isNotEmpty()) Text(status, color = colors.onToolBar, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.align(Alignment.TopStart).background(colors.toolBar)
                             .testTag("ftutter-tab-status"))

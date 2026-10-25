@@ -18,7 +18,7 @@ private const val SEEN_FIELD_SEPARATOR = '\n'
  * background would open with nothing marked new. Kept in this mode's own setting (`compat.futaber.seen`), so the
  * other modes' stored history is not touched.
  */
-internal data class FutaberSeenCount(val boardId: String, val threadId: String, val seen: Int)
+internal data class FutaberSeenCount(val boardId: String, val threadId: String, val seen: Int, val lastPostId: String? = null)
 
 /** Oldest first, newest last. A damaged or unknown stored value reads as nothing seen rather than failing. */
 internal fun decodeFutaberSeenCounts(stored: String?): List<FutaberSeenCount> {
@@ -29,11 +29,11 @@ internal fun decodeFutaberSeenCounts(stored: String?): List<FutaberSeenCount> {
     raw.forEach { entry ->
         val parts = entry.split(SEEN_FIELD_SEPARATOR)
         val seen = parts.getOrNull(2)?.toIntOrNull()
-        if (parts.size == 3 && parts[0].isNotBlank() && parts[1].isNotBlank() && seen != null && seen > 0) {
+        if (parts.size in 3..4 && parts[0].isNotBlank() && parts[1].isNotBlank() && seen != null && seen > 0) {
             val key = parts[0] to parts[1]
             // A repeated key keeps its latest place.
             byKey.remove(key)
-            byKey[key] = FutaberSeenCount(parts[0], parts[1], seen)
+            byKey[key] = FutaberSeenCount(parts[0], parts[1], seen, parts.getOrNull(3)?.takeIf { it.isNotEmpty() && it.length <= 100 && it.all(Char::isDigit) })
         }
     }
     return byKey.values.toList().takeLast(FUTABER_MAX_SEEN_THREADS)
@@ -45,7 +45,8 @@ internal fun encodeFutaberSeenCounts(counts: List<FutaberSeenCount>): String {
     while (true) {
         val text = Json.encodeToString(
             ListSerializer(String.serializer()),
-            kept.map { "${it.boardId}$SEEN_FIELD_SEPARATOR${it.threadId}$SEEN_FIELD_SEPARATOR${it.seen}" }
+            kept.map { "${it.boardId}$SEEN_FIELD_SEPARATOR${it.threadId}$SEEN_FIELD_SEPARATOR${it.seen}" +
+                (it.lastPostId?.let { id -> "$SEEN_FIELD_SEPARATOR$id" } ?: "") }
         )
         if (text.length <= SEEN_STORED_LIMIT || kept.isEmpty()) return text
         kept = kept.drop(1)

@@ -404,6 +404,34 @@ class GlobalSettingsSupportTest {
         )
     }
 
+    /** L32: the screen rebuilds the callbacks on every recomposition; a cleanup already running is still seen. */
+    @Test
+    fun globalSettingsBindingsSupport_cacheCallbacks_rebuiltCallbacksSeeTheRunningCleanup() = runBlocking {
+        val messages = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        var clears = 0
+        val inputs = GlobalSettingsCacheInputs(
+            coroutineScope = this,
+            showSnackbar = { messages += it },
+            clearImageCache = { clears += 1; release.await() },
+            clearTemporaryCache = { clears += 1 },
+            refreshAutoSavedStats = {}
+        )
+        buildGlobalSettingsCacheCallbacks(inputs).clearImageCache()
+        yield()
+        val rebuilt = buildGlobalSettingsCacheCallbacks(inputs)
+        assertTrue(rebuilt.isCleanupInProgress())
+        rebuilt.clearImageCache()
+        rebuilt.clearTemporaryCache()
+        yield()
+        assertEquals(1, clears)
+        release.complete(Unit)
+        yield()
+        yield()
+        assertFalse(rebuilt.isCleanupInProgress())
+        assertEquals(listOf("画像キャッシュを削除しました"), messages)
+    }
+
     @Test
     fun globalSettingsBindingsSupport_cacheCallbacks_ignoreSecondCleanupWhileRunning() = runBlocking {
         val messages = mutableListOf<String>()

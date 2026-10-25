@@ -52,10 +52,23 @@ internal fun threadStatusBadgeText(status: ThreadStatus?): String = when {
     else -> ""
 }
 
-/** Catalog-created history rows have a count but are not evidence of a previous read. */
+/** Only a foreground view establishes this baseline; network metadata is not a reading record. */
 internal fun knownViewedPostCount(entry: com.valoser.futacha.shared.model.ThreadHistoryEntry?): Int? = entry
-    ?.takeIf { it.lastConfirmedAliveEpochMillis != null || it.lastReadPostId != null || it.lastReadItemIndex > 0 }
-    ?.replyCount?.takeIf { it > 0 }
+    ?.lastViewedSnapshot?.postCount?.takeIf { it > 0 }
+
+/** A stable post boundary survives older posts being removed from a later response. */
+internal fun threadPostsAfterBaseline(posts: List<Post>, count: Int, lastPostId: String?): List<Post> {
+    val numericBoundary = lastPostId?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.trimStart('0').orEmpty()
+    if (numericBoundary.isNotEmpty()) return posts.filter { post ->
+        val id = post.id.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.trimStart('0') ?: return@filter false
+        id.length > numericBoundary.length || (id.length == numericBoundary.length && id > numericBoundary)
+    }
+    if (lastPostId != null) {
+        val index = posts.indexOfFirst { it.id == lastPostId }
+        if (index >= 0) return posts.drop(index + 1)
+    }
+    return posts.drop(count.coerceAtLeast(0))
+}
 
 internal data class ThreadOpeningSummary(val newPosts: Int, val repliesToSelf: Int?) {
     val text: String get() = "新着${newPosts}件" +
@@ -63,8 +76,12 @@ internal data class ThreadOpeningSummary(val newPosts: Int, val repliesToSelf: I
 }
 
 /** Captures the pre-open baseline; an archive/preview and an incomplete response cannot consume the notice. */
-internal class ThreadOpeningSummaryTracker(private val knownPostCount: Int?) {
+internal class ThreadOpeningSummaryTracker(
+    private val knownPostCount: Int?,
+    private val knownLastPostId: String? = null
+) {
     private var completed = false
+    val isCompleted: Boolean get() = completed
 
     fun accept(
         posts: List<Post>, selfIds: Set<String>, hiddenIds: Set<String> = emptySet(),
@@ -72,9 +89,8 @@ internal class ThreadOpeningSummaryTracker(private val knownPostCount: Int?) {
     ): ThreadOpeningSummary? {
         if (completed || !live || truncated || posts.isEmpty()) return null
         val count = knownPostCount?.takeIf { it > 0 } ?: run { completed = true; return null }
-        if (posts.size < count) return null
         completed = true
-        val added = posts.drop(count).filter { it.id !in hiddenIds }
+        val added = threadPostsAfterBaseline(posts, count, knownLastPostId).filter { it.id !in hiddenIds }
         if (added.isEmpty()) return null
         val replies = if (selfIds.isEmpty()) null else added.count { post ->
             post.quoteReferences.any { quote -> quote.replyTargetPostIds.any { it in selfIds } }

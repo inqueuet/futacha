@@ -136,6 +136,31 @@ class ImageGenerationMetadataReaderTest {
         }
     }
 
+    /**
+     * L118: a packet that declares an encoding which hides "<!DOCTYPE" from the UTF-8 preflight (UTF-7 here) is
+     * rejected before a parser that honours the declaration (NSXMLParser) expands its internal entities.
+     */
+    @Test fun xmpDeclaringAnEncodingThatHidesTheDtdIsRejected(): Unit = runBlocking {
+        val hidden = "<?xml version=\"1.0\" encoding=\"UTF-7\"?>" +
+            "<+ACE-DOCTYPE x:xmpmeta +AFs-<+ACE-ENTITY e \"EXPANDED\"+AD4-+AF0-+AD4-" +
+            xmp("<p:parameters>&e;</p:parameters>")
+        for (packet in listOf(hidden, hidden.replace("UTF-7", "utf-7"), hidden.replace("\"UTF-7\"", "'UTF-7'"))) {
+            val result = read(jpeg(0xe1 to xmpApp1(packet), 0xfe to raw.encodeToByteArray()))
+            assertEquals(MetadataCoverage.MALFORMED, result.coverage)
+            assertEquals(positive, result.candidates.single().positive)
+            assertTrue(result.candidates.none { "EXPANDED" in it.positive.orEmpty() })
+        }
+        // Unicode declarations, as XMP requires, are read as before.
+        for (encoding in listOf("UTF-8", "utf-8")) {
+            val packet = "<?xml version=\"1.0\" encoding=\"$encoding\"?>" + xmp("<p:parameters>${xml(raw).replace("\r", "&#13;")}</p:parameters>")
+            assertEquals(positive, read(webp("XMP " to packet.encodeToByteArray())).candidates.single().positive)
+        }
+        for (encoding in listOf("US-ASCII", "ISO-8859-1")) {
+            val packet = "<?xml version=\"1.0\" encoding=\"$encoding\"?>" + xmp("<p:parameters>a red cat\nNegative prompt: dog\nSteps: 20, Sampler: Euler, Seed: 1</p:parameters>")
+            assertEquals("a red cat", read(webp("XMP " to packet.encodeToByteArray())).candidates.single().positive)
+        }
+    }
+
     @Test fun malformedExifCyclesOffsetsAndSegmentsAreBounded(): Unit = runBlocking {
         val cyclic = tiff(0x010f to "Cam\u0000".encodeToByteArray()).also { put32(it, 22, 8, true) }
         val invalidOffset = tiff(0x010e to "long enough".encodeToByteArray()).also { put32(it, 18, 0xffffffffL, true) }

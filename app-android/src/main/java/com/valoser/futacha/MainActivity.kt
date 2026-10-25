@@ -36,7 +36,7 @@ import com.valoser.futacha.shared.compat.CompatVolumeKey
 import com.valoser.futacha.shared.compat.CompatVolumeKeyBus
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
 import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
-import com.valoser.futacha.shared.compat.modernBoardsToCompatibility
+import com.valoser.futacha.shared.compat.bridgeProfileBoardsAndHistory
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
 import com.valoser.futacha.shared.compat.isExperienceProfileSessionCurrent
 import com.valoser.futacha.shared.compat.rememberExperienceProfileActivityResultLauncher
@@ -50,7 +50,6 @@ import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -84,7 +83,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) receiveSharedAttachment(intent)
+        // A share or link delivered to the task's root replaces the task's own intent; opened again from Recents
+        // after the app was left, that old share or link would be handled again (L151). It is a plain start.
+        val incoming = intent?.takeIf { it.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0 }
+        if (savedInstanceState == null) receiveSharedAttachment(incoming)
         val app = application as? FutachaApplication
         inAppUpdateController = AndroidInAppUpdateController(
             activity = this,
@@ -111,8 +113,8 @@ class MainActivity : ComponentActivity() {
             )
         } else {
             PendingPlatformDeepLinks().withIncoming(
-                ai = intent?.futachaAiDeepLinkOrNull(),
-                thread = intent?.futabaThreadDeepLinkOrNull()
+                ai = incoming?.futachaAiDeepLinkOrNull(),
+                thread = incoming?.futabaThreadDeepLinkOrNull()
             )
         }
         if (app == null || app.profileRecoveryComplete.value) {
@@ -221,63 +223,19 @@ class MainActivity : ComponentActivity() {
                 // Keep the compatibility -> modern bridge alive even when the
                 // app starts directly in Futacha mode; restricting it to a
                 // compatibility session left data invisible until the user
-                // switched modes once (issue #11).
+                // switched modes once (issue #11). A failed update does not
+                // stop it (L96).
                 val compatibilityApp = app ?: return@LaunchedEffect
-                coroutineScope {
-                    launch {
-                        try {
-                            if (!activeProfile.usesAppStateData) {
-                                var hasObservedAuthoritativeCompatBoards = false
-                                compatibilityApp.compatibilityStore.boards.collect { compatBoards ->
-                                    if (compatBoards.isNotEmpty()) hasObservedAuthoritativeCompatBoards = true
-                                    if (!hasObservedAuthoritativeCompatBoards) return@collect
-                                    val current = stateStore.boards.first()
-                                    val synchronized = synchronizeModernBoardsFromCompatibility(
-                                        current, compatBoards, compatibilityApp.compatibilityStore.holdsBundledTutorialBoard
-                                    )
-                                    if (synchronized != current) stateStore.setBoards(synchronized)
-                                }
-                            } else {
-                                var hasObservedLoadedModernBoards = false
-                                stateStore.observedBoards.collect { modernBoards ->
-                                    if (modernBoards.isNotEmpty()) hasObservedLoadedModernBoards = true
-                                    if (!hasObservedLoadedModernBoards) return@collect
-                                    val desired = modernBoardsToCompatibility(modernBoards)
-                                    val desiredKeys = desired.mapTo(mutableSetOf()) { it.key }
-                                    compatibilityApp.compatibilityStore.boards.first()
-                                        .filterNot { it.key in desiredKeys }
-                                        .forEach { compatibilityApp.compatibilityStore.deleteBoard(it.key) }
-                                    compatibilityApp.compatibilityStore.upsertBoards(desired)
-                                }
-                            }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Throwable) {
-                            com.valoser.futacha.shared.util.Logger.e(
-                                "MainActivity",
-                                "Compatibility board bridge stopped",
-                                failure
-                            )
-                        }
-                    }
-                    launch {
-                        try {
-                            compatibilityApp.compatibilityStore.history.collect { compatHistory ->
-                                val boards = stateStore.boards.first()
-                                stateStore.updateHistory { current ->
-                                    mergeCompatibilityHistory(current, compatHistory, boards)
-                                }
-                            }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Throwable) {
-                            com.valoser.futacha.shared.util.Logger.e(
-                                "MainActivity",
-                                "Compatibility history bridge stopped",
-                                failure
-                            )
-                        }
-                    }
+                bridgeProfileBoardsAndHistory(
+                    stateStore,
+                    compatibilityApp.compatibilityStore,
+                    activeProfile.usesAppStateData
+                ) { operation, failure ->
+                    com.valoser.futacha.shared.util.Logger.e(
+                        "MainActivity",
+                        "Compatibility $operation bridge update failed",
+                        failure
+                    )
                 }
             }
             DisposableEffect(app, httpClient) {
@@ -316,6 +274,13 @@ class MainActivity : ComponentActivity() {
                             var switchThreadUrl: String? = null
                             try {
                                 profileSwitchError = null
+                                if ((!target.usesAppStateData || !activeProfile.usesAppStateData) &&
+                                    !application.compatibilityStore.isLoaded.value
+                                ) {
+                                    // Retry a cold/failed load before waiting for authoritative data.
+                                    // Failure uses the existing switch error path, without copying placeholders.
+                                    application.compatibilityStore.ensureInitialized()
+                                }
                             // Make the cross-profile dataset authoritative before
                             // the new Activity is launched.  The collectors below
                             // normally do this continuously, but a switch can
@@ -448,16 +413,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     if (app != null && networkServicesError != null) {
-                        androidx.compose.foundation.layout.Box(
-                            modifier = androidx.compose.ui.Modifier.fillMaxSize(),
-                            contentAlignment = androidx.compose.ui.Alignment.Center
-                        ) {
-                            androidx.compose.foundation.layout.Column(
-                                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
-                            ) {
-                                Text("通信機能の初期化に失敗しました。アプリを再起動してください。")
-                            }
-                        }
+                        // 再試行 builds the network services again (L125: iOS offers one;
+                        // before, the only way out was restarting the app).
+                        com.valoser.futacha.shared.ui.FutachaStartupErrorScreen(
+                            message = "通信機能の初期化に失敗しました。再試行するか、アプリを再起動してください。",
+                            onRetry = app::retryNetworkServices
+                        )
                     } else {
                         FutachaApp(
                             stateStore = stateStore,
@@ -721,6 +682,14 @@ class MainActivity : ComponentActivity() {
         if (uri.scheme != "content") return
         incomingAttachmentJob?.cancel()
         incomingAttachmentJob = lifecycleScope.launch {
+            // This app reads its own providers' files, which other apps cannot: a share pointing at one is read only
+            // when it is an image or a video (saved media shared back to a post), never the app's other private
+            // files (the cookies' JSON, the saved threads' HTML) (L128).
+            if (!kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { isSharedUriAllowed(uri) }) {
+                android.widget.Toast.makeText(this@MainActivity, "共有されたファイルは画像・動画ではありません",
+                    android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
             val image = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 com.valoser.futacha.shared.util.readImageDataFromUri(this@MainActivity, uri, 32_000_000L)
             }
@@ -729,6 +698,14 @@ class MainActivity : ComponentActivity() {
                 if (image != null) "書き込み画面で「共有された画像を添付」を選んでください"
                 else "共有された画像を読み込めませんでした（上限32MB）", android.widget.Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun isSharedUriAllowed(uri: android.net.Uri): Boolean {
+        val authority = uri.authority ?: return false
+        val provider = runCatching { packageManager.resolveContentProvider(authority, 0) }.getOrNull()
+        if (provider?.packageName != packageName) return true
+        val type = runCatching { contentResolver.getType(uri) }.getOrNull().orEmpty()
+        return type.startsWith("image/") || type.startsWith("video/")
     }
 
     override fun onNewIntent(intent: Intent) {

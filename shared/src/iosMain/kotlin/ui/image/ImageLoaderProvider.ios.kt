@@ -11,8 +11,8 @@ import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
 
 actual fun ComponentRegistry.Builder.addPlatformImageComponents() {
-    add(IosLowMemoryImageInterceptor)
-    add(SkiaImageDecoder.Factory())
+    add(IosLowMemoryImageInterceptor())
+    add(IosAdmittedDecoderFactory(SkiaImageDecoder.Factory()))
     add(IosVideoFrameFetcher.Factory())
 }
 

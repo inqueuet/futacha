@@ -28,9 +28,17 @@ import kotlin.test.assertTrue
  * end: a buffering implementation would never return.
  */
 class HttpBoardApiStreamingTest {
-    private val writers = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // The reader cancels the endless body, so a writer then fails with a closed-channel IOException.
+    // Keep it here: an uncaught one reached kotlinx-coroutines-test and failed a later runTest (T1).
+    private val unexpectedWriterFailures = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+    private val writers = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, failure ->
+        if (failure !is IOException) unexpectedWriterFailures += failure
+    })
 
-    @AfterTest fun stopWriters() = writers.cancel()
+    @AfterTest fun stopWriters() {
+        writers.cancel()
+        assertTrue(unexpectedWriterFailures.isEmpty(), "unexpected writer failures: $unexpectedWriterFailures")
+    }
 
     private fun endlessClient(prefix: String, keepWriting: suspend (ByteChannel) -> Unit) = HttpClient(MockEngine {
         val channel = ByteChannel()

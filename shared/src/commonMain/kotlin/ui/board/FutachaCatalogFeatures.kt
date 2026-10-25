@@ -16,6 +16,7 @@ import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.ui.compat.*
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -63,6 +64,7 @@ internal fun FutachaCatalogFeatureHost(
     val boardUrl = board?.url?.let(::canonicalizeBoardUrl)
     if (features == null || board == null || boardUrl == null) { content(state); return }
     val boardKey = compatBoardKey(boardUrl)
+    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     val scope = rememberCoroutineScope()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val openUrl = rememberUrlLauncher()
@@ -85,6 +87,8 @@ internal fun FutachaCatalogFeatureHost(
     var droppedOpen by remember { mutableStateOf(false) }
     var undoOpen by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<CatalogItem?>(null) }
+    var pendingReport by remember(boardKey) { mutableStateOf<CatalogItem?>(null) }
+    var reporting by remember(boardKey) { mutableStateOf(false) }
     var imageNg by remember { mutableStateOf<CatalogItem?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     if (createThreadDraft != null) {
@@ -192,11 +196,21 @@ internal fun FutachaCatalogFeatureHost(
             replyCount = item.replyCount, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now))
         selected = null
     } }
-    fun requestDeletion(item: CatalogItem) { action {
-        repository.requestDeletion(boardUrl, item.id, item.id, "110")
+    fun requestDeletion(item: CatalogItem) {
+        // Claim the action before launching: two clicks in the same frame must send only once.
+        if (reporting) return
+        reporting = true
         selected = null
-        message = "DEL依頼を送信しました"
-    } }
+        pendingReport = null
+        action {
+            try {
+                repository.requestDeletion(boardUrl, item.id, item.id, "110")
+                message = if (reviewComplianceEnabled) "通報しました" else "DEL依頼を送信しました"
+            } finally {
+                reporting = false
+            }
+        }
+    }
     val viewedFirstKey = viewedThreadFirstKey(board.url)
     val viewedFirstEnabled = features.rawValue(viewedFirstKey) == "ON"
     val tools = listOf(
@@ -317,6 +331,10 @@ internal fun FutachaCatalogFeatureHost(
     val replyIndicators by androidx.compose.runtime.produceState(emptyMap<String, CompatCatalogReplyIndicator>(), items, tabs, replyDeltas) {
         value = kotlinx.coroutines.withContext(AppDispatchers.parsing) { buildCatalogReplyIndicators(items, tabs, replyDeltas) }
     }
+    // Made again only when the list or the placement changes (L31: up to 3,000 rows on every recomposition).
+    val viewedFirstItems = remember(projected, viewedFirstThreadId, viewedFirstEnabled) {
+        projected?.let { catalogWithViewedThreadFirst(it, viewedFirstThreadId.takeIf { viewedFirstEnabled }) }
+    }
     CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
         LocalFutachaCatalogReplyIndicators provides replyIndicators,
         LocalFutachaTabStrip provides strip,
@@ -326,7 +344,7 @@ internal fun FutachaCatalogFeatureHost(
             state !is CatalogUiState.Success -> state
             // Not projected yet: showing the raw items would flash NG'd threads.
             projected == null -> CatalogUiState.Loading
-            else -> state.copy(content = state.content.copy(items = catalogWithViewedThreadFirst(projected, viewedFirstThreadId.takeIf { viewedFirstEnabled })))
+            else -> state.copy(content = state.content.copy(items = viewedFirstItems ?: projected))
         })
     }
     if (undoOpen) FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { undoOpen = false }, title = { Text("更新前のカタログ") }, text = {
@@ -352,7 +370,9 @@ internal fun FutachaCatalogFeatureHost(
             TextButton(onClick = { addTab(item) }) { Text("タブに追加") }
             TextButton(onClick = { register(item) }) { Text("NGスレッドに登録") }
             if (item.fullImageUrl != null || item.thumbnailUrl != null) TextButton(onClick = { imageNg = item; selected = null }) { Text("NG画像に登録") }
-            TextButton(onClick = { requestDeletion(item) }) { Text("DEL依頼を送信") }
+            TextButton(enabled = !reporting, onClick = { selected = null; pendingReport = item }) {
+                Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "DEL依頼を送信")
+            }
             TextButton(onClick = {
                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(futachaCatalogThreadUrl(boardUrl, item)))
                 selected = null
@@ -364,6 +384,15 @@ internal fun FutachaCatalogFeatureHost(
             }) { Text("ブラウザで開く") }
         }
     }, confirmButton = { TextButton(onClick = { selected = null }) { Text("閉じる") } }) } }
+    pendingReport?.let { item -> FutachaAppLockAwareWindow {
+        AlertDialog(
+            onDismissRequest = { pendingReport = null },
+            title = { Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "削除依頼 No.${item.id}") },
+            text = { Text(futachaReportConfirmationBody(item.id, reviewComplianceEnabled)) },
+            confirmButton = { TextButton(onClick = { requestDeletion(item) }, enabled = !reporting) { Text("通報する") } },
+            dismissButton = { TextButton(onClick = { pendingReport = null }) { Text("キャンセル") } }
+        )
+    } }
     imageNg?.let { item -> FutachaImageNgRegistration(features, boardKey, CompatImageNgSource.CATALOG,
         item.fullImageUrl ?: item.thumbnailUrl.orEmpty(), item.title.orEmpty(), { imageNg = null }) }
     message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },

@@ -27,6 +27,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import coil3.ImageLoader
@@ -165,7 +167,9 @@ class RuntimeStabilityInstrumentedTest {
                 }
             }
         }
-        rule.onNodeWithText("送信時の確認").performScrollTo().performClick()
+        // The page is a lazy list: the row is brought into it first.
+        rule.onNodeWithTag("compat-settings-list-control").performScrollToNode(hasText("送信時の確認"))
+        rule.onNodeWithText("送信時の確認").performClick()
         rule.onNodeWithText("操作に失敗しました: disk full").assertIsDisplayed()
         rule.onNodeWithContentDescription("戻る").performClick()
         assertTrue(returned.get())

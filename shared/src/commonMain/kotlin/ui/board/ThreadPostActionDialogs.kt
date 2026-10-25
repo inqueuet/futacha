@@ -167,7 +167,7 @@ internal fun ThreadPostActionSheet(
             title = { Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "削除依頼 No.${post.id}") },
             text = {
                 Column {
-                    Text("No.${post.id} をふたば☆ちゃんねるの掲示板管理者へ削除依頼します。")
+                    Text(futachaReportConfirmationBody(post.id, reviewComplianceEnabled))
                     if (delAndNg != null) Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = alsoNg, onCheckedChange = { alsoNg = it })
                         Text("このレスをNGにも登録")

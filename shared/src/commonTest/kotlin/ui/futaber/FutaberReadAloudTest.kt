@@ -54,10 +54,28 @@ class FutaberReadAloudTest {
         reader.dispose()
     }
 
+    /** L112: a reading started from an AI command scrolls to each post where it is in the list shown now. */
+    @Test fun anAiStartedReadingFollowsTheListShownNow() = runBlocking {
+        val engine = FakeEngine(blockOn = "一番目")
+        val reader = FutaberReadAloud(this, { engine })
+        val start = listOf(FutaberRow(0, post("1", "一番目")), FutaberRow(1, post("3", "三番目")))
+        var shown = start
+        val scrolled = mutableListOf<Int>()
+        futaberStartReadAloudFollowing(reader, start, 0, { shown }) { scrolled += it }
+        awaitCondition { engine.spoken.isNotEmpty() }
+        // A search or NG changed the list: post 3 is now the first row.
+        shown = listOf(FutaberRow(1, post("3", "三番目")), FutaberRow(0, post("1", "一番目")))
+        engine.gate.complete(Unit)
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目"), engine.spoken)
+        assertEquals(0, scrolled.last(), "Post 3 is scrolled to where it is now")
+    }
+
     private class FakeEngine(val failOn: String? = null, val blockOn: String? = null) : FutaberSpeechEngine {
         val spoken = mutableListOf<String>()
         var prepared = 0
         var stops = 0
+        var interrupts = 0
         var closed = false
         val gate = CompletableDeferred<Unit>()
         override suspend fun prepare() { prepared += 1 }
@@ -66,6 +84,7 @@ class FutaberReadAloudTest {
             spoken += text
             if (text == blockOn) gate.await()
         }
+        override fun interrupt() { interrupts += 1 }
         override fun stop() { stops += 1 }
         override fun close() { closed = true }
     }
@@ -179,6 +198,7 @@ class FutaberReadAloudTest {
         reader.awaitIdle()
         // 一番目 was cut off; the quote-only and deleted posts are not readable, so the next is 三番目.
         assertEquals(listOf("一番目", "三番目", "五番目"), engine.spoken)
+        assertEquals(1, engine.interrupts)
         assertEquals(1, engine.stops)
         assertFalse(reader.isReading)
         assertNull(reader.currentPostId)

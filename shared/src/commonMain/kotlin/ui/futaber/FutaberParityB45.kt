@@ -539,7 +539,8 @@ internal fun futaberWatchResultFromExternal(entry: CompatExternalWatcherEntry): 
         ),
         keyword = entry.extractedKeyword?.trim().orEmpty(),
         insertedAtEpochMillis = entry.insertedAtEpochMillis,
-        active = entry.active
+        active = entry.active,
+        externalEntryKey = entry.key
     )
 }
 
@@ -558,13 +559,18 @@ internal class FutaberExternalWatcher(private val watcher: CompatExternalWatcher
         internal set
     var status by mutableStateOf<String?>(null)
         internal set
-    internal var keys: Map<String, String> = emptyMap()
     internal var reload: () -> Unit = {}
 
     fun openManager(): Result<Unit> = watcher.openManager()
 
     fun remove(result: CompatWatchResult) {
-        val key = keys[result.history.canonicalUrl] ?: return
+        if (results == null) return
+        // A thread can match several provider rows. Never resolve a selected row back through its URL.
+        val key = result.externalEntryKey?.takeIf { it.isNotBlank() }
+        if (key == null) {
+            status = "削除対象を確認できませんでした"
+            return
+        }
         scope.launch {
             watcher.delete(key).onFailure { status = it.message ?: "削除できませんでした" }
             reload()
@@ -582,20 +588,17 @@ internal class FutaberExternalWatcher(private val watcher: CompatExternalWatcher
         if (!external) {
             results = null
             status = null
-            keys = emptyMap()
             return
         }
         watcher.load()
             .onSuccess { snapshot ->
                 val rows = futaberExternalNotificationRows(snapshot.entries)
                 results = rows.map { it.first }
-                keys = rows.associate { (result, key) -> result.history.canonicalUrl to key }
                 // The provider's own words ("にじろぐ(仮) 未インストール" and the like), as the other modes show them.
                 status = snapshot.message ?: "外部にじろぐの結果"
             }
             .onFailure { failure ->
                 results = emptyList()
-                keys = emptyMap()
                 status = failure.message ?: "外部にじろぐの結果を読み込めませんでした"
             }
     }

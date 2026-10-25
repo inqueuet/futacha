@@ -55,21 +55,15 @@ internal object MockBoardData {
             """.trimIndent())
         })
     }
-    private val threadPages: MutableMap<String, ThreadPage> = mutableMapOf(
-        // Placeholder; actual entries filled after first parse
-    )
-
+    // No cache of the per-id copies: thread() runs on any caller's dispatcher (the tutorial board in
+    // release builds too), and a plain map filled from there raced and grew with every id (L104).
+    // A data-class copy is cheap and equal for the same id.
     suspend fun thread(threadId: String): ThreadPage {
         val baseThreadPage = baseThreadPageDeferred.await()
-        if (threadPages.isEmpty()) {
-            threadPages[baseThreadPage.threadId] = baseThreadPage
-        }
-        if (threadId.isBlank()) return baseThreadPage
-        return threadPages.getOrPut(threadId) {
-            baseThreadPage.copy(
-                threadId = threadId,
-                boardTitle = null
-            )
-        }
+        if (threadId.isBlank() || threadId == baseThreadPage.threadId) return baseThreadPage
+        return baseThreadPage.copy(
+            threadId = threadId,
+            boardTitle = null
+        )
     }
 }

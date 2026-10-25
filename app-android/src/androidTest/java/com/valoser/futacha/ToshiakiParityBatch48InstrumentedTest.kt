@@ -190,6 +190,28 @@ class ToshiakiParityBatch48InstrumentedTest {
         rule.onAllNodesWithText("履歴を一括更新").assertCountEquals(0)
     }
 
+    /** L61: "全て削除する" asks first, with the count and every mode it reaches; キャンセル keeps everything. */
+    @Test fun historyClearAllAsksFirstWithTheCountAndEveryMode() {
+        val (alpha, _) = seedMayBoardAndHistory()
+        showApp()
+        openHistoryDrawer()
+        longPressHistory(alpha)
+        rule.onNodeWithText("全て削除する").performClick()
+        waitForTag("compat-history-clear-confirm")
+        rule.onNodeWithText("2件", substring = true).assertExists()
+        rule.onNodeWithText("ふたばー風", substring = true).assertExists()
+        rule.onNodeWithText("キャンセル").performClick()
+        rule.waitForIdle()
+        assertEquals(2, runBlocking { store.history.first() }.size)
+        rule.onNodeWithText("TOOLS-ALPHA").assertIsDisplayed()
+
+        longPressHistory(alpha)
+        rule.onNodeWithText("全て削除する").performClick()
+        waitForTag("compat-history-clear-confirm")
+        rule.onNodeWithText("削除する").performClick()
+        rule.waitUntil(10_000) { runBlocking { store.history.first() }.isEmpty() }
+    }
+
     private fun settingCheckbox(key: String) =
         rule.onNode(isToggleable() and hasAnyAncestor(hasTestTag("compat-setting-$key")), useUnmergedTree = true)
 

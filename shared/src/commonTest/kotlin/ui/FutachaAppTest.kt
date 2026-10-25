@@ -1282,6 +1282,27 @@ class FutachaAppTest {
         )
     }
 
+    /** L29: playing a saved thread whose board is gone writes no history row that could never be opened. */
+    @Test
+    fun recordFutachaVisitedThread_writesNothingForTheSavedThreadPlaceholderBoard() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val board = buildSavedThreadFallbackBoard(boardId = "gone", boardName = "消えた板")
+        val context = FutachaThreadHistoryContext(
+            title = "saved", threadUrl = "${board.url}/res/123.htm", replyCount = 3, thumbnailUrl = ""
+        )
+        assertFalse(
+            recordFutachaVisitedThread(
+                stateStore = store,
+                history = store.history.first(),
+                threadId = "123",
+                board = board,
+                context = context,
+                currentTimeMillis = 1_000L
+            )
+        )
+        assertTrue(store.history.first().isEmpty())
+    }
+
     @Test
     fun recordFutachaVisitedThread_recordsShortRevisitsAndPreservesScroll() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
@@ -1866,8 +1887,8 @@ class FutachaAppTest {
             normalizeBoardUrl("https://may.2chan.net/b?mode=cat#frag")
         )
         assertEquals(
-            "http://may.2chan.net/b/futaba.php",
-            normalizeBoardUrl("http://may.2chan.net/b/")
+            "http://www.example.org/b/futaba.php",
+            normalizeBoardUrl("http://www.example.org/b/")
         )
     }
 

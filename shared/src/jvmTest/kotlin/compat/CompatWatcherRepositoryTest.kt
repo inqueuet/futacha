@@ -101,6 +101,103 @@ class CompatWatcherRepositoryTest {
         assertEquals(listOf(match().history), f.history.value)
     }
 
+    // L97: a result the person deleted is remembered, so the next patrol does not record (or notify) the same
+    // thread again while it is still in the catalog. New threads matching the word still appear, and
+    // "すべて削除" behaves the same way.
+    @Test fun aDeletedResultDoesNotComeBackFromLaterPatrolsButNewThreadsDo() = runBlocking {
+        val r = CompatWatcherRepository(Fixture().store)
+        val now = System.currentTimeMillis()
+        fun url(id: Int) = match(id).history.canonicalUrl
+        assertEquals(setOf(url(1), url(2)), r.recordAll(listOf(match(1, now), match(2, now))))
+
+        r.delete(url(1))
+        assertEquals(emptySet(), r.recordAll(listOf(match(1, now + 1), match(2, now + 1))))
+        assertEquals(listOf("2"), r.load(now + 1).map { it.history.threadNo })
+        assertTrue(r.record(match(3, now + 2)))
+
+        r.deleteAll()
+        assertEquals(emptySet(), r.recordAll(listOf(match(1, now + 3), match(2, now + 3), match(3, now + 3))))
+        assertTrue(r.load(now + 3).isEmpty())
+        assertTrue(r.record(match(4, now + 4)))
+        assertEquals(listOf("4"), r.load(now + 4).map { it.history.threadNo })
+    }
+
+    @Test fun theBackgroundPatrolDoesNotRecordOrNotifyADeletedResultAgain() = runBlocking {
+        val f = Fixture(listOf(board))
+        val r = CompatWatcherRepository(f.store)
+        r.saveRules(listOf(CompatWatchRule("猫", board.key)))
+        val catalog = mutableListOf(CatalogItem("1", match(1).history.originalUrl, "猫のスレ", null, null, replyCount = 3))
+        val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getCatalog", "getCatalogWithSettings" -> catalog.toList()
+                "probeThreadGone" -> false
+                else -> error("Unexpected repository call: ${method.name}")
+            }
+        } as BoardRepository
+        val now = System.currentTimeMillis()
+        suspend fun patrol(at: Long) = refreshCompatTabsInBackground(f.store, repository, at, checkUpdates = false,
+            checkExistence = false, checkWatchWords = true).newWatchMatches.map { it.history.threadNo }
+
+        assertEquals(listOf("1"), patrol(now))
+        r.delete(match(1).history.canonicalUrl)
+        assertEquals(emptyList(), patrol(now + 1))
+        assertTrue(r.load(now + 1).isEmpty())
+
+        catalog += CatalogItem("2", match(2).history.originalUrl, "猫の新スレ", null, null, replyCount = 1)
+        assertEquals(listOf("2"), patrol(now + 2))
+        assertEquals(listOf("2"), r.load(now + 2).map { it.history.threadNo })
+    }
+
+    @Test fun aDeletionIsForgottenSevenDaysAfterItAndANewWordBringsTheThreadBack() = runBlocking {
+        val r = CompatWatcherRepository(Fixture().store)
+        val url = match(1).history.canonicalUrl
+        r.record(match(1, 100))
+        r.delete(url, now = 1_000)
+        assertFalse(r.record(match(1, 2_000)))
+        // A word it was not deleted with (a keyword added since) is news: listed and notified again.
+        assertTrue(r.record(match(1, 2_000).copy(keyword = "猫 / 犬")))
+        assertEquals(listOf("猫 / 犬" to 2_000L), r.load(2_000).map { it.keyword to it.insertedAtEpochMillis })
+
+        r.delete(url, now = 3_000)
+        assertFalse(r.record(match(1, 3_000 + COMPAT_WATCH_RETENTION_MILLIS).copy(keyword = "犬")))
+        assertTrue(r.load(3_000 + COMPAT_WATCH_RETENTION_MILLIS).isEmpty())
+        // Counted from the deletion, not from the first detection.
+        assertTrue(r.record(match(1, 3_001 + COMPAT_WATCH_RETENTION_MILLIS)))
+    }
+
+    @Test fun deletionRecordsGiveTheirSlotsToNewResultsBeforeAnyShownResult() = runBlocking {
+        val r = CompatWatcherRepository(Fixture().store)
+        r.recordAll((0 until MAX_COMPAT_WATCH_RESULTS).map { match(it, 100L + it) })
+        (0 until 100).forEach { r.delete(match(it).history.canonicalUrl, now = 1_000) }
+        val added = (MAX_COMPAT_WATCH_RESULTS until MAX_COMPAT_WATCH_RESULTS + 100).map { match(it, 2_000) }
+        assertEquals(100, r.recordAll(added).size)
+        // The 400 results kept are all still listed, as when a deletion freed its slot.
+        assertEquals((100 until MAX_COMPAT_WATCH_RESULTS + 100).map(Int::toString).toSet(),
+            r.load(2_000).map { it.history.threadNo }.toSet())
+
+        r.deleteAll(now = 3_000)
+        assertTrue(r.load(3_000).isEmpty())
+        val fresh = (1_000 until 1_000 + MAX_COMPAT_WATCH_RESULTS).map { match(it, 4_000) }
+        assertEquals(MAX_COMPAT_WATCH_RESULTS, r.recordAll(fresh).size)
+        assertEquals(MAX_COMPAT_WATCH_RESULTS, r.load(4_000).size)
+    }
+
+    @Test fun deletingResultsLeavesTheKeywordsAndTheirBackupsAlone() = runBlocking {
+        val f = Fixture()
+        val r = CompatWatcherRepository(f.store)
+        val rules = listOf(CompatWatchRule("猫", board.key), CompatWatchRule("犬", enabled = false))
+        r.saveRules(rules)
+        r.recordAll(listOf(match(1, 100), match(2, 100)))
+        r.delete(match(1).history.canonicalUrl, now = 200)
+        r.deleteAll(now = 300)
+
+        assertEquals(rules, compatWatchRules(f.preferences.value))
+        val backup = CompatSettingsBackup(exportedAtEpochMillis = 400, preferences = f.preferences.value)
+        assertTrue(backup.settingsOnly().preferences.keys.none { it.startsWith("compat.watcher.result.") })
+        assertEquals(setOf(COMPAT_WATCH_RULES_KEY), backup.watchAndNgOnly().preferences.keys)
+        assertEquals(rules, compatWatchRules(decodeCompatWatchNgBackup(encodeCompatWatchNgBackup(backup)).preferences))
+    }
+
     @Test fun expirationAndCapacityAreBounded() = runBlocking {
         val r = CompatWatcherRepository(Fixture().store)
         r.record(match())

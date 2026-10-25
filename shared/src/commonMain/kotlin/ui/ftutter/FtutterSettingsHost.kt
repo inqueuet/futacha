@@ -64,10 +64,18 @@ internal fun FtutterSettingsHost(
     /** 拡張機能の巡回の結果から開く（設定を閉じてスレッドへ）。 */
     repository: com.valoser.futacha.shared.repo.BoardRepository? = null,
     onOpenThread: (BoardSummary, threadId: String, title: String) -> Unit = { _, _, _ -> },
-    ngReasons: Map<String, String> = emptyMap()
+    ngReasons: Map<String, String> = emptyMap(),
+    /** フォントの選択・リセットの結果を出す。スコープはダイアログ・設定より長く生きるもの（アプリ）。 */
+    appScope: kotlinx.coroutines.CoroutineScope? = null,
+    onNotice: (String) -> Unit = {}
 ) {
     var stack by remember { mutableStateOf(listOf<FtutterSettingsRoute>(FtutterSettingsRoute.Root)) }
     var sharedPath by remember { mutableStateOf<String?>(null) }
+    // カスタムフォントは、このモードの中の小さなダイアログで選ぶ（L20。他モード向けの「デザイン」ページを丸ごと開くと、
+    // このモードで効かない「ローディング」「タブ一覧」が並んだ）。保存先は全モード共有のフォントのまま。
+    var fontDialog by remember { mutableStateOf(false) }
+    val fallbackScope = androidx.compose.runtime.rememberCoroutineScope()
+    val fontActions = com.valoser.futacha.shared.ui.futaber.rememberFutaberCustomFontActions(services, appScope ?: fallbackScope, onNotice)
     fun push(route: FtutterSettingsRoute) { stack = stack + route }
     val back: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) else onBack() }
     PlatformBackHandler(enabled = sharedPath == null, onBack = back)
@@ -86,13 +94,25 @@ internal fun FtutterSettingsHost(
             if (services != null) {
                 ftutterSection("他のモードと共有の設定")
                 item { FtutterNavRow("保存先・キャッシュ", "ftutter-shared-storage") { sharedPath = "storage" } }
-                preferences[FtutterKeys.PREFIX + "import.savePath"]?.takeIf { it.isNotBlank() }?.let { original ->
+                // 取り込み元の保存先の案内は、保存先を選び直すまで（L19）。「案内を消す」でも消せる。
+                val chosenAtImport = preferences[FTUTTER_IMPORT_SAVE_PATH_CHOSEN]
+                val currentDestination = preferences[FTUTTER_SHARED_DESTINATION_KEY]
+                val importedPath = preferences[FtutterKeys.PREFIX + "import.savePath"]
+                    ?.takeIf { ftutterImportNoticePending(it, chosenAtImport, currentDestination) }
+                val importedList = preferences[FtutterKeys.PREFIX + "import.savePathList"]?.let { decodeFtutterList(it).orEmpty() }.orEmpty()
+                    .takeIf { it.isNotEmpty() && ftutterImportNoticePending(it.first(), chosenAtImport, currentDestination) }.orEmpty()
+                importedPath?.let { original ->
                     item { androidx.compose.material3.Text("取り込み元の保存先: $original\n使用するフォルダを「保存先・キャッシュ」で選択してください。", color = LocalFtutterColors.current.text,
-                        modifier = androidx.compose.ui.Modifier.padding(16.dp)) }
+                        modifier = androidx.compose.ui.Modifier.padding(16.dp).testTag("ftutter-import-location-notice")) }
                 }
-                preferences[FtutterKeys.PREFIX + "import.savePathList"]?.let { paths ->
-                    decodeFtutterList(paths).orEmpty().forEachIndexed { index, original ->
-                        item { FtutterNavRow("取り込み元の保存先 ${index + 1}", "ftutter-import-location-$index", detail = original) { sharedPath = "storage" } }
+                importedList.forEachIndexed { index, original ->
+                    item { FtutterNavRow("取り込み元の保存先 ${index + 1}", "ftutter-import-location-$index", detail = original) { sharedPath = "storage" } }
+                }
+                if (importedPath != null || importedList.isNotEmpty()) item {
+                    androidx.compose.material3.TextButton(onClick = {
+                        save(FtutterKeys.PREFIX + "import.savePath", ""); save(FtutterKeys.PREFIX + "import.savePathList", "")
+                    }, modifier = androidx.compose.ui.Modifier.testTag("ftutter-import-location-dismiss")) {
+                        androidx.compose.material3.Text("案内を消す", color = LocalFtutterColors.current.text)
                     }
                 }
                 item { FtutterNavRow("ネットワーク", "ftutter-shared-network") { sharedPath = "network" } }
@@ -107,7 +127,7 @@ internal fun FtutterSettingsHost(
             item { GlobalSettingsModeSection() }
         }
         is FtutterSettingsRoute.Page -> when (route.page) {
-            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back, onChooseFont = { sharedPath = "design" })
+            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back, onChooseFont = services?.let { { fontDialog = true } })
             FtutterSettingsPage.CATALOG -> FtutterCatalogSettingsPage(preferences, save, { onEditToolbar(FtutterOrderEditorKind.CATALOG) }, back)
             FtutterSettingsPage.THREAD -> FtutterThreadSettingsPage(
                 preferences, save, { onEditToolbar(FtutterOrderEditorKind.THREAD) }, { onEditToolbar(FtutterOrderEditorKind.POST_MENU) }, back
@@ -156,9 +176,12 @@ internal fun FtutterSettingsHost(
             }
         }
     }
+    if (fontDialog && services != null) {
+        FtutterCustomFontDialog(com.valoser.futacha.shared.ui.futaber.futaberCustomFontName(preferences), fontActions) { fontDialog = false }
+    }
     val path = sharedPath
     if (path != null && services != null) {
-        FtutterSharedSettingsHost(path, services, appVersion, stateStore, onClose = { sharedPath = null })
+        FtutterSharedSettingsHost(path, services, appVersion, stateStore, appScope, onNotice, onClose = { sharedPath = null })
     }
 }
 
@@ -172,6 +195,8 @@ private fun FtutterSharedSettingsHost(
     services: FutaberMediaServices,
     appVersion: String,
     stateStore: AppStateStore?,
+    appScope: kotlinx.coroutines.CoroutineScope?,
+    onNotice: (String) -> Unit,
     onClose: () -> Unit
 ) {
     val colors = LocalFtutterColors.current
@@ -208,7 +233,10 @@ private fun FtutterSharedSettingsHost(
                         onBack = back,
                         stateStore = stateStore,
                         // 共有のバックアップから復元した板を、このモードが使う板の一覧へ足す（ふたばー風と同じ）。
-                        restoreBoardsInto = stateStore
+                        restoreBoardsInto = stateStore,
+                        // ここで始めた復元・フォント・キャッシュの削除は設定を閉じても続け、結果はアプリの知らせで出す（L58）。
+                        lastingScope = appScope,
+                        onLastingNotice = onNotice
                     )
                 }
             }
@@ -219,3 +247,40 @@ private fun FtutterSharedSettingsHost(
 @Composable
 private fun kotlinx.coroutines.flow.Flow<Map<String, String>>.collectAsStateCompat() =
     androidx.compose.runtime.produceState<Map<String, String>?>(null, this) { collect { value = it } }
+
+/** カスタムフォントの選択・リセット（他のモードと共通のフォント）。処理は [actions] がダイアログより長く続ける。 */
+@Composable
+private fun FtutterCustomFontDialog(
+    currentName: String?,
+    actions: com.valoser.futacha.shared.ui.futaber.FutaberCustomFontActions,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalFtutterColors.current
+    FutachaAppLockAwareWindow { androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("ftutter-custom-font-dialog"),
+        containerColor = colors.popUp,
+        title = { androidx.compose.material3.Text("カスタムフォント", color = colors.text) },
+        text = {
+            androidx.compose.foundation.layout.Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Text("現在：${currentName ?: "未選択"}", color = colors.text)
+                androidx.compose.material3.Text("他のモードと共通のフォントです（TTF・OTF）。ここで選ぶと、他のモードのフォントも変わります。", color = colors.text)
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onDismiss(); actions.pick() }, modifier = Modifier.testTag("ftutter-custom-font-pick")) {
+                androidx.compose.material3.Text("選択", color = colors.text)
+            }
+        },
+        dismissButton = {
+            androidx.compose.foundation.layout.Row {
+                if (currentName != null) {
+                    androidx.compose.material3.TextButton(onClick = { onDismiss(); actions.reset() }, modifier = Modifier.testTag("ftutter-custom-font-reset")) {
+                        androidx.compose.material3.Text("リセット", color = colors.text)
+                    }
+                }
+                androidx.compose.material3.TextButton(onClick = onDismiss) { androidx.compose.material3.Text("キャンセル", color = colors.text) }
+            }
+        }
+    ) }
+}

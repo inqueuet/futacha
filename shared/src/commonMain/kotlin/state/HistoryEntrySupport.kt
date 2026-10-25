@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadStatus
 import com.valoser.futacha.shared.network.BoardUrlResolver
 
 private const val HISTORY_ENTRY_DELIMITER = "::"
@@ -37,9 +38,47 @@ internal fun mergeAppStateHistoryEntry(
             incoming.lastReadPostId
         },
         threadStatus = incoming.threadStatus ?: existing.threadStatus,
+        lastViewedSnapshot = listOfNotNull(existing.lastViewedSnapshot, incoming.lastViewedSnapshot)
+            .maxByOrNull { it.viewedAtEpochMillis },
         hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave,
         isAutoRefreshDisabled = existing.isAutoRefreshDisabled ||
-            incoming.isAutoRefreshDisabled
+            incoming.isAutoRefreshDisabled,
+        // A background refresh writes from the row it read when it started, so a post
+        // made meanwhile must not be taken back (L88): the latest own post wins.
+        hasSelfPost = existing.hasSelfPost || incoming.hasSelfPost,
+        lastSelfPostEpochMillis = listOfNotNull(
+            existing.lastSelfPostEpochMillis,
+            incoming.lastSelfPostEpochMillis
+        ).maxOrNull()
+    )
+}
+
+/**
+ * Merges an entry read from a history archive into the entry already known (L89). The archive is a copy from some
+ * earlier time or another device, so unlike a fresh board response it must not take back what is known here: a
+ * thread's status only moves forward (落ち・隔離・削除・管理者削除 do not come undone), so every mark either side
+ * knows is kept, and the later confirmation that the thread was alive is kept. Everything else merges as
+ * [mergeAppStateHistoryEntry] does; an entry new to the device keeps the archive's values as they are.
+ */
+internal fun mergeImportedHistoryEntry(
+    existing: ThreadHistoryEntry,
+    imported: ThreadHistoryEntry
+): ThreadHistoryEntry = mergeAppStateHistoryEntry(existing, imported).copy(
+    threadStatus = mergeKnownThreadStatus(existing.threadStatus, imported.threadStatus),
+    lastConfirmedAliveEpochMillis = listOfNotNull(
+        existing.lastConfirmedAliveEpochMillis,
+        imported.lastConfirmedAliveEpochMillis
+    ).maxOrNull()
+)
+
+private fun mergeKnownThreadStatus(first: ThreadStatus?, second: ThreadStatus?): ThreadStatus? = when {
+    first == null -> second
+    second == null -> first
+    else -> ThreadStatus(
+        isDead = first.isDead || second.isDead,
+        isIsolated = first.isIsolated || second.isIsolated,
+        isDeleted = first.isDeleted || second.isDeleted,
+        isAdminDeleted = first.isAdminDeleted || second.isAdminDeleted
     )
 }
 

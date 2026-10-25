@@ -34,6 +34,15 @@ class FutaberParityFoundationTest {
         assertEquals(FUTABER_AI_LINK_UNREADABLE_NOTICE, futaberAiDeepLinkNotice("https://example.com/"))
     }
 
+    /** L121: the watch's "スマホで開く" link is not this mode's AI command: it is sent to ふたちゃ mode. */
+    @Test
+    fun aWatchRelayLinkIsSentToFutachaMode() {
+        val relay = futaberAiDeepLinkNotice("futacha://ai?action=open_thread&boardId=b&threadId=1&relay=wear-os")
+        assertTrue(relay.contains("ウォッチ"), relay)
+        assertTrue(relay.contains("ふたちゃモードで実行してください"), relay)
+        assertTrue(!relay.contains("ふたばー風モードでは使えません"), relay)
+    }
+
     // ---- media features ----
 
     @Test
@@ -110,6 +119,24 @@ class FutaberParityFoundationTest {
             "画像のアドレス　迷惑画像　全スレッド",
             futaberThreadDetailNgRuleLabel(rule("6", CompatNgKind.THREAD_IMAGE, "*", "https://x/src/1.jpg", memo = "迷惑画像"), titles)
         )
+    }
+
+    /** L110: asking only for the rules' scopes gives the same titles as the full table for those scopes. */
+    @Test
+    fun theWantedScopesGetTheSameTitlesAsTheFullTable() {
+        val boards = listOf(BoardSummary("a", "虹裏", "", "https://may.2chan.net/b/", ""),
+            BoardSummary("t", "チュートリアル", "", "https://www.example.com/t/futaba.php", ""))
+        val history = (1..50).map { n ->
+            ThreadHistoryEntry(threadId = "$n", boardId = if (n % 2 == 0) "a" else "t", title = "スレ$n", titleImageUrl = "",
+                boardName = "", boardUrl = "", lastVisitedEpochMillis = n.toLong(), replyCount = 1)
+        }
+        val full = futaberThreadNgScopeTitles(history, boards)
+        val wanted = setOf(compatTabKey("https://may.2chan.net/b/res/10.htm"), futaberNgScopeKey(boards.first())!!, "unknown")
+        val narrowed = futaberThreadNgScopeTitles(history, boards, wanted)
+        wanted.forEach { assertEquals(full[it], narrowed[it], it) }
+        assertEquals("スレ10", narrowed[compatTabKey("https://may.2chan.net/b/res/10.htm")])
+        val tutorialKey = futaberCompatTabKey(boards[1], "11")
+        assertEquals(full[tutorialKey], futaberThreadNgScopeTitles(history, boards, setOf(tutorialKey))[tutorialKey])
     }
 
     @Test

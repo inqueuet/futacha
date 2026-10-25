@@ -134,8 +134,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 226
-        versionName = "13.0"
+        versionCode = 227
+        versionName = "13.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -384,6 +384,7 @@ dependencies {
     androidTestImplementation(libs.androidx.navigationevent)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.monitor)
+    androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.androidx.exifinterface)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

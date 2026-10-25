@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
 import kotlin.coroutines.resume
@@ -220,7 +221,7 @@ internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
         try {
             // Capture the session job before entering the per-utterance timeout.
             preparePlayback()
-            withTimeout(calculateTextSpeakerTimeoutMillis(text, speechSettings.rate)) {
+            withSpeakingTimeout(calculateTextSpeakerTimeoutMillis(text, speechSettings.rate)) {
                 val engine = awaitTts()
                 suspendCancellableCoroutine<Unit> { continuation ->
                     val utteranceId = UUID.randomUUID().toString()
@@ -276,8 +277,15 @@ internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
             }
         } catch (timeout: TimeoutCancellationException) {
             throw IOException("読み上げがタイムアウトしました", timeout)
+        } catch (timeout: SpeakingTimeLimitExceeded) {
+            throw IOException("読み上げがタイムアウトしました", timeout)
         }
     }
+
+    /** The utterance's time limit stops while it is paused for the audio focus (L117). */
+    private suspend fun <T> withSpeakingTimeout(limitMillis: Long, block: suspend CoroutineScope.() -> T): T =
+        withPauseAwareTimeout(limitMillis, isPaused = { synchronized(lock) { focusPaused } },
+            onTimeout = ::SpeakingTimeLimitExceeded, block = block)
 
     private fun startUtterance(engine: TextToSpeech, utteranceId: String, text: String) {
         val settings = speechSettings
@@ -432,3 +440,6 @@ internal class SystemSpeechEngine(platformContext: Any?) : SpeechBackend {
 }
 
 internal actual fun createSystemSpeechEngine(platformContext: Any?): SpeechBackend = SystemSpeechEngine(platformContext)
+
+/** The utterance ran past its limit (not a cancellation: the caller shows it as an error). */
+private class SpeakingTimeLimitExceeded : Exception("読み上げがタイムアウトしました")

@@ -13,11 +13,15 @@ internal fun Throwable.isRecoverableDesktopCompatibilityDatabaseCorruption(): Bo
 /** Same state envelope and overlay transactions as the iOS implementation, through JDBC. */
 private const val IMAGE_PHASH_CACHE_MAX_ENTRIES = 8_192
 private const val IMAGE_PHASH_CACHE_TRIM_TO = 6_144
+private const val IMAGE_PHASH_USE_REFRESH_MILLIS = 60L * 60L * 1000L
 
-internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) {
+internal class DesktopCompatibilityDatabase(
+    private val fileSystem: FileSystem,
+    private val databasePath: String = "compatibility/compatibility.db"
+) {
     private var connection: Connection? = null
     private fun open(): Connection = connection ?: run {
-        val file = File(fileSystem.resolveAbsolutePath("compatibility/compatibility.db"))
+        val file = File(fileSystem.resolveAbsolutePath(databasePath))
         check(file.parentFile.isDirectory || file.parentFile.mkdirs())
         Class.forName("org.sqlite.JDBC")
         DriverManager.getConnection("jdbc:sqlite:${file.absolutePath}").also { db ->
@@ -63,17 +67,34 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
             s.setString(1, bounded(tabKey, 4096)); s.setLong(2, accessedAtMillis); s.executeUpdate()
         }
     }
-    /** Reads cached image hashes and marks the hits as recently used. */
+    /**
+     * Reads cached image hashes and marks the hits as recently used.
+     *
+     * A hit's use time is rewritten only once it is [IMAGE_PHASH_USE_REFRESH_MILLIS] old:
+     * rewriting every hit made each scroll through a thread a durable write (L84, as on iOS).
+     */
     fun readImagePhashes(keys: Collection<String>, usedAtMillis: Long): Map<String, String> {
-        val found = open().prepareStatement("SELECT phash FROM compat_image_phash WHERE key = ?").use { s ->
-            buildMap {
-                keys.distinct().forEach { key ->
-                    s.setString(1, key)
-                    s.executeQuery().use { rows -> if (rows.next()) put(key, rows.getString(1)) }
+        if (keys.isEmpty()) return emptyMap()
+        val found = LinkedHashMap<String, String>()
+        val stale = mutableListOf<String>()
+        open().prepareStatement("SELECT phash, used_at FROM compat_image_phash WHERE key = ?").use { s ->
+            keys.distinct().forEach { key ->
+                s.setString(1, key)
+                s.executeQuery().use { rows ->
+                    if (rows.next()) {
+                        found[key] = rows.getString(1)
+                        if (usedAtMillis - rows.getLong(2) >= IMAGE_PHASH_USE_REFRESH_MILLIS) stale += key
+                    }
                 }
             }
         }
-        if (found.isNotEmpty()) writeImagePhashes(found, usedAtMillis)
+        if (stale.isNotEmpty()) {
+            inTransaction { db ->
+                db.prepareStatement("UPDATE compat_image_phash SET used_at = ? WHERE key = ?").use { s ->
+                    stale.forEach { key -> s.setLong(1, usedAtMillis); s.setString(2, key); s.executeUpdate() }
+                }
+            }
+        }
         return found
     }
 
@@ -182,6 +203,34 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
         runDesktopDatabaseTransaction(db, discard = { if (connection === db) connection = null }, block = block)
     }
     fun close() { connection?.close(); connection = null }
+
+    /** Finish and checkpoint a clean replacement before backing up and atomically replacing the damaged file. */
+    fun rebuildWithoutCacheRecords(payload: String, updatedAtMillis: Long): String? {
+        val replacementPath = "compatibility/cache-recovery-${java.util.UUID.randomUUID()}.db"
+        val replacementFile = File(fileSystem.resolveAbsolutePath(replacementPath))
+        val replacement = DesktopCompatibilityDatabase(fileSystem, replacementPath)
+        try {
+            replacement.writePayload(payload, updatedAtMillis)
+            replacement.close()
+            val backupPath = backupStorage(updatedAtMillis)
+            val original = File(fileSystem.resolveAbsolutePath(databasePath))
+            // Never combine a new main file with another connection's old WAL.
+            for (file in listOf(original, replacementFile)) {
+                check(listOf("-wal", "-shm").none { File(file.path + it).exists() }) {
+                    "Compatibility database is still in use during cache recovery"
+                }
+            }
+            java.nio.file.Files.move(
+                replacementFile.toPath(), original.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+            return backupPath
+        } finally {
+            replacement.close()
+            for (suffix in listOf("", "-wal", "-shm")) File(replacementFile.path + suffix).delete()
+        }
+    }
     /**
      * Copies the database files next to it (relative path of the main copy, or null when there is
      * nothing to copy). Called before [deleteStorage] discards a database that could not be read:
@@ -190,7 +239,7 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
      */
     fun backupStorage(stampMillis: Long): String? {
         close()
-        val main = File(fileSystem.resolveAbsolutePath("compatibility/compatibility.db"))
+        val main = File(fileSystem.resolveAbsolutePath(databasePath))
         if (!main.isFile) return null
         val backupBase = "unreadable_compatibility_db-$stampMillis.db"
         for (suffix in listOf("", "-wal", "-shm")) {
@@ -206,7 +255,7 @@ internal class DesktopCompatibilityDatabase(private val fileSystem: FileSystem) 
     }
     suspend fun deleteStorage() {
         close()
-        for (suffix in listOf("", "-wal", "-shm")) fileSystem.delete("compatibility/compatibility.db$suffix").getOrThrow()
+        for (suffix in listOf("", "-wal", "-shm")) fileSystem.delete("$databasePath$suffix").getOrThrow()
     }
     private fun bounded(value: String, limit: Int): String {
         require(value.toByteArray(Charsets.UTF_8).size <= limit) { "Compatibility database value is too large" }

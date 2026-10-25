@@ -63,6 +63,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -111,7 +112,37 @@ internal data class FtutterCatalogLoad(
     val viewedFirstId: String? = null
 )
 
+/**
+ * A fetch cancelled by leaving the screen leaves no 「取得中」 record behind (L144): while its own record is still
+ * the current one, the rows that were there before come back, so returning fetches again and pull-to-refresh works.
+ * A record written by a newer fetch is kept.
+ */
+/**
+ * 一覧に出すスレ（件数の上限と、閲覧スレを先頭へ）。元の一覧・上限・先頭のスレが変わった時だけ作る（L25：合成のたびに新しい
+ * リストを渡していたので、一覧の部品が設定の保存などのたびに再合成された）。
+ */
+@Composable
+internal fun rememberFtutterVisibleCatalog(items: List<CatalogItem>, maxCount: Int, viewedFirstId: String?): List<CatalogItem> =
+    remember(items, maxCount, viewedFirstId) {
+        com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(items.take(maxCount), viewedFirstId)
+    }
+
+internal fun ftutterCatalogLoadAfterCancel(current: FtutterCatalogLoad?, started: FtutterCatalogLoad,
+    before: FtutterCatalogLoad): FtutterCatalogLoad? = if (current === started) before else current
+
 internal class FtutterCatalogHolder {
+    /**
+     * A thread was created on this board: the last viewed thread is no longer put first (L37: the reload after it, or the
+     * list on return, kept it above the new thread). Another order already drops it (its own key).
+     */
+    fun afterThreadCreated() {
+        load = load?.copy(viewedFirstId = null)
+    }
+    private var sessionOrder: MutableState<FtutterOrder>? = null
+    /** Apply the startup default once; thread/settings children must not reset the current choice. */
+    fun orderState(initialOrder: FtutterOrder): MutableState<FtutterOrder> =
+        sessionOrder ?: mutableStateOf(initialOrder).also { sessionOrder = it }
+
     private val searches = LinkedHashMap<String, com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState>()
     fun search(boardId: String): com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState {
         val state = searches.remove(boardId) ?: com.valoser.futacha.shared.ui.futaber.FutaberCatalogSearchState()
@@ -131,6 +162,23 @@ internal class FtutterCatalogHolder {
             }
         }
     fun cached(key: String) = loaded[key]
+    private var cachedTabBoardId: String? = null
+    /** Only a move between favorite board tabs may reuse the previous catalog. */
+    fun openBoard(boardId: String, tabMove: Boolean = false, refreshOnTabMove: Boolean = false) {
+        cachedTabBoardId = boardId.takeIf { tabMove && !refreshOnTabMove }
+        refreshTick++
+    }
+    fun takeTabCache(boardId: String, key: String): FtutterCatalogLoad? {
+        val reuse = cachedTabBoardId == boardId
+        cachedTabBoardId = null
+        return if (reuse) cached(key) else null
+    }
+    fun reusableLoad(boardId: String, key: String, tick: Int): FtutterCatalogLoad? {
+        val current = load
+        takeTabCache(boardId, key)?.let { return it.copy(tick = tick) }
+        // A record still marked 「取得中」 is never reused: its fetch did not finish (L144).
+        return current?.takeIf { it.key == key && it.tick == tick && !it.loading && it.items.isNotEmpty() && it.error == null }
+    }
     var manualRefreshKey: String? = null
     var refreshTick by mutableIntStateOf(0)
     /** 直近のカタログでNGタイトルに当たって消えたスレ（「非表示・NG」の画面に出す）。 */
@@ -201,6 +249,8 @@ internal fun FtutterCatalogScreen(
     onDelThread: (CatalogItem) -> Unit = {},
     gesture: FtutterGestureSettings = FtutterGestureSettings(enabled = false),
     onAppGesture: (FtutterGestureAction) -> Unit = {},
+    /** 「ジェスチャーの操作を選ぶ」から選んだ時（実行できなければ理由を知らせる。L17）。 */
+    onAppMenuGesture: (FtutterGestureAction) -> Unit = onAppGesture,
     /** ジェスチャーがOFFの時の左右スワイプ（お気に入りの隣の板へ）。 */
     onSwipeBoard: ((forward: Boolean) -> Unit)? = null,
     onEditToolbar: () -> Unit = {},
@@ -219,7 +269,7 @@ internal fun FtutterCatalogScreen(
     val metrics = remember(preferences) { parseFtutterCatalogToolbarMetrics(preferences) }
     val hidden = remember(preferences) { parseFtutterHiddenThreads(preferences[FtutterKeys.HIDDEN_THREADS]) }
     val readCounts = remember(preferences) { parseFtutterReadCounts(preferences[FtutterKeys.READ_COUNTS]) }
-    var order by remember { mutableStateOf(settings.startOrder) }
+    var order by remember(holder) { holder.orderState(settings.startOrder) }
     val search = remember(board.id, holder) { holder.search(board.id) }
     var searching by search::open
     var query by search::query
@@ -249,11 +299,12 @@ internal fun FtutterCatalogScreen(
     LaunchedEffect(key, holder.refreshTick) {
         val current = holder.load
         val tick = holder.refreshTick
-        if (current?.key != key && !preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false)) {
-            holder.cached(key)?.let { holder.load = it.copy(tick = tick); return@LaunchedEffect }
-        }
-        if (current?.key == key && current.tick == tick && current.items.isNotEmpty() && current.error == null) return@LaunchedEffect
-        holder.load = FtutterCatalogLoad(key = key, tick = tick, items = current?.takeIf { it.key == key }?.items.orEmpty(), loading = true)
+        holder.reusableLoad(board.id, key, tick)
+            ?.let { holder.load = it; return@LaunchedEffect }
+        val retained = current?.takeIf { it.key == key } ?: FtutterCatalogLoad(key = key)
+        // Keep the displayed rows and their viewed-first placement until a new response succeeds.
+        val started = retained.copy(tick = tick, loading = true, error = null)
+        holder.load = started
         try {
             val page = repository.getCatalogPage(board.url, order.mode)
             holder.load = FtutterCatalogLoad(key = key, tick = tick, items = page.items,
@@ -271,14 +322,15 @@ internal fun FtutterCatalogScreen(
                 refreshFromBottom = false
             }
         } catch (cancelled: CancellationException) {
+            holder.load = ftutterCatalogLoadAfterCancel(holder.load, started, retained)
             throw cancelled
         } catch (error: Throwable) {
-            holder.load = FtutterCatalogLoad(
-                key = key,
-                tick = tick,
-                items = current?.takeIf { it.key == key }?.items.orEmpty(),
-                error = error.message ?: "カタログを取得できませんでした"
-            )
+            kotlin.coroutines.coroutineContext.ensureActive()
+            val message = com.valoser.futacha.shared.ui.futaber.futaberFriendlyLoadError(error, "カタログ")
+            holder.load = retained.copy(tick = tick, loading = false, error = message)
+            // The inline error is only shown for an empty list. Notify refresh failures too,
+            // just as the thread screen does, while keeping the catalog and scroll position.
+            onNotice(message)
             holder.manualRefreshKey = null
             refreshFromBottom = false
         } finally {
@@ -350,8 +402,7 @@ internal fun FtutterCatalogScreen(
             holder.load = it.copy(viewedFirstId = null)
         }
     }
-    val visible = com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(
-        ngResult.items.take(settings.maxThreadCount), load?.viewedFirstId.takeIf { viewedFirstEnabled })
+    val visible = rememberFtutterVisibleCatalog(ngResult.items, settings.maxThreadCount, load?.viewedFirstId.takeIf { viewedFirstEnabled })
     var ngDraft by remember { mutableStateOf<FtutterNgRule?>(null) }
     var delTarget by remember { mutableStateOf<CatalogItem?>(null) }
     var historyDeleteTarget by remember { mutableStateOf<CatalogItem?>(null) }
@@ -364,7 +415,7 @@ internal fun FtutterCatalogScreen(
         onDispose { holder.paneBack = null }
     }
 
-    fun handleGesture(action: FtutterGestureAction) {
+    fun handleGesture(action: FtutterGestureAction, fromMenu: Boolean = false) {
         // カタログでは、ツリー・人気・画像抽出は何もしない（原作）。
         when (action) {
             FtutterGestureAction.TOP -> scope.launch { holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0) }
@@ -376,7 +427,7 @@ internal fun FtutterCatalogScreen(
             FtutterGestureAction.SEARCH -> searching = true
             FtutterGestureAction.EDIT -> onCreateThread()
             FtutterGestureAction.TREE, FtutterGestureAction.POPULAR, FtutterGestureAction.IMAGES, FtutterGestureAction.NONE -> Unit
-            else -> onAppGesture(action)
+            else -> if (fromMenu) onAppMenuGesture(action) else onAppGesture(action)
         }
     }
 
@@ -452,7 +503,7 @@ internal fun FtutterCatalogScreen(
                     privacy = settings.privacy,
                     viewedFirstEnabled = viewedFirstEnabled,
                     onToggleViewedFirst = { savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON") },
-                    onGesture = ::handleGesture,
+                    onGesture = { handleGesture(it, fromMenu = true) },
                     onTogglePrivacy = { savePreference(FtutterKeys.IS_PRIVACY, (!settings.privacy).toString()) },
                     onToolbarEdit = onEditToolbar,
                     onHiddenAndNg = onOpenHiddenAndNg,

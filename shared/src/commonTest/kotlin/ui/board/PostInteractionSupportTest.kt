@@ -69,4 +69,10 @@ class PostInteractionSupportTest {
         assertFalse(isTutorialImageUrl("https://example.com.evil/b/src/1762576973515.png"))
         assertFalse(isTutorialImageUrl("https://www.example.com/b/res/123.htm"))
     }
+
+    /** L137: the DEL confirmation's body follows the iOS review wording; Android's stays as it was. */
+    @Test fun theReportConfirmationBodyFollowsTheReviewWording() {
+        assertEquals("No.12 をふたば☆ちゃんねるの掲示板管理者へ削除依頼します。", futachaReportConfirmationBody("12", false))
+        assertEquals("No.12 を不適切な投稿として、ふたば☆ちゃんねるの掲示板管理者へ通報します。", futachaReportConfirmationBody("12", true))
+    }
 }

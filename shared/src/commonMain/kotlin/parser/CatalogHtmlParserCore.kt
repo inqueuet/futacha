@@ -152,7 +152,10 @@ internal object CatalogHtmlParserCore {
             
             val tableEndIndex = normalized.indexOf("</table>", startIndex = tableStartIndex, ignoreCase = true)
             if (tableEndIndex == -1) {
-                return@withContext CatalogPageContent(items = emptyList())
+                // A catalog whose table never ends was cut off. Like a page that is not a catalog, it
+                // fails so the saved catalog stays (L102): an empty or partial list would replace it,
+                // and the threads missing from it would be taken as gone (消えたスレ).
+                throw ParserException("カタログの応答が途中で切れています。もう一度更新してください")
             }
             
             // Process body without substringing the whole table to save memory

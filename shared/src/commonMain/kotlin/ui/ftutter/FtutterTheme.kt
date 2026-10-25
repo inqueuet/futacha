@@ -225,6 +225,17 @@ internal val LocalFtutterColors = staticCompositionLocalOf { ftutterColors(null,
  * ふたったー風モードの見た目。原作どおり ColorScheme.fromSeed の配色で、ツールバーとシステムバーは同じ色にする。
  * 原作はOSの明暗に従わず、設定の「明るさ」だけで決まる。
  */
+/** The scheme as the settings name it, for a bug report (L35). */
+internal fun ftutterBugReportThemeName(mainColor: Long?, brightness: FtutterBrightness): String {
+    val color = mainColor?.let { "メインカラー #" + (it and 0xFFFFFF).toString(16).uppercase().padStart(6, '0') } ?: "メインカラー 標準"
+    val light = when (brightness) {
+        FtutterBrightness.LIGHT -> "ライトモード"
+        FtutterBrightness.DARK -> "ダークモード"
+        FtutterBrightness.BLACK -> "ダークモード（背景真っ黒）"
+    }
+    return "$color・$light"
+}
+
 @Composable
 internal fun FtutterTheme(
     mainColor: Long?,
@@ -237,16 +248,20 @@ internal fun FtutterTheme(
 ) {
     val scheme = remember(mainColor, brightness) { ftutterColorScheme(mainColor, brightness) }
     val colors = remember(mainColor, brightness, overrides) { ftutterColors(mainColor, brightness, overrides) }
+    // Material's theme locals also invalidate their descendants when these instances change.
+    // Saving an unrelated preference must retain both theme instances.
+    val materialScheme = remember(scheme, colors.background) { scheme.copy(background = colors.background) }
+    val typography = remember(fontFamily) { com.valoser.futacha.shared.ui.compat.compatibilityTypography(fontFamily) }
     val barColor = colors.toolBar
     ApplyFutachaSystemBars(systemBarColor = barColor, useDarkIcons = barColor.luminance() > 0.5f)
     @Suppress("DEPRECATION")
     CompositionLocalProvider(
         LocalFtutterColors provides colors,
-        LocalFtutterPreferences provides preferences,
+        LocalFtutterUseCustomTab provides preferences.ftutterBool(FtutterKeys.USE_CUSTOM_TAB, true),
+        com.valoser.futacha.shared.ui.board.LocalBugReportThemeName provides ftutterBugReportThemeName(mainColor, brightness),
         androidx.compose.foundation.LocalOverscrollFactory provides if (disableStretch) null else androidx.compose.foundation.LocalOverscrollFactory.current
     ) {
-        MaterialTheme(colorScheme = scheme.copy(background = colors.background),
-            typography = com.valoser.futacha.shared.ui.compat.compatibilityTypography(fontFamily)) {
+        MaterialTheme(colorScheme = materialScheme, typography = typography) {
             Box(Modifier.fillMaxSize().background(colors.background)) {
                 content()
                 // Edge-to-edge hosts leave the system bars transparent; paint them with the bar colour.

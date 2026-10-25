@@ -11,6 +11,8 @@ internal interface VoicePlatform {
     fun createNative(pack: VoicePack): VoiceNativeSession
     fun createPlayer(): VoicePcmPlayer
 }
+internal class VoiceTextAnalysisException(message: String) : IllegalArgumentException(message)
+
 internal interface VoiceNativeSession : AutoCloseable {
     fun query(text: String): String
     fun synthesize(query: String): ByteArray
@@ -18,6 +20,7 @@ internal interface VoiceNativeSession : AutoCloseable {
 internal interface VoicePcmPlayer : AutoCloseable {
     suspend fun prepare(onStop: () -> Unit)
     suspend fun play(wav: ByteArray)
+    fun interrupt() { stop() }
     fun stop()
 }
 internal expect fun createVoicePlatform(context: Any?): VoicePlatform

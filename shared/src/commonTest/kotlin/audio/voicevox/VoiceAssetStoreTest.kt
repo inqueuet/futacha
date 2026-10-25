@@ -29,6 +29,11 @@ class VoiceAssetStoreTest {
             assertEquals("partial", FileSystem.SYSTEM.read(partial) { readUtf8() })
             val recreated = VoiceAssetStore({ root }, { Long.MAX_VALUE }, downloader = { transport })
             recreated.refresh(); assertEquals(1, calls)
+            assertEquals(VoiceAssetStage.PAUSED, recreated.state.value.stage)
+            assertEquals(7L, recreated.state.value.bytes)
+            assertTrue(recreated.state.value.message.orEmpty().contains("再開"))
+            store.refresh()
+            assertEquals(VoiceAssetStage.PAUSED, store.state.value.stage)
             assertFailsWith<IOException> { recreated.install() }
             assertEquals(2, calls)
             assertFalse(recreated.state.value.ready)
@@ -45,6 +50,10 @@ class VoiceAssetStoreTest {
             assertFails { store.install() }
             assertEquals(1, calls)
             assertEquals(VoiceAssetStage.FAILED, store.state.value.stage)
+            val failureMessage = store.state.value.message
+            store.refresh()
+            assertEquals(VoiceAssetStage.FAILED, store.state.value.stage)
+            assertEquals(failureMessage, store.state.value.message)
             assertFalse(FileSystem.SYSTEM.exists(root.resolve(VoiceAssetManifest.PACK)))
             assertFalse(FileSystem.SYSTEM.list(root).any { it.name.endsWith(".part") || it.name.endsWith(".staging") })
         } finally { FileSystem.SYSTEM.deleteRecursively(root, false) }
@@ -55,8 +64,26 @@ class VoiceAssetStoreTest {
         assertEquals(VoiceAssetStage.FAILED, store.state.value.stage)
         assertFailsWith<IOException> { store.install() }
         assertEquals(VoiceAssetStage.FAILED, store.state.value.stage)
-        assertEquals("storage unavailable", store.state.value.message)
+        // L7: the raw platform text is not shown in the settings screen.
+        assertEquals("音声データの保存先を確認できませんでした", store.state.value.message)
     }
+    @Test fun retainedArchiveIsVisibleAndCanBeDeletedAfterRecreatingTheStore() = runBlocking {
+        val root = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("voice-retained-${Random.nextLong()}")
+        FileSystem.SYSTEM.createDirectories(root)
+        val archive = root.resolve("${VoiceAssetManifest.dictionary.sha256}.tar.gz")
+        FileSystem.SYSTEM.write(archive) { writeUtf8("retained archive") }
+        val store = VoiceAssetStore({ root }, { Long.MAX_VALUE }, downloader = { error("no HTTP during refresh") })
+        try {
+            store.refresh()
+            assertEquals(VoiceAssetStage.PAUSED, store.state.value.stage)
+            assertTrue(FileSystem.SYSTEM.exists(archive))
+            store.delete()
+            store.refresh()
+            assertEquals(VoiceAssetStage.MISSING, store.state.value.stage)
+            assertFalse(FileSystem.SYSTEM.exists(root))
+        } finally { FileSystem.SYSTEM.deleteRecursively(root, false) }
+    }
+
     @Test fun lowStorageIsRejectedBeforeStartingAnyTransfer() = runBlocking {
         val root = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve("voice-capacity-${Random.nextLong()}")
         val store = VoiceAssetStore({ root }, { 1 }, downloader = { error("must not download") })

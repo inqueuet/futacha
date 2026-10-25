@@ -1,10 +1,15 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.network.PersistentCookieStorage
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 
 class CompatPtmtAndUpsTest {
     @Test
@@ -30,6 +35,20 @@ class CompatPtmtAndUpsTest {
         assertEquals("削除しました", compatPtmtMutationNotice(null, ""))
         assertEquals("変更しました", compatPtmtMutationNotice("old", "new"))
         assertEquals("変更しました", compatPtmtMutationNotice(null, "new"))
+    }
+
+    @Test
+    fun ptmtManualCookieLastsTheReference400Days() = runBlocking {
+        // (L59) The reference meant 400 days; 400 days in ms overflowed an Int to
+        // 200,261,632 (about 2.3 days). Use the real clock: an expiry in the past is
+        // dropped by the storage instead of being stored.
+        val repository = CookieRepository(PersistentCookieStorage(InMemoryFileSystem()))
+        val now = Clock.System.now().toEpochMilliseconds()
+        saveCompatPtmtCookie(repository, "abc-123", now)
+        val stored = repository.listCookies().single { it.name == "ptmt" }
+        assertEquals("abc-123", stored.value)
+        assertEquals("2chan.net", stored.domain)
+        assertEquals(now + 34_560_000_000L, stored.expiresAtMillis)
     }
 
     @Test

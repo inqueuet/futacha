@@ -678,6 +678,65 @@ internal class IosCompatibilityDatabase(
         }
     }
 
+    /**
+     * Replaces this database, whose cache table can be neither read nor cleared, with a clean one holding [payload]
+     * and [stateRecords] and no cache rows (audit L95, as Desktop's M8). The replacement is finished and closed
+     * beside it first, [keepOriginal] then keeps the damaged file aside, and only then is the replacement renamed
+     * over it, so a failure on the way leaves the original database where it was and the next launch retries.
+     */
+    suspend fun rebuildWithoutCacheRecords(
+        payload: String,
+        stateRecords: Map<CompatibilityStateRecordKey, String?>,
+        updatedAtMillis: Long,
+        replacementPath: String,
+        keepOriginal: suspend () -> Unit
+    ) {
+        checkpointAndClose()
+        val replacement = IosCompatibilityDatabase(fileSystem, replacementPath)
+        try {
+            // Files left by an interrupted earlier attempt.
+            listOf("", "-wal", "-shm").forEach { suffix -> fileSystem.delete("$replacementPath$suffix") }
+            replacement.writePayload(
+                payload,
+                updatedAtMillis,
+                stateRecordUpdates = stateRecords,
+                replaceStateRecords = true
+            )
+            replacement.checkpointAndClose()
+            keepOriginal()
+            // Apple's SQLite keeps the write-ahead log and its index after the last connection closes. Never pair
+            // the new main file with a log that still holds frames; an emptied log and its index are only stale
+            // files once no connection is open, and SQLite recreates them.
+            listOf(storagePath, replacementPath).forEach { path ->
+                check(!fileSystem.exists("$path-wal") || fileSystem.getFileSize("$path-wal") == 0L) {
+                    "Compatibility database is still in use during cache recovery"
+                }
+            }
+            listOf(storagePath, replacementPath).forEach { path ->
+                listOf("-wal", "-shm").forEach { suffix -> fileSystem.delete("$path$suffix").getOrThrow() }
+            }
+            check(
+                platform.posix.rename(
+                    fileSystem.resolveAbsolutePath(replacementPath),
+                    fileSystem.resolveAbsolutePath(storagePath)
+                ) == 0
+            ) { "Could not replace the damaged compatibility database" }
+        } finally {
+            replacement.close()
+            listOf("", "-wal", "-shm").forEach { suffix -> fileSystem.delete("$replacementPath$suffix") }
+        }
+    }
+
+    /** Moves every committed frame of the write-ahead log into the database file, empties the log, and closes. */
+    private fun checkpointAndClose() {
+        try {
+            // A checkpoint that cannot finish leaves frames in the log, which the caller checks.
+            runCatching { execute(open(), "PRAGMA wal_checkpoint(TRUNCATE)", "checkpoint compatibility database") }
+        } finally {
+            close()
+        }
+    }
+
     private fun readBoundedColumnText(
         statement: CPointer<sqlite3_stmt>,
         column: Int,

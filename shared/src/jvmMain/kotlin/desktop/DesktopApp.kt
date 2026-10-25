@@ -45,6 +45,10 @@ internal fun writeDesktopProfileFile(
     moveReplacingWithRetry(temp.toPath(), file.toPath(), move)
 }
 
+/** What the manual history refresh of としあき(仮) tells when it is over; as on iOS, with what the time left (re-audit L81). */
+internal fun desktopCompatHistoryRefreshNotice(result: CompatBackgroundRefreshResult): String =
+    "履歴を更新しました（更新 ${result.updatedTabs}件、終了 ${result.deadTabs}件、失敗 ${result.failures}件）${result.unfinishedNotice}"
+
 class DesktopAppGraph(val environment: DesktopEnvironment) {
     val fileSystem = createFileSystem(environment)
     val stateStore = createAppStateStore(environment, fileSystem)
@@ -158,7 +162,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
                     compatibility.preferences.first()[COMPAT_WATCH_NOTIFY_KEY] != "OFF"
             }
         }
-        return "履歴を更新しました（更新 ${result.updatedTabs}件、終了 ${result.deadTabs}件、失敗 ${result.failures}件）"
+        return desktopCompatHistoryRefreshNotice(result)
     }
 
     internal suspend fun refreshModern(background: Boolean, watch: Boolean) {
@@ -169,7 +173,8 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         } }
         if (background) refresher.refresh(historyCommitGate = gate, autoSaveCommitGate = gate)
         if (watch && stateStore.isWatchAlertEnabled.first()) {
-            val result = watchRefresher.refresh()
+            // Its cursor and diagnostics are not written after a mode switch (re-audit L82).
+            val result = watchRefresher.refresh(commitGate = gate)
             watchNotifications.notify(result.matches, sessionMutex = profileMutex) {
                 !switching && profile == ExperienceProfile.FUTACHA && generation == token && stateStore.isWatchAlertEnabled.first()
             }
@@ -216,20 +221,53 @@ internal suspend fun runDesktopCloseStep(name: String, timeoutMillis: Long, step
     } catch (failure: Exception) { Logger.e("DesktopShutdown", "Failed to close $name", failure) }
 }
 
-@Composable
-fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
-    var ready by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(graph) {
-        try { graph.initialize(); ready = true }
+/**
+ * The start of the Desktop window (L125). A failed [DesktopAppGraph.initialize] used to leave only its message, with
+ * nothing to do but quit, where iOS offers 再試行; its steps are idempotent, so [retry] runs them again.
+ */
+@Stable
+internal class DesktopStartup {
+    var ready by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var attempt by mutableIntStateOf(0)
+        private set
+
+    /** Runs the start again after a failure; nothing while one is running or done. */
+    fun retry() {
+        if (error == null) return
+        error = null
+        attempt += 1
+    }
+
+    internal suspend fun run(initialize: suspend () -> Unit) {
+        try { initialize(); ready = true }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message ?: "起動できませんでした" }
     }
-    if (!ready) {
-        MaterialTheme { Surface(Modifier.fillMaxSize()) { Box(Modifier.padding(32.dp)) {
-            if (error == null) CircularProgressIndicator() else Text(error!!)
-        } } }
+}
+
+@Composable
+internal fun rememberDesktopStartup(key: Any, initialize: suspend () -> Unit): DesktopStartup {
+    val startup = remember(key) { DesktopStartup() }
+    val currentInitialize by rememberUpdatedState(initialize)
+    LaunchedEffect(startup, startup.attempt) { startup.run { currentInitialize() } }
+    return startup
+}
+
+@Composable
+fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
+    val startup = rememberDesktopStartup(graph) { graph.initialize() }
+    // A failed mode switch (the start's failure is the startup's).
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    if (!startup.ready) {
+        MaterialTheme { Surface(Modifier.fillMaxSize()) {
+            val failure = startup.error
+            if (failure == null) Box(Modifier.padding(32.dp)) { CircularProgressIndicator() }
+            else com.valoser.futacha.shared.ui.FutachaStartupErrorScreen(message = failure, onRetry = startup::retry)
+        } }
         return
     }
     LaunchedEffect(Unit) {
@@ -320,10 +358,9 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
             }
         }) { Text("通知設定を開く") } },
         dismissButton = { TextButton(onClick = { notificationError = null }) { Text("閉じる") } }) }
-    val controller = ExperienceProfileUiController(
-        isAvailable = true, activeProfile = graph.profile, sessionGeneration = graph.generation,
-        isSessionActive = !graph.switching, switchInProgress = graph.switching, lastError = error,
-        isSessionAuthoritativelyCurrent = { !graph.switching && it.profile == graph.profile && it.generation == graph.generation },
+    val controller = rememberDesktopProfileUiController(
+        profile = graph.profile, generation = graph.generation, switching = graph.switching, lastError = error,
+        isSessionCurrent = { !graph.switching && it.profile == graph.profile && it.generation == graph.generation },
         requestSwitch = { target -> scope.launch {
             try { graph.switchTo(target); error = null }
             catch (cancelled: CancellationException) { throw cancelled }
@@ -341,6 +378,8 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
                 compatibilityHistoryRefresh = { runSuspendCatchingPreservingCancellation { graph.refreshCompatibility(manual = true) } },
                 platformThreadDeepLink = pendingLink,
                 onPlatformThreadDeepLinkConsumed = { if (pendingLink == it) pendingLink = null },
+                // The window's Esc and menu "戻る" do nothing under the lock screen (L124).
+                onAppUnlockedChanged = DesktopBackDispatcher::setAppUnlocked,
                 onWatchAlertSettingChangeRequested = { enabled ->
                     if (!notificationRequestPending) {
                         notificationRequestPending = true
@@ -356,6 +395,33 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
                 },
                 onExitApplication = onExit)
         }
+    }
+}
+
+/**
+ * Remembered like Android's and iOS's (L123, 2026-10-02 M4-4): a new controller (fresh lambdas, so never equal to the
+ * last) on every recomposition of the host, e.g. a notification click or a notification setting change, replaced the
+ * static local and recomposed all of FutachaApp. A new one is made only when what it shows changes; its lambdas call
+ * the host's latest ones, so the session check still reads the state at the time it is asked.
+ */
+@Composable
+internal fun rememberDesktopProfileUiController(
+    profile: ExperienceProfile,
+    generation: Long,
+    switching: Boolean,
+    lastError: String?,
+    isSessionCurrent: (ExperienceProfileSessionToken) -> Boolean,
+    requestSwitch: (ExperienceProfile) -> Unit
+): ExperienceProfileUiController {
+    val currentIsSessionCurrent by rememberUpdatedState(isSessionCurrent)
+    val currentRequestSwitch by rememberUpdatedState(requestSwitch)
+    return remember(profile, generation, switching, lastError) {
+        ExperienceProfileUiController(
+            isAvailable = true, activeProfile = profile, sessionGeneration = generation,
+            isSessionActive = !switching, switchInProgress = switching, lastError = lastError,
+            isSessionAuthoritativelyCurrent = { token -> currentIsSessionCurrent(token) },
+            requestSwitch = { target -> currentRequestSwitch(target) }
+        )
     }
 }
 

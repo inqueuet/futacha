@@ -190,7 +190,10 @@ class HistoryRefreshWorker(
                     ) {
                         // Also called with the matches found so far when the run
                         // timeout cuts the check off, so they are not all dropped.
-                        app.catalogWatchAlertRefresher.refresh(onMatchesFound = { matches ->
+                        app.catalogWatchAlertRefresher.refresh(commitGate = { commit ->
+                            // Its cursor and diagnostics are not written after a mode switch (re-audit L82).
+                            app.experienceProfileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
+                        }, onMatchesFound = { matches ->
                             deliverCatalogWatchAlertMatches(app, matches, ::isCurrentModernGeneration)
                         })
                     }

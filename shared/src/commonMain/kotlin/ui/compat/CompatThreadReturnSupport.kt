@@ -43,8 +43,30 @@ private const val MAX_CHILD_HOST_DEPTH = 32
  * when the thread screen is created and must not recompose the app when they change.
  */
 internal class CompatThreadReturnTracker {
+    private val openingVisits = LinkedHashMap<String, com.valoser.futacha.shared.ui.board.ThreadOpeningVisit>()
     var lastHost: CompatHost? = null
     var lastThreadTabKey: String? = null
+
+    fun openingVisit(tabKey: String): com.valoser.futacha.shared.ui.board.ThreadOpeningVisit {
+        var parent = lastHost
+        var ownPost = false
+        if (lastThreadTabKey == tabKey) repeat(MAX_CHILD_HOST_DEPTH) {
+            parent = when (val child = parent) {
+                is CompatHost.Post -> { ownPost = child.tabKey == tabKey; null }
+                is CompatHost.PostDrawing -> child.origin
+                is CompatHost.ToolbarEditor -> child.origin
+                is CompatHost.Settings -> child.origin
+                is CompatHost.Help -> child.origin
+                else -> null
+            }
+        }
+        val retained = if (ownPost || returnsFromOwnChild(tabKey)) openingVisits[tabKey] else null
+        val visit = retained ?: com.valoser.futacha.shared.ui.board.ThreadOpeningVisit()
+        openingVisits.remove(tabKey)
+        openingVisits[tabKey] = visit
+        while (openingVisits.size > 12) openingVisits.remove(openingVisits.keys.first())
+        return visit
+    }
 
     fun returnsFromOwnChild(tabKey: String): Boolean =
         compatThreadReturnsFromOwnChild(lastHost, lastThreadTabKey, tabKey)

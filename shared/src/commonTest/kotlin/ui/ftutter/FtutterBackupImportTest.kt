@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.ftutter
 import com.valoser.futacha.shared.model.BoardSummary
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -105,7 +106,7 @@ class FtutterBackupImportTest {
         assertEquals(board.id, plan.preferences[FtutterKeys.LAST_BOARD])
         assertEquals(thread, plan.preferences[FtutterKeys.OPENING])
         assertEquals(FtutterStats(17, 8, 10, 12), parseFtutterStats(plan.preferences))
-        assertEquals("false", plan.preferences[FtutterKeys.PREFIX + "useHttps"])
+        assertNull(plan.preferences[FtutterKeys.USE_HTTPS])
         assertEquals("false", plan.preferences[FtutterKeys.PREFIX + "useChromeCustomTab"])
         val repeated = ftutterBackupPlan(original, plan.boards, emptyList(), plan.preferences, 0)
         assertEquals(parseFtutterStats(plan.preferences), parseFtutterStats(repeated.preferences))
@@ -129,5 +130,40 @@ class FtutterBackupImportTest {
         assertEquals("/original/font.ttf", plan.preferences[FtutterKeys.PREFIX + "import.userFontPath"])
         assertTrue(plan.limitations.any { it.contains("添付ファイル") })
         assertTrue(parseFtutterDrafts(plan.preferences[FtutterKeys.DRAFTS]).values.any { it.comment == "本文" && it.sourceAttachmentPath == "/original/image.png" })
+    }
+
+    /** L132: the confirmation counts the imported tabs apart from the current ones and says how many the limit closes. */
+    @Test
+    fun theTabSummarySeparatesImportedAndCurrentTabsAndCountsWhatTheLimitCloses() {
+        fun url(n: Int) = "https://may.2chan.net/b/res/$n.htm"
+        val imported = listOf(url(1), url(2), url(3))
+        val current = listOf(url(11), url(12), url(13))
+        val existing = mapOf(FtutterKeys.TABS to encodeFtutterList(current), FtutterKeys.HISTORY_LIMIT to "4")
+        val plan = ftutterBackupPlan(mapOf("tabs" to FtutterPrefValue.Texts(imported)), emptyList(), emptyList(), existing, 0,
+            existingHistoryOrder = listOf(url(13), url(12), url(11)))
+        assertTrue(plan.summary.contains("タブ：取り込み 3件（今のタブ 3件と合わせて 6件。履歴の保存数 4 を超える古いタブ 2件は閉じます）"), plan.summary)
+        val kept = decodeFtutterList(plan.preferences[FtutterKeys.TABS]).orEmpty()
+        assertEquals(imported + url(13), kept, "The imported tabs and the newest current tab stay")
+        val roomy = ftutterBackupPlan(mapOf("tabs" to FtutterPrefValue.Texts(imported)), emptyList(), emptyList(),
+            existing + (FtutterKeys.HISTORY_LIMIT to "200"), 0)
+        assertTrue(roomy.summary.contains("タブ：取り込み 3件（今のタブ 3件と合わせて 6件）"), roomy.summary)
+    }
+
+    /** L19: the import remembers what was chosen then, so the notice about the original ends once another is chosen. */
+    @Test
+    fun theImportRemembersTheChoicesItsNoticesWaitFor() {
+        val original = parseFtutterPreferencesXml(xml) + mapOf(
+            "userFontPath" to FtutterPrefValue.Text("/original/font.ttf"),
+            "savePath" to FtutterPrefValue.Text("content://original/tree/1")
+        )
+        val existing = mapOf(FTUTTER_SHARED_DESTINATION_KEY to "content://current/tree/9",
+            com.valoser.futacha.shared.ui.futaber.FUTABER_CUSTOM_FONT_PREFERENCE_KEY to "デフォルト")
+        val plan = ftutterBackupPlan(original, emptyList(), emptyList(), existing, 0)
+        assertEquals("content://current/tree/9", plan.preferences[FTUTTER_IMPORT_SAVE_PATH_CHOSEN])
+        assertEquals("デフォルト", plan.preferences[FTUTTER_IMPORT_FONT_CHOSEN])
+        assertTrue(ftutterImportNoticePending("content://original/tree/1", "content://current/tree/9", "content://current/tree/9"))
+        assertFalse(ftutterImportNoticePending("content://original/tree/1", "content://current/tree/9", "content://new/tree/2"))
+        assertTrue(ftutterImportNoticePending("/original/font.ttf", null, "anything"), "An earlier import keeps its notice until dismissed")
+        assertFalse(ftutterImportNoticePending("", null, null))
     }
 }

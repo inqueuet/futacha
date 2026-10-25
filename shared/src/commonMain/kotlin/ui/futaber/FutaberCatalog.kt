@@ -113,6 +113,15 @@ internal class FutaberCatalogViewState {
     var scrollToTopHandled: Int = 0
     var lastAttemptKey: FutaberCatalogFetchKey? = null
     var viewedFirstId by mutableStateOf<String?>(null)
+    /**
+     * Set when a thread was created on this board: the reload it causes does not put the last viewed thread above the
+     * new one (L37). Another order has its own state, so a change of the order drops the placement already.
+     */
+    var skipViewedFirstOnce: Boolean = false
+    fun afterThreadCreated() {
+        viewedFirstId = null
+        skipViewedFirstOnce = true
+    }
     var fetchedKey: FutaberCatalogFetchKey? = null
     var fetchedAtMillis: Long = 0L
     val gridState = LazyGridState()
@@ -184,6 +193,11 @@ internal fun FutaberCatalogScreen(
     var archiveQuery by remember(board.id) { mutableStateOf<String?>(null) }
     // The keyboard goes away when the results open, so they are not hidden behind it.
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    // Android's back closes the search bar like its cancel (L27: the app went to the background instead). The archive
+    // results, registered after, close first. iOS keeps the original: the left edge does nothing here.
+    com.valoser.futacha.shared.ui.util.PlatformBackHandler(enabled = searchOpen && archiveQuery == null, iosEdgeGestureEnabled = false) {
+        search.query = ""; search.open = false
+    }
     com.valoser.futacha.shared.ui.util.PlatformBackHandler(enabled = archiveQuery != null) { archiveQuery = null }
     // The reloads of this board and sort: what to go back to, and which threads dropped out.
     var refreshSheet by remember(board.id, sortMode) { mutableStateOf(false) }
@@ -209,7 +223,10 @@ internal fun FutaberCatalogScreen(
                 sameQuery = view.fetchedKey == null || view.fetchedKey?.watchWords == key.watchWords
             )
             view.load = FutaberCatalogLoad(items = page.items, isLoading = false)
-            if (explicitRefresh) view.viewedFirstId = lastViewedThreadId.takeIf { viewedFirstEnabled }
+            if (view.skipViewedFirstOnce) {
+                view.skipViewedFirstOnce = false
+                view.viewedFirstId = null
+            } else if (explicitRefresh) view.viewedFirstId = lastViewedThreadId.takeIf { viewedFirstEnabled }
             view.fetchedKey = key
             view.fetchedAtMillis = Clock.System.now().toEpochMilliseconds()
             if (explicitRefresh && display.scrollCatalogToTopOnRefresh) view.scrollToTopTick += 1

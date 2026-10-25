@@ -9,6 +9,16 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ThreadHtmlParserCoreTest {
+    /** L103: running out of time for the quote links does not mark a page that has every post as cut short. */
+    @Test fun aQuoteLinkTimeoutDoesNotMarkACompletePageTruncated() = runBlocking {
+        val normal = ThreadHtmlParserCore.parseThread(sampleThreadHtml)
+        val outOfTime = ThreadHtmlParserCore.parseThread(sampleThreadHtml, null, -1L)
+        assertFalse(normal.isTruncated)
+        assertEquals(normal.posts.map { it.id }, outOfTime.posts.map { it.id })
+        assertFalse(outOfTime.isTruncated)
+        assertNull(outOfTime.truncationReason)
+    }
+
     @Test fun wordsEndingInNoAreQuotedTextInsteadOfPostNumbers() = runBlocking {
         val html = """
             <div class="thre" data-res="1"><span class="cno">No.1</span><blockquote>casino2<br>piano 3</blockquote></div>
@@ -132,7 +142,9 @@ class ThreadHtmlParserCoreTest {
         assertEquals(0, op.order)
         assertEquals("そうだねx1", op.saidaneLabel)
         assertEquals(false, op.isDeleted)
-        assertEquals(1, op.referencedCount)
+        // The third post's ">>No.354621" sits above shallower lines of its quote block: a nested quote of someone's
+        // anchor, not a reply to the OP (L85; only a bare ">>354621" counts as a reply of its own).
+        assertEquals(0, op.referencedCount)
         assertEquals(
             "https://www.example.com/t/src/1762145224666.jpg",
             op.imageUrl

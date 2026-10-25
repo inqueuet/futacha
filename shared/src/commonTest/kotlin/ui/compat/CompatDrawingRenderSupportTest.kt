@@ -53,6 +53,40 @@ class CompatDrawingRenderSupportTest {
     }
 
     @Test
+    fun pointsFromDifferentCanvasSizesShareTheSameReferenceCoordinates() {
+        assertEquals(CompatDrawingPoint(280f, 100f),
+            compatDrawingReferencePoint(CompatDrawingPoint(560f, 200f), 688, 270))
+        assertEquals(CompatDrawingPoint(280f, 100f),
+            compatDrawingReferencePoint(CompatDrawingPoint(280f, 100f), 344, 135))
+        // Fractional and outside-canvas input is retained; drawing clips at render time.
+        assertEquals(CompatDrawingPoint(-0.125f, 140.25f),
+            compatDrawingReferencePoint(CompatDrawingPoint(-0.25f, 280.5f), 688, 270))
+    }
+
+    @Test
+    fun brushWidthIsConvertedAtContactWithoutChangingExistingLogicalStrokes() {
+        val widthAtContact = compatDrawingReferenceWidth(18f, 688, 270)
+        assertEquals(9f, widthAtContact)
+        assertEquals(18f, compatDrawingReferenceWidth(18f, 344, 135))
+        val held = CompatDrawingStroke(0, widthAtContact, listOf(CompatDrawingPoint(280f, 100f)))
+        assertEquals(held, scaleCompatDrawingStrokesForReferencePng(listOf(held), 344, 135).single())
+    }
+
+    @Test
+    fun referenceExportRetainsTheExistingMinimumOnePixelWidth() {
+        val stroke = CompatDrawingStroke(0, 0.125f, listOf(CompatDrawingPoint(50.125f, 30.5f)))
+        val exported = scaleCompatDrawingStrokesForReferencePng(listOf(stroke), 344, 135).single()
+        assertEquals(1f, exported.widthPx)
+        assertEquals(stroke.points, exported.points)
+    }
+
+    @Test
+    fun referenceInputRejectsAnUninitialisedCanvas() {
+        assertFailsWith<IllegalArgumentException> { compatDrawingReferencePoint(CompatDrawingPoint(0f, 0f), 0, 135) }
+        assertFailsWith<IllegalArgumentException> { compatDrawingReferenceWidth(18f, 344, 0) }
+    }
+
+    @Test
     fun rejectsDimensionsWhosePixelCountExceedsSafeLimit() {
         assertFailsWith<IllegalArgumentException> {
             validateCompatDrawingRender(emptyList(), 100_000, 100_000)

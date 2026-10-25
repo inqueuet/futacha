@@ -45,6 +45,7 @@ import com.valoser.futacha.shared.ui.board.buildCookiePostingRecoveryFallbackGui
 import com.valoser.futacha.shared.ui.board.buildCookiePostingRecoveryGuidance
 import com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher
 import com.valoser.futacha.shared.ui.board.shouldOfferCookieManagerForPostingFailure
+import com.valoser.futacha.shared.ui.compat.COMPAT_DRAWING_HELP_SECTION
 import com.valoser.futacha.shared.ui.compat.CompatPostDrawingScreen
 import com.valoser.futacha.shared.ui.compat.CompatUpsUploadDialog
 import com.valoser.futacha.shared.ui.compat.CompatibilityPalette
@@ -56,7 +57,7 @@ import com.valoser.futacha.shared.ui.compat.fetchCompatPostNetworkInfo
 import com.valoser.futacha.shared.ui.compat.isCompatUpsUploadSizeAllowed
 import com.valoser.futacha.shared.ui.compat.normalizeCompatSpeechResult
 import com.valoser.futacha.shared.ui.compat.parseCompatSaveLocation
-import com.valoser.futacha.shared.ui.compat.persistCompatDrawingCopy
+import com.valoser.futacha.shared.ui.compat.launchCompatDrawingCopy
 import com.valoser.futacha.shared.ui.compat.rememberCompatSpeechRecognizer
 import com.valoser.futacha.shared.ui.compat.uploadCompatUps
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -227,6 +228,10 @@ internal fun FutaberPostToolsHost(
 ) {
     val colors = LocalFutaberColors.current
     val scope = rememberCoroutineScope()
+    val appTasks = LocalFutaberAppTasks.current
+    // Whether these tools are still on screen, for a late result (L39).
+    val shown = remember { mutableStateOf(true) }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { shown.value = false } }
     val latestComment by rememberUpdatedState(comment)
     val latestOnCommentChange by rememberUpdatedState(onCommentChange)
     fun perform(block: suspend () -> Unit) {
@@ -291,21 +296,24 @@ internal fun FutaberPostToolsHost(
                     Surface(Modifier.fillMaxSize().testTag("futaber-post-drawing"), color = colors.background) {
                         CompatPostDrawingScreen(
                             onSaved = { image ->
-                                state.drawing = false
                                 onAttach(image)
+                                state.drawing = false
                                 // A copy for the person, only when "手書きファイルの保存先" is set; a failure keeps the attachment.
-                                val fs = tools.fileSystem
-                                val location = tools.drawingCopyLocation
-                                if (fs != null && location != null) scope.launch {
-                                    runSuspendCatchingPreservingCancellation {
-                                        persistCompatDrawingCopy(fs, location, image, Clock.System.now().toEpochMilliseconds())?.getOrThrow()
-                                    }.onFailure {
-                                        Logger.e(PARITY_B2_TAG, "Failed to keep a copy of the drawing", it)
-                                        state.message = "手書き画像のコピーを保存できませんでした（添付はそのままです）"
+                                // Written afterwards on the app's scope (L39: the drawing screen waited for it).
+                                tools.fileSystem?.let { fs ->
+                                    launchCompatDrawingCopy(appTasks?.scope ?: scope, fs, tools.drawingCopyLocation, image,
+                                        Clock.System.now().toEpochMilliseconds()) {
+                                        Logger.w(PARITY_B2_TAG, "Failed to keep a copy of the drawing")
+                                        val text = "手書き画像のコピーを保存できませんでした（添付はそのままです）"
+                                        if (shown.value) state.message = text else appTasks?.notify?.invoke(text)
                                     }
                                 }
                             },
-                            onBack = { state.drawing = false }
+                            onBack = { state.drawing = false },
+                            // The reference help's 手書き section, not としあき(仮)'s whole help (L70).
+                            helpSectionId = COMPAT_DRAWING_HELP_SECTION,
+                            // A drawing lost with the app is offered back the next time (L69).
+                            recoveryFileSystem = tools.fileSystem
                         )
                     }
                 }

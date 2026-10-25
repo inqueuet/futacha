@@ -452,6 +452,10 @@ internal fun CompatPostScreen(
     onBuildCreated: (String?) -> Unit = {},
     onOpenDrawing: () -> Unit = {},
     onOpenHelp: () -> Unit = {},
+    /** Outlives this screen: the draft is written and an attachment being kept finishes after it closes (L52). */
+    lastingScope: kotlinx.coroutines.CoroutineScope? = null,
+    /** Tells a send's failure once this screen has gone (L157); the screen tells it itself while it is shown. */
+    onLastingNotice: ((String) -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val ownerKey = if (isBuild) "build:${board.key}" else tab.key
@@ -500,8 +504,11 @@ internal fun CompatPostScreen(
     var initialAttachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
     var initialAttachmentLocator by remember(ownerKey) { mutableStateOf<String?>(null) }
     var draftLoaded by remember(ownerKey) { mutableStateOf(false) }
+    // The stored draft could not be read: the form is still used, its input kept (L51) and its help shown (L149).
+    var draftLoadFailed by remember(ownerKey) { mutableStateOf(false) }
     var savingAttachment by remember(ownerKey) { mutableStateOf(false) }
     var sending by remember(ownerKey) { mutableStateOf(false) }
+    com.valoser.futacha.shared.ui.ReportPostingInFlight(sending)
     var message by remember(ownerKey) { mutableStateOf<String?>(null) }
     // Post failures stay until acknowledged (the transient notice below fades after 2.5 s).
     var postFailureMessage by remember(ownerKey) { mutableStateOf<String?>(null) }
@@ -514,12 +521,12 @@ internal fun CompatPostScreen(
     var attachmentPreviewOpen by remember(ownerKey) { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     var toolbarOverflowOpen by remember { mutableStateOf(false) }
-    var upsUploadRequested by remember(ownerKey) { mutableStateOf(false) }
     var upsAttachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
     var upsDialogOpen by remember(ownerKey) { mutableStateOf(false) }
     var upsComment by remember(ownerKey) { mutableStateOf("") }
     var upsDeleteKey by remember(ownerKey) { mutableStateOf("") }
     var upsUploadInProgress by remember(ownerKey) { mutableStateOf(false) }
+    var openingHelp by remember(ownerKey) { mutableStateOf(false) }
     var discardConfirm by remember { mutableStateOf(false) }
     var sendConfirm by remember { mutableStateOf(false) }
     var postDestinationWarning by remember { mutableStateOf<String?>(null) }
@@ -530,8 +537,10 @@ internal fun CompatPostScreen(
     val attachmentLimitBytes = postingCapabilities.maxFileSizeBytes.toInt()
     val storedDeleteKey = preferences.compatStoredPostDeleteKey()
 
+    // These read the form's state (commentValue, not the composed comment): the writer run as the screen closes
+    // was made in an earlier composition (L52).
     fun hasDraft(): Boolean = name.isNotEmpty() || email.isNotEmpty() || subject.isNotEmpty() ||
-        comment.isNotEmpty() || deleteKey.isNotEmpty() || attachment != null
+        commentValue.text.isNotEmpty() || deleteKey.isNotEmpty() || attachment != null
 
     suspend fun persistCurrentDraftOrDelete() {
         if (hasDraft()) {
@@ -543,7 +552,7 @@ internal fun CompatPostScreen(
                         name = name,
                         email = email,
                         subject = subject,
-                        comment = comment,
+                        comment = commentValue.text,
                         attachmentUri = attachmentLocator,
                         attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
@@ -557,7 +566,7 @@ internal fun CompatPostScreen(
                         name = name,
                         email = email,
                         subject = subject,
-                        comment = comment,
+                        comment = commentValue.text,
                         attachmentUri = attachmentLocator,
                         attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
@@ -570,8 +579,45 @@ internal fun CompatPostScreen(
         }
     }
 
+    // After a draft that could not be read, what the user typed is saved, but an empty form deletes nothing: the
+    // stored draft may still be there (L51).
+    suspend fun persistDraftOfThisForm() {
+        if (draftLoaded) persistCurrentDraftOrDelete()
+        else if (draftLoadFailed && editedDraftFields.isNotEmpty() && hasDraft()) persistCurrentDraftOrDelete()
+    }
+
+    val postingInFlight = com.valoser.futacha.shared.ui.LocalPostingInFlight.current
+    // While the same form's earlier screen is still sending (or keeping its attachment), this one waits before
+    // offering the draft, which that send may already have posted (L157, L168).
+    var waitingForPreviousScreen by remember(ownerKey) { mutableStateOf(false) }
+    val attachmentSave = remember(ownerKey) { arrayOfNulls<Job>(1) }
+    // A post being sent goes on when the screen is taken away (L47): the screen is then left alone, not navigated.
+    val postSend = remember(ownerKey) { arrayOfNulls<Job>(1) }
+    val screenPresent = remember(ownerKey) { booleanArrayOf(true) }
+    // Closing the screen cancels its 300 ms autosave: the form is written once more as it is left, after an
+    // attachment still being kept (L52: the last input and a just-picked attachment were lost) and after a post
+    // being sent (a sent one has no draft any more; a failed one keeps it).
+    DisposableEffect(ownerKey) {
+        onDispose {
+            screenPresent[0] = false
+            val pendingAttachment = attachmentSave[0]
+            val pendingSend = postSend[0]
+            lastingScope?.launch {
+                runSuspendCatchingPreservingCancellation {
+                    pendingAttachment?.join()
+                    pendingSend?.join()
+                    persistDraftOfThisForm()
+                }.onFailure { failure -> Logger.e("CompatPost", "Draft persistence on leaving failed", failure) }
+            }?.let { leaving -> CompatPostWork.leave(ownerKey, leaving) }
+        }
+    }
+
     LaunchedEffect(ownerKey) {
         try {
+            CompatPostWork.previous(ownerKey)?.let { previous ->
+                waitingForPreviousScreen = true
+                try { previous.join() } finally { waitingForPreviousScreen = false }
+            }
             val draft = if (isBuild) {
                 store.loadBuildDraft(board.key)?.let { build ->
                     CompatReplyDraft(
@@ -635,6 +681,7 @@ internal fun CompatPostScreen(
         } catch (failure: Throwable) {
             Logger.e("CompatPost", "下書きを読み込めませんでした", failure)
             message = "下書きを読み込めませんでした"
+            draftLoadFailed = true
         }
     }
     // Preferences can arrive one frame after the form's draft. Fill the field once in that
@@ -659,11 +706,11 @@ internal fun CompatPostScreen(
             repository?.getPostingCapabilities(board.originalUrl, if (isBuild) null else tab.threadNo)
         }.getOrNull() ?: defaultBoardPostingCapabilities(board.canonicalUrl)
     }
-    LaunchedEffect(name, email, subject, comment, deleteKey, attachment, attachmentLocator, draftLoaded) {
-        if (!draftLoaded) return@LaunchedEffect
+    LaunchedEffect(name, email, subject, comment, deleteKey, attachment, attachmentLocator, draftLoaded, draftLoadFailed) {
+        if (!draftLoaded && !draftLoadFailed) return@LaunchedEffect
         delay(300)
         try {
-            persistCurrentDraftOrDelete()
+            persistDraftOfThisForm()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -671,9 +718,13 @@ internal fun CompatPostScreen(
             message = "下書きを保存できませんでした"
         }
     }
-    LaunchedEffect(message) {
+    // As the app's own notices: a long one stays longer, and the time runs only while the app is unlocked (L51: every
+    // notice went after 2.5 seconds, also behind the lock screen).
+    val isAppUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
+    LaunchedEffect(message, isAppUnlocked) {
         val shownMessage = message ?: return@LaunchedEffect
-        delay(2_500)
+        if (!isAppUnlocked) return@LaunchedEffect
+        delay(compatAppNoticeMillis(shownMessage))
         if (message == shownMessage) message = null
     }
 
@@ -682,7 +733,8 @@ internal fun CompatPostScreen(
         onBack()
     }
 
-    fun clearAttachment(deleteContainer: Boolean = false) {
+    // Each attachment is kept in a folder of its own, which goes with it (L64: empty folders were left behind).
+    fun clearAttachment(deleteContainer: Boolean = true) {
         editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
         val locator = attachmentLocator
         attachmentLocator = null
@@ -706,14 +758,17 @@ internal fun CompatPostScreen(
         }
         val previousLocator = attachmentLocator
         savingAttachment = true
-        launchScreenAction {
+        // Kept on even when the screen closes meanwhile; the draft written then waits for it (L52).
+        attachmentSave[0] = (lastingScope ?: scope).launchCompatScreenAction("CompatPost", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }) {
             try { persistCompatPostAttachment(localFileSystem, ownerKey, selected)
                 .onSuccess { persistedLocator ->
                     editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
                     attachmentLocator = persistedLocator
                     attachment = selected
                     if (previousLocator != null && previousLocator != persistedLocator) {
-                        deleteCompatPostAttachment(localFileSystem, previousLocator)
+                        deleteCompatPostAttachment(localFileSystem, previousLocator, deleteContainer = true)
                     }
                 }
                 .onFailure { error ->
@@ -723,23 +778,24 @@ internal fun CompatPostScreen(
         }
     }
 
-    fun acceptAttachment(selected: ImageData) {
-        if (upsUploadRequested) {
-            upsUploadRequested = false
-            if (!isCompatUpsUploadSizeAllowed(selected.bytes.size)) {
-                message = "ファイルサイズ超過です\n3000KBまで"
-            } else {
-                upsAttachment = selected
-                // The reference dialog starts with an empty upload comment and
-                // the globally remembered deletion key, not the post body or a
-                // not-yet-saved edit in the posting form.
-                val initialFields = compatUpsUploadInitialFields(storedDeleteKey)
-                upsComment = initialFields.comment
-                upsDeleteKey = initialFields.deleteKey
-                upsDialogOpen = true
-            }
-            return
+    // The あぷ小 pick has pickers of its own: a pick left without a choice left an "あぷ小 mode" behind, which then
+    // took the next attachment, a shared image too, as an upload (L49).
+    fun acceptUpsAttachment(selected: ImageData) {
+        if (!isCompatUpsUploadSizeAllowed(selected.bytes.size)) {
+            message = "ファイルサイズ超過です\n3000KBまで"
+        } else {
+            upsAttachment = selected
+            // The reference dialog starts with an empty upload comment and
+            // the globally remembered deletion key, not the post body or a
+            // not-yet-saved edit in the posting form.
+            val initialFields = compatUpsUploadInitialFields(storedDeleteKey)
+            upsComment = initialFields.comment
+            upsDeleteKey = initialFields.deleteKey
+            upsDialogOpen = true
         }
+    }
+
+    fun acceptAttachment(selected: ImageData) {
         if (!isBuild && !postingCapabilities.replyAttachmentsAllowed && !selected.isHandwriting) {
             message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
             return
@@ -760,7 +816,7 @@ internal fun CompatPostScreen(
     }
 
     val clipboardPaste = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
-        onImage = { upsUploadRequested = false; acceptAttachment(it) }, onError = { message = it }
+        onImage = ::acceptAttachment, onError = { message = it }
     )
     fun pasteImage() {
         if (sending || savingAttachment || upsUploadInProgress || clipboardPaste.busy) return
@@ -785,8 +841,21 @@ internal fun CompatPostScreen(
         onImageSelected = ::acceptAttachment,
         onSelectionError = { message = it }
     )
+    val launchUpsPicker = rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
+        mimeType = "*/*",
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptUpsAttachment,
+        onSelectionError = { message = it }
+    )
+    val launchUpsChooser = rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.ALWAYS_ASK,
+        mimeType = "*/*",
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptUpsAttachment,
+        onSelectionError = { message = it }
+    )
     fun attachmentCommand(explicitChooser: Boolean = false) {
-        upsUploadRequested = false
         if (attachment != null) {
             clearAttachment()
         } else if (!isBuild && !postingCapabilities.replyAttachmentsAllowed) {
@@ -804,8 +873,7 @@ internal fun CompatPostScreen(
         } else if (upsUploadInProgress) {
             message = "アップロード中です"
         } else {
-            upsUploadRequested = true
-            if (explicitChooser) launchAttachmentChooser() else launchAttachmentPicker()
+            if (explicitChooser) launchUpsChooser() else launchUpsPicker()
         }
     }
 
@@ -820,14 +888,20 @@ internal fun CompatPostScreen(
         val validationError = postValidationError()
         if (validationError != null) {
             message = validationError
+        } else if (waitingForPreviousScreen) {
+            message = "前の書き込みの送信が終わるまでお待ちください"
         } else if (!sending && !savingAttachment && !clipboardPaste.busy) {
             // Claim the guard before the coroutine is dispatched, so a second
             // tap in the same frame cannot send the post twice (E-13).
             sending = true
-            launchScreenAction {
+            postSend[0] = (lastingScope ?: scope).launchCompatScreenAction("CompatPost", { failure ->
+                message = failure.toCompatUserMessage("操作に失敗しました")
+            }) {
                 // After a created thread the guard is kept until the screen is left, so a second
                 // tap cannot create the same thread again while the new tab is being opened.
                 var keepSendingGuard = false
+                // Counted for the whole send, also once the screen has gone (L157): links and notifications wait.
+                postingInFlight?.begin()
                 try {
                     val currentLocator = attachmentLocator
                     if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
@@ -835,7 +909,7 @@ internal fun CompatPostScreen(
                         attachment = null
                         attachmentLocator = null
                         sending = false
-                        return@launchScreenAction
+                        return@launchCompatScreenAction
                     }
                     runSuspendCatchingPreservingCancellation {
                         if (isBuild) {
@@ -868,6 +942,7 @@ internal fun CompatPostScreen(
                         }
                     }.onSuccess { responseId ->
                         draftLoaded = false
+                        draftLoadFailed = false
                         suspend fun finishLocalStep(operation: suspend () -> Unit) {
                             runSuspendCatchingPreservingCancellation { operation() }.onFailure { failure ->
                                 Logger.e("CompatPost", "Post accepted, but local cleanup failed", failure)
@@ -898,14 +973,19 @@ internal fun CompatPostScreen(
                         }
                         if (isBuild) {
                             keepSendingGuard = true
-                            onBuildCreated(responseId)
+                            if (screenPresent[0]) onBuildCreated(responseId)
                         } else {
                             onPostSent()
-                            leave()
+                            if (screenPresent[0]) leave()
                         }
-                    }.onFailure { postFailureMessage = compatPostFailureMessage(it, isBuild) }
+                    }.onFailure { failure ->
+                        val failureMessage = compatPostFailureMessage(failure, isBuild)
+                        if (screenPresent[0]) postFailureMessage = failureMessage
+                        else onLastingNotice?.invoke(failureMessage)
+                    }
                 } finally {
                     if (!keepSendingGuard) sending = false
+                    postingInFlight?.end()
                 }
             }
         }
@@ -930,12 +1010,29 @@ internal fun CompatPostScreen(
             sendConfirm = true
         }
     }
+    fun openHelp() {
+        if (!(draftLoaded || draftLoadFailed) || sending || savingAttachment || upsUploadInProgress || clipboardPaste.busy ||
+            pendingCompression != null || openingHelp
+        ) return
+        overflowOpen = false
+        openingHelp = true
+        launchScreenAction {
+            try {
+                // Help replaces this form, cancelling its delayed autosave. Persist the latest draft first (audit M44).
+                persistDraftOfThisForm()
+                keyboard?.hide()
+                onOpenHelp()
+            } finally {
+                openingHelp = false
+            }
+        }
+    }
     val postActions: Map<String, () -> Unit> = mapOf(
         "send" to ::requestSend,
         "attach" to { attachmentCommand() },
         "pallete" to {
             launchScreenAction {
-                persistCurrentDraftOrDelete()
+                persistDraftOfThisForm()
                 keyboard?.hide()
                 onOpenDrawing()
             }
@@ -967,7 +1064,7 @@ internal fun CompatPostScreen(
                 previousLocator != null &&
                 previousLocator != resetAttachmentLocator
             ) {
-                launchScreenAction { deleteCompatPostAttachment(fileSystem, previousLocator) }
+                launchScreenAction { deleteCompatPostAttachment(fileSystem, previousLocator, deleteContainer = true) }
             }
             // Removing or replacing the initial attachment deleted its file; restoring only the
             // in-memory bytes and the old locator would leave a post that cannot be sent.
@@ -1023,8 +1120,8 @@ internal fun CompatPostScreen(
 
     CompatPostImePolicyEffect()
     // WaitingDialogFragment in both reference APKs is explicitly non-cancelable.
-    // Consume the platform Back action while the network request is in flight.
-    PlatformBackHandler(enabled = sending || upsUploadInProgress) {}
+    // Consume Back while sending/uploading, or while saving the draft before Help replaces this screen.
+    PlatformBackHandler(enabled = sending || upsUploadInProgress || openingHelp) {}
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -1051,7 +1148,10 @@ internal fun CompatPostScreen(
                             ) {
                                 DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; pasteImage() })
                                 DropdownMenuItem(text = { Text("ツールバー編集") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onToolbarEdit() })
-                                DropdownMenuItem(text = { Text("ヘルプ") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onOpenHelp() })
+                                DropdownMenuItem(text = { Text("ヘルプ") },
+                                    enabled = (draftLoaded || draftLoadFailed) && !sending && !savingAttachment && !upsUploadInProgress &&
+                                        !clipboardPaste.busy && pendingCompression == null && !openingHelp,
+                                    colors = compatibilityMenuItemColors(), onClick = ::openHelp)
                             }
                         }
                     },
@@ -1293,7 +1393,7 @@ internal fun CompatPostScreen(
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             )
         }
-        if (sending || upsUploadInProgress) {
+        if (sending || upsUploadInProgress || openingHelp) {
             // WaitingDialogFragment is a real non-cancelable dialog in both
             // reference APKs. A plain overlay leaves Android's parent host
             // BackHandler able to win during a busy frame and close the post
@@ -1555,4 +1655,19 @@ private fun SecondaryToolbarOverflowPopup(
             }
         }
     }
+}
+
+/**
+ * The work a post screen leaves running when it goes (its last draft write, which waits for its attachment and its
+ * send), per form (L157, L168). The same form opened again waits for it before reading its draft. Main thread only.
+ */
+internal object CompatPostWork {
+    private val leaving = mutableMapOf<String, Job>()
+
+    fun leave(ownerKey: String, job: Job) {
+        leaving.entries.removeAll { !it.value.isActive }
+        leaving[ownerKey] = job
+    }
+
+    fun previous(ownerKey: String): Job? = leaving[ownerKey]?.takeIf { it.isActive }
 }

@@ -170,7 +170,8 @@ internal fun buildThreadScreenLoadBindings(
                             board = board,
                             overrideThreadUrl = shownResult.nextThreadUrlOverride,
                             usedOffline = shownResult.usedOffline,
-                            fromArchive = shownResult.fromArchive
+                            fromArchive = shownResult.fromArchive,
+                            confirmedGone = shownResult.remoteGone
                         ),
                         savedIndex,
                         savedOffset
@@ -290,7 +291,8 @@ internal fun buildThreadScreenLoadBindings(
                             board = board,
                             overrideThreadUrl = shownResult.nextThreadUrlOverride,
                             usedOffline = shownResult.usedOffline,
-                            fromArchive = shownResult.fromArchive
+                            fromArchive = shownResult.fromArchive,
+                            confirmedGone = shownResult.remoteGone
                         )
                     )
                 }

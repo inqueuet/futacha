@@ -295,7 +295,14 @@ internal fun CompatSettingsScreen(
      * The AppStateStore that owns the boards (ふたちゃ, ふたばー風); null where the compatibility store does (としあき(仮)).
      * The boards a restore brings are added to it, or the next board synchronisation drops them.
      */
-    restoreBoardsInto: com.valoser.futacha.shared.state.AppStateStore? = null
+    restoreBoardsInto: com.valoser.futacha.shared.state.AppStateStore? = null,
+    /**
+     * Outlives this screen (the app's): a restore, a font's copy or a cache clear goes on to its end when the screen is
+     * left, instead of being cancelled half way (L58). Null runs them on this screen, as before.
+     */
+    lastingScope: kotlinx.coroutines.CoroutineScope? = null,
+    /** The app's notice: a result that comes after this screen is left is told there (L58). */
+    onLastingNotice: (String) -> Unit = {}
 ) {
     com.valoser.futacha.shared.ui.privacy.PrivacySettingsExemption()
     if (path == "speech") {
@@ -326,26 +333,26 @@ internal fun CompatSettingsScreen(
     var autoSaveUsageBytes by remember(path) { mutableStateOf<Long?>(null) }
     var threadCacheUsageBytes by remember(path) { mutableStateOf<Long?>(null) }
     var confirmThreadCacheClear by remember(path) { mutableStateOf(false) }
-    var threadCacheClearInProgress by remember(path) { mutableStateOf(false) }
+    val threadCacheClearInProgress by CompatSettingsWork.threadCacheClear
     var attachmentCacheUsageBytes by remember(path) { mutableStateOf<Long?>(null) }
     var imageCacheUsage by remember(path) { mutableStateOf<CompatImageCacheUsage?>(null) }
-    var cacheLocationChangeInProgress by remember(path) { mutableStateOf(false) }
+    val cacheLocationChangeInProgress by CompatSettingsWork.cacheLocationChange
     var cacheAvailableBytes by remember(path) {
         mutableStateOf<Map<CompatibilityCacheLocation, Long?>>(emptyMap())
     }
     var confirmImageCacheClear by remember(path) { mutableStateOf(false) }
-    var imageCacheClearInProgress by remember(path) { mutableStateOf(false) }
+    val imageCacheClearInProgress by CompatSettingsWork.imageCacheClear
     var confirmAttachmentClear by remember(path) { mutableStateOf(false) }
-    var attachmentClearInProgress by remember(path) { mutableStateOf(false) }
+    val attachmentClearInProgress by CompatSettingsWork.attachmentClear
     var archiveReportEnabled by remember(path, preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY]) {
         mutableStateOf(preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF")
     }
     var archiveReportStats by remember(path) { mutableStateOf<ArchiveReportOutboxStats?>(null) }
-    var archiveReportSettingInProgress by remember(path) { mutableStateOf(false) }
+    val archiveReportSettingInProgress by CompatSettingsWork.archiveReportSetting
     var confirmArchiveReportClear by remember(path) { mutableStateOf(false) }
     var archiveReportInfoOpen by remember(path) { mutableStateOf(false) }
     var backupMessage by remember(path) { mutableStateOf<String?>(null) }
-    var backupInProgress by remember(path) { mutableStateOf(false) }
+    var backupInProgress by CompatSettingsWork.backup
     var restoreBackupKind by remember(path) { mutableStateOf("settings") }
     var backupDates by remember(path, preferences) {
         mutableStateOf(
@@ -369,15 +376,25 @@ internal fun CompatSettingsScreen(
             .onFailure { failure -> Logger.e("CompatSettings", "Failed to record backup date", failure) }
     }
 
-    fun launchSettingsSafely(block: suspend () -> Unit) {
-        scope.launch {
+    val screenPresent = remember { booleanArrayOf(true) }
+    DisposableEffect(Unit) { onDispose { screenPresent[0] = false } }
+    // Told on this screen, or, once it has been left, as the app's notice (L58).
+    fun tell(message: String, onScreen: (String) -> Unit) {
+        if (screenPresent[0]) onScreen(message) else onLastingNotice(message)
+    }
+    /** [running] (one of [CompatSettingsWork]) is set while [block] runs, and always cleared after it (L165). */
+    fun launchSettingsSafely(running: androidx.compose.runtime.MutableState<Boolean>? = null, block: suspend () -> Unit) {
+        running?.value = true
+        (lastingScope ?: scope).launch {
             try {
                 block()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
                 Logger.e("CompatSettings", "Settings operation failed", failure)
-                transientNotice = "操作に失敗しました: ${failure.message.orEmpty()}"
+                tell("操作に失敗しました: ${failure.message.orEmpty()}") { transientNotice = it }
+            } finally {
+                running?.value = false
             }
         }
     }
@@ -485,9 +502,7 @@ internal fun CompatSettingsScreen(
                     recordCompatBackupDate(backupKind)
                     mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
                 }
-                backupMessage = result.getOrElse { error ->
-                    compatBackupFailureMessage(backupKind, error)
-                }
+                tell(result.getOrElse { error -> compatBackupFailureMessage(backupKind, error) }) { backupMessage = it }
               } finally {
                 // A failure after the restore (e.g. saving the date) must not
                 // leave the restore buttons disabled.
@@ -598,10 +613,8 @@ internal fun CompatSettingsScreen(
                     // Saving a backup restores nothing; every other kind (settings, NG, the old app's files) can bring boards.
                     if (!kind.startsWith("save_")) mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
                 }
-                val message = result.getOrElse { error ->
-                    compatBackupFailureMessage(kind, error)
-                }
-                backupMessage = message
+                val message = result.getOrElse { error -> compatBackupFailureMessage(kind, error) }
+                if (message == null) backupMessage = null else tell(message) { backupMessage = it }
               } finally {
                 backupInProgress = false
               }
@@ -630,9 +643,9 @@ internal fun CompatSettingsScreen(
                     }.onSuccess {
                         customFontName = selected.fileName
                         savedValues = savedValues + ("dummyCustomFont" to selected.fileName)
-                        transientNotice = "アプリを再起動してください"
+                        tell("アプリを再起動してください") { transientNotice = it }
                     }.onFailure {
-                        infoDialog = "フォントのコピーに失敗しました"
+                        tell("フォントのコピーに失敗しました") { infoDialog = it }
                     }
                 }
             }
@@ -767,7 +780,7 @@ internal fun CompatSettingsScreen(
                         launchSettingsSafely { store.savePreference(key, enabled.toString()) }
                     })
                 }
-                Text("板が少ない時に下へ寄せます。並び順は変わりません。", Modifier.padding(horizontal = 16.dp))
+                Text(com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_NOTE, Modifier.padding(horizontal = 16.dp))
             }
             if (path == "thread") item(key = "thread-opening-summary") {
                 val key = com.valoser.futacha.shared.ui.board.THREAD_OPEN_SUMMARY_KEY
@@ -876,8 +889,7 @@ internal fun CompatSettingsScreen(
                             isMode -> modeDialog = true
                             isUpdateCheckToggle -> onUpdateCheckChanged(next)
                             isArchiveReportToggle && !archiveReportSettingInProgress -> {
-                                archiveReportSettingInProgress = true
-                                launchSettingsSafely {
+                                launchSettingsSafely(CompatSettingsWork.archiveReportSetting) {
                                     runSuspendCatchingPreservingCancellation {
                                         store.savePreference(
                                             ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY,
@@ -887,7 +899,6 @@ internal fun CompatSettingsScreen(
                                         archiveReportEnabled = next
                                         onArchiveReportEnabledChanged(next)
                                     }
-                                    archiveReportSettingInProgress = false
                                 }
                             }
                             isCacheToggle -> {
@@ -1103,8 +1114,7 @@ internal fun CompatSettingsScreen(
                 TextButton(
                     enabled = !threadCacheClearInProgress,
                     onClick = {
-                        threadCacheClearInProgress = true
-                        launchSettingsSafely {
+                        launchSettingsSafely(CompatSettingsWork.threadCacheClear) {
                             runSuspendCatchingPreservingCancellation {
                                 store.clearThreadSnapshotCache()
                             }
@@ -1114,7 +1124,6 @@ internal fun CompatSettingsScreen(
                                         store.threadSnapshotCacheUsageBytes()
                                     }.getOrNull()
                                 }
-                            threadCacheClearInProgress = false
                             confirmThreadCacheClear = false
                         }
                     }
@@ -1168,8 +1177,7 @@ internal fun CompatSettingsScreen(
                 TextButton(
                     enabled = !imageCacheClearInProgress,
                     onClick = {
-                        imageCacheClearInProgress = true
-                        launchSettingsSafely {
+                        launchSettingsSafely(CompatSettingsWork.imageCacheClear) {
                             val usage = withContext(AppDispatchers.io) {
                                 runSuspendCatchingPreservingCancellation {
                                     clearFutachaImageCaches(imageLoader, catalogImageLoader)
@@ -1183,7 +1191,6 @@ internal fun CompatSettingsScreen(
                                 }.getOrNull()
                             }
                             imageCacheUsage = usage
-                            imageCacheClearInProgress = false
                             confirmImageCacheClear = false
                         }
                     }
@@ -1206,13 +1213,11 @@ internal fun CompatSettingsScreen(
                 TextButton(
                     enabled = !attachmentClearInProgress,
                     onClick = {
-                        attachmentClearInProgress = true
-                        launchSettingsSafely {
+                        launchSettingsSafely(CompatSettingsWork.attachmentClear) {
                             fileSystem?.deleteRecursively("private/compat_post_attachments")
                             attachmentCacheUsageBytes = runSuspendCatchingPreservingCancellation {
                                 compatibilityAttachmentCacheUsageBytes(fileSystem)
                             }.getOrDefault(0L)
-                            attachmentClearInProgress = false
                             confirmAttachmentClear = false
                         }
                     }
@@ -1443,8 +1448,7 @@ internal fun CompatSettingsScreen(
                                         ) {
                                             backgroundAlwaysNotice = entry
                                         }
-                                        launchSettingsSafely {
-                                            if (cacheLocationEntry) cacheLocationChangeInProgress = true
+                                        launchSettingsSafely(CompatSettingsWork.cacheLocationChange.takeIf { cacheLocationEntry }) {
                                             runSuspendCatchingPreservingCancellation {
                                                 applyCompatCacheLocationChange(
                                                     preferenceKey = entry.preferenceKey,
@@ -1463,9 +1467,8 @@ internal fun CompatSettingsScreen(
                                                     }
                                                 )
                                             }.onFailure { failure ->
-                                                infoDialog = "設定の保存に失敗しました: ${failure.message.orEmpty()}"
+                                                tell("設定の保存に失敗しました: ${failure.message.orEmpty()}") { infoDialog = it }
                                             }
-                                            cacheLocationChangeInProgress = false
                                         }
                                     },
                                     onLongClick = {}
@@ -1587,13 +1590,9 @@ internal fun CompatSettingsScreen(
                                     }
                                     ptmtConfigured = false
                                 } else {
-                                    repository?.setCookie(
-                                        requestUrl = "https://www.2chan.net/",
-                                        name = "ptmt",
-                                        value = ptmtValue,
-                                        domain = "2chan.net",
-                                        expiresAtMillis = Clock.System.now().toEpochMilliseconds() + 200_261_632L
-                                    )
+                                    repository?.let {
+                                        saveCompatPtmtCookie(it, ptmtValue, Clock.System.now().toEpochMilliseconds())
+                                    }
                                     ptmtConfigured = true
                                 }
                                 transientNotice = notice
@@ -1744,8 +1743,10 @@ internal fun CompatHelpScreen(
     if (operationGuideOpen) com.valoser.futacha.shared.ui.board.ModeOperationGuideDialog(
         com.valoser.futacha.shared.compat.LocalExperienceProfileUiController.current.activeProfile,
         onDismiss = { operationGuideOpen = false })
+    // The mode's own scheme name when its theme gives one (L35: only としあき(仮)'s six schemes were matched).
+    val modeThemeName = com.valoser.futacha.shared.ui.board.LocalBugReportThemeName.current
     if (reportOpen) com.valoser.futacha.shared.ui.board.BugReportDialog(appVersion,
-        listOf("default" to "標準", "mono" to "モノクロ", "futaba" to "ふたば", "blue" to "ブルー", "pink" to "ピンク", "black" to "ブラック")
+        modeThemeName ?: listOf("default" to "標準", "mono" to "モノクロ", "futaba" to "ふたば", "blue" to "ブルー", "pink" to "ピンク", "black" to "ブラック")
             .firstOrNull { compatibilityPaletteFor(it.first).chrome == palette.chrome }?.second ?: "カスタム", onDismiss = { reportOpen = false })
     Scaffold(
         containerColor = palette.background,
@@ -1785,7 +1786,7 @@ internal fun CompatHelpScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
         TextButton(onClick = { operationGuideOpen = true }, modifier = Modifier.fillMaxWidth().testTag("help-operation-guide")) {
-            Text("操作ガイド：書き込み・添付・保存・戻る", color = palette.text)
+            Text("操作ガイド：書き込み・添付・保存・戻る", color = compatibilityHelpEntryColor(palette))
         }
         SearchableHelpContent(
             html = helpHtml,
@@ -1839,4 +1840,19 @@ private fun CompatPreferenceRow(
             )
         }
     }
+}
+
+/**
+ * What the shared settings screen has running (L165). Since L58 that work outlives the screen, so these are kept
+ * beside it rather than in it: the screen opened again shows 「削除中…」 / 「復元中…」 and does not start the same
+ * work a second time. Each is set when its work starts and cleared in its `finally`, so it is true only while the
+ * work runs.
+ */
+internal object CompatSettingsWork {
+    val backup = mutableStateOf(false)
+    val threadCacheClear = mutableStateOf(false)
+    val imageCacheClear = mutableStateOf(false)
+    val attachmentClear = mutableStateOf(false)
+    val cacheLocationChange = mutableStateOf(false)
+    val archiveReportSetting = mutableStateOf(false)
 }

@@ -102,6 +102,11 @@ private fun VideoPlayerContent(
     onMediaInfoKnown: (VideoMediaInfo) -> Unit,
     onPlaybackError: (VideoPlaybackError) -> Unit
 ) {
+    val unsupported = platformVideoPlaybackCapabilityError(videoUrl)
+    if (unsupported != null) {
+        UnsupportedVideoPlayerContent(videoUrl, unsupported, modifier, onStateChanged, onPlaybackError)
+        return
+    }
     var legacy by remember { mutableStateOf(source == null || !isSharedOriginalVideoUrl(videoUrl)) }
     var playback by remember { mutableStateOf<OriginalMediaPlayback?>(null) }
     var alive by remember { mutableStateOf(true) }
@@ -114,13 +119,23 @@ private fun VideoPlayerContent(
         var owned: OriginalMediaPlayback? = null
         try {
             stateCallback(VideoPlayerState.Buffering)
-            owned = requireNotNull(source).acquireForPlayback(originalVideoRequest(videoUrl))
-            withTimeout(20_000) { owned.info() }
-            playback = owned
+            val prepared = prepareVideoPlaybackResource(videoUrl) {
+                requireNotNull(source).acquireForPlayback(originalVideoRequest(videoUrl))
+            }
+            owned = prepared
+            val info = withTimeout(20_000) { prepared.info() }
+            prepareVideoPlaybackResource(videoUrl, info) { playback = prepared }
             // Completion registers this very revision for metadata, only if that setting is ON.
             // The native player reads the growing prefix concurrently and owns its own pin.
-            owned.complete().close()
+            prepared.complete().close()
             awaitCancellation()
+        } catch (unsupported: UnsupportedVideoPlayback) {
+            owned?.rejectAsUnsupported()
+            failed = true
+            if (alive) {
+                errorCallback(unsupported.error)
+                stateCallback(VideoPlayerState.Error)
+            }
         } catch (_: OriginalMediaCacheUnavailable) {
             // Only cache-open failures precede HTTP and permit the legacy player to fetch.
             legacy = true
@@ -144,6 +159,21 @@ private fun VideoPlayerContent(
             onMediaInfoKnown = { if (alive && !failed) onMediaInfoKnown(it) },
             onPlaybackError = { if (alive && !failed) errorCallback(it) })
     } else Box(modifier)
+}
+
+@Composable
+internal fun UnsupportedVideoPlayerContent(
+    videoUrl: String,
+    error: VideoPlaybackError,
+    modifier: Modifier,
+    onStateChanged: (VideoPlayerState) -> Unit,
+    onPlaybackError: (VideoPlaybackError) -> Unit
+) {
+    LaunchedEffect(videoUrl, error) {
+        onPlaybackError(error)
+        onStateChanged(VideoPlayerState.Error)
+    }
+    Box(modifier)
 }
 
 @Composable

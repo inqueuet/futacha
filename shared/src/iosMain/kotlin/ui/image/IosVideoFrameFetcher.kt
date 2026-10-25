@@ -71,7 +71,10 @@ internal class IosVideoFrameFetcher(
         val extension = url.pathExtension?.lowercase().orEmpty()
         val data = when (extension) {
             "webm" -> createCachedWebKitThumbnail(url, options, webmPlaybackAvailable)
-            else -> createAvFoundationThumbnail(url, options)
+            // AVFoundation's remote frame generation includes its range reads. Keep
+            // that native lifetime bounded; ordinary still-image network fetches
+            // never enter this budget. A low-RAM video owns only one general slot.
+            else -> options.withIosImageProcessingPermit { createAvFoundationThumbnail(url, options) }
         }
         return SourceFetchResult(
             source = createImageSource(
@@ -100,7 +103,6 @@ internal class IosVideoFrameFetcher(
 }
 
 private val IOS_VIDEO_THUMBNAIL_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm")
-private val webKitThumbnailPriorityGate = VideoThumbnailPriorityGate()
 private val webKitThumbnailCacheMutex = Mutex()
 private val webKitThumbnailCache = LinkedHashMap<String, NSData>()
 private var webKitThumbnailCacheBytes = 0L
@@ -196,11 +198,11 @@ private suspend fun createCachedWebKitThumbnail(
     }
     // A PNG cached by another session is still usable; do not start WebKit decoding on iOS 15/16.
     check(playbackAvailable()) { IOS_WEBM_PREVIEW_UNAVAILABLE }
-    return webKitThumbnailPriorityGate.withPermit(options.videoThumbnailRequestPriority()) {
-        readCachedWebKitThumbnail(cacheKey)?.let { return@withPermit it }
+    return options.withIosImageProcessingPermit(exclusiveWebKit = true) {
+        readCachedWebKitThumbnail(cacheKey)?.let { return@withIosImageProcessingPermit it }
         readDiskCachedWebKitThumbnail(cacheKey)?.let { data ->
             rememberWebKitThumbnail(cacheKey, data)
-            return@withPermit data
+            return@withIosImageProcessingPermit data
         }
         createWebKitThumbnail(
             url = url,

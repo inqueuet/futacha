@@ -1,6 +1,10 @@
 package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
+import com.valoser.futacha.shared.compat.CompatNgKind
+import com.valoser.futacha.shared.compat.CompatNgRule
+import com.valoser.futacha.shared.compat.buildCompatThreadNgRuleIndex
+import com.valoser.futacha.shared.compat.filterCompatThreadPosts
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -81,6 +85,74 @@ class CompatReadAloudBatchSupportTest {
             IllegalStateException("日本語TTSが有効になっていません")
                 .toCompatUserMessage("読み上げできませんでした")
         )
+    }
+
+    @Test
+    fun speechUsesTheSameWordIdNumberImageAndAiFilteringAsTheDisplayedList() {
+        val posts = listOf(
+            post("1", "表示する本文"),
+            post("2", "禁止語を含む本文"),
+            post("3", "IDで隠す本文").copy(posterId = "AbCd"),
+            post("4", "番号で隠す本文"),
+            post("5", "画像で隠す本文").copy(imageUrl = "https://example.com/hidden.jpg"),
+            post("6", "AIで隠す本文"),
+            post("7", "類似画像で隠す本文"),
+            post("8", "最後の本文")
+        )
+        val rules = listOf(
+            CompatNgRule("word", CompatNgKind.THREAD_WORD, "thread", "禁止語", 0),
+            CompatNgRule("id", CompatNgKind.THREAD_POSTER_ID, "thread", "AbCd", 0),
+            CompatNgRule("number", CompatNgKind.THREAD_POST_NO, "thread", "4", 0),
+            CompatNgRule("image", CompatNgKind.THREAD_IMAGE, "thread", "https://example.com/hidden.jpg", 0)
+        )
+        val visible = filterCompatThreadPosts(
+            posts, true, buildCompatThreadNgRuleIndex(rules, "thread"),
+            aiHiddenPostNos = setOf("6", "7")
+        )
+        assertEquals(listOf("1", "8"), visible.map { it.postNo })
+        val byNo = visible.associateBy { it.postNo }
+        val first = buildCompatReadAloudBatch(posts, 0, 0, visiblePostsByNo = byNo)
+        val last = buildCompatReadAloudBatch(posts, first.nextPostIndex, 0, visiblePostsByNo = byNo)
+        assertEquals("表示する本文", first.text)
+        assertEquals("最後の本文", last.text)
+        assertEquals(posts.size, last.nextPostIndex)
+    }
+
+    @Test
+    fun deletedAndIsolatedBodiesAreNotReadWhenOnlyTheirPlaceholderIsDisplayed() {
+        val posts = listOf(
+            post("1", "非表示の削除本文").copy(isDeleted = true),
+            post("2", "非表示の隔離本文").copy(isIsolated = true),
+            post("3", "通常の本文")
+        )
+        val visible = presentCompatPostsForDeletedVisibility(posts, showDeletedContent = false)
+        val batch = buildCompatReadAloudBatch(posts, 0, 0, visiblePostsByNo = visible.associateBy { it.postNo })
+        assertEquals("通常の本文", batch.text)
+        assertEquals(posts.size, batch.nextPostIndex)
+        val shown = buildCompatReadAloudBatch(posts, 0, 0, visiblePostsByNo = posts.associateBy { it.postNo })
+        assertEquals("非表示の削除本文", shown.text)
+    }
+
+    @Test
+    fun noVisiblePostsProducesNoUtteranceAndAdvancesToTheEnd() {
+        val posts = listOf(post("1", "隠した本文"))
+        val batch = buildCompatReadAloudBatch(posts, 0, 0, visiblePostsByNo = emptyMap())
+        assertEquals("", batch.text)
+        assertEquals(posts.size, batch.nextPostIndex)
+    }
+
+    @Test
+    fun hidingALongPostBetweenChunksSkipsItsRemainingBody() {
+        val posts = listOf(post("1", "あ".repeat(7100)), post("2", "次の本文"))
+        val first = buildCompatReadAloudBatch(posts, 0, 0, visiblePostsByNo = posts.associateBy { it.postNo })
+        assertEquals(3000, first.nextCharacterOffset)
+        val next = buildCompatReadAloudBatch(
+            posts, first.nextPostIndex, first.nextCharacterOffset,
+            visiblePostsByNo = mapOf("2" to posts[1])
+        )
+        assertEquals("次の本文", next.text)
+        assertEquals(posts.size, next.nextPostIndex)
+        assertEquals(0, next.nextCharacterOffset)
     }
 
     private fun post(no: String, body: String) = CompatPostSnapshot(

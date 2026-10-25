@@ -134,4 +134,11 @@ class FutaberPostSupportTest {
         assertFalse(futaberHeldTextBelongsTo(other.draftKey, sent))
         assertFalse(futaberHeldTextBelongsTo(null, sent))
     }
+
+    /** L111: an AI draft is refused while any post is sent, even to the same target a person could still open. */
+    @Test fun anAiDraftWaitsForThePostInFlightWhateverItsTarget() {
+        val inFlight = "thread:b:100"
+        assertTrue(futaberAiDraftRefusedWhileSending(inFlight))
+        assertFalse(futaberAiDraftRefusedWhileSending(null))
+    }
 }

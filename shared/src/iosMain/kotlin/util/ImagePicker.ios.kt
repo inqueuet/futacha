@@ -1049,6 +1049,16 @@ suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): Sav
     }
 }
 
+/** The iOS 16 `NSFileProviderManager` method that finds a provider's root folder. */
+internal const val FILE_PROVIDER_USER_VISIBLE_URL_SELECTOR = "getUserVisibleURLForItemIdentifier:completionHandler:"
+
+/**
+ * Whether [manager] has [FILE_PROVIDER_USER_VISIBLE_URL_SELECTOR] (iOS 16 and later). Asked of the object rather than
+ * of the OS version, which an iPhone app on a Mac reports as the macOS one (L77).
+ */
+internal fun fileProviderRootUrlLookupAvailable(manager: NSObject): Boolean =
+    manager.respondsToSelector(NSSelectorFromString(FILE_PROVIDER_USER_VISIBLE_URL_SELECTOR))
+
 private fun resolvePreferredProviderUrl(
     providerIdentifier: String?,
     completion: (NSURL?) -> Unit
@@ -1070,7 +1080,9 @@ private fun resolvePreferredProviderUrl(
             return@getDomainsWithCompletionHandler
         }
         val manager = NSFileProviderManager.managerForDomain(domain)
-        if (manager == null) {
+        // getUserVisibleURLForItemIdentifier is iOS 16+; on iOS 15 the call raises an Objective-C exception that
+        // runCatching cannot catch and the app ends (L75). Without it the picker opens at its default location.
+        if (manager == null || !fileProviderRootUrlLookupAvailable(manager)) {
             dispatch_async(dispatch_get_main_queue()) {
                 completion(null)
             }

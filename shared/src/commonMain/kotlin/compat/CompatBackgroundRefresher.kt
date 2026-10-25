@@ -47,6 +47,14 @@ data class CompatBackgroundRefreshResult(
 )
 
 /**
+ * Added to a told result when the time ran out before every step was done. Those steps are not failures, but every screen
+ * other than the iOS manual refresh then told "失敗0件" (and "巡回完了") as if all had been checked (re-audit L81). The
+ * cursors make the next run continue there.
+ */
+val CompatBackgroundRefreshResult.unfinishedNotice: String
+    get() = if (unfinished > 0) "。時間内に確認しきれなかった分は次回確認します" else ""
+
+/**
  * The [refreshCompatTabsInBackground] budget for a caller that cuts the run off at [timeoutMillis] (audit M23). Without a
  * budget the watch phase, which runs first, had no deadline: with many watched boards it used up the outer timeout and the
  * tabs' reply counts were never updated, nor the check times stored. A tenth of the time (30 s at most) is kept for the

@@ -1,6 +1,7 @@
 @file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 package com.valoser.futacha.shared.network
 
+import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,17 +23,7 @@ internal class IosPostingBrowser : PostingBrowser {
         withContext(Dispatchers.Main) {
             val result = CompletableDeferred<String>()
             val view = WKWebView(CGRectMake(0.0, 0.0, 1.0, 1.0), WKWebViewConfiguration())
-            val delegate = object : NSObject(), WKNavigationDelegateProtocol {
-                override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
-                    webView.evaluateJavaScript(script) { value, error ->
-                        if (error != null || value !is String) result.completeExceptionally(NetworkException("投稿準備の実行に失敗しました"))
-                        else result.complete(value)
-                    }
-                }
-                override fun webView(webView: WKWebView, didFailProvisionalNavigation: WKNavigation?, withError: NSError) {
-                    result.completeExceptionally(NetworkException("投稿準備画面を読み込めませんでした"))
-                }
-            }
+            val delegate = IosPostingNavigationDelegate(script, result)
             try {
                 activeNavigationDelegate = delegate
                 view.navigationDelegate = delegate
@@ -44,5 +35,38 @@ internal class IosPostingBrowser : PostingBrowser {
                 activeNavigationDelegate = null
             }
         }
+    }
+}
+
+/**
+ * Runs the preparation script once the page has loaded and ends the wait as soon as WebKit reports that it cannot
+ * finish: a page that fails to load before or after it was committed, and a web content process that ended (low
+ * memory, a crash). Without the latter two the person waited the whole timeout and was told it took too long
+ * (audit L76). Nothing is sent in any of these cases.
+ */
+internal class IosPostingNavigationDelegate(
+    private val script: String,
+    private val result: CompletableDeferred<String>
+) : NSObject(), WKNavigationDelegateProtocol {
+    @ObjCSignatureOverride
+    override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
+        webView.evaluateJavaScript(script) { value, error ->
+            if (error != null || value !is String) result.completeExceptionally(NetworkException("投稿準備の実行に失敗しました"))
+            else result.complete(value)
+        }
+    }
+
+    @ObjCSignatureOverride
+    override fun webView(webView: WKWebView, didFailProvisionalNavigation: WKNavigation?, withError: NSError) {
+        result.completeExceptionally(NetworkException("投稿準備画面を読み込めませんでした"))
+    }
+
+    @ObjCSignatureOverride
+    override fun webView(webView: WKWebView, didFailNavigation: WKNavigation?, withError: NSError) {
+        result.completeExceptionally(NetworkException("投稿準備画面を読み込めませんでした"))
+    }
+
+    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
+        result.completeExceptionally(NetworkException("投稿の準備中にブラウザー部品が停止したため送信していません"))
     }
 }

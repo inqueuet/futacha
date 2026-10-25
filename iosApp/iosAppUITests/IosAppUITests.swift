@@ -5404,6 +5404,45 @@ final class IosAppUITests: XCTestCase {
         add(screenshot)
     }
 
+    /** L141: a long-pressed thread image saved to Photos reports in the workspace notice until it is closed. */
+    func testToshiakiLongPressPhotoSaveResultStaysUntilClosed() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let pendingAllow = springboard.buttons["許可"].firstMatch
+        if pendingAllow.exists { pendingAllow.tap() }
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "toshiaki_compat", "-experience.profile_generation", "2303", "-update_check_enabled", "false", "-privacy_filter_enabled", "false"]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        board.tap()
+        let thread = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.tap()
+        let top = app.buttons["ページ最上部へ"].firstMatch
+        XCTAssertTrue(top.waitForExistence(timeout: 10))
+        top.tap()
+        let image = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "No.", "の画像")).firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 10), app.debugDescription)
+        image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.2)
+        let save = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像を保存する")).firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10), app.debugDescription)
+        save.tap()
+        let photos = app.buttons["写真に保存"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 10), app.debugDescription)
+        photos.tap()
+        let allow = springboard.buttons.matching(NSPredicate(format: "label == %@ OR label == %@ OR label CONTAINS %@", "許可", "Allow", "Add Photos Only")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let done = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "写真に保存しました")).firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 20), app.debugDescription)
+        // The former thread error text disappeared after 3 seconds and had no close action.
+        Thread.sleep(forTimeInterval: 5)
+        XCTAssertTrue(done.exists, "the photo save result must still be readable after 5 seconds")
+        let close = app.buttons["閉じる"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5), app.debugDescription)
+        close.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5), app.debugDescription)
+    }
+
     func testFutachaPrivacyFilterAndPrivateTitle() {
         verifyPrivacyDisplay(compat: false)
     }

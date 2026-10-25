@@ -48,6 +48,28 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class HistoryRefresherTest {
+    /** L29: a row an older version made for a saved thread whose board is gone (saved.invalid) is kept, not fetched. */
+    @Test
+    fun refresh_keepsButNeverFetchesTheSavedThreadPlaceholderRows() = runBlocking {
+        val board = boardSummary()
+        val placeholder = historyEntry(threadId = "123", title = "saved")
+            .copy(boardId = "gone", boardUrl = "https://saved.invalid/gone")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(placeholder))
+        val repository = FakeHistoryBoardRepository()
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(placeholder))
+
+        assertEquals(0, repository.getThreadCalls)
+        assertEquals(listOf(placeholder), store.history.first())
+    }
+
     @Test
     fun refresh_updatesHistoryEntryFromFetchedThread() = runBlocking {
         val board = boardSummary()
@@ -81,6 +103,43 @@ class HistoryRefresherTest {
         assertEquals("board-new", updated.boardName)
         assertEquals(2, updated.replyCount)
         assertEquals(1, repository.getThreadCalls)
+    }
+
+    /** L88: the refresh writes from the row it read at the start; a post made meanwhile keeps its mark and time. */
+    @Test
+    fun refresh_keepsASelfPostMadeWhileTheThreadWasBeingFetched() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        var postedAt: Long? = null
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 3
+            )
+            onGetThread = {
+                store.addSelfPostIdentifier(threadId = "123", identifier = "3", boardId = board.id)
+                postedAt = store.history.first().single().lastSelfPostEpochMillis
+            }
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals(3, updated.replyCount)
+        assertTrue(postedAt != null)
+        assertTrue(updated.hasSelfPost)
+        assertEquals(postedAt, updated.lastSelfPostEpochMillis)
     }
 
     @Test
@@ -532,9 +591,11 @@ class HistoryRefresherTest {
         val updated = store.history.first().single()
         assertEquals("archive title", updated.title)
         assertEquals("archive-thumb", updated.titleImageUrl)
-        assertEquals("archive-board", updated.boardName)
-        assertEquals("https://may.inqueuet.com/b", updated.boardUrl)
+        // L90: the row stays on its own board, not the archive's address and page title.
+        assertEquals("board-old", updated.boardName)
+        assertEquals(entry.boardUrl, updated.boardUrl)
         assertTrue(updated.isAutoRefreshDisabled)
+        assertEquals(true, updated.threadStatus?.isDead)
         assertEquals(1, repository.getThreadCalls)
         assertEquals(1, repository.getThreadByUrlCalls)
     }
@@ -571,8 +632,91 @@ class HistoryRefresherTest {
 
         val updated = store.history.first().single()
         assertEquals("archive title", updated.title)
-        assertEquals("https://may.inqueuet.com/b", updated.boardUrl)
+        assertEquals("https://may.2chan.net/b/futaba.php", updated.boardUrl)
         assertEquals(1, repository.getThreadByUrlCalls)
+    }
+
+    /**
+     * L90: a row without a board id is found by its board address; while the archive's address was written
+     * over it the update could not find the row and was dropped, so the fall mark was never stored.
+     */
+    @Test
+    fun refresh_archiveFallbackMarksARowWithoutBoardIdAsFallen() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "557", boardId = "")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "557"] = NetworkException("gone", statusCode = 404)
+            threadPagesByUrl["https://may.inqueuet.com/b/res/557.htm"] = threadPage(
+                threadId = "557",
+                boardTitle = "archive-board",
+                titleLine = "archive title",
+                thumbnailUrl = "archive-thumb",
+                replyCount = 4
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createThreadHtmlClient("<html></html>"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals(1, repository.getThreadByUrlCalls)
+        assertEquals("archive title", updated.title)
+        assertEquals(4, updated.replyCount)
+        assertEquals(entry.boardUrl, updated.boardUrl)
+        assertTrue(updated.isAutoRefreshDisabled)
+        assertEquals(true, updated.threadStatus?.isDead)
+    }
+
+    /** L90 (decided): rows an earlier archive refresh pointed at the archive's board are put back on their own. */
+    @Test
+    fun refresh_repairsRowsAnArchiveRefreshPointedAtTheArchiveBoard() = runBlocking {
+        val board = boardSummary()
+        val fallen = com.valoser.futacha.shared.model.ThreadStatus(isDead = true)
+        val registered = historyEntry(threadId = "558", boardName = "archive-board", boardUrl = "https://may.inqueuet.com/b")
+            .copy(isAutoRefreshDisabled = true, threadStatus = fallen)
+        val unregistered = historyEntry(
+            threadId = "559",
+            boardId = "gone",
+            boardName = "archive-gone",
+            boardUrl = "https://img.inqueuet.com/b"
+        ).copy(isAutoRefreshDisabled = true, threadStatus = fallen)
+        val untouched = historyEntry(threadId = "560")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(registered, unregistered, untouched))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "560"] = threadPage(
+                threadId = "560",
+                boardTitle = "board-new",
+                titleLine = "title-560",
+                thumbnailUrl = "thumb-old",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(registered, unregistered, untouched)
+        )
+
+        val byThread = store.history.first().associateBy { it.threadId }
+        assertEquals(registered.copy(boardUrl = board.url, boardName = board.name), byThread.getValue("558"))
+        assertEquals(unregistered.copy(boardUrl = "https://img.2chan.net/b"), byThread.getValue("559"))
+        assertEquals(untouched.boardUrl, byThread.getValue("560").boardUrl)
+        assertEquals(listOf("560"), repository.fetchedThreadIds)
     }
 
     @Test

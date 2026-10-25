@@ -135,14 +135,14 @@ private val FutaberThreadRefSaver = Saver<FutaberThreadRef?, List<String>>(
         if (ref == null) emptyList()
         else listOf(
             ref.boardId, ref.threadId, ref.title, ref.thumbnailUrl, ref.replyCount.toString(),
-            ref.seenCount.toString(), ref.resumePostId, ref.resumeIndex.toString(), ref.resumeOffset.toString()
+            ref.seenCount.toString(), ref.resumePostId, ref.resumeIndex.toString(), ref.resumeOffset.toString(), ref.seenLastPostId.orEmpty()
         )
     },
     restore = { parts ->
-        if (parts.size != 9) null
+        if (parts.size !in 9..10) null
         else FutaberThreadRef(
             parts[0], parts[1], parts[2], parts[3], parts[4].toIntOrNull() ?: 0,
-            parts[5].toIntOrNull() ?: 0, parts[6], parts[7].toIntOrNull() ?: 0, parts[8].toIntOrNull() ?: 0
+            parts[5].toIntOrNull() ?: 0, parts[6], parts[7].toIntOrNull() ?: 0, parts[8].toIntOrNull() ?: 0, parts.getOrNull(9)?.takeIf { it.isNotEmpty() }
         )
     }
 )
@@ -736,6 +736,7 @@ internal fun FutaberApp(
         if (pruned != tabKeys) editTabs(false) { futaberPruneTabsOfRemovedBoards(it, boards) }
     }
     // Opening a screen (from the catalog, a tab or the history) is what writes the history.
+    val viewedLastPostIds = remember { mutableMapOf<FutaberTabKey?, Pair<Int, String>>() }
     val openRef: (BoardSummary, FutaberThreadRef) -> Unit = { target, ref ->
         val existing = findFutaberHistoryEntry(history, target, ref.threadId)
         selectedBoardId = target.id
@@ -745,7 +746,7 @@ internal fun FutaberApp(
         // with background refreshes and the other modes, and would leave nothing marked as new.
         openThread = futaberRefWithHistory(
             ref, existing, futaberSeenCountForBoard(preferences[FutaberPreferenceKeys.SEEN], target, ref.threadId)
-        )
+        ).copy(seenLastPostId = futaberSeenBoundaryForBoard(preferences[FutaberPreferenceKeys.SEEN], target, ref.threadId)?.lastPostId)
         managePanelOpen = false
         writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, target.id)
         scope.launch {
@@ -839,9 +840,11 @@ internal fun FutaberApp(
         if (target != null && repo != null && fileSystem != null) scope.launch {
             try {
                 val metadata = repo.loadThreadMetadata(saved.threadId, saved.boardId).getOrThrow()
-                val page = metadata.toThreadPage(
-                    fileSystem, (saveLocation as? SaveLocation.Path)?.path ?: MANUAL_SAVE_DIRECTORY, saveLocation
-                )
+                // Every post is converted and the quotes rebuilt: off the main thread, as としあき(仮) does (L101).
+                val location = saveLocation
+                val page = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                    metadata.toThreadPage(fileSystem, (location as? SaveLocation.Path)?.path ?: MANUAL_SAVE_DIRECTORY, location)
+                }
                 offlineView = FutaberOfflineView(target, futaberRefForSaved(saved, target), page)
                 managePanelOpen = false
             } catch (cancelled: CancellationException) {
@@ -1034,7 +1037,10 @@ internal fun FutaberApp(
                         writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, selected.id)
                     },
                     onAddBoard = { name, url -> editBoards { futaberAddBoard(it, name, url) } },
-                    onDeleteBoard = { target -> editBoards { futaberDeleteBoard(it, target.id) } },
+                    onDeleteBoard = { target ->
+                        editBoards { futaberDeleteBoard(it, target.id) }
+                        if (favorites.any { it.boardId == target.id }) editFavorites { futaberFavoritesWithoutBoard(it, target.id) }
+                    },
                     onMoveBoard = { target, up -> editBoards { futaberMoveBoard(it, target.id, up) } },
                     onRenameBoard = { target, name -> editBoards { futaberRenameBoard(it, target.id, name) } },
                     onBulkAdd = bulkAddBoards
@@ -1069,8 +1075,8 @@ internal fun FutaberApp(
                             ngWords = ngWords,
                             ngHeaders = ngHeaders,
                             ngRules = ngRules,
-                            onChangeNgWords = { launchStore("save NG words") { stateStore.setNgWords(it) } },
-                            onChangeNgHeaders = { launchStore("save NG headers") { stateStore.setNgHeaders(it) } },
+                            onChangeNgWords = { edit -> launchStore("save NG words") { stateStore.updateNgWords(edit) } },
+                            onChangeNgHeaders = { edit -> launchStore("save NG headers") { stateStore.updateNgHeaders(edit) } },
                             // A saved copy is not a visit: nothing is written to the history or the reading position.
                             onPageLoaded = {},
                             onScrollSettled = { _, _, _, _ -> },
@@ -1088,8 +1094,9 @@ internal fun FutaberApp(
                         onOpenSettings = { settingsOpen = true }
                     )
                     thread != null -> FutaberThreadScreen(
-                        initialKnownPostCount = com.valoser.futacha.shared.ui.board.knownViewedPostCount(
-                            history.firstOrNull { it.boardId == board.id && it.threadId == thread.threadId }),
+                        initialKnownPostCount = thread.seenCount.takeIf { it > 0 },
+                        initialKnownLastPostId = thread.seenLastPostId ?: history.firstOrNull { it.boardId == board.id && it.threadId == thread.threadId }
+                            ?.lastViewedSnapshot?.takeIf { it.postCount == thread.seenCount }?.lastPostId,
                         board = board,
                         ref = thread,
                         repository = if (board.isMockBoard()) mockRepository else threadRepository,
@@ -1130,11 +1137,18 @@ internal fun FutaberApp(
                         ngWords = ngWords,
                         ngHeaders = ngHeaders,
                         ngRules = ngRules,
-                        onChangeNgWords = { launchStore("save NG words") { stateStore.setNgWords(it) } },
-                        onChangeNgHeaders = { launchStore("save NG headers") { stateStore.setNgHeaders(it) } },
+                        onChangeNgWords = { edit -> launchStore("save NG words") { stateStore.updateNgWords(edit) } },
+                        onChangeNgHeaders = { edit -> launchStore("save NG headers") { stateStore.updateNgHeaders(edit) } },
                         onPageLoaded = { posts ->
+                            viewedLastPostIds.clear()
+                            posts.lastOrNull()?.id?.let { viewedLastPostIds[openKey] = posts.size to it }
                             launchStore("update history after load") {
                                 stateStore.updateHistory { futaberHistoryAfterLoad(it, board.id, thread.threadId, posts) }
+                            }
+                        },
+                        onConfirmedGone = {
+                            launchStore("mark the thread fallen") {
+                                stateStore.updateHistory { futaberHistoryMarkFallen(it, board.id, thread.threadId) }
                             }
                         },
                         onLivePageConfirmed = {
@@ -1151,7 +1165,7 @@ internal fun FutaberApp(
                             // screen is left): this is the count the next visit marks new posts from.
                             // (A value that is already stored is not written again.)
                             editPreference(FutaberPreferenceKeys.SEEN) { stored ->
-                                futaberSeenCountsAfterForBoard(stored, board, thread.threadId, total)
+                                futaberSeenCountsAfterForBoard(stored, board, thread.threadId, total, viewedLastPostIds[openKey]?.takeIf { it.first == total }?.second)
                             }
                             launchStore("save reading position") {
                                 stateStore.updateHistoryScrollPositionImmediately(
@@ -1453,6 +1467,7 @@ internal fun FutaberApp(
                                     when (target) {
                                         is FutaberPostTarget.Reply -> threadRefreshSignal += 1
                                         is FutaberPostTarget.CreateThread -> {
+                                            if (board?.id == target.boardId) catalogView.afterThreadCreated()
                                             catalogRefreshSignal += 1
                                             // The new thread opens at once when the server named it.
                                             if (!posted.isNullOrBlank()) {
@@ -1549,7 +1564,7 @@ internal fun FutaberApp(
                     openPost(target, comment)
                     if (subject.isNotEmpty()) postSubject = subject
                 },
-                draftRefused = { target -> futaberPostRefusedWhileSending(postInFlight, target) },
+                draftRefused = { _ -> futaberAiDraftRefusedWhileSending(postInFlight) },
                 savedRepository = savedRepository,
                 onSavedChanged = { savedTick += 1 }
             ),
@@ -1599,7 +1614,7 @@ internal fun FutaberApp(
                 imageNgRules = imageNgRules,
                 threadDetailRules = threadDetailRules,
                 // Worked out only when the list is opened (it keys every history row).
-                threadNgScopeTitles = { futaberThreadNgScopeTitles(history, boards) },
+                threadNgScopeTitles = { wanted -> futaberThreadNgScopeTitles(history, boards, wanted) },
                 onDeleteNgRule = deleteNgRule,
                 // Each edit is applied to the list stored at that moment, so two quick "×" both count.
                 onEditCatalogNgWords = { edit -> launchStore("save catalog NG words") { stateStore.updateCatalogNgWords(edit) } },

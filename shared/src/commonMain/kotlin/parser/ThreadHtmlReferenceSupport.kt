@@ -29,6 +29,11 @@ private data class ThreadQuoteLineResolution(
     val isExplicit: Boolean
 )
 
+private data class ThreadQuoteSourceContext(
+    val candidates: Set<String>,
+    val hasRequotedLine: Boolean
+)
+
 private data class ThreadLineTargets(
     val plain: MutableSet<String> = mutableSetOf(),
     val quoted: MutableSet<String> = mutableSetOf(),
@@ -69,13 +74,23 @@ internal fun buildThreadReferenceData(
 
         val lines = decodeHtmlEntities(stripTags(post.messageHtml)).lines()
         if (lines.isEmpty()) continue
+        val quoteContexts = if (lines.any { threadQuoteDepth(it.trimStart()) > 1 }) {
+            buildThreadQuoteSourceContexts(lines, messageLineIndex, config, startedAt)
+        } else emptyArray()
+        if (quoteContexts == null) {
+            timedOut = true
+            break
+        }
 
-        var quoteBlockDepth: Int? = null
+        // The shallowest depth of each line's whole quote block, looked at before the anchors are judged (L85: a running
+        // minimum made an anchor direct when a shallower line of the same block came after it).
+        val blockDepths = threadQuoteBlockDepths(lines, config)
         val postReferences = mutableListOf<QuoteReference>()
         val referencedTargets = mutableSetOf<String>()
         val pendingContentLines = mutableListOf<String>()
         var pendingContentTargets: Set<String>? = null
         var isContentBlockInvalid = false
+        var pendingContentContext: ThreadQuoteSourceContext? = null
 
         fun flushPendingContentBlock() {
             val targets = pendingContentTargets
@@ -84,17 +99,24 @@ internal fun buildThreadReferenceData(
                 targets != null &&
                 targets.isNotEmpty()
             ) {
+                val replyTargets = if (pendingContentContext?.hasRequotedLine == true) {
+                    pendingContentContext?.candidates?.singleOrNull()
+                        ?.takeIf { it in targets }?.let(::setOf).orEmpty()
+                } else targets
                 postReferences.add(
                     QuoteReference(
                         text = pendingContentLines.joinToString("\n").trim(),
-                        targetPostIds = targets.toList()
+                        targetPostIds = targets.toList(),
+                        isDirectReply = replyTargets == targets,
+                        replyTargetPostIds = replyTargets.toList()
                     )
                 )
-                referencedTargets += targets
+                referencedTargets += replyTargets
             }
             pendingContentLines.clear()
             pendingContentTargets = null
             isContentBlockInvalid = false
+            pendingContentContext = null
         }
 
         var lineIndex = 0
@@ -111,12 +133,10 @@ internal fun buildThreadReferenceData(
             if (trimmedLine.isBlank()) continue
             if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
                 flushPendingContentBlock()
-                quoteBlockDepth = null
                 continue
             }
             val depth = threadQuoteDepth(trimmedLine)
-            quoteBlockDepth = minOf(quoteBlockDepth ?: depth, depth)
-            val isDirectAnchor = depth <= quoteBlockDepth
+            val isDirectAnchor = threadQuoteAnchorDepth(trimmedLine, config) <= blockDepths[lineIndex - 1]
 
             val resolution = resolveThreadQuoteTargets(
                 quoteLine = trimmedLine,
@@ -130,11 +150,16 @@ internal fun buildThreadReferenceData(
                 flushPendingContentBlock()
                 if (resolution.targets.isNotEmpty()) {
                     val content = trimmedLine.trimStart { it == '>' || it == '＞' }.trim()
-                    val copiedFrom = if (depth > 1) messageLineIndex[
+                    // A bare >>100 is the explicit numeric shortcut, even if a
+                    // previous post happened to contain >100. No. anchors retain
+                    // the established number-only requote behavior.
+                    val copiedFrom = if (depth > 1 && !config.leadingNumberRegex.matches(content)) messageLineIndex[
                         normalizeThreadQuoteText(content, config.whitespaceRegex)
                     ]?.byDepth?.get(depth - 1).orEmpty() else emptySet()
-                    val directTargets = if (copiedFrom.isNotEmpty()) copiedFrom
-                        else if (isDirectAnchor) resolution.targets else emptySet()
+                    val directTargets = if (copiedFrom.isNotEmpty()) {
+                        quoteContexts.getOrNull(lineIndex - 1)?.candidates?.singleOrNull()
+                            ?.takeIf { it in copiedFrom }?.let(::setOf).orEmpty()
+                    } else if (isDirectAnchor) resolution.targets else emptySet()
                     postReferences.add(
                         QuoteReference(
                             text = trimmedLine.trim(),
@@ -148,6 +173,11 @@ internal fun buildThreadReferenceData(
                 continue
             }
 
+            val context = quoteContexts.getOrNull(lineIndex - 1)
+            if (pendingContentContext !== context &&
+                (pendingContentContext?.hasRequotedLine == true || context?.hasRequotedLine == true)
+            ) flushPendingContentBlock()
+            pendingContentContext = context
             if (resolution.targets.isEmpty()) {
                 if (pendingContentLines.isNotEmpty()) {
                     pendingContentLines.add(trimmedLine.trim())
@@ -203,6 +233,48 @@ internal fun buildThreadReferenceData(
     }
 
     return ThreadReferenceData(counts, references, timedOut = timedOut)
+}
+
+/** Intersect source owners across each contiguous quote block, retaining the original link targets separately. */
+private fun buildThreadQuoteSourceContexts(
+    lines: List<String>,
+    index: Map<String, ThreadLineTargets>,
+    config: ThreadReferenceBuildConfig,
+    startedAt: TimeMark
+): Array<ThreadQuoteSourceContext?>? {
+    val contexts = arrayOfNulls<ThreadQuoteSourceContext>(lines.size)
+    var start = -1
+    var candidates: Set<String>? = null
+    var hasRequotedLine = false
+    fun finish(end: Int) {
+        if (start < 0) return
+        val context = ThreadQuoteSourceContext(candidates.orEmpty(), hasRequotedLine)
+        for (position in start until end) contexts[position] = context
+        start = -1
+        candidates = null
+        hasRequotedLine = false
+    }
+    for ((position, rawLine) in lines.withIndex()) {
+        if (position % 32 == 0 && isThreadReferenceBuildTimedOut(startedAt, config)) return null
+        val line = rawLine.trimStart()
+        // The reference builder ignores HTML formatting/blank lines inside a quote block.
+        if (line.isBlank()) continue
+        val depth = threadQuoteDepth(line)
+        if (depth == 0) {
+            finish(position)
+            continue
+        }
+        if (start < 0) start = position
+        val content = line.trimStart { it == '>' || it == '＞' }.trim()
+        val owners = index[normalizeThreadQuoteText(content, config.whitespaceRegex)]
+            ?.byDepth?.get(depth - 1).orEmpty()
+        if (owners.isNotEmpty()) {
+            candidates = candidates?.intersect(owners) ?: owners
+            if (depth > 1 && !config.leadingNumberRegex.matches(content)) hasRequotedLine = true
+        }
+    }
+    finish(lines.size)
+    return contexts
 }
 
 private fun addPosterIdToThreadReferenceIndex(
@@ -367,3 +439,38 @@ private fun extractThreadMediaFileName(url: String?, mediaFilenameRegex: Regex):
 
 /** Only leading markers contribute to nesting; full-width quotes behave identically. */
 private fun threadQuoteDepth(line: String): Int = line.takeWhile { it == '>' || it == '＞' }.length
+
+/** A 2ch-style ">>123" is a reply anchor of its own, so it counts as depth 1 (L85: it stays a direct reply). */
+private fun threadQuoteAnchorDepth(line: String, config: ThreadReferenceBuildConfig): Int {
+    val depth = threadQuoteDepth(line)
+    return if (depth == 2 && config.leadingNumberRegex.matches(line.substring(depth).trim())) 1 else depth
+}
+
+/**
+ * For each line, the shallowest anchor depth of the run of quote lines it belongs to (blank lines do not end a run, any
+ * other line does); 0 for lines outside a run.
+ */
+private fun threadQuoteBlockDepths(lines: List<String>, config: ThreadReferenceBuildConfig): IntArray {
+    val depths = IntArray(lines.size)
+    var start = -1
+    var shallowest = Int.MAX_VALUE
+    fun close(end: Int) {
+        if (start < 0) return
+        for (i in start until end) depths[i] = shallowest
+        start = -1
+        shallowest = Int.MAX_VALUE
+    }
+    lines.forEachIndexed { index, raw ->
+        val line = raw.trimStart()
+        when {
+            line.isBlank() -> Unit
+            line.startsWith(">") || line.startsWith("＞") -> {
+                if (start < 0) start = index
+                shallowest = minOf(shallowest, threadQuoteAnchorDepth(line, config))
+            }
+            else -> close(index)
+        }
+    }
+    close(lines.size)
+    return depths
+}

@@ -39,6 +39,21 @@ class ThreadNestedQuoteTest {
         assertEquals(1, posts[0].referencedCount)
         assertEquals(1, posts[1].referencedCount)
     }
+    /**
+     * L85: an anchor deeper than a later, shallower line of its quote block is a nested quote, not a direct reply. A
+     * 2ch-style ">>100" right before ">本文" stays a direct reply (the decision for L85).
+     */
+    @Test fun anAnchorAboveAShallowerLineOfItsBlockIsNested() {
+        val nested = resolve(">>No.100<br>>返信本文<br>さらに返信").last().quoteReferences.first { "100" in it.targetPostIds }
+        assertFalse(nested.isDirectReply)
+        assertTrue(nested.replyTargetPostIds.isEmpty())
+        assertParent(">>No.100<br>>返信本文<br>さらに返信")
+        val shortcut = resolve(">>100<br>>返信本文<br>さらに返信").last().quoteReferences.first { "100" in it.targetPostIds }
+        assertTrue(shortcut.isDirectReply)
+        // The shallow line first, as before: the deeper anchor is nested.
+        assertFalse(resolve(">返信本文<br>>>No.100<br>さらに").last().quoteReferences.first { "100" in it.targetPostIds }.isDirectReply)
+    }
+
     @Test fun standaloneDoubleMarkerNumberStillMeansAnExplicitAnchor() {
         assertEquals(listOf("100"), resolve(">>100").last().quoteReferences.single().targetPostIds)
         assertTrue(resolve(">>100").last().quoteReferences.single().isDirectReply)

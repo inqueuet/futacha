@@ -58,11 +58,15 @@ internal suspend fun <T> submitHttpBoardApiBinaryForm(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        // Failures while handling the received response keep their own message.
+        // Explicit HTTP/server refusals keep their own message. A failure to
+        // read the body is classified as unconfirmed by the response handler.
         if (responseReceived) throw e
-        throw NetworkException("送信結果を確認できませんでした。スレッドを確認してから再送してください。${request.failureMessage}: ${e.message}", cause = e)
+        throw unconfirmedHttpBoardApiPostResult(request.failureMessage, e)
     }
 }
+
+internal fun unconfirmedHttpBoardApiPostResult(failureMessage: String, cause: Exception): NetworkException =
+    NetworkException("送信結果を確認できませんでした。スレッドを確認してから再送してください。$failureMessage: ${cause.message}", cause = cause)
 
 internal fun resolveHttpBoardApiPostResponseOrThrow(
     mode: HttpBoardApiPostResponseMode,

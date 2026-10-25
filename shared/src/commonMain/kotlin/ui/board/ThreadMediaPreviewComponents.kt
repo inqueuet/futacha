@@ -175,6 +175,7 @@ internal fun ThreadMediaPreviewDialogFrame(
     onNavigatePrevious: () -> Unit,
     isSwipeNavigationEnabled: Boolean = true,
     isTapNavigationEnabled: Boolean = true,
+    isEdgeTapNavigationEnabled: Boolean = true,
     isNavigationOverlayVisible: Boolean = true,
     navigationOverlayPadding: PaddingValues = PaddingValues(horizontal = 8.dp),
     swipeNavigationPadding: PaddingValues = PaddingValues(),
@@ -226,7 +227,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                     awaitEachGesture {
                         val down = awaitFirstDown(
                             requireUnconsumed = false,
-                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                         )
                         if (!isSwipeNavigationStartWithinBounds(
                                 position = down.position,
@@ -246,9 +247,12 @@ internal fun ThreadMediaPreviewDialogFrame(
 
                         while (true) {
                             val event = awaitPointerEvent(
-                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                             )
-                            if (event.changes.count { it.pressed } > 1) {
+                            // Observe after children/native interop. A seekbar, slider,
+                            // zoom surface or other control owns the whole gesture once
+                            // it consumes any change; it must never page on release.
+                            if (event.changes.any { it.isConsumed } || event.changes.count { it.pressed } > 1) {
                                 cancelled = true
                                 break
                             }
@@ -280,6 +284,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                     onNavigateNext = onNavigateNext,
                     onNavigatePrevious = onNavigatePrevious,
                     isTapNavigationEnabled = isTapNavigationEnabled,
+                    isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled,
                     paddingValues = navigationOverlayPadding
                 )
             }
@@ -293,6 +298,7 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     isTapNavigationEnabled: Boolean,
+    isEdgeTapNavigationEnabled: Boolean,
     paddingValues: PaddingValues
 ) {
     Row(
@@ -307,7 +313,8 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
             onNavigate = onNavigatePrevious,
             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
             contentDescription = "前の添付へ移動",
-            isTapNavigationEnabled = isTapNavigationEnabled
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled
         )
         Spacer(modifier = Modifier.weight(1f))
         ThreadMediaPreviewNavigationZone(
@@ -315,7 +322,8 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
             onNavigate = onNavigateNext,
             imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
             contentDescription = "次の添付へ移動",
-            isTapNavigationEnabled = isTapNavigationEnabled
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled
         )
     }
 }
@@ -326,16 +334,17 @@ private fun ThreadMediaPreviewNavigationZone(
     onNavigate: () -> Unit,
     imageVector: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
-    isTapNavigationEnabled: Boolean
+    isTapNavigationEnabled: Boolean,
+    isEdgeTapNavigationEnabled: Boolean
 ) {
     Box(
         modifier = Modifier
             .width(72.dp)
-            .fillMaxHeight()
-            .pointerInput(navigationKey, isTapNavigationEnabled) {
-                if (!isTapNavigationEnabled) return@pointerInput
-                detectTapGestures(onTap = { onNavigate() })
-            },
+            .then(if (isEdgeTapNavigationEnabled) Modifier.fillMaxHeight()
+                .pointerInput(navigationKey, isTapNavigationEnabled) {
+                    if (!isTapNavigationEnabled) return@pointerInput
+                    detectTapGestures(onTap = { onNavigate() })
+                } else Modifier),
         contentAlignment = Alignment.Center
     ) {
         IconButton(

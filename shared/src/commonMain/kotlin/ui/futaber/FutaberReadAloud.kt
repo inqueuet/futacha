@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 internal interface FutaberSpeechEngine {
     suspend fun prepare()
     suspend fun speak(text: String)
+    fun interrupt() { stop() }
     fun stop()
     fun close()
 }
@@ -35,6 +36,7 @@ internal interface FutaberSpeechEngine {
 internal fun TextSpeaker.asFutaberEngine(settings: () -> com.valoser.futacha.shared.audio.SpeechSettings = { com.valoser.futacha.shared.audio.SpeechSettings() }): FutaberSpeechEngine = object : FutaberSpeechEngine {
     override suspend fun prepare() { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.prepare() }
     override suspend fun speak(text: String) { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.speak(text) }
+    override fun interrupt() = this@asFutaberEngine.interrupt()
     override fun stop() = this@asFutaberEngine.stop()
     override fun close() = this@asFutaberEngine.close()
 }
@@ -143,6 +145,7 @@ internal class FutaberReadAloud(
                 message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE
             } finally {
                 if (run == generation) {
+                    if (!stoppedByUser) engine?.stop()
                     isReading = false
                     isPaused = false
                     currentPostId = null
@@ -269,7 +272,7 @@ internal class FutaberReadAloud(
     private fun relaunch(target: Int) {
         val run = ++generation
         val previous = job
-        engine?.stop()
+        engine?.interrupt()
         job = scope.launch(start = CoroutineStart.ATOMIC) {
             try {
                 // The replaced run ends first; it leaves the shared state to this one (see [generation]). Inside the
@@ -284,6 +287,7 @@ internal class FutaberReadAloud(
                 message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE
             } finally {
                 if (run == generation) {
+                    if (!stoppedByUser) engine?.stop()
                     isReading = false
                     isPaused = false
                     currentPostId = null

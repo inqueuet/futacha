@@ -149,6 +149,34 @@ class FtutterPostGuidanceInstrumentedTest {
         rule.waitForIdle()
     }
 
+    private fun sourceAttachmentDraft(boardUrl: String) {
+        rule.setContent { FtutterTheme(null, FtutterBrightness.LIGHT) {
+            FtutterPostDialog(FtutterPostTarget.Reply("test", "123"), boardUrl, "検証板",
+                FtutterDraft(comment = "取り込んだ本文", sourceAttachmentPath = "/imported/old.png"), null, "KEY", false,
+                BoardPostingCapabilities(1_000_000, setOf("png")),
+                AttachmentPickerPreference.ALWAYS_ASK, null, { "test" }, null,
+                onDeleteKeyChange = {}, onSaveDraft = { _, _ -> },
+                onSend = { Result.success(null) }, onSent = {}, onDismiss = {})
+        } }
+    }
+
+    /** L15: the imported attachment notice appears once. */
+    @Test fun theImportedAttachmentNoticeAppearsOnce() {
+        sourceAttachmentDraft("https://may.2chan.net/b/")
+        rule.onAllNodesWithTag("ftutter-draft-attachment-reselect").assertCountEquals(1)
+        rule.onNodeWithText("添付ボタンから選び直してください", substring = true).assertExists()
+    }
+
+    /** L15: an img reply cannot attach, so the notice does not point to the attach button and can be dismissed. */
+    @Test fun anImgReplyExplainsTheImportedAttachmentIsUnusedAndCanDismissIt() {
+        sourceAttachmentDraft("https://img.2chan.net/b/")
+        rule.onAllNodesWithTag("ftutter-draft-attachment-reselect").assertCountEquals(1)
+        rule.onAllNodesWithText("添付ボタン", substring = true).assertCountEquals(0)
+        rule.onNodeWithText("取り込み元の添付は使われません", substring = true).assertExists()
+        rule.onNodeWithTag("ftutter-draft-attachment-dismiss").performScrollTo().performClick()
+        rule.onAllNodesWithTag("ftutter-draft-attachment-reselect").assertCountEquals(0)
+    }
+
     @Test fun cancellingKeySettingsKeepsTheUnsentDraftAndDoesNotStoreAKey() {
         var sends = 0
         var keyChanges = 0

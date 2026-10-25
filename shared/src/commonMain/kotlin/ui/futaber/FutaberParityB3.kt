@@ -90,6 +90,11 @@ internal fun futaberFavoritesToStore(favorites: List<FutaberFavorite>, boards: L
 private fun storedIdsFor(board: BoardSummary): Set<String> = setOf(board.id, futaberStoredBoardId(board))
 
 /** The posts seen the last time the thread was left, whichever form of the board id the record has. */
+internal fun futaberSeenBoundaryForBoard(stored: String?, board: BoardSummary, threadId: String): FutaberSeenCount? {
+    val ids = storedIdsFor(board)
+    return decodeFutaberSeenCounts(stored).lastOrNull { it.boardId in ids && it.threadId == threadId }
+}
+
 internal fun futaberSeenCountForBoard(stored: String?, board: BoardSummary, threadId: String): Int? {
     val ids = storedIdsFor(board)
     return decodeFutaberSeenCounts(stored).lastOrNull { it.boardId in ids && it.threadId == threadId }?.seen
@@ -99,15 +104,15 @@ internal fun futaberSeenCountForBoard(stored: String?, board: BoardSummary, thre
  * The stored value after the thread was left with [seen] posts on screen, written under the board's stored id (an older
  * record of the thread under the board's own id goes); null when nothing needs writing.
  */
-internal fun futaberSeenCountsAfterForBoard(stored: String?, board: BoardSummary, threadId: String, seen: Int): String? {
+internal fun futaberSeenCountsAfterForBoard(stored: String?, board: BoardSummary, threadId: String, seen: Int, lastPostId: String? = null): String? {
     if (seen <= 0 || threadId.isBlank()) return null
     val storedId = futaberStoredBoardId(board)
     val ids = storedIdsFor(board)
     val current = decodeFutaberSeenCounts(stored)
     val matching = current.filter { it.boardId in ids && it.threadId == threadId }
     val last = current.lastOrNull()
-    if (matching.size == 1 && last == matching[0] && last.boardId == storedId && last.seen == seen) return null
-    return encodeFutaberSeenCounts(current.filterNot { it.boardId in ids && it.threadId == threadId } + FutaberSeenCount(storedId, threadId, seen))
+    if (matching.size == 1 && last == matching[0] && last.boardId == storedId && last.seen == seen && (lastPostId == null || last.lastPostId == lastPostId)) return null
+    return encodeFutaberSeenCounts(current.filterNot { it.boardId in ids && it.threadId == threadId } + FutaberSeenCount(storedId, threadId, seen, lastPostId ?: matching.lastOrNull()?.takeIf { it.seen == seen }?.lastPostId))
 }
 
 /** The key the draft of [target] is written under. */

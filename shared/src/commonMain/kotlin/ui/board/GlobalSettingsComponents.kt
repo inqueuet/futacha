@@ -1195,11 +1195,7 @@ private fun GlobalSettingsAppLockControls(
         headlineContent = { Text("起動ロック") },
         supportingContent = {
             Text(
-                text = if (isAppLockEnabled) {
-                    "有効です。アプリ起動時にパスワードを要求します。"
-                } else {
-                    "無効です。パスワードを設定すると起動時にロックします。"
-                },
+                text = com.valoser.futacha.shared.ui.appLockSettingDescription(isAppLockEnabled),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

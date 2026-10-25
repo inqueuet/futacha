@@ -36,10 +36,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -199,19 +201,25 @@ private fun CompatReverseImageSearchScreenContent(
         serial += 1L
         command = CompatBrowserNavigationCommand(serial, action)
     }
-    PlatformBackHandler {
-        if (state.canGoBack) navigate(CompatBrowserNavigation.BACK) else onClose()
-    }
-
     FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(
-            usePlatformDefaultWidth = false
+            usePlatformDefaultWidth = false,
+            // The back is taken below, in the Dialog's own window: it goes back a page first, as the back arrow
+            // does (L50: the window took it and closed the whole screen).
+            dismissOnBackPress = false
         )
     ) {
+        PlatformBackHandler {
+            if (state.canGoBack) navigate(CompatBrowserNavigation.BACK) else onClose()
+        }
         Column(
             Modifier
                 .fillMaxSize()
+                // A separate window: the privacy "画面全体" is drawn here too, as on the other media windows (L146).
+                // With "画像のみ" the result page is left as it is.
+                .privacyWindowFilter()
+                .testTag("compat-reverse-search-window")
                 .background(LocalCompatibilityPalette.current.background)
         ) {
             Row(
@@ -288,7 +296,7 @@ private fun CompatReverseImageSearchScreenContent(
                         baseUrl = baseUrl,
                         initialCookies = initialCookies.orEmpty(),
                         navigationCommand = command,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().testTag("compat-reverse-search-page"),
                         onStateChanged = { state = it },
                         onLinkLongPressed = { value ->
                             longPressedLink = normalizeCompatReverseSearchLongPressedLink(value)

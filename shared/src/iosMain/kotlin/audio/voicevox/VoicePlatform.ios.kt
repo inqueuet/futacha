@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.audio.voicevox
 
+import com.valoser.futacha.shared.util.currentIosEquivalentVersion
 import com.valoser.futacha.shared.voicevox.*
 import cnames.structs.FutachaVoiceSession
 import kotlinx.cinterop.*
@@ -16,7 +17,8 @@ internal actual val voiceNativeDispatcher: CoroutineDispatcher by lazy { newSing
 internal actual fun createVoicePlatform(context: Any?): VoicePlatform = IosVoicePlatform()
 
 private class IosVoicePlatform : VoicePlatform {
-    override val available: Boolean get() = NSProcessInfo.processInfo.operatingSystemVersion.useContents { majorVersion >= 16 }
+    // The iOS release, also on an Apple-silicon Mac where operatingSystemVersion is the macOS one (L77).
+    override val available: Boolean get() = currentIosEquivalentVersion().major >= 16
     override val unavailableReason = "ずんだもんにはiOS 16以降が必要です"
     override fun directory(): Path {
         val base = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).firstOrNull() as? String
@@ -26,8 +28,7 @@ private class IosVoicePlatform : VoicePlatform {
         check(NSURL.fileURLWithPath(path.toString()).setResourceValue(true, NSURLIsExcludedFromBackupKey, null))
         return path
     }
-    override fun availableBytes(): Long? = (NSFileManager.defaultManager.attributesOfFileSystemForPath(
-        NSHomeDirectory(), null)?.get(NSFileSystemFreeSize) as? NSNumber)?.longLongValue
+    override fun availableBytes(): Long? = iosVoiceAssetAvailableBytes()
     override fun createPlayer(): VoicePcmPlayer = IosVoicePcmPlayer()
     override fun createNative(pack: VoicePack): VoiceNativeSession {
         check(available) { unavailableReason }
@@ -35,6 +36,24 @@ private class IosVoicePlatform : VoicePlatform {
         return IosVoiceNativeSession("$base/voicevox_core.framework/voicevox_core",
             "$base/voicevox_onnxruntime.framework/voicevox_onnxruntime", pack)
     }
+}
+
+/** Capacity lookup kept separate from the native voice runtime for deterministic admission tests. */
+internal fun iosVoiceAssetAvailableBytes(
+    importantUsageBytes: () -> Long? = {
+        (NSURL.fileURLWithPath(NSHomeDirectory())
+            .resourceValuesForKeys(listOf(NSURLVolumeAvailableCapacityForImportantUsageKey), null)
+            ?.get(NSURLVolumeAvailableCapacityForImportantUsageKey) as? NSNumber)?.longLongValue
+    },
+    legacyFreeBytes: () -> Long? = {
+        (NSFileManager.defaultManager.attributesOfFileSystemForPath(NSHomeDirectory(), null)
+            ?.get(NSFileSystemFreeSize) as? NSNumber)?.longLongValue
+    }
+): Long? {
+    // Important-usage capacity includes space iOS can reclaim (purgeable caches); 0 is a real full volume (L5).
+    val important = try { importantUsageBytes() } catch (_: Exception) { null }
+    if (important != null && important >= 0) return important
+    return legacyFreeBytes()?.takeIf { it >= 0 }
 }
 
 internal class IosVoiceNativeSession(core: String, runtime: String, pack: VoicePack) : VoiceNativeSession {
@@ -46,7 +65,9 @@ internal class IosVoiceNativeSession(core: String, runtime: String, pack: VoiceP
     }
     override fun query(text: String): String = memScoped {
         val output = alloc<CPointerVar<ByteVar>>(); output.value = null
-        checkVoice(futacha_voice_query(session, text, output.ptr))
+        val status = futacha_voice_query(session, text, output.ptr)
+        if (status == FUTACHA_VOICE_TEXT_ANALYSIS_ERROR) throw VoiceTextAnalysisException("入力テキストの解析に失敗しました")
+        checkVoice(status)
         val json = requireNotNull(output.value)
         try { json.toKString() } finally { futacha_voice_json_free(json) }
     }

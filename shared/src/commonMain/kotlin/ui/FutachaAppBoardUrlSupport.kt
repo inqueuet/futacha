@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui
 
+import com.valoser.futacha.shared.compat.upgradeOfficialFutabaHttpUrl
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.Logger
@@ -38,11 +39,16 @@ internal fun normalizeBoardUrl(raw: String): String {
     val withScheme = stripBoardUrlDocument(when {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {
-            Logger.w(
-                FUTACHA_APP_RUNTIME_LOG_TAG,
-                "HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed"
-            )
-            trimmed
+            // A 2chan board is registered with https: over http it could not post on iOS nor through the official
+            // pre-submit step (L100). Other hosts keep http.
+            val upgraded = upgradeOfficialFutabaHttpUrl(trimmed)
+            if (upgraded == trimmed) {
+                Logger.w(
+                    FUTACHA_APP_RUNTIME_LOG_TAG,
+                    "HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed"
+                )
+            }
+            upgraded
         }
         else -> "https://$trimmed"
     })

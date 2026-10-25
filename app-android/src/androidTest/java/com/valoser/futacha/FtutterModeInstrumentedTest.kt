@@ -667,6 +667,30 @@ class FtutterModeInstrumentedTest {
         saveShot("feedback-gesture-menu-opens-reply")
     }
 
+    /** L17: an operation chosen from the gesture menu that cannot run says why (a drawn gesture stays silent). */
+    @Test fun aGestureMenuOperationThatCannotRunSaysWhy() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-catalog-menu-gesture-actions").performClick()
+        rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-8"))
+        rule.onNodeWithTag("ftutter-gesture-action-8").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("閉じたタブはありません").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    /** L23: with the drawer set to 「無効」 nothing opens invisibly, so one back leaves the catalog. */
+    @Test fun aDisabledDrawerIsNotOpenedInvisiblyAndOneBackLeavesTheCatalog() {
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.drawerLeftOrRight", "3") }
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-drawer").performClick()
+        // Wait for the notice without failing here, so a back swallowed by an invisible drawer is what fails first.
+        val told = runCatching {
+            rule.waitUntil(5_000) { rule.onAllNodesWithText("ドロワーは設定で無効です").fetchSemanticsNodes().isNotEmpty() }
+        }.isSuccess
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("ftutter-board-row", timeoutMillis = 5_000)
+        assertTrue("A disabled drawer explains why it does not open", told)
+    }
+
     @Test fun theThreadMenuHasATextEntryToWriteAReply() {
         openTutorialThread()
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
@@ -783,6 +807,48 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-gesture-reset").performClick()
         rule.onNodeWithTag("ftutter-gesture-reset-ok").performClick()
         rule.waitUntil(10_000) { preference("compat.ftutter.Gesture12").isNullOrEmpty() }
+    }
+
+    /** L130: lowering the history limit so that tabs would close asks first; cancelling keeps the limit and the tabs. */
+    @Test fun loweringTheHistoryLimitThatClosesTabsAsksFirst() {
+        // Tabs whose threads are in the history (the start-up tidy closes tabs that are not).
+        seedHistory(tutorialUrl, fakeTab2, fakeTab3)
+        runBlocking {
+            app.compatibilityStore.savePreferences(mapOf(
+                "compat.ftutter.tabs" to listOf(tutorialUrl, fakeTab2, fakeTab3).joinToString("\n"),
+                "compat.ftutter.rirekiLimit" to "10"))
+        }
+        openSettingsRoot()
+        val tabsBefore = tabs()
+        assertEquals(3, tabsBefore.size)
+        rule.onNodeWithTag("ftutter-settings-thread").performClick()
+        waitForTag("ftutter-settings-page-thread")
+        rule.onNodeWithTag("ftutter-settings-page-thread-list")
+            .performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-setting-compat.ftutter.rirekiLimit"))
+        rule.onNodeWithTag("ftutter-setting-compat.ftutter.rirekiLimit").performClick()
+        rule.onNodeWithTag("ftutter-slider-minus").performClick()
+        rule.onNodeWithTag("ftutter-slider-ok").performClick()
+        waitForTag("ftutter-slider-confirm", timeoutMillis = 5_000)
+        rule.onNodeWithText("閉じられます", substring = true).assertExists()
+        rule.onNodeWithTag("ftutter-slider-confirm-cancel").performClick()
+        rule.waitForIdle()
+        assertEquals("10", preference("compat.ftutter.rirekiLimit"))
+        assertEquals(tabsBefore, tabs())
+    }
+
+    /** L21: the 9,998-step slider (0.1 to 1000 by 0.1) can be set one step at a time and saves the exact step. */
+    @Test fun aLongRangeSliderCanBeSetOneStepAtATime() {
+        rule.activityRule.scenario.recreate()
+        waitForTag("ftutter-board-list")
+        rule.onNodeWithTag("ftutter-open-settings").performClick()
+        waitForTag("ftutter-settings-gesture")
+        rule.onNodeWithTag("ftutter-settings-gesture").performClick()
+        waitForTag("ftutter-gesture-settings")
+        rule.onNodeWithTag("ftutter-setting-compat.ftutter.kando").performScrollTo().performClick()
+        rule.onNodeWithTag("ftutter-slider-plus").performClick()
+        rule.onNodeWithText("20.1").assertExists()
+        rule.onNodeWithTag("ftutter-slider-ok").performClick()
+        rule.waitUntil(10_000) { preference("compat.ftutter.kando") == "20.1" }
     }
 
     @Test fun theThreadToolbarEditorSavesTheOrderAndSwitches() {
@@ -954,6 +1020,52 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-board-list")
         rule.onNodeWithTag("ftutter-open-settings").performClick()
         waitForTag("ftutter-settings")
+    }
+
+    /** L19: the imported save location notice ends once another folder is chosen; the font notice can be dismissed. */
+    @Test fun importedOriginalNoticesEndWhenChosenAgainOrDismissed() {
+        val destinationKey = "compat.storage.dummyDownloadDir"
+        val savedDestination = preference(destinationKey)
+        try {
+            runBlocking {
+                app.compatibilityStore.savePreferences(mapOf(
+                    "compat.ftutter.import.savePath" to "content://original/tree/1",
+                    "compat.ftutter.import.savePathChosen" to savedDestination.orEmpty(),
+                    "compat.ftutter.import.userFontPath" to "/original/font.ttf"
+                ))
+            }
+            openSettingsRoot()
+            // Found by its text (not a tag), so the same check runs against the earlier code.
+            val locationNotice = androidx.compose.ui.test.hasText("取り込み元の保存先: content://original/tree/1", substring = true)
+            rule.onNodeWithTag("ftutter-settings-list").performScrollToNode(locationNotice)
+            runBlocking { app.compatibilityStore.savePreference(destinationKey, "content://com.example.l19/tree/chosen") }
+            rule.waitUntil(5_000) { rule.onAllNodes(locationNotice).fetchSemanticsNodes().isEmpty() }
+            assertEquals(0, rule.allTagged("ftutter-import-location-dismiss").fetchSemanticsNodes().size)
+            rule.onNodeWithTag("ftutter-settings-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-settings-design"))
+            rule.onNodeWithTag("ftutter-settings-design").performClick()
+            waitForTag("ftutter-settings-page-design")
+            rule.onNodeWithTag("ftutter-settings-page-design-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-import-font-dismiss"))
+            rule.onNodeWithTag("ftutter-import-font-notice").assertExists()
+            rule.onNodeWithTag("ftutter-import-font-dismiss").performClick()
+            rule.waitUntil(5_000) { rule.allTagged("ftutter-import-font-notice").fetchSemanticsNodes().isEmpty() }
+        } finally {
+            runBlocking { app.compatibilityStore.savePreferences(mapOf(destinationKey to savedDestination)) }
+        }
+    }
+
+    /** L20: カスタムフォント opens this mode's own font dialog, not the shared design page with rows that do nothing here. */
+    @Test fun theCustomFontRowOpensTheModesOwnFontDialog() {
+        openSettingsRoot()
+        rule.onNodeWithTag("ftutter-settings-design").performClick()
+        waitForTag("ftutter-settings-page-design")
+        rule.onNodeWithTag("ftutter-settings-page-design-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-settings-font"))
+        rule.onNodeWithTag("ftutter-settings-font").performClick()
+        waitForTag("ftutter-custom-font-dialog", timeoutMillis = 5_000)
+        assertTrue(rule.onAllNodesWithText("ローディング").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText("タブ一覧").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithText("キャンセル").performClick()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-custom-font-dialog").fetchSemanticsNodes().isEmpty() }
+        waitForTag("ftutter-settings-page-design")
     }
 
     @Test fun theSettingsCategoriesOpenAndTheirChoicesAreSaved() {

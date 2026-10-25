@@ -221,6 +221,7 @@ import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.service.ImageZipSaveService
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.SingleMediaSaveService
+import com.valoser.futacha.shared.service.MediaSaveDestinationException
 import com.valoser.futacha.shared.service.buildCompatManualImageFolderName
 import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.board.VideoMediaInfo
@@ -278,19 +279,32 @@ internal fun CompatGalleryScreen(
     onOpenSettings: () -> Unit,
     onOpenCommonSettings: () -> Unit,
     onOpenHelp: () -> Unit = {},
+    saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
+    onSaveNotice: (String) -> Unit = {},
+    onInitialPositionRestored: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val tabKey = tab.key
     val scope = rememberCoroutineScope()
+    val screenPresent = remember(tabKey) { booleanArrayOf(true) }
+    DisposableEffect(tabKey) { onDispose { screenPresent[0] = false } }
     val palette = LocalCompatibilityPalette.current
     val openUrl = rememberUrlLauncher()
     val share = rememberCompatShareLauncher()
     val clipboard = LocalClipboardManager.current
     val imageLoader = LocalFutachaImageLoader.current
     var posts by remember(tabKey) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
+    // Until the list is read, nothing is said to be missing (L55: "画像はありません" showed while it was loading).
+    var postsLoaded by remember(tabKey) { mutableStateOf(false) }
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var saveMode by remember { mutableStateOf(false) }
     var selectedMediaKeys by remember(tabKey) { mutableStateOf<Set<String>>(emptySet()) }
+    // The system back leaves the save mode first, as the top-left arrow does (L62: it closed the gallery and lost the
+    // selection).
+    PlatformBackHandler(enabled = saveMode) {
+        saveMode = false
+        selectedMediaKeys = emptySet()
+    }
     var batchSaveFormatDialog by remember { mutableStateOf(false) }
     val batchProtectionProgress = remember { kotlinx.coroutines.flow.MutableStateFlow<SaveProgress?>(null) }
     val batchSaveProgress by batchProtectionProgress.collectAsState()
@@ -400,13 +414,16 @@ internal fun CompatGalleryScreen(
                         wifiConnected = wifiConnected
                     )
                 }
+                postsLoaded = true
             }
         } catch (cancelled: CancellationException) {
             Logger.e("CompatGallery", "Media list load timed out", cancelled.compatTimeoutFailureOrThrow())
             message = "画像一覧を読み込めませんでした"
+            postsLoaded = true
         } catch (failure: Throwable) {
             Logger.e("CompatGallery", "Media list load failed", failure)
             message = "画像一覧を読み込めませんでした"
+            postsLoaded = true
         }
     }
     // pHash matches are hidden progressively after the list first appears;
@@ -419,6 +436,7 @@ internal fun CompatGalleryScreen(
             withFrameNanos { }
             gridState.scrollToItem(target)
             initialPositionRestored = true
+            onInitialPositionRestored()
         }
     }
     // Selection is by media identity, which repeats when a thread lists the
@@ -442,7 +460,10 @@ internal fun CompatGalleryScreen(
         // Claim the guard before the coroutine is dispatched, so a second tap
         // in the same frame cannot start another save (E-13).
         savingMediaKey = compatMediaIdentity(post)
-        launchScreenAction {
+        (saveCoroutineScope ?: scope).launchCompatScreenAction("CompatGallerySave", { failure ->
+            val text = failure.toCompatUserMessage("メディアを保存できませんでした")
+            if (screenPresent[0]) message = text else onSaveNotice(text)
+        }) {
             try {
                 val result = saver.saveMedia(
                     mediaUrl,
@@ -452,11 +473,14 @@ internal fun CompatGalleryScreen(
                     storageDirectoryOverride = "",
                     useTypeSubdirectory = false
                 )
-                message = result.fold(
+                val text = result.fold(
                     onSuccess = { compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) },
                     onFailure = { it.toCompatUserMessage("メディアを保存できませんでした") }
                 )
-                result.getOrNull()?.let { messageState.attach(CompatSaveResultAction.Share(it, selectedLocation)) }
+                if (screenPresent[0]) {
+                    message = text
+                    result.getOrNull()?.let { messageState.attach(CompatSaveResultAction.Share(it, selectedLocation)) }
+                } else onSaveNotice(text)
             } finally {
                 savingMediaKey = null
             }
@@ -530,33 +554,38 @@ internal fun CompatGalleryScreen(
                                 threadId = tab.threadNo
                             )
                             val outputNames = compatBatchOutputFileNames(targetByUrl.map { it.first })
-                            targetByUrl.forEachIndexed { index, (url, _) ->
-                                val item = url.substringBefore('?').substringBefore('#').substringAfterLast('/')
-                                batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index, targetByUrl.size, item)
-                                saver.saveMedia(
-                                    url,
-                                    tab.boardKey,
-                                    tab.threadNo,
-                                    baseSaveLocation = selectedLocation,
-                                    baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                    storageDirectoryOverride = folder,
-                                    useTypeSubdirectory = false,
-                                    outputFileNameOverride = outputNames[url],
-                                    onProgress = { itemBytes, itemTotalBytes ->
-                                        batchProtectionProgress.value = SaveProgress(
-                                            SavePhase.DOWNLOADING,
-                                            index,
-                                            targetByUrl.size,
-                                            item,
-                                            itemBytes,
-                                            itemTotalBytes
-                                        )
-                                    }
-                                ).fold(
-                                    onSuccess = { succeeded += 1 },
-                                    onFailure = { failedUrls += url }
-                                )
-                                batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index + 1, targetByUrl.size, item)
+                            withContext(requireNotNull(fileSystem).saveBatchContext()) {
+                                targetByUrl.forEachIndexed { index, (url, _) ->
+                                    val item = url.substringBefore('?').substringBefore('#').substringAfterLast('/')
+                                    batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index, targetByUrl.size, item)
+                                    saver.saveMedia(
+                                        url,
+                                        tab.boardKey,
+                                        tab.threadNo,
+                                        baseSaveLocation = selectedLocation,
+                                        baseDirectory = MANUAL_SAVE_DIRECTORY,
+                                        storageDirectoryOverride = folder,
+                                        useTypeSubdirectory = false,
+                                        outputFileNameOverride = outputNames[url],
+                                        onProgress = { itemBytes, itemTotalBytes ->
+                                            batchProtectionProgress.value = SaveProgress(
+                                                SavePhase.DOWNLOADING,
+                                                index,
+                                                targetByUrl.size,
+                                                item,
+                                                itemBytes,
+                                                itemTotalBytes
+                                            )
+                                        }
+                                    ).fold(
+                                        onSuccess = { succeeded += 1 },
+                                        onFailure = {
+                                            if (it is MediaSaveDestinationException) throw it
+                                            failedUrls += url
+                                        }
+                                    )
+                                    batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index + 1, targetByUrl.size, item)
+                                }
                             }
                             message = buildCompatGalleryBatchSaveMessage(format, succeeded, failedUrls.size)
                         }
@@ -586,6 +615,10 @@ internal fun CompatGalleryScreen(
                     }
                     throw cancelled
                 }
+            } catch (busy: com.valoser.futacha.shared.service.ThreadSaveAlreadyRunningException) {
+                // Nothing was saved or failed while another save runs: told so, with no "失敗分を再試行"; the selection
+                // stays for a later try (L142).
+                message = busy.toCompatUserMessage("一括保存できませんでした")
             } catch (failure: Throwable) {
                 message = failure.toCompatUserMessage("一括保存できませんでした")
                 attachBatchRetry(format, targetByUrl.mapTo(mutableSetOf()) { compatMediaIdentity(it.second) })
@@ -859,7 +892,9 @@ internal fun CompatGalleryScreen(
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val columns = if (maxWidth > maxHeight) landscapeColumns else portraitColumns
             if (posts.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("画像はありません") }
+                Box(Modifier.fillMaxSize().testTag("compat-gallery-empty"), contentAlignment = Alignment.Center) {
+                    if (postsLoaded) Text("画像はありません") else CircularProgressIndicator()
+                }
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),

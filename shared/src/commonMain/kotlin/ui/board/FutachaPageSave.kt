@@ -59,7 +59,10 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                             storageOptions = buildManualThreadSaveStorageOptions(boardKey, page.threadId))
                     }
                     message = result.fold({ completeCompatThreadSave(it, fs, location) }, { it.message ?: "保存できませんでした" })
-                } catch (cancelled: CancellationException) { message = "保存を中止しました"; throw cancelled }
+                } catch (cancelled: CancellationException) {
+                    // The wording of としあき(仮) (L74).
+                    message = com.valoser.futacha.shared.ui.compat.compatThreadSaveCancellationMessage(); throw cancelled
+                }
                 catch (failure: Exception) { message = failure.message ?: "保存できませんでした" }
                 finally { job = null }
             } }
@@ -68,11 +71,16 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                 destination { location ->
                     mediaOnlyProgressFlow.value = null
                     mediaOnlyRunning = true
+                    var savedSoFar = 0
                     job = scope.launch {
                         try {
                             message = runFutachaMediaOnlySave(kind, page, boardKey, boardName, title, location,
-                                client, fs, mediaOnlyProgressFlow)
-                        } catch (cancelled: CancellationException) { message = "保存を中止しました"; throw cancelled }
+                                client, fs, mediaOnlyProgressFlow, onSaved = { savedSoFar = it })
+                        } catch (cancelled: CancellationException) {
+                            // As としあき(仮) says it: what was saved before the cancel stays, and is counted (L74).
+                            message = com.valoser.futacha.shared.ui.compat.compatThreadSaveCancellationMessage(savedSoFar)
+                            throw cancelled
+                        }
                         catch (failure: Exception) { message = failure.message ?: "保存できませんでした" }
                         finally { job = null; mediaOnlyRunning = false }
                     }

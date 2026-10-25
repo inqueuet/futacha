@@ -18,15 +18,17 @@ internal fun ftutterApuImages(html: String): List<String> = compatInlineLinksCac
     .filter { isCompatApuSmallMediaUrl(it) && isCompatImageMediaUrl(it) }.distinct()
 
 @Composable
-internal fun FtutterApuPreviews(html: String, settings: FtutterThreadSettings, alpha: Float, onOpen: (String) -> Unit) {
+internal fun FtutterApuPreviews(html: String, settings: FtutterThreadSettings, alpha: Float,
+    loadedUrls: MutableSet<String>, onOpen: (String) -> Unit) {
     val urls = remember(html) { ftutterApuImages(html) }
     if (urls.isEmpty()) return
     val wifi = isCompatWifiConnected(LocalPlatformContext.current)
     val automatic = ftutterLoadHighResolution(settings.apuAutoLoad, wifi)
-    var loaded by remember(html) { mutableStateOf(false) }
+    // The rows are recreated when they scroll away, so what was loaded is kept by the thread screen (L24).
+    val loaded = urls.all { it in loadedUrls }
     if (!automatic && !loaded) {
         Text("あぷ小の画像を読み込む（${urls.size}件）", color = LocalFtutterColors.current.link,
-            modifier = Modifier.clickable { loaded = true }.padding(vertical = 8.dp).testTag("ftutter-apu-load"))
+            modifier = Modifier.clickable { loadedUrls.addAll(urls) }.padding(vertical = 8.dp).testTag("ftutter-apu-load"))
     } else urls.forEach { url ->
         Box(Modifier.size(settings.apuThumbSize.dp).clickable { onOpen(url) }.testTag("ftutter-apu-preview")) {
             FtutterThumbnail(url, null, settings.apuThumbSize * 3, "あぷ小の画像", Modifier.fillMaxSize().alpha(alpha), quality = 0)

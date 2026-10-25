@@ -74,7 +74,7 @@ fun resolveHistoryArchiveImportMergeEntries(
         importedByKey[key] = if (existing == null) {
             entry
         } else {
-            mergeAppStateHistoryEntry(existing, entry)
+            mergeImportedHistoryEntry(existing, entry)
         }
     }
 
@@ -97,7 +97,7 @@ fun resolveHistoryArchiveImportMergeEntries(
         if (imported == null) {
             existing
         } else {
-            val merged = mergeAppStateHistoryEntry(existing, imported)
+            val merged = mergeImportedHistoryEntry(existing, imported)
             if (merged == existing) {
                 unchangedCount += 1
             } else {

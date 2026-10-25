@@ -254,7 +254,8 @@ fun FutaberTheme(
     val statusColor = if (statusFollowsTopBar) colors.topBar else colors.bar
     ApplyFutachaSystemBars(systemBarColor = statusColor, useDarkIcons = statusColor.luminance() > 0.5f)
     ApplyFutaberHostBackground(statusColor)
-    CompositionLocalProvider(LocalFutaberColors provides colors, LocalFutaberCustomFont provides fontFamily) {
+    CompositionLocalProvider(LocalFutaberColors provides colors, LocalFutaberCustomFont provides fontFamily,
+        com.valoser.futacha.shared.ui.board.LocalBugReportThemeName provides mode.label) {
         MaterialTheme(
             colorScheme = scheme,
             typography = com.valoser.futacha.shared.ui.compat.compatibilityTypography(fontFamily, MaterialTheme.typography)

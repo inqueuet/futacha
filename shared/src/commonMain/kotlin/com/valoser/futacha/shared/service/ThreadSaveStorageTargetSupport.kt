@@ -218,12 +218,16 @@ internal suspend fun cleanupThreadSaveBinaryWriteTarget(
     fileSystem: FileSystem,
     target: ThreadSaveBinaryWriteTarget
 ) {
-    when {
-        target.saveLocation != null && target.relativePath != null -> {
-            fileSystem.delete(target.saveLocation, target.relativePath).getOrNull()
-        }
-        target.absolutePath != null -> {
-            fileSystem.delete(target.absolutePath).getOrNull()
+    // Runs also when the save was cancelled (L72: the delete, which suspends, was itself cancelled and the partial
+    // file stayed).
+    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+        when {
+            target.saveLocation != null && target.relativePath != null -> {
+                fileSystem.delete(target.saveLocation, target.relativePath).getOrNull()
+            }
+            target.absolutePath != null -> {
+                fileSystem.delete(target.absolutePath).getOrNull()
+            }
         }
     }
 }

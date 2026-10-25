@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.FutachaAiCommandArrivals
 import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
 import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
+import com.valoser.futacha.shared.ai.watchRelayLinkNoticeOutsideFutacha
 import com.valoser.futacha.shared.ui.AiCommandEffectKey
 import com.valoser.futacha.shared.ui.AiCommandHoldDecision
 import com.valoser.futacha.shared.ui.FutachaAppLockHolder
@@ -41,10 +42,13 @@ internal fun futaberAiCommandNotice(command: FutachaAiCommand, decision: AiComma
     AiCommandHoldDecision.DropHeldByLock -> buildAiCommandHeldByLockMessage(command)
 }
 
-/** The notice for an AI link: the command it holds is not supported here, or the link says nothing readable. */
+/**
+ * The notice for an AI link: the command it holds is not supported here, the watch's "スマホで開く" is for ふたちゃ mode
+ * (L121), or the link says nothing readable.
+ */
 internal fun futaberAiDeepLinkNotice(raw: String): String {
     val command = parseFutachaAiDeepLink(raw, source = "platform") ?: return FUTABER_AI_LINK_UNREADABLE_NOTICE
-    return futaberAiUnsupportedNotice(command)
+    return command.watchRelayLinkNoticeOutsideFutacha() ?: futaberAiUnsupportedNotice(command)
 }
 
 /**
@@ -105,8 +109,12 @@ internal fun FutaberAiCommandSink(
         val arrivedAt = TimeSource.Monotonic.markNow()
         appLock.awaitUnlocked()
         val command = parseFutachaAiDeepLink(raw, source = "platform")
+        // L121: the watch's "スマホで開く" link is for ふたちゃ mode only; the screen never runs it (whatever the AI setting).
+        val watchRelayNotice = command?.watchRelayLinkNoticeOutsideFutacha()
         if (command == null) {
             notice.value(FUTABER_AI_LINK_UNREADABLE_NOTICE)
+        } else if (watchRelayNotice != null) {
+            notice.value(watchRelayNotice)
         } else {
             scope.launch { inbox.deliver(command, arrivedAt, null, appLock) { notice.value(it) } }
         }

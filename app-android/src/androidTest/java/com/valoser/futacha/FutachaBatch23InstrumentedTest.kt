@@ -209,6 +209,41 @@ class FutachaBatch23InstrumentedTest {
         }
     }
 
+    /** L74: a cancelled media-only folder save says キャンセルしました and how many files it saved. */
+    @Test fun aCancelledFolderSaveTellsHowManyFilesItSaved() {
+        val bytes = jpegBytes()
+        val second = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val client = HttpClient(MockEngine { request ->
+            if (request.url.encodedPath.endsWith("170000000002.jpg")) { second.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+            if (request.url.host == "may.2chan.net" && request.url.encodedPath.contains("/src/")) {
+                respond(bytes, headers = headersOf("Content-Type", "image/jpeg"))
+            } else respond("missing", HttpStatusCode.NotFound)
+        })
+        val saveDir = File(rule.activity.getExternalFilesDir(null), "batch23-cancel-${System.nanoTime()}").apply { mkdirs() }
+        runBlocking { store.savePreference("compat.storage.dummyDownloadDir", saveDir.absolutePath) }
+        var features: FutachaSharedFeatures? = null
+        try {
+            host(httpClient = client, withFileSystem = true) {
+                features = LocalFutachaSharedFeatures.current
+                FutachaPageSaveDialog(requireNotNull(LocalFutachaSharedFeatures.current), page(), compatBoardKey(boardUrl),
+                    "may", boardUrl, "保存テスト", onDismiss = {}, offerMediaOnly = true)
+            }
+            rule.waitUntil(10_000) { features?.preferences?.get("compat.storage.dummyDownloadDir") != null }
+            rule.onNodeWithText("メディアのみ（フォルダ）").performClick()
+            rule.waitUntil(20_000) { second.isCompleted }
+            rule.onNodeWithText("キャンセル").performClick()
+            rule.waitUntil(10_000) {
+                rule.onAllNodesWithText("キャンセルしました", substring = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            rule.onNodeWithText("1件のメディアをここまで保存しました", substring = true).assertExists()
+            assertEquals(1, saveDir.walkTopDown().count { it.isFile && it.name.endsWith(".jpg") })
+        } finally {
+            runBlocking { store.savePreference("compat.storage.dummyDownloadDir", "") }
+            saveDir.deleteRecursively()
+            client.close()
+        }
+    }
+
     private fun swipeDownDismissCount(saved: String?): Int {
         saved?.let { runBlocking { store.savePreference("compat.control.controlViewerSwipeClose", it) } }
         var dismissed = 0

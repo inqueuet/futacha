@@ -79,7 +79,8 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     setShowPastThreadSearchDialog: (Boolean) -> Unit,
     setShowModeDialog: (Boolean) -> Unit,
-    setShowSettingsMenu: (Boolean) -> Unit
+    setShowSettingsMenu: (Boolean) -> Unit,
+    onThreadCreated: () -> Unit = {}
 ): CatalogScreenRuntimeBindingsBundle {
     val executionBindings = buildCatalogExecutionBindings(
         coroutineScope = coroutineScope,
@@ -141,7 +142,8 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
                     onOpenCookieManager = onOpenCookieManager
                 )
             },
-            performRefresh = executionBindings.performRefresh
+            // Only the refresh after a created thread goes through here.
+            performRefresh = { onThreadCreated(); executionBindings.performRefresh() }
         ),
         historyDrawerCallbacks = buildCatalogHistoryDrawerCallbacks(
             coroutineScope = coroutineScope,

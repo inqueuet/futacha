@@ -174,6 +174,11 @@ fun FutachaApp(
      * presented outside Compose, behind the app lock (H7).
      */
     onAppUnlockedChanged: (Boolean) -> Unit = {},
+    /**
+     * Called synchronously when the lock is engaged on leaving the app, outside composition (a host's own windows above
+     * Compose, such as iOS's in-app browser, stop composition from running until they are gone).
+     */
+    onSessionLocked: () -> Unit = {},
     initialPerformanceProfile: DevicePerformanceProfile = DevicePerformanceProfile(false, false)
 ) {
     val platformContext = LocalPlatformContext.current
@@ -230,6 +235,9 @@ fun FutachaApp(
     // The session flag lives outside composition: Android pauses
     // recomposition after ON_STOP, so command handlers read the holder (C-1).
     val appLockHolder = remember { FutachaAppLockHolder() }
+    // The same explicit retry must restart a failed native policy subscription;
+    // restarting only the UI reader would leave protection latched on forever.
+    PlatformAppLockSnapshotProtection(stateStore, appLockHolder, retryGeneration = appLockLoadAttempt)
     val isUnlockedForSession by appLockHolder.sessionUnlocked.collectAsState()
     // The wrong-password counter / cool-down is kept in the shared compat store (all modes pass the
     // same one) so a force-stop does not reset it; without a store it lives for the process only.
@@ -270,6 +278,7 @@ fun FutachaApp(
         errorSentinel = APP_LOCK_HASH_ERROR
     )
     val currentOnAppUnlockedChanged by rememberUpdatedState(onAppUnlockedChanged)
+    val currentOnSessionLocked by rememberUpdatedState(onSessionLocked)
     val isAppUnlocked = startupTheme != null && appLockGate == FutachaAppLockGate.Unlocked
     SideEffect { appLockHolder.setContentVisible(isAppUnlocked) }
     DisposableEffect(isAppUnlocked) {
@@ -278,6 +287,24 @@ fun FutachaApp(
     }
     if (startupTheme == null) return
     val resolvedStartupTheme = startupTheme ?: return
+    if (!appTreeShown.value && compatibilityStore != null) {
+        // A failed load keeps the shared data private (M7). Every mode, the lock screen's
+        // attempt counter and the image settings wait for it, so offer a retry (M74).
+        val compatibilityLoaded by compatibilityStore.isLoaded.collectAsState()
+        val compatibilityLoadFailed by compatibilityStore.loadFailed.collectAsState()
+        if (!compatibilityLoaded && compatibilityLoadFailed) {
+            val retryScope = rememberCoroutineScope()
+            FutachaTheme(
+                themeMode = resolvedStartupTheme.mode,
+                themePalette = resolvedStartupTheme.palette
+            ) {
+                Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
+                    FutachaStoreLoadErrorScreen(onRetry = { retryScope.launch { compatibilityStore.retryLoading() } })
+                }
+            }
+            return
+        }
+    }
     if (!appTreeShown.value && appLockGate != FutachaAppLockGate.Unlocked) {
         // Compatibility owns a separate persisted palette. Painting the
         // modern loading surface before that palette is available produces a
@@ -315,9 +342,11 @@ fun FutachaApp(
             // Runs synchronously in ON_STOP / didEnterBackground, before any
             // command delivered in the background can read the lock state.
             appLockHolder.lockSession()
+            currentOnSessionLocked()
         }
     }
     val isAppHidden = appLockGate != FutachaAppLockGate.Unlocked
+    val postingInFlight = remember { PostingInFlight() }
     Box(modifier = Modifier.fillMaxSize()) {
     Box(
         modifier = Modifier
@@ -326,7 +355,10 @@ fun FutachaApp(
     ) {
         CompositionLocalProvider(
             LocalFutachaAppUnlocked provides !isAppHidden,
-            LocalFutachaAppLockHolder provides appLockHolder
+            LocalFutachaAppLockHolder provides appLockHolder,
+            LocalPostingInFlight provides postingInFlight,
+            com.valoser.futacha.shared.ui.board.LocalFutachaAppVersion provides
+                remember(versionChecker) { versionChecker?.getCurrentVersion().orEmpty() }
         ) {
         FutachaAppContent(
             stateStore = stateStore,
@@ -687,13 +719,16 @@ private fun FutachaAppContent(
         // theme and system bars, so a plain Material theme is used only while a
         // notice is showing.
         val futaberRecoveryNotice by SettingsRecoveryNotices.notice.collectAsState()
-        if (futaberRecoveryNotice != null) {
+        // These modes edit the same NG / watch word lists, so an unreadable one is offered 「初期化する」 here too (L87).
+        val futaberUnreadableWordLists by stateStore.unreadableWordLists.collectAsState(emptySet())
+        if (futaberRecoveryNotice != null || futaberUnreadableWordLists.isNotEmpty()) {
             val dark = androidx.compose.foundation.isSystemInDarkTheme()
             androidx.compose.material3.MaterialTheme(
                 colorScheme = if (dark) androidx.compose.material3.darkColorScheme()
                 else androidx.compose.material3.lightColorScheme()
             ) {
                 SettingsRecoveryNoticeDialog()
+                if (futaberRecoveryNotice == null) UnreadableWordListsDialog(stateStore)
             }
         }
         // AI commands (Siri / Shortcuts / Wear OS / links) are taken off the queue here and handed to the mode's screen,
@@ -817,6 +852,8 @@ private fun FutachaAppContent(
         // Notices share the active screen's theme. A separate theme host also
         // paints system bars, even when the notice itself has nothing to show.
         SettingsRecoveryNoticeDialog()
+        // After the recovery notice, which may explain why a list cannot be read (L87).
+        if (SettingsRecoveryNotices.notice.collectAsState().value == null) UnreadableWordListsDialog(stateStore)
         val persistedLightweightMode by produceState<Boolean?>(
             initialValue = null,
             key1 = stateStore
@@ -992,6 +1029,8 @@ private fun FutachaAppContent(
                     onCurrentThreadChanged(currentUrl)
                 }
                 var pendingCompatThreadDeepLink by remember { mutableStateOf<String?>(null) }
+                // Links, notifications and AI commands wait for a post being sent (L30).
+                val postingInFlight = LocalPostingInFlight.current
                 var threadDeepLinkError by remember { mutableStateOf<String?>(null) }
                 var unregisteredBoardRequest by remember { mutableStateOf<FutachaUnregisteredBoardRequest?>(null) }
                 var pendingOpenAfterBoardAdd by remember { mutableStateOf<ThreadHistoryEntry?>(null) }
@@ -1001,6 +1040,8 @@ private fun FutachaAppContent(
                 LaunchedEffect(platformThreadDeepLink, persistedBoards, persistedHistory, arePersistedListsLoaded, isAppUnlocked) {
                     if (!isAppUnlocked || !appLock.isUnlocked) return@LaunchedEffect
                     if (!arePersistedListsLoaded) return@LaunchedEffect
+                    if (platformThreadDeepLink.isNullOrBlank()) return@LaunchedEffect
+                    postingInFlight?.awaitIdle()
                     val raw = platformThreadDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     when (val resolution = resolveFutachaThreadDeepLink(raw, persistedBoards, persistedHistory)) {
                         is FutachaThreadDeepLinkResolution.Open -> {
@@ -1020,6 +1061,8 @@ private fun FutachaAppContent(
                 LaunchedEffect(platformBoardDeepLink, persistedBoards, arePersistedListsLoaded, isAppUnlocked) {
                     if (!isAppUnlocked || !appLock.isUnlocked) return@LaunchedEffect
                     if (!arePersistedListsLoaded) return@LaunchedEffect
+                    if (platformBoardDeepLink.isNullOrBlank()) return@LaunchedEffect
+                    postingInFlight?.awaitIdle()
                     val raw = platformBoardDeepLink?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
                     val board = persistedBoards.firstOrNull { candidate ->
                         candidate.url.trimEnd('/').equals(raw.trimEnd('/'), ignoreCase = true)
@@ -1284,6 +1327,8 @@ private fun FutachaAppContent(
                             return@rememberUpdatedState
                         }
                     }
+                    // After the age check, so a command is not dropped for the time a post took (L30).
+                    postingInFlight?.awaitIdle()
                     if (handledAiCommandIds.isDuplicateAiCommand(command)) {
                         return@rememberUpdatedState
                     }

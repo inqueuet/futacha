@@ -97,6 +97,17 @@ internal fun futachaProjectionUsesModernNg(
  * nothing needs hiding or extracting the normal page is returned at once.
  * Image NG needs network hashes and is applied as its results arrive.
  */
+/** Whether a stored NG rule applies to the thread shown ([tabKey] is the thread's, [boardKey] its board's). */
+internal fun futachaThreadRuleApplies(rule: CompatNgRule, tabKey: String, boardKey: String): Boolean = when (rule.kind) {
+    CompatNgKind.THREAD_IMAGE, CompatNgKind.THREAD_IMAGE_PHASH -> rule.appliesToThreadImage(boardKey, tabKey)
+    // ふたばー風・ふたったー風's "del＋レスNG" is scoped to the thread's address, not a tab key (L38), as としあき(仮) reads it.
+    CompatNgKind.THREAD_POST_NO -> rule.scopeKey == "*" || rule.scopeKey == tabKey ||
+        canonicalizeThreadUrl(rule.scopeKey)?.let { compatTabKey(it.canonicalUrl) == tabKey } == true
+    CompatNgKind.THREAD_POSTER_ID, CompatNgKind.THREAD_WORD,
+    CompatNgKind.THREAD_IGNORE, CompatNgKind.THREAD_REFUSE -> rule.scopeKey == "*" || rule.scopeKey == tabKey
+    else -> false
+}
+
 @Composable
 internal fun rememberFutachaFilteredThreadPage(
     source: ThreadPage,
@@ -110,14 +121,7 @@ internal fun rememberFutachaFilteredThreadPage(
     // null until the store delivered its rules; an empty initial list showed NG'd posts first.
     val loadedRules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(features.ngRulesState?.value)
     val rules = remember(loadedRules, context.tabKey, context.boardKey) {
-        loadedRules?.filter { rule -> when (rule.kind) {
-            CompatNgKind.THREAD_IMAGE, CompatNgKind.THREAD_IMAGE_PHASH ->
-                rule.appliesToThreadImage(context.boardKey, context.tabKey)
-            CompatNgKind.THREAD_POST_NO, CompatNgKind.THREAD_POSTER_ID, CompatNgKind.THREAD_WORD,
-            CompatNgKind.THREAD_IGNORE, CompatNgKind.THREAD_REFUSE ->
-                rule.scopeKey == "*" || rule.scopeKey == context.tabKey
-            else -> false
-        } }
+        loadedRules?.filter { rule -> futachaThreadRuleApplies(rule, context.tabKey, context.boardKey) }
     }
     val phashRules = remember(rules, context) { rules.orEmpty().filter {
         it.kind == CompatNgKind.THREAD_IMAGE_PHASH && it.appliesToThreadImage(context.boardKey, context.tabKey)

@@ -232,4 +232,15 @@ class VideoPlayerSupportTest {
             )
         )
     }
+
+    /** L116: the embedded (WebM) player gets the loop option, and only an autoplay option starts it. */
+    @Test
+    fun webVideoScriptsCarryLoopAndOnlyAutoplayStartsPlayback() {
+        val sync = buildWebVideoSyncJavaScript(resolveVideoPlayerWebSyncState(0.5f, isMuted = false, areControlsVisible = true, loop = true))
+        assertTrue("v.loop=true;" in sync, sync)
+        assertTrue("v.loop=false;" in buildWebVideoSyncJavaScript(resolveVideoPlayerWebSyncState(0.5f, false, true)))
+        assertTrue("v.play()" in buildWebVideoStartJavaScript(loop = false, autoPlay = true))
+        assertFalse("v.play()" in buildWebVideoStartJavaScript(loop = true, autoPlay = false))
+        assertFalse("autoplay" in buildEmbeddedVideoHtml("https://example.com/a.webm"), "The page itself still does not autoplay")
+    }
 }

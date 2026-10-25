@@ -405,7 +405,18 @@ internal fun futaberGallerySnapshot(snapshot: CompatThreadSnapshot, hiddenPostNo
  * from the same snapshot, but the shared one also applies a few settings of its own), else the list's own index.
  */
 internal fun futaberViewerIndexFor(mediaPosts: List<CompatPostSnapshot>, identity: String?, fallbackIndex: Int): Int {
-    val found = identity?.let { id -> mediaPosts.indexOfFirst { compatMediaIdentity(it) == id } } ?: -1
+    fun matches(post: CompatPostSnapshot, id: String) =
+        post.imageUrl == id || (post.imageUrl == null && post.thumbnailUrl == id) || compatMediaIdentity(post) == id
+    // The recorded page wins while it still shows the same picture (L147: a picture posted twice returned to its first
+    // copy, since the URL was looked up first).
+    if (identity != null && mediaPosts.getOrNull(fallbackIndex)?.let { matches(it, identity) } == true) return fallbackIndex
+    // Original URLs distinguish several images from one post even if inline-media indices have shifted.
+    val urlIndex = identity?.let { id ->
+        mediaPosts.indexOfFirst { it.imageUrl == id || (it.imageUrl == null && it.thumbnailUrl == id) }
+    } ?: -1
+    val found = if (urlIndex >= 0) urlIndex else identity?.let { id ->
+        mediaPosts.indexOfFirst { compatMediaIdentity(it) == id }
+    } ?: -1
     return if (found >= 0) found else fallbackIndex.coerceIn(0, (mediaPosts.size - 1).coerceAtLeast(0))
 }
 

@@ -53,7 +53,9 @@ internal data class GlobalSettingsCallbackBundleInputs(
     val showSnackbar: suspend (String) -> Unit,
     val clearImageCache: suspend () -> Unit,
     val clearTemporaryCache: suspend () -> Unit,
-    val refreshAutoSavedStats: suspend () -> Unit
+    val refreshAutoSavedStats: suspend () -> Unit,
+    /** Remembered by the screen, so callbacks rebuilt on recomposition see the cleanup already running (L32). */
+    val cleanupState: GlobalSettingsCleanupState = GlobalSettingsCleanupState()
 )
 
 internal data class GlobalSettingsCatalogMenuInputs(
@@ -143,7 +145,8 @@ internal fun buildGlobalSettingsCallbackBundle(
             showSnackbar = inputs.showSnackbar,
             clearImageCache = inputs.clearImageCache,
             clearTemporaryCache = inputs.clearTemporaryCache,
-            refreshAutoSavedStats = inputs.refreshAutoSavedStats
+            refreshAutoSavedStats = inputs.refreshAutoSavedStats,
+            cleanupState = inputs.cleanupState
         )
     )
     return GlobalSettingsCallbackBundle(
@@ -259,20 +262,33 @@ internal data class GlobalSettingsCacheInputs(
     val showSnackbar: suspend (String) -> Unit,
     val clearImageCache: suspend () -> Unit,
     val clearTemporaryCache: suspend () -> Unit,
-    val refreshAutoSavedStats: suspend () -> Unit
+    val refreshAutoSavedStats: suspend () -> Unit,
+    val cleanupState: GlobalSettingsCleanupState = GlobalSettingsCleanupState()
 )
+
+/**
+ * The cleanup that is running. It is Compose state kept by the screen (L32: it was a local of the callbacks, which are
+ * rebuilt on every recomposition, so a second tap ran the cleanup and its notice twice, and the buttons never
+ * recomposed to disabled).
+ */
+internal class GlobalSettingsCleanupState {
+    private val running = androidx.compose.runtime.mutableStateOf<Job?>(null)
+    var job: Job?
+        get() = running.value
+        set(value) { running.value = value }
+}
 
 internal fun buildGlobalSettingsCacheCallbacks(
     inputs: GlobalSettingsCacheInputs
 ): GlobalSettingsCacheCallbacks {
-    var cleanupJob: Job? = null
+    val state = inputs.cleanupState
 
     fun launchCleanup(
         target: GlobalSettingsCacheCleanupTarget,
         action: suspend () -> Unit
     ) {
-        if (cleanupJob?.isActive == true) return
-        cleanupJob = inputs.coroutineScope.launch {
+        if (state.job?.isActive == true) return
+        val job = inputs.coroutineScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             val result = runSuspendCatchingPreservingCancellation {
                 withTimeout(GLOBAL_SETTINGS_CACHE_CLEANUP_TIMEOUT_MILLIS) {
                     action()
@@ -285,6 +301,10 @@ internal fun buildGlobalSettingsCacheCallbacks(
                 )
             )
         }
+        // Recorded before it starts, cleared when it ends (the buttons read it).
+        state.job = job
+        job.invokeOnCompletion { if (state.job === job) state.job = null }
+        job.start()
     }
 
     return GlobalSettingsCacheCallbacks(
@@ -300,7 +320,7 @@ internal fun buildGlobalSettingsCacheCallbacks(
             AnalyticsTracker.event("storage_stats_refreshed")
             inputs.coroutineScope.launch { inputs.refreshAutoSavedStats() }
         },
-        isCleanupInProgress = { cleanupJob?.isActive == true }
+        isCleanupInProgress = { state.job?.isActive == true }
     )
 }
 

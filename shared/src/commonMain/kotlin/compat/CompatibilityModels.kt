@@ -357,7 +357,47 @@ fun compatPostNgScopeBoardKey(scopeKey: String): String? = canonicalizeThreadUrl
     ?.takeIf { it.canonicalUrl == scopeKey }
     ?.let { compatBoardKey(it.canonicalBoardUrl) }
 
-fun CompatNgRule.isScopedToRemovedBoard(boardKey: String): Boolean = scopeKey == boardKey ||
+/**
+ * Whether a stored rule is kept when the profile is loaded. A thread scope (a key of the
+ * [compatTabKey] form) outlives its tab, as on Android, so the same thread opened again is still
+ * filtered; it goes with its board instead ([isScopedToRemovedBoard]). Other scopes need their
+ * board or open tab as in [isCompatNgScopeValid] (L86).
+ */
+fun isCompatNgScopeRetained(
+    kind: CompatNgKind,
+    scopeKey: String,
+    boardKeys: Set<String>,
+    tabKeys: Set<String>
+): Boolean = isCompatNgScopeValid(kind, scopeKey, boardKeys, tabKeys) ||
+    (COMPAT_TAB_KEY_FORM.matches(scopeKey) && isCompatNgScopeValid(kind, scopeKey, boardKeys, setOf(scopeKey)))
+
+private val COMPAT_TAB_KEY_FORM = Regex("^compat_tab_[0-9a-f]{16}$")
+
+/**
+ * The thread scopes known to belong to [boardKey]: its tabs (open or closed) and history rows.
+ * Deleting the board removes their NG with the board's own (L86).
+ */
+fun compatBoardThreadScopeKeys(
+    boardKey: String,
+    tabs: Iterable<CompatTab>,
+    history: Iterable<CompatHistoryEntry>
+): Set<String> = buildSet {
+    tabs.forEach { tab -> if (tab.boardKey == boardKey) add(tab.key) }
+    history.forEach { entry ->
+        if (entry.boardKey == boardKey) runCatching { compatTabKey(entry.canonicalUrl) }.getOrNull()?.let(::add)
+    }
+}
+
+fun CompatNgRule.isScopedToRemovedBoard(boardKey: String, boardThreadKeys: Set<String> = emptySet()): Boolean =
+    isCompatNgScopedToRemovedBoard(kind, scopeKey, boardKey, boardThreadKeys)
+
+/** [isScopedToRemovedBoard] for a stored row, whose kind may be one this version does not know (null). */
+fun isCompatNgScopedToRemovedBoard(
+    kind: CompatNgKind?,
+    scopeKey: String,
+    boardKey: String,
+    boardThreadKeys: Set<String> = emptySet()
+): Boolean = scopeKey == boardKey || scopeKey in boardThreadKeys ||
     (kind == CompatNgKind.THREAD_POST_NO && compatPostNgScopeBoardKey(scopeKey) == boardKey)
 
 /**

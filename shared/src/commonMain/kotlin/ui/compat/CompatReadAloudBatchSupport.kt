@@ -6,6 +6,12 @@ import com.valoser.futacha.shared.compat.toCompatPlainText
 
 internal const val COMPAT_READ_ALOUD_MAX_BATCH_CHARS = 3_000
 
+/** Full order preserves the cursor; displayed copies preserve NG and deletion redaction. */
+internal class CompatReadAloudVisibleSnapshot(
+    val posts: List<CompatPostSnapshot> = emptyList(),
+    val visibleByNo: Map<String, CompatPostSnapshot> = emptyMap()
+)
+
 internal data class CompatReadAloudBatch(
     val text: String,
     val nextPostIndex: Int,
@@ -50,19 +56,22 @@ internal fun buildCompatReadAloudBatch(
     startPostIndex: Int,
     startCharacterOffset: Int,
     maxChars: Int = COMPAT_READ_ALOUD_MAX_BATCH_CHARS,
-    hiddenPostNos: Set<String> = emptySet()
+    hiddenPostNos: Set<String> = emptySet(),
+    visiblePostsByNo: Map<String, CompatPostSnapshot>? = null
 ): CompatReadAloudBatch {
     require(maxChars > 0) { "Read-aloud batch size must be positive" }
     var postIndex = startPostIndex.coerceIn(0, posts.size)
     var characterOffset = startCharacterOffset.coerceAtLeast(0)
     val output = StringBuilder(minOf(maxChars, 512))
     while (postIndex < posts.size && output.length < maxChars) {
-        if (posts[postIndex].postNo in hiddenPostNos) {
+        val source = posts[postIndex]
+        val displayed = if (visiblePostsByNo == null) source else visiblePostsByNo[source.postNo]
+        if (source.postNo in hiddenPostNos || displayed == null || displayed.isContentRedacted) {
             postIndex += 1
             characterOffset = 0
             continue
         }
-        val text = compatReadAloudText(posts[postIndex])
+        val text = compatReadAloudText(displayed)
         if (characterOffset >= text.length) {
             postIndex += 1
             characterOffset = 0

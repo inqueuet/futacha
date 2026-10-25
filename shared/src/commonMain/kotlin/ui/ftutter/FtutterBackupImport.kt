@@ -128,7 +128,7 @@ internal val FTUTTER_BACKUP_SAME_NAME_SETTINGS: List<String> = listOf(
     FtutterKeys.NG_CHAIN, FtutterKeys.CONFIRM_BEFORE_POST, FtutterKeys.USE_GESTURE, FtutterKeys.BACK_BY_PREVIOUS_CATALOG,
     FtutterKeys.BACK_BY_PREVIOUS_THREAD, FtutterKeys.USE_TABLET, FtutterKeys.TABLET_MIN_WIDTH, FtutterKeys.TABLET_ROW_PORTRAIT,
     FtutterKeys.TABLET_ROW_LANDSCAPE, FtutterKeys.THREAD_ON_LEFT, FtutterKeys.DIVIDE_PERCENTAGE, FtutterKeys.DELETE_KEY,
-    FtutterKeys.USE_HTTPS, FtutterKeys.USE_CUSTOM_TAB, FtutterKeys.GESTURE_SENSITIVITY,
+    FtutterKeys.USE_CUSTOM_TAB, FtutterKeys.GESTURE_SENSITIVITY,
     FtutterKeys.IMAGE_SEARCH_ASCII2D, FtutterKeys.ALBUM_NAME, FtutterKeys.DISABLE_ALBUM_NAME
 ) + FTUTTER_GESTURE_DEFAULTS.keys.map(FtutterKeys::gesture)
 
@@ -157,7 +157,12 @@ internal data class FtutterBackupPlan(
     /** 追加のファイル選択やアクセス許可が必要なもの。取り込み前に知らせる。 */
     val limitations: List<String> = emptyList(),
     /** Header only; import into the shared cookie jar without logging its contents. */
-    val cookieHeader: String? = null
+    val cookieHeader: String? = null,
+    /** Source drafts remain separate so confirmation-time edits are merged again when saved. */
+    val importedDrafts: Map<String, FtutterDraft> = emptyMap(),
+    val draftImport: FtutterDraftImport? = null,
+    /** 取り込むタブの内訳（L132）。上限で閉じる数も確認の時に出す。 */
+    val tabCounts: FtutterImportTabCounts? = null
 ) {
     override fun toString(): String = summary
 
@@ -166,10 +171,13 @@ internal data class FtutterBackupPlan(
             add("設定 ${settingCount}項目")
             add("板 ${addedBoards}件")
             add("履歴 ${history.size}件")
-            preferences[FtutterKeys.TABS]?.let { add("タブ ${decodeFtutterList(it).orEmpty().size}件") }
+            tabCounts?.let { add(it.summary) } ?: preferences[FtutterKeys.TABS]?.let { add("タブ ${decodeFtutterList(it).orEmpty().size}件") }
             add("NG・ピックアップ ${ngCount}件")
             if (rejectedNg > 0) add("使えないNG ${rejectedNg}件は取り込みません")
             if (marks.isNotEmpty()) add("マーク ${marks.size}件")
+            draftImport?.let { add(it.summary) }
+            val cookieCount = com.valoser.futacha.shared.repository.parseWebViewCookieHeader(cookieHeader).size
+            if (cookieCount > 0) add("Cookie ${cookieCount}件（全モード共有・ふたば全体。既存Cookieと同名のものは取り込みません）")
         }.joinToString("、") + if (limitations.isEmpty()) "" else "\n引き継ぎの制限：${limitations.joinToString("、")}"
 }
 
@@ -188,7 +196,9 @@ internal fun ftutterBackupPlan(
     existingNg: List<FtutterNgRule>,
     existingPreferences: Map<String, String>,
     now: Long,
-    ensureActive: () -> Unit = {}
+    ensureActive: () -> Unit = {},
+    /** 今の履歴の並び（最後に開いた順のスレURL）。取り込んだ後に上限で閉じるタブを決める（L132）。 */
+    existingHistoryOrder: List<String> = emptyList()
 ): FtutterBackupPlan {
     val out = LinkedHashMap<String, String>()
     fun scalar(value: FtutterPrefValue): String? = when (value) {
@@ -218,6 +228,7 @@ internal fun ftutterBackupPlan(
     texts("applyPickupOrderMode")?.let { out[FtutterKeys.PICKUP_ORDER_MODES] = if (it.isEmpty()) FTUTTER_PICKUP_ORDERS_NONE else encodeFtutterList(it) }
     val settingCount = out.size
     var hasDraftAttachment = false
+    val importedDrafts = LinkedHashMap<String, FtutterDraft>()
     fun importedDraft(element: JsonElement): FtutterDraft? {
         if ((element as? JsonObject)?.str("upFile")?.isNotBlank() == true) hasDraftAttachment = true
         return draftOf(element)
@@ -270,8 +281,7 @@ internal fun ftutterBackupPlan(
         }
         ita["kakikomiData"]?.let(::importedDraft)?.let { draft ->
             ftutterBoardForUrl(nextBoards, url)?.let { board ->
-                out[FtutterKeys.DRAFTS] = ftutterDraftsWith(parseFtutterDrafts(out[FtutterKeys.DRAFTS] ?: existingPreferences[FtutterKeys.DRAFTS]),
-                    ftutterDraftKey(FtutterPostTarget.Create(board.id), board.url), draft)
+                importedDrafts.getOrPut(ftutterDraftKey(FtutterPostTarget.Create(board.id), board.url)) { draft }
             }
         }
     }
@@ -310,8 +320,7 @@ internal fun ftutterBackupPlan(
         if (data.bool("protected") == true) protected += url
         posts.filter { it.int("marked") == 1 }.mapNotNull { it.int("no")?.toString() }.forEach { marks += url to it }
         data["kakikomiData"]?.let(::importedDraft)?.let { draft ->
-            out[FtutterKeys.DRAFTS] = ftutterDraftsWith(parseFtutterDrafts(out[FtutterKeys.DRAFTS] ?: existingPreferences[FtutterKeys.DRAFTS]),
-                ftutterDraftKey(FtutterPostTarget.Reply(board.id, threadId), board.url), draft)
+            importedDrafts.getOrPut(ftutterDraftKey(FtutterPostTarget.Reply(board.id, threadId), board.url)) { draft }
         }
     }
     if (history.isNotEmpty()) {
@@ -319,13 +328,25 @@ internal fun ftutterBackupPlan(
         // 上限で取り込んだ分が捨てられた）。
         val importedUrls = history.mapTo(LinkedHashSet()) { it.boardUrl }
         val ordered = readCounts.entries.sortedBy { if (it.key in importedUrls) 0 else 1 }
-        out[FtutterKeys.READ_COUNTS] = encodeFtutterReadCounts(ordered.take(FTUTTER_IMPORT_READ_COUNT_LIMIT).associate { it.key to it.value })
+        // 次の書き込みと同じ規則（字数・今のタブと保護したスレを先に）で収め、取り込んだ分が次の書き込みで減らないようにする（L129）。
+        out[FtutterKeys.READ_COUNTS] = encodeFtutterReadCounts(ftutterTrimReadCounts(ordered.associate { it.key to it.value },
+            importedUrls + ftutterReadRecordsToKeep(existingPreferences)))
     }
     if (protected.isNotEmpty()) out[FtutterKeys.PROTECTED] = encodeFtutterList(protected.toList())
-    // タブ：今のタブの前に、原作のタブを（重複を除いて）入れる。
+    // タブ：今のタブの前に、原作のタブを（重複を除いて）入れる。取り込んだ履歴は今の履歴より上に並ぶので、履歴の保存数の
+    // 上限は今のタブから閉じる。後で黙って閉じず、ここで上限に合わせ、閉じる数を確認の文に出す（L132）。
+    var tabCounts: FtutterImportTabCounts? = null
     texts("tabs")?.map(::ftutterCanonicalThreadUrl)?.takeIf { it.isNotEmpty() }?.let { tabs ->
         val current = parseFtutterTabs(existingPreferences).urls
-        out[FtutterKeys.TABS] = encodeFtutterList((tabs + current).distinct())
+        val merged = (tabs + current).distinct()
+        val order = (history.map { ftutterCanonicalThreadUrl(it.boardUrl) } + tabs + existingHistoryOrder + current).distinct()
+        val limit = ftutterHistoryLimit(existingPreferences + out)
+        val keep = listOfNotNull(existingPreferences[FtutterKeys.OPENING], (prefs["opening"] as? FtutterPrefValue.Text)?.value)
+            .filter { it.isNotBlank() }.mapTo(HashSet(), ::ftutterCanonicalThreadUrl)
+        val kept = ftutterLimitTabs(merged, order, protected, limit, keep, dropMissing = false)
+        out[FtutterKeys.TABS] = encodeFtutterList(kept)
+        tabCounts = FtutterImportTabCounts(imported = tabs.distinct().size, current = current.size, merged = merged.size,
+            closed = merged.size - kept.size, limit = limit)
     }
     (prefs["opening"] as? FtutterPrefValue.Text)?.value?.let(::ftutterCanonicalThreadUrl)?.let { opening ->
         if (opening in decodeFtutterList(out[FtutterKeys.TABS] ?: existingPreferences[FtutterKeys.TABS]).orEmpty()) {
@@ -348,11 +369,44 @@ internal fun ftutterBackupPlan(
     // Preserve source paths as recovery information; a copied URI does not confer the source app's grant.
     listOf("userFontPath", "savePath").forEach { key -> prefs[key]?.let(::scalar)?.let { out[FtutterKeys.PREFIX + "import." + key] = it } }
     texts("savePathList")?.let { out[FtutterKeys.PREFIX + "import.savePathList"] = encodeFtutterList(it) }
+    // What was chosen when importing: once the user chooses another one, the notice about the original goes away (L19).
+    if (FtutterKeys.PREFIX + "import.savePath" in out || FtutterKeys.PREFIX + "import.savePathList" in out) {
+        out[FTUTTER_IMPORT_SAVE_PATH_CHOSEN] = existingPreferences[FTUTTER_SHARED_DESTINATION_KEY].orEmpty()
+    }
+    if (FtutterKeys.PREFIX + "import.userFontPath" in out) {
+        out[FTUTTER_IMPORT_FONT_CHOSEN] = existingPreferences[com.valoser.futacha.shared.ui.futaber.FUTABER_CUSTOM_FONT_PREFERENCE_KEY].orEmpty()
+    }
     if (hasDraftAttachment) limitations += "下書きの添付ファイル（本文は取り込みます）"
-    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount, rejectedNg, limitations.toList(), (prefs["cookie"] as? FtutterPrefValue.Text)?.value)
+    val draftImport = importedDrafts.takeIf { it.isNotEmpty() }?.let {
+        ftutterMergeImportedDrafts(existingPreferences[FtutterKeys.DRAFTS], it).also { fit -> out[FtutterKeys.DRAFTS] = fit.encoded }
+    }
+    return FtutterBackupPlan(out, nextBoards, added, history, marks, importedNg.size, settingCount, rejectedNg,
+        limitations.toList(), (prefs["cookie"] as? FtutterPrefValue.Text)?.value, importedDrafts, draftImport, tabCounts)
 }
 
-internal const val FTUTTER_IMPORT_READ_COUNT_LIMIT = 400
+/** 取り込むタブの内訳（L132）。[closed] は履歴の保存数 [limit] を超えて閉じる数（保護したタブは数えない）。 */
+internal data class FtutterImportTabCounts(val imported: Int, val current: Int, val merged: Int, val closed: Int, val limit: Int) {
+    val summary: String
+        get() = buildString {
+            append("タブ：取り込み ${imported}件")
+            val details = listOfNotNull(
+                "今のタブ ${current}件と合わせて ${merged}件".takeIf { current > 0 },
+                "履歴の保存数 ${limit} を超える古いタブ ${closed}件は閉じます".takeIf { closed > 0 }
+            )
+            if (details.isNotEmpty()) append("（${details.joinToString("。")}）")
+        }
+}
+
+internal val FTUTTER_SHARED_DESTINATION_KEY = com.valoser.futacha.shared.ui.compat.compatPreferenceStorageKey("storage", "dummyDownloadDir")
+internal val FTUTTER_IMPORT_SAVE_PATH_CHOSEN = FtutterKeys.PREFIX + "import.savePathChosen"
+internal val FTUTTER_IMPORT_FONT_CHOSEN = FtutterKeys.PREFIX + "import.userFontPathChosen"
+
+/**
+ * Whether the notice about an imported original (save location or font) still applies (L19): it does until another one
+ * is chosen. An import made before the choice was recorded keeps its notice until it is dismissed.
+ */
+internal fun ftutterImportNoticePending(original: String?, chosenAtImport: String?, current: String?): Boolean =
+    !original.isNullOrBlank() && (chosenAtImport == null || current.orEmpty() == chosenAtImport)
 
 private fun draftOf(element: JsonElement): FtutterDraft? {
     val obj = element as? JsonObject ?: return null
@@ -372,5 +426,5 @@ internal fun ftutterMergeImportedReadCounts(planValue: String, stored: String?, 
     val merged = LinkedHashMap<String, Int>()
     parseFtutterReadCounts(planValue).forEach { (url, count) -> if (url in importedUrls) merged[url] = count }
     parseFtutterReadCounts(stored).forEach { (url, count) -> if (url !in merged) merged[url] = count }
-    return encodeFtutterReadCounts(merged.entries.take(FTUTTER_IMPORT_READ_COUNT_LIMIT).associate { it.key to it.value })
+    return encodeFtutterReadCounts(ftutterTrimReadCounts(merged, importedUrls))
 }

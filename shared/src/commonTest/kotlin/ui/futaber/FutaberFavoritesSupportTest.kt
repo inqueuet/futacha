@@ -79,6 +79,9 @@ class FutaberFavoritesSupportTest {
         val list = listOf(favorite("1"), favorite("2", board = other))
         assertEquals(listOf("2"), futaberPruneFavorites(list, listOf(other)).map { it.threadId })
         assertEquals(list, futaberPruneFavorites(list, listOf(board, other)))
+        // L113: an empty list (not read yet, or unreadable) is not every board removed; a deleted board drops its own.
+        assertEquals(list, futaberPruneFavorites(list, emptyList()))
+        assertEquals(listOf("2"), futaberFavoritesWithoutBoard(list, board.id).map { it.threadId })
         // The row follows the history count when the thread was read since, and keeps its own otherwise.
         val history = listOf(
             ThreadHistoryEntry(

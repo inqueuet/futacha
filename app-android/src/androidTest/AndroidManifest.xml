@@ -1,5 +1,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity
+            android:name="com.valoser.futacha.M66TaskSenderActivity"
+            android:exported="true"
+            android:taskAffinity="com.valoser.futacha.test.auditm66.sender"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <provider
+            android:name="com.valoser.futacha.SafRenameAuditProvider"
+            android:authorities="com.valoser.futacha.test.auditrename"
+            android:exported="true"
+            android:grantUriPermissions="true">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+        <provider
+            android:name="com.valoser.futacha.MediaFolderTestProvider"
+            android:authorities="com.valoser.futacha.test.mediafolder"
+            android:exported="true"
+            android:grantUriPermissions="true">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
         <provider
             android:name="com.valoser.futacha.AttachmentTestProvider"
             android:authorities="com.valoser.futacha.test.attachments"

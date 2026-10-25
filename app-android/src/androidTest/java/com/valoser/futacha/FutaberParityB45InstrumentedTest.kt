@@ -77,6 +77,8 @@ class FutaberParityB45InstrumentedTest {
         override suspend fun getThreadIfModified(board: String, threadId: String, validators: HttpConditionalValidators?) =
             if (gone) throw NetworkException("gone", statusCode = 404)
             else ConditionalThreadFetchResult.Modified(fake.getThread(board, threadId), null)
+        override suspend fun getThreadContent(board: String, threadId: String) =
+            if (gone) throw NetworkException("gone", statusCode = 404) else fake.getThreadContent(board, threadId)
     }
 
     @Before fun prepare() {
@@ -209,6 +211,19 @@ class FutaberParityB45InstrumentedTest {
         rule.waitUntil(10_000) { notice().startsWith("タブを1件確認しました") }
         assertEquals("タブを1件確認しました（落ちたスレ 1件）", notice())
         assertTrue(notice() != FUTABER_TAB_CHECK_RUNNING_NOTICE)
+    }
+
+    /** L108: the thread on screen confirmed gone (404) marks its shared history row fallen, as the tab check does. */
+    @Test fun aThreadThatFallsWhileShownIsMarkedFallenInTheHistory() {
+        host(emptyMap())
+        val threadId = openFirstThread()
+        rule.waitUntil(10_000) { runBlocking { appState.history.first() }.any { it.threadId == threadId } }
+        gone = true
+        rule.onNodeWithTag("futaber-thread-refresh").performClick()
+        rule.waitUntil(30_000) {
+            runBlocking { appState.history.first() }.firstOrNull { it.threadId == threadId }
+                ?.let { it.isAutoRefreshDisabled && it.threadStatus?.isDead == true } == true
+        }
     }
 
     @Test fun theSettingsSwitchTurnsTheSharedArchiveReportOffAndNothingIsNotedThen() {

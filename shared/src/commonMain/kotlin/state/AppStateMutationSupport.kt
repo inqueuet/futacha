@@ -76,7 +76,7 @@ internal suspend fun addAppStateSelfPostIdentifier(
     threadId: String,
     identifier: String,
     boardId: String? = null,
-    maxEntries: Int = SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE,
+    maxEntries: Int = SELF_POST_THREAD_IDENTIFIER_MAX_ENTRIES,
     mutateSelfPostIdentifierMap: suspend (
         transform: (Map<String, List<String>>) -> Map<String, List<String>>
     ) -> Unit

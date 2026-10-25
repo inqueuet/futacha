@@ -302,7 +302,9 @@ fun FutachaTheme(
     )
     CompositionLocalProvider(
         LocalFutachaThemePalette provides themePalette,
-        LocalFutachaChromeColors provides chromeColors
+        LocalFutachaChromeColors provides chromeColors,
+        com.valoser.futacha.shared.ui.board.LocalBugReportThemeName provides
+            com.valoser.futacha.shared.ui.board.futachaBugReportThemeName(themePalette, themeMode)
     ) {
         MaterialTheme(
             colorScheme = colors,

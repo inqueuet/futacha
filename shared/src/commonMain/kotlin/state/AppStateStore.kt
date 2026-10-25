@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.compat.removeDuplicateBoardSummaries
+import com.valoser.futacha.shared.compat.upgradeOfficialFutabaHttpUrl
 import com.valoser.futacha.shared.media.MediaFeatureSettings
 
 import com.valoser.futacha.shared.model.AppIconVariant
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -203,11 +205,18 @@ class AppStateStore internal constructor(
                 historyFileStore.changes.map { Unit },
                 storage.historyJson.map { Unit }
             )
-                .map {
-                    historyFileStore.readHistorySnapshot(
-                        clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
-                    ) {
-                        storage.historyJson.first()
+                .mapNotNull {
+                    try {
+                        historyFileStore.readHistorySnapshot(
+                            clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+                        ) {
+                            storage.historyJson.first()
+                        }
+                    } catch (error: AppStateHistoryUnavailableException) {
+                        // An unavailable read is not a loaded empty history. Keep
+                        // subscribers waiting, and retry on the next storage event.
+                        Logger.e(TAG, "Failed to observe saved history", error)
+                        null
                     }
                 }
                 .distinctUntilChanged()
@@ -319,7 +328,7 @@ class AppStateStore internal constructor(
         threadMenuEntriesSerializer = threadMenuEntriesSerializer,
         catalogNavEntriesSerializer = catalogNavEntriesSerializer,
         preferredFileManagerFlow = preferredFileManagerFlow,
-        selfIdentifierMaxEntries = SELF_IDENTIFIER_MAX_ENTRIES,
+        selfIdentifierMaxEntries = SELF_POST_THREAD_IDENTIFIER_MAX_ENTRIES,
         tag = TAG,
         rethrowIfCancellation = ::rethrowIfCancellation,
         mutateCatalogModeMap = preferenceSnapshotCoordinator::mutateCatalogModeMap,
@@ -454,50 +463,153 @@ class AppStateStore internal constructor(
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) =
         preferenceOperations.setCatalogMode(boardId, mode)
 
-    suspend fun setNgHeaders(headers: List<String>) =
-        preferenceOperations.setNgHeaders(headers)
+    // The word lists below are not saved over while the stored one cannot be read (L87): see storedWordListForEdit.
+    suspend fun setNgHeaders(headers: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.NG_HEADERS) != null) preferenceOperations.setNgHeaders(headers)
+    }
 
-    suspend fun setNgWords(words: List<String>) =
-        preferenceOperations.setNgWords(words)
+    suspend fun setNgWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.NG_WORDS) != null) preferenceOperations.setNgWords(words)
+    }
 
-    suspend fun setCatalogNgWords(words: List<String>) =
-        preferenceOperations.setCatalogNgWords(words)
+    suspend fun setCatalogNgWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.CATALOG_NG_WORDS) != null) preferenceOperations.setCatalogNgWords(words)
+    }
 
-    suspend fun setWatchWords(words: List<String>) =
-        preferenceOperations.setWatchWords(words)
+    suspend fun setWatchWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.WATCH_WORDS) != null) preferenceOperations.setWatchWords(words)
+    }
 
-    suspend fun setBoardWatchWords(boardId: String, words: List<String>) =
-        preferenceOperations.setBoardWatchWords(boardId, words)
+    suspend fun setBoardWatchWords(boardId: String, words: List<String>) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.setBoardWatchWords(boardId, words)
+    }
 
-    suspend fun clearBoardWatchWordsOverride(boardId: String) =
-        preferenceOperations.clearBoardWatchWordsOverride(boardId)
+    suspend fun clearBoardWatchWordsOverride(boardId: String) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.clearBoardWatchWordsOverride(boardId)
+    }
 
     /** Atomically re-applies [edit] to the latest stored NG headers. */
-    suspend fun updateNgHeaders(edit: (List<String>) -> List<String>) =
-        wordListEditMutex.withLock { setNgHeaders(edit(ngHeaders.first())) }
+    suspend fun updateNgHeaders(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.NG_HEADERS)?.let { preferenceOperations.setNgHeaders(edit(it)) }
+        }
+    }
 
     /** Atomically re-applies [edit] to the latest stored NG words. */
-    suspend fun updateNgWords(edit: (List<String>) -> List<String>) =
-        wordListEditMutex.withLock { setNgWords(edit(ngWords.first())) }
+    suspend fun updateNgWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.NG_WORDS)?.let { preferenceOperations.setNgWords(edit(it)) }
+        }
+    }
 
     /** Atomically re-applies [edit] to the latest stored catalog NG words. */
-    suspend fun updateCatalogNgWords(edit: (List<String>) -> List<String>) =
-        wordListEditMutex.withLock { setCatalogNgWords(edit(catalogNgWords.first())) }
+    suspend fun updateCatalogNgWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.CATALOG_NG_WORDS)?.let { preferenceOperations.setCatalogNgWords(edit(it)) }
+        }
+    }
 
     /** Atomically re-applies [edit] to the latest stored global watch words. */
-    suspend fun updateWatchWords(edit: (List<String>) -> List<String>) =
-        wordListEditMutex.withLock { setWatchWords(edit(watchWords.first())) }
+    suspend fun updateWatchWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.WATCH_WORDS)?.let { preferenceOperations.setWatchWords(edit(it)) }
+        }
+    }
 
     /**
      * Atomically re-applies [edit] to the board's watch words; without an
      * override the global list is the starting point, as in the editor.
      */
-    suspend fun updateBoardWatchWords(boardId: String, edit: (List<String>) -> List<String>) =
+    suspend fun updateBoardWatchWords(boardId: String, edit: (List<String>) -> List<String>) {
         wordListEditMutex.withLock {
             val normalizedBoardId = boardId.trim()
-            val base = boardWatchWords.first()[normalizedBoardId] ?: watchWords.first()
-            setBoardWatchWords(normalizedBoardId, edit(base))
+            val boardLists = storedBoardWatchWordsForEdit() ?: return@withLock
+            // An unreadable global list is not the starting point of a new override either.
+            val base = boardLists[normalizedBoardId]
+                ?: storedWordListForEdit(AppStateWordList.WATCH_WORDS)
+                ?: return@withLock
+            preferenceOperations.setBoardWatchWords(normalizedBoardId, edit(base))
         }
+    }
+
+    private fun storedWordListJson(list: AppStateWordList): Flow<String?> = when (list) {
+        AppStateWordList.NG_HEADERS -> storage.ngHeadersJson
+        AppStateWordList.NG_WORDS -> storage.ngWordsJson
+        AppStateWordList.CATALOG_NG_WORDS -> storage.catalogNgWordsJson
+        AppStateWordList.WATCH_WORDS -> storage.watchWordsJson
+        AppStateWordList.BOARD_WATCH_WORDS -> storage.boardWatchWordsJson
+    }
+
+    private fun isStoredWordListReadable(list: AppStateWordList, raw: String?): Boolean =
+        if (list == AppStateWordList.BOARD_WATCH_WORDS) {
+            readStoredStringListMapValue(raw, json, stringListMapSerializer).isSuccess
+        } else {
+            readStoredStringListValue(raw, json, stringListSerializer).isSuccess
+        }
+
+    /**
+     * The word lists stored but unreadable (damaged, or too large). They show as empty, and their edits are not saved
+     * until [resetUnreadableWordList] (L87).
+     */
+    val unreadableWordLists: Flow<Set<AppStateWordList>> = combine(
+        AppStateWordList.entries.map { list ->
+            storedWordListJson(list).distinctUntilChanged().map { raw -> list.takeUnless { isStoredWordListReadable(it, raw) } }
+        }
+    ) { lists -> lists.filterNotNull().toSet() }
+        .distinctUntilChanged()
+        .flowOn(AppDispatchers.parsing)
+
+    /**
+     * The stored [list] for an edit, or null when one is stored but cannot be read. Such a list shows as empty, and an
+     * edit made on that view saved only the edit over every stored entry (L87): it is kept, and the refusal recorded in
+     * [lastStorageError], until [resetUnreadableWordList] (「初期化する」).
+     */
+    private suspend fun storedWordListForEdit(list: AppStateWordList): List<String>? {
+        val raw = storedWordListJson(list).first()
+        return withContext(AppDispatchers.parsing) { readStoredStringListValue(raw, json, stringListSerializer) }
+            .getOrElse { error -> refuseUnreadableWordListEdit(list, error); null }
+    }
+
+    /** [storedWordListForEdit] for the per-board watch words. */
+    private suspend fun storedBoardWatchWordsForEdit(): Map<String, List<String>>? {
+        val raw = storage.boardWatchWordsJson.first()
+        return withContext(AppDispatchers.parsing) { readStoredStringListMapValue(raw, json, stringListMapSerializer) }
+            .getOrElse { error -> refuseUnreadableWordListEdit(AppStateWordList.BOARD_WATCH_WORDS, error); null }
+    }
+
+    private suspend fun refuseUnreadableWordListEdit(list: AppStateWordList, error: Throwable) {
+        runStorageMutation(
+            "save ${list.name}",
+            { "Refusing to save ${list.name}: the stored list could not be read" }
+        ) {
+            throw error
+        }
+    }
+
+    /**
+     * 「初期化する」 for a list found unreadable: it is replaced by an empty one, so it can be edited and saved again.
+     * A list that reads by now is left as it is. True when it was reset (L87).
+     */
+    suspend fun resetUnreadableWordList(list: AppStateWordList): Boolean = wordListEditMutex.withLock {
+        val raw = storedWordListJson(list).first()
+        if (withContext(AppDispatchers.parsing) { isStoredWordListReadable(list, raw) }) return@withLock false
+        var reset = false
+        runStorageMutation("reset ${list.name}", { "Failed to reset the unreadable ${list.name}" }) {
+            when (list) {
+                AppStateWordList.NG_HEADERS -> storage.updateNgHeadersJson("[]")
+                AppStateWordList.NG_WORDS -> storage.updateNgWordsJson("[]")
+                AppStateWordList.CATALOG_NG_WORDS -> storage.updateCatalogNgWordsJson("[]")
+                AppStateWordList.WATCH_WORDS -> storage.updateWatchWordsJson("[]")
+                AppStateWordList.BOARD_WATCH_WORDS -> {
+                    storage.updateBoardWatchWordsJson("{}")
+                    // Edits read the cached map before the stored one; it must not bring the old entries back.
+                    preferenceSnapshotCoordinator.forgetBoardWatchWordMap()
+                }
+            }
+            reset = true
+        }
+        reset
+    }
 
     suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) =
         preferenceOperations.setThreadMenuConfig(config)
@@ -605,6 +717,18 @@ class AppStateStore internal constructor(
                     if (repaired.size != boards.size) {
                         Logger.w(TAG, "Removing ${boards.size - repaired.size} boards stored more than once")
                         boardsCoordinator.updateBoards { current -> removeDuplicateBoardSummaries(current) }
+                    }
+                    // A 2chan board saved with http:// is moved to https once (L100, the decision): over http it could
+                    // not post on iOS nor through the official pre-submit step. Registration gives https now, so a later
+                    // start finds nothing to move unless an old backup brings one back. Other hosts keep their address.
+                    if (boards.any { upgradeOfficialFutabaHttpUrl(it.url) != it.url }) {
+                        Logger.i(TAG, "Moving 2chan boards saved with http to https")
+                        boardsCoordinator.updateBoards { current ->
+                            current.map { board ->
+                                val upgraded = upgradeOfficialFutabaHttpUrl(board.url)
+                                if (upgraded == board.url) board else board.copy(url = upgraded)
+                            }
+                        }
                     }
                 }
             }

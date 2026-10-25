@@ -257,8 +257,24 @@ internal fun FutachaThreadFeatureHost(
     }
     val confirmedGone = !staticView && !restoring &&
         ((currentState as? ThreadUiState.Error)?.confirmedGone == true || ((currentState as? ThreadUiState.Success)?.let { it.isArchived || it.confirmedGone } == true))
-    LaunchedEffect(confirmedGone, tabKey) {
-        if (confirmedGone) features.store.updateTabIfPresent(tabKey) { it.copy(isDead = true) }
+    var goneSaveFailure by remember(tabKey) { mutableStateOf<String?>(null) }
+    var goneSaveFailureOpen by remember(tabKey) { mutableStateOf(false) }
+    var goneSaveInProgress by remember(tabKey) { mutableStateOf(false) }
+    var goneSaveRetry by remember(tabKey) { mutableIntStateOf(0) }
+    fun retryGoneSave() { if (!goneSaveInProgress) { goneSaveFailureOpen = false; goneSaveRetry++ } }
+    LaunchedEffect(confirmedGone, tabKey, features.store, goneSaveRetry) {
+        goneSaveFailure = null
+        goneSaveFailureOpen = false
+        if (!confirmedGone) return@LaunchedEffect
+        goneSaveInProgress = true
+        try {
+            persistFutachaGoneTab(features.store, tabKey).exceptionOrNull()?.let { failure ->
+                goneSaveFailure = futachaGoneTabSaveFailureReason(failure)
+                goneSaveFailureOpen = true
+            }
+        } finally {
+            goneSaveInProgress = false
+        }
     }
     val page = (currentState as? ThreadUiState.Success)?.page ?: latest?.page
     val tab = tabs.firstOrNull { it.key == tabKey } ?: CompatTab(
@@ -323,7 +339,7 @@ internal fun FutachaThreadFeatureHost(
     // the 404/410 probe confirmed that; a newer page (manual retry) clears it.
     var goneConfirmedFor by remember(tabKey) { mutableStateOf<ThreadUiState?>(null) }
     val latestState by rememberUpdatedState(currentState)
-    val threadGone = tab.isDead || (currentState as? ThreadUiState.Success)?.isArchived == true ||
+    val threadGone = confirmedGone || tab.isDead || (currentState as? ThreadUiState.Success)?.isArchived == true ||
         !page?.deletedNotice.isNullOrBlank() || isFutachaThreadConfirmedGone(goneConfirmedFor, currentState)
     LaunchedEffect(automatic, scrollPixels, scrollDelay, threadGone, isForeground) {
         if (!automatic || threadGone) { automatic = false; return@LaunchedEffect }
@@ -365,7 +381,8 @@ internal fun FutachaThreadFeatureHost(
         FutachaThreadTool("更新前に戻す", Icons.AutoMirrored.Rounded.Undo, previous != null) { previous?.let { restoring = true; previous = null; onRestore(it) } },
         FutachaThreadTool("1ページ上へ", Icons.Rounded.ArrowUpward) { scrollPage(-1) },
         FutachaThreadTool("1ページ下へ", Icons.Rounded.ArrowDownward) { scrollPage(1) },
-        FutachaThreadTool(if (automatic) "自動スクロールを停止" else "自動スクロール", if (automatic) Icons.Rounded.Stop else Icons.Rounded.SwapVert, !tab.isDead) { automatic = !automatic },
+        FutachaThreadTool(if (automatic) "自動スクロールを停止" else "自動スクロール", if (automatic) Icons.Rounded.Stop else Icons.Rounded.SwapVert, !threadGone) { automatic = !automatic },
+        FutachaThreadTool("落ち状態の保存を再試行", Icons.Rounded.Refresh, !goneSaveInProgress, ::retryGoneSave).takeIf { goneSaveFailure != null },
         FutachaThreadTool("画像一覧・選択保存", Icons.Rounded.PhotoLibrary, page != null) { mediaOpen = true },
         FutachaThreadTool("形式を選んでスレッド保存", Icons.Rounded.Archive, page != null && features.fileSystem != null && features.httpClient != null) { pageSaveOpen = true },
         FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
@@ -519,6 +536,17 @@ internal fun FutachaThreadFeatureHost(
             }
         }, confirmButton = { TextButton(onClick = { urlsOpen = false }) { Text("閉じる") } }) }
     }
+    if (goneSaveFailureOpen && goneSaveFailure != null) FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = { goneSaveFailureOpen = false },
+        title = { Text("落ち状態を保存できませんでした") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("スレッドの落ちは確認済みです。本文と既存のタブは保持しています。")
+            Text(goneSaveFailure.orEmpty())
+            Text("端末の空き容量などを確認して再試行してください。閉じた後も操作メニューから再試行できます。")
+        } },
+        confirmButton = { TextButton(onClick = ::retryGoneSave, enabled = !goneSaveInProgress) { Text("再試行") } },
+        dismissButton = { TextButton(onClick = { goneSaveFailureOpen = false }) { Text("閉じる") } }
+    ) }
     message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }

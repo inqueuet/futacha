@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Without a delegate iOS drops notifications that arrive while the app is
         // in the foreground, yet the watch-alert ledger records them as delivered.
         UNUserNotificationCenter.current().delegate = self
+        FutachaAppSnapshotProtection.shared.install()
         FutachaAppleIntelligenceBridge.installAiBridge()
         FutachaNetworkPathMonitor.shared.start()
         MainViewControllerKt.registerIosBackgroundRefreshTask()
@@ -40,6 +41,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .list, .sound])
+    }
+
+    // A tap on a watch notification for one thread opens it, as on Android and
+    // Desktop. The thread link waits in the shared bridge until the screen is
+    // ready, so a tap that launches the app opens it as well.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            _ = MainViewControllerKt.openIosNotificationThread(
+                userInfo: response.notification.request.content.userInfo
+            )
+        }
+        completionHandler()
     }
 }
 

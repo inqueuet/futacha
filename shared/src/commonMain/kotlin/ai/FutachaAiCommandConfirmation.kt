@@ -19,6 +19,9 @@ fun buildFutachaAiConfirmationMessage(
         append("\n\n")
         append(details.joinToString("\n"))
     }
+    if (command.ignoresExternalDraftPassword()) {
+        append("\n\n外部リンクで指定された削除キーは使用しません。下書きや保存済みの削除キーを引き継ぎます。")
+    }
     if (command.isFromExternalLink()) {
         append("\n\n外部のリンク（Webページなど）から届いた操作です。内容に心当たりがない場合はキャンセルしてください。")
     }

@@ -97,7 +97,12 @@ failed:
 }
 
 int futacha_voice_query(FutachaVoiceSession *session, const char *text, char **json) {
-    return result(p_voicevox_synthesizer_create_audio_query(session->synthesizer, text, 3, json));
+    VoicevoxResultCode code = p_voicevox_synthesizer_create_audio_query(session->synthesizer, text, 3, json);
+    if (code == VOICEVOX_RESULT_ANALYZE_TEXT_ERROR) {
+        error(p_voicevox_error_result_to_message(code));
+        return FUTACHA_VOICE_TEXT_ANALYSIS_ERROR;
+    }
+    return result(code);
 }
 int futacha_voice_synthesis(FutachaVoiceSession *session, const char *query, uint8_t **wav, size_t *size) {
     uintptr_t length = 0;

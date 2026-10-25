@@ -76,7 +76,12 @@ internal data class ThreadLoadExecutionResult(
      * later load of the inqueuet URL it switched to). It does not prove the
      * thread alive and may hold fewer posts than a local copy.
      */
-    val fromArchive: Boolean = false
+    val fromArchive: Boolean = false,
+    /**
+     * The server answered 404/410 and the page is the local copy shown instead. The thread is confirmed gone, as when
+     * the copy on screen is kept after a failed refresh (L36: its fall was not recorded).
+     */
+    val remoteGone: Boolean = false
 )
 
 /** The remote load did not answer within its budget; offline/archive fallbacks apply. */
@@ -307,7 +312,8 @@ internal suspend fun performThreadLoadWithOfflineFallback(
                         page = offlineDecision.page,
                         embeddedHtml = offlineDecision.embeddedHtml,
                         usedOffline = true,
-                        nextThreadUrlOverride = config.threadUrlOverride
+                        nextThreadUrlOverride = config.threadUrlOverride,
+                        remoteGone = e.statusCodeOrNull().let { it == 404 || it == 410 }
                     )
                     is ThreadLoadPostOfflineDecision.Fail -> throw offlineDecision.error
                 }

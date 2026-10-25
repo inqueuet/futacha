@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.util.ToolbarOverflowHints
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -41,13 +42,16 @@ internal fun FutachaPostToolbar(
 ) {
     val scope = rememberCoroutineScope()
     val latestComment by rememberUpdatedState(comment)
-    val master = remember { compatToolbarMaster(CompatToolbarSurface.POST) }
+    val master = remember { futachaPostToolbarMaster() }
     var toolbar by remember { mutableStateOf(master.mapIndexed { index, item -> CompatToolbarItem(item.key, index, item.defaultActive) }) }
     var editing by remember { mutableStateOf(false) }
     var drawing by remember { mutableStateOf(false) }
     var overflow by remember { mutableStateOf(false) }
     var attachmentMenu by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    // Whether this toolbar is still on screen, for a late result (L39).
+    val shown = remember { mutableStateOf(true) }
+    DisposableEffect(Unit) { onDispose { shown.value = false } }
     var busy by remember { mutableStateOf(false) }
     var sendConfirmation by remember { mutableStateOf<String?>(null) }
     var upsAttachment by remember { mutableStateOf<ImageData?>(null) }
@@ -117,7 +121,10 @@ internal fun FutachaPostToolbar(
             "discard" -> onDismiss()
         }
     }
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).navigationBarsPadding(),
+    val toolbarScroll = rememberScrollState()
+    // The shared edge hints show that more commands (and "投稿のその他") are off screen (L150).
+    Box(Modifier.fillMaxWidth().navigationBarsPadding()) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(toolbarScroll),
         horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         remember(toolbar) { toolbar.filter { it.active }.sortedBy { it.position } }.forEach { item ->
             IconButton(enabled = !busy && commandEnabled(item.key), onClick = { runCommand(item.key) }) {
@@ -142,21 +149,31 @@ internal fun FutachaPostToolbar(
             }
         }
     }
+    ToolbarOverflowHints(toolbarScroll)
+    }
     if (editing || drawing) FutachaAppLockAwareWindow {
         Dialog(onDismissRequest = { if (!drawing) editing = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize()) {
-                if (editing) CompatToolbarEditorScreen(CompatToolbarSurface.POST, features.store, onBack = { editing = false })
+                if (editing) CompatToolbarEditorScreen(CompatToolbarSurface.POST, features.store, onBack = { editing = false },
+                    master = futachaPostToolbarMaster())
                 else CompatPostDrawingScreen(onSaved = { image ->
                     onImageSelected(image)
                     drawing = false
+                    // The person's copy is written afterwards and outlives the post form (L39); a failure is told here while
+                    // the toolbar is shown, else as the mode's notice.
                     features.fileSystem?.let { fs ->
-                        perform {
-                            persistCompatDrawingCopy(fs,
-                                parseCompatSaveLocation(features.value("storage", "dummyDrawingDir", "手書きファイルの保存先")),
-                                image, Clock.System.now().toEpochMilliseconds())?.getOrThrow()
+                        launchCompatDrawingCopy(features.lastingScope ?: scope, fs,
+                            parseCompatSaveLocation(features.value("storage", "dummyDrawingDir", "手書きファイルの保存先")),
+                            image, Clock.System.now().toEpochMilliseconds()) {
+                            val text = "手書き画像のコピーを保存できませんでした（添付はそのままです）"
+                            if (shown.value) message = text else features.notify(text)
                         }
                     }
-                }, onBack = { drawing = false })
+                }, onBack = { drawing = false },
+                    // The reference help's 手書き section, not としあき(仮)'s whole help (L70).
+                    helpSectionId = COMPAT_DRAWING_HELP_SECTION,
+                    // A drawing lost with the app is offered back the next time (L69).
+                    recoveryFileSystem = features.fileSystem)
             }
         }
     }
@@ -190,3 +207,11 @@ internal fun FutachaPostToolbar(
             confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } })
     } }
 }
+
+/**
+ * The post toolbar's items as ふたちゃ names them. Its "discard" only closes the post screen and keeps the text and the
+ * attachment for later (the decision for L33), so it is named "閉じる" (its icon is already a close mark); としあき(仮)'s
+ * asks and discards, and keeps its name.
+ */
+internal fun futachaPostToolbarMaster(): List<CompatToolbarMasterItem> =
+    compatToolbarMaster(CompatToolbarSurface.POST).map { if (it.key == "discard") it.copy(label = "閉じる") else it }

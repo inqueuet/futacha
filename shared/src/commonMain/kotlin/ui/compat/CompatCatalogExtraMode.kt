@@ -84,14 +84,18 @@ internal suspend fun fetchCompatCatalogItems(
     null -> repository.getCatalogWithSettings(board = boardUrl, mode = baseMode, settings = settings)
     CompatCatalogExtraMode.SO -> repository.getCatalogWithSettings(board = boardUrl, mode = CatalogMode.So, settings = settings)
     CompatCatalogExtraMode.WATCH -> {
+        // The words come from the screen's state, so they are read here; merging the catalogs, matching the words
+        // and ordering the threads run away from the caller (the screen's thread), with the same result (L43).
         val words = watchWords()
-        if (normalizeWatchWords(words).isEmpty()) {
-            emptyList()
-        } else {
-            val page = loadCatalogItemsForMode(boardUrl, CatalogMode.WatchWords, words) { url, mode ->
-                repository.getCatalogPageWithSettings(url, mode, settings)
+        withContext(AppDispatchers.parsing) {
+            if (normalizeWatchWords(words).isEmpty()) {
+                emptyList()
+            } else {
+                val page = loadCatalogItemsForMode(boardUrl, CatalogMode.WatchWords, words) { url, mode ->
+                    repository.getCatalogPageWithSettings(url, mode, settings)
+                }
+                CatalogMode.WatchWords.applyClientTransform(page.items, words)
             }
-            CatalogMode.WatchWords.applyClientTransform(page.items, words)
         }
     }
 }

@@ -480,12 +480,23 @@ internal suspend fun compatibilityAttachmentCacheUsageBytes(fileSystem: FileSyst
     val directory = "private/compat_post_attachments"
     if (!fileSystem.exists(directory)) return 0L
     var total = 0L
-    fileSystem.listFiles(directory).forEach { name ->
-        val size = runSuspendCatchingPreservingCancellation { fileSystem.getFileSize("$directory/$name") }.getOrDefault(0L)
+    // Attachments are kept in a folder per post (L53: only the top level was counted, so the folders added nothing).
+    suspend fun add(path: String, depth: Int) {
+        val children = if (depth < COMPAT_ATTACHMENT_USAGE_MAX_DEPTH) {
+            runSuspendCatchingPreservingCancellation { fileSystem.listFiles(path) }.getOrDefault(emptyList())
+        } else emptyList()
+        if (children.isNotEmpty()) {
+            children.forEach { add("$path/$it", depth + 1) }
+            return
+        }
+        val size = runSuspendCatchingPreservingCancellation { fileSystem.getFileSize(path) }.getOrDefault(0L)
         if (size > 0L && total <= Long.MAX_VALUE - size) total += size
     }
+    fileSystem.listFiles(directory).forEach { add("$directory/$it", 1) }
     return total
 }
+
+private const val COMPAT_ATTACHMENT_USAGE_MAX_DEPTH = 4
 
 private fun percentDecodeCompatUriSegment(value: String): String {
     val bytes = mutableListOf<Byte>()
@@ -825,6 +836,20 @@ internal fun compatPtmtMutationNotice(existingValue: String?, requestedValue: St
     existingValue != null && existingValue == requestedValue -> "変更はありません"
     requestedValue.isBlank() -> "削除しました"
     else -> "変更しました"
+}
+
+// (L59) The reference's 200,261,632ms (about 2.3 days) is its intended 400 days overflowed
+// as an Int; a hand-entered ptmt lasts the 400 days meant.
+internal const val COMPAT_PTMT_COOKIE_LIFETIME_MILLIS = 400L * 24 * 60 * 60 * 1000
+
+internal suspend fun saveCompatPtmtCookie(repository: CookieRepository, value: String, nowMillis: Long) {
+    repository.setCookie(
+        requestUrl = "https://www.2chan.net/",
+        name = "ptmt",
+        value = value,
+        domain = "2chan.net",
+        expiresAtMillis = nowMillis + COMPAT_PTMT_COOKIE_LIFETIME_MILLIS
+    )
 }
 
 internal fun String.compatSettingsTitle(): String = when (this) {

@@ -23,6 +23,8 @@ interface OriginalMediaPlayback : AutoCloseable {
     }
     /** An independent consumer of this exact transfer/revision, including across cache clear. */
     fun retain(): OriginalMediaPlayback
+    /** This format cannot play here: close this consumer without keeping an unfinished download alive for retries. */
+    fun rejectAsUnsupported() = close()
     /** Wait for validation/commit and pin the same complete file for parsers, WebKit or export. */
     suspend fun complete(): OriginalMediaStore.Lease
     /**
@@ -71,7 +73,8 @@ internal class SharedOriginalMediaPlayback(
     private val state: StateFlow<OriginalMediaReadState>,
     private val dispatcher: CoroutineDispatcher,
     private val completedLease: suspend () -> OriginalMediaStore.Lease,
-    private val references: OriginalMediaStore.LeaseReferences
+    private val references: OriginalMediaStore.LeaseReferences,
+    private val onUnsupported: () -> Unit = {}
 ) : OriginalMediaPlayback {
     private val closed = MutableStateFlow(false)
 
@@ -154,11 +157,18 @@ internal class SharedOriginalMediaPlayback(
         check(!closed.value) { "Original media playback lease is closed" }
         references.retain()
         if (closed.value) { references.close(); error("Original media playback lease is closed") }
-        return SharedOriginalMediaPlayback(state, dispatcher, completedLease, references)
+        return SharedOriginalMediaPlayback(state, dispatcher, completedLease, references, onUnsupported)
     }
 
     override fun close() {
         if (closed.compareAndSet(false, true)) references.close()
+    }
+
+    override fun rejectAsUnsupported() {
+        if (closed.compareAndSet(false, true)) {
+            onUnsupported()
+            references.close()
+        }
     }
 }
 

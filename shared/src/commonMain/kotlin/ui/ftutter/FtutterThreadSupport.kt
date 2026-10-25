@@ -2,12 +2,15 @@ package com.valoser.futacha.shared.ui.ftutter
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import com.valoser.futacha.shared.compat.CompatHeaderExtractionKind
+import com.valoser.futacha.shared.compat.CompatPosterIdentity
+import com.valoser.futacha.shared.compat.compatPosterIdentities
+import com.valoser.futacha.shared.compat.parseCompatPosterIdentity
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.ui.board.buildThreadTreeNodes
 import com.valoser.futacha.shared.ui.board.canonicalThreadSearchText
 import com.valoser.futacha.shared.ui.board.messageHtmlToLines
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
-import com.valoser.futacha.shared.ui.board.normalizePosterIdValue
 
 /**
  * スレッド画面の設定（原作 Setting_Sure の既定値と範囲。docs/ftutter-mode-research-round6-2026-10-13.md §6・§11）。
@@ -213,19 +216,40 @@ internal fun ftutterThreadIndexOf(posts: List<Post>): FtutterThreadIndex {
     return FtutterThreadIndex(posts).also { lastFtutterThreadIndex.store(it) }
 }
 
-/** IDの (n/m)：何番目と全体の件数。IDが1回しか出ないレスは null。 */
-internal data class FtutterIdCount(val id: String, val nth: Int, val total: Int)
+/** ID/IP come only from posterId and the date header, never a body quote, name or subject. */
+internal fun ftutterPosterIdentities(post: Post): List<CompatPosterIdentity> =
+    compatPosterIdentities(post.timestamp, post.posterId)
+
+internal fun ftutterPosterIdentity(post: Post): CompatPosterIdentity? =
+    parseCompatPosterIdentity(post.posterId) ?: ftutterPosterIdentities(post).firstOrNull()
+
+private val ftutterHeaderIdentityPattern = Regex("(?:ID|IP):[^\\s<]+", RegexOption.IGNORE_CASE)
+
+/** Render the chosen identity separately, preserving other date/header text. */
+internal fun ftutterTimestampWithoutIdentity(post: Post): String {
+    val identity = ftutterPosterIdentity(post) ?: return post.timestamp.trim()
+    return ftutterHeaderIdentityPattern.replace(post.timestamp) {
+        if (parseCompatPosterIdentity(it.value) == identity) "" else it.value
+    }.trim()
+}
+
+/** ID/IPの (n/m)：同じ種類と表示値の何番目かと全体の件数。 */
+internal data class FtutterIdCount(
+    val id: String, val nth: Int, val total: Int,
+    val kind: CompatHeaderExtractionKind = CompatHeaderExtractionKind.ID
+) {
+    val display: String get() = "${kind.name}:$id"
+}
 
 internal fun ftutterIdCounts(posts: List<Post>): Map<String, FtutterIdCount> {
-    val totals = HashMap<String, Int>()
-    posts.forEach { post -> normalizePosterIdValue(post.posterId)?.let { totals[it] = (totals[it] ?: 0) + 1 } }
-    val running = HashMap<String, Int>()
+    val identities = posts.mapNotNull { post -> ftutterPosterIdentity(post)?.let { post.id to it } }
+    val totals = identities.groupingBy { it.second }.eachCount()
+    val running = HashMap<CompatPosterIdentity, Int>()
     val result = HashMap<String, FtutterIdCount>()
-    posts.forEach { post ->
-        val id = normalizePosterIdValue(post.posterId) ?: return@forEach
-        val nth = (running[id] ?: 0) + 1
-        running[id] = nth
-        result[post.id] = FtutterIdCount(id, nth, totals.getValue(id))
+    identities.forEach { (postId, identity) ->
+        val nth = (running[identity] ?: 0) + 1
+        running[identity] = nth
+        result[postId] = FtutterIdCount(identity.value, nth, totals.getValue(identity), identity.kind)
     }
     return result
 }
@@ -290,7 +314,9 @@ internal data class FtutterThreadFilter(
 internal data class FtutterHidden(
     val deleted: Set<Int> = emptySet(),
     val ng: Set<Int> = emptySet(),
-    val removed: Set<Int> = emptySet()
+    val removed: Set<Int> = emptySet(),
+    /** Media excludes NG and its chain independently of the deleted-image preference. */
+    val ngIncludingChained: Set<Int> = ng
 ) {
     fun isHidden(index: Int): Boolean = index in deleted || index in ng || index in removed
 }
@@ -310,7 +336,7 @@ internal fun ftutterHidden(posts: List<Post>, settings: FtutterThreadSettings, n
         all
     } else emptySet()
     val removed = (deletedChained + ngChained) - deleted - ngOnly
-    return FtutterHidden(deleted, ngOnly, removed)
+    return FtutterHidden(deleted, ngOnly, removed, ngPosts + ngChained)
 }
 
 /** 削除レスを隠す時の対象（削除レス本体と、連鎖がONならそれを引用したレスを段ごとに）。 */
@@ -578,8 +604,18 @@ internal fun ftutterIsQuoteLine(line: String): Boolean {
 
 /** 引用行が指すレスの番号（その行を含む引用の塊の解決先）。 */
 internal fun ftutterQuoteLineTargets(posts: List<Post>, index: Int, line: String): List<Int> {
+    if (index !in posts.indices) return emptyList()
     val wanted = line.trim()
     if (wanted.isEmpty()) return emptyList()
+    val query = wanted.trimStart('>', '＞').trim()
+    if (query.startsWith("ID:", ignoreCase = true) || query.startsWith("IP:", ignoreCase = true)) {
+        val identity = parseCompatPosterIdentity(query) ?: return emptyList()
+        // Keep the original ID prefix lookup, separated by kind for IPv4/IPv6.
+        // This is a popup lookup only; direct-reply references remain untouched.
+        return (0 until index).filter { at -> ftutterPosterIdentities(posts[at]).any {
+            it.kind == identity.kind && it.value.startsWith(identity.value)
+        } }
+    }
     val position = posts.withIndex().associate { (i, p) -> p.id to i }
     return posts[index].quoteReferences
         .filter { ref -> ref.text.trim() == wanted || ref.text.lineSequence().any { it.trim() == wanted } }

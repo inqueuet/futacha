@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -53,10 +55,12 @@ import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
 import com.valoser.futacha.shared.ui.compat.CompatViewerImagePage
 import com.valoser.futacha.shared.ui.compat.CompatViewerTransform
+import com.valoser.futacha.shared.ui.compat.CompatViewerReturnPosition
+import com.valoser.futacha.shared.ui.compat.compatMediaIdentity
 import com.valoser.futacha.shared.ui.compat.compatUniqueMediaKeys
-import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
 import com.valoser.futacha.shared.ui.compat.isCompatVideoMediaUrl
 import com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl
+import com.valoser.futacha.shared.ui.privacy.PrivacyVideoOverlay
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.rememberUrlLauncher
@@ -101,13 +105,25 @@ internal fun FutaberViewerScreen(
     swipeDownToClose: Boolean = false,
     /** A video page is the video viewer, with play / pause / stop, volume and "ブラウザで開く" (an extension); otherwise it only offers to open the video elsewhere. */
     playVideoInApp: Boolean = false,
+    /** Kept by the media window while settings/help temporarily replace this composable. */
+    returnPosition: CompatViewerReturnPosition? = null,
     onClose: () -> Unit
 ) {
     PlatformBackHandler(onBack = onOpenGallery)
     val scope = rememberCoroutineScope()
     val openUrl = rememberUrlLauncher()
     val keys = remember(mediaPosts) { compatUniqueMediaKeys(mediaPosts) }
-    val pagerState = rememberPagerState(initialPage = initialIndex.coerceIn(0, (mediaPosts.size - 1).coerceAtLeast(0))) { mediaPosts.size }
+    val pagerState = rememberPagerState(initialPage = futaberViewerIndexFor(
+        mediaPosts, returnPosition?.mediaIdentity, returnPosition?.index ?: initialIndex
+    )) { mediaPosts.size }
+    // currentPage follows a drag/fling before it settles; that is the image the person is currently leaving.
+    val returnIndex = pagerState.currentPage
+    val returnIdentity = mediaPosts.getOrNull(returnIndex)?.let { resolveCompatViewerMediaUrl(it) ?: compatMediaIdentity(it) }
+    SideEffect { if (returnIdentity != null) returnPosition?.update(returnIndex, returnIdentity) }
+    fun rememberCurrentPosition() {
+        val index = pagerState.currentPage
+        mediaPosts.getOrNull(index)?.let { returnPosition?.update(index, resolveCompatViewerMediaUrl(it) ?: compatMediaIdentity(it)) }
+    }
     var chromeVisible by remember { mutableStateOf(true) }
     val longPressHaptic = rememberFutaberLongPressHaptic()
     var message by remember { mutableStateOf<String?>(null) }
@@ -133,6 +149,10 @@ internal fun FutaberViewerScreen(
     }
 
     var zoomed by remember { mutableStateOf(false) }
+    val currentIsVideo = current?.let(::resolveCompatViewerMediaUrl)?.let(::isCompatVideoMediaUrl) == true
+    LaunchedEffect(pagerState.currentPage, currentIsVideo) {
+        if (currentIsVideo) zoomed = false
+    }
     val closeOnSwipe = if (swipeDownToClose) {
         Modifier.pointerInput(zoomed) {
             if (zoomed) return@pointerInput
@@ -165,32 +185,41 @@ internal fun FutaberViewerScreen(
             val post = mediaPosts.getOrNull(page)
             val mediaUrl = post?.let(::resolveCompatViewerMediaUrl)
             Box(Modifier.fillMaxSize()) {
-                CompatViewerImagePage(
-                    post = post,
-                    mediaUrl = mediaUrl,
-                    reloadSuffix = "",
-                    viewerTransform = mediaUrl?.let(transforms::get) ?: CompatViewerTransform(),
-                    isCurrentPage = page == pagerState.currentPage,
-                    resetKey = if (page == pagerState.currentPage) pagerState.currentPage else -1,
-                    privacyEnabled = false,
-                    privacyAlpha = 0f,
-                    onZoomedChanged = { if (page == pagerState.currentPage) zoomed = it },
-                    onTransformChanged = { scale, translation ->
-                        mediaUrl?.let { transforms[it] = CompatViewerTransform(scale, translation) }
-                    },
-                    onHorizontalSwipe = { dragDistancePx, viewportWidthPx ->
-                        val target = when {
-                            dragDistancePx < -viewportWidthPx * 0.25f -> page + 1
-                            dragDistancePx > viewportWidthPx * 0.25f -> page - 1
-                            else -> page
-                        }.coerceIn(0, mediaPosts.size - 1)
-                        if (target != page) scope.launch { pagerState.animateScrollToPage(target) }
-                    },
-                    onDimensionsKnown = { _, _ -> },
-                    onClick = { chromeVisible = !chromeVisible },
-                    // A long press on the image opens the share sheet at once, as in the original.
-                    onLongClick = { if (page == pagerState.currentPage) { longPressHaptic(); saveCurrent(true) } }
-                )
+                if (mediaUrl != null && isCompatVideoMediaUrl(mediaUrl)) {
+                    FutaberVideoPoster(post?.thumbnailUrl, Modifier.fillMaxSize().pointerInput(mediaUrl) {
+                        detectTapGestures(
+                            onTap = { chromeVisible = !chromeVisible },
+                            onLongPress = { if (page == pagerState.currentPage) { longPressHaptic(); saveCurrent(true) } }
+                        )
+                    })
+                } else {
+                    CompatViewerImagePage(
+                        post = post,
+                        mediaUrl = mediaUrl,
+                        reloadSuffix = "",
+                        viewerTransform = mediaUrl?.let(transforms::get) ?: CompatViewerTransform(),
+                        isCurrentPage = page == pagerState.currentPage,
+                        resetKey = if (page == pagerState.currentPage) pagerState.currentPage else -1,
+                        privacyEnabled = false,
+                        privacyAlpha = 0f,
+                        onZoomedChanged = { if (page == pagerState.currentPage) zoomed = it },
+                        onTransformChanged = { scale, translation ->
+                            mediaUrl?.let { transforms[it] = CompatViewerTransform(scale, translation) }
+                        },
+                        onHorizontalSwipe = { dragDistancePx, viewportWidthPx ->
+                            val target = when {
+                                dragDistancePx < -viewportWidthPx * 0.25f -> page + 1
+                                dragDistancePx > viewportWidthPx * 0.25f -> page - 1
+                                else -> page
+                            }.coerceIn(0, mediaPosts.size - 1)
+                            if (target != page) scope.launch { pagerState.animateScrollToPage(target) }
+                        },
+                        onDimensionsKnown = { _, _ -> },
+                        onClick = { chromeVisible = !chromeVisible },
+                        // A long press on the image opens the share sheet at once, as in the original.
+                        onLongClick = { if (page == pagerState.currentPage) { longPressHaptic(); saveCurrent(true) } }
+                    )
+                }
                 if (mediaUrl != null && isCompatVideoMediaUrl(mediaUrl)) {
                     // The video page is the video viewer itself (no play button). Like the other modes' viewers it opens stopped,
                     // ready for a deliberate play (the shared player never autoplays); "停止" leaves it for the picture list.
@@ -204,6 +233,7 @@ internal fun FutaberViewerScreen(
                             bottomInset = 110.dp
                         )
                     } else {
+                        PrivacyVideoOverlay()
                         TextButton(onClick = { openUrl(mediaUrl) }, modifier = Modifier.align(Alignment.Center)) {
                             Text("動画を開く", color = ViewerText, fontSize = 16.sp)
                         }
@@ -217,7 +247,7 @@ internal fun FutaberViewerScreen(
                     Modifier.fillMaxWidth().background(ViewerBar).statusBarsPadding().height(FUTABER_TOP_BAR_HEIGHT_DP.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("futaber-viewer-gear")) {
+                    IconButton(onClick = { rememberCurrentPosition(); onOpenSettings() }, modifier = Modifier.testTag("futaber-viewer-gear")) {
                         FutaberIcon(Icons.Outlined.Settings, contentDescription = "画像ビューアの設定", tint = ViewerText)
                     }
                     Text(

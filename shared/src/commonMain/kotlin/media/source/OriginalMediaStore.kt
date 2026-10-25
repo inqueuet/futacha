@@ -330,7 +330,8 @@ class OriginalMediaStore(
 
     override suspend fun acquireForPlayback(request: OriginalMediaRequest): OriginalMediaPlayback {
         val entry = join(request, playback = true)
-        val references = LeaseReferences { cleanupScope.launch { release(entry) } }
+        val allowPlaybackLinger = MutableStateFlow(true)
+        val references = LeaseReferences { cleanupScope.launch { release(entry, allowPlaybackLinger.value) } }
         // No suspending return after ownership transfer: cancellation must not discard the lease.
         return SharedOriginalMediaPlayback(entry.progress, dispatcher, completedLease = {
             val asset = entry.job.await()
@@ -338,7 +339,7 @@ class OriginalMediaStore(
             references.retain()
             Lease(asset.snapshot.data, asset.disk.fileSystem, asset.info, asset.identity, asset.fromCache,
                 dispatcher, release = {}, references = references)
-        }, references = references)
+        }, references = references, onUnsupported = { allowPlaybackLinger.value = false })
     }
 
     override suspend fun acquire(request: OriginalMediaRequest): Lease {
@@ -544,11 +545,11 @@ class OriginalMediaStore(
         if (entry.asset == null) entry.job.cancel()
     }
 
-    private suspend fun release(entry: Entry) = mutex.withLock {
+    private suspend fun release(entry: Entry, allowPlaybackLinger: Boolean = true) = mutex.withLock {
         check(entry.users > 0)
         entry.users--
         if (entry.users == 0) {
-            if (shouldLingerLocked(entry)) lingerLocked(entry)
+            if (allowPlaybackLinger && shouldLingerLocked(entry)) lingerLocked(entry)
             else {
                 retireLocked(entry)
                 disposeIfUnusedLocked(entry)

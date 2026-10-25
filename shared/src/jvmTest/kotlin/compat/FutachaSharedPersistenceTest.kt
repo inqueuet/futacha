@@ -138,27 +138,44 @@ class FutachaSharedPersistenceTest {
     }
 
     /**
-     * Re-audit M25: a scroll stop publishes nothing (as on Android): the tab and history lists stay the same objects, so
-     * the としあき(仮) screen is not rebuilt. The anchor is still stored and comes back with the next change and on reopening.
+     * L80: a scroll stop publishes the anchor as Android does: only the scrolled tab and its history row are replaced
+     * in the published lists (no re-sort; every other element and the order stay), so the screen that comes back to
+     * the thread (from settings, say) restores where it was left instead of the last published position.
      */
-    @Test fun aScrollAnchorIsStoredWithoutPublishingTheListsAgain() = runBlocking {
-        val root = Files.createTempDirectory("futacha-scroll-anchor-quiet").toFile()
+    @Test fun aScrollAnchorIsPublishedByPatchingOnlyTheScrolledTabAndHistoryRow() = runBlocking {
+        val root = Files.createTempDirectory("futacha-scroll-anchor-patch").toFile()
         val store = DesktopCompatibilityStore(JvmFileSystem(root))
         try {
             store.initialize()
             val url = "https://may.2chan.net/b/res/320.htm"
+            val otherUrl = "https://may.2chan.net/b/res/999.htm"
             val now = System.currentTimeMillis()
-            val tab = CompatTab(compatTabKey(url), url, url, "b", "板", "320", "スレ", insertedAtEpochMillis = now,
-                contentUpdatedAtEpochMillis = now)
-            store.openTab(tab)
+            fun tabOf(threadUrl: String, threadNo: String, insertedAt: Long) = CompatTab(compatTabKey(threadUrl),
+                threadUrl, threadUrl, "b", "板", threadNo, "スレ", insertedAtEpochMillis = insertedAt,
+                contentUpdatedAtEpochMillis = insertedAt)
+            fun historyOf(threadUrl: String, threadNo: String, visitedAt: Long) = CompatHistoryEntry(threadUrl,
+                threadUrl, "b", "板", threadNo, "スレ", contentUpdatedAtEpochMillis = visitedAt,
+                lastVisitedEpochMillis = visitedAt)
+            val tab = tabOf(url, "320", now)
+            store.openTab(tab, historyOf(url, "320", now))
+            store.openTab(tabOf(otherUrl, "999", now + 1), historyOf(otherUrl, "999", now + 1))
             val tabsBefore = store.tabs.first()
             val historyBefore = store.history.first()
-            store.updateScrollAnchor(tab.key, ScrollAnchor(postNo = "330", fallbackIndex = 4, offsetPx = 12))
-            assertSame(tabsBefore, store.tabs.first())
-            assertSame(historyBefore, store.history.first())
-            // The next ordinary change carries it.
-            assertTrue(store.updateTabIfPresent(tab.key) { it.copy(replyCount = 9) })
-            assertEquals("330", store.tabs.first().single().scrollAnchor.postNo)
+            val anchor = ScrollAnchor(postNo = "330", fallbackIndex = 4, offsetPx = 12)
+            store.updateScrollAnchor(tab.key, anchor)
+
+            val tabsAfter = store.tabs.first()
+            assertEquals(tabsBefore.map { it.key }, tabsAfter.map { it.key })
+            assertEquals(anchor, tabsAfter.single { it.key == tab.key }.scrollAnchor)
+            assertSame(tabsBefore.single { it.key != tab.key }, tabsAfter.single { it.key != tab.key })
+            val historyAfter = store.history.first()
+            assertEquals(historyBefore.map { it.canonicalUrl }, historyAfter.map { it.canonicalUrl })
+            assertEquals(anchor, historyAfter.single { it.canonicalUrl == url }.scrollAnchor)
+            assertSame(historyBefore.single { it.canonicalUrl != url }, historyAfter.single { it.canonicalUrl != url })
+            // The same anchor again publishes nothing new.
+            store.updateScrollAnchor(tab.key, anchor)
+            assertSame(tabsAfter, store.tabs.first())
+            assertSame(historyAfter, store.history.first())
             // (That the anchor is stored for the next launch is DesktopRuntimeTest's.)
         } finally { store.close(); root.deleteRecursively() }
     }

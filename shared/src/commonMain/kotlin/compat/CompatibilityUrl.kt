@@ -32,6 +32,18 @@ private fun matchOfficialFutabaUrl(url: String): MatchResult? {
     return match
 }
 
+/**
+ * [url] with `https://` when it is an `http://` address on a 2chan.net host, else [url] as is (L100, the decision): iOS
+ * cannot post over http, and the official pre-submit step runs only on https. Other hosts keep http (Android still
+ * allows cleartext for them).
+ */
+internal fun upgradeOfficialFutabaHttpUrl(url: String): String {
+    val trimmed = url.trim()
+    if (!trimmed.startsWith("http://", ignoreCase = true)) return url
+    matchOfficialFutabaUrl(trimmed) ?: return url
+    return "https://" + trimmed.substring("http://".length)
+}
+
 data class CanonicalThreadUrl(
     val canonicalUrl: String,
     val canonicalBoardUrl: String,

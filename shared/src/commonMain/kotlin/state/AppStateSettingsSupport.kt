@@ -41,8 +41,20 @@ internal const val SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE = 20
 internal const val SELF_POST_IDENTIFIER_DELIMITER = "::"
 internal const val APP_STATE_SETTINGS_JSON_MAX_CHARS = 2 * 1024 * 1024
 internal const val APP_STATE_STRING_LIST_MAX_ENTRIES = 10_000
+// Persist post numbers for the entire thread, independently of the small
+// legacy aggregated identifier list.
+internal const val SELF_POST_THREAD_IDENTIFIER_MAX_ENTRIES = APP_STATE_STRING_LIST_MAX_ENTRIES
 internal const val APP_STATE_STRING_ENTRY_MAX_CHARS = 10_000
 internal const val APP_STATE_STRING_LIST_MAP_MAX_ENTRIES = 1_000
+
+/** The NG and watch word lists kept in AppState; one stored but unreadable is offered 「初期化する」 (L87). */
+enum class AppStateWordList(val label: String) {
+    NG_HEADERS("NGヘッダー"),
+    NG_WORDS("NGワード"),
+    CATALOG_NG_WORDS("カタログのNGワード"),
+    WATCH_WORDS("監視ワード"),
+    BOARD_WATCH_WORDS("板ごとの監視ワード")
+}
 
 private val catalogModeMapJson = Json { ignoreUnknownKeys = true }
 private val catalogModeMapSerializer = MapSerializer(String.serializer(), String.serializer())
@@ -78,16 +90,35 @@ internal fun encodeCatalogModeMapValue(map: Map<String, CatalogMode>): Map<Strin
     return map.mapValues { it.value.name }
 }
 
+/**
+ * A stored list that cannot be read: damaged, or over [APP_STATE_SETTINGS_JSON_MAX_CHARS]. It is shown as empty but is
+ * not an empty list, so an edit made on that empty view must not be saved over it (L87).
+ */
+internal class UnreadableStoredListException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+/** The stored list, or a failure when one is stored but cannot be read; nothing (or a blank value) stored is empty. */
+internal fun readStoredStringListValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<String>>
+): Result<List<String>> {
+    if (raw.isNullOrBlank()) return Result.success(emptyList())
+    if (raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return Result.failure(UnreadableStoredListException("Stored list is too large (${raw.length} chars)"))
+    }
+    return try {
+        Result.success(normalizeStoredStringList(json.decodeFromString(serializer, raw)))
+    } catch (error: Exception) {
+        Result.failure(UnreadableStoredListException("Stored list could not be read", error))
+    }
+}
+
 internal fun decodeStringListValue(
     raw: String?,
     json: Json,
     serializer: KSerializer<List<String>>
-): List<String> {
-    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyList()
-    return runCatching {
-        normalizeStoredStringList(json.decodeFromString(serializer, raw))
-    }.getOrDefault(emptyList())
-}
+): List<String> = readStoredStringListValue(raw, json, serializer).getOrDefault(emptyList())
 
 internal fun normalizeStoredStringList(values: List<String>): List<String> {
     val seen = mutableSetOf<String>()
@@ -113,14 +144,18 @@ internal fun decodeSelfPostIdentifierMapValue(
     }.getOrDefault(emptyMap())
 }
 
-internal fun decodeStringListMapValue(
+/** [readStoredStringListValue] for the per-board lists. */
+internal fun readStoredStringListMapValue(
     raw: String?,
     json: Json,
     serializer: KSerializer<Map<String, List<String>>>
-): Map<String, List<String>> {
-    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyMap()
-    return runCatching {
-        json.decodeFromString(serializer, raw)
+): Result<Map<String, List<String>>> {
+    if (raw.isNullOrBlank()) return Result.success(emptyMap())
+    if (raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return Result.failure(UnreadableStoredListException("Stored list map is too large (${raw.length} chars)"))
+    }
+    return try {
+        Result.success(json.decodeFromString(serializer, raw)
             .mapNotNull { (key, values) ->
                 val normalizedKey = key.trim().takeIf {
                     it.isNotBlank() && it.length <= APP_STATE_STRING_ENTRY_MAX_CHARS
@@ -128,9 +163,17 @@ internal fun decodeStringListMapValue(
                 normalizedKey to normalizeStoredStringList(values)
             }
             .take(APP_STATE_STRING_LIST_MAP_MAX_ENTRIES)
-            .toMap()
-    }.getOrDefault(emptyMap())
+            .toMap())
+    } catch (error: Exception) {
+        Result.failure(UnreadableStoredListException("Stored list map could not be read", error))
+    }
 }
+
+internal fun decodeStringListMapValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<Map<String, List<String>>>
+): Map<String, List<String>> = readStoredStringListMapValue(raw, json, serializer).getOrDefault(emptyMap())
 
 internal fun aggregateSelfPostIdentifiers(
     map: Map<String, List<String>>,
@@ -316,7 +359,7 @@ internal fun mergeSelfPostIdentifierMap(
     threadId: String,
     identifier: String,
     boardId: String? = null,
-    maxEntries: Int = SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE
+    maxEntries: Int = SELF_POST_THREAD_IDENTIFIER_MAX_ENTRIES
 ): Map<String, List<String>> {
     val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return currentMap
     val scopedKey = buildSelfPostStorageKey(threadId, boardId)
@@ -337,8 +380,8 @@ internal fun mergeSelfPostIdentifierMap(
     val updatedThreadList = normalized
         .asSequence()
         .distinctBy { it.lowercase() }
-        .take(maxEntries)
         .toList()
+        .takeLast(maxEntries)
     val nextMap = currentMap.toMutableMap()
     nextMap[scopedKey] = updatedThreadList
     return nextMap.toMap()

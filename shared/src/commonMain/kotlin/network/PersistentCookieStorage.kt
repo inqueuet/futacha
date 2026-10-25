@@ -224,6 +224,15 @@ class PersistentCookieStorage(
         // no-op
     }
 
+    /** Explicit local imports need a durable result; received network cookies remain best effort. */
+    suspend fun flushPendingChanges() {
+        val snapshot = mutex.withLock {
+            ensureLoadedLocked()
+            if (hasUnpersistedSnapshotLocked()) createSnapshotLocked(cookies) else null
+        }
+        snapshot?.let { persistSnapshot(it) }
+    }
+
     suspend fun listCookies(): List<StoredCookie> {
         var saveSnapshot: StoredCookieFile? = null
         val result = mutex.withLock {

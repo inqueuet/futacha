@@ -35,7 +35,8 @@ internal data class FutaberThreadRef(
     val seenCount: Int = 0,
     val resumePostId: String = "",
     val resumeIndex: Int = 0,
-    val resumeOffset: Int = 0
+    val resumeOffset: Int = 0,
+    val seenLastPostId: String? = null
 )
 
 internal fun CatalogItem.toFutaberThreadRef(boardId: String): FutaberThreadRef = FutaberThreadRef(
@@ -147,11 +148,11 @@ internal fun futaberPosterColor(posterId: String, isDark: Boolean): Color {
 /**
  * The ref to show for [existing]'s thread, carrying what its stored history said before this visit. [seenCount] is the
  * number of posts this person had on screen when they last left the thread (this mode's own record, see
- * [FutaberSeenCount]); without one, the history row's count is the baseline, as before.
+ * [FutaberSeenCount]); only a foreground-view snapshot can supply the fallback baseline.
  */
 internal fun futaberRefWithHistory(ref: FutaberThreadRef, existing: ThreadHistoryEntry?, seenCount: Int? = null): FutaberThreadRef =
     if (existing == null) ref else ref.copy(
-        seenCount = seenCount ?: existing.replyCount,
+        seenCount = seenCount ?: com.valoser.futacha.shared.ui.board.knownViewedPostCount(existing) ?: 0,
         resumePostId = existing.lastReadPostId.orEmpty(),
         resumeIndex = existing.lastReadItemIndex,
         resumeOffset = existing.lastReadItemOffset
@@ -209,6 +210,20 @@ internal fun futaberHistoryMarkAlive(
 ): List<ThreadHistoryEntry> = history.map { entry ->
     if (entry.threadId != threadId || entry.boardId != boardId) entry
     else entry.copy(lastConfirmedAliveEpochMillis = nowEpochMillis, isAutoRefreshDisabled = false)
+}
+
+/**
+ * The counterpart of [futaberHistoryMarkAlive] for a thread confirmed gone (404/410) on screen (L108): both fall records
+ * (`isAutoRefreshDisabled` and `threadStatus.isDead`), as the history refresh and ふたったー風 write. Only that row changes.
+ */
+internal fun futaberHistoryMarkFallen(
+    history: List<ThreadHistoryEntry>,
+    boardId: String,
+    threadId: String
+): List<ThreadHistoryEntry> = history.map { entry ->
+    if (entry.threadId != threadId || entry.boardId != boardId) entry
+    else entry.copy(isAutoRefreshDisabled = true,
+        threadStatus = (entry.threadStatus ?: com.valoser.futacha.shared.model.ThreadStatus()).copy(isDead = true))
 }
 
 /** The count of a post's そうだね label ("そうだね×3", "+3"); null when there is none or it is zero. */

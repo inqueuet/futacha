@@ -21,6 +21,21 @@ class AuditFixesParserTest {
     }
 
     @Test
+    fun catalogsCutOffBeforeTheTableEndAreRejected() {
+        // L102: the catalog table starts but its end never comes (the page was cut off). It used to
+        // become a warning-less empty catalog that replaced the saved one.
+        val withCells = """<html><body><a href="futaba.php?mode=cat">cat</a><table border="1" id="cattable"><tr>""" +
+            """<td><a href="res/123.htm"><img src="/b/cat/1s.jpg"></a><br><font size=2>5</font></td><td><a href="res/124.htm">"""
+        val withoutCells = """<html><body><a href="futaba.php?mode=cat">cat</a><table border="1" id="cattable"><tr>"""
+        for (html in listOf(withCells, withoutCells)) {
+            val error = assertFailsWith<ParserException> {
+                runBlocking { CatalogHtmlParserCore.parseCatalogPage(html, "https://may.2chan.net/b") }
+            }
+            assertTrue(error.message.orEmpty().contains("途中で切れています"), error.message)
+        }
+    }
+
+    @Test
     fun genuineEmptyCatalogsStayASuccess() {
         val emptyTable = """<html><body><a href="futaba.php?mode=cat">cat</a><table border="1" id="cattable"><tr></tr></table></body></html>"""
         val noTableButFutabaPage = """<html><body><form action="futaba.php" method="POST"></form><a href="futaba.php?mode=cat">cat</a></body></html>"""

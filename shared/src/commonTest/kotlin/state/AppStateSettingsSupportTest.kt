@@ -194,6 +194,25 @@ class AppStateSettingsSupportTest {
     }
 
     @Test
+    fun selfPostIdentifiersKeepEarlierPostsAfterTheTwentiethPost() {
+        var map = mapOf("img::123" to listOf("another-board"))
+        val expected = (1..30).map { (1000 + it).toString() }
+        expected.forEach { identifier ->
+            map = mergeSelfPostIdentifierMap(map, "123", identifier, "may")
+        }
+        assertEquals(expected, map["may::123"])
+        assertEquals(listOf("another-board"), map["img::123"])
+    }
+
+    @Test
+    fun selfPostIdentifierOverflowKeepsTheNewestRecordsAndDeduplicatesLegacyValues() {
+        val map = mapOf("123" to listOf("ID:a", "id:A", ""), "b::123" to listOf("ID:b", "ID:c"))
+        val merged = mergeSelfPostIdentifierMap(map, "123", " ID:d ", "b", maxEntries = 3)
+        assertEquals(listOf("ID:c", "ID:a", "ID:d"), merged["b::123"])
+        assertEquals(merged, mergeSelfPostIdentifierMap(merged, "123", "id:D", "b", maxEntries = 3))
+    }
+
+    @Test
     fun selfPostIdentifier_helpers_removeScopedAndLegacyKeys() {
         val current = mapOf(
             "123" to listOf("ID:legacy"),

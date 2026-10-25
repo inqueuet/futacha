@@ -21,6 +21,26 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         .replace("<label for=\"network\"", thumbnailHelpHtmlSection() + "<label for=\"network\"")
 }
 
+/**
+ * One section of the reference help on its own, opened, with the document's styles (L70: the drawing screens of
+ * ふたちゃ, ふたばー風 and ふたったー風 opened としあき(仮)'s whole help). The sections are the flat label / checkbox / div
+ * accordions [searchedHelpHtml] works on; a section that is not there gives the whole help rather than an empty page.
+ */
+internal fun compatibilityReferenceHelpSectionHtml(palette: CompatibilityPalette, sectionId: String): String {
+    val html = compatibilityReferenceHelpHtml(palette)
+    val start = html.indexOf("<label for=\"$sectionId\"")
+    if (start < 0) return html
+    // Matched from the section's own label only; its body has no nested div, so the lazy match ends at its own </div>.
+    val section = Regex("(<label\\b[^>]*>[\\s\\S]*?</label>)\\s*(<input\\b[^>]*>)\\s*(<div\\b[^>]*>[\\s\\S]*?</div>)")
+        .find(html, start)
+        ?.takeIf { it.range.first == start && "id=\"$sectionId\"" in it.groupValues[2] }
+        ?: return html
+    return html.substringBefore("<body>") + "<body>\n<div class=\"menu\">\n\n\t" +
+        section.groupValues[1] + "\n\t" +
+        section.groupValues[2].replace("<input", "<input checked") + "\n\t" +
+        section.groupValues[3] + "\n\n</div>\n</body>\n</html>\n"
+}
+
 // Reference help with current history/patrol guidance and inlined images.
 internal val COMPAT_REFERENCE_HELP_HTML: String = listOf(
     """

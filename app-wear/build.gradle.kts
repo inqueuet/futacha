@@ -82,8 +82,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100_000_026
-        versionName = "13.0"
+        versionCode = 100_000_027
+        versionName = "13.1"
     }
 
     signingConfigs {

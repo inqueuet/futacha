@@ -41,7 +41,7 @@ internal fun parseFtutterMediaSettings(p: Map<String, String>) = FtutterMediaSet
  * 一覧・ビューアに並べる画像（本体ファイルと、本文中の「あぷ・あぷ小」のリンク。共有の`compatViewerMediaPosts`）。
  * [position]は0始まりの通し番号（OPが0）で、番号カードに出る。
  * - [onlyPostId]：そのレスの画像だけ（「スレ内の画像を全て繋げて表示する」がOFFの時）。
- * - [keepPostId]：削除レスを除く時も、開いた画像のレスは残す（原作のビューア）。
+ * - [keepPostId]：削除レスを除く時も、開いた画像のレスは残す（原作のビューア）。NGの非表示には適用しない。
  */
 internal fun ftutterMediaPosts(
     posts: List<Post>,
@@ -53,8 +53,13 @@ internal fun ftutterMediaPosts(
     val snapshots = posts.mapIndexed { i, post -> post.toCompatPostSnapshot(i) }
         .filter { onlyPostId == null || it.postNo == onlyPostId }
     val deleted = if (excludeDeleted) posts.filter { it.isDeleted && it.id != keepPostId }.map { it.id }.toSet() else emptySet()
-    return compatViewerMediaPosts(snapshots, hiddenPostNos = deleted + (hiddenPostIds - setOfNotNull(keepPostId)))
+    return compatViewerMediaPosts(snapshots, hiddenPostNos = deleted + hiddenPostIds)
 }
+
+/** A late NG/AI/image-hash result must also hide an already-held gallery/viewer snapshot. */
+internal fun ftutterVisibleMedia(
+    media: List<CompatPostSnapshot>, hiddenPostIds: Set<String>
+): List<CompatPostSnapshot> = if (hiddenPostIds.isEmpty()) media else media.filterNot { it.postNo in hiddenPostIds }
 
 /** 共有の画面（画像検索など）の色を、このモードの色に合わせる。 */
 internal fun ftutterMediaPalette(colors: FtutterColors): CompatibilityPalette = CompatibilityPalette(

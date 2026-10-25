@@ -16,9 +16,12 @@ import kotlin.uuid.Uuid
 @Composable
 internal fun rememberPhotoSaveDestination(
     httpClient: HttpClient?, fileSystem: FileSystem?,
+    /** Where the save runs; a longer-lived scope keeps it (and its result) when the screen closes. */
+    saveScope: CoroutineScope? = null,
     onMessage: (String) -> Unit
 ): (String, () -> Unit) -> Unit {
-    val scope = rememberCoroutineScope()
+    val screenScope = rememberCoroutineScope()
+    val scope = saveScope ?: screenScope
     val message by rememberUpdatedState(onMessage)
     var pending by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var saving by remember { mutableStateOf(false) }

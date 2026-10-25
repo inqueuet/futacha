@@ -158,6 +158,13 @@ internal fun futaberHeldTextBelongsTo(ownerKey: String?, target: FutaberPostTarg
 internal fun futaberPostRefusedWhileSending(postInFlight: String?, target: FutaberPostTarget): Boolean =
     postInFlight != null && postInFlight != target.draftKey
 
+/**
+ * An AI draft command is refused while any post is being sent (L111): the write screen locks its own input then, and
+ * a draft added to the post in flight was cleared when that post succeeded. A person's own opening keeps
+ * [futaberPostRefusedWhileSending].
+ */
+internal fun futaberAiDraftRefusedWhileSending(postInFlight: String?): Boolean = postInFlight != null
+
 internal const val FUTABER_POST_IN_FLIGHT_NOTICE = "書き込みを送信中です。終わってからもう一度お試しください"
 
 /** 送信中に書き込み画面が外れ（板の削除など）、その後に送信が済んだ時（監査M13）。 */

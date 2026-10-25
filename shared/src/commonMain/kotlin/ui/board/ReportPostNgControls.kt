@@ -10,12 +10,15 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
 import kotlinx.coroutines.launch
 
+/** The del confirmation's check in ふたばー風 and ふたったー風; the operation guide names it (L26). */
+internal const val REPORT_POST_NG_CHECK_LABEL = "このスレッドのこのレスをNGにも登録"
+
 @Composable
 internal fun ReportPostNgCheckRow(checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 8.dp)
         .testTag("report-post-ng-option")) {
         Checkbox(checked, onCheckedChange = onChange)
-        Text("このスレッドのこのレスをNGにも登録", Modifier.weight(1f).padding(top = 12.dp))
+        Text(REPORT_POST_NG_CHECK_LABEL, Modifier.weight(1f).padding(top = 12.dp))
     }
 }
 

@@ -29,11 +29,13 @@ import com.valoser.futacha.shared.compat.toCompatThreadSnapshot
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
 import com.valoser.futacha.shared.ui.compat.compatViewerMediaPosts
 import com.valoser.futacha.shared.ui.compat.CompatHelpScreen
 import com.valoser.futacha.shared.ui.compat.CompatSettingsScreen
 import com.valoser.futacha.shared.ui.compat.CompatToolbarEditorScreen
 import com.valoser.futacha.shared.ui.compat.CompatViewerScreen
+import com.valoser.futacha.shared.ui.compat.CompatViewerReturnPosition
 import com.valoser.futacha.shared.ui.compat.LocalCompatibilityPalette
 import com.valoser.futacha.shared.ui.compat.normalizeCompatThreadSnapshot
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
@@ -89,6 +91,14 @@ internal fun FutaberMediaOverlay(
     // The viewer keeps the pictures it was opened with: a refresh or a new NG behind it shifted the pages, so the page on
     // screen became another picture, and "保存" could save that one (re-audit L8). Back in the list, the list is current.
     val viewerOpen = viewerIndex != null
+    // One visit includes settings/help/editor, but selecting another image from the gallery starts a fresh one.
+    val viewerReturnPosition = remember(viewerOpen, snapshot == null) {
+        CompatViewerReturnPosition().apply {
+            val index = viewerIndex
+            val identity = viewerPostNo
+            if (index != null && identity != null) update(index, identity)
+        }
+    }
     // (Taken again once the pictures are first known, for a viewer restored before they were.)
     val viewerMedia = remember(viewerOpen, snapshot == null) { mediaPosts }
     // "ビューアで表示": once the pictures are known, the viewer opens on that post's picture (only once; back goes to the list).
@@ -108,88 +118,98 @@ internal fun FutaberMediaOverlay(
                 Surface(Modifier.fillMaxSize().testTag("futaber-media"), color = colors.background) {
                     val settingsPath = settingsPaths.lastOrNull()
                     val closeSettings = { settingsPaths = settingsPaths.dropLast(1) }
-                    when {
-                        snapshot == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = colors.accent)
-                        }
-                        settingsPath == "help" -> {
-                            PlatformBackHandler(onBack = closeSettings)
-                            CompatHelpScreen(onBack = closeSettings)
-                        }
-                        settingsPath != null -> {
-                            PlatformBackHandler(onBack = closeSettings)
-                            CompatSettingsScreen(
-                                path = settingsPath,
-                                store = services.store,
-                                preferences = preferences,
-                                fileSystem = services.fileSystem,
-                                httpClient = services.httpClient,
-                                cookieRepository = services.cookieRepository,
-                                modernPresentation = true,
-                                onOpenHelp = { settingsPaths = settingsPaths + "help" },
-                                onNavigate = { settingsPaths = settingsPaths + it },
-                                onBack = closeSettings
-                            )
-                        }
-                        toolbarEditorOpen -> {
-                            PlatformBackHandler { toolbarEditorOpen = false }
-                            CompatToolbarEditorScreen(CompatToolbarSurface.VIEWER, services.store) {
-                                toolbarEditorOpen = false
-                                toolbarRevision += 1
+                    // A Dialog is a separate window: the runtime host's filter cannot draw over its pixels.
+                    // Settings opened inside this same Dialog keep their normal brightness.
+                    val mediaFilter = if (settingsPath == null && !toolbarEditorOpen) Modifier.privacyWindowFilter() else Modifier
+                    Box(Modifier.fillMaxSize().then(mediaFilter)) {
+                        when {
+                            snapshot == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = colors.accent)
                             }
-                        }
-                        viewerIndex != null -> {
-                            PlatformBackHandler { viewerIndex = null }
-                            FutaberViewerScreen(
-                                mediaPosts = viewerMedia,
-                                initialIndex = viewerIndex ?: 0,
-                                boardKey = tab.boardKey,
-                                threadKey = tab.threadNo,
-                                store = services.store,
+                            settingsPath == "help" -> {
+                                PlatformBackHandler(onBack = closeSettings)
+                                CompatHelpScreen(onBack = closeSettings)
+                            }
+                            settingsPath != null -> {
+                                PlatformBackHandler(onBack = closeSettings)
+                                val appTasks = LocalFutaberAppTasks.current
+                                CompatSettingsScreen(
+                                    path = settingsPath,
+                                    store = services.store,
+                                    preferences = preferences,
+                                    fileSystem = services.fileSystem,
+                                    httpClient = services.httpClient,
+                                    cookieRepository = services.cookieRepository,
+                                    modernPresentation = true,
+                                    onOpenHelp = { settingsPaths = settingsPaths + "help" },
+                                    onNavigate = { settingsPaths = settingsPaths + it },
+                                    onBack = closeSettings,
+                                    // Work started here goes on after the settings are closed (L58).
+                                    lastingScope = appTasks?.scope,
+                                    onLastingNotice = { message -> appTasks?.notify?.invoke(message) }
+                                )
+                            }
+                            toolbarEditorOpen -> {
+                                PlatformBackHandler { toolbarEditorOpen = false }
+                                CompatToolbarEditorScreen(CompatToolbarSurface.VIEWER, services.store) {
+                                    toolbarEditorOpen = false
+                                    toolbarRevision += 1
+                                }
+                            }
+                            viewerIndex != null -> {
+                                PlatformBackHandler { viewerIndex = null }
+                                FutaberViewerScreen(
+                                    mediaPosts = viewerMedia,
+                                    initialIndex = viewerIndex ?: 0,
+                                    returnPosition = viewerReturnPosition,
+                                    boardKey = tab.boardKey,
+                                    threadKey = tab.threadNo,
+                                    store = services.store,
+                                    preferences = preferences,
+                                    httpClient = services.httpClient,
+                                    fileSystem = services.fileSystem,
+                                    onShowPost = { postNo ->
+                                        viewerIndex = null
+                                        onShowPost(postNo)
+                                        onClose()
+                                    },
+                                    onOpenGallery = { viewerIndex = null },
+                                    onOpenSettings = { settingsPaths = listOf("viewer") },
+                                    swipeDownToClose = FutaberDisplaySettings.from(preferences).viewerSwipeClose,
+                                    playVideoInApp = FutaberDisplaySettings.from(preferences).extVideo,
+                                    onClose = onClose
+                                )
+                            }
+                            // B7b (FutaberParityB7b.kt): the shared list with the selection save (an extension, off by default).
+                            FutaberDisplaySettings.from(preferences).extGallerySelectSave -> FutaberSelectSaveGallery(
+                                tab = tab,
+                                snapshot = snapshot,
+                                hiddenPostNos = hiddenPostNos,
+                                mediaPosts = mediaPosts,
+                                services = services,
                                 preferences = preferences,
-                                httpClient = services.httpClient,
-                                fileSystem = services.fileSystem,
-                                onShowPost = { postNo ->
-                                    viewerIndex = null
-                                    onShowPost(postNo)
-                                    onClose()
-                                },
-                                onOpenGallery = { viewerIndex = null },
+                                ngRules = ngRules,
+                                gridState = galleryGridState,
+                                onOpenViewer = { index, identity -> viewerIndex = index; viewerPostNo = identity },
+                                onShowPost = onShowPost,
                                 onOpenSettings = { settingsPaths = listOf("viewer") },
-                                swipeDownToClose = FutaberDisplaySettings.from(preferences).viewerSwipeClose,
-                                playVideoInApp = FutaberDisplaySettings.from(preferences).extVideo,
                                 onClose = onClose
                             )
+                            else -> FutaberGalleryScreen(
+                                mediaPosts = mediaPosts,
+                                gridState = galleryGridState,
+                                onOpenViewer = { index, postNo ->
+                                    viewerIndex = index
+                                    viewerPostNo = postNo
+                                },
+                                onOpenSettings = { settingsPaths = listOf("viewer") },
+                                onClose = onClose,
+                                // The shared viewer settings' column counts (an extension); the original's 3 otherwise.
+                                sharedColumns = if (FutaberDisplaySettings.from(preferences).extGalleryColumns) {
+                                    futaberSharedGalleryColumns(preferences)
+                                } else null
+                            )
                         }
-                        // B7b (FutaberParityB7b.kt): the shared list with the selection save (an extension, off by default).
-                        FutaberDisplaySettings.from(preferences).extGallerySelectSave -> FutaberSelectSaveGallery(
-                            tab = tab,
-                            snapshot = snapshot,
-                            hiddenPostNos = hiddenPostNos,
-                            mediaPosts = mediaPosts,
-                            services = services,
-                            preferences = preferences,
-                            ngRules = ngRules,
-                            gridState = galleryGridState,
-                            onOpenViewer = { index, identity -> viewerIndex = index; viewerPostNo = identity },
-                            onShowPost = onShowPost,
-                            onOpenSettings = { settingsPaths = listOf("viewer") },
-                            onClose = onClose
-                        )
-                        else -> FutaberGalleryScreen(
-                            mediaPosts = mediaPosts,
-                            gridState = galleryGridState,
-                            onOpenViewer = { index, postNo ->
-                                viewerIndex = index
-                                viewerPostNo = postNo
-                            },
-                            onOpenSettings = { settingsPaths = listOf("viewer") },
-                            onClose = onClose,
-                            // The shared viewer settings' column counts (an extension); the original's 3 otherwise.
-                            sharedColumns = if (FutaberDisplaySettings.from(preferences).extGalleryColumns) {
-                                futaberSharedGalleryColumns(preferences)
-                            } else null
-                        )
                     }
                 }
             }

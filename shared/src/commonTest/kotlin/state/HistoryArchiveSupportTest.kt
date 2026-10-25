@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.HistoryArchiveEntry
 import com.valoser.futacha.shared.model.HistoryArchiveManifest
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadStatus
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -104,6 +105,57 @@ class HistoryArchiveSupportTest {
         assertEquals(20_000L, merged.lastVisitedEpochMillis)
         assertEquals(7, merged.lastReadItemIndex)
         assertEquals(25, merged.replyCount)
+    }
+
+    // L89: an archive is a copy from some earlier time (or another device). Importing it must not take back a status
+    // this device learned since: a thread that fell, or was isolated or deleted, does not come back.
+    @Test
+    fun resolveHistoryArchiveImportMerge_neverTakesBackAKnownThreadStatus() {
+        val fallen = historyEntry("200", visited = 5_000L).copy(
+            threadStatus = ThreadStatus(isDead = true, isIsolated = true),
+            isAutoRefreshDisabled = true,
+            lastConfirmedAliveEpochMillis = 4_000L
+        )
+        val aliveInArchive = historyEntry("200", visited = 9_000L).copy(
+            threadStatus = ThreadStatus(),
+            lastConfirmedAliveEpochMillis = 1_000L
+        )
+
+        val merged = resolveHistoryArchiveImportMergeEntries(listOf(fallen), listOf(aliveInArchive))
+            .updatedHistory.single()
+
+        assertEquals(ThreadStatus(isDead = true, isIsolated = true), merged.threadStatus)
+        assertTrue(merged.isAutoRefreshDisabled)
+        assertEquals(4_000L, merged.lastConfirmedAliveEpochMillis)
+        // What the archive legitimately brings still comes in.
+        assertEquals(9_000L, merged.lastVisitedEpochMillis)
+    }
+
+    @Test
+    fun resolveHistoryArchiveImportMerge_keepsWhatTheArchiveKnowsBeyondTheDevice() {
+        val aliveHere = historyEntry("200", visited = 9_000L).copy(threadStatus = ThreadStatus())
+        val deletedInArchive = historyEntry("200", visited = 5_000L).copy(
+            threadStatus = ThreadStatus(isDead = true, isAdminDeleted = true),
+            lastConfirmedAliveEpochMillis = 3_000L
+        )
+        val newToDevice = historyEntry("300", visited = 6_000L).copy(
+            threadStatus = ThreadStatus(isDeleted = true),
+            lastConfirmedAliveEpochMillis = 2_000L
+        )
+
+        val result = resolveHistoryArchiveImportMergeEntries(listOf(aliveHere), listOf(deletedInArchive, newToDevice))
+        val byId = result.updatedHistory.associateBy { it.threadId }
+
+        assertEquals(ThreadStatus(isDead = true, isAdminDeleted = true), byId.getValue("200").threadStatus)
+        assertEquals(3_000L, byId.getValue("200").lastConfirmedAliveEpochMillis)
+        assertEquals(newToDevice, byId.getValue("300"))
+        // A status the archive does not have leaves the device's one as it is.
+        val unknownInArchive = historyEntry("200", visited = 1_000L)
+        assertEquals(
+            ThreadStatus(isDead = true, isAdminDeleted = true),
+            resolveHistoryArchiveImportMergeEntries(result.updatedHistory, listOf(unknownInArchive))
+                .updatedHistory.first { it.threadId == "200" }.threadStatus
+        )
     }
 
     @Test

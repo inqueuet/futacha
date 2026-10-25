@@ -48,6 +48,12 @@ fun FutachaAiCommand.draftCommentParameter(): String? {
     return parameter("comment", "body", "text", "message", "content")
 }
 
-fun FutachaAiCommand.draftPasswordParameter(): String? {
-    return parameter("password", "deleteKey", "delete_key", "deletePassword", "delete_password")
-}
+private val DRAFT_PASSWORD_PARAMETERS = arrayOf("password", "deleteKey", "delete_key", "deletePassword", "delete_password")
+
+/** A web page may suggest draft content, but it cannot choose who can delete the eventual post. */
+fun FutachaAiCommand.draftPasswordParameter(): String? =
+    if (isFromExternalLink()) null else parameter(*DRAFT_PASSWORD_PARAMETERS)
+
+internal fun FutachaAiCommand.ignoresExternalDraftPassword(): Boolean =
+    isFromExternalLink() && (action == FutachaAiAction.DraftReply || action == FutachaAiAction.DraftThread) &&
+        parameter(*DRAFT_PASSWORD_PARAMETERS) != null

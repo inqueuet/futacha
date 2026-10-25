@@ -26,6 +26,7 @@ fun requireValidCompatPreference(key: String, value: String) {
 fun compatCatalogExtraModePreferenceKey(boardKey: String): String = "compat.catalog.extraMode.$boardKey"
 
 private val ALWAYS_LOADED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
+private val NEVER_FAILED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(false).asStateFlow()
 
 interface CompatibilityStore {
     val boards: Flow<List<CompatBoard>>
@@ -43,6 +44,16 @@ interface CompatibilityStore {
      * default.
      */
     val isLoaded: StateFlow<Boolean> get() = ALWAYS_LOADED_COMPAT_STORE
+
+    /**
+     * True while the last load failed and [isLoaded] stays false. The placeholders are
+     * never published as the user's data, so the app must offer [retryLoading] instead
+     * of waiting forever (M74). Stores that load synchronously never fail this way.
+     */
+    val loadFailed: StateFlow<Boolean> get() = NEVER_FAILED_COMPAT_STORE
+
+    /** Retries a failed load. Failures are reported through [loadFailed], not thrown. */
+    suspend fun retryLoading() {}
 
     /**
      * Whether this store can hold the bundled tutorial board (example.com). The iOS and desktop stores keep it
@@ -250,6 +261,8 @@ interface CompatibilityStore {
 
     /** Returns false when the board/tab scope disappeared before the write. */
     suspend fun upsertNgRule(rule: CompatNgRule): Boolean
+    /** Replaces one existing rule atomically, preserving it on invalid scope, collision or write failure. */
+    suspend fun replaceNgRule(previousRuleId: String, rule: CompatNgRule): Boolean
     suspend fun deleteNgRule(ruleId: String)
 
     /** Deletes a set of NG rules as one logical user action. */
@@ -258,6 +271,35 @@ interface CompatibilityStore {
     }
 }
 
+/**
+ * Replaces [previousRuleId] with [rule] as one write, so a failed write or a scope gone meanwhile keeps the old rule
+ * (L139: the old rule was deleted first). An edit into a rule that is already there makes the two that one, as the
+ * delete-then-write did; the old one goes only once that one is written.
+ */
+suspend fun CompatibilityStore.replaceNgRuleMerging(previousRuleId: String, rule: CompatNgRule): Boolean =
+    replaceNgRule(previousRuleId, rule) ||
+        (rule.id != previousRuleId && ngRules.first().any { it.id == rule.id } &&
+            upsertNgRule(rule).also { written -> if (written) deleteNgRule(previousRuleId) })
+
 /** Keeps the identity and the durable scroll anchor of the stored tab. */
 fun CompatTab.pinnedTo(current: CompatTab): CompatTab =
     copy(key = current.key, canonicalUrl = current.canonicalUrl, scrollAnchor = current.scrollAnchor)
+
+/**
+ * Patches only [tabKey]'s scroll anchor in a published (sorted) tab list, as Android's store does on a
+ * scroll stop (L80). The receiver is returned unchanged when nothing differs and every other element
+ * keeps its identity; the anchor is no sort key, so the order stays without sorting again.
+ */
+internal fun List<CompatTab>.withCompatTabScrollAnchor(tabKey: String, anchor: ScrollAnchor): List<CompatTab> {
+    if (none { it.key == tabKey && it.scrollAnchor != anchor }) return this
+    return map { if (it.key == tabKey && it.scrollAnchor != anchor) it.copy(scrollAnchor = anchor) else it }
+}
+
+/** History counterpart of [withCompatTabScrollAnchor], matched by canonical URL. */
+internal fun List<CompatHistoryEntry>.withCompatHistoryScrollAnchor(
+    canonicalUrl: String,
+    anchor: ScrollAnchor
+): List<CompatHistoryEntry> {
+    if (none { it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor }) return this
+    return map { if (it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor) it.copy(scrollAnchor = anchor) else it }
+}

@@ -65,6 +65,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlin.math.abs
 import kotlin.time.ExperimentalTime
@@ -200,10 +201,17 @@ private fun CatalogScreenContent(
     var catalogMode by uiRuntimeStateRefs.catalogMode
     var isRefreshing by uiRuntimeStateRefs.isRefreshing
     var viewedFirstThreadId by androidx.compose.runtime.saveable.rememberSaveable(board?.id) { mutableStateOf<String?>(null) }
+    // The order the placement was made in: another order drops it (L37).
+    var viewedFirstModeName by androidx.compose.runtime.saveable.rememberSaveable(board?.id) { mutableStateOf<String?>(null) }
+    // The refresh after creating a thread does not put the last viewed one above it (L37).
+    val viewedFirstSkipNext = remember(board?.id) { booleanArrayOf(false) }
     val feedbackFeatures = LocalFutachaSharedFeatures.current
-    val feedbackHistory by (feedbackFeatures?.appStateStore?.history ?: kotlinx.coroutines.flow.flowOf(emptyList()))
-        .collectAsState(emptyList())
-    val latestFeedbackHistory by rememberUpdatedState(feedbackHistory)
+    // Read only when a refresh succeeds, kept out of composition (L31: the whole history was collected here, and every
+    // change of it recomposed the catalog).
+    val latestFeedbackHistory = remember { arrayOf<List<ThreadHistoryEntry>>(emptyList()) }
+    LaunchedEffect(feedbackFeatures?.appStateStore) {
+        feedbackFeatures?.appStateStore?.history?.collect { latestFeedbackHistory[0] = it }
+    }
     val viewedFirstEnabled = board?.let { feedbackFeatures?.rawValue(viewedThreadFirstKey(it.url)) == "ON" } == true
     LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) viewedFirstThreadId = null }
 
@@ -217,6 +225,7 @@ private fun CatalogScreenContent(
     var createThreadDraft by draftDisplayStateRefs.createThreadDraft
     var createThreadImage by draftDisplayStateRefs.createThreadImage
     var isCreateThreadSubmitting by remember(board?.id) { mutableStateOf(false) }
+    com.valoser.futacha.shared.ui.ReportPostingInFlight(isCreateThreadSubmitting)
     // Leaving the catalog while a thread is being created cancels the request.
     val notifyCreateThreadSending: () -> Unit = {
         coroutineScope.launch { snackbarHostState.showSnackbar(CATALOG_CREATE_THREAD_SENDING_MESSAGE) }
@@ -261,6 +270,13 @@ private fun CatalogScreenContent(
             persistedCatalogModes = persistentBindings.persistedCatalogModes
         )?.let { catalogMode = it }
         hasSyncedCatalogMode = true
+    }
+    // Only after the stored order is applied: until then the screen shows the default order (L37).
+    LaunchedEffect(catalogMode, hasSyncedCatalogMode) {
+        if (hasSyncedCatalogMode && viewedFirstModeName != null && viewedFirstModeName != catalogMode.name) {
+            viewedFirstThreadId = null
+            viewedFirstModeName = null
+        }
     }
     LaunchedEffect(board?.url) {
         pastSearchRuntimeState.job?.cancel()
@@ -366,11 +382,18 @@ private fun CatalogScreenContent(
             setIsRefreshing = { isRefreshing = it },
             setCatalogUiState = { next ->
                 uiState.value = next
-                if (isRefreshing && next is CatalogUiState.Success && !next.partial && viewedFirstEnabled) {
-                    viewedFirstThreadId = latestFeedbackHistory.filter { it.boardId == board?.id }
-                        .maxByOrNull { it.lastVisitedEpochMillis }?.threadId
-                }
+                if (isRefreshing && next is CatalogUiState.Success && !next.partial) {
+                    if (viewedFirstSkipNext[0]) {
+                        viewedFirstSkipNext[0] = false
+                        viewedFirstThreadId = null
+                    } else if (viewedFirstEnabled) {
+                        viewedFirstThreadId = latestFeedbackHistory[0].filter { it.boardId == board?.id }
+                            .maxByOrNull { it.lastVisitedEpochMillis }?.threadId
+                        viewedFirstModeName = catalogMode.name
+                    }
+                } else if (isRefreshing && next !is CatalogUiState.Loading) viewedFirstSkipNext[0] = false
             },
+            onThreadCreated = { viewedFirstSkipNext[0] = true },
             currentCatalogUiState = { uiState.value },
             setLastCatalogItems = { lastCatalogItems = it },
             loadCatalogItems = ::loadCatalogItems,
@@ -540,12 +563,20 @@ private fun CatalogScreenContent(
                 }
             }
             FutachaAiAction.DraftThread -> {
+                val requestedPassword = command.draftPasswordParameter()
+                // Use the manual dialog's trusted current/default ordering. A
+                // rejected external key must not bypass default autofill, even
+                // while the preference collector still has its initial empty value.
+                val savedDefault = if (requestedPassword == null && createThreadDraft.password.isBlank()) {
+                    stateStore?.lastUsedDeleteKey?.first() ?: lastUsedDeleteKey
+                } else lastUsedDeleteKey
+                if (aiCommandAppLock?.isUnlocked == false) return@LaunchedEffect
                 createThreadDraft = createThreadDraft.copy(
                     name = command.draftNameParameter() ?: createThreadDraft.name,
                     email = command.draftEmailParameter() ?: createThreadDraft.email,
                     title = command.draftSubjectParameter() ?: createThreadDraft.title,
                     comment = command.draftCommentParameter() ?: createThreadDraft.comment,
-                    password = command.draftPasswordParameter() ?: createThreadDraft.password
+                    password = requestedPassword ?: resolveCreateThreadDialogOpenPassword(createThreadDraft.password, savedDefault)
                 )
                 overlayState = setCatalogCreateThreadDialogVisible(overlayState, true)
             }
@@ -666,7 +697,7 @@ private fun CatalogScreenContent(
         } }, onScrollTop = { coroutineScope.launch {
             catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
         } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
-        viewedFirstThreadId = viewedFirstThreadId,
+        viewedFirstThreadId = viewedFirstThreadId.takeIf { viewedFirstModeName == catalogMode.name },
         ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
         createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },
             { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog },

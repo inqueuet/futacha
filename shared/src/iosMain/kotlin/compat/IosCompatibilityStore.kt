@@ -83,6 +83,14 @@ internal class IosCompatibilityStore(
     override val preferences: Flow<Map<String, String>> = preferencesState
     override val ngRules: Flow<List<CompatNgRule>> = ngRulesState
 
+    /** Closes the database connection; a later call opens it again from disk (tests, as on Desktop). */
+    internal suspend fun close() = withContext(AppDispatchers.io) {
+        mutex.withLock {
+            database.close()
+            initialized = false
+        }
+    }
+
     suspend fun initialize() = withContext(AppDispatchers.io) {
         mutex.withLock {
             ensureInitializedLocked()
@@ -108,10 +116,11 @@ internal class IosCompatibilityStore(
                     .associate { it.toPair() }
             )
             val validTabKeys = repairedTabs.mapTo(mutableSetOf(), CompatTab::key)
+            // A thread scope outlives its closed tab, as on Android (L86).
             val repairedRules = state.ngRules.asSequence()
                 .filter {
                     isValidCompatNgRule(it) &&
-                        isCompatNgScopeValid(it.kind, it.scopeKey, validBoardKeys, validTabKeys)
+                        isCompatNgScopeRetained(it.kind, it.scopeKey, validBoardKeys, validTabKeys)
                 }
                 .take(MAX_COMPAT_NG_RULES)
                 .toList()
@@ -316,6 +325,12 @@ internal class IosCompatibilityStore(
     }
 
     override suspend fun deleteBoard(boardKey: String) = mutate {
+        // The board's thread scopes (its tabs, closed tabs and history) go with it, like its board scope (L86).
+        val boardThreadKeys = compatBoardThreadScopeKeys(
+            boardKey,
+            it.tabs + it.closedBatch?.tabs.orEmpty().map(ClosedCompatTab::tab),
+            it.history
+        )
         val remainingBoards = it.boards.filterNot { board -> board.key == boardKey }
         val remainingTabs = it.tabs.filterNot { tab -> tab.boardKey == boardKey }
         val remainingTabKeys = remainingTabs.mapTo(mutableSetOf(), CompatTab::key)
@@ -336,7 +351,7 @@ internal class IosCompatibilityStore(
             catalogPreferences = it.catalogPreferences.filterNot { pref -> pref.boardKey == boardKey },
             catalogSnapshots = it.catalogSnapshots.filterNot { snapshot -> snapshot.boardKey == boardKey },
             droppedItems = it.droppedItems.filterNot { dropped -> dropped.boardKey == boardKey },
-            ngRules = it.ngRules.filterNot { rule -> rule.isScopedToRemovedBoard(boardKey) },
+            ngRules = it.ngRules.filterNot { rule -> rule.isScopedToRemovedBoard(boardKey, boardThreadKeys) },
             // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
             preferences = compatCatalogExtraModePreferenceKey(boardKey).let { key ->
                 if (key in it.preferences) it.preferences - key else it.preferences
@@ -661,12 +676,13 @@ internal class IosCompatibilityStore(
                     updatedAtMillis = nowMillis()
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
-                // Every scroll stop lands here. Nothing is published, as on Android
-                // (re-audit M25: a new tab list on each stop made the whole
-                // としあき(仮) screen run its workspace reduction again). The screen
-                // keeps the anchors it saved; `state` carries them into the next
-                // ordinary mutation, which always happens (tab close) before a
-                // closed tab can be reopened from history.
+                // Every scroll stop lands here. Publish only the patched tab and
+                // history row, as Android does (L80). Not publishing at all
+                // (re-audit M25) left the screen with the last published anchor,
+                // so coming back to the thread (from settings, say) restored an
+                // old position. Patching keeps the order and the other rows.
+                tabsState.value = tabsState.value.withCompatTabScrollAnchor(tabKey, anchor)
+                historyState.value = historyState.value.withCompatHistoryScrollAnchor(tab.canonicalUrl, anchor)
             }
         }
 
@@ -1129,6 +1145,14 @@ internal class IosCompatibilityStore(
         true
     }
 
+    override suspend fun replaceNgRule(previousRuleId: String, rule: CompatNgRule): Boolean = mutate {
+        val replacement = planCompatNgRuleReplacement(it.ngRules, previousRuleId, rule,
+            it.boards.mapTo(mutableSetOf(), CompatBoard::key), it.tabs.mapTo(mutableSetOf(), CompatTab::key))
+            ?: return@mutate false
+        state = it.copy(ngRules = replacement)
+        true
+    }
+
     override suspend fun deleteNgRule(ruleId: String) = mutate {
         state = it.copy(ngRules = it.ngRules.filterNot { rule -> rule.id == ruleId })
     }
@@ -1175,6 +1199,7 @@ internal class IosCompatibilityStore(
             val result = block(state)
             if (state != previousState) {
                 try {
+                    require(state.boards.size <= MAX_BOARDS) { "登録できる板は${MAX_BOARDS}件までです" }
                     persistLocked()
                     publishLocked()
                 } catch (error: Throwable) {
@@ -1203,6 +1228,12 @@ internal class IosCompatibilityStore(
         // every launch, the unreadable file staying in place).
         keepAside(source, target)
         if (fileSystem.exists("$source-wal")) keepAside("$source-wal", "$target-wal")
+        pruneUnreadableCompatibilityDatabaseCopies()
+        return target
+    }
+
+    /** Only the newest few kept copies of unreadable databases stay. */
+    private suspend fun pruneUnreadableCompatibilityDatabaseCopies() {
         runCatching {
             fileSystem.listFiles("compatibility")
                 .map { it.substringAfterLast('/') }
@@ -1214,7 +1245,6 @@ internal class IosCompatibilityStore(
                     fileSystem.delete("compatibility/$name-wal")
                 }
         }
-        return target
     }
 
     private suspend fun keepAside(from: String, to: String) {
@@ -1222,6 +1252,40 @@ internal class IosCompatibilityStore(
         // memory) a copy is tried only when the move fails (re-audit L23).
         if (platform.posix.rename(fileSystem.resolveAbsolutePath(from), fileSystem.resolveAbsolutePath(to)) == 0) return
         check(fileSystem.linkOrCopy(from, to).isSuccess) { "Could not keep the unreadable compatibility database ($from)" }
+    }
+
+    /**
+     * Rebuilds the database without its damaged cache table (L95). Everything the person owns, the profile metadata
+     * with the scroll positions read from the overlay and every state record (settings, archive outbox, dropped
+     * items), is first written to a separate file; the damaged original is kept as a copy (a hard link, so a large
+     * file is not read into memory) before that file replaces it. A failure on the way leaves the original database
+     * in place and fails this initialization, so the next launch tries again. Returns the kept copy's path.
+     */
+    private suspend fun rebuildCacheStorageLocked(): String {
+        state = state.copy(partitionedCaches = true, stateRecordsPartitioned = true)
+        resetStateRecordTrackingLocked()
+        // With the tracking reset every preference, archive row and dropped item is listed.
+        val stateRecords = diffStateRecordsLocked().updates
+        val payload = json.encodeToString(PersistedCompatibilityState.serializer(), metadataOf(state))
+        val stamp = nowMillis()
+        val source = database.storagePath
+        val target = "$UNREADABLE_COMPATIBILITY_DATABASE_PREFIX$stamp.db"
+        database.rebuildWithoutCacheRecords(
+            payload = payload,
+            stateRecords = stateRecords,
+            updatedAtMillis = stamp,
+            replacementPath = "compatibility/cache-recovery-$stamp.db"
+        ) {
+            // A copy, not a move: the original has to stay in place until the replacement is renamed over it.
+            check(fileSystem.linkOrCopy(source, target).isSuccess) { "Could not keep the compatibility database ($source)" }
+            if (fileSystem.exists("$source-wal")) {
+                check(fileSystem.linkOrCopy("$source-wal", "$target-wal").isSuccess) {
+                    "Could not keep the compatibility database ($source-wal)"
+                }
+            }
+        }
+        pruneUnreadableCompatibilityDatabaseCopies()
+        return target
     }
 
     private suspend fun ensureInitializedLocked() {
@@ -1311,11 +1375,7 @@ internal class IosCompatibilityStore(
             persistedMetadataBytes = databaseRecords.first.encodeToByteArray().size.toLong()
             loadStateRecordsLocked(databaseRecords.second)
         }
-        var cacheStorageReset = false
-        if (state.partitionedCaches) {
-            cacheStorageReset = loadPartitionedCachesLocked()
-        }
-        if (cacheStorageReset) resetStateRecordTrackingLocked()
+        val cacheStorageReset = state.partitionedCaches && loadPartitionedCachesLocked()
         val pendingAnchors = runSuspendCatchingPreservingCancellation {
             database.readPendingScrollAnchors()
         }.getOrDefault(emptyMap())
@@ -1346,6 +1406,11 @@ internal class IosCompatibilityStore(
         if (pendingSnapshotAccess.isNotEmpty()) {
             state = state.copy(snapshotAccess = state.snapshotAccess + pendingSnapshotAccess)
         }
+        if (cacheStorageReset) {
+            // The latest read positions lived outside the profile row; they were absorbed above.
+            val backupPath = rebuildCacheStorageLocked()
+            Logger.w("IosCompatibilityStore", "Rebuilt damaged cache storage; original kept at $backupPath")
+        }
         if (databaseState == null && legacyState != null) {
             database.writePayload(
                 json.encodeToString(PersistedCompatibilityState.serializer(), state),
@@ -1373,56 +1438,85 @@ internal class IosCompatibilityStore(
         if (!fileSystem.exists(oldDatabasePath)) return
 
         val oldDatabase = IosCompatibilityDatabase(fileSystem, storagePath = oldDatabasePath)
-        try {
-            val payload = runSuspendCatchingPreservingCancellation { oldDatabase.readPayload() }
-                .onFailure { error ->
-                    Logger.e(
-                        "IosCompatibilityStore",
-                        "Failed to inspect legacy Documents compatibility database",
-                        error
-                    )
-                }
-                .getOrNull()
-                ?: return
-            val decoded = withContext(AppDispatchers.parsing) {
-                runCatching {
-                    json.decodeFromString(PersistedCompatibilityState.serializer(), payload)
-                }.getOrNull()
-            } ?: return
-            val pendingAnchors = runSuspendCatchingPreservingCancellation {
-                oldDatabase.readPendingScrollAnchors()
-            }.getOrDefault(emptyMap())
-            val pendingSnapshotAccess = runSuspendCatchingPreservingCancellation {
-                oldDatabase.readPendingSnapshotAccess()
-            }.getOrDefault(emptyMap())
-            // Without its state records a partitioned payload has no settings;
-            // leave the old database in place rather than migrate half of it.
-            val stateRecords = if (!decoded.stateRecordsPartitioned) emptyMap() else {
-                runSuspendCatchingPreservingCancellation { oldDatabase.readStateRecords() }
-                    .getOrNull()
-                    ?.records
-                    ?.associate { record -> CompatibilityStateRecordKey(record.kind, record.key) to record.payload }
-                    ?: return
-            }
-
-            // Commit the validated payload first; overlays are replayed only
-            // after that transaction so their newer values remain visible.
-            database.writePayload(
-                json.encodeToString(PersistedCompatibilityState.serializer(), decoded),
-                nowMillis(),
-                stateRecordUpdates = stateRecords,
-                replaceStateRecords = true
-            )
-            pendingAnchors.forEach { (tabKey, anchorPayload) ->
-                database.writeScrollAnchor(tabKey, anchorPayload, nowMillis())
-            }
-            pendingSnapshotAccess.forEach { (tabKey, accessedAt) ->
-                database.writeSnapshotAccess(tabKey, accessedAt)
-            }
-            oldDatabase.deleteStorage()
+        val unreadable = try {
+            migrateLegacyDocumentsDatabase(oldDatabase)
         } finally {
             oldDatabase.close()
         }
+        if (unreadable) keepUnreadableLegacyDocumentsDatabase(oldDatabasePath)
+    }
+
+    /**
+     * Copies the old Documents database into the private one and deletes it. Returns true when it holds a profile
+     * that cannot be read (damaged, undecodable or without its state records); a failure that is not damage (I/O,
+     * a locked file) is thrown, so initialization fails and the next launch retries with the old file untouched
+     * instead of starting empty (L94).
+     */
+    private suspend fun migrateLegacyDocumentsDatabase(oldDatabase: IosCompatibilityDatabase): Boolean {
+        fun Throwable.isUnreadableDatabase() =
+            isRecoverableIosCompatibilityDatabaseCorruption() || this is IllegalArgumentException
+        val payload = runSuspendCatchingPreservingCancellation { oldDatabase.readPayload() }
+            .getOrElse { error ->
+                Logger.e("IosCompatibilityStore", "Failed to inspect legacy Documents compatibility database", error)
+                if (!error.isUnreadableDatabase()) throw error
+                return true
+            }
+            // An old database without a profile row has nothing to migrate.
+            ?: return false
+        val decoded = withContext(AppDispatchers.parsing) {
+            runCatching {
+                json.decodeFromString(PersistedCompatibilityState.serializer(), payload)
+            }.getOrNull()
+        } ?: return true
+        val pendingAnchors = runSuspendCatchingPreservingCancellation {
+            oldDatabase.readPendingScrollAnchors()
+        }.getOrDefault(emptyMap())
+        val pendingSnapshotAccess = runSuspendCatchingPreservingCancellation {
+            oldDatabase.readPendingSnapshotAccess()
+        }.getOrDefault(emptyMap())
+        // Without its state records a partitioned payload has no settings;
+        // keep the old database rather than migrate half of it.
+        val stateRecords = if (!decoded.stateRecordsPartitioned) emptyMap() else {
+            runSuspendCatchingPreservingCancellation { oldDatabase.readStateRecords() }
+                .getOrElse { error ->
+                    Logger.e("IosCompatibilityStore", "Failed to read legacy Documents compatibility records", error)
+                    if (!error.isUnreadableDatabase()) throw error
+                    return true
+                }
+                .records
+                .associate { record -> CompatibilityStateRecordKey(record.kind, record.key) to record.payload }
+        }
+
+        // Commit the validated payload first; overlays are replayed only
+        // after that transaction so their newer values remain visible.
+        database.writePayload(
+            json.encodeToString(PersistedCompatibilityState.serializer(), decoded),
+            nowMillis(),
+            stateRecordUpdates = stateRecords,
+            replaceStateRecords = true
+        )
+        pendingAnchors.forEach { (tabKey, anchorPayload) ->
+            database.writeScrollAnchor(tabKey, anchorPayload, nowMillis())
+        }
+        pendingSnapshotAccess.forEach { (tabKey, accessedAt) ->
+            database.writeSnapshotAccess(tabKey, accessedAt)
+        }
+        oldDatabase.deleteStorage()
+        return false
+    }
+
+    /**
+     * An old Documents database that cannot be read used to be left where the next launch deleted it, after a start
+     * from an empty profile nobody was told about (L94). It is moved into private storage with the copies of other
+     * unreadable databases, where no clean-up removes it, and the person is told where it is.
+     */
+    private suspend fun keepUnreadableLegacyDocumentsDatabase(oldDatabasePath: String) {
+        val target = "$UNREADABLE_COMPATIBILITY_DATABASE_PREFIX${nowMillis()}.db"
+        keepAside(oldDatabasePath, target)
+        if (fileSystem.exists("$oldDatabasePath-wal")) keepAside("$oldDatabasePath-wal", "$target-wal")
+        pruneUnreadableCompatibilityDatabaseCopies()
+        Logger.e("IosCompatibilityStore", "Starting from an empty profile; unreadable Documents database kept at $target")
+        postUnreadableCompatibilityPayloadNotice(fileSystem, target, location = "アプリ内の保存領域")
     }
 
     private fun legacyDocumentsCompatibilityDirectory(): String =
@@ -1455,24 +1549,28 @@ internal class IosCompatibilityStore(
      * refetchable, so an unreadable, undecodable or misfiled row is logged and
      * deleted instead of failing initialization on every launch.
      *
-     * @return true when the database had to be recreated and the profile
-     *   metadata must be written again.
+     * @return true when the cache table can be neither read nor cleared, so the
+     *   database must be rebuilt without it ([rebuildCacheStorageLocked]) once
+     *   the profile and its overlays have been read.
      */
     private suspend fun loadPartitionedCachesLocked(): Boolean {
-        var storageReset = false
+        var rebuildStorage = false
         val read = runSuspendCatchingPreservingCancellation { database.readCacheRecords() }
             .getOrElse { error ->
                 if (!error.isRecoverableIosCompatibilityDatabaseCorruption()) throw error
                 Logger.e("IosCompatibilityStore", "Dropping unreadable compatibility cache records", error)
                 runSuspendCatchingPreservingCancellation { database.clearCacheRecords() }
                     .onFailure { clearError ->
+                        // DELETE reads the damaged b-tree too. The database is not deleted
+                        // here (L95): the scroll overlay is still to be read from it, and
+                        // the profile is moved to a rebuilt file only after a copy is kept.
+                        if (!clearError.isRecoverableIosCompatibilityDatabaseCorruption()) throw clearError
                         Logger.e(
                             "IosCompatibilityStore",
-                            "Recreating compatibility database after cache corruption",
+                            "Rebuilding compatibility database after cache corruption",
                             clearError
                         )
-                        database.deleteStorage()
-                        storageReset = true
+                        rebuildStorage = true
                     }
                 CompatibilityCacheRecordsRead(emptyMap(), emptyList())
             }
@@ -1527,7 +1625,7 @@ internal class IosCompatibilityStore(
         )
         persistedCaches = cacheRecords()
         persistedCacheBytes = acceptedBytes
-        return storageReset
+        return rebuildStorage
     }
 
     private fun threadCacheKey(snapshot: CompatThreadSnapshot): String = "thread:${snapshot.tabKey}"
@@ -1926,7 +2024,7 @@ internal class IosCompatibilityStore(
         const val HISTORY_LIMIT_AFTER_TRIM = 190
         const val MAX_TABS = TAB_LIMIT_TRIGGER
         const val MAX_HISTORY = HISTORY_LIMIT_TRIGGER
-        const val MAX_BOARDS = 100
+        const val MAX_BOARDS = com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS
         const val MAX_HISTORY_TOMBSTONES = 1_000
         const val MAX_TOOLBAR_ITEMS = 64
         const val MAX_COMPAT_BOARD_FIELD_CHARS = 200

@@ -58,6 +58,8 @@ class FutaberParityB23InstrumentedTest {
 
     @Before fun prepare() {
         app = ApplicationProvider.getApplicationContext()
+        // L69: a drawing another test left on the real files would be offered before anything could be drawn.
+        clearCompatDrawingRecovery(app)
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()

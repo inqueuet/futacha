@@ -49,8 +49,9 @@ object DesktopOsIntegration {
 
     suspend fun notificationSettings() = withContext(Dispatchers.IO) { openNotificationSettings() }
 
-    suspend fun notify(identifier: String, title: String, body: String, threadUrl: String) {
-        require(canonicalizeThreadUrl(threadUrl) != null)
+    /** A click opens [threadUrl], only ever an official thread; without one it brings the app forward (L126). */
+    suspend fun notify(identifier: String, title: String, body: String, threadUrl: String?) {
+        require(threadUrl == null || canonicalizeThreadUrl(threadUrl) != null)
         if (!DesktopPlatform.isWindows) return MacOsIntegration.notify(identifier, title, body, threadUrl)
         withContext(Dispatchers.Main) {
             balloonLink.show(threadUrl, System.currentTimeMillis())
@@ -116,7 +117,8 @@ internal class DesktopTrayBalloonLink(private val lifetimeMillis: Long = 5 * 60_
     private var url: String? = null
     private var shownAtMillis = 0L
 
-    fun show(threadUrl: String, nowMillis: Long) { url = threadUrl; shownAtMillis = nowMillis }
+    /** A balloon without a thread ([threadUrl] null) leaves nothing to open, so its click only activates. */
+    fun show(threadUrl: String?, nowMillis: Long) { url = threadUrl; shownAtMillis = nowMillis }
 
     fun consume(nowMillis: Long): String? {
         val pending = url ?: return null

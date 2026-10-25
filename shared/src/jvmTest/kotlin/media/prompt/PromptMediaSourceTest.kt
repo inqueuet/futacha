@@ -151,6 +151,23 @@ class PromptMediaSourceTest {
         }
     }
 
+    /** L115: a reload (`#compat-reload=N`) binds no alias that hides the original's generation information. */
+    @Test fun aReloadFragmentDoesNotHideTheGenerationInformation(): Unit = runBlocking {
+        fixture { store, _ ->
+            val gate = MediaFeatureGate().apply { update(on) }
+            val source = PromptMediaSource(store, gate) { result(it.readAt(0, 2).decodeToString()) }
+            try {
+                source.acquire(request).close()
+                source.changes.first { source.metadata(request.url) != null }
+                source.bindSuccessfulUrl(request.url, request.url + "#compat-reload=1")
+                assertNotNull(source.metadata(request.url), "The plain URL keeps its information after a reload")
+                assertNotNull(source.metadata(request.url + "#compat-reload=1"))
+                source.bindSuccessfulUrl(request.url, request.url)
+                assertNotNull(source.metadata(request.url))
+            } finally { source.close() }
+        }
+    }
+
     @Test fun reacquiringTheSameOriginalDoesNotNotifyWatchers(): Unit = runBlocking {
         fixture { store, _ ->
             val gate = MediaFeatureGate().apply { update(on) }

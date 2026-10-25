@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import kotlinx.coroutines.CoroutineScope
@@ -45,12 +48,24 @@ internal fun buildThreadScreenReadAloudStateBindings(
     )
 }
 
+/** Skip/seek: cancel the utterance but keep the playback protection and the loaded voice. */
+internal fun interruptThreadReadAloud(
+    stateBindings: ThreadScreenReadAloudStateBindings,
+    interruptPlayback: () -> Unit
+) {
+    interruptPlayback()
+    val current = stateBindings.currentState()
+    stateBindings.setState(current.copy(cancelRequestedByUser = true))
+    current.job?.cancel()
+}
+
 internal data class ThreadScreenReadAloudCallbacks(
     val showMessage: (String) -> Unit,
     val showOptionalMessage: (String?) -> Unit,
     val scrollToPostIndex: suspend (Int) -> Unit,
     val speakText: suspend (String) -> Unit,
-    val cancelActiveReadAloud: () -> Unit
+    val cancelActiveReadAloud: () -> Unit,
+    val interruptActiveReadAloud: () -> Unit = cancelActiveReadAloud
 )
 
 internal data class ThreadScreenReadAloudDependencies(
@@ -66,6 +81,14 @@ internal data class ThreadScreenReadAloudDependencies(
     },
     val resolveFinalState: (Boolean, ReadAloudStatus) -> ThreadReadAloudFinalState = ::resolveThreadReadAloudFinalState
 )
+
+@Composable
+internal fun threadScreenReadAloudDependencies(segments: List<ReadAloudSegment>): ThreadScreenReadAloudDependencies {
+    // A running session asks for the list as it is now (L12): the one captured at composition went stale,
+    // so posts hidden by NG later were read and new replies were not.
+    val latest = rememberUpdatedState(segments)
+    return remember { ThreadScreenReadAloudDependencies(currentSegments = { latest.value }) }
+}
 
 internal data class ThreadScreenReadAloudBindings(
     val startReadAloud: () -> Unit,
@@ -180,6 +203,7 @@ internal fun buildThreadScreenReadAloudBindings(
                     // platform returns its audio session and other apps' audio resumes,
                     // instead of holding it until the screen closes (N4-4). With no job
                     // left this only stops playback; the user-cancel flag is restored.
+                    // Stop (not interrupt): a finished reading also releases the loaded voice.
                     callbacks.cancelActiveReadAloud()
                     updateState { it.copy(cancelRequestedByUser = false) }
                     callbacks.showOptionalMessage(finalState.message)
@@ -211,7 +235,9 @@ internal fun buildThreadScreenReadAloudBindings(
                 "will_restart" to seekState.shouldRestart.toString()
             )
         )
-        callbacks.cancelActiveReadAloud()
+        // Reading continues from the new position: keep the playback protection and the
+        // verified voice. A seek that does not restart has nothing to keep.
+        if (seekState.shouldRestart) callbacks.interruptActiveReadAloud() else callbacks.cancelActiveReadAloud()
         updateState {
             it.copy(
                 job = null,

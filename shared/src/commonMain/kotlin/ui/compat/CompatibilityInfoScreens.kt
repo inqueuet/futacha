@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BusinessCenter
@@ -29,7 +30,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
-import futacha.shared.generated.resources.Res
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -173,14 +173,18 @@ internal fun CompatChangeLogContent(modifier: Modifier = Modifier) {
 }
 
 @Composable
-internal fun CompatLicenseScreen(onBack: () -> Unit) {
+internal fun CompatLicenseScreen(onBack: () -> Unit, initialAssetId: String? = null) {
+    // Opened for one subject (the ずんだもん credit), the list starts at that entry.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = FUTACHA_LICENSE_ASSETS.indexOfFirst { it.id == initialAssetId }.coerceAtLeast(0)
+    )
     var selected by remember { mutableStateOf<FutachaLicenseAsset?>(null) }
     var paragraphs by remember { mutableStateOf<List<String>?>(null) }
     LaunchedEffect(selected) {
         paragraphs = null
         selected?.resourcePath?.let { path ->
             paragraphs = runSuspendCatchingPreservingCancellation {
-                Res.readBytes(path).decodeToString().lines().chunked(32).map { it.joinToString("\n") }
+                loadCompatLicenseParagraphs(path)
             }.getOrElse { listOf("ライセンスを読み込めませんでした。画面を開き直してください。") }
         }
     }
@@ -204,7 +208,8 @@ internal fun CompatLicenseScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .testTag("compat-license-list")
+                .testTag("compat-license-list"),
+            state = listState
         ) {
             if (selected != null) {
                 item { Text(selected!!.text, Modifier.padding(10.dp)) }

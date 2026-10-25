@@ -60,7 +60,7 @@ internal fun WatchDiagnosticsDialog(store: CompatibilityStore, repository: Board
                             message = "検出 ${result.matches.size}件／取得失敗 ${result.failures.size}件（通知は送信しません）"
                         } else {
                             val result = refreshCompatTabsInBackground(store, repository!!, checkUpdates = false, checkExistence = false, checkWatchWords = true)
-                            message = "新たに保存 ${result.newWatchMatches.size}件／失敗 ${result.failures}件"
+                            message = compatWatchCheckNowNotice(result)
                         }
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (error: Exception) { message = error.message ?: "確認に失敗しました" }
@@ -70,3 +70,7 @@ internal fun WatchDiagnosticsDialog(store: CompatibilityStore, repository: Board
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }) }
 }
+
+/** What "今すぐ確認" tells for the shared watcher, with what the time left unchecked (re-audit L81). */
+internal fun compatWatchCheckNowNotice(result: CompatBackgroundRefreshResult): String =
+    "新たに保存 ${result.newWatchMatches.size}件／失敗 ${result.failures}件${result.unfinishedNotice}"

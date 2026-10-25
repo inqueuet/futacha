@@ -181,7 +181,7 @@ class HistoryRefresher(
             val boards = boardsSnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
                 stateStore.boards.first()
             } ?: throw IllegalStateException("Timed out while reading board snapshot")
-            val fullHistory = historySnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
+            val storedHistory = historySnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
                 stateStore.history.first()
             } ?: throw IllegalStateException("Timed out while reading history snapshot")
             val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
@@ -191,8 +191,22 @@ class HistoryRefresher(
             val runThreadFetchTimeoutMillis = threadFetchTimeoutMillisOverride
                 ?.coerceAtLeast(1_000L)
                 ?: effectiveThreadFetchTimeoutMillis
-            if (fullHistory.isEmpty()) return@withContext
+            if (storedHistory.isEmpty()) return@withContext
             val boardById = boards.associateBy { it.id }
+            // Rows an earlier archive refresh pointed at the archive's board go back on their own
+            // (L90), in the store and in this run's copy, whose updates would write it back.
+            val fullHistory = storedHistory.map { repairArchiveRewrittenHistoryBoard(it, boardById) }
+            if (fullHistory != storedHistory) {
+                runSuspendCatchingPreservingCancellation {
+                    historyCommitGate {
+                        stateStore.updateHistory { rows ->
+                            rows.map { repairArchiveRewrittenHistoryBoard(it, boardById) }
+                        }
+                    }
+                }.onFailure { error ->
+                    Logger.w(HISTORY_REFRESH_TAG, "Could not repair archive board addresses: ${error.message}")
+                }
+            }
             val boardByBaseUrl = boards
                 .mapNotNull { board ->
                     normalizeBoardKey(board.url)?.let { key -> key to board }
@@ -529,7 +543,8 @@ class HistoryRefresher(
             maxThreadsPerRun = maxThreadsPerRun,
             cursor = historyRefreshCursor
         ) { entry ->
-            if (entry.isAutoRefreshDisabled) {
+            // Rows an older version made for a saved thread without its board are kept but never fetched (L29).
+            if (entry.isAutoRefreshDisabled || com.valoser.futacha.shared.model.isSavedThreadPlaceholderUrl(entry.boardUrl)) {
                 false
             } else {
                 val key = buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)

@@ -227,7 +227,10 @@ private suspend fun readHttpBoardApiPostingConfigResponse(
             hashValue = hashValue,
             ptuaValue = ptuaValue,
             maxFileSizeBytes = maxFileSizeBytes,
-            supportedExtensions = supportedExtensions,
+            // Apply the same current-server exceptions as the attachment picker.
+            // An absent list keeps the existing unrestricted sender fallback.
+            supportedExtensions = if (supportedExtensions.isEmpty()) emptySet() else
+                resolveBoardPostingCapabilities(board, maxFileSizeBytes, supportedExtensions).supportedExtensions,
             cacheable = false
         ).copy(formFields = parseHttpBoardApiPostingFieldNames(html))
     } finally {

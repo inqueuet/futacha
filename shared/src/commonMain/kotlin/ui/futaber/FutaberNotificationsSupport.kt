@@ -39,3 +39,22 @@ internal fun futaberWatchSubtitle(result: CompatWatchResult, openable: Boolean):
     "「${result.keyword}」  ${result.history.boardName}" +
         (if (result.active) "" else "（落ちました）") +
         (if (openable) "" else "（板が未登録）")
+
+/**
+ * Provider IDs and internal thread URLs have separate key spaces. A malformed provider may omit/repeat an ID;
+ * keep every displayed row without letting that become a duplicate LazyColumn key. The ID still governs deletion.
+ */
+internal fun futaberNotificationRowKeys(results: List<CompatWatchResult>): List<String> {
+    val occurrences = mutableMapOf<String, Int>()
+    return results.mapIndexed { index, result ->
+        val external = result.externalEntryKey
+        val base = when {
+            external == null -> "internal:url:${result.history.canonicalUrl}"
+            external.isBlank() -> "external:missing:$index"
+            else -> "external:id:${external.length}:$external"
+        }
+        val occurrence = occurrences[base] ?: 0
+        occurrences[base] = occurrence + 1
+        "$base:$occurrence"
+    }
+}

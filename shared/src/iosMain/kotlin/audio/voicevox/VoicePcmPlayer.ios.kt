@@ -16,17 +16,22 @@ import platform.darwin.NSObject
 import platform.darwin.NSObjectProtocol
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
+import platform.darwin.dispatch_get_global_queue
+import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal class IosVoicePcmPlayer : VoicePcmPlayer {
+internal class IosVoicePcmPlayer(
+    private val interruptionTimeoutMillis: Long = VOICE_INTERRUPTION_TIMEOUT_MILLIS,
+    private val acquireSession: () -> IosPlaybackAudioLease = ::acquireIosSpeechAudioSession
+) : VoicePcmPlayer {
     private val lease = MutableStateFlow<IosPlaybackAudioLease?>(null)
     private var player: AVAudioPlayer? = null
     private var continuation: CancellableContinuation<Unit>? = null
     private var onStop: (() -> Unit)? = null
     private var interruption: NSObjectProtocol? = null
     private var route: NSObjectProtocol? = null
-    private var interrupted = false
+    private val interrupted = MutableStateFlow(false)
     private var closed = false
     private val generation = MutableStateFlow(0L)
     private val delegate = object : NSObject(), AVAudioPlayerDelegateProtocol {
@@ -48,7 +53,7 @@ internal class IosVoicePcmPlayer : VoicePcmPlayer {
         try {
             withContext(AppDispatchers.io) {
                 if (lease.value == null) {
-                    val held = acquireIosSpeechAudioSession()
+                    val held = acquireSession()
                     if (closed || !lease.compareAndSet(null, held)) held.close()
                     ensureActive()
                 }
@@ -57,9 +62,9 @@ internal class IosVoicePcmPlayer : VoicePcmPlayer {
                 if (interruption == null) interruption = NSNotificationCenter.defaultCenter.addObserverForName(
                     AVAudioSessionInterruptionNotification, null, NSOperationQueue.mainQueue) { note ->
                     val type = (note?.userInfo?.get(AVAudioSessionInterruptionTypeKey) as? NSNumber)?.intValue
-                    if (type == 1) { interrupted = true; player?.pause() }
-                    else if (interrupted) {
-                        interrupted = false
+                    if (type == 1) { interrupted.value = true; player?.pause() }
+                    else if (interrupted.value) {
+                        interrupted.value = false
                         val options = (note?.userInfo?.get(AVAudioSessionInterruptionOptionKey) as? NSNumber)?.intValue ?: 0
                         if (options and 1 != 0 && !closed) player?.play() else this@IosVoicePcmPlayer.onStop?.invoke()
                     }
@@ -72,9 +77,18 @@ internal class IosVoicePcmPlayer : VoicePcmPlayer {
         } catch (failure: Throwable) { stop(); throw failure }
     }
     override suspend fun play(wav: ByteArray) = withContext(Dispatchers.Main) {
+        coroutineScope {
+            val interruptionGuard = launch(start = CoroutineStart.UNDISPATCHED) {
+                guardVoiceInterruption(interrupted, interruptionTimeoutMillis)
+            }
+            try { playOnMain(wav) }
+            finally { interruptionGuard.cancel() }
+        }
+    }
+    private suspend fun playOnMain(wav: ByteArray) {
         generation.updateAndGet { it + 1 }
         voicePcm(wav)
-        while (interrupted) { ensureActive(); delay(25) }
+        while (interrupted.value) { currentCoroutineContext().ensureActive(); delay(25) }
         check(!closed)
         val data = wav.usePinned { NSData.create(bytes = it.addressOf(0), length = wav.size.toULong()) }
         val output = AVAudioPlayer(data = data, error = null)
@@ -97,14 +111,27 @@ internal class IosVoicePcmPlayer : VoicePcmPlayer {
             if (player == output) { player = null; continuation = null }
         }
     }
-    override fun stop() {
-        val stoppedGeneration = generation.updateAndGet { it + 1 }
-        lease.exchange(null)?.close()
+    override fun interrupt() {
+        // Repeated stops of the same playback remain effective; only a new play()
+        // invalidates queued stops, so a lease is never returned before the player stops.
+        val stoppedGeneration = generation.value
         dispatch_async(dispatch_get_main_queue()) {
             if (generation.value != stoppedGeneration) return@dispatch_async
             player?.stop()
             continuation?.cancel(CancellationException("読み上げを停止しました"))
             continuation = null
+        }
+    }
+    override fun stop() {
+        interrupt()
+        val held = lease.exchange(null)
+        // FIFO on the main queue puts this after interrupt()'s player stop. Session
+        // deactivation can block and must then run away from the UI dispatcher.
+        dispatch_async(dispatch_get_main_queue()) {
+            interrupted.value = false
+            if (held != null) dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                held.close()
+            }
         }
     }
     override fun close() {

@@ -25,3 +25,9 @@ internal fun logVideoPlaybackEnvironment(url: String, engine: String) {
         "build=${NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleVersion")} engine=$engine " +
         "url=$url extension=${extractVideoUrlExtension(url)}")
 }
+
+internal actual fun platformVideoPlaybackCapabilityError(
+    videoUrl: String,
+    resolvedInfo: com.valoser.futacha.shared.media.source.OriginalMediaInfo?
+): VideoPlaybackError? = iosVideoPlaybackCapabilityError(videoUrl,
+    com.valoser.futacha.shared.util.iosWebmPlaybackAvailable(), resolvedInfo)

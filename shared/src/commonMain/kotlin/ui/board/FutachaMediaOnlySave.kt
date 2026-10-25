@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.service.ImageZipSaveService
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.service.SingleMediaSaveService
+import com.valoser.futacha.shared.service.MediaSaveDestinationException
 import com.valoser.futacha.shared.service.buildCompatManualImageFolderName
 import com.valoser.futacha.shared.service.runProtectedThreadSave
 import com.valoser.futacha.shared.ui.compat.compatBatchMediaUrls
@@ -17,6 +18,7 @@ import com.valoser.futacha.shared.ui.compat.toCompatUserMessage
 import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 
 /** 「メディアのみ」の保存形式（としあき(仮)の「画像をZIPで保存」「画像をフォルダに保存」と同じ処理）。 */
 internal enum class FutachaMediaOnlySaveKind(val label: String) {
@@ -41,7 +43,9 @@ internal suspend fun runFutachaMediaOnlySave(
     location: SaveLocation?,
     httpClient: HttpClient,
     fileSystem: FileSystem,
-    progress: MutableStateFlow<SaveProgress?>
+    progress: MutableStateFlow<SaveProgress?>,
+    /** The media saved so far, for the cancellation message (L74). */
+    onSaved: (Int) -> Unit = {}
 ): String = runProtectedThreadSave(title, progress) {
     val urls = futachaMediaOnlyUrls(page)
     progress.value = SaveProgress(phase = SavePhase.DOWNLOADING, current = 0, total = urls.size,
@@ -63,30 +67,65 @@ internal suspend fun runFutachaMediaOnlySave(
             },
             onFailure = { it.toCompatUserMessage("ZIPを保存できませんでした") }
         )
-        FutachaMediaOnlySaveKind.FOLDER -> {
-            if (urls.isEmpty()) return@runProtectedThreadSave "保存するメディアがありません"
-            val saver = SingleMediaSaveService(httpClient, fileSystem)
-            val outputNames = compatBatchOutputFileNames(urls)
-            val imageFolder = buildCompatManualImageFolderName(boardName = boardName, title = title, threadId = page.threadId)
-            var success = 0
-            var failure = 0
-            urls.forEachIndexed { index, url ->
-                val item = url.substringBefore('?').substringAfterLast('/')
-                progress.value = SaveProgress(phase = SavePhase.DOWNLOADING, current = index, total = urls.size, currentItem = item)
-                saver.saveMedia(
-                    url, boardKey, page.threadId,
-                    baseSaveLocation = location,
-                    baseDirectory = MANUAL_SAVE_DIRECTORY,
-                    storageDirectoryOverride = imageFolder,
-                    useTypeSubdirectory = false,
-                    outputFileNameOverride = outputNames[url],
-                    onProgress = { itemBytes, itemTotalBytes ->
-                        progress.value = SaveProgress(phase = SavePhase.DOWNLOADING, current = index, total = urls.size,
-                            currentItem = item, currentItemBytes = itemBytes, currentItemTotalBytes = itemTotalBytes)
-                    }
-                ).fold({ success += 1 }, { failure += 1 })
-            }
-            "メディアを保存しました 成功${success}件 / 失敗${failure}件\n保存先: ${manualSaveDestinationLabel(fileSystem, location)}/$imageFolder"
-        }
+        FutachaMediaOnlySaveKind.FOLDER -> saveCompatMediaFolder(
+            urls = urls,
+            saver = SingleMediaSaveService(httpClient, fileSystem),
+            boardKey = boardKey,
+            threadId = page.threadId,
+            boardName = boardName,
+            title = title,
+            location = location,
+            fileSystem = fileSystem,
+            onProgress = { progress.value = it },
+            onSaved = onSaved
+        )
     }
 }
+
+/**
+ * The media-only folder save of every mode (ふたちゃ, ふたばー風 and としあき(仮)): each file into one folder named
+ * after the thread, sequentially, inside one SAF save index. Returns the completion message; a save with no media
+ * says so instead of 「成功0件 / 失敗0件」 (L74). [onSaved] reports the files saved so far, which a cancellation
+ * tells.
+ */
+internal suspend fun saveCompatMediaFolder(
+    urls: List<String>,
+    saver: SingleMediaSaveService,
+    boardKey: String,
+    threadId: String,
+    boardName: String,
+    title: String,
+    location: SaveLocation?,
+    fileSystem: FileSystem,
+    onProgress: (SaveProgress) -> Unit,
+    onSaved: (Int) -> Unit = {}
+): String {
+    if (urls.isEmpty()) return COMPAT_NO_MEDIA_TO_SAVE_MESSAGE
+    val outputNames = compatBatchOutputFileNames(urls)
+    val imageFolder = buildCompatManualImageFolderName(boardName = boardName, title = title, threadId = threadId)
+    var success = 0
+    var failure = 0
+    onProgress(SaveProgress(phase = SavePhase.DOWNLOADING, current = 0, total = urls.size, currentItem = "しばらくお待ち下さい"))
+    // Keep Android SAF folder lookups shared for the entire save.
+    withContext(fileSystem.saveBatchContext()) {
+        urls.forEachIndexed { index, url ->
+            val item = url.substringBefore('?').substringAfterLast('/')
+            onProgress(SaveProgress(phase = SavePhase.DOWNLOADING, current = index, total = urls.size, currentItem = item))
+            saver.saveMedia(
+                url, boardKey, threadId,
+                baseSaveLocation = location,
+                baseDirectory = MANUAL_SAVE_DIRECTORY,
+                storageDirectoryOverride = imageFolder,
+                useTypeSubdirectory = false,
+                outputFileNameOverride = outputNames[url],
+                onProgress = { itemBytes, itemTotalBytes ->
+                    onProgress(SaveProgress(phase = SavePhase.DOWNLOADING, current = index, total = urls.size,
+                        currentItem = item, currentItemBytes = itemBytes, currentItemTotalBytes = itemTotalBytes))
+                }
+            ).fold({ success += 1; onSaved(success) }, { if (it is MediaSaveDestinationException) throw it; failure += 1 })
+        }
+    }
+    return "メディアを保存しました 成功${success}件 / 失敗${failure}件\n保存先: ${manualSaveDestinationLabel(fileSystem, location)}/$imageFolder"
+}
+
+internal const val COMPAT_NO_MEDIA_TO_SAVE_MESSAGE = "保存するメディアがありません"

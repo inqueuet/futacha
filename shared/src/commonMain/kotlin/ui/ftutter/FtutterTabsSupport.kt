@@ -26,8 +26,17 @@ internal fun parseFtutterTabs(p: Map<String, String>): FtutterTabs {
 internal fun ftutterPushTab(urls: List<String>, url: String): List<String> =
     if (url in urls) urls else listOf(url) + urls
 
-/** 閉じたタブ（メモリだけ。件数の上限なし、再起動で消える）。 */
-internal data class FtutterClosedTab(val url: String, val index: Int)
+/**
+ * 閉じたタブ（メモリだけ。件数の上限なし、再起動で消える）。[entry] は閉じた時の履歴の行で、戻す時に履歴に無ければ
+ * その行を戻す（L17：以前は題名もサムネイルも無い行を作り、開くまで題名の無い行が残った）。
+ */
+internal data class FtutterClosedTab(val url: String, val index: Int, val entry: ThreadHistoryEntry? = null)
+
+/** 戻したタブの履歴の行（原作どおり履歴にも戻す）。閉じた時の行があれば、その題名・サムネイルで今の時刻に戻す。 */
+internal fun ftutterRestoredHistoryEntry(closed: ThreadHistoryEntry?, board: BoardSummary, threadId: String, now: Long): ThreadHistoryEntry =
+    closed?.takeIf { it.threadId == threadId }?.copy(lastVisitedEpochMillis = now)
+        ?: com.valoser.futacha.shared.ui.futaber.buildFutaberOpenHistoryEntry(
+            null, board, com.valoser.futacha.shared.ui.futaber.FutaberThreadRef(board.id, threadId, "", "", 0), now)
 
 internal data class FtutterCloseResult(val urls: List<String>, val closed: List<FtutterClosedTab>)
 
@@ -103,6 +112,12 @@ internal fun ftutterLimitTabs(
     val room = (limit - urls.count { it in keep && it !in protected }).coerceAtLeast(0)
     val kept = candidates.sortedBy { rank[it] ?: -1 }.take(room).toHashSet()
     return urls.filter { it in fixed || it in kept }
+}
+
+/** 上限 [limit] で閉じられるタブの数（[ftutterLimitTabs] と同じ数え方。保護したタブと開いているタブは数えない。L130）。 */
+internal fun ftutterTabsClosedByLimit(tabs: FtutterTabs, protected: Set<String>, limit: Int): Int {
+    val keep = setOf(tabs.opening).filter { it.isNotEmpty() }.toSet()
+    return tabs.urls.size - ftutterLimitTabs(tabs.urls, emptyList(), protected, limit, keep, dropMissing = false).size
 }
 
 /**
@@ -342,6 +357,8 @@ internal class FtutterTabState(initial: FtutterTabs, initialProtected: Set<Strin
     /** 履歴の並び（最後に開いた順のスレッドURL）と、設定「履歴の保存数」。画面の側が組み立てのたびに入れる。 */
     var historyOrder: List<String> = emptyList()
     var limit: Int = FTUTTER_HISTORY_LIMIT_DEFAULT
+    /** 閉じる時に、そのタブの履歴の行を覚える（L17）。画面の側が組み立てのたびに入れる。 */
+    var entryOf: (String) -> ThreadHistoryEntry? = { null }
 
     /** 開いているタブ。上限で外さない。 */
     private var openingUrl: String = initial.opening
@@ -419,7 +436,7 @@ internal class FtutterTabState(initial: FtutterTabs, initialProtected: Set<Strin
         if (targets.isEmpty()) return
         val result = ftutterCloseMany(urls, targets, emptySet())
         urls = result.urls
-        closed += result.closed
+        closed += result.closed.map { it.copy(entry = entryOf(it.url)) }
         if (targets.any { it in protected }) {
             protected = protected - targets.toSet()
             persistProtected()
@@ -427,13 +444,15 @@ internal class FtutterTabState(initial: FtutterTabs, initialProtected: Set<Strin
         persist()
     }
 
-    fun restore(): String? {
+    fun restore(): String? = restoreTab()?.url
+
+    fun restoreTab(): FtutterClosedTab? {
         val last = closed.removeLastOrNull() ?: return null
         openingUrl = last.url
         urls = ftutterRestoreTab(urls, last)
         urls = limited(last.url)
         persist(opening = last.url)
-        return last.url
+        return last
     }
 
     fun move(from: Int, to: Int) {

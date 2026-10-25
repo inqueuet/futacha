@@ -103,6 +103,9 @@ internal fun VideoPreviewDialog(
         onNavigatePrevious = onNavigatePrevious,
         isSwipeNavigationEnabled = chromeState.showsControlPanel,
         isTapNavigationEnabled = chromeState.showsControlPanel,
+        // Keep the explicit arrows, but never put a 72dp transparent sibling
+        // over the native player's seekbar/buttons. Images retain their edge taps.
+        isEdgeTapNavigationEnabled = false,
         isNavigationOverlayVisible = chromeState.showsControlPanel,
         navigationOverlayPadding = PaddingValues(
             start = 8.dp,

@@ -23,9 +23,21 @@ internal data class HttpBoardApiShortFormRequest(
     val formParameters: Parameters,
     val failureMessage: String,
     val responseFailureMessage: String,
+    /** The action named in the message when a 2xx body cannot be read (L83), e.g. "本人削除". */
+    val actionLabel: String,
     /** Pre-encoded application/x-www-form-urlencoded body; when set it is sent instead of [formParameters]. */
     val encodedBody: String? = null
 )
+
+/** Part of every message for an action whose 2xx answer could not be read (L83). */
+internal const val HTTP_BOARD_API_ACTION_RESULT_UNCONFIRMED = "の結果を確認できませんでした"
+
+/**
+ * A deletion, del request or vote got a 2xx whose body could not be read: the server may
+ * or may not have applied it, so it is neither a success nor a plain failure (L83).
+ */
+internal fun unconfirmedHttpBoardApiActionResult(action: String, note: String, cause: Exception): NetworkException =
+    NetworkException("$action$HTTP_BOARD_API_ACTION_RESULT_UNCONFIRMED$note: ${cause.message}", cause = cause)
 
 private const val FORM_URL_ENCODE_SAFE = "-._~"
 
@@ -110,9 +122,22 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
                 val suffix = detail?.let { ": $it" }.orEmpty()
                 NetworkException("${request.responseFailureMessage} (HTTP ${response.status.value}$suffix)")
             } else {
+                // A body that could not be read is not an empty (successful) one:
+                // the deletion may or may not have happened (L83). Not resent.
+                val body = try {
+                    readSmallResponseBody(response)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw unconfirmedHttpBoardApiActionResult(
+                        request.actionLabel,
+                        "。スレッドを再読み込みして確認してください",
+                        e
+                    )
+                }
                 // Futaba answers a rejected deletion (wrong key, missing post,
                 // duplicate request...) with HTTP 200 and the reason as text.
-                extractHttpBoardApiShortFormFailure(readSmallResponseBody(response))
+                extractHttpBoardApiShortFormFailure(body)
                     ?.let { detail -> NetworkException("${request.responseFailureMessage}: $detail") }
             }
         }

@@ -83,6 +83,33 @@ class HistoryEntrySupportTest {
         assertEquals(19, merged.lastReadItemOffset)
     }
 
+    /** L88: a refresh that read the row before the user's own post must not take that post back. */
+    @Test
+    fun mergeAppStateHistoryMetadataEntry_keepsASelfPostMadeAfterTheIncomingSnapshot() {
+        val existing = historyEntry(lastVisitedEpochMillis = 100L)
+            .copy(hasSelfPost = true, lastSelfPostEpochMillis = 500L)
+
+        val beforeAnyPost = mergeAppStateHistoryMetadataEntry(
+            existing,
+            historyEntry(lastVisitedEpochMillis = 100L, replyCount = 30)
+        )
+        assertTrue(beforeAnyPost.hasSelfPost)
+        assertEquals(500L, beforeAnyPost.lastSelfPostEpochMillis)
+        assertEquals(30, beforeAnyPost.replyCount)
+
+        val beforeTheLatestPost = mergeAppStateHistoryMetadataEntry(
+            existing,
+            historyEntry(lastVisitedEpochMillis = 100L).copy(hasSelfPost = true, lastSelfPostEpochMillis = 300L)
+        )
+        assertEquals(500L, beforeTheLatestPost.lastSelfPostEpochMillis)
+
+        val laterPost = mergeAppStateHistoryMetadataEntry(
+            existing,
+            historyEntry(lastVisitedEpochMillis = 100L).copy(hasSelfPost = true, lastSelfPostEpochMillis = 700L)
+        )
+        assertEquals(700L, laterPost.lastSelfPostEpochMillis)
+    }
+
     @Test
     fun historyEntryIdentity_prefersBoardId_thenNormalizedBoardUrl_thenThreadId() {
         assertEquals(

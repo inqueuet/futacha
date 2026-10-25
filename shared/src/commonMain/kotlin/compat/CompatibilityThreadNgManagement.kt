@@ -41,15 +41,29 @@ internal inline fun <T> List<T>.sortedByPrecomputedKey(key: (T) -> String): List
 
 /** Preserve the exact word typed in the reference editor while matching NFKC/case-insensitively. */
 fun compatThreadReferenceDisplayValue(rule: CompatNgRule): String =
-    rule.memo.takeIf(String::isNotBlank) ?: when (rule.kind) {
+    when (rule.kind) {
         CompatNgKind.THREAD_POST_NO -> rule.normalizedValue
             .takeIf { it.all(Char::isDigit) }
             ?.let { "No.$it" }
             ?: rule.normalizedValue
         CompatNgKind.THREAD_POSTER_ID ->
             parseCompatPosterIdentity(rule.normalizedValue)?.display ?: rule.normalizedValue
-        else -> rule.normalizedValue
+        else -> rule.memo.takeIf(String::isNotBlank) ?: rule.normalizedValue
     }
+
+internal fun isCompatTypedThreadReference(kind: CompatNgKind): Boolean =
+    kind == CompatNgKind.THREAD_POST_NO || kind == CompatNgKind.THREAD_POSTER_ID
+
+internal const val COMPAT_THREAD_IDENTITY_EDIT_LIMIT = 200
+
+/** Identities keep their case; a post-number label is decoded back to the number used by the matcher. */
+internal fun compatTypedThreadReferenceEditValue(kind: CompatNgKind, value: String): String? = when (kind) {
+    CompatNgKind.THREAD_POST_NO -> Regex("(?:no\\.?\\s*)?([0-9]+)")
+        .matchEntire(normalizeCompatSearchText(value))?.groupValues?.get(1)
+    CompatNgKind.THREAD_POSTER_ID -> parseCompatPosterIdentity(value)?.display
+        ?.takeIf { it.length <= COMPAT_THREAD_IDENTITY_EDIT_LIMIT }
+    else -> null
+}
 
 /**
  * The first [maxLength] UTF-16 units, except that a surrogate pair straddling the limit is dropped

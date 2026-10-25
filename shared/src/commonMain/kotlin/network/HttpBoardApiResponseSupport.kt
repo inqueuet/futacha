@@ -391,10 +391,9 @@ internal suspend fun readSmallHttpBoardApiResponseBody(
     zeroReadBackoffMillis: Long,
     responseTotalTimeoutMillis: Long
 ): String? {
-    val bytes = try {
-        readHttpBoardApiResponseBytesWithLimit(
+    return try {
+        readSmallHttpBoardApiResponseBodyOrThrow(
             response = response,
-            maxBytes = 64 * 1024,
             responseReadBufferBytes = responseReadBufferBytes,
             maxZeroReadRetries = maxZeroReadRetries,
             zeroReadBackoffMillis = zeroReadBackoffMillis,
@@ -403,15 +402,31 @@ internal suspend fun readSmallHttpBoardApiResponseBody(
     } catch (e: CancellationException) {
         throw e
     } catch (_: Throwable) {
-        return null
-    }
-    return try {
-        TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: Throwable) {
         null
     }
+}
+
+/**
+ * The decoded body of a small response (at most 64 KiB). A body that cannot be read (cut off,
+ * larger, undecodable) throws instead of looking empty: the answer to a deletion or a vote the
+ * server may already have applied must not read as "no text" when it is unknown (L83).
+ */
+internal suspend fun readSmallHttpBoardApiResponseBodyOrThrow(
+    response: HttpResponse,
+    responseReadBufferBytes: Int,
+    maxZeroReadRetries: Int,
+    zeroReadBackoffMillis: Long,
+    responseTotalTimeoutMillis: Long
+): String {
+    val bytes = readHttpBoardApiResponseBytesWithLimit(
+        response = response,
+        maxBytes = 64 * 1024,
+        responseReadBufferBytes = responseReadBufferBytes,
+        maxZeroReadRetries = maxZeroReadRetries,
+        zeroReadBackoffMillis = zeroReadBackoffMillis,
+        responseTotalTimeoutMillis = responseTotalTimeoutMillis
+    )
+    return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
 }
 
 /** The first [maxBytes] of a body (fewer when it ends earlier), decoded; the rest is not received. */

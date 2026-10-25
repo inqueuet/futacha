@@ -48,8 +48,9 @@ internal fun FutaberNgDialog(
     headers: List<String>,
     /** Posts hidden in the open thread; null when the dialog is opened from the settings. */
     hiddenCount: Int?,
-    onChangeWords: (List<String>) -> Unit,
-    onChangeHeaders: (List<String>) -> Unit,
+    /** Apply edits atomically to the current stored list, which may be newer than the displayed list. */
+    onChangeWords: ((List<String>) -> List<String>) -> Unit,
+    onChangeHeaders: ((List<String>) -> List<String>) -> Unit,
     onDismiss: () -> Unit,
     /** Opens on the 名前・ID等 list with this text ready to add (the poster of a long-pressed post); blank = the word list. */
     initialHeader: String = ""
@@ -100,7 +101,11 @@ internal fun FutaberNgDialog(
                             modifier = Modifier.weight(1f).testTag("futaber-ng-input")
                         )
                         TextButton(
-                            onClick = { change(futaberAddNgEntry(current, input)); input = "" },
+                            onClick = {
+                                val entry = input
+                                change { latest -> futaberAddNgEntry(latest, entry) }
+                                input = ""
+                            },
                             enabled = canAdd,
                             modifier = Modifier.testTag("futaber-ng-add")
                         ) { Text("追加", color = if (canAdd) colors.link else colors.meta) }
@@ -116,7 +121,7 @@ internal fun FutaberNgDialog(
                                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(entry, color = colors.body, fontSize = 14.sp, modifier = Modifier.weight(1f))
                                     IconButton(
-                                        onClick = { change(futaberRemoveNgEntry(current, entry)) },
+                                        onClick = { change { latest -> futaberRemoveNgEntry(latest, entry) } },
                                         modifier = Modifier.testTag("futaber-ng-delete")
                                     ) {
                                         FutaberIcon(Icons.Outlined.RemoveCircleOutline, contentDescription = "「$entry」を削除", tint = colors.accent)

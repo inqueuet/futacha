@@ -13,16 +13,24 @@ import com.valoser.futacha.shared.audio.*
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 @Composable
-internal fun CompatSpeechSettingsScreen(store: CompatibilityStore, preferences: Map<String, String>, onBack: () -> Unit) {
+internal fun CompatSpeechSettingsScreen(
+    store: CompatibilityStore,
+    preferences: Map<String, String>,
+    onBack: () -> Unit,
+    createSpeaker: (Any?, com.valoser.futacha.shared.audio.SpeechRuntime?) -> com.valoser.futacha.shared.audio.TextSpeaker =
+        { context, runtime -> createTextSpeaker(context, runtime) }
+) {
     val context = LocalPlatformContext.current
     val runtime = LocalSpeechRuntime.current
-    val speaker = remember(context, runtime) { createTextSpeaker(context, runtime) }
-    val settings = speechSettingsFromPreferences(preferences)
+    val speaker = remember(context, runtime) { createSpeaker(context, runtime) }
+    // What is shown and sampled is the voice actually used; the saved choice is only changed by the user (L4).
+    val settings = effectiveSpeechSettings(speechSettingsFromPreferences(preferences), runtime?.platform?.available == true)
     val scope = rememberCoroutineScope()
     var voices by remember { mutableStateOf<List<SpeechVoice>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -34,6 +42,14 @@ internal fun CompatSpeechSettingsScreen(store: CompatibilityStore, preferences: 
     DisposableEffect(speaker) { onDispose { sampleJob?.cancel(); speaker.close() } }
     LaunchedEffect(unlocked) {
         if (!unlocked) { sampleJob?.cancel(); speaker.stop(); samplePlaying = false }
+    }
+    val appLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(appLock, speaker) {
+        // Background frames are paused, so the composed value above can stay true after the session was
+        // locked. Follow the session itself like the mode readers do (L148, same as M63).
+        appLock?.sessionUnlocked?.collect { open ->
+            if (!open) { sampleJob?.cancel(); speaker.stop(); samplePlaying = false }
+        }
     }
     LaunchedEffect(speaker) {
         // Listing voices must not acquire playback focus or interrupt other audio.
@@ -53,7 +69,8 @@ internal fun CompatSpeechSettingsScreen(store: CompatibilityStore, preferences: 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("モード間で共有する読み上げ設定です。利用できる日本語音声を選べます。")
             VoiceAssetSettings(runtime, settings, onEngine = { save(SPEECH_ENGINE_KEY, it) },
-                onStop = { sampleJob?.cancel(); speaker.stop(); samplePlaying = false })
+                onStop = { sampleJob?.cancel(); speaker.stop(); samplePlaying = false },
+                commitEngine = { store.savePreference(SPEECH_ENGINE_KEY, it) })
             if (settings.engine == SpeechEngineKind.SYSTEM) {
             Text("端末の音声", style = MaterialTheme.typography.titleMedium)
             if (loading) CircularProgressIndicator(Modifier.size(24.dp))
@@ -77,9 +94,9 @@ internal fun CompatSpeechSettingsScreen(store: CompatibilityStore, preferences: 
                 samplePlaying = true; sampleCompleted = false; error = null
                 sampleJob = scope.launch {
                     try { speaker.configure(settings); speaker.speak("ふたちゃの読み上げ音声を確認しています。"); sampleCompleted = true }
-                    catch (cancelled: CancellationException) { currentCoroutineContext().ensureActive(); error = "試聴がタイムアウトしました" }
+                    catch (cancelled: CancellationException) { currentCoroutineContext().ensureActive(); error = speechSampleCancellationMessage(cancelled) }
                     catch (failure: Exception) { error = failure.message ?: "試聴できませんでした" }
-                    finally { samplePlaying = false }
+                    finally { speaker.stop(); samplePlaying = false }
                 }
             }) { Text("試聴") }
             if (sampleCompleted) Text("試聴が終了しました", Modifier.testTag("speech-sample-finished"))
@@ -87,6 +104,17 @@ internal fun CompatSpeechSettingsScreen(store: CompatibilityStore, preferences: 
         }
     }
 }
+
+/** A device that cannot run ずんだもん reads with the system voice even while the saved choice stays ずんだもん
+ * (a backup restored on a capable device keeps it), so the screen shows that voice (L4). */
+internal fun effectiveSpeechSettings(saved: SpeechSettings, zundamonAvailable: Boolean): SpeechSettings =
+    if (saved.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON && !zundamonAvailable) saved.copy(engine = SpeechEngineKind.SYSTEM)
+    else saved
+
+/** Only a real time limit is an error. A sample stopped from elsewhere (the notification's stop, another reader)
+ * just ends without a message (L3). */
+internal fun speechSampleCancellationMessage(cancelled: CancellationException): String? =
+    if (cancelled is TimeoutCancellationException) "試聴がタイムアウトしました" else null
 
 @Composable
 private fun SpeechSettingSlider(title: String, tag: String, saved: Float, onSave: (Float) -> Unit) {

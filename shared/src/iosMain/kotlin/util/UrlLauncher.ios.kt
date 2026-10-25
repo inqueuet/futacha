@@ -3,7 +3,9 @@ package com.valoser.futacha.shared.util
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import platform.Foundation.NSURL
+import platform.SafariServices.SFSafariViewController
 import platform.UIKit.UIApplication
+import platform.UIKit.UIViewController
 
 @Composable
 actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
@@ -22,7 +24,7 @@ actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
                     if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
                         val parent = if (customTabs) findIosTopViewController() else null
                         if (parent != null && request.target == UrlLaunchTarget.Browser) {
-                            parent.presentViewController(platform.SafariServices.SFSafariViewController(uRL = nsUrl), true, null)
+                            IosInAppBrowser.present(parent, nsUrl)
                         } else UIApplication.sharedApplication.openURL(
                             nsUrl,
                             options = emptyMap<Any?, Any?>(),
@@ -46,6 +48,46 @@ actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
                     message = "もう一度お試しください。"
                 )
             }
+        }
+    }
+}
+
+/**
+ * The in-app browser (SFSafariViewController) that ふたったー風 opens. It lives outside Compose, so the app lock drawn
+ * in Compose cannot cover it: when the lock is engaged it is closed, and after unlocking the same page is opened again
+ * so nothing is lost (L127). Main thread only.
+ */
+@OptIn(kotlin.experimental.ExperimentalNativeApi::class)
+internal object IosInAppBrowser {
+    private var presented: kotlin.native.ref.WeakReference<SFSafariViewController>? = null
+    private var presentedUrl: NSURL? = null
+    private var reopenAfterUnlock: NSURL? = null
+
+    fun present(parent: UIViewController, url: NSURL) {
+        val browser = SFSafariViewController(uRL = url)
+        presented = kotlin.native.ref.WeakReference(browser)
+        presentedUrl = url
+        parent.presentViewController(browser, true, null)
+    }
+
+    /** The lock was engaged on leaving the app. Called directly, since composition does not run under the browser. */
+    fun onSessionLocked() {
+        val browser = presented?.get()
+        if (browser != null && browser.presentingViewController != null) {
+            reopenAfterUnlock = presentedUrl
+            browser.dismissViewControllerAnimated(false, completion = null)
+        }
+        presented = null
+        presentedUrl = null
+    }
+
+    fun onAppUnlockedChanged(unlocked: Boolean) {
+        if (!unlocked) {
+            onSessionLocked()
+        } else {
+            val url = reopenAfterUnlock ?: return
+            reopenAfterUnlock = null
+            findIosTopViewController()?.let { present(it, url) }
         }
     }
 }

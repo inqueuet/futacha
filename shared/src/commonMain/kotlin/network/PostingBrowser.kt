@@ -28,7 +28,14 @@ internal suspend fun prepareOfficialPostingEnvironment(
     userAgent: String
 ): HttpBoardApiPostingConfig = withTimeoutOrNull(30_000) {
     val url = Url(pageUrl)
-    require(url.protocol.name == "https" && url.host.endsWith(".2chan.net"))
+    // The official pre-submit step is 2chan's own script, fetched and run for a 2chan.net page over https only. Said
+    // in words: require() told only "Failed requirement." (L100).
+    if (!url.host.endsWith(".2chan.net")) {
+        throw NetworkException("ふたば☆ちゃんねる（2chan.net）以外の板では、公式の送信前処理を行えないため送信していません")
+    }
+    if (url.protocol.name != "https") {
+        throw NetworkException("http の板では公式の送信前処理を行えないため送信していません。板のアドレスを https にしてください")
+    }
     suspend fun script(path: String): String {
         return client.prepareGet("https://${url.host}$path") {
             attributes.put(HigherLayerRetryManaged, true)

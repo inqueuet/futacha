@@ -154,7 +154,14 @@ internal fun ftutterRegexIsTooSlow(
     /** The input as the engine sees it; the test passes the plain string to act like Android (no deadline checks). */
     input: (String, TimeMark) -> CharSequence = { probe, deadline -> FtutterDeadlineCharSequence(probe, deadline) }
 ): Boolean {
-    val literals = (pattern.filter { it.isLetterOrDigit() }.toList().distinct().take(8) + listOf('a', '1', ' ', 'あ', '.')).distinct()
+    // ICU copies the input to native String storage, so neither coroutine cancellation
+    // nor DeadlineCharSequence can stop a bad match. Reject this structural family
+    // before giving even a short probe to that engine.
+    if (ftutterRegexHasAmbiguousNestedRepetition(pattern)) return true
+    // Symbols written in the pattern too (M77): a probe of letters alone never exercises `！`-only runs.
+    val symbols = pattern.filter { !it.isLetterOrDigit() && !it.isWhitespace() && !it.isSurrogate() && it.code >= 0x20 }
+        .toList().distinct().take(8)
+    val literals = (pattern.filter { it.isLetterOrDigit() }.toList().distinct().take(8) + symbols + listOf('a', '1', ' ', 'あ', '.')).distinct()
     val units = literals.map { it.toString() } + literals.joinToString("")
     return units.any { unit ->
         FTUTTER_NG_REGEX_PROBE_LENGTHS.any { length ->
@@ -329,10 +336,9 @@ internal class FtutterNgMatcher(
         return pickups.firstOrNull { matches(it, title, ensureActive) { normalized } }?.rule?.text
     }
 
-    /** NGワード（本文。行は改行でつなぐ）と NGID・IP（表示されたIDとの完全一致）。 */
+    /** NGワード（本文。行は改行でつなぐ）と NGID・IP（接頭辞を含むヘッダーの表示値との完全一致）。 */
     fun hidesPost(post: Post, ensureActive: () -> Unit = {}): Boolean {
-        val id = post.posterId?.trim()
-        if (id != null && ids.any { it.rule.text == id }) return true
+        if (ids.isNotEmpty() && ftutterPosterIdentities(post).any { identity -> ids.any { it.rule.text == identity.display } }) return true
         if (words.isEmpty()) return false
         val body = messageHtmlToPlainText(post.messageHtml)
         val normalized by lazy { canonicalThreadSearchText(body.lowercase()) }

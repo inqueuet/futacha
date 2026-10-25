@@ -61,7 +61,6 @@ internal class AppStateBoardsCoordinator(
     private val tag: String
 ) {
     suspend fun setBoards(boards: List<BoardSummary>) {
-        val encoded = encodeAppStateBoards(boards, json)
         boardsMutex.withLock {
             runStorageMutation(
                 "setBoards",
@@ -69,6 +68,7 @@ internal class AppStateBoardsCoordinator(
                 {},
                 false
             ) {
+                val encoded = encodeAppStateBoards(boards, json)
                 storage.updateBoardsJson(encoded)
             }
         }
@@ -98,13 +98,13 @@ internal class AppStateBoardsCoordinator(
             if (updatedBoards == currentBoards) {
                 return
             }
-            val encoded = encodeAppStateBoards(updatedBoards, json)
             runStorageMutation(
                 "updateBoards",
                 { "Failed to update ${updatedBoards.size} boards" },
                 {},
                 false
             ) {
+                val encoded = encodeAppStateBoards(updatedBoards, json)
                 storage.updateBoardsJson(encoded)
             }
         }

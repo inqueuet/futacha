@@ -95,7 +95,7 @@ internal fun FutachaTabsDialog(
             Row {
                 TextButton(enabled = !busy && repository != null, onClick = { perform {
                     val result = refreshCompatTabsInBackground(features.store, requireNotNull(repository), maxTabs = 100)
-                    message = "更新${result.updatedTabs}件・落ち${result.deadTabs}件・失敗${result.failures}件"
+                    message = futachaCheckAllTabsNotice(result)
                 } }) { Text("全タブを確認") }
                 // Also offered by the host's snackbar for a tab closed elsewhere: once restored there, not here.
                 val offeredUndo = undo?.takeUnless(features.closedTabsUndo::isRestored)
@@ -231,3 +231,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
         onOpenExternal = if (isAndroid()) watcher::openManager else null,
         onOpenHelp = { managing = false; onDismiss(); features.openSettings("help") }) }
 }
+
+/** What the tab list's "全タブを確認" tells when it is over, with what the time left unchecked (re-audit L81). */
+internal fun futachaCheckAllTabsNotice(result: CompatBackgroundRefreshResult): String =
+    "更新${result.updatedTabs}件・落ち${result.deadTabs}件・失敗${result.failures}件${result.unfinishedNotice}"

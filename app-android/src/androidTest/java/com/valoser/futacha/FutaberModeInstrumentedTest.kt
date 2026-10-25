@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -170,6 +171,52 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-search-cancel").performClick()
         waitForTag("futaber-catalog-item")
         rule.onNodeWithTag("futaber-refresh").assertIsDisplayed()
+    }
+
+    /** L27: Android's back closes the catalog search bar instead of sending the app to the background. */
+    @Test fun backClosesTheCatalogSearchBar() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("futaber-search").performClick()
+        rule.onNodeWithTag("futaber-search-field").performTextInput("チュートリアル")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-search-field").fetchSemanticsNodes().isEmpty() }
+        waitForTag("futaber-catalog-item")
+        rule.activityRule.scenario.onActivity { assertFalse(it.isFinishing) }
+    }
+
+    /** L28: with the boards bottom-aligned, the last board sits on the edit row, without a navigation-bar gap. */
+    @Test fun theBoardDrawerHasNoDoubledBottomInset() {
+        val key = "compat.control.controlBoardsFromBottom"
+        val saved = preference(key)
+        try {
+            runBlocking { app.compatibilityStore.savePreference(key, "ON") }
+            openTutorialCatalog()
+            rule.onNodeWithTag("futaber-open-drawer").performClick()
+            waitForTag("futaber-board-list")
+            rule.waitForIdle()
+            val last = rule.onAllNodesWithTag("futaber-drawer-board").fetchSemanticsNodes().maxByOrNull { it.boundsInRoot.bottom }!!.boundsInRoot
+            val edit = rule.onNodeWithTag("futaber-board-edit").fetchSemanticsNode().boundsInRoot
+            val density = rule.activity.resources.displayMetrics.density
+            // Only the edit row's own 12dp padding is between them; the navigation-bar inset is not added twice.
+            val gapDp = (edit.top - last.bottom) / density
+            assertTrue("Gap between the last board and the edit button: ${gapDp}dp", gapDp <= 13f)
+        } finally {
+            runBlocking { app.compatibilityStore.savePreferences(mapOf(key to saved)) }
+        }
+    }
+
+    /** L114: while the operation menu covers the thread, the left-edge back is not taken for the board list. */
+    @Test fun theLeftEdgeBackLeavesTheBoardListAloneUnderTheMenu() {
+        openTutorialCatalog()
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        rule.waitUntil(10_000) { com.valoser.futacha.shared.compat.CompatBackGestureBus.captureDrawerRequest() != null }
+        rule.onNodeWithTag("futaber-thread-menu").performClick()
+        rule.waitForIdle()
+        assertEquals(null, com.valoser.futacha.shared.compat.CompatBackGestureBus.captureDrawerRequest())
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(10_000) { com.valoser.futacha.shared.compat.CompatBackGestureBus.captureDrawerRequest() != null }
     }
 
     @Test fun openingAThreadShowsItsPostsRecordsHistoryAndBackReturns() {
@@ -816,16 +863,28 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         val thread = runBlocking { app.appStateStore.history.first().first() }
-        runBlocking {
-            app.appStateStore.updateHistory { list ->
-                list.map { if (it.threadId == thread.threadId) it.copy(hasSelfPost = true, hasAutoSave = true) else it }
-            }
+        fun clearMarks() = runBlocking {
+            app.appStateStore.updateHistory { list -> list.map { it.copy(hasSelfPost = false, hasAutoSave = false) } }
         }
-        rule.onNodeWithTag("futaber-manage").performClick()
-        waitForTag("futaber-history-row")
-        rule.onNodeWithText("書き込み済み・保存済み", substring = true).assertIsDisplayed()
-        capture("60-history-marks")
-        runBlocking { app.appStateStore.updateHistory { list -> list.map { it.copy(hasSelfPost = false, hasAutoSave = false) } } }
+        // The shared history persists between runs; a run stopped before its own reset left marks behind.
+        clearMarks()
+        try {
+            runBlocking {
+                app.appStateStore.updateHistory { list ->
+                    // The same thread number can be in the shared history from another board (other tests' boards).
+                    list.map {
+                        if (it.threadId == thread.threadId && it.boardId == thread.boardId) it.copy(hasSelfPost = true, hasAutoSave = true)
+                        else it
+                    }
+                }
+            }
+            rule.onNodeWithTag("futaber-manage").performClick()
+            waitForTag("futaber-history-row")
+            rule.onNodeWithText("書き込み済み・保存済み", substring = true).assertIsDisplayed()
+            capture("60-history-marks")
+        } finally {
+            clearMarks()
+        }
     }
 
     @Test fun aPicturesLongPressOpensItsOwnMenuWithImageSearchAndImageNg() {
@@ -1183,12 +1242,22 @@ class FutaberModeInstrumentedTest {
         assertEquals(null, stored())
     }
 
+    /**
+     * Removes every stored patrol result row. Deleting a result now keeps a record of it so later patrols do not bring
+     * the thread back (L97), and this test records the same tutorial thread on every run of the shared app store.
+     */
+    private fun clearPatrolResults() = runBlocking {
+        val store = app.compatibilityStore
+        val rows = store.preferences.first().keys.filter { it.startsWith("compat.watcher.result.") }
+        if (rows.isNotEmpty()) store.savePreferences(rows.associateWith { null })
+    }
+
     @Test fun patrolResultsAreListedInTheNotificationsPanelOpenedAndRemoved() {
         val watcher = com.valoser.futacha.shared.compat.CompatWatcherRepository(app.compatibilityStore)
         val boardUrl = "https://www.example.com/t/futaba.php"
         val now = System.currentTimeMillis()
+        clearPatrolResults()
         runBlocking {
-            watcher.deleteAll()
             watcher.recordAll(
                 listOf(
                     com.valoser.futacha.shared.compat.CompatWatchMatch(
@@ -1235,7 +1304,7 @@ class FutaberModeInstrumentedTest {
             rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-notification-row").fetchSemanticsNodes().isEmpty() }
             assertTrue(runBlocking { watcher.load(System.currentTimeMillis()) }.isEmpty())
         } finally {
-            runBlocking { watcher.deleteAll() }
+            clearPatrolResults()
         }
     }
 

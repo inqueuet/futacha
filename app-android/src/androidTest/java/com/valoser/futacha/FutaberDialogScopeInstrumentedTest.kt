@@ -146,6 +146,36 @@ class FutaberDialogScopeInstrumentedTest {
         assertEquals(1, tsumanneRequests.get())
     }
 
+    /** L107: leaving the thread while 「つまんね。に登録」 runs does not cancel it; the result comes as the app's notice. */
+    @Test fun theTsumanneRegistrationGoesOnAfterLeavingTheThread() {
+        val tsumanneRequests = AtomicInteger()
+        client = HttpClient(MockEngine { request ->
+            if (request.url.host.contains("tsumanne")) {
+                tsumanneRequests.incrementAndGet()
+                delay(2_000)
+                respond("busy", HttpStatusCode.ServiceUnavailable)
+            } else {
+                respond("", HttpStatusCode.NotFound)
+            }
+        })
+        host(mapOf("compat.futaber.ext.archiveMenu" to "ON"), client)
+        waitForTag("futaber-catalog-item")
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        rule.onNodeWithTag("futaber-thread-menu").performClick()
+        waitForTag("futaber-menu-archive")
+        runCatching { rule.onNodeWithTag("futaber-menu-archive").performScrollTo() }
+        rule.onNodeWithTag("futaber-menu-archive").performClick()
+        waitForTag("futaber-action-archive-tsumanne")
+        rule.onNodeWithTag("futaber-action-archive-tsumanne").performClick()
+        waitForText("つまんね。に登録しています")
+        androidx.test.espresso.Espresso.pressBack()
+        waitForTag("futaber-catalog-item")
+        assertTrue(rule.onAllNodesWithTag("futaber-post").fetchSemanticsNodes().isEmpty())
+        waitForText("つまんね。への登録に失敗しました")
+        assertEquals(1, tsumanneRequests.get())
+    }
+
     @Test fun theCustomFontResetFinishesAfterTheDialogCloses() {
         val fs = createFileSystem(rule.activity)
         val font = File("/system/fonts").listFiles { file -> file.name.endsWith(".ttf") }!!.first()

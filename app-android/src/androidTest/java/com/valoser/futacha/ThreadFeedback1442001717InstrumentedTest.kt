@@ -270,7 +270,8 @@ class ThreadFeedback1442001717InstrumentedTest {
             rule.onNodeWithText("検証用にビューアを閉じる").performClick()
             assertFalse(cancelled.isCompleted)
             release.complete(Unit)
-            rule.waitUntil(10_000) { folder.walkTopDown().any { it.isFile && it.extension == "png" } }
+            // The file appears before its bytes are written: wait for all of them.
+            rule.waitUntil(10_000) { folder.walkTopDown().any { it.isFile && it.extension == "png" && it.length() == png.size.toLong() } }
             val saved = folder.walkTopDown().first { it.isFile && it.extension == "png" }
             assertArrayEquals(png, saved.readBytes())
             File(out, "save-$mode-observations.txt").writeText("cancelledOnScreenClose=false completedPng=true\n")
@@ -282,7 +283,8 @@ class ThreadFeedback1442001717InstrumentedTest {
             File(out, "save-home-background.png").outputStream().use { homeBitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; homeBitmap.recycle()
             release.complete(Unit)
             val deadline = android.os.SystemClock.elapsedRealtime() + 10_000
-            while (android.os.SystemClock.elapsedRealtime() < deadline && folder.walkTopDown().none { it.isFile && it.extension == "png" }) android.os.SystemClock.sleep(50)
+            while (android.os.SystemClock.elapsedRealtime() < deadline &&
+                folder.walkTopDown().none { it.isFile && it.extension == "png" && it.length() == png.size.toLong() }) android.os.SystemClock.sleep(50)
             val saved = folder.walkTopDown().firstOrNull { it.isFile && it.extension == "png" }
             assertNotNull("Save did not finish while the app was behind Home", saved)
             assertArrayEquals(png, saved!!.readBytes())

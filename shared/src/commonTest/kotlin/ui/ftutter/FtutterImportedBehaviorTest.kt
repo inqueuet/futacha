@@ -80,10 +80,13 @@ class FtutterImportedBehaviorTest {
         assertEquals(4, shared.size)
     }
 
-    @Test fun networkChoiceChangesOnlyFutabaAndHtmlChoicesKeepTheirIndependentFlags() {
-        assertEquals("http://may.2chan.net/b/", ftutterNetworkUrl("https://may.2chan.net/b/", false))
-        assertEquals("https://may.2chan.net/b/", ftutterNetworkUrl("http://may.2chan.net/b/", true))
-        assertEquals("https://2chan.net.example/b/", ftutterNetworkUrl("https://2chan.net.example/b/", false))
+    @Test fun futabaAlwaysUsesHttpsAndHtmlChoicesKeepTheirIndependentFlags() {
+        assertEquals("https://may.2chan.net/b/", ftutterNetworkUrl("https://may.2chan.net/b/"))
+        assertEquals("https://may.2chan.net/b/", ftutterNetworkUrl("http://may.2chan.net/b/"))
+        assertEquals("https://2chan.net.example/b/", ftutterNetworkUrl("https://2chan.net.example/b/"))
+        assertEquals("https://may.2chan.net/b/res/123.htm?x=1#p2", ftutterNetworkUrl("http://may.2chan.net/b/res/123.htm?x=1#p2"))
+        assertEquals("http://example.com/b/", ftutterNetworkUrl("http://example.com/b/"))
+        assertEquals("http://2chan.net.example/b/", ftutterNetworkUrl("http://2chan.net.example/b/"))
         assertEquals(FtutterHtmlOptions(true, true, true, true), parseFtutterHtmlOptions(emptyMap()))
         val options = parseFtutterHtmlOptions(mapOf(FtutterKeys.SAVE_HTML_THUMB to "false",
             FtutterKeys.SAVE_HTML_FILE to "true", FtutterKeys.SAVE_HTML_APU to "true", FtutterKeys.SAVE_HTML_ZIP to "true"))

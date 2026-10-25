@@ -147,7 +147,7 @@ internal fun CompatWatcherManager(
                         val result = refreshCompatTabsInBackground(store, repository!!,
                             nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
                             checkUpdates = false, checkExistence = false, checkWatchWords = true)
-                        message = "巡回完了：新着${result.newWatchMatches.size}件／失敗${result.failures}件"
+                        message = compatWatchPatrolNotice(result)
                         onResultsChanged()
                     }
                 }) { Text(if (busy) "処理中…" else "今すぐ巡回（現在の回線を使用）") }
@@ -169,3 +169,8 @@ internal fun CompatWatcherManager(
         confirmButton = { TextButton(onClick = { actionJob?.cancel(); onDismiss() }) { Text(if (busy) "中止して閉じる" else "閉じる") } }
     ) }
 }
+
+/** What "今すぐ巡回" tells when it is over; not "完了" when the time left some unchecked (re-audit L81). */
+internal fun compatWatchPatrolNotice(result: CompatBackgroundRefreshResult): String =
+    (if (result.unfinished > 0) "巡回中断" else "巡回完了") +
+        "：新着${result.newWatchMatches.size}件／失敗${result.failures}件${result.unfinishedNotice}"

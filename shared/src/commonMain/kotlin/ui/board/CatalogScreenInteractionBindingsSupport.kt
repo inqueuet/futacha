@@ -126,7 +126,9 @@ internal data class CatalogScreenRuntimeInputs(
     val setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     val setShowPastThreadSearchDialog: (Boolean) -> Unit,
     val setShowModeDialog: (Boolean) -> Unit,
-    val setShowSettingsMenu: (Boolean) -> Unit
+    val setShowSettingsMenu: (Boolean) -> Unit,
+    /** Called when a thread was created, before the catalog is read again (L37). */
+    val onThreadCreated: () -> Unit = {}
 )
 
 internal data class CatalogScreenOverlayInputs(
@@ -240,7 +242,8 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
         setShowPastThreadSearchNoticeDialog = runtimeInputs.setShowPastThreadSearchNoticeDialog,
         setShowPastThreadSearchDialog = runtimeInputs.setShowPastThreadSearchDialog,
         setShowModeDialog = runtimeInputs.setShowModeDialog,
-        setShowSettingsMenu = runtimeInputs.setShowSettingsMenu
+        setShowSettingsMenu = runtimeInputs.setShowSettingsMenu,
+        onThreadCreated = runtimeInputs.onThreadCreated
     )
     val overlayBindings = buildCatalogScreenOverlayBindingsBundle(
         dialogInputs = CatalogScreenOverlayDialogInputs(

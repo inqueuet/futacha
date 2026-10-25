@@ -57,7 +57,7 @@ internal fun FutaberAppLockDialog(
             text = {
                 Column {
                     Text(
-                        if (enabled) "有効です。アプリ起動時にパスワードを要求します。" else "無効です。パスワードを設定すると起動時にロックします。",
+                        com.valoser.futacha.shared.ui.appLockSettingDescription(enabled),
                         color = colors.meta, fontSize = 13.sp
                     )
                     OutlinedTextField(

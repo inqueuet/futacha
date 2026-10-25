@@ -85,7 +85,9 @@ internal fun buildThreadInitialLoadUiOutcome(
     overrideThreadUrl: String?,
     usedOffline: Boolean,
     embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
-    fromArchive: Boolean = false
+    fromArchive: Boolean = false,
+    /** The local copy is shown because the server answered 404/410 (L36). */
+    confirmedGone: Boolean = false
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
@@ -99,7 +101,7 @@ internal fun buildThreadInitialLoadUiOutcome(
         confirmAlive = !usedOffline && !fromArchive
     )
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState.copy(isArchived = fromArchive),
+        uiState = successState.uiState.copy(isArchived = fromArchive, confirmedGone = confirmedGone),
         historyEntry = successState.historyEntry
     )
 }
@@ -140,7 +142,8 @@ internal fun buildThreadManualRefreshUiOutcome(
     overrideThreadUrl: String?,
     usedOffline: Boolean,
     embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
-    fromArchive: Boolean = false
+    fromArchive: Boolean = false,
+    confirmedGone: Boolean = false
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
@@ -153,7 +156,7 @@ internal fun buildThreadManualRefreshUiOutcome(
         confirmAlive = !usedOffline && !fromArchive
     )
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState.copy(isArchived = fromArchive),
+        uiState = successState.uiState.copy(isArchived = fromArchive, confirmedGone = confirmedGone),
         historyEntry = successState.historyEntry,
         snackbarMessage = buildThreadRefreshSuccessMessage(usedOffline)
     )

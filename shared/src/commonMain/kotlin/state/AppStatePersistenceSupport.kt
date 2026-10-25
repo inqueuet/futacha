@@ -21,7 +21,7 @@ import kotlin.time.TimeSource
 
 internal const val APP_STATE_BOARDS_JSON_MAX_CHARS = 4 * 1024 * 1024
 internal const val APP_STATE_HISTORY_JSON_MAX_CHARS = 32 * 1024 * 1024
-internal const val APP_STATE_MAX_BOARDS = 20_000
+internal const val APP_STATE_MAX_BOARDS = com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS
 internal const val APP_STATE_MAX_HISTORY_ENTRIES = 20_000
 
 internal suspend fun encodeAppStateBoards(
@@ -29,7 +29,10 @@ internal suspend fun encodeAppStateBoards(
     json: Json
 ): String {
     return withContext(AppDispatchers.parsing) {
-        json.encodeToString(ListSerializer(BoardSummary.serializer()), boards)
+        require(boards.size <= APP_STATE_MAX_BOARDS) { "板の登録数が保存上限を超えています" }
+        json.encodeToString(ListSerializer(BoardSummary.serializer()), boards).also { encoded ->
+            require(encoded.length <= APP_STATE_BOARDS_JSON_MAX_CHARS) { "板の情報が保存上限を超えています" }
+        }
     }
 }
 

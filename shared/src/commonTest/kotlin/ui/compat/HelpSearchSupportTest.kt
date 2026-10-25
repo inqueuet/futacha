@@ -89,6 +89,30 @@ class HelpSearchSupportTest {
         assertFalse(searchedHelpHtml(html, "no-such-help-word").contains("<label"))
     }
 
+    /** L70: the drawing screens of ふたちゃ, ふたばー風 and ふたったー風 show the reference help's 手書き section alone, opened. */
+    @Test fun drawingHelpIsOnlyTheReferenceHandwritingSectionOpened() {
+        val palette = compatibilityPaletteFor("pink")
+        val html = compatibilityReferenceHelpSectionHtml(palette, COMPAT_DRAWING_HELP_SECTION)
+        assertTrue(html.contains("<input checked type=\"checkbox\" id=\"drawing\" class=\"on-off\" />"))
+        assertTrue(html.contains("<label for=\"drawing\" class=\"index\">手書き</label>"))
+        assertTrue(html.contains("キャンバスを最初の状態に戻します"))
+        assertTrue(html.contains("二種類のブラシを保存して利用できます"))
+        // The document's styles (in the mode's accent) and its images stay, inside the same body / menu container.
+        assertTrue(html.contains("<style"))
+        assertTrue(html.contains("#ad1457"))
+        assertTrue(html.contains("<div class=\"menu\">"))
+        assertTrue(html.contains("data:image/png;base64,"))
+        assertTrue(html.trimEnd().endsWith("</html>"))
+        assertEquals(1, Regex("<label\\b").findAll(html).count())
+        for (other in listOf("board", "post", "ai-help", "gallery", "question")) {
+            assertFalse(html.contains("id=\"$other\""), other)
+        }
+        assertTrue(helpSearchSections(html).isNotEmpty())
+        assertTrue(helpSearchSections(html).all { it.title.startsWith("手書き") })
+        // A section that is not there gives the whole help rather than an empty page.
+        assertEquals(compatibilityReferenceHelpHtml(palette), compatibilityReferenceHelpSectionHtml(palette, "no-such-section"))
+    }
+
     @Test fun highlightPreservesImagesLinksAndEscapesLiteralSearchText() {
         val html = """<label for="test">A&amp;B</label><input type="checkbox" id="test" class="on-off" />
             <div><p><a href="https://example.com/?a=1&amp;b=2">A&amp;B</a> a&amp;b &lt;tag&gt; [検索]

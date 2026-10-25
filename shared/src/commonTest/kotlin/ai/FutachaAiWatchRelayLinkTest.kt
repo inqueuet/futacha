@@ -28,6 +28,23 @@ class FutachaAiWatchRelayLinkTest {
         assertFalse(link.copy(parameters = link.parameters - FUTACHA_AI_WATCH_RELAY_PARAMETER).isWatchRelayLink())
     }
 
+    /** L121: the other modes send a watch relay link to ふたちゃ mode; any other command is theirs to answer. */
+    @Test
+    fun theOtherModesSendOnlyAWatchRelayLinkToFutachaMode() {
+        val link = parseFutachaAiDeepLink(
+            buildFutachaAiDeepLink(
+                FutachaAiAction.OpenThread,
+                mapOf("boardId" to "b", "threadId" to "1", FUTACHA_AI_WATCH_RELAY_PARAMETER to FUTACHA_AI_WATCH_RELAY_WEAR_OS)
+            ),
+            source = "platform"
+        )!!
+        val notice = link.watchRelayLinkNoticeOutsideFutacha()!!
+        assertTrue(notice.contains("ウォッチ") && notice.contains(FutachaAiAction.OpenThread.label), notice)
+        assertTrue(notice.endsWith("ふたちゃモードで実行してください"), notice)
+        assertEquals(null, link.copy(parameters = link.parameters - FUTACHA_AI_WATCH_RELAY_PARAMETER).watchRelayLinkNoticeOutsideFutacha())
+        assertEquals(null, link.copy(source = "wear-os").watchRelayLinkNoticeOutsideFutacha())
+    }
+
     @Test
     fun confirmationMessageListsValuesOnOneLineAndShortensLongOnes() {
         val long = "x".repeat(500)

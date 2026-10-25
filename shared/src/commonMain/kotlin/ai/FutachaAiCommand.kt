@@ -175,6 +175,15 @@ fun FutachaAiCommand.isWatchRelayLink(): Boolean {
         parameter(FUTACHA_AI_WATCH_RELAY_PARAMETER).equals(FUTACHA_AI_WATCH_RELAY_WEAR_OS, ignoreCase = true)
 }
 
+/**
+ * L121: what the modes other than ふたちゃ say to a watch relay link; null for any other command. Only ふたちゃ serves
+ * the watch (elsewhere its Data Layer copy is answered as not supported), so those modes do not run the link either.
+ * They used to answer it as their own AI command ("AIアプリ操作は設定でOFFです", "…では使えません"), which sent the
+ * person to a setting that does not make the watch work there.
+ */
+fun FutachaAiCommand.watchRelayLinkNoticeOutsideFutacha(): String? =
+    if (isWatchRelayLink()) "ウォッチからの「${action.label}」はふたちゃモードでだけ使えます。ふたちゃモードで実行してください" else null
+
 /** Actions that change a saved setting or list (privacy, NG, watch words, ...). */
 fun FutachaAiAction.changesPersistentSettings(): Boolean {
     return when (this) {

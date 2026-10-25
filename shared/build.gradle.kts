@@ -156,6 +156,7 @@ kotlin {
             kotlin.srcDir(videoTestFixtures)
             dependencies {
                 implementation(libs.kotlin.test)
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:${libs.versions.kotlinxCoroutines.get()}")
                 implementation(libs.kotlinx.io.core)
                 implementation(libs.ktor.client.mock)
             }

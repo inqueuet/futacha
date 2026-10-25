@@ -401,6 +401,11 @@ internal class FutaberMediaSaver {
 internal class FutaberAppTasks(val scope: CoroutineScope, val notify: (String) -> Unit) {
     var historyRefreshing by androidx.compose.runtime.mutableStateOf(false)
     var historyRefreshMessage by androidx.compose.runtime.mutableStateOf<String?>(null)
+    /**
+     * Threads (board id, thread id) with a そうだね / deletion / report on its way (L109). Kept here rather than in the
+     * thread screen's state, which is recreated per thread, so going A→B→A still shows A as busy.
+     */
+    val busyThreads = androidx.compose.runtime.mutableStateMapOf<Pair<String, String>, Boolean>()
 }
 
 internal val LocalFutaberAppTasks = androidx.compose.runtime.staticCompositionLocalOf<FutaberAppTasks?> { null }

@@ -148,7 +148,8 @@ internal fun FutaberSettingsScreen(
     catalogImageRules: List<com.valoser.futacha.shared.compat.CompatNgRule> = emptyList(),
     /** The thread rules of the other modes (post number, poster id, words, picture address) that hide posts here, and the titles their scopes stand for. */
     threadDetailRules: List<com.valoser.futacha.shared.compat.CompatNgRule> = emptyList(),
-    threadNgScopeTitles: () -> Map<String, String> = { emptyMap() },
+    /** The titles of the given rule scopes; called off the main thread (L110). */
+    threadNgScopeTitles: (wanted: Set<String>) -> Map<String, String> = { emptyMap() },
     /** Tells the person something went wrong (a setting that could not be saved). */
     onNotice: (String) -> Unit = {},
     /** The shared "閲覧スレ通知" switch was changed (the host starts or stops its sender). */
@@ -248,7 +249,12 @@ internal fun FutaberSettingsScreen(
                 FutaberNgListKind.ThreadDetails -> NgListScreen(
                     ngKind,
                     run {
-                        val titles = remember { threadNgScopeTitles() }
+                        // Worked out off the main thread, only for the scopes the rules use (L110: every history row was
+                        // keyed in composition when the list opened).
+                        val wanted = remember(threadDetailRules) { threadDetailRules.mapNotNullTo(HashSet()) { it.scopeKey.takeIf { k -> k != "*" } } }
+                        val titles by androidx.compose.runtime.produceState(emptyMap<String, String>(), wanted) {
+                            value = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) { threadNgScopeTitles(wanted) }
+                        }
                         futaberNgRows(threadDetailRules.map { FutaberNgRow(it.id, futaberThreadDetailNgRuleLabel(it, titles)) })
                     },
                     onAdd = null, canAdd = { false }, onRemove = { onDeleteNgRule(it.id) }
@@ -421,6 +427,16 @@ internal fun FutaberSettingsScreen(
                     )
                 }
                 SettingsRoute.Extras -> {
+                    // Shared by every mode, so not under "スレッド" (L26).
+                    SettingsSection("板一覧") {
+                        SwitchRow("板一覧を下寄せ", "boards-from-bottom", com.valoser.futacha.shared.ui.board.boardsFromBottom(boardPlacementPreferences), last = true) {
+                            onSettingChange(com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY, it.toString())
+                        }
+                        Text(
+                            com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_NOTE, color = colors.meta, fontSize = 13.sp,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).testTag("futaber-settings-boards-from-bottom-note")
+                        )
+                    }
                     SettingsSection("スレッド") {
                         SwitchRow("そうだねボタンをレスに表示", "ext-quick-saidane", settings.extQuickSaidane) {
                             onSettingChange(FutaberSettingKeys.EXT_QUICK_SAIDANE, if (it) "ON" else "OFF")
@@ -450,16 +466,10 @@ internal fun FutaberSettingsScreen(
                                 }
                             }
                         }
-                        SwitchRow("板一覧を下寄せ", "boards-from-bottom", com.valoser.futacha.shared.ui.board.boardsFromBottom(boardPlacementPreferences)) {
-                            onSettingChange(com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY, it.toString())
-                        }
                         SwitchRow("開いた時の新着・自分への返信件数", "ext-open-summary", settings.extOpenSummary) {
                             onSettingChange(FutaberSettingKeys.EXT_OPEN_SUMMARY, if (it) "ON" else "OFF")
                         }
-                        SwitchRow("タブの隔離・落ち状態を表示", "ext-tab-status", settings.extTabStatus) {
-                            onSettingChange(FutaberSettingKeys.EXT_TAB_STATUS, if (it) "ON" else "OFF")
-                        }
-                        SwitchRow("delの確認でこのレスをNGにも登録", "ext-report-ng", settings.extReportNg) {
+                        SwitchRow(FUTABER_REPORT_NG_SWITCH, "ext-report-ng", settings.extReportNg) {
                             onSettingChange(FutaberSettingKeys.EXT_REPORT_NG, if (it) "ON" else "OFF")
                         }
                         SwitchRow("検索結果の前後移動（▲▼）", "ext-search-nav", settings.extSearchNav) {
@@ -582,6 +592,10 @@ internal fun FutaberSettingsScreen(
                         }
                         SwitchRow("他のモードのお気に入りを表示", "ext-other-favorites", settings.extOtherFavorites) {
                             onSettingChange(FutaberSettingKeys.EXT_OTHER_FAVORITES, if (it) "ON" else "OFF")
+                        }
+                        // The tab strip and this panel's tab list show it, so it sits with the tab items (L26).
+                        SwitchRow("タブの隔離・落ち状態を表示", "ext-tab-status", settings.extTabStatus) {
+                            onSettingChange(FutaberSettingKeys.EXT_TAB_STATUS, if (it) "ON" else "OFF")
                         }
                         SwitchRow("閉じたタブを元に戻す（タブの長押し）", "ext-tabs", settings.extTabs, last = true) {
                             onSettingChange(FutaberSettingKeys.EXT_TABS, if (it) "ON" else "OFF")
@@ -936,6 +950,9 @@ internal const val FUTABER_EXTRAS_NOTE_INTRO =
         "登録していない板のスレッドを開く時の「板を追加して開く」、" +
         "画像を添付できない板（img板の返信など）での添付ボタンからの手書き。"
 
+/** The extension's switch, also named by the operation guide (L26). */
+internal const val FUTABER_REPORT_NG_SWITCH = "delの確認でこのレスをNGにも登録"
+
 @Composable
 private fun SwitchRow(label: String, id: String, checked: Boolean, last: Boolean = false, onChange: (Boolean) -> Unit) {
     val colors = LocalFutaberColors.current
@@ -1099,7 +1116,10 @@ internal fun FutaberSharedSettingsHost(
                             onBack = back,
                             stateStore = stateStore,
                             // A restored backup's boards are added to the list this mode keeps (else the next sync drops them).
-                            restoreBoardsInto = stateStore
+                            restoreBoardsInto = stateStore,
+                            // Work started here goes on after the settings are closed, its result told by the app (L58).
+                            lastingScope = LocalFutaberAppTasks.current?.scope,
+                            onLastingNotice = futaberLastingNotice(LocalFutaberAppTasks.current)
                         )
                     }
                 }
@@ -1144,14 +1164,16 @@ private fun ColumnScope.NgListScreen(
     var input by rememberSaveable(kind) { mutableStateOf("") }
     val canAddNow = onAdd != null && canAdd(input)
     val corner = 16.dp
+    // Both namespaces use saveable String keys. Prefix every row ID as well as every chrome key:
+    // words/rule IDs such as "hint" or even "chrome:hint" must stay editable without key collisions.
     LazyColumn(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
-        item(key = "hint") {
+        item(key = "chrome:hint") {
             Text(
                 hint, color = colors.meta, fontSize = 13.sp,
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp)
             )
         }
-        if (onAdd != null) item(key = "add") { Column {
+        if (onAdd != null) item(key = "chrome:add") { Column {
             Spacer(Modifier.height(24.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(FutaberShapes.card).background(colors.bar)
@@ -1177,15 +1199,15 @@ private fun ColumnScope.NgListScreen(
             }
         } }
         if (rows.isEmpty()) {
-            item(key = "empty") {
+            item(key = "chrome:empty") {
                 Text(
                     "登録はありません", color = colors.meta, fontSize = 14.sp,
                     modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("futaber-ng-empty")
                 )
             }
         } else {
-            item(key = "gap") { Spacer(Modifier.height(24.dp)) }
-            itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
+            item(key = "chrome:gap") { Spacer(Modifier.height(24.dp)) }
+            itemsIndexed(rows, key = { _, row -> "entry:${row.id}" }) { index, row ->
                 val first = index == 0
                 val last = index == rows.lastIndex
                 val shape = RoundedCornerShape(
@@ -1211,3 +1233,6 @@ private fun ColumnScope.NgListScreen(
         }
     }
 }
+
+/** The app's notice of this mode, for a result that comes after a settings page is left (L58). */
+internal fun futaberLastingNotice(tasks: FutaberAppTasks?): (String) -> Unit = { message -> tasks?.notify?.invoke(message) }

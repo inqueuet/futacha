@@ -10,12 +10,15 @@ import androidx.compose.ui.draw.alpha
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.MoreVert
@@ -408,12 +411,10 @@ internal fun ThreadActionBar(
         resolveThreadActionBarEntries(menuEntries)
     }
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().testTag("futacha-thread-action-bar"),
         color = chromeColors.bottomBar
     ) {
-        ScrollableToolbarRow(
-            itemCount = visibleActions.size,
-            minItemWidth = 48.dp,
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -423,23 +424,53 @@ internal fun ThreadActionBar(
                     } else {
                         Modifier
                     }
-                ),
-            horizontalArrangement = Arrangement.SpaceAround,
-            verticalAlignment = Alignment.CenterVertically
+                )
         ) {
-            visibleActions.forEach { action ->
-                val meta = action.id.toMeta()
-                IconButton(onClick = {
-                    AnalyticsTracker.uiControl("thread_action_bar", "スレッド操作: ${meta.label}")
-                    onAction(action.id)
-                }) {
-                    Icon(
-                        imageVector = meta.icon,
-                        contentDescription = meta.label,
-                        tint = chromeColors.onBar
-                    )
+            // (L67) As on the としあき(仮) bar (判断2): the slots narrow to 36dp before anything scrolls,
+            // so the default eight show from 320dp screens, and the last action (設定 by default, or
+            // whatever the saved order ends with) keeps a fixed slot at the right end instead of being
+            // cut off. While all fit, the equal slots centre the buttons where SpaceAround put them.
+            val slotWidth = futachaThreadActionBarItemWidth(maxWidth.value, visibleActions.size).dp
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val scrolling = visibleActions.dropLast(1)
+                if (scrolling.isNotEmpty()) {
+                    ScrollableToolbarRow(
+                        itemCount = scrolling.size,
+                        minItemWidth = FUTACHA_THREAD_ACTION_BAR_MIN_ITEM_WIDTH_DP.dp,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        scrolling.forEach { action ->
+                            ThreadActionBarButton(action, onAction, Modifier.weight(1f))
+                        }
+                    }
+                }
+                visibleActions.lastOrNull()?.let { action ->
+                    ThreadActionBarButton(action, onAction, Modifier.width(slotWidth))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ThreadActionBarButton(
+    action: ThreadMenuEntryConfig,
+    onAction: (ThreadMenuEntryId) -> Unit,
+    modifier: Modifier
+) {
+    val meta = action.id.toMeta()
+    // A slot narrower than the 48dp touch size centres the button rather than squeezing its 40dp circle.
+    IconButton(
+        onClick = {
+            AnalyticsTracker.uiControl("thread_action_bar", "スレッド操作: ${meta.label}")
+            onAction(action.id)
+        },
+        modifier = modifier.wrapContentWidth(unbounded = true)
+    ) {
+        Icon(
+            imageVector = meta.icon,
+            contentDescription = meta.label,
+            tint = LocalFutachaChromeColors.current.onBar
+        )
     }
 }

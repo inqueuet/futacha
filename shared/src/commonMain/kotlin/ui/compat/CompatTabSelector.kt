@@ -326,6 +326,7 @@ import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatNgRuleId
 import com.valoser.futacha.shared.compat.reduceCompatibilityWorkspace
 import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
+import com.valoser.futacha.shared.compat.unfinishedNotice
 import com.valoser.futacha.shared.compat.compatQuoteQueryForLine
 import com.valoser.futacha.shared.compat.resolveCompatQuotePosts
 import com.valoser.futacha.shared.compat.resolveCompatSelectorLongTapEffect
@@ -951,10 +952,11 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
 
 internal const val COMPAT_REFRESH_ALL_TABS_BUSY_NOTICE = "全タブの更新確認中です"
 
-/** What "全タブ更新確認" tells when it is over (re-audit L17). */
+/** What "全タブ更新確認" tells when it is over (re-audit L17), with what the time left unchecked (re-audit L81). */
 internal fun compatRefreshAllTabsDoneNotice(result: com.valoser.futacha.shared.compat.CompatBackgroundRefreshResult): String =
     buildString {
         append("全タブの更新確認が終わりました（更新 ${result.updatedTabs}件、終了 ${result.deadTabs}件")
         if (result.failures > 0) append("、失敗 ${result.failures}件")
         append("）")
+        append(result.unfinishedNotice)
     }

@@ -64,7 +64,7 @@ class IosCompatibilityStoreRecoveryTest {
     }
 
     @Test
-    fun scrollAnchorUpdatePublishesNothingAndStaysDurable() = runBlocking {
+    fun scrollAnchorUpdatePublishesOnlyThePatchedRowsAndStaysDurable() = runBlocking {
         val fileSystem = createFileSystem()
         fileSystem.deleteRecursively("compatibility").getOrThrow()
         try {
@@ -80,12 +80,20 @@ class IosCompatibilityStoreRecoveryTest {
             val anchor = ScrollAnchor(postNo = "123460", offsetPx = 12, fallbackIndex = 4)
             store.updateScrollAnchor(compatTabKey(threadUrl), anchor)
 
-            // A scroll stop publishes nothing (re-audit M25: a new tab list on each stop rebuilt the whole screen).
-            assertSame(tabsBefore, store.tabs.first())
-            assertSame(historyBefore, store.history.first())
+            // A scroll stop publishes only the scrolled tab and its history row, as Android does (L80): the order and
+            // the other tab keep, so the screen restores where the thread was left.
+            val tabsAfter = store.tabs.first()
+            assertEquals(tabsBefore.map { it.key }, tabsAfter.map { it.key })
+            assertEquals(anchor, tabsAfter.first { it.canonicalUrl == threadUrl }.scrollAnchor)
+            assertSame(tabsBefore.first { it.canonicalUrl == otherUrl }, tabsAfter.first { it.canonicalUrl == otherUrl })
+            assertEquals(anchor, store.history.first().single().scrollAnchor)
+            assertTrue(historyBefore.single().scrollAnchor != anchor)
+            // The same anchor again publishes nothing new.
+            store.updateScrollAnchor(compatTabKey(threadUrl), anchor)
+            assertSame(tabsAfter, store.tabs.first())
 
             // The durable history anchor survives a relaunch (overlay replay)
-            // and is published by the next ordinary mutation (tab close).
+            // and the next ordinary mutation (tab close) keeps it.
             val relaunched = IosCompatibilityStore(fileSystem, nowMillis = { 2_000L })
             relaunched.initialize()
             assertEquals(anchor, relaunched.history.first().single().scrollAnchor)

@@ -35,6 +35,32 @@ class AppStateStoreTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val selfPostSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
 
+    @Test fun boardCountOverflowDoesNotReplaceTheStoredBoards() = runBlocking {
+        verifyUnreadableBoardWriteIsRefused(oversized = false)
+    }
+
+    @Test fun boardJsonOverflowDoesNotReplaceTheStoredBoards() = runBlocking {
+        verifyUnreadableBoardWriteIsRefused(oversized = true)
+    }
+
+    private suspend fun verifyUnreadableBoardWriteIsRefused(oversized: Boolean) {
+        val original = BoardSummary("b", "board", "", "https://may.2chan.net/b/", "")
+        val invalid = if (oversized) listOf(original.copy(name = "x".repeat(APP_STATE_BOARDS_JSON_MAX_CHARS)))
+            else List(APP_STATE_MAX_BOARDS + 1) { index -> original.copy(id = "$index", url = "https://may.2chan.net/board$index/") }
+        for (update in listOf(false, true)) {
+            val storage = FakePlatformStateStorage()
+            val store = AppStateStore(storage)
+            try {
+                store.setBoards(listOf(original))
+                val before = storage.boardsState.value
+                if (update) store.updateBoards { invalid } else store.setBoards(invalid)
+                assertTrue(before == storage.boardsState.value, "An unreadable board snapshot must never replace the stored value")
+                assertEquals(listOf(original), store.boards.first())
+                assertEquals(if (update) "updateBoards" else "setBoards", store.lastStorageError.value?.operation)
+            } finally { store.close() }
+        }
+    }
+
     @Test
     fun updateCheckDefaultsOnAndCanBeDisabled() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
@@ -449,7 +475,7 @@ class AppStateStoreTest {
     }
 
     @Test
-    fun historyReorderReusesManifestAndBackupButDeletionRemainsDurable() = runBlocking {
+    fun historyReorderKeepsAnIndependentBackupAndDeletionRemainsDurable() = runBlocking {
         val storage = FakePlatformStateStorage()
         val files = CountingHistoryFileSystem()
         val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
@@ -459,15 +485,18 @@ class AppStateStoreTest {
         files.readCount = 0
         files.backupWriteCount = 0
         store.prependOrReplaceHistoryEntry(second.copy(lastVisitedEpochMillis = 5000L))
+        // A reorder only leaves the backup: it still holds every thread (L135).
         assertEquals(0, files.backupWriteCount)
-        assertEquals(0, files.readCount, "Unchanged manifest and known entry hashes stay in memory")
+        assertEquals(0, files.readCount, "Known manifest and entry hashes stay in memory")
         val restarted = AppStateStore(storage, AppStateHistoryFileStore(files, json, "restart"), json)
         assertEquals(listOf("222", "111"), restarted.history.first().map { it.threadId })
+        files.backupWriteCount = 0
         files.backupLinkCount = 0
         store.removeHistoryEntry(first)
-        // T-4: the deletion updates the backup without writing the manifest twice.
-        assertEquals(0, files.backupWriteCount)
-        assertEquals(1, files.backupLinkCount)
+        // The deletion updates an independent backup, so corruption cannot also
+        // affect the recovery source. Unchanged entry files are still reused.
+        assertEquals(1, files.backupWriteCount)
+        assertEquals(0, files.backupLinkCount)
         files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
         val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
         assertEquals(listOf("222"), recovered.history.first().map { it.threadId })
@@ -506,8 +535,8 @@ class AppStateStoreTest {
 
         assertEquals(1, files.entryWriteCount, "only the added entry is written")
         assertEquals(1, files.manifestWriteCount)
-        assertEquals(0, files.backupWriteCount, "the backup is not a second full manifest write")
-        assertEquals(1, files.backupLinkCount)
+        assertEquals(1, files.backupWriteCount, "one independent backup is written when membership changes")
+        assertEquals(0, files.backupLinkCount)
         files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
         val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
         assertEquals(listOf("999") + (1..50).map { "$it" }, recovered.history.first().map { it.threadId })
@@ -633,6 +662,18 @@ class AppStateStoreTest {
         assertEquals(AttachmentPickerPreference.ALWAYS_ASK, store.attachmentPickerPreference.first())
         assertEquals(SaveDirectorySelection.PICKER, store.saveDirectorySelection.first())
         assertEquals(ThreadGalleryThumbnailMode.Fit, store.threadGalleryThumbnailMode.first())
+    }
+
+    @Test
+    fun selfPostIdentifiersSurviveReopeningAfterMoreThanTwentyPosts() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val expected = (1..30).map { (1000 + it).toString() }
+        expected.forEach { store.addSelfPostIdentifier("123", it, "b") }
+        assertEquals(expected, store.selfPostIdentifiersByThread.first()["b::123"])
+        assertEquals(expected, AppStateStore(storage).selfPostIdentifiersByThread.first()["b::123"])
+        store.removeSelfPostIdentifiersForThread("123", "b")
+        assertEquals(emptyMap(), AppStateStore(storage).selfPostIdentifiersByThread.first())
     }
 
     @Test
@@ -1281,7 +1322,7 @@ private class CountingHistoryFileSystem(
     var manifestWriteCount = 0
     var backupWriteCount = 0
     var backupLinkCount = 0
-    /** Fails the next backup update: its link and the copy written instead. */
+    /** Fails the next independent backup write. */
     var failNextBackupWrite = false
     var readCount = 0
 

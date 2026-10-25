@@ -158,7 +158,7 @@ private fun CompatAppLockDialog(stateStore: AppStateStore, enabled: Boolean, onD
             text = {
                 Column {
                     Text(
-                        if (enabled) "有効です。アプリ起動時にパスワードを要求します。" else "無効です。パスワードを設定すると起動時にロックします。",
+                        com.valoser.futacha.shared.ui.appLockSettingDescription(enabled),
                         color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp
                     )
                     OutlinedTextField(

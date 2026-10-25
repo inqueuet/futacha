@@ -65,7 +65,7 @@ fun collectCompatWatchMatches(
                 isNew = previous == null,
                 keyword = watchWords.filter { word ->
                     normalizeCompatWatchText(word).let { it.isNotBlank() && normalizeCompatWatchText(item.title.orEmpty()).contains(it) }
-                }.joinToString(" / ")
+                }.joinToString(COMPAT_WATCH_KEYWORD_SEPARATOR)
             )
         }
         .toList()

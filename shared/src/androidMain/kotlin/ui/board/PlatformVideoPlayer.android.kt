@@ -60,6 +60,8 @@ internal actual fun NativePlatformVideoPlayer(
     val currentMediaInfoCallback by rememberUpdatedState(onMediaInfoKnown)
     val currentErrorCallback by rememberUpdatedState(onPlaybackError)
     var player by remember(context) { mutableStateOf<ExoPlayer?>(null) }
+    // What the screen drives: the player, with its audio focus and this app's reading aloud handled (L117).
+    var videoAudio by remember(context) { mutableStateOf<AppVideoAudio?>(null) }
 
     DisposableEffect(context, videoUrl, playback, editing) {
         val pin = playback?.retain()
@@ -88,15 +90,17 @@ internal actual fun NativePlatformVideoPlayer(
             .setSeekBackIncrementMs(REFERENCE_VIDEO_SEEK_STEP_MILLIS)
             .setSeekForwardIncrementMs(REFERENCE_VIDEO_SEEK_STEP_MILLIS)
             .build()
-            .apply {
-            playWhenReady = options.autoPlay
-        } } catch (failure: Throwable) { pin?.close(); editPin?.close(); throw failure }
+        } catch (failure: Throwable) { pin?.close(); editPin?.close(); throw failure }
+        val createdAudio = AppVideoAudio(createdPlayer, audible = normalizeVideoPlayerVolume(volume, isMuted) > 0f)
+        createdAudio.player.playWhenReady = options.autoPlay
         player = createdPlayer
+        videoAudio = createdAudio
         onDispose {
             if (player === createdPlayer) {
                 player = null
             }
-            try { createdPlayer.release() } finally { pin?.close(); editPin?.close() }
+            if (videoAudio === createdAudio) videoAudio = null
+            try { createdAudio.release(); createdPlayer.release() } finally { pin?.close(); editPin?.close() }
         }
     }
 
@@ -113,7 +117,7 @@ internal actual fun NativePlatformVideoPlayer(
         editing?.let { activePlayer.setVideoEffects(listOf(MosaicEffect(AtomicReference(it.document), it.info.frames.timeAt(0)))) }
         activePlayer.setMediaItem(mediaItem)
         editing?.let { activePlayer.seekTo(((it.startUs - it.info.frames.timeAt(0)).coerceAtLeast(0)) / 1000) }
-        activePlayer.playWhenReady = editing != null || options.autoPlay
+        (videoAudio?.player ?: activePlayer).playWhenReady = editing != null || options.autoPlay
         activePlayer.prepare()
     }
 
@@ -138,7 +142,9 @@ internal actual fun NativePlatformVideoPlayer(
     }
 
     LaunchedEffect(volume, isMuted, player) {
-        player?.volume = normalizeVideoPlayerVolume(volume, isMuted)
+        val normalized = normalizeVideoPlayerVolume(volume, isMuted)
+        player?.volume = normalized
+        videoAudio?.setAudible(normalized > 0f)
     }
 
     // Leaving the app must not keep the video and its sound running, as iOS
@@ -175,7 +181,7 @@ internal actual fun NativePlatformVideoPlayer(
                 targetView = this
                 useController = editing == null
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                this.player = player
+                this.player = videoAudio?.player ?: player
                 setOnTouchListener { _, event ->
                     doubleTapDetector.onTouchEvent(event)
                     if (event.action == MotionEvent.ACTION_DOWN) {
@@ -186,8 +192,9 @@ internal actual fun NativePlatformVideoPlayer(
             }
         },
         update = { view ->
-            if (view.player !== player) {
-                view.player = player
+            val shown = videoAudio?.player ?: player
+            if (view.player !== shown) {
+                view.player = shown
             }
             if (areControlsVisible) {
                 view.showController()

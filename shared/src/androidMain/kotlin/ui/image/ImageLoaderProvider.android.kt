@@ -134,3 +134,6 @@ internal fun isRemovableStorageDirectory(
     directory: File,
     removableCheck: (File) -> Boolean = Environment::isExternalStorageRemovable,
 ): Boolean = runCatching { removableCheck(directory) }.getOrDefault(false)
+
+internal actual fun platformImageMemoryPressureInterceptor(gate: AdaptiveImageRequestGate): coil3.intercept.Interceptor =
+    ImageMemoryPressureInterceptor(gate)

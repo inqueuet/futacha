@@ -46,7 +46,7 @@ internal class KtorAssetDownloader(private val client: HttpClient = createAssetD
                     fun invalid(message: String): Nothing =
                         throw if (offset > 0L) AssetResumeUnavailableException(message) else IOException(message)
                     if (offset > 0L && response.status.value in setOf(200, 416)) throw AssetResumeUnavailableException()
-                    if (response.status.value != if (offset == 0L) 200 else 206) throw IOException("モデルを取得できません（HTTP ${response.status.value}）")
+                    if (response.status.value != if (offset == 0L) 200 else 206) throw AssetHttpStatusException(response.status.value)
                     if (offset > 0L) {
                         val expectedRange = "bytes $offset-${distribution.bytes - 1}/${distribution.bytes}"
                         if (response.headers[HttpHeaders.ContentRange] != expectedRange) invalid("モデルの再開位置が一致しません")
@@ -78,6 +78,9 @@ internal class KtorAssetDownloader(private val client: HttpClient = createAssetD
     }
     override fun close() = client.close()
 }
+
+/** An unexpected HTTP status. The text is the image models' own; other assets word it for their screen (L7). */
+internal class AssetHttpStatusException(val status: Int) : IOException("モデルを取得できません（HTTP $status）")
 
 internal class AssetResumeUnavailableException(message: String = "The model server does not support resuming") : IOException(message)
 

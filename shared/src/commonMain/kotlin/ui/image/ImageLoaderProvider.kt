@@ -286,6 +286,7 @@ val LocalFutachaCatalogImageLoader = staticCompositionLocalOf<ImageLoader> {
 }
 
 expect fun ComponentRegistry.Builder.addPlatformImageComponents()
+internal expect fun platformImageMemoryPressureInterceptor(gate: AdaptiveImageRequestGate): Interceptor
 expect fun getPlatformDiskCacheDirectory(
     platformContext: Any?,
     location: CompatibilityCacheLocation = CompatibilityCacheLocation.INTERNAL
@@ -516,7 +517,7 @@ internal fun buildFutachaImageLoader(
         add(ArchiveImageFallbackInterceptor())
         // After the fallback chains: each attempt takes its own permit, so a
         // slot walking extensions or mirrors never holds one for its whole chain.
-        add(ImageMemoryPressureInterceptor(pressureGate))
+        add(platformImageMemoryPressureInterceptor(pressureGate))
         add(VisibleImageRequestInterceptor())
         originalMediaStore?.let { addOriginalMediaSupport(it) }
         // Fetchers are tried in registration order and the Ktor factory accepts

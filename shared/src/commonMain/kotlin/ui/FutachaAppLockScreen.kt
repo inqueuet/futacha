@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -262,22 +263,24 @@ internal fun FutachaAppLockGateContent(
     onAttemptsChanged: (AppLockAttemptState) -> Unit = {},
     attemptsLoaded: Boolean = true
 ) {
-    when (gate) {
-        FutachaAppLockGate.Loading -> FutachaAppLockLoadingScreen()
-        FutachaAppLockGate.Error -> FutachaAppLockLoadErrorScreen(onRetry = onRetry)
-        FutachaAppLockGate.Locked -> {
-            LaunchedEffect(Unit) {
-                AnalyticsTracker.screen("app_lock")
+    Box(Modifier.fillMaxSize().appLockSnapshotFrameReady()) {
+        when (gate) {
+            FutachaAppLockGate.Loading -> FutachaAppLockLoadingScreen()
+            FutachaAppLockGate.Error -> FutachaAppLockLoadErrorScreen(onRetry = onRetry)
+            FutachaAppLockGate.Locked -> {
+                LaunchedEffect(Unit) {
+                    AnalyticsTracker.screen("app_lock")
+                }
+                FutachaAppLockScreen(
+                    passwordHash = passwordHash,
+                    onUnlocked = onUnlocked,
+                    persistedAttempts = persistedAttempts,
+                    onAttemptsChanged = onAttemptsChanged,
+                    attemptsLoaded = attemptsLoaded
+                )
             }
-            FutachaAppLockScreen(
-                passwordHash = passwordHash,
-                onUnlocked = onUnlocked,
-                persistedAttempts = persistedAttempts,
-                onAttemptsChanged = onAttemptsChanged,
-                attemptsLoaded = attemptsLoaded
-            )
+            FutachaAppLockGate.Unlocked -> Unit
         }
-        FutachaAppLockGate.Unlocked -> Unit
     }
 }
 
@@ -300,6 +303,89 @@ internal fun FutachaAppLockOverlay(content: @Composable () -> Unit) {
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
             content()
+        }
+    }
+}
+
+/**
+ * Shown instead of an endless loading screen when the shared compatibility data could
+ * not be read (M74). Nothing of the app or its lock state is revealed; retry reloads it.
+ */
+@Composable
+internal fun FutachaStoreLoadErrorScreen(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .appLockSnapshotFrameReady()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 420.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp)
+            )
+            Text(
+                text = "保存データ（板・履歴・設定）を読み込めませんでした。端末の空き容量を確認してから、再試行してください。",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            OutlinedButton(onClick = onRetry) {
+                Text("再試行")
+            }
+        }
+    }
+}
+
+/**
+ * Shown by the Android and Desktop hosts when their start failed (L125: the network services, the stores), with the
+ * 再試行 iOS already offered; before, the app could only be closed and opened again. [message] is the failure's.
+ */
+@Composable
+fun FutachaStartupErrorScreen(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 420.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp)
+            )
+            Text(
+                text = "アプリを起動できませんでした",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            OutlinedButton(onClick = onRetry) {
+                Text("再試行")
+            }
         }
     }
 }

@@ -157,10 +157,12 @@ internal fun ftutterFitPreferencesForStore(
 }
 
 /** What an `.ftt` import tells: what did not fit, and how many older marks the imported ones pushed out (re-audit L22). */
-internal fun ftutterImportNotice(leftOut: List<String>, droppedMarks: Int): String {
+internal fun ftutterImportNotice(leftOut: List<String>, droppedMarks: Int, supplements: FtutterBackupSupplementResult? = null): String {
     val parts = buildList {
         if (leftOut.isNotEmpty()) add("保存できる量を超えたため、次は取り込めませんでした：${leftOut.joinToString("、")}")
         com.valoser.futacha.shared.compat.manualPostMarksDroppedNotice(droppedMarks)?.let(::add)
+        supplements?.notices?.let(::addAll)
     }
-    return if (parts.isEmpty()) "取り込みました" else "取り込みました（${parts.joinToString("。")}）"
+    val result = if (supplements?.incomplete == true) "一部を取り込みました" else "取り込みました"
+    return if (parts.isEmpty()) result else "$result（${parts.joinToString("。")}）"
 }

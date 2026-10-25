@@ -42,6 +42,7 @@ import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
 import com.valoser.futacha.shared.compat.isCompatNgScopeValid
+import com.valoser.futacha.shared.compat.compatBoardThreadScopeKeys
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatReplyDraft
 import com.valoser.futacha.shared.compat.CompatTab
@@ -87,6 +88,7 @@ import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -108,6 +110,17 @@ import kotlin.coroutines.cancellation.CancellationException
 private enum class CompatObservableState { BOARDS, TABS, HISTORY, WORKSPACE, PREFERENCES, NG_RULES }
 private val ALL_COMPAT_OBSERVABLE_STATES = CompatObservableState.entries.toSet()
 private val NO_COMPAT_OBSERVABLE_STATES = emptySet<CompatObservableState>()
+
+// The NG rules read and applied: the newest valid rows, up to MAX_COMPAT_NG_RULES (rowid decides a tie) (L91).
+private const val NG_RULE_READ_SELECTION = "length(rule_id) BETWEEN 1 AND ? AND length(scope_key) BETWEEN 1 AND ? AND " +
+    "length(normalized_value) BETWEEN 1 AND ? AND length(payload_json) <= ?"
+private val NG_RULE_READ_ARGS = arrayOf(
+    MAX_COMPAT_NG_RULE_ID_CHARS.toString(),
+    MAX_COMPAT_NG_SCOPE_KEY_CHARS.toString(),
+    MAX_COMPAT_NG_VALUE_CHARS.toString(),
+    (MAX_COMPAT_NG_IMAGE_URL_CHARS + MAX_COMPAT_NG_MEMO_CHARS + 512).toString()
+)
+private const val NG_RULE_READ_ORDER = "created_at DESC, rowid DESC"
 
 class AndroidCompatibilityStore(
     context: Context,
@@ -158,6 +171,8 @@ class AndroidCompatibilityStore(
      * scheduler cancelling its work).
      */
     override val isLoaded: StateFlow<Boolean> = loadedState.asStateFlow()
+    private val loadFailedState = MutableStateFlow(false)
+    override val loadFailed: StateFlow<Boolean> = loadFailedState.asStateFlow()
     override val boards: Flow<List<CompatBoard>> = boardsState.afterLoaded()
     override val tabs: Flow<List<CompatTab>> = tabsState.afterLoaded()
     override val history: Flow<List<CompatHistoryEntry>> = historyState.afterLoaded()
@@ -174,18 +189,33 @@ class AndroidCompatibilityStore(
     }
 
     suspend fun initialize() {
+        loadFailedState.value = false
         try {
             initializeOnce()
         } catch (error: Throwable) {
-            if (error !is CancellationException) publishStatesAfterFailedInitialization()
+            if (error !is CancellationException) {
+                publishStatesAfterFailedInitialization()
+                // Placeholders stay private (M7); report the failure so the app can offer a retry (M74).
+                if (!loadedState.value) loadFailedState.value = true
+            }
             throw error
         }
     }
 
+    override suspend fun retryLoading() {
+        try {
+            ensureInitialized()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Logger.e("AndroidCompatibilityStore", "Retrying the compatibility load failed", failure)
+        }
+    }
+
     /**
-     * A failed repair/migration must not leave every observer waiting for
-     * [isLoaded] forever. Publish whatever can still be read; if the database
-     * cannot be read at all, observers get the empty placeholders as before.
+     * A failed repair/migration may still leave readable persisted state.
+     * Publish it only after every observable was read successfully. If reads
+     * fail too, keep placeholders private until a later initialization succeeds.
      */
     private suspend fun publishStatesAfterFailedInitialization() {
         if (loadedState.value) return
@@ -196,17 +226,17 @@ class AndroidCompatibilityStore(
         } catch (failure: Exception) {
             Logger.e("AndroidCompatibilityStore", "Compatibility state could not be read after a failed initialization", failure)
         }
-        loadedState.value = true
     }
 
     private suspend fun initializeOnce() {
         var observation = 0L
-        val cleanup = mutate(refreshOnly = true) { db ->
+        mutateThenCleanup(afterCommit = { cleanup -> scheduleClosedBatchExpiry(cleanup.value, observation) }) { db ->
             // Before anything reads preferences: the old per-image rows could
             // push real settings past the 4096-row read limit.
             db.migrateImagePhashPreferences()
             db.trimTransientPreferences()
             db.trimHistoryTombstones()
+            db.trimNgRules()
             val repairDiscardedAttachments = db.repairCanonicalBoards()
             db.repairThreadSnapshotCache()
             db.enforceThreadSnapshotQuota()
@@ -223,8 +253,6 @@ class AndroidCompatibilityStore(
                 retained = db.readRetainedAttachmentLocators()
             )
         }
-        cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(cleanup.value, observation)
         initialized = true
     }
 
@@ -271,6 +299,7 @@ class AndroidCompatibilityStore(
         if (db.metadataValue(METADATA_BOARD_BOOTSTRAP_VERSION) != null) return@mutate false
         val imported = validatedModernBoards(modernBoards)
         imported.forEach { board -> db.insertBoardIfMissing(board) }
+        db.requireBoardCapacity()
         db.putMetadata(METADATA_BOARD_BOOTSTRAP_VERSION, BOARD_BOOTSTRAP_VERSION.toString())
         true
     }
@@ -278,7 +307,9 @@ class AndroidCompatibilityStore(
     override suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int = mutate(
         refresh = setOf(CompatObservableState.BOARDS)
     ) { db ->
-        validatedModernBoards(modernBoards).count { board -> db.insertBoardIfMissing(board) }
+        val added = validatedModernBoards(modernBoards).count { board -> db.insertBoardIfMissing(board) }
+        db.requireBoardCapacity()
+        added
     }
 
     override suspend fun importModernHistory(
@@ -307,6 +338,7 @@ class AndroidCompatibilityStore(
     ) { db ->
         require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) { "Invalid Futaba board URL" }
         db.upsertBoard(board)
+        db.requireBoardCapacity()
     }
 
     override suspend fun upsertBoards(boards: List<CompatBoard>) = mutate(
@@ -318,6 +350,7 @@ class AndroidCompatibilityStore(
             }
             db.upsertBoard(board)
         }
+        db.requireBoardCapacity()
     }
 
     /**
@@ -351,7 +384,7 @@ class AndroidCompatibilityStore(
     }
 
     override suspend fun deleteBoard(boardKey: String) {
-        val cleanup = mutate(
+        mutateThenCleanup(
             refresh = setOf(
                 CompatObservableState.BOARDS,
                 CompatObservableState.TABS,
@@ -362,6 +395,13 @@ class AndroidCompatibilityStore(
             )
         ) { db ->
             val candidates = db.readDraftAttachmentLocatorsForBoard(boardKey).toMutableSet()
+            // The board's thread scopes (its tabs, closed tabs and history) go with it, like its
+            // board scope (L86). Read before the closed batches below are cut down.
+            val boardThreadKeys = compatBoardThreadScopeKeys(
+                boardKey,
+                db.readTabs() + db.readClosedBatches().flatMap { batch -> batch.tabs.map(ClosedCompatTab::tab) },
+                db.readHistory(limit = null)
+            )
             db.query(
                 "compat_tab",
                 arrayOf("tab_key"),
@@ -390,10 +430,9 @@ class AndroidCompatibilityStore(
                     db.updateClosedBatch(repaired)
                 }
             }
-            db.readNgRules().filter { rule ->
-                rule.scopeKey == boardKey || (rule.kind == CompatNgKind.THREAD_POST_NO &&
-                    com.valoser.futacha.shared.compat.compatPostNgScopeBoardKey(rule.scopeKey) == boardKey)
-            }.forEach { rule -> db.delete("compat_ng_rule", "rule_id=?", arrayOf(rule.id)) }
+            // Every stored row, not only the ones read for the screens (the newest ones of known kinds) (L79).
+            db.readNgRuleIdsScopedToRemovedBoard(boardKey, boardThreadKeys)
+                .forEach { ruleId -> db.delete("compat_ng_rule", "rule_id=?", arrayOf(ruleId)) }
             // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
             db.delete(
                 "compat_preference",
@@ -401,17 +440,20 @@ class AndroidCompatibilityStore(
                 arrayOf(com.valoser.futacha.shared.compat.compatCatalogExtraModePreferenceKey(boardKey))
             )
             db.delete("compat_board", "board_key=?", arrayOf(boardKey))
-            val active = db.readWorkspace().activeTabKey
-            if (active != null && db.readTab(active) == null) {
-                db.updateWorkspace(db.readWorkspace().copy(activeTabKey = db.readTabs().firstOrNull()?.key))
+            val workspace = db.readWorkspace()
+            val active = workspace.activeTabKey?.takeIf { key -> db.readTab(key) != null }
+                ?: workspace.activeTabKey?.let { db.readTabs().firstOrNull()?.key }
+            // The catalog shown for the board goes with it, as on iOS and Desktop (L105).
+            val host = workspace.catalogHostBoardKey?.takeIf { key -> key != boardKey }
+            if (active != workspace.activeTabKey || host != workspace.catalogHostBoardKey) {
+                db.updateWorkspace(workspace.copy(activeTabKey = active, catalogHostBoardKey = host))
             }
             AttachmentCleanupMutation(Unit, candidates, db.readRetainedAttachmentLocators())
         }
-        cleanupAttachments(cleanup)
     }
 
     override suspend fun openTab(tab: CompatTab, historyEntry: CompatHistoryEntry?) {
-        val cleanup = mutate(
+        mutateThenCleanup(
             refresh = setOf(
                 CompatObservableState.TABS,
                 CompatObservableState.HISTORY,
@@ -431,7 +473,6 @@ class AndroidCompatibilityStore(
             db.trimHistory()
             AttachmentCleanupMutation(Unit, trimmedAttachments, db.readRetainedAttachmentLocators())
         }
-        cleanupAttachments(cleanup)
     }
 
     override suspend fun updateTab(tab: CompatTab) = mutate(
@@ -470,7 +511,8 @@ class AndroidCompatibilityStore(
         finalScrollAnchors: Map<String, ScrollAnchor>
     ): ClosedTabBatch? {
         var observation = 0L
-        val cleanup = mutate(
+        val cleanup = mutateThenCleanup(
+            afterCommit = { committed -> if (observation != 0L) scheduleClosedBatchExpiry(committed.value, observation) },
             refresh = setOf(
                 CompatObservableState.TABS,
                 CompatObservableState.HISTORY,
@@ -493,7 +535,7 @@ class AndroidCompatibilityStore(
                 if (tab.key !in tabKeys) null else ClosedCompatTab(tab = tab, originalIndex = index)
             }
             if (closed.isEmpty()) {
-                return@mutate AttachmentCleanupMutation<ClosedTabBatch?>(null)
+                return@mutateThenCleanup AttachmentCleanupMutation<ClosedTabBatch?>(null)
             }
             observation = nextClosedBatchObservation()
             val supersededAttachments = db.readClosedBatches().attachmentLocators()
@@ -514,14 +556,13 @@ class AndroidCompatibilityStore(
             db.insertClosedBatch(batch)
             AttachmentCleanupMutation(batch, supersededAttachments + closedDraftAttachments, db.readRetainedAttachmentLocators())
         }
-        cleanupAttachments(cleanup)
-        if (observation != 0L) scheduleClosedBatchExpiry(cleanup.value, observation)
         return cleanup.value
     }
 
     override suspend fun restoreClosedTabs(batch: ClosedTabBatch) {
         var observation = 0L
-        val cleanup = mutate(
+        mutateThenCleanup(
+            afterCommit = { scheduleClosedBatchExpiry(null, observation) },
             refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE)
         ) { db ->
             // Match the reference APK: Undo restores the closed thread row only.
@@ -544,14 +585,12 @@ class AndroidCompatibilityStore(
                 db.readRetainedAttachmentLocators()
             )
         }
-        cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(null, observation)
     }
 
     override suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch? {
         var observation = 0L
-        val cleanup = mutate(
-            refreshOnly = true,
+        val cleanup = mutateThenCleanup(
+            afterCommit = { committed -> scheduleClosedBatchExpiry(committed.value, observation) },
             refresh = NO_COMPAT_OBSERVABLE_STATES
         ) { db ->
             val expired = db.readClosedBatches { it.expiresAtEpochMillis <= nowEpochMillis }
@@ -567,8 +606,6 @@ class AndroidCompatibilityStore(
                 db.readRetainedAttachmentLocators()
             )
         }
-        cleanupAttachments(cleanup)
-        scheduleClosedBatchExpiry(cleanup.value, observation)
         return cleanup.value
     }
 
@@ -1350,7 +1387,7 @@ class AndroidCompatibilityStore(
     ): CompatSettingsBackupImportReport {
         val backup = decodeCompatSettingsBackup(payload)
         validateCompatSettingsBackup(backup)
-        val cleanup = mutate { db ->
+        val cleanup = mutateThenCleanup { db ->
             val existingBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
             val importedBoards = if (restoreUserSettings) {
                 backup.boards.forEach { board ->
@@ -1432,14 +1469,14 @@ class AndroidCompatibilityStore(
             ) else 0
             val importedNgRules = if (restoreNgRules) {
                 val tabKeys = db.readTabs().mapTo(mutableSetOf()) { it.key }
-                backup.ngRules.count { rule ->
+                backup.ngRules.filter { rule ->
                     if (!com.valoser.futacha.shared.compat.isCompatNgScopeValid(
                             rule.kind,
                             rule.scopeKey,
                             validBoardKeys,
                             tabKeys
                         )
-                    ) return@count false
+                    ) return@filter false
                     db.insertWithOnConflict(
                         "compat_ng_rule",
                         null,
@@ -1453,6 +1490,11 @@ class AndroidCompatibilityStore(
                         },
                         SQLiteDatabase.CONFLICT_REPLACE
                     ) > 0
+                }.map { it.id }.let { restoredIds ->
+                    // Only the newest rules up to the limit are read and applied; the rest would neither show, apply
+                    // nor be deletable, and would stop new NG being added (L91). Report the restored ones kept.
+                    db.trimNgRules()
+                    db.countStoredNgRules(restoredIds)
                 }
             } else 0
             AttachmentCleanupMutation(
@@ -1468,7 +1510,6 @@ class AndroidCompatibilityStore(
                 retained = db.readRetainedAttachmentLocators()
             )
         }
-        cleanupAttachments(cleanup)
         return cleanup.value
     }
 
@@ -1817,8 +1858,14 @@ class AndroidCompatibilityStore(
 
     override suspend fun upsertNgRule(rule: CompatNgRule): Boolean = mutate(
         refresh = setOf(CompatObservableState.NG_RULES)
-    ) { db ->
-        if (!isValidCompatNgRule(rule)) return@mutate false
+    ) { db -> writeNgRule(db, rule) }
+
+    override suspend fun replaceNgRule(previousRuleId: String, rule: CompatNgRule): Boolean = mutate(
+        refresh = setOf(CompatObservableState.NG_RULES)
+    ) { db -> writeNgRule(db, rule, previousRuleId) }
+
+    private fun writeNgRule(db: SQLiteDatabase, rule: CompatNgRule, previousRuleId: String? = null): Boolean {
+        if (!isValidCompatNgRule(rule)) return false
         val boardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
         val tabKeys = db.readTabs().mapTo(mutableSetOf()) { it.key }
         if (!isCompatNgScopeValid(rule.kind, rule.scopeKey, boardKeys, tabKeys)) {
@@ -1829,20 +1876,25 @@ class AndroidCompatibilityStore(
                 "AndroidCompatibilityStore",
                 "Ignoring compatibility NG rule for a missing scope: kind=${rule.kind}"
             )
-            return@mutate false
+            return false
         }
         val alreadyExists = DatabaseUtils.longForQuery(
             db,
             "SELECT EXISTS(SELECT 1 FROM compat_ng_rule WHERE rule_id=? LIMIT 1)",
             arrayOf(rule.id)
         ) != 0L
+        if (previousRuleId != null) {
+            val previousExists = DatabaseUtils.longForQuery(db,
+                "SELECT EXISTS(SELECT 1 FROM compat_ng_rule WHERE rule_id=? LIMIT 1)", arrayOf(previousRuleId)) != 0L
+            if (!previousExists || (previousRuleId != rule.id && alreadyExists)) return false
+        }
         if (
-            !alreadyExists &&
+            previousRuleId == null && !alreadyExists &&
             DatabaseUtils.longForQuery(db, "SELECT COUNT(*) FROM compat_ng_rule", null) >= MAX_COMPAT_NG_RULES
         ) {
-            return@mutate false
+            return false
         }
-        db.insertWithOnConflict(
+        val inserted = db.insertWithOnConflict(
             "compat_ng_rule",
             null,
             ContentValues().apply {
@@ -1855,7 +1907,11 @@ class AndroidCompatibilityStore(
             },
             SQLiteDatabase.CONFLICT_REPLACE
         )
-        true
+        check(inserted != -1L) { "NG rule could not be written" }
+        if (previousRuleId != null && previousRuleId != rule.id) {
+            db.delete("compat_ng_rule", "rule_id=?", arrayOf(previousRuleId))
+        }
+        return true
     }
 
     override suspend fun deleteNgRule(ruleId: String) = mutate(
@@ -1894,10 +1950,32 @@ class AndroidCompatibilityStore(
     }
 
     private suspend fun <T> mutate(
-        refreshOnly: Boolean = false,
         refresh: Set<CompatObservableState> = ALL_COMPAT_OBSERVABLE_STATES,
         block: (SQLiteDatabase) -> T
-    ): T = withContext(Dispatchers.IO) {
+    ): T = withContext(Dispatchers.IO) { transaction(refresh, block) }
+
+    /**
+     * [mutate] whose attachments are cleaned once it has committed, even when the caller is cancelled meanwhile (a
+     * cancelled `withContext` drops its result, and the cleanup after it never ran) (L93). [afterCommit] runs the
+     * same way, after the cleanup.
+     */
+    private suspend fun <T> mutateThenCleanup(
+        refresh: Set<CompatObservableState> = ALL_COMPAT_OBSERVABLE_STATES,
+        afterCommit: (AttachmentCleanupMutation<T>) -> Unit = {},
+        block: (SQLiteDatabase) -> AttachmentCleanupMutation<T>
+    ): AttachmentCleanupMutation<T> = withContext(Dispatchers.IO) {
+        val committed = transaction(refresh, block)
+        withContext(NonCancellable) {
+            cleanupAttachments(committed)
+            afterCommit(committed)
+        }
+        committed
+    }
+
+    /** Test seam: runs inside each write's transaction, after its changes and before the commit. */
+    internal var beforeCommitForTest: ((SQLiteDatabase) -> Unit)? = null
+
+    private suspend fun <T> transaction(refresh: Set<CompatObservableState>, block: (SQLiteDatabase) -> T): T =
         mutex.withLock {
             // Compose/test teardown can cancel the lifecycle while a UI
             // callback is still queued on its own scope. Treat a late write
@@ -1905,27 +1983,56 @@ class AndroidCompatibilityStore(
             // uncaught IllegalStateException from the worker thread.
             if (closed) throw CancellationException("Compatibility store is closed")
             val db = helper.writableDatabase
+            val result: T
+            val refreshed: RefreshedStates
             db.beginTransaction()
             try {
-                val result = if (refreshOnly) block(db) else block(db)
+                result = block(db)
+                beforeCommitForTest?.invoke(db)
+                // Read inside the transaction (what is about to be committed) but published only once the commit
+                // succeeded: a failed commit (a full disk) rolls the write back, and the screens must not show it
+                // (L92). A failed read here fails the write instead of committing it behind the caller's error.
+                refreshed = readStates(db, refresh)
                 db.setTransactionSuccessful()
-                refreshStates(db, refresh)
-                result
             } finally {
                 db.endTransaction()
             }
+            publishStates(refreshed)
+            result
         }
+
+    private class RefreshedStates(
+        val boards: List<CompatBoard>?,
+        val tabs: List<CompatTab>?,
+        val history: List<CompatHistoryEntry>?,
+        val workspace: CompatWorkspaceRecord?,
+        val preferences: Map<String, String>?,
+        val ngRules: List<CompatNgRule>?,
+        val all: Boolean
+    )
+
+    private fun readStates(db: SQLiteDatabase, refresh: Set<CompatObservableState>) = RefreshedStates(
+        boards = if (CompatObservableState.BOARDS in refresh) db.readBoards() else null,
+        tabs = if (CompatObservableState.TABS in refresh) db.readTabs() else null,
+        history = if (CompatObservableState.HISTORY in refresh) db.readHistory() else null,
+        workspace = if (CompatObservableState.WORKSPACE in refresh) db.readWorkspace() else null,
+        preferences = if (CompatObservableState.PREFERENCES in refresh) db.readPreferences() else null,
+        ngRules = if (CompatObservableState.NG_RULES in refresh) db.readNgRules() else null,
+        all = refresh.containsAll(ALL_COMPAT_OBSERVABLE_STATES)
+    )
+
+    private fun publishStates(states: RefreshedStates) {
+        states.boards?.let { boardsState.value = it }
+        states.tabs?.let { tabsState.value = it }
+        states.history?.let { historyState.value = it }
+        states.workspace?.let { workspaceState.value = it }
+        states.preferences?.let { preferencesState.value = it }
+        states.ngRules?.let { ngRulesState.value = it }
+        if (states.all) loadedState.value = true
     }
 
-    private fun refreshStates(db: SQLiteDatabase, refresh: Set<CompatObservableState>) {
-        if (CompatObservableState.BOARDS in refresh) boardsState.value = db.readBoards()
-        if (CompatObservableState.TABS in refresh) tabsState.value = db.readTabs()
-        if (CompatObservableState.HISTORY in refresh) historyState.value = db.readHistory()
-        if (CompatObservableState.WORKSPACE in refresh) workspaceState.value = db.readWorkspace()
-        if (CompatObservableState.PREFERENCES in refresh) preferencesState.value = db.readPreferences()
-        if (CompatObservableState.NG_RULES in refresh) ngRulesState.value = db.readNgRules()
-        if (refresh.containsAll(ALL_COMPAT_OBSERVABLE_STATES)) loadedState.value = true
-    }
+    private fun refreshStates(db: SQLiteDatabase, refresh: Set<CompatObservableState>) =
+        publishStates(readStates(db, refresh))
 
     private suspend fun <T> cleanupAttachments(mutation: AttachmentCleanupMutation<T>) {
         val fileSystem = attachmentFileSystem
@@ -2552,6 +2659,12 @@ class AndroidCompatibilityStore(
         put("sort_order", sortOrder)
     }
 
+    private fun SQLiteDatabase.requireBoardCapacity() {
+        compileStatement("SELECT COUNT(*) FROM compat_board").use { statement ->
+            require(statement.simpleQueryForLong() <= MAX_COMPAT_BOARDS) { "登録できる板は${MAX_COMPAT_BOARDS}件までです" }
+        }
+    }
+
     private fun SQLiteDatabase.readBoards(): List<CompatBoard> = query(
         "compat_board",
         arrayOf("board_key", "name", "canonical_url", "original_url", "sort_order"),
@@ -2560,12 +2673,14 @@ class AndroidCompatibilityStore(
         null,
         null,
         "sort_order ASC, board_key ASC",
-        MAX_COMPAT_BOARDS.toString()
+        (MAX_COMPAT_BOARDS + 1).toString()
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
                 add(CompatBoard(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getInt(4)))
             }
+        }.also { boards ->
+            require(boards.size <= MAX_COMPAT_BOARDS) { "保存済みの板が上限を超えています" }
         }
     }
 
@@ -2631,20 +2746,45 @@ class AndroidCompatibilityStore(
         Logger.i("AndroidCompatibilityStore", "Trimmed $removed old own-post/catalog-count preference(s)")
     }
 
+    private fun SQLiteDatabase.readNgRuleIdsScopedToRemovedBoard(boardKey: String, boardThreadKeys: Set<String>): List<String> =
+        query("compat_ng_rule", arrayOf("rule_id", "kind", "scope_key"), null, null, null, null, null).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val ruleId = cursor.getString(0) ?: continue
+                    val scope = cursor.getString(2) ?: continue
+                    val kind = runCatching { CompatNgKind.valueOf(cursor.getString(1)) }.getOrNull()
+                    if (com.valoser.futacha.shared.compat.isCompatNgScopedToRemovedBoard(kind, scope, boardKey, boardThreadKeys)) add(ruleId)
+                }
+            }
+        }
+
+    /**
+     * Rules past the [MAX_COMPAT_NG_RULES] read by [readNgRules] (a settings restore before L91 could leave them) are
+     * never shown or applied, cannot be deleted, and keep the count at the limit so no new NG can be added. Removes
+     * them; the rules read stay as they are.
+     */
+    private fun SQLiteDatabase.trimNgRules() {
+        if (DatabaseUtils.queryNumEntries(this, "compat_ng_rule") <= MAX_COMPAT_NG_RULES) return
+        val removed = delete(
+            "compat_ng_rule",
+            "rowid NOT IN (SELECT rowid FROM compat_ng_rule WHERE $NG_RULE_READ_SELECTION ORDER BY $NG_RULE_READ_ORDER LIMIT ?)",
+            NG_RULE_READ_ARGS + MAX_COMPAT_NG_RULES.toString()
+        )
+        Logger.i("AndroidCompatibilityStore", "Removed $removed NG rule(s) past the $MAX_COMPAT_NG_RULES read")
+    }
+
+    private fun SQLiteDatabase.countStoredNgRules(ruleIds: List<String>): Int = ruleIds.count { id ->
+        DatabaseUtils.longForQuery(this, "SELECT EXISTS(SELECT 1 FROM compat_ng_rule WHERE rule_id=? LIMIT 1)", arrayOf(id)) != 0L
+    }
+
     private fun SQLiteDatabase.readNgRules(): List<CompatNgRule> = query(
         "compat_ng_rule",
         arrayOf("rule_id", "kind", "scope_key", "normalized_value", "created_at", "payload_json"),
-        "length(rule_id) BETWEEN 1 AND ? AND length(scope_key) BETWEEN 1 AND ? AND " +
-            "length(normalized_value) BETWEEN 1 AND ? AND length(payload_json) <= ?",
-        arrayOf(
-            MAX_COMPAT_NG_RULE_ID_CHARS.toString(),
-            MAX_COMPAT_NG_SCOPE_KEY_CHARS.toString(),
-            MAX_COMPAT_NG_VALUE_CHARS.toString(),
-            (MAX_COMPAT_NG_IMAGE_URL_CHARS + MAX_COMPAT_NG_MEMO_CHARS + 512).toString()
-        ),
+        NG_RULE_READ_SELECTION,
+        NG_RULE_READ_ARGS,
         null,
         null,
-        "created_at DESC",
+        NG_RULE_READ_ORDER,
         MAX_COMPAT_NG_RULES.toString()
     ).use { cursor ->
         buildList {
@@ -3029,7 +3169,7 @@ class AndroidCompatibilityStore(
         const val HISTORY_LIMIT_TRIGGER = 200
         const val HISTORY_LIMIT_AFTER_TRIM = 190
         const val MAX_HISTORY_TOMBSTONES = 1_000
-        const val MAX_COMPAT_BOARDS = 100
+        const val MAX_COMPAT_BOARDS = com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS
         const val MAX_COMPAT_PREFERENCES = 4_096
         const val MAX_COMPAT_TRANSIENT_PREFERENCES = 2_048
         const val TRANSIENT_PREFERENCE_TRIM_TO = 1_536L

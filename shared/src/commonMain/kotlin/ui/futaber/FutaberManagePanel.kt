@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -244,8 +245,9 @@ internal fun FutaberManagePanel(
                         if (notifications.isEmpty()) {
                             FutaberMessage("一致したスレッドはまだありません")
                         } else {
+                            val rowKeys = remember(notifications) { futaberNotificationRowKeys(notifications) }
                             LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("futaber-notifications-list")) {
-                                items(notifications, key = { it.history.canonicalUrl }) { result ->
+                                itemsIndexed(notifications, key = { index, _ -> rowKeys[index] }) { _, result ->
                                     val openable = futaberRefForWatchResult(result, boards) != null
                                     val addRequest = if (openable || onAddBoardAndOpen == null) null else futaberBoardAddRequestForWatchResult(result)
                                     ManageRow(

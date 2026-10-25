@@ -458,6 +458,17 @@ class CompatPreferenceSchemaTest {
         )
     }
 
+    /** L53: attachments kept in a folder per post are counted too. */
+    @Test
+    fun attachmentCacheUsageCountsTheFilesInsideEachPostsFolder() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        fileSystem.createDirectory("private/compat_post_attachments").getOrThrow()
+        fileSystem.writeBytes("private/compat_post_attachments/compat_tab_1/drawing_a.png", ByteArray(3)).getOrThrow()
+        fileSystem.writeBytes("private/compat_post_attachments/build_b/compressed_b.jpg", ByteArray(5)).getOrThrow()
+        fileSystem.writeBytes("private/compat_post_attachments/loose.png", ByteArray(7)).getOrThrow()
+        assertEquals(15L, compatibilityAttachmentCacheUsageBytes(fileSystem))
+    }
+
     @Test
     fun attachmentCacheUsageMeasuresTheActualTemporaryFiles() = runBlocking {
         val fileSystem = InMemoryFileSystem()

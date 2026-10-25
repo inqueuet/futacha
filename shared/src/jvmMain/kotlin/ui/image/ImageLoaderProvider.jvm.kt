@@ -20,3 +20,6 @@ actual fun getPlatformCacheAvailableBytes(
 ): Long? = com.valoser.futacha.shared.desktop.DesktopEnvironment.current?.cacheDirectory?.usableSpace
 
 actual fun isPlatformRemovableCacheAvailable(platformContext: Any?): Boolean = false
+
+internal actual fun platformImageMemoryPressureInterceptor(gate: AdaptiveImageRequestGate): coil3.intercept.Interceptor =
+    ImageMemoryPressureInterceptor(gate)

@@ -49,6 +49,10 @@ internal class DesktopCompatibilityStore(
     // False until the rows on disk are known to match memory (a fresh, legacy or non-partitioned profile).
     private var cacheRowsInSync = false
 
+    /** Test hook: how many thread snapshots were serialized only to measure their size (L84). */
+    internal var snapshotSizeEncodings = 0L
+        private set
+
     private val boardsState = MutableStateFlow<List<CompatBoard>>(emptyList())
     private val tabsState = MutableStateFlow<List<CompatTab>>(emptyList())
     private val historyState = MutableStateFlow<List<CompatHistoryEntry>>(emptyList())
@@ -83,16 +87,18 @@ internal class DesktopCompatibilityStore(
             if (legacyImagePhashes.isNotEmpty()) {
                 database.writeImagePhashes(legacyImagePhashes.filterValues(::isValidCompatImagePhash), nowMillis())
             }
-            val repairedPreferences = state.preferences.asSequence()
-                .filterNot { (key, _) -> isCompatImagePhashCacheKey(key) }
-                .filter { (key, value) -> isValidCompatPreference(key, value) }
-                .take(MAX_PREFERENCES)
-                .associate { it.toPair() }
+            val repairedPreferences = boundCompatPreferences(
+                state.preferences.asSequence()
+                    .filterNot { (key, _) -> isCompatImagePhashCacheKey(key) }
+                    .filter { (key, value) -> isValidCompatPreference(key, value) }
+                    .associate { it.toPair() }
+            )
             val validTabKeys = repairedTabs.mapTo(mutableSetOf(), CompatTab::key)
+            // A thread scope outlives its closed tab, as on Android (L86).
             val repairedRules = state.ngRules.asSequence()
                 .filter {
                     isValidCompatNgRule(it) &&
-                        isCompatNgScopeValid(it.kind, it.scopeKey, validBoardKeys, validTabKeys)
+                        isCompatNgScopeRetained(it.kind, it.scopeKey, validBoardKeys, validTabKeys)
                 }
                 .take(MAX_COMPAT_NG_RULES)
                 .toList()
@@ -127,17 +133,33 @@ internal class DesktopCompatibilityStore(
                 .distinctBy(CompatBuildDraft::boardKey)
                 .take(MAX_BOARDS)
                 .toList()
-            val repairedSnapshots = state.snapshots
+            val validSnapshots = state.snapshots
                 .asSequence()
                 .filter { snapshot ->
                     (snapshot.tabKey in validTabKeys || COMPAT_SHARED_SNAPSHOT_KEY_REGEX.matches(snapshot.tabKey)) &&
                         snapshot.posts.size <= MAX_COMPAT_THREAD_SNAPSHOT_POSTS
                 }
                 .distinctBy(CompatThreadSnapshot::tabKey)
-                .take(MAX_THREAD_SNAPSHOTS)
                 .toList()
+            // Keep the most recently used snapshots. The rows come back in database order, so a
+            // plain take() dropped the newest threads (L84, as on iOS).
+            val repairedSnapshots = if (validSnapshots.size <= MAX_THREAD_SNAPSHOTS) validSnapshots else {
+                val kept = validSnapshots.sortedByDescending(::snapshotLastUsed)
+                    .take(MAX_THREAD_SNAPSHOTS)
+                    .mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
+                Logger.w(
+                    "DesktopCompatibilityStore",
+                    "Trimming ${validSnapshots.size - kept.size} least recently used thread snapshots"
+                )
+                validSnapshots.filter { snapshot -> snapshot.tabKey in kept }
+            }
             val repairedSnapshotKeys = repairedSnapshots.mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
             val repairedSnapshotAccess = state.snapshotAccess.filterKeys { it in repairedSnapshotKeys }
+            // A tab whose snapshot is gone (dropped here or by an older build) must not keep
+            // claiming that revision.
+            val revisedTabs = repairedTabs.map { tab ->
+                if (tab.snapshotRevision != 0L && tab.key !in repairedSnapshotKeys) tab.copy(snapshotRevision = 0L) else tab
+            }
             val repairedCatalogPreferences = state.catalogPreferences
                 .asSequence()
                 .filter { it.boardKey in validBoardKeys }
@@ -180,7 +202,7 @@ internal class DesktopCompatibilityStore(
                 .map { row -> row.copy(attemptCount = row.attemptCount.coerceAtLeast(0)) }
                 .toList()
             if (
-                repairedBoards != state.boards || repairedTabs != state.tabs || repairedHistory != state.history ||
+                repairedBoards != state.boards || revisedTabs != state.tabs || repairedHistory != state.history ||
                 repairedRules.size != state.ngRules.size ||
                 repairedPreferences.size != state.preferences.size || pending != state.closedBatch ||
                 repairedReplyDrafts != state.replyDrafts || repairedBuildDrafts != state.buildDrafts ||
@@ -192,7 +214,7 @@ internal class DesktopCompatibilityStore(
             ) {
                 state = state.copy(
                     boards = repairedBoards,
-                    tabs = repairedTabs,
+                    tabs = revisedTabs,
                     history = repairedHistory,
                     preferences = repairedPreferences,
                     ngRules = repairedRules,
@@ -281,6 +303,12 @@ internal class DesktopCompatibilityStore(
     }
 
     override suspend fun deleteBoard(boardKey: String) = mutate {
+        // The board's thread scopes (its tabs, closed tabs and history) go with it, like its board scope (L86).
+        val boardThreadKeys = compatBoardThreadScopeKeys(
+            boardKey,
+            it.tabs + it.closedBatch?.tabs.orEmpty().map(ClosedCompatTab::tab),
+            it.history
+        )
         val remainingBoards = it.boards.filterNot { board -> board.key == boardKey }
         val remainingTabs = it.tabs.filterNot { tab -> tab.boardKey == boardKey }
         val remainingTabKeys = remainingTabs.mapTo(mutableSetOf(), CompatTab::key)
@@ -301,7 +329,7 @@ internal class DesktopCompatibilityStore(
             catalogPreferences = it.catalogPreferences.filterNot { pref -> pref.boardKey == boardKey },
             catalogSnapshots = it.catalogSnapshots.filterNot { snapshot -> snapshot.boardKey == boardKey },
             droppedItems = it.droppedItems.filterNot { dropped -> dropped.boardKey == boardKey },
-            ngRules = it.ngRules.filterNot { rule -> rule.isScopedToRemovedBoard(boardKey) },
+            ngRules = it.ngRules.filterNot { rule -> rule.isScopedToRemovedBoard(boardKey, boardThreadKeys) },
             // としあき(仮)'s "そ順"/"監視" of the board: a board added again starts in its own order.
             preferences = compatCatalogExtraModePreferenceKey(boardKey).let { key ->
                 if (key in it.preferences) it.preferences - key else it.preferences
@@ -544,6 +572,7 @@ internal class DesktopCompatibilityStore(
             snapshotAccess = it.snapshotAccess + (snapshot.tabKey to nowMillis())
         )
         enforceSnapshotQuotaLocked()
+        enforceSnapshotCountLocked()
         true
     }
 
@@ -581,6 +610,7 @@ internal class DesktopCompatibilityStore(
             snapshotAccess = it.snapshotAccess + (shared.tabKey to nowMillis())
         )
         enforceSnapshotQuotaLocked()
+        enforceSnapshotCountLocked()
         true
     }
 
@@ -618,10 +648,13 @@ internal class DesktopCompatibilityStore(
                     updatedAtMillis = nowMillis()
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
-                // Nothing is published, as on Android (re-audit M25: every scroll stop
-                // sorted the 20,000 history rows again and re-emitted the tabs, so the
-                // whole としあき(仮) screen was rebuilt). `state` carries the anchor into
-                // the next ordinary mutation.
+                // Publish only the patched tab and history row, as Android does (L80). Not
+                // publishing at all (re-audit M25) left the screen with the last published
+                // anchor, so coming back to the thread (from settings, say) restored an old
+                // position. Patching keeps the order and the other rows, so the 20,000
+                // history rows are not sorted again.
+                tabsState.value = tabsState.value.withCompatTabScrollAnchor(tabKey, anchor)
+                historyState.value = historyState.value.withCompatHistoryScrollAnchor(tab.canonicalUrl, anchor)
             }
         }
 
@@ -755,7 +788,7 @@ internal class DesktopCompatibilityStore(
 
     override suspend fun savePreference(key: String, value: String) = mutate {
         requireValidCompatPreference(key, value)
-        state = it.copy(preferences = it.preferences + (key to value))
+        state = it.copy(preferences = boundCompatPreferences(it.preferences + (key to value)))
         // Only the cache-size setting changes the snapshot quota. Checking it for
         // every preference encoded all cached snapshots on each save.
         if (key == COMPAT_THREAD_CACHE_PREFERENCE_KEY) enforceSnapshotQuotaLocked()
@@ -789,7 +822,7 @@ internal class DesktopCompatibilityStore(
             values.forEach { (key, value) -> if (value != null) requireValidCompatPreference(key, value) }
             val updated = it.preferences.toMutableMap()
             values.forEach { (key, value) -> if (value == null) updated.remove(key) else updated[key] = value }
-            state = it.copy(preferences = updated)
+            state = it.copy(preferences = boundCompatPreferences(updated))
             if (COMPAT_THREAD_CACHE_PREFERENCE_KEY in values) enforceSnapshotQuotaLocked()
         }
     }
@@ -874,7 +907,7 @@ internal class DesktopCompatibilityStore(
             boards = nextBoards,
             tabs = trimmedTabs,
             history = keptHistory,
-            preferences = nextPreferences,
+            preferences = boundCompatPreferences(nextPreferences),
             catalogPreferences = nextCatalogPrefs,
             ngRules = nextRules,
             toolbars = nextToolbars,
@@ -1084,6 +1117,14 @@ internal class DesktopCompatibilityStore(
         true
     }
 
+    override suspend fun replaceNgRule(previousRuleId: String, rule: CompatNgRule): Boolean = mutate {
+        val replacement = planCompatNgRuleReplacement(it.ngRules, previousRuleId, rule,
+            it.boards.mapTo(mutableSetOf(), CompatBoard::key), it.tabs.mapTo(mutableSetOf(), CompatTab::key))
+            ?: return@mutate false
+        state = it.copy(ngRules = replacement)
+        true
+    }
+
     override suspend fun deleteNgRule(ruleId: String) = mutate {
         state = it.copy(ngRules = it.ngRules.filterNot { rule -> rule.id == ruleId })
     }
@@ -1130,6 +1171,7 @@ internal class DesktopCompatibilityStore(
             val result = block(state)
             if (state != previousState) {
                 try {
+                    require(state.boards.size <= MAX_BOARDS) { "登録できる板は${MAX_BOARDS}件までです" }
                     persistLocked()
                     publishLocked()
                 } catch (error: Throwable) {
@@ -1206,7 +1248,6 @@ internal class DesktopCompatibilityStore(
             readLegacyState(path)
         }
         state = databaseState ?: legacyState ?: PersistedCompatibilityState()
-        if (databaseState?.partitionedCaches == true) loadPartitionedCachesLocked()
         val pendingAnchors = runSuspendCatchingPreservingCancellation {
             database.readPendingScrollAnchors()
         }.getOrDefault(emptyMap())
@@ -1215,6 +1256,7 @@ internal class DesktopCompatibilityStore(
             }
             .filterValues { it != null }
             .mapValues { (_, anchor) -> anchor!! }
+        val rebuildCacheStorage = databaseState?.partitionedCaches == true && loadPartitionedCachesLocked()
         if (pendingAnchors.isNotEmpty()) {
             val tabKeysByCanonicalUrl = state.tabs.associate { tab -> tab.canonicalUrl to tab.key }
             state = state.copy(
@@ -1236,6 +1278,13 @@ internal class DesktopCompatibilityStore(
             .filterKeys { it in snapshotKeys }
         if (pendingSnapshotAccess.isNotEmpty()) {
             state = state.copy(snapshotAccess = state.snapshotAccess + pendingSnapshotAccess)
+        }
+        if (rebuildCacheStorage) {
+            // The latest read positions lived outside the profile row. Absorb them
+            // before replacing the database; every user-owned record remains in metadata.
+            val payload = json.encodeToString(PersistedCompatibilityState.serializer(), metadataOf(state))
+            val backupPath = database.rebuildWithoutCacheRecords(payload, nowMillis())
+            Logger.w("DesktopCompatibilityStore", "Rebuilt damaged cache storage; original kept at $backupPath")
         }
         if (databaseState == null && legacyState != null) {
             database.writePayload(
@@ -1284,12 +1333,19 @@ internal class DesktopCompatibilityStore(
      * Loads the partitioned caches. The rows are refetchable, so an undecodable or
      * misfiled one is logged and deleted instead of failing initialization on every launch.
      */
-    private suspend fun loadPartitionedCachesLocked() {
+    private suspend fun loadPartitionedCachesLocked(): Boolean {
+        var rebuildStorage = false
         val read = runSuspendCatchingPreservingCancellation { database.readCacheRecords() }
             .getOrElse { error ->
                 if (!error.isRecoverableDesktopCompatibilityDatabaseCorruption()) throw error
                 Logger.e("DesktopCompatibilityStore", "Dropping unreadable compatibility cache records", error)
-                database.clearCacheRecords()
+                runSuspendCatchingPreservingCancellation { database.clearCacheRecords() }
+                    .getOrElse { clearError ->
+                        if (!clearError.isRecoverableDesktopCompatibilityDatabaseCorruption()) throw clearError
+                        // DELETE also reads the damaged b-tree. Rebuild after the
+                        // durable profile and scroll overlay have both been loaded.
+                        rebuildStorage = true
+                    }
                 DesktopCompatibilityDatabase.CacheRecordsRead(emptyMap(), emptyList())
             }
         val snapshots = mutableListOf<CompatThreadSnapshot>()
@@ -1328,6 +1384,7 @@ internal class DesktopCompatibilityStore(
         persistedCaches = cacheRecords()
         persistedCacheBytes = acceptedBytes
         cacheRowsInSync = true
+        return rebuildStorage
     }
 
     private suspend fun persistLocked() {
@@ -1427,9 +1484,7 @@ internal class DesktopCompatibilityStore(
             if (size > Long.MAX_VALUE - total) Long.MAX_VALUE else total + size
         }
         if (usage <= quota) return false
-        val ordered = snapshotsWithSizes.sortedBy { (snapshot, _) ->
-            state.snapshotAccess[snapshot.tabKey] ?: snapshot.fetchedAtEpochMillis
-        }
+        val ordered = snapshotsWithSizes.sortedBy { (snapshot, _) -> snapshotLastUsed(snapshot) }
         val remove = mutableSetOf<String>()
         ordered.forEach { (snapshot, size) ->
             if (usage > quota) {
@@ -1438,16 +1493,39 @@ internal class DesktopCompatibilityStore(
             }
         }
         if (remove.isEmpty()) return false
+        dropSnapshotsLocked(remove)
+        return true
+    }
+
+    /** Evicts the least recently used snapshots beyond the count cap at runtime, not only at launch (L84). */
+    private fun enforceSnapshotCountLocked() {
+        val excess = state.snapshots.size - MAX_THREAD_SNAPSHOTS
+        if (excess <= 0) return
+        dropSnapshotsLocked(
+            state.snapshots.sortedBy(::snapshotLastUsed).take(excess).mapTo(mutableSetOf(), CompatThreadSnapshot::tabKey)
+        )
+    }
+
+    private fun snapshotLastUsed(snapshot: CompatThreadSnapshot): Long =
+        state.snapshotAccess[snapshot.tabKey] ?: snapshot.fetchedAtEpochMillis
+
+    private fun dropSnapshotsLocked(remove: Set<String>) {
         state = state.copy(
             snapshots = state.snapshots.filterNot { snapshot -> snapshot.tabKey in remove },
             snapshotAccess = state.snapshotAccess - remove,
             tabs = state.tabs.map { tab -> if (tab.key in remove) tab.copy(snapshotRevision = 0L) else tab }
         )
-        return true
     }
 
-    private fun encodedSnapshotBytes(snapshot: CompatThreadSnapshot): Long =
-        json.encodeToString(CompatThreadSnapshot.serializer(), snapshot).encodeToByteArray().size.toLong()
+    // A snapshot unchanged since its row was written or read is measured by that row. Encoding
+    // every cached thread to check the quota on each save cost a full pass over the cache (L84,
+    // as on iOS).
+    private fun encodedSnapshotBytes(snapshot: CompatThreadSnapshot): Long {
+        val key = threadCacheKey(snapshot)
+        if (persistedCaches[key] === snapshot) persistedCacheBytes[key]?.let { return it }
+        snapshotSizeEncodings++
+        return json.encodeToString(CompatThreadSnapshot.serializer(), snapshot).encodeToByteArray().size.toLong()
+    }
 
     private fun sumEncodedSnapshotBytes(snapshots: List<CompatThreadSnapshot>): Long =
         snapshots.fold(0L) { total, snapshot ->
@@ -1561,10 +1639,9 @@ internal class DesktopCompatibilityStore(
         const val HISTORY_LIMIT_AFTER_TRIM = 190
         const val MAX_TABS = TAB_LIMIT_TRIGGER
         const val MAX_HISTORY = HISTORY_LIMIT_TRIGGER
-        const val MAX_BOARDS = 100
+        const val MAX_BOARDS = com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS
         const val MAX_THREAD_SNAPSHOTS = 512
         const val MAX_HISTORY_TOMBSTONES = 1_000
-        const val MAX_PREFERENCES = 4_096
         const val MAX_TOOLBAR_ITEMS = 64
         const val MAX_COMPAT_BOARD_FIELD_CHARS = 200
         const val MAX_COMPAT_URL_CHARS = 500
@@ -1575,6 +1652,49 @@ internal class DesktopCompatibilityStore(
         const val UNDO_WINDOW_MILLIS = 7_000L
         val COMPAT_SHARED_SNAPSHOT_KEY_REGEX = Regex("^compat_tab_[0-9a-f]{16}$")
     }
+}
+
+internal const val DESKTOP_COMPAT_MAX_PREFERENCES = 16_384
+internal const val DESKTOP_COMPAT_PREFERENCES_TRIM_TO = 14_336
+
+/**
+ * Per-thread/per-board markers the UI writes as preferences (the same as iOS's). They accumulate
+ * without bound and can be recomputed or safely forgotten, unlike settings.
+ */
+private val TRANSIENT_COMPAT_PREFERENCE_PREFIXES = listOf(
+    "compat.ownpost.",
+    "compat.catalog.lastFetchThreadCount."
+)
+
+internal fun isTransientCompatPreferenceKey(key: String): Boolean =
+    TRANSIENT_COMPAT_PREFERENCE_PREFIXES.any(key::startsWith)
+
+/**
+ * Bounds the preference map without ever dropping a real setting, as iOS does (L84).
+ *
+ * Only transient markers are pruned, oldest insertion first, down to
+ * [DESKTOP_COMPAT_PREFERENCES_TRIM_TO] so the next saves do not prune again. The former
+ * load-time `take(4096)` kept map order and so permanently lost the settings added after
+ * enough markers had accumulated, while nothing bounded the map at runtime.
+ */
+internal fun boundCompatPreferences(preferences: Map<String, String>): Map<String, String> {
+    if (preferences.size <= DESKTOP_COMPAT_MAX_PREFERENCES) return preferences
+    val excess = preferences.size - DESKTOP_COMPAT_PREFERENCES_TRIM_TO
+    val drop = preferences.keys.asSequence()
+        .filter(::isTransientCompatPreferenceKey)
+        .take(excess)
+        .toSet()
+    Logger.w(
+        "DesktopCompatibilityStore",
+        "Pruned ${drop.size} transient compatibility preferences (${preferences.size} stored)"
+    )
+    if (preferences.size - drop.size > DESKTOP_COMPAT_MAX_PREFERENCES) {
+        Logger.w(
+            "DesktopCompatibilityStore",
+            "Keeping ${preferences.size - drop.size} compatibility preferences above the soft cap"
+        )
+    }
+    return if (drop.isEmpty()) preferences else preferences.filterKeys { key -> key !in drop }
 }
 
 @Serializable

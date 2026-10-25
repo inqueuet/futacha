@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.desktop
 
+import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.service.CatalogWatchAlertMatch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -18,10 +19,10 @@ class DesktopWatchNotificationsTest {
             val ledger = File(directory, "ledger.tsv")
             val delivered = mutableListOf<String>()
             val first = DesktopWatchNotifications(ledger) { _, title, body, url ->
-                assertTrue(title.contains("二次元裏")); assertEquals("通知のテスト", body); delivered += url
+                assertTrue(title.contains("二次元裏")); assertEquals("通知のテスト", body); delivered += checkNotNull(url)
             }
             first.notify(listOf(match("123"), match("123"))) { true }
-            val restarted = DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += url }
+            val restarted = DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += checkNotNull(url) }
             restarted.notify(listOf(match("123"), match("456"))) { true }
             assertEquals(listOf("https://may.2chan.net/b/res/123.htm", "https://may.2chan.net/b/res/456.htm"), delivered)
         } finally { directory.deleteRecursively() }
@@ -36,7 +37,7 @@ class DesktopWatchNotificationsTest {
             val notifier = DesktopWatchNotifications(ledger, move = { source, target, options ->
                 if (failing) throw java.io.IOException("ledger locked")
                 Files.move(source, target, *options)
-            }) { _, _, _, url -> delivered += url }
+            }) { _, _, _, url -> delivered += checkNotNull(url) }
             notifier.notify(listOf(match("123"))) { true }
             assertFalse(ledger.exists())
             notifier.notify(listOf(match("123"), match("456"))) { true }
@@ -45,7 +46,7 @@ class DesktopWatchNotificationsTest {
             notifier.notify(emptyList()) { true }
             assertTrue(ledger.isFile)
             assertFalse(File(directory, "ledger.tsv.pending").exists())
-            DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += url }
+            DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += checkNotNull(url) }
                 .notify(listOf(match("123"), match("456"))) { true }
             assertEquals(2, delivered.size)
         } finally { directory.deleteRecursively() }
@@ -62,7 +63,7 @@ class DesktopWatchNotificationsTest {
             }) { _, _, _, _ -> }.notify(listOf(match("123"))) { true }
             assertEquals(3, moves)
             val retried = mutableListOf<String>()
-            DesktopWatchNotifications(ledger) { _, _, _, url -> retried += url }.notify(listOf(match("123"))) { true }
+            DesktopWatchNotifications(ledger) { _, _, _, url -> retried += checkNotNull(url) }.notify(listOf(match("123"))) { true }
             assertTrue(retried.isEmpty())
         } finally { directory.deleteRecursively() }
     }
@@ -77,7 +78,7 @@ class DesktopWatchNotificationsTest {
             }
             assertFailsWith<IllegalStateException> { notifier.notify(listOf(match("123"), match("456"))) { true } }
             val retried = mutableListOf<String>()
-            DesktopWatchNotifications(ledger) { _, _, _, url -> retried += url }
+            DesktopWatchNotifications(ledger) { _, _, _, url -> retried += checkNotNull(url) }
                 .notify(listOf(match("123"), match("456"))) { true }
             assertEquals(listOf("https://may.2chan.net/b/res/456.htm"), retried)
         } finally { directory.deleteRecursively() }
@@ -133,8 +134,37 @@ class DesktopWatchNotificationsTest {
         try {
             val ledger = File(directory, "ledger.tsv")
             val notifier = DesktopWatchNotifications(ledger) { _, _, _, _ -> fail("Invalid thread reached OS") }
-            assertFailsWith<IllegalArgumentException> { notifier.notify(listOf(match("../123"))) { true } }
+            notifier.notify(listOf(match("../123"))) { true }
             assertFalse(ledger.exists())
+            // It is skipped, not thrown, so the matches after it still arrive (L126).
+            val delivered = mutableListOf<String>()
+            DesktopWatchNotifications(ledger) { _, _, _, url -> delivered += checkNotNull(url) }
+                .notify(listOf(match("../123"), match("456"))) { true }
+            assertEquals(listOf("https://may.2chan.net/b/res/456.htm"), delivered)
+            assertFalse(ledger.readText().contains("../123"))
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun aMatchOnABoardOutside2chanIsShownWithoutALinkAndTheLaterOnesStillArrive() = runBlocking {
+        val directory = Files.createTempDirectory("futacha-notification-elsewhere").toFile()
+        try {
+            val ledger = File(directory, "ledger.tsv")
+            val delivered = mutableListOf<Pair<String, String?>>()
+            val elsewhere = CatalogWatchAlertMatch("77", "other", "よそ", "https://example.com/b/", "よその板", "", 0, 1)
+            // As the OS integration requires: a link is only ever an official thread, which a click opens.
+            val notifier = DesktopWatchNotifications(ledger) { _, _, body, url ->
+                require(url == null || canonicalizeThreadUrl(url) != null) { "Not an official thread: $url" }
+                delivered += body to url
+            }
+            notifier.notify(listOf(elsewhere, match("123"))) { true }
+            assertEquals(
+                listOf<Pair<String, String?>>("よその板" to null, "通知のテスト" to "https://may.2chan.net/b/res/123.htm"),
+                delivered
+            )
+            // Both were recorded, so neither is shown again.
+            DesktopWatchNotifications(ledger) { _, _, body, url -> delivered += body to url }
+                .notify(listOf(elsewhere, match("123"))) { true }
+            assertEquals(2, delivered.size)
         } finally { directory.deleteRecursively() }
     }
 }

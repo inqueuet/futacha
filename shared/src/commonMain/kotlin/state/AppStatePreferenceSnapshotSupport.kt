@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
@@ -78,6 +79,11 @@ internal class AppStatePreferenceSnapshotCoordinator(
             onWriteFailure = { error -> throw error },
             rethrowIfCancellation = rethrowIfCancellation
         )
+    }
+
+    /** Drops the cached per-board watch words, so the next edit starts from the stored map (after a reset, L87). */
+    suspend fun forgetBoardWatchWordMap() {
+        boardWatchWordsMutex.withLock { cachedBoardWatchWordMap = null }
     }
 
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {

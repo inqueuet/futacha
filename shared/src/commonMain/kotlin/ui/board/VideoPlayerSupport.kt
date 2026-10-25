@@ -32,7 +32,9 @@ internal data class VideoPreviewChromeState(
 internal data class VideoPlayerWebSyncState(
     val isMuted: Boolean,
     val volume: Float,
-    val areControlsVisible: Boolean
+    val areControlsVisible: Boolean,
+    /** The mode's loop option (ふたったー風). Other modes leave it off, as the page's default. */
+    val loop: Boolean = false
 )
 
 internal fun resolveReadyVideoPlayerState(isPlaying: Boolean): VideoPlayerState =
@@ -46,12 +48,43 @@ internal fun normalizeVideoPlayerVolume(
 internal fun resolveVideoPlayerWebSyncState(
     volume: Float,
     isMuted: Boolean,
-    areControlsVisible: Boolean
+    areControlsVisible: Boolean,
+    loop: Boolean = false
 ): VideoPlayerWebSyncState = VideoPlayerWebSyncState(
     isMuted = isMuted,
     volume = normalizeVideoPlayerVolume(volume, isMuted),
-    areControlsVisible = areControlsVisible
+    areControlsVisible = areControlsVisible,
+    loop = loop
 )
+
+internal const val WEB_VIDEO_SYNC_APPLIED_RESULT = "applied"
+
+/** The script that keeps the embedded (WKWebView) player in step with the screen's controls and the loop option. */
+internal fun buildWebVideoSyncJavaScript(state: VideoPlayerWebSyncState): String = """
+    (function(){
+        var v=document.querySelector('video');
+        if(!v){return 'missing';}
+        v.muted=${state.isMuted};
+        v.volume=${state.volume};
+        v.controls=${state.areControlsVisible};
+        v.loop=${state.loop};
+        return '$WEB_VIDEO_SYNC_APPLIED_RESULT';
+    })()
+""".trimIndent()
+
+/**
+ * Run once when the embedded page has loaded (L116): the loop option, and play() only when the mode asks to play
+ * automatically (ふたったー風's setting; other modes never pass it, so their videos still wait for the user).
+ */
+internal fun buildWebVideoStartJavaScript(loop: Boolean, autoPlay: Boolean): String = """
+    (function(){
+        var v=document.querySelector('video');
+        if(!v){return 'missing';}
+        v.loop=$loop;
+        ${if (autoPlay) "var p=v.play(); if(p&&p.catch){p.catch(function(){});}" else ""}
+        return '$WEB_VIDEO_SYNC_APPLIED_RESULT';
+    })()
+""".trimIndent()
 
 internal fun shouldApplyVideoPlayerWebSyncState(
     appliedState: VideoPlayerWebSyncState?,

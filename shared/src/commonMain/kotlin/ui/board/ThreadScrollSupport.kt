@@ -19,24 +19,28 @@ internal data class ThreadScrollRestoreTarget(
 )
 
 /** Kept for one open thread; failed loads and equal refreshes leave its new-post boundary intact. */
-internal class ThreadNewPostTracker(private val initialKnownPostCount: Int? = null) {
+internal class ThreadNewPostTracker(
+    private val initialKnownPostCount: Int? = null,
+    private val initialKnownLastPostId: String? = null
+) {
     private var knownPostIds: Set<String>? = null
-    private var awaitingHistoryBaseline = initialKnownPostCount != null
+    private var awaitingInitialResponse = true
     var newPostIds: Set<String> = emptySet()
         private set
 
-    fun onPostsLoaded(posts: List<Post>) {
+    fun onPostsLoaded(posts: List<Post>, complete: Boolean = true) {
         val currentIds = posts.mapTo(mutableSetOf()) { it.id }
         val knownIds = knownPostIds
         val addedIds = when {
-            awaitingHistoryBaseline -> {
-                val count = initialKnownPostCount!!.coerceAtLeast(0)
-                if (posts.size >= count) awaitingHistoryBaseline = false
-                posts.drop(count).mapTo(mutableSetOf()) { it.id }
+            awaitingInitialResponse -> {
+                initialKnownPostCount?.let { count ->
+                    threadPostsAfterBaseline(posts, count, initialKnownLastPostId).mapTo(mutableSetOf()) { it.id }
+                }.orEmpty()
             }
             knownIds == null -> emptySet()
             else -> currentIds - knownIds
         }
+        if (complete) awaitingInitialResponse = false
         newPostIds = if (addedIds.isNotEmpty()) addedIds else newPostIds.intersect(currentIds)
         knownPostIds = knownIds.orEmpty() + currentIds
     }

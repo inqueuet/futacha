@@ -57,6 +57,11 @@ internal suspend fun sendReportAndOptionalNg(
     }
 }
 
+/** The DEL confirmation's body; with the iOS review wording it says what the "通報" button sends (L137). */
+internal fun futachaReportConfirmationBody(postNo: String, reviewCompliance: Boolean): String =
+    if (reviewCompliance) "No.$postNo を不適切な投稿として、ふたば☆ちゃんねるの掲示板管理者へ通報します。"
+    else "No.$postNo をふたば☆ちゃんねるの掲示板管理者へ削除依頼します。"
+
 internal enum class DelAndNgGate { PROCEED, BUSY, ARCHIVE_READ_ONLY }
 
 /** "DEL依頼＋NG" must pass the same gates as the plain DEL request (writable board, no other action running). */

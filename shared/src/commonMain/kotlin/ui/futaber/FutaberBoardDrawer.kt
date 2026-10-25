@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -104,7 +107,12 @@ internal fun FutaberBoardDrawer(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(16.dp)
             )
-            LazyColumn(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding().testTag("futaber-board-list"),
+            // The edit row below keeps the bottom inset; the list only avoids a side navigation bar (L28: both took the
+            // bottom inset, leaving a gap the height of the navigation bar under the boards).
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars.only(
+                    androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))
+                .testTag("futaber-board-list"),
                 verticalArrangement = if (boardsFromBottom) androidx.compose.foundation.layout.Arrangement.Bottom else androidx.compose.foundation.layout.Arrangement.Top) {
                 itemsIndexed(shownBoards, key = { _, item -> item.id }) { index, item ->
                     val selected = item.id == selectedBoardId

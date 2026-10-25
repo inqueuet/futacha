@@ -7,6 +7,10 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.isCompatTypedThreadReference
+import com.valoser.futacha.shared.compat.compatTypedThreadReferenceEditValue
+import com.valoser.futacha.shared.compat.COMPAT_THREAD_IDENTITY_EDIT_LIMIT
+
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
@@ -1174,6 +1178,7 @@ internal fun CompatNgRuleManagementDialog(
         ) }
     }
     editingRule?.let { rule ->
+        val typedReference = isThreadWordReference && isCompatTypedThreadReference(rule.kind)
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { editingRule = null },
             title = {
@@ -1222,7 +1227,7 @@ internal fun CompatNgRuleManagementDialog(
                             TextField(
                                 value = editValue,
                                 onValueChange = {
-                                    editValue = it.take(referenceWordMaxLength)
+                                    editValue = it.take(if (typedReference) COMPAT_THREAD_IDENTITY_EDIT_LIMIT else referenceWordMaxLength)
                                     editValidationMessage = null
                                 },
                                 modifier = Modifier
@@ -1307,7 +1312,8 @@ internal fun CompatNgRuleManagementDialog(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val normalizedEditValue = normalizeCompatSearchText(
+                    val typedValue = if (typedReference) compatTypedThreadReferenceEditValue(rule.kind, editValue) else null
+                    val normalizedEditValue = if (typedReference) typedValue else normalizeCompatSearchText(
                         if (isThreadWordReference) cleanCompatThreadReferenceWord(editValue) else editValue
                     )
                     val originalDisplayValue = if (isThreadWordReference) {
@@ -1315,18 +1321,24 @@ internal fun CompatNgRuleManagementDialog(
                     } else {
                         rule.normalizedValue
                     }
-                    val unchanged = normalizedEditValue == normalizeCompatSearchText(originalDisplayValue) &&
+                    val unchanged = normalizedEditValue == (if (typedReference) rule.normalizedValue else normalizeCompatSearchText(originalDisplayValue)) &&
                         editGlobalScope == (rule.scopeKey == "*")
-                    if (isWordReference && editValue.isBlank()) {
+                    val duplicate = if (typedReference) rules.any {
+                        it.id != rule.id && it.kind == rule.kind && it.normalizedValue == typedValue &&
+                            (it.scopeKey == "*") == editGlobalScope
+                    } else hasReferenceDuplicate(editValue, editGlobalScope, rule.id)
+                    if (typedReference && typedValue == null) {
+                        editValidationMessage = if (rule.kind == CompatNgKind.THREAD_POST_NO) "レス番号を入力してください" else "IDまたはIPを入力してください"
+                    } else if (isWordReference && editValue.isBlank()) {
                         editValidationMessage = "単語を入力して下さい"
                     } else if (
-                        referenceKind == CompatNgKind.THREAD_REFUSE &&
+                        !typedReference && referenceKind == CompatNgKind.THREAD_REFUSE &&
                         isCompatThreadRefuseForbidden(editValue)
                     ) {
                         editValidationMessage = "登録できない単語です"
                     } else if (
                         isWordReference &&
-                        (unchanged || hasReferenceDuplicate(editValue, editGlobalScope, rule.id))
+                        (unchanged || duplicate)
                     ) {
                         editValidationMessage = "既に登録されているか、または変更がありません"
                     } else {

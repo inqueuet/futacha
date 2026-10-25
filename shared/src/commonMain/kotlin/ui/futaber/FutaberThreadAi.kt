@@ -265,7 +265,7 @@ internal fun FutaberThreadAiCommands(
         }
         target.consume(received)
         val message = futaberRunThreadAiCommand(
-            received, scope, listState, reader, latestRows, latestQuery, latestHit,
+            received, scope, listState, reader, latestRows, { latestRows }, latestQuery, latestHit,
             onSearchHit, onSearch, onOpenMenu, onOpenGallery, onRefresh, onOpenSave
         )
         message?.let(target.notify)
@@ -278,6 +278,7 @@ private fun futaberRunThreadAiCommand(
     listState: LazyListState,
     reader: FutaberReadAloud,
     rows: List<FutaberRow>,
+    currentRows: () -> List<FutaberRow>,
     query: String,
     searchHit: Int,
     onSearchHit: (Int) -> Unit,
@@ -302,10 +303,7 @@ private fun futaberRunThreadAiCommand(
         rows.isEmpty() -> "読み上げるレスがありません"
         else -> {
             // As the menu's "読み上げを開始": from the first post on screen, the posts as they are listed now.
-            val readPosts = rows.map { it.post }
-            reader.start(readPosts, listState.firstVisibleItemIndex) { index ->
-                futaberRowPositionOfPost(rows, readPosts.getOrNull(index)?.id)?.let { listState.animateScrollToItem(it) }
-            }
+            futaberStartReadAloudFollowing(reader, rows, listState.firstVisibleItemIndex, currentRows) { listState.animateScrollToItem(it) }
             "読み上げを開始しました"
         }
     }
@@ -336,4 +334,21 @@ private fun futaberRunThreadAiCommand(
     FutachaAiAction.OpenGallery -> if (onOpenGallery()) "画像一覧を開きました" else "このスレッドには画像がありません"
     FutachaAiAction.SaveCurrentThread -> if (onOpenSave()) null else "このスレッドは保存できません"
     else -> futaberAiUnsupportedNotice(command)
+}
+
+/**
+ * Reads the posts of [rowsAtStart] and scrolls to each one where it is in the rows shown at that moment (L112: the AI
+ * command kept the rows of when it arrived, so after a search or NG changed the list it scrolled to the wrong row).
+ */
+internal fun futaberStartReadAloudFollowing(
+    reader: FutaberReadAloud,
+    rowsAtStart: List<FutaberRow>,
+    firstVisibleRow: Int,
+    currentRows: () -> List<FutaberRow>,
+    scrollTo: suspend (Int) -> Unit
+) {
+    val readPosts = rowsAtStart.map { it.post }
+    reader.start(readPosts, firstVisibleRow) { index ->
+        futaberRowPositionOfPost(currentRows(), readPosts.getOrNull(index)?.id)?.let { scrollTo(it) }
+    }
 }

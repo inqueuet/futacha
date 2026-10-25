@@ -30,17 +30,26 @@ internal interface SpeechBackend {
     fun configure(settings: SpeechSettings)
     suspend fun prepare()
     suspend fun speak(text: String)
+    fun interrupt() { stop() }
     fun stop()
     fun close()
 }
 
 /** Existing one-argument construction remains an OS-only compatibility API. */
-class TextSpeaker internal constructor(private val context: Any?, private val runtime: SpeechRuntime?) {
+class TextSpeaker internal constructor(
+    private val context: Any?,
+    private val runtime: SpeechRuntime?,
+    systemEngine: () -> SpeechBackend = { createSystemSpeechEngine(context) }
+) {
     constructor(platformContext: Any?) : this(platformContext, null)
-    private val system = lazy { createSystemSpeechEngine(context) }
+    private val system = lazy(systemEngine)
     private val voice = lazy { requireNotNull(runtime).createEngine() }
     private val configuration = kotlinx.coroutines.flow.MutableStateFlow(SpeechSettings())
     private val closed = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private val fallbackNotified = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private fun notifyFallbackOnce() {
+        if (runtime != null && fallbackNotified.compareAndSet(false, true)) runtime.notifyFallback()
+    }
     private var effective: SpeechBackend? = null
     val supportsPitch: Boolean get() = if (configuration.value.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON) true else system.value.supportsPitch
     suspend fun availableVoices(): List<SpeechVoice> = system.value.availableVoices()
@@ -55,7 +64,7 @@ class TextSpeaker internal constructor(private val context: Any?, private val ru
             if (runtime.platform.available) runtime.assets.refresh()
             if (runtime.platform.available && runtime.assets.state.value.ready) voice.value
             else {
-                runtime.notifyFallback()
+                notifyFallbackOnce()
                 system.value
             }
         } else system.value
@@ -70,7 +79,7 @@ class TextSpeaker internal constructor(private val context: Any?, private val ru
         catch (unavailable: com.valoser.futacha.shared.audio.voicevox.VoicePackUnavailableException) {
             // The pack check runs before any audio. A corrupt/restored pack must
             // never result in a partly repeated utterance or silent voice change.
-            runtime?.notifyFallback()
+            notifyFallbackOnce()
             effective?.stop()
             val fallback = system.value
             effective = fallback
@@ -79,7 +88,12 @@ class TextSpeaker internal constructor(private val context: Any?, private val ru
             fallback.speak(text)
         }
     }
+    internal fun interrupt() {
+        if (system.isInitialized()) system.value.interrupt()
+        if (voice.isInitialized()) voice.value.interrupt()
+    }
     fun stop() {
+        fallbackNotified.value = false
         if (system.isInitialized()) system.value.stop()
         if (voice.isInitialized()) voice.value.stop()
     }

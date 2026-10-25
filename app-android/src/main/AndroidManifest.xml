@@ -111,6 +111,18 @@
             android:launchMode="singleTop"
             android:resizeableActivity="true"
             android:theme="@style/Theme.Futacha">
+        </activity>
+
+        <!-- Shares and links from other apps (M66/M79): forwarded to the app's own task, where the single
+             existing MainActivity receives them. MainActivity stays singleTop, so a launcher return brings
+             the task back as it was (an open picker is kept). -->
+        <activity
+            android:name=".ExternalIntentActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

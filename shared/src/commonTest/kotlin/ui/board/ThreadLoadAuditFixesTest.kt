@@ -47,6 +47,37 @@ class ThreadLoadAuditFixesTest {
         remoteLoadTimeoutMillis = 1_000L
     )
 
+    /** L36: a 404/410 answered with the local copy still confirms the thread gone, so its fall is recorded. */
+    @Test
+    fun aLocalCopyShownAfterAGoneAnswerConfirmsTheThreadGone() = runBlocking {
+        suspend fun load(error: Throwable) = performThreadLoadWithOfflineFallback(
+            config = config(),
+            callbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unexpected") },
+                loadRemoteByBoard = { _, _ -> throw error },
+                loadArchiveFallback = { ArchiveFallbackOutcome.NoMatch },
+                loadOfflineFallback = { page("1", "2") }
+            )
+        )
+        for (status in listOf(404, 410)) {
+            val result = load(NetworkException("gone", statusCode = status))
+            assertTrue(result.usedOffline)
+            assertTrue(result.remoteGone)
+            val initial = buildThreadInitialLoadUiOutcome(
+                page = result.page, history = emptyList(), threadId = "123", threadTitle = null, board = board,
+                overrideThreadUrl = null, usedOffline = true, confirmedGone = result.remoteGone
+            )
+            assertTrue((initial.uiState as ThreadUiState.Success).confirmedGone)
+            val manual = buildThreadManualRefreshUiOutcome(
+                page = result.page, history = emptyList(), threadId = "123", threadTitle = null, board = board,
+                overrideThreadUrl = null, usedOffline = true, confirmedGone = result.remoteGone
+            )
+            assertTrue((manual.uiState as ThreadUiState.Success).confirmedGone)
+        }
+        // Offline (no answer) is not "gone": the local copy stays an ordinary copy.
+        assertFalse(load(NetworkException("offline")).remoteGone)
+    }
+
     @Test
     fun archiveFallbackResultIsMarkedAndDoesNotConfirmAlive() = runBlocking {
         val result = performThreadLoadWithOfflineFallback(

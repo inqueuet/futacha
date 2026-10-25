@@ -5,6 +5,11 @@ package com.valoser.futacha.shared.media.prompt
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
+private val XMP_DECLARED_ENCODING = Regex("^\uFEFF?<\\?xml\\s[^>]*?\\bencoding\\s*=\\s*([\"'])([^\"']*)\\1")
+private val XMP_READABLE_ENCODINGS = setOf(
+    "utf-8", "utf8", "utf-16", "utf-16le", "utf-16be", "us-ascii", "ascii", "iso-8859-1", "iso_8859-1", "latin1"
+)
+
 internal data class XmpName(val namespace: String, val local: String)
 internal data class XmpAttribute(val name: XmpName, val value: String)
 
@@ -69,6 +74,11 @@ internal suspend fun readXmpGenerationMetadata(
         else -> bytes.decodeToString(throwOnInvalidSequence = true)
     }
     if ('\u0000' in safetyText || Regex("<!\\s*(DOCTYPE|ENTITY)", RegexOption.IGNORE_CASE).containsMatchIn(safetyText)) throw InvalidMetadata()
+    // The parsers follow the declared encoding, so one that hides markup from this check (UTF-7, EBCDIC; NSXMLParser
+    // read a UTF-7 packet's DTD and entities, L118) is refused. XMP is Unicode; ASCII and Latin-1 keep markup as it is.
+    XMP_DECLARED_ENCODING.find(safetyText)?.let { declared ->
+        if (declared.groupValues[2].lowercase() !in XMP_READABLE_ENCODINGS) throw InvalidMetadata()
+    }
     val context = currentCoroutineContext()
     val sink = XmpEventSink(budget) { context.ensureActive() }
     parseXmpDocument(bytes, sink)

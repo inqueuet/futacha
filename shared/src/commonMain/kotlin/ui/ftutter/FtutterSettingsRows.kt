@@ -139,10 +139,13 @@ internal fun FtutterChoiceSetting(
 @Composable
 internal fun FtutterSliderSetting(
     label: String, key: String, min: Double, max: Double, step: Double, default: Double,
-    preferences: Map<String, String>, save: (String, String) -> Unit, integer: Boolean = true, note: String? = null
+    preferences: Map<String, String>, save: (String, String) -> Unit, integer: Boolean = true, note: String? = null,
+    /** OK の前に確かめること（値を受け取り、確かめる文を返す。null なら確かめずに保存する）。 */
+    confirm: ((Double) -> String?)? = null
 ) {
     val colors = LocalFtutterColors.current
     var open by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<Pair<Double, String>?>(null) }
     val current = preferences[key]?.trim()?.toDoubleOrNull()?.takeIf { it in min..max } ?: default
     fun show(v: Double) = if (integer) v.toLong().toString() else ((v * 100).toLong() / 100.0).toString()
     Column {
@@ -153,23 +156,33 @@ internal fun FtutterSliderSetting(
         FtutterRowNote(note)
     }
     if (open) {
-        var value by remember { mutableStateOf(current.toFloat()) }
-        val steps = ((max - min) / step).toInt() - 1
+        var value by remember { mutableStateOf(current) }
+        // 段が多い時は目盛りを描かない（L21：数千段で狙った値に合わせにくく、目盛りの点も重かった）。範囲・刻みは原作どおり。
+        val steps = ftutterSliderSteps(min, max, step)
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { open = false },
             title = { Text(label) },
             text = {
                 Column {
-                    Text(show(value.toDouble()), fontSize = 20.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
-                    Slider(value = value, onValueChange = { value = it }, valueRange = min.toFloat()..max.toFloat(), steps = steps.coerceAtLeast(0),
+                    Text(show(ftutterSliderSnap(value, min, max, step)), fontSize = 20.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+                    Slider(value = value.toFloat(), onValueChange = { value = it.toDouble() }, valueRange = min.toFloat()..max.toFloat(), steps = steps,
                         modifier = Modifier.testTag("ftutter-slider-$key"))
+                    // 1刻みずつ合わせる。
+                    Row(Modifier.align(Alignment.CenterHorizontally)) {
+                        TextButton(onClick = { value = ftutterSliderNudge(value, min, max, step, -1) },
+                            modifier = Modifier.testTag("ftutter-slider-minus")) { Text("−", fontSize = 20.sp) }
+                        TextButton(onClick = { value = ftutterSliderNudge(value, min, max, step, 1) },
+                            modifier = Modifier.testTag("ftutter-slider-plus")) { Text("＋", fontSize = 20.sp) }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     open = false
-                    val snapped = min + kotlin.math.round((value - min) / step) * step
-                    save(key, if (integer) snapped.toLong().toString() else snapped.toString())
+                    val snapped = ftutterSliderSnap(value, min, max, step)
+                    val question = confirm?.invoke(snapped)
+                    if (question != null) pending = snapped to question
+                    else save(key, if (integer) snapped.toLong().toString() else snapped.toString())
                 }, modifier = Modifier.testTag("ftutter-slider-ok")) { Text("OK") }
             },
             dismissButton = {
@@ -180,7 +193,40 @@ internal fun FtutterSliderSetting(
             }
         ) }
     }
+    pending?.let { (snapped, question) ->
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text(label) },
+            text = { Text(question) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pending = null
+                    save(key, if (integer) snapped.toLong().toString() else snapped.toString())
+                }, modifier = Modifier.testTag("ftutter-slider-confirm")) { Text("変更する") }
+            },
+            dismissButton = { TextButton(onClick = { pending = null }, modifier = Modifier.testTag("ftutter-slider-confirm-cancel")) { Text("キャンセル") } }
+        ) }
+    }
 }
+
+/** これより段が多いスライダーは目盛りを描かない連続のものにする（L21）。 */
+internal const val FTUTTER_SLIDER_MAX_TICKS = 100
+
+internal fun ftutterSliderSteps(min: Double, max: Double, step: Double): Int {
+    val steps = kotlin.math.round((max - min) / step).toLong() - 1
+    return if (steps > FTUTTER_SLIDER_MAX_TICKS) 0 else steps.coerceAtLeast(0).toInt()
+}
+
+/** 刻みに丸めて範囲に収める。0.1 刻みでも 20.099999… のような値にしない。 */
+internal fun ftutterSliderSnap(value: Double, min: Double, max: Double, step: Double): Double {
+    val index = kotlin.math.round((value.coerceIn(min, max) - min) / step)
+    var scale = 1.0
+    while (scale < 1e6 && kotlin.math.abs(step * scale - kotlin.math.round(step * scale)) > 1e-9) scale *= 10
+    return (kotlin.math.round((min + index * step) * scale) / scale).coerceIn(min, max)
+}
+
+internal fun ftutterSliderNudge(value: Double, min: Double, max: Double, step: Double, delta: Int): Double =
+    ftutterSliderSnap(ftutterSliderSnap(value, min, max, step) + delta * step, min, max, step)
 
 /** 色の候補（メインカラーの19色と、白・黒・灰）。 */
 internal val FTUTTER_COLOR_CHOICES: List<Long> = FTUTTER_SEED_COLORS.toList() +

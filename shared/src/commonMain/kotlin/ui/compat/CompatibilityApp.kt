@@ -7,7 +7,11 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.isCompatTypedThreadReference
+import com.valoser.futacha.shared.compat.compatTypedThreadReferenceEditValue
+
 import com.valoser.futacha.shared.compat.toThreadPage
+import com.valoser.futacha.shared.compat.replaceNgRuleMerging
 
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
@@ -356,12 +360,12 @@ import com.valoser.futacha.shared.compat.ScrollAnchor
 import com.valoser.futacha.shared.compat.toCompatPlainText
 import com.valoser.futacha.shared.compat.normalizeCompatSearchText
 import com.valoser.futacha.shared.util.extractFirstUsableTitleLine
-import com.valoser.futacha.shared.compat.toCompatHistoryEntry
 import com.valoser.futacha.shared.compat.toModernThreadHistoryEntry
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.buildImportedHistoryRepository
 import com.valoser.futacha.shared.ui.clearHistory
 import com.valoser.futacha.shared.ui.dismissHistoryEntry
+import com.valoser.futacha.shared.ui.findModernHistoryEntryFor
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.compat.compatPostActionCandidates
 import com.valoser.futacha.shared.compat.compatReferencePostContextLabels
@@ -453,8 +457,10 @@ import com.valoser.futacha.shared.ai.catalogModeParameter
 import com.valoser.futacha.shared.ai.threadIdParameter
 import com.valoser.futacha.shared.ai.threadUrlParameter
 import com.valoser.futacha.shared.ai.wordParameter
+import com.valoser.futacha.shared.ai.watchRelayLinkNoticeOutsideFutacha
 import com.valoser.futacha.shared.service.RawHtmlSaveOptions
 import com.valoser.futacha.shared.service.SingleMediaSaveService
+import com.valoser.futacha.shared.service.MediaSaveDestinationException
 import com.valoser.futacha.shared.service.buildCompatManualImageFolderName
 import com.valoser.futacha.shared.service.ThreadSaveLimits
 import com.valoser.futacha.shared.service.ThreadSaveService
@@ -687,6 +693,8 @@ private fun CompatibilityAppContent(
     onExitApplication: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    // Links and AI commands wait for a post being sent (L30).
+    val postingInFlight = com.valoser.futacha.shared.ui.LocalPostingInFlight.current
     val apngMarkerCache = remember(scope) { CompatApngMarkerCache(scope) }
     val updateCheckEnabled by produceState(initialValue = true, stateStore) {
         stateStore?.isUpdateCheckEnabled?.collect { value = it }
@@ -722,9 +730,11 @@ private fun CompatibilityAppContent(
     var threadSelectorOpen by rememberSaveable { mutableStateOf(false) }
     var ngRules by remember { mutableStateOf<List<CompatNgRule>>(emptyList()) }
     var toolbarRefreshToken by remember { mutableStateOf(0L) }
-    var toolbarItemsBySurface by remember {
-        mutableStateOf<Map<CompatToolbarSurface, List<CompatToolbarItem>>>(emptyMap())
-    }
+    // Threads created per board: a catalog placement made before one no longer applies (L37).
+    var createdThreadTokens by remember { mutableStateOf(emptyMap<String, Long>()) }
+    var toolbarLoad by remember(store) { mutableStateOf(CompatToolbarLoadResult()) }
+    val toolbarItemsBySurface = toolbarLoad.items
+    var toolbarLoadInProgress by remember(store) { mutableStateOf(false) }
     // Settings screens are host-level destinations and therefore leave the
     // composition while a child page is open. Keep only the root anchor at
     // workspace level so returning from a child restores the exact root
@@ -747,7 +757,8 @@ private fun CompatibilityAppContent(
     var deepLinkError by remember { mutableStateOf<String?>(null) }
     // A result told without stopping what the person is doing (audit L34: the history refresh, up to a minute, ended in a
     // dialog over whatever screen was open by then).
-    var appNotice by remember { mutableStateOf<String?>(null) }
+    val saveNotices = remember { CompatSaveNotices() }
+    val pageSaves = remember { CompatPageSaves() }
     // "全タブ更新確認": one at a time, and its end is told (re-audit L17: pressed again it ran beside itself, and nothing
     // said when it was over).
     var refreshingAllTabs by remember { mutableStateOf(false) }
@@ -803,6 +814,8 @@ private fun CompatibilityAppContent(
     // to the catalog restores the exact grid/list position instead of recreating a
     // new LazyGridState at item 0.
     val catalogStateHolder = rememberSaveableStateHolder()
+    val mediaReturnOrigin = compatMediaReturnOrigin(state.host)
+    val mediaReturnState = remember(mediaReturnOrigin) { CompatMediaReturnState() }
     val compatPlatformContext = LocalPlatformContext.current
     val externalWatcher = rememberCompatExternalWatcher(store)
     var watcherManagerOpen by remember { mutableStateOf(false) }
@@ -863,6 +876,33 @@ private fun CompatibilityAppContent(
             }
         }
 
+    // One check of all the tabs at a time, from the drawer, the toolbars and the tab list alike, and its end is told
+    // (L40: the toolbars and the tab list started one more check on each press, all running at once, telling nothing).
+    fun checkAllTabs(activeRepository: BoardRepository) {
+        if (refreshingAllTabs) {
+            saveNotices.offerTimed(COMPAT_REFRESH_ALL_TABS_BUSY_NOTICE)
+            return
+        }
+        refreshingAllTabs = true
+        launchStoreSafely("refresh all tabs") {
+            try {
+                val result = refreshCompatTabsInBackground(
+                    store = store,
+                    repository = activeRepository,
+                    nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                    maxTabs = Int.MAX_VALUE,
+                    checkUpdates = true,
+                    checkExistence = true,
+                    existenceStaleMillis = 0L,
+                    checkWatchWords = false
+                )
+                saveNotices.offerTimed(compatRefreshAllTabsDoneNotice(result))
+            } finally {
+                refreshingAllTabs = false
+            }
+        }
+    }
+
     suspend fun persistStoreSafely(operation: String, block: suspend () -> Unit) {
         try {
             block()
@@ -890,7 +930,7 @@ private fun CompatibilityAppContent(
         importedHistoryRepository = importedHistoryRepository,
         historyRefresher = historyRefresher,
         appVersion = appVersion,
-        onMessage = { appNotice = it }
+        onMessage = { saveNotices.offerTimed(it) }
     )
 
     suspend fun loadPendingClosedTabsSafely(): ClosedTabBatch? = try {
@@ -1092,10 +1132,11 @@ private fun CompatibilityAppContent(
     }
     LaunchedEffect(store) { store.ngRules.collectLatest { ngRules = it } }
     LaunchedEffect(store, toolbarRefreshToken) {
-        persistStoreSafely("toolbar load") {
-            toolbarItemsBySurface = CompatToolbarSurface.entries.associateWith { surface ->
-                store.loadToolbar(surface)
-            }
+        toolbarLoadInProgress = true
+        try {
+            toolbarLoad = loadCompatToolbarsWithRecovery(toolbarLoad.items, store::loadToolbar)
+        } finally {
+            toolbarLoadInProgress = false
         }
     }
     var customFontPath by remember { mutableStateOf<String?>(null) }
@@ -1438,7 +1479,7 @@ private fun CompatibilityAppContent(
     // stayed under the sheet's window).
     commonNg?.failureNotice?.takeIf { commonNg.sheet == null }?.let { notice ->
         LaunchedEffect(notice) {
-            appNotice = notice
+            saveNotices.offerTimed(notice)
             commonNg.failureNotice = null
         }
     }
@@ -1639,6 +1680,8 @@ private fun CompatibilityAppContent(
                 if (board == null) deepLinkError = "対象板を特定できませんでした"
                 else {
                     toolbarRefreshToken += 1L
+                    // The catalog reads itself again as a manual refresh (L37).
+                    catalogAiSlot.forward(command)
                     dispatch(CompatibilityEvent.OpenCatalog(board.key))
                 }
             }
@@ -1755,10 +1798,9 @@ private fun CompatibilityAppContent(
                         return@launchStoreSafely
                     }
                     val modernStore = stateStore
+                    // Searched off the main thread (L44).
                     val modernEntry = modernStore?.history?.first()
-                        ?.firstOrNull { candidate ->
-                            candidate.toCompatHistoryEntry()?.canonicalUrl == compatibilityEntry.canonicalUrl
-                        }
+                        ?.let { history -> findModernHistoryEntryFor(history, compatibilityEntry.canonicalUrl) }
                         ?: compatibilityEntry.toModernThreadHistoryEntry()
                     if (modernStore != null && modernEntry != null) {
                         dismissHistoryEntry(
@@ -1871,6 +1913,7 @@ private fun CompatibilityAppContent(
         snapshotFlow { boardsLoaded && historiesLoaded && workspaceLoaded && preferencesLoaded }.first { it }
         when (holdCompatPlatformAiCommand(arrivedAt, appLock)) {
             com.valoser.futacha.shared.ui.AiCommandHoldDecision.Run -> {
+                postingInFlight?.awaitIdle()
                 val enabled = com.valoser.futacha.shared.ui.readPersistedAiCommandEnabled(stateStore, fallback = false)
                 val rejection = compatPlatformAiDisabledRejection(command, enabled)
                 if (rejection != null) deepLinkError = rejection else runPlatformAiCommand(command)
@@ -1893,9 +1936,14 @@ private fun CompatibilityAppContent(
         val raw = platformAiDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val arrivedAt = kotlin.time.TimeSource.Monotonic.markNow()
         val command = parseFutachaAiDeepLink(raw, source = "platform")
+        // L121: the watch's "スマホで開く" link is for ふたちゃ mode only; not run here whatever the AI setting.
+        val watchRelayNotice = command?.watchRelayLinkNoticeOutsideFutacha()
         if (command == null) {
             appLock.awaitUnlocked()
             deepLinkError = "AI操作のURLを解釈できませんでした"
+        } else if (watchRelayNotice != null) {
+            appLock.awaitUnlocked()
+            deepLinkError = watchRelayNotice
         } else {
             deliverPlatformAiCommand(command, arrivedAt)
         }
@@ -2068,6 +2116,7 @@ private fun CompatibilityAppContent(
     ) {
         val raw = initialThreadDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         if (!boardsLoaded) return@LaunchedEffect
+        postingInFlight?.awaitIdle()
         val parsed = canonicalizeThreadUrl(raw)
         if (parsed == null) {
             deepLinkError = "スレッドURLを解釈できませんでした"
@@ -2097,6 +2146,7 @@ private fun CompatibilityAppContent(
 
     LaunchedEffect(initialBoardDeepLink, boards, boardsLoaded) {
         val raw = initialBoardDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        postingInFlight?.awaitIdle()
         if (!boardsLoaded) return@LaunchedEffect
         val canonical = canonicalizeBoardUrl(raw)
         val board = canonical?.let { target ->
@@ -2135,7 +2185,9 @@ private fun CompatibilityAppContent(
     val drawerTouchSlopPx = LocalViewConfiguration.current.touchSlop
     // Settings is a separate host-level surface. It must not expose the
     // compatibility drawer's edge or modal drag recognizers (#43).
-    val drawerGesturesEnabled = state.host !is CompatHost.Settings
+    // Nor the drawing screen: a stroke from the left edge opened the drawer, and leaving through it lost the drawing
+    // without asking (L65).
+    val drawerGesturesEnabled = state.host !is CompatHost.Settings && state.host !is CompatHost.PostDrawing
     val drawerOpeningGesturesEnabled = drawerGesturesEnabled &&
         (state.host !is CompatHost.ThreadWorkspace || threadDrawerOpeningAllowed)
     var drawerPreviewOffsetPx by remember { mutableFloatStateOf(0f) }
@@ -2307,10 +2359,9 @@ private fun CompatibilityAppContent(
             onHistoryDeleted = { entry ->
                 launchStoreSafely("history deletion", "履歴を削除できませんでした") {
                     val modernStore = stateStore
+                    // Searched off the main thread (L44).
                     val modernEntry = modernStore?.history?.first()
-                        ?.firstOrNull { candidate ->
-                            candidate.toCompatHistoryEntry()?.canonicalUrl == entry.canonicalUrl
-                        }
+                        ?.let { history -> findModernHistoryEntryFor(history, entry.canonicalUrl) }
                         ?: entry.toModernThreadHistoryEntry()
                     if (modernStore != null && modernEntry != null) {
                         dismissHistoryEntry(
@@ -2363,33 +2414,8 @@ private fun CompatibilityAppContent(
             onOpenExternalWatcherManager = { watcherManagerOpen = true },
             onRefreshExternalWatcher = ::refreshExternalWatcher,
             historyTools = historyTools,
-            onRefreshAllTabs = {
-                val activeRepository = repository
-                if (activeRepository != null) {
-                    if (refreshingAllTabs) {
-                        appNotice = COMPAT_REFRESH_ALL_TABS_BUSY_NOTICE
-                    } else {
-                        refreshingAllTabs = true
-                        launchStoreSafely("refresh all tabs") {
-                            try {
-                                val result = refreshCompatTabsInBackground(
-                                    store = store,
-                                    repository = activeRepository,
-                                    nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                                    maxTabs = Int.MAX_VALUE,
-                                    checkUpdates = true,
-                                    checkExistence = true,
-                                    existenceStaleMillis = 0L,
-                                    checkWatchWords = false
-                                )
-                                appNotice = compatRefreshAllTabsDoneNotice(result)
-                            } finally {
-                                refreshingAllTabs = false
-                            }
-                        }
-                    }
-                }
-            },
+            historyClearReachesEveryMode = stateStore != null,
+            onRefreshAllTabs = { repository?.let(::checkAllTabs) },
             onOpenSettings = {
                 val origin = state.host
                 closeDrawerForNavigation()
@@ -2418,6 +2444,10 @@ private fun CompatibilityAppContent(
         customFontFamily = customFontFamily
     ) {
     com.valoser.futacha.shared.ui.SettingsRecoveryNoticeDialog()
+    // The shared NG / watch word lists of AppState: one that cannot be read is offered 「初期化する」 (L87).
+    if (com.valoser.futacha.shared.state.SettingsRecoveryNotices.notice.collectAsState().value == null) {
+        com.valoser.futacha.shared.ui.UnreadableWordListsDialog(stateStore)
+    }
     if (!boardsLoaded) {
         Box(
             modifier = Modifier
@@ -2452,8 +2482,15 @@ private fun CompatibilityAppContent(
         scrimColor = Color.Black.copy(alpha = 0.001f),
         drawerContent = { renderCompatibilityDrawer() }
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize()
+        val activeToolbarSurface = when (state.host) {
+            is CompatHost.Catalog -> CompatToolbarSurface.CATALOG
+            is CompatHost.ThreadWorkspace -> CompatToolbarSurface.THREAD
+            else -> null
+        }
+        CompatToolbarRecoveryFrame(
+            showError = activeToolbarSurface != null && activeToolbarSurface in toolbarLoad.failedSurfaces,
+            retrying = toolbarLoadInProgress,
+            onRetry = { toolbarRefreshToken += 1L }
         ) {
         when (val host = state.host) {
             CompatHost.Main -> CompatMainScreen(
@@ -2534,6 +2571,17 @@ private fun CompatibilityAppContent(
                                 if (navigate) {
                                     dispatch(CompatibilityEvent.OpenThread(tab.key, CompatThreadOrigin.CATALOG))
                                 }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Throwable) {
+                                restoreOptimisticTab(tab.key, previousTabs)
+                                deepLinkError = "スレッドを開けませんでした: ${failure.message.orEmpty()}"
+                                Logger.e("CompatibilityApp", "Failed to open catalog thread", failure)
+                                return@launch
+                            }
+                            // The thread is open now: a failed title repair leaves it as it is (L45: it said the thread
+                            // could not be opened and took its tab out of the list).
+                            try {
                                 // Some img/dat catalog responses expose the
                                 // reply count where the subject should be.  Do
                                 // not make opening a thread wait for a second
@@ -2572,9 +2620,7 @@ private fun CompatibilityAppContent(
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Throwable) {
-                                restoreOptimisticTab(tab.key, previousTabs)
-                                deepLinkError = "スレッドを開けませんでした: ${failure.message.orEmpty()}"
-                                Logger.e("CompatibilityApp", "Failed to open catalog thread", failure)
+                                Logger.w("CompatibilityApp", "Could not repair the opened thread's title: ${failure.message.orEmpty()}")
                             }
                         }
                     }
@@ -2588,6 +2634,7 @@ private fun CompatibilityAppContent(
                         platformAiCommand = catalogAiSlot.deliverable(isAppUnlocked),
                         onPlatformAiCommandConsumed = { command -> catalogAiSlot.consume(command) },
                         toolbarRefreshToken = toolbarRefreshToken,
+                        createdThreadToken = createdThreadTokens[board.key] ?: 0L,
                         initialToolbarItems = toolbarItemsBySurface[CompatToolbarSurface.CATALOG],
                         preferences = preferences,
                         ngRules = ngRules,
@@ -2623,22 +2670,7 @@ private fun CompatibilityAppContent(
                         onOpenDrawer = ::openPreferredDrawer,
                         onCloseDrawer = { dispatch(CompatibilityEvent.CloseDrawer) },
                         onOpenWatcher = { dispatch(CompatibilityEvent.OpenDrawer(CompatDrawerPage.WATCHER)) },
-                        onCheckUpdates = {
-                            repository?.let { activeRepository ->
-                                launchStoreSafely("force thread update check") {
-                                    refreshCompatTabsInBackground(
-                                        store = store,
-                                        repository = activeRepository,
-                                        nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                                        maxTabs = Int.MAX_VALUE,
-                                        checkUpdates = true,
-                                        checkExistence = true,
-                                        existenceStaleMillis = 0L,
-                                        checkWatchWords = false
-                                    )
-                                }
-                            }
-                        },
+                        onCheckUpdates = { repository?.let(::checkAllTabs) },
                         onOpenSettings = {
                             closeDrawerForNavigation()
                             dispatch(CompatibilityEvent.OpenHost(CompatHost.Settings(origin = host)))
@@ -2701,6 +2733,7 @@ private fun CompatibilityAppContent(
                     }
                     // Back from this thread's own viewer, gallery, settings, help or editor: not an opening (7.6).
                     val reloadOnOpenSuppressed = remember(tab.key) { threadReturn.returnsFromOwnChild(tab.key) }
+                    val openingVisit = remember(tab.key) { threadReturn.openingVisit(tab.key) }
                     SideEffect { threadReturn.lastThreadTabKey = tab.key }
                     threadStateHolder.SaveableStateProvider(tab.key) {
                         CompatThreadScreen(
@@ -2717,6 +2750,7 @@ private fun CompatibilityAppContent(
                             threadRefreshToken = threadRefreshToken,
                             consumePostRefreshRequest = { pendingPostRefreshTabs.remove(tab.key) },
                             reloadOnOpenSuppressed = reloadOnOpenSuppressed,
+                            openingVisit = openingVisit,
                             archiveBaseUrl = preferences[COMPAT_CACHE_BASE_URL_KEY],
                             archiveSearchHistory = archiveSearchHistory,
                             archiveSearchNoticeHidden =
@@ -2724,6 +2758,8 @@ private fun CompatibilityAppContent(
                             localHistory = histories,
                             fileSystem = fileSystem,
                             longRunningScope = scope,
+                            pageSaves = pageSaves,
+                            onSaveNotice = { saveNotices.offer(it) },
                             store = store,
                             preferences = preferences,
                             ngRules = ngRules,
@@ -2764,22 +2800,7 @@ private fun CompatibilityAppContent(
                             },
                             onOpenDrawer = ::openPreferredDrawer,
                             onCloseDrawer = { dispatch(CompatibilityEvent.CloseDrawer) },
-                            onCheckUpdates = {
-                                threadRepository?.let { activeRepository ->
-                                    launchStoreSafely("force thread update check") {
-                                        refreshCompatTabsInBackground(
-                                            store = store,
-                                            repository = activeRepository,
-                                            nowEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                                            maxTabs = Int.MAX_VALUE,
-                                            checkUpdates = true,
-                                            checkExistence = true,
-                                            existenceStaleMillis = 0L,
-                                            checkWatchWords = false
-                                        )
-                                    }
-                                }
-                            },
+                            onCheckUpdates = { threadRepository?.let(::checkAllTabs) },
                             onOpenSettings = {
                                 closeDrawerForNavigation()
                                 dispatch(CompatibilityEvent.OpenHost(CompatHost.Settings(origin = host)))
@@ -2982,6 +3003,13 @@ private fun CompatibilityAppContent(
                         onOpenDrawing = {
                             dispatch(CompatibilityEvent.OpenHost(CompatHost.PostDrawing(host)))
                         },
+                        onOpenHelp = {
+                            dispatch(CompatibilityEvent.OpenHost(CompatHost.Help(host)))
+                        },
+                        // The draft is written as the screen is left, after it is gone (L52).
+                        lastingScope = scope,
+                        // A send's failure after the screen went stays readable until closed (L157).
+                        onLastingNotice = { saveNotices.offer(it) },
                         onBack = { dispatch(CompatibilityEvent.Back) }
                     )
                 }
@@ -3025,6 +3053,7 @@ private fun CompatibilityAppContent(
                             )
                         },
                         onBuildCreated = { rawThreadId ->
+                            createdThreadTokens = createdThreadTokens + (board.key to ((createdThreadTokens[board.key] ?: 0L) + 1L))
                             val threadId = rawThreadId?.let { compatAppPostNumberRegex.find(it)?.value }
                             if (threadId == null) {
                                 dispatch(CompatibilityEvent.OpenHost(CompatHost.Catalog(board.key)))
@@ -3079,101 +3108,31 @@ private fun CompatibilityAppContent(
                         onOpenHelp = {
                             dispatch(CompatibilityEvent.OpenHost(CompatHost.Help(host)))
                         },
+                        // The draft is written as the screen is left, after it is gone (L52).
+                        lastingScope = scope,
+                        // A send's failure after the screen went stays readable until closed (L157).
+                        onLastingNotice = { saveNotices.offer(it) },
                         onBack = { dispatch(CompatibilityEvent.Back) }
                     )
                 }
             }
             is CompatHost.PostDrawing -> CompatPostDrawingScreen(
                 onSaved = { drawing ->
-                    val localFileSystem = fileSystem
-                    if (localFileSystem != null) {
-                        scope.launch {
-                            try {
-                                val now = Clock.System.now().toEpochMilliseconds()
-                                val drawingLocation = parseCompatSaveLocation(
-                                    preferences.compatPreferenceValue(
-                                        "storage",
-                                        "dummyDrawingDir",
-                                        "手書きファイルの保存先"
-                                    )
-                                )
-                                // Keep the configured external PNG copy independent
-                                // from the private draft attachment.  The latter is
-                                // still saved even when a SAF/path write fails.
-                                persistCompatDrawingCopy(
-                                    fileSystem = localFileSystem,
-                                    location = drawingLocation,
-                                    drawing = drawing,
-                                    timestampEpochMillis = now
-                                )?.onFailure { failure ->
-                                    Logger.w(
-                                        "CompatibilityApp",
-                                        "手書き画像の指定保存先へのコピーに失敗しました: ${failure.message.orEmpty()}"
-                                    )
-                                }
-                                when (val origin = host.origin) {
-                                    is CompatHost.Post -> {
-                                        val old = store.loadDraft(origin.tabKey)
-                                        persistCompatPostAttachment(localFileSystem, origin.tabKey, drawing)
-                                            .onSuccess { locator ->
-                                                store.saveDraft(
-                                                    old?.copy(
-                                                        attachmentUri = locator,
-                                                        attachmentIsHandwriting = true,
-                                                        updatedAtEpochMillis = now
-                                                    ) ?: CompatReplyDraft(
-                                                        tabKey = origin.tabKey,
-                                                        attachmentUri = locator,
-                                                        attachmentIsHandwriting = true,
-                                                        updatedAtEpochMillis = now
-                                                    )
-                                                )
-                                                    old?.attachmentUri?.takeIf { it != locator }?.let { previous ->
-                                                    deleteCompatPostAttachment(localFileSystem, previous, deleteContainer = true)
-                                                }
-                                                dispatch(CompatibilityEvent.OpenHost(origin))
-                                            }
-                                            .onFailure { failure ->
-                                                deepLinkError = "手書き画像を保存できませんでした: ${failure.message.orEmpty()}"
-                                            }
-                                    }
-                                    is CompatHost.PostBuild -> {
-                                        val old = store.loadBuildDraft(origin.boardKey)
-                                        persistCompatPostAttachment(localFileSystem, "build:${origin.boardKey}", drawing)
-                                            .onSuccess { locator ->
-                                                store.saveBuildDraft(
-                                                    old?.copy(
-                                                        attachmentUri = locator,
-                                                        attachmentIsHandwriting = true,
-                                                        updatedAtEpochMillis = now
-                                                    ) ?: com.valoser.futacha.shared.compat.CompatBuildDraft(
-                                                        boardKey = origin.boardKey,
-                                                        attachmentUri = locator,
-                                                        attachmentIsHandwriting = true,
-                                                        updatedAtEpochMillis = now
-                                                    )
-                                                )
-                                                old?.attachmentUri?.takeIf { it != locator }?.let { previous ->
-                                                    deleteCompatPostAttachment(localFileSystem, previous, deleteContainer = true)
-                                                }
-                                                dispatch(CompatibilityEvent.OpenHost(origin))
-                                            }
-                                            .onFailure { failure ->
-                                                deepLinkError = "手書き画像を保存できませんでした: ${failure.message.orEmpty()}"
-                                            }
-                                    }
-                                    else -> dispatch(CompatibilityEvent.OpenHost(origin))
-                                }
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (failure: Throwable) {
-                                Logger.e("CompatibilityApp", "Failed to save the drawing", failure)
-                                deepLinkError = "手書き画像を保存できませんでした: ${failure.message.orEmpty()}"
-                            }
-                        }
+                    val localFileSystem = checkNotNull(fileSystem) { "ファイル保存機能を利用できません" }
+                    val drawingLocation = parseCompatSaveLocation(
+                        preferences.compatPreferenceValue("storage", "dummyDrawingDir", "手書きファイルの保存先")
+                    )
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    saveCompatDrawingToDraft(store, localFileSystem, host.origin, drawing, now)
+                    dispatch(CompatibilityEvent.OpenHost(host.origin))
+                    // The person's copy does not hold the attachment up (L39).
+                    launchCompatDrawingCopy(scope, localFileSystem, drawingLocation, drawing, now) {
+                        saveNotices.offer("手書き画像のコピーを保存できませんでした（添付は保存しました）")
                     }
                 },
-                onBack = { dispatch(CompatibilityEvent.OpenHost(host.origin)) }
+                onBack = { dispatch(CompatibilityEvent.OpenHost(host.origin)) },
+                // A drawing lost with the app is offered back the next time (L69).
+                recoveryFileSystem = fileSystem
             )
             is CompatHost.Gallery -> {
                 val galleryTab = state.tabs.firstOrNull { it.key == host.tabKey }
@@ -3184,6 +3143,9 @@ private fun CompatibilityAppContent(
                         tab = galleryTab,
                         initialIndex = host.index,
                         initialPostNo = host.postNo,
+                        gridState = mediaReturnState.galleryGridState,
+                        restoreInitialPosition = !mediaReturnState.galleryInitialPositionApplied,
+                        onInitialPositionRestored = { mediaReturnState.galleryInitialPositionApplied = true },
                         store = store,
                         preferences = preferences,
                         ngRules = ngRules,
@@ -3215,6 +3177,8 @@ private fun CompatibilityAppContent(
                         onOpenHelp = {
                             dispatch(CompatibilityEvent.OpenHost(CompatHost.Help(host)))
                         },
+                        saveCoroutineScope = scope,
+                        onSaveNotice = { saveNotices.offer(it) },
                         onBack = { dispatch(CompatibilityEvent.Back) }
                     )
                 }
@@ -3228,6 +3192,7 @@ private fun CompatibilityAppContent(
                         tab = viewerTab,
                         initialIndex = host.index,
                         initialPostNo = host.postNo,
+                        returnPosition = mediaReturnState.viewerPosition,
                         directMediaUrl = host.directMediaUrl,
                         directSourcePosition = host.directSourcePosition,
                         store = store,
@@ -3238,7 +3203,7 @@ private fun CompatibilityAppContent(
                         fileSystem = fileSystem,
                         cookieRepository = cookieRepository,
                         saveCoroutineScope = scope,
-                        onSaveNotice = { boardUpdateNotice = it },
+                        onSaveNotice = { saveNotices.offer(it) },
                         onToolbarEdit = {
                             dispatch(
                                 CompatibilityEvent.OpenHost(
@@ -3359,7 +3324,11 @@ private fun CompatibilityAppContent(
                 initialScrollPosition = settingsRootScrollPosition[0].takeIf { host.path == "root" },
                 onScrollPositionChanged = { position ->
                     if (host.path == "root") settingsRootScrollPosition[0] = position
-                }
+                },
+                // A restore, a font's copy or a cache clear goes on after the settings are left, and its result is
+                // told at the bottom of the app (L58).
+                lastingScope = scope,
+                onLastingNotice = { saveNotices.offerTimed(it) }
             )
             is CompatHost.Help -> CompatHelpScreen(
                 appVersion = appVersion,
@@ -3636,13 +3605,18 @@ private fun CompatibilityAppContent(
             }
         ) }
     }
-    appNotice?.let { message ->
+    saveNotices.current?.let { message ->
+        val saveResult = saveNotices.currentSticky
+        val token = saveNotices.currentToken
+        val dismissNotice = { saveNotices.dismiss(token) }
         // Long notices (a file path, a reason) stay longer, and the time runs only while the app is unlocked
         // (re-audit M14/M15: every notice went after 4 seconds, also behind the lock screen). A tap still closes it.
-        LaunchedEffect(message, isAppUnlocked) {
-            if (!isAppUnlocked) return@LaunchedEffect
+        LaunchedEffect(token, isAppUnlocked, saveResult) {
+            // Save paths and failures remain readable, including after returning
+            // from the background or lock screen. Only the user dismisses them.
+            if (saveResult || !isAppUnlocked) return@LaunchedEffect
             kotlinx.coroutines.delay(compatAppNoticeMillis(message))
-            appNotice = null
+            saveNotices.dismiss(token)
         }
         FutachaAppLockAwareWindow { Popup(
             alignment = Alignment.BottomCenter,
@@ -3650,13 +3624,16 @@ private fun CompatibilityAppContent(
             properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false, clippingEnabled = false)
         ) {
             Surface(
-                modifier = Modifier.width(320.dp).clickable { appNotice = null }.testTag("compat-app-notice"),
+                modifier = Modifier.width(320.dp).clickable(onClick = dismissNotice).testTag("compat-app-notice"),
                 shape = RoundedCornerShape(4.dp),
                 color = Color(0xFF323232),
                 contentColor = Color.White,
                 shadowElevation = 4.dp
             ) {
-                Text(message, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(message, modifier = Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 12.dp), fontSize = 14.sp)
+                    if (saveResult) TextButton(onClick = dismissNotice) { Text("閉じる") }
+                }
             }
         } }
     }
@@ -3683,6 +3660,10 @@ private fun CompatibilityAppContent(
  * Thread tab keys whose saveable state may be dropped: keys seen before that
  * are neither open nor awaiting Undo in the pending close batch.
  */
+/** The order (and the created-thread count) a "閲覧スレを先頭へ" placement was made under (L37). */
+internal fun compatViewedFirstTag(sort: CompatCatalogSort, extraMode: CompatCatalogExtraMode?, createdThreadToken: Long): String =
+    "${sort.name}/${extraMode?.storedValue.orEmpty()}/$createdThreadToken"
+
 internal fun compatStaleThreadStateKeys(
     known: Set<String>,
     open: Set<String>,
@@ -3832,7 +3813,9 @@ private fun CompatCatalogScreen(
     onSelectTab: (CompatTab) -> Unit,
     onCloseTab: (CompatTab) -> Unit,
     canUndoClose: Boolean,
-    onUndoClose: () -> Unit
+    onUndoClose: () -> Unit,
+    /** Counts the threads created on this board (L37). */
+    createdThreadToken: Long = 0L
 ) {
     val scope = rememberCoroutineScope()
     val effectiveRepository = remember(board.key, repository) {
@@ -3841,6 +3824,9 @@ private fun CompatCatalogScreen(
     val viewedFirstKey = com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.originalUrl)
     val viewedFirstEnabled = preferences[viewedFirstKey] == "ON"
     var viewedFirstId by rememberSaveable(board.key) { mutableStateOf<String?>(null) }
+    // The order and the created-thread count the placement was made under; another order or a created thread drops it
+    // (L37: it stayed first after the order changed, and above a thread just created).
+    var viewedFirstTag by rememberSaveable(board.key) { mutableStateOf<String?>(null) }
     LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) viewedFirstId = null }
     val latestViewedHistory by rememberUpdatedState(localHistory)
     var items by remember(board.key) { mutableStateOf<List<CatalogItem>>(emptyList()) }
@@ -3855,7 +3841,9 @@ private fun CompatCatalogScreen(
     // The order the running refresh fetches, and one asked for meanwhile (audit L33: a different order chosen during a
     // load was dropped with "読み込み中です", so the heading showed the new order over the old list).
     val runningRefresh = remember(board.key) { arrayOfNulls<Pair<CompatCatalogSort, Any?>>(1) }
-    val queuedRefresh = remember(board.key) { arrayOfNulls<CompatCatalogSort>(1) }
+    // The order and the extra order ("そ順"/"監視") asked for while a load runs (L41: only the order was kept, so a
+    // load of the board's own order was shown under "そ順" chosen meanwhile, and the other way round).
+    val queuedRefresh = remember(board.key) { arrayOfNulls<Pair<CompatCatalogSort, Any?>>(1) }
     // The board shown now: a load of the board left behind does not start the order queued there (re-audit L12).
     val latestCatalogBoardKey by rememberUpdatedState(board.key)
     var showLoadingIndicator by remember(board.key) { mutableStateOf(true) }
@@ -4051,8 +4039,16 @@ private fun CompatCatalogScreen(
             value = calculateCompatCatalogProjection(catalogProjectionRequest)
         }
     }
+    val currentViewedFirstTag = compatViewedFirstTag(preference.sort, catalogExtraMode, createdThreadToken)
+    // Only once the board's stored order is known: until then the screen holds the default one.
+    LaunchedEffect(currentViewedFirstTag, preferenceLoaded) {
+        if (preferenceLoaded && viewedFirstTag != null && viewedFirstTag != currentViewedFirstTag) {
+            viewedFirstId = null
+            viewedFirstTag = null
+        }
+    }
     val visibleItems = com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(
-        projectedVisibleItems, viewedFirstId.takeIf { viewedFirstEnabled })
+        projectedVisibleItems, viewedFirstId.takeIf { viewedFirstEnabled && viewedFirstTag == currentViewedFirstTag })
 
 
     // Some boards (notably img.2chan.net) expose only the reply-count badge
@@ -4344,9 +4340,11 @@ private fun CompatCatalogScreen(
         if (!refreshMutex.tryLock()) {
             if (runningRefresh[0] != (sort to catalogExtraMode)) {
                 // Another order: fetched as soon as the running load ends.
-                queuedRefresh[0] = sort
+                queuedRefresh[0] = sort to catalogExtraMode
                 transientMessage = "読み込み中です。終わったら選んだ並び順で読み直します"
             } else {
+                // Back to the order being loaded: that load is shown, and nothing else is read after it.
+                queuedRefresh[0] = null
                 transientMessage = "読み込み中です"
             }
             return
@@ -4412,12 +4410,15 @@ private fun CompatCatalogScreen(
                 }
                 // Another order chosen meanwhile is what the screen shows now: this result is stored, not shown
                 // over it (re-audit L11: the old order replaced the new one, then the new one was read again).
-                fun shownNow() = queuedRefresh[0].let { it == null || it == sort }
+                fun shownNow() = queuedRefresh[0].let { it == null || it == (sort to fetchedExtraMode) }
                 if (shownNow()) {
                     catalogReplyDeltas = nextReplyDeltas
                     items = loadedItems
-                    if (manual && viewedFirstEnabled) viewedFirstId = latestViewedHistory.filter { it.boardKey == board.key }
-                        .maxByOrNull { it.lastVisitedEpochMillis }?.threadNo
+                    if (manual && viewedFirstEnabled) {
+                        viewedFirstId = latestViewedHistory.filter { it.boardKey == board.key }
+                            .maxByOrNull { it.lastVisitedEpochMillis }?.threadNo
+                        viewedFirstTag = compatViewedFirstTag(sort, fetchedExtraMode, createdThreadToken)
+                    }
                     itemsExtraMode = fetchedExtraMode
                     catalogHistoryGeneration = 0
                     // The timestamp in the legacy toolbar describes the cached
@@ -4516,7 +4517,7 @@ private fun CompatCatalogScreen(
             runningRefresh[0] = null
             refreshMutex.unlock()
         }
-        queuedRefresh[0]?.let { queued ->
+        queuedRefresh[0]?.let { (queued, _) ->
             queuedRefresh[0] = null
             if (latestCatalogBoardKey == board.key) refresh(queued)
         }
@@ -4667,6 +4668,13 @@ private fun CompatCatalogScreen(
                 command.parameter("query", "q", "word", "keyword", "text")?.let { searchQuery = it }
             }
             FutachaAiAction.OpenBoardExternally -> openUrl(board.originalUrl)
+            // As the toolbar's reload; after the order is known and a load already running (opening) has ended (L37).
+            FutachaAiAction.RefreshCurrentBoard,
+            FutachaAiAction.RefreshCatalog -> scope.launch {
+                androidx.compose.runtime.snapshotFlow { preferenceLoaded }.first { it }
+                refreshMutex.withLock { }
+                refresh(manual = true)
+            }
             FutachaAiAction.SetCatalogMode -> resolvePlatformAiCatalogSort(command)?.let { sort ->
                 // Already stored by the host: the screen takes the order and reads the catalog again in it.
                 catalogExtraMode = null
@@ -4677,7 +4685,8 @@ private fun CompatCatalogScreen(
         }
         onPlatformAiCommandConsumed(command)
     }
-    PlatformBackHandler(enabled = searchActive, iosEdgeGestureEnabled = false) {
+    // An open drawer takes the back first; the app's Back closes it (L63: the search was closed first).
+    PlatformBackHandler(enabled = searchActive && !isDrawerOpen, iosEdgeGestureEnabled = false) {
         searchActive = false
         searchQuery = ""
     }
@@ -5242,8 +5251,9 @@ private fun CompatCatalogScreen(
                 } else {
                     launchCatalogStoreSafely("catalog NG edit", "NGの更新に失敗しました") {
                         val scopeKey = if (allBoards) "*" else board.key
-                        store.deleteNgRule(rule.id)
-                        val updated = store.upsertNgRule(
+                        // One replacement: a failed write (or the board gone meanwhile) keeps the old rule (L139: it was
+                        // deleted first, and the threads it hid came back).
+                        val replacement =
                             rule.copy(
                                 id = compatNgRuleId(rule.kind, scopeKey, normalized),
                                 scopeKey = scopeKey,
@@ -5259,7 +5269,7 @@ private fun CompatCatalogScreen(
                                     Clock.System.now().toEpochMilliseconds()
                                 }
                             )
-                        )
+                        val updated = store.replaceNgRuleMerging(rule.id, replacement)
                         transientMessage = if (updated) "NGを更新しました" else "NGを更新できませんでした"
                     }
                 }
@@ -5604,12 +5614,16 @@ private fun CompatThreadScreen(
     consumePostRefreshRequest: () -> Boolean = { false },
     /** Shown again after one of this thread's own child screens closed: "スレッドを開いた時に更新" does not apply. */
     reloadOnOpenSuppressed: Boolean = false,
+    openingVisit: com.valoser.futacha.shared.ui.board.ThreadOpeningVisit,
     archiveBaseUrl: String?,
     archiveSearchHistory: List<String>,
     archiveSearchNoticeHidden: Boolean,
     localHistory: List<CompatHistoryEntry>,
     fileSystem: FileSystem?,
     longRunningScope: CoroutineScope,
+    /** The thread save running in the workspace, shown again when its thread comes back (L48). */
+    pageSaves: CompatPageSaves,
+    onSaveNotice: (String) -> Unit,
     store: CompatibilityStore,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
@@ -5776,9 +5790,22 @@ private fun CompatThreadScreen(
     }
     val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var snapshot by snapshotState
-    val openingTracker = remember(tab.key) { com.valoser.futacha.shared.ui.board.ThreadOpeningSummaryTracker(
-        tab.checkedReplyCount.takeIf { it > 0 || tab.snapshotRevision > 0 }?.plus(1)) }
+    LaunchedEffect(openingVisit, stateStore) {
+        if (openingVisit.tracker == null) {
+            val entry = stateStore?.observedHistory?.first()?.firstOrNull {
+                com.valoser.futacha.shared.ui.board.matchesViewedThread(it, tab.boardKey, tab.threadNo, BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl))
+            }
+            openingVisit.initialize(entry?.lastViewedSnapshot?.postCount, entry?.lastViewedSnapshot?.lastPostId)
+        }
+    }
+    val openingTracker = openingVisit.tracker
     var openingLiveSnapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    var openingLivePage by remember(tab.key) { mutableStateOf<com.valoser.futacha.shared.model.ThreadPage?>(null) }
+    com.valoser.futacha.shared.ui.board.ThreadViewedObservationEffect(
+        stateStore, tab.boardKey, tab.threadNo, openingLivePage,
+        live = openingTracker != null && openingLiveSnapshot != null && snapshot === openingLiveSnapshot,
+        boardUrl = BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl)
+    )
     var openingNotice by remember(tab.key) { mutableStateOf<String?>(null) }
     LaunchedEffect(openingNotice) {
         if (openingNotice != null) { delay(5000); openingNotice = null }
@@ -5795,7 +5822,7 @@ private fun CompatThreadScreen(
     }
     val threadAi = rememberCompatThreadAi(stateStore, snapshot, tab.title, ownPostNos, aiRetry, listState, visiblePosts)
     com.valoser.futacha.shared.ui.board.OpenAiLimitNotice(threadAi.moderationEnabled)
-    val speechAiHiddenPostNos by rememberUpdatedState(if (threadNgEnabled) threadAi.hiddenPostNos else emptySet())
+    var speechSnapshot by remember(tab.key) { mutableStateOf(CompatReadAloudVisibleSnapshot()) }
     val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
     val undoRefreshSnapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var undoRefreshSnapshot by undoRefreshSnapshotState
@@ -5903,11 +5930,11 @@ private fun CompatThreadScreen(
     var scrollDialogOpen by scrollDialogOpenState
     val managedNgKindsState = remember { mutableStateOf<Set<CompatNgKind>?>(null) }
     var managedNgKinds by managedNgKindsState
-    var savingPage by remember(tab.key) { mutableStateOf(false) }
-    var pageSaveJob by remember(tab.key) { mutableStateOf<Job?>(null) }
-    var pageSaveCancelRequested by remember(tab.key) { mutableStateOf(false) }
+    // L48: the save belongs to the workspace and goes on when this screen goes; its progress and 中止 come back with it.
+    val runningPageSave = pageSaves.running?.takeIf { it.tabKey == tab.key }
+    val savingPage = runningPageSave != null
     val auxiliaryPageSaveProgressFlow = remember(tab.key) { kotlinx.coroutines.flow.MutableStateFlow<SaveProgress?>(null) }
-    val auxiliaryPageSaveProgress by auxiliaryPageSaveProgressFlow.collectAsState()
+    val auxiliaryPageSaveProgress by (runningPageSave?.auxiliary ?: auxiliaryPageSaveProgressFlow).collectAsState()
     var pageSavePartialSavedCount by remember(tab.key) { mutableIntStateOf(0) }
     var mhtSaveFull by remember(tab.key) { mutableStateOf<Boolean?>(null) }
     // What the MHT save was asked to save, fixed when it was asked: a reload of the thread while the file is written must not change it.
@@ -5977,14 +6004,16 @@ private fun CompatThreadScreen(
     // frames of a thread transition.  Keep it lazy and create it only when
     // the read-aloud command is actually invoked.
     var textSpeaker by remember(platformContext) { mutableStateOf<TextSpeaker?>(null) }
-    val choosePhotoSaveDestination = com.valoser.futacha.shared.ui.board.rememberPhotoSaveDestination(httpClient, fileSystem) { error = it }
+    // Like the other image saves (M28/M29): runs in the workspace and reports until closed (L141).
+    val choosePhotoSaveDestination = com.valoser.futacha.shared.ui.board.rememberPhotoSaveDestination(
+        httpClient, fileSystem, saveScope = longRunningScope) { onSaveNotice(it) }
     val mediaSaver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) SingleMediaSaveService(httpClient, fileSystem) else null
     }
     val pageSaver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) ThreadSaveService(httpClient, fileSystem) else null
     }
-    val pageSaveProgress = pageSaver?.saveProgress?.collectAsState()?.value
+    val pageSaveProgress = (runningPageSave?.page ?: pageSaver?.saveProgress)?.collectAsState()?.value
     val visiblePageSaveProgress = auxiliaryPageSaveProgress ?: pageSaveProgress
     val imageZipSaver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) ImageZipSaveService(httpClient, fileSystem) else null
@@ -6126,7 +6155,7 @@ private fun CompatThreadScreen(
         error = it.toCompatUserMessage("保存先の設定を記録できませんでした")
     }
     fun saveCompatPageNow(mode: String, selectedLocation: SaveLocation?) {
-        if (savingPage) {
+        if (pageSaves.running != null) {
             error = "別の保存を実行中です"
             return
         }
@@ -6140,20 +6169,18 @@ private fun CompatThreadScreen(
             return
         }
         pageSaver?.resetSaveProgress()
-        pageSaveCancelRequested = false
         auxiliaryPageSaveProgressFlow.value = null
         pageSavePartialSavedCount = 0
-        savingPage = true
+        val runningSave = pageSaves.start(tab.key, auxiliaryPageSaveProgressFlow, pageSaver?.saveProgress)
         // A page save belongs to the compatibility workspace, not to this
         // one thread composition. Keep it alive when the user switches tabs,
         // closes the thread, or visits settings, matching the reference APK's
         // foreground-save behavior without leaking beyond CompatibilityApp.
-        pageSaveJob = longRunningScope.launch {
+        runningSave.job = longRunningScope.launch {
+            var resultNotice: String? = null
             try {
                 runCompatPageSaveWithCleanup(onFinished = {
-                    savingPage = false
-                    pageSaveJob = null
-                    pageSaveCancelRequested = false
+                    pageSaves.finish(runningSave)
                     auxiliaryPageSaveProgressFlow.value = null
                 }) {
                     runProtectedThreadSave(
@@ -6169,7 +6196,7 @@ private fun CompatThreadScreen(
                                 total = urls.size,
                                 currentItem = "しばらくお待ち下さい"
                             )
-                            error = imageZipSaver?.save(
+                            resultNotice = imageZipSaver?.save(
                                 mediaUrls = urls,
                                 boardId = tab.boardKey,
                                 threadId = tab.threadNo,
@@ -6192,52 +6219,21 @@ private fun CompatThreadScreen(
                                 onFailure = { it.toCompatUserMessage("ZIPを保存できませんでした") }
                             ) ?: "保存機能を初期化できませんでした"
                         } else if (mode == "save_images_folder") {
-                            val urls = compatBatchMediaUrls(currentSnapshot.posts)
-                            var success = 0
-                            var failure = 0
-                            val outputNames = compatBatchOutputFileNames(urls)
-                            val imageFolder = buildCompatManualImageFolderName(
-                                boardName = tab.boardName,
-                                title = tab.title,
-                                threadId = tab.threadNo
-                            )
-                            auxiliaryPageSaveProgressFlow.value = SaveProgress(
-                                phase = SavePhase.DOWNLOADING,
-                                current = 0,
-                                total = urls.size,
-                                currentItem = "しばらくお待ち下さい"
-                            )
-                            urls.forEachIndexed { index, url ->
-                                auxiliaryPageSaveProgressFlow.value = SaveProgress(
-                                    phase = SavePhase.DOWNLOADING,
-                                    current = index,
-                                    total = urls.size,
-                                    currentItem = url.substringBefore('?').substringAfterLast('/')
+                            // One folder save for every mode: no media, or no saver, is said so (L74).
+                            resultNotice = mediaSaver?.let { saver ->
+                                com.valoser.futacha.shared.ui.board.saveCompatMediaFolder(
+                                    urls = compatBatchMediaUrls(currentSnapshot.posts),
+                                    saver = saver,
+                                    boardKey = tab.boardKey,
+                                    threadId = tab.threadNo,
+                                    boardName = tab.boardName,
+                                    title = tab.title,
+                                    location = selectedLocation,
+                                    fileSystem = fileSystem,
+                                    onProgress = { auxiliaryPageSaveProgressFlow.value = it },
+                                    onSaved = { pageSavePartialSavedCount = it }
                                 )
-                                mediaSaver?.saveMedia(
-                                    url,
-                                    tab.boardKey,
-                                    tab.threadNo,
-                                    baseSaveLocation = selectedLocation,
-                                    baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                    storageDirectoryOverride = imageFolder,
-                                    useTypeSubdirectory = false,
-                                    outputFileNameOverride = outputNames[url],
-                                    onProgress = { itemBytes, itemTotalBytes ->
-                                        auxiliaryPageSaveProgressFlow.value = SaveProgress(
-                                            phase = SavePhase.DOWNLOADING,
-                                            current = index,
-                                            total = urls.size,
-                                            currentItem = url.substringBefore('?').substringAfterLast('/'),
-                                            currentItemBytes = itemBytes,
-                                            currentItemTotalBytes = itemTotalBytes
-                                        )
-                                    }
-                                )
-                                    ?.fold({ success += 1 }, { failure += 1 })
-                                pageSavePartialSavedCount = success
-                            }
-                            error = "メディアを保存しました 成功${success}件 / 失敗${failure}件\n保存先: ${manualSaveDestinationLabel(fileSystem, selectedLocation)}/$imageFolder"
+                            } ?: "保存機能を初期化できませんでした"
                         } else {
                             val includeFull = mode == "save_all"
                             val includeThumb = mode == "save_thumb" || mode == "save_all"
@@ -6268,7 +6264,7 @@ private fun CompatThreadScreen(
                                         )
                                     )
                             }
-                            error = result?.fold(
+                            resultNotice = result?.fold(
                                 onSuccess = { saved -> completeCompatThreadSave(saved, fileSystem, selectedLocation) },
                                 onFailure = { it.toCompatUserMessage("保存できませんでした") }
                             ) ?: "保存機能を初期化できませんでした"
@@ -6276,10 +6272,12 @@ private fun CompatThreadScreen(
                     }
                 }
             } catch (cancelled: CancellationException) {
-                error = compatThreadSaveCancellationMessage(pageSavePartialSavedCount)
+                resultNotice = compatThreadSaveCancellationMessage(pageSavePartialSavedCount)
                 throw cancelled
             } catch (failure: Throwable) {
-                error = failure.toCompatUserMessage("保存できませんでした")
+                resultNotice = failure.toCompatUserMessage("保存できませんでした")
+            } finally {
+                resultNotice?.let(onSaveNotice)
             }
         }
     }
@@ -6522,6 +6520,7 @@ private fun CompatThreadScreen(
                     }
                     if (committed) {
                         openingLiveSnapshot = if (!loadedFromArchive && !archiveSupplemented && !primaryThreadGone && !page.isTruncated) newSnapshot else null
+                        openingLivePage = page.takeIf { openingLiveSnapshot != null }
                         val replyCount = page.compatReplyCount()
                         val statusFlags = parseCompatThreadStatusFlags(page.deletedNotice)
                         val thumbnailUrl = com.valoser.futacha.shared.ui.image.updatedHistoryThumbnailUrl(
@@ -6627,10 +6626,10 @@ private fun CompatThreadScreen(
         loadThreadLocked(manual, refreshOnActivation, bypassCache)
     }
 
-    fun stopReadAloud(message: String? = null) {
+    fun cancelReadAloud(message: String?, keepModel: Boolean) {
+        if (keepModel) textSpeaker?.interrupt() else textSpeaker?.stop()
         readAloudJob?.cancel()
         readAloudJob = null
-        textSpeaker?.stop()
         readingAloud = false
         readAloudDialogOpen = false
         readAloudDisplayPost = null
@@ -6638,8 +6637,10 @@ private fun CompatThreadScreen(
         if (message != null) error = message
     }
 
+    fun stopReadAloud(message: String? = null) = cancelReadAloud(message, keepModel = false)
+
     fun visibleReadAloudIndex(): Int = resolveCompatReadAloudVisibleIndex(
-        snapshot?.posts.orEmpty(), visiblePosts, listState.firstVisibleItemIndex - threadHeaderCount
+        speechSnapshot.posts, visiblePosts, listState.firstVisibleItemIndex - threadHeaderCount
     )
 
     fun startReadAloud(startPostIndex: Int = if (readAloudCursor < 0) visibleReadAloudIndex() else readAloudCursor) {
@@ -6649,7 +6650,7 @@ private fun CompatThreadScreen(
         readAloudPausedAtEnd = false
         val resolvedStartIndex = resolveCompatReadAloudStartIndex(
             requestedIndex = startPostIndex,
-            postCount = snapshot?.posts?.size ?: 0,
+            postCount = speechSnapshot.posts.size,
             keepWaitingAtEnd = resumeAtEnd
         )
         if (resolvedStartIndex != readAloudCursor) readAloudCharacterOffset = 0
@@ -6660,8 +6661,11 @@ private fun CompatThreadScreen(
         // Started lazily so the job is the current one before any of its code runs.
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val thisJob = coroutineContext[Job]
+            val initialSpeechSnapshot = speechSnapshot
             val hasText = withContext(AppDispatchers.textAnnotation) {
-                snapshot?.posts.orEmpty().any { post -> post.postNo !in speechAiHiddenPostNos && compatReadAloudText(post).isNotBlank() }
+                initialSpeechSnapshot.visibleByNo.values.any { post ->
+                    !post.isContentRedacted && compatReadAloudText(post).isNotBlank()
+                }
             }
             if (!hasText) {
                 error = "読み上げ対象がありません"
@@ -6676,25 +6680,34 @@ private fun CompatThreadScreen(
                 speaker.prepare()
                 readingAloud = true
                 while (isActive && readingAloud) {
-                    val currentPosts = snapshot?.posts.orEmpty()
+                    // Advance only over a snapshot whose display filtering has completed.
+                    // A newly fetched response must not be skipped while its NG check is pending.
+                    val currentSpeechSnapshot = speechSnapshot
+                    val currentPosts = currentSpeechSnapshot.posts
+                    val displayedPosts = currentSpeechSnapshot.visibleByNo
                     if (currentPosts.size < readAloudCursor) {
                         readAloudCursor = 0
                         readAloudCharacterOffset = 0
                     }
-                    while (currentPosts.getOrNull(readAloudCursor)?.postNo in speechAiHiddenPostNos) {
+                    while (readAloudCursor < currentPosts.size &&
+                        displayedPosts[currentPosts[readAloudCursor].postNo]?.let { !it.isContentRedacted } != true
+                    ) {
                         readAloudCursor++
                         readAloudCharacterOffset = 0
                     }
-                    readAloudDisplayPost = currentPosts.getOrNull(readAloudCursor)
+                    readAloudDisplayPost = currentPosts.getOrNull(readAloudCursor)?.let { displayedPosts[it.postNo] }
                     readAloudStatus = null
                     val batch = withContext(AppDispatchers.textAnnotation) {
                         buildCompatReadAloudBatch(
                             posts = currentPosts,
                             startPostIndex = readAloudCursor,
                             startCharacterOffset = readAloudCharacterOffset,
-                            hiddenPostNos = speechAiHiddenPostNos
+                            visiblePostsByNo = displayedPosts
                         )
                     }
+                    // Filtering can finish while text is built on a worker. Rebuild against
+                    // the latest displayed list before queueing any newly hidden body.
+                    if (speechSnapshot !== currentSpeechSnapshot) continue
                     if (batch.text.isNotBlank()) {
                         speaker.speak(batch.text)
                     }
@@ -6717,7 +6730,7 @@ private fun CompatThreadScreen(
                         readAloudStatus = stoppedMessage
                         break
                     }
-                    if (snapshot?.posts.orEmpty().size <= readAloudCursor) {
+                    if (speechSnapshot.posts.size <= readAloudCursor) {
                         for (remainingSeconds in 30 downTo 5 step 5) {
                             readAloudStatus = compatReadAloudReloadTimer(remainingSeconds)
                             delay(COMPAT_READ_ALOUD_TIMER_TICK_MILLIS)
@@ -6750,13 +6763,13 @@ private fun CompatThreadScreen(
     }
 
     fun seekReadAloudCursor(index: Int, autoPlay: Boolean = readingAloud || readAloudJob?.isActive == true) {
-        val postCount = snapshot?.posts?.size ?: 0
+        val postCount = speechSnapshot.posts.size
         val target = index.coerceIn(0, (postCount - 1).coerceAtLeast(0))
-        stopReadAloud()
+        cancelReadAloud(null, keepModel = autoPlay)
         readAloudPausedAtEnd = false
         readAloudCursor = target
         readAloudCharacterOffset = 0
-        val targetPost = snapshot?.posts?.getOrNull(target)
+        val targetPost = speechSnapshot.posts.getOrNull(target)?.let { speechSnapshot.visibleByNo[it.postNo] }
         val renderedIndex = targetPost?.let { post ->
             visiblePosts.indexOfFirst { it.postNo == post.postNo }.takeIf { it >= 0 }
                 ?: visiblePosts.indexOfFirst { it.position >= post.position }.takeIf { it >= 0 }
@@ -6771,7 +6784,7 @@ private fun CompatThreadScreen(
     }
     fun moveReadAloudCursor(delta: Int) = seekReadAloudCursor(readAloudCursor + delta, autoPlay = true)
     fun markReadAloudPaused() {
-        val postCount = snapshot?.posts?.size ?: 0
+        val postCount = speechSnapshot.posts.size
         readAloudPausedAtEnd = postCount > 0 && readAloudCursor >= postCount
     }
     fun pauseReadAloud() {
@@ -6861,6 +6874,7 @@ private fun CompatThreadScreen(
     val threadNgFilterCache = remember(tab.key) { CompatThreadNgFilterCacheHolder() }
     LaunchedEffect(
         snapshot?.revision,
+        openingTracker,
         treeDisplayEnabled,
         showDeletedPosts,
         hideDeletedRows,
@@ -6872,8 +6886,9 @@ private fun CompatThreadScreen(
         imageNgPhashThreshold,
         threadAi.hiddenPostNos
     ) {
+        val filteringSnapshot = snapshot
         val posts = presentCompatPostsForDeletedVisibilityOffMain(
-            posts = snapshot?.posts.orEmpty(),
+            posts = filteringSnapshot?.posts.orEmpty(),
             showDeletedContent = showDeletedPosts,
             hideDeletedRows = hideDeletedRows
         )
@@ -6926,6 +6941,13 @@ private fun CompatThreadScreen(
             CompatThreadDisplay(filteredPosts)
         }
         val nextVisiblePosts = display.posts
+        val nextSpeechSnapshot = if (nextVisiblePosts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+            CompatReadAloudVisibleSnapshot(filteringSnapshot?.posts.orEmpty(), nextVisiblePosts.associateBy { it.postNo })
+        } else {
+            withContext(AppDispatchers.parsing) {
+                CompatReadAloudVisibleSnapshot(filteringSnapshot?.posts.orEmpty(), nextVisiblePosts.associateBy { it.postNo })
+            }
+        }
         val headerCount = threadHeaderCount
         // Capture the latest position after the potentially expensive filter
         // calculation, while the old list is still rendered. Restore the same
@@ -6944,12 +6966,15 @@ private fun CompatThreadScreen(
         }
         treeDepthByPostNo = display.depthByPostNo
         visiblePosts = nextVisiblePosts
-        val openingPage = snapshot?.takeIf { it === openingLiveSnapshot }
-        if (openingPage != null && preferences[com.valoser.futacha.shared.ui.board.THREAD_OPEN_SUMMARY_KEY] != "OFF") {
+        speechSnapshot = nextSpeechSnapshot
+        // The live response already has the parser's post and direct-reply metadata. Reusing it avoids
+        // re-normalizing every cached post on the UI dispatcher just to count opening feedback.
+        val openingPage = openingLivePage?.takeIf { snapshot === openingLiveSnapshot }
+        if (openingPage != null && openingTracker != null && !openingTracker.isCompleted) {
             val shownIds = nextVisiblePosts.mapTo(HashSet()) { it.postNo }
-            val openingHiddenIds = openingPage.posts.filter { it.postNo !in shownIds }.mapTo(HashSet()) { it.postNo }
-            openingTracker.accept(openingPage.toThreadPage(tab.threadNo).posts, ownPostNos, openingHiddenIds)?.let {
-                openingNotice = it.text
+            val openingHiddenIds = openingPage.posts.filter { it.id !in shownIds }.mapTo(HashSet()) { it.id }
+            openingTracker.accept(openingPage.posts, ownPostNos, openingHiddenIds)?.let {
+                if (preferences[com.valoser.futacha.shared.ui.board.THREAD_OPEN_SUMMARY_KEY] != "OFF") openingNotice = it.text
             }
         }
         if (replacementAnchor != null && nextVisiblePosts.isNotEmpty()) {
@@ -7529,16 +7554,18 @@ private fun CompatThreadScreen(
             manualRefreshNotice = null
         }
     }
+    // An open drawer takes the back first: these give way to the last handler, whose Back closes it (L63: the search
+    // was closed first, and the drawer stayed).
     PlatformBackHandler(
-        enabled = replyPopupPosts.isNotEmpty(),
+        enabled = replyPopupPosts.isNotEmpty() && !isDrawerOpen,
         iosEdgeGestureEnabled = false
     ) {
         replyPopupPosts = emptyList()
     }
-    PlatformBackHandler(enabled = quoteStack.isNotEmpty(), iosEdgeGestureEnabled = false) {
+    PlatformBackHandler(enabled = quoteStack.isNotEmpty() && !isDrawerOpen, iosEdgeGestureEnabled = false) {
         quoteStack = quoteStack.dropLast(1)
     }
-    PlatformBackHandler(enabled = searchActive, iosEdgeGestureEnabled = false) {
+    PlatformBackHandler(enabled = searchActive && !isDrawerOpen, iosEdgeGestureEnabled = false) {
         when (searchBackDismissStages) {
             2 -> {
                 // API 26/29 can consume the first BACK in the platform IME without
@@ -7574,7 +7601,7 @@ private fun CompatThreadScreen(
         }
     }
     PlatformBackHandler(
-        enabled = !searchActive && quoteStack.isEmpty(),
+        enabled = (!searchActive && quoteStack.isEmpty()) || isDrawerOpen,
         iosEdgeGestureEnabled = false
     ) {
         onBack()
@@ -8170,13 +8197,15 @@ private fun CompatThreadScreen(
             post = readAloudDisplayPost,
             follow = speechFollow,
             showThumbnails = speechThumbnails,
-            onFollowChange = { speechFollow = it; scope.launch { store.savePreference("compat.speech.follow", if (it) "ON" else "OFF") } },
-            onThumbnailsChange = { speechThumbnails = it; scope.launch { store.savePreference("compat.speech.thumbnails", if (it) "ON" else "OFF") } },
+            onFollowChange = { speechFollow = it
+                launchThreadStoreSafely("read-aloud follow persistence") { store.savePreference("compat.speech.follow", if (it) "ON" else "OFF") } },
+            onThumbnailsChange = { speechThumbnails = it
+                launchThreadStoreSafely("read-aloud thumbnail persistence") { store.savePreference("compat.speech.thumbnails", if (it) "ON" else "OFF") } },
             onHide = { readAloudDialogOpen = false },
             message = readAloudStatus,
             fontSize = threadFontSize,
             currentIndex = readAloudCursor.coerceAtLeast(0),
-            postCount = snapshot?.posts?.size ?: 0,
+            postCount = speechSnapshot.posts.size,
             playing = readingAloud || readAloudJob?.isActive == true,
             onSeek = { seekReadAloudCursor(it) },
             onSeekToVisible = { seekReadAloudCursor(visibleReadAloudIndex(), autoPlay = true) },
@@ -8185,13 +8214,13 @@ private fun CompatThreadScreen(
             onDismiss = { stopReadAloud() }
         )
     }
-    if (savingPage && visiblePageSaveProgress != null) {
+    if (runningPageSave != null && visiblePageSaveProgress != null) {
         CompatThreadSaveProgressDialog(
             progress = visiblePageSaveProgress,
-            cancelRequested = pageSaveCancelRequested,
+            cancelRequested = runningPageSave.cancelRequested,
             onCancel = {
-                pageSaveCancelRequested = true
-                pageSaveJob?.cancel()
+                runningPageSave.cancelRequested = true
+                runningPageSave.job?.cancel()
             }
         )
     }
@@ -8565,6 +8594,8 @@ private fun CompatThreadScreen(
             manualSaveLocation = manualSaveLocation,
             withSaveDestination = withSaveDestination,
             scope = scope,
+            saveCoroutineScope = longRunningScope,
+            onSaveResult = onSaveNotice,
             clipboard = clipboard,
             openUrl = openUrl,
             share = share,
@@ -8724,20 +8755,24 @@ private fun CompatThreadNgManagementDialog(
             }
         },
         onEdit = { rule, value, allThreads, memo ->
+            val typedReference = threadReferenceKind != null && isCompatTypedThreadReference(rule.kind)
             val displayValue = when {
+                typedReference -> value.trim()
                 threadReferenceKind != null -> cleanCompatThreadReferenceWord(value)
                 imageReferenceSource != null -> rule.normalizedValue
                 else -> value
             }
             val normalized = if (imageReferenceSource != null) {
                 rule.normalizedValue
+            } else if (typedReference) {
+                compatTypedThreadReferenceEditValue(rule.kind, displayValue).orEmpty()
             } else {
                 displayValue.normalizeCompatNgValue()
             }
             if (normalized.isBlank()) {
                 error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
             } else if (
-                threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
+                !typedReference && threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
                 isCompatThreadRefuseForbidden(displayValue)
             ) {
                 error = "登録できない単語です"
@@ -8745,16 +8780,17 @@ private fun CompatThreadNgManagementDialog(
                 launchThreadStoreSafely("thread NG edit", "NGの更新に失敗しました") {
                     val scopeKey = if (allThreads) "*" else if (
                         rule.kind == CompatNgKind.THREAD_IMAGE || rule.kind == CompatNgKind.THREAD_IMAGE_PHASH
-                    ) tab.boardKey else tab.key
-                    store.deleteNgRule(rule.id)
-                    val updatedKind = threadReferenceKind ?: rule.kind
-                    val updated = store.upsertNgRule(
+                    ) tab.boardKey else if (rule.kind == CompatNgKind.THREAD_POST_NO &&
+                        canonicalizeThreadUrl(rule.scopeKey)?.canonicalUrl == tab.canonicalUrl
+                    ) rule.scopeKey else tab.key
+                    val updatedKind = rule.kind
+                    val updated = store.replaceNgRule(rule.id,
                         rule.copy(
                             id = compatNgRuleId(updatedKind, scopeKey, normalized),
                             kind = updatedKind,
                             scopeKey = scopeKey,
                             normalizedValue = normalized,
-                            memo = if (threadReferenceKind != null) displayValue else memo,
+                            memo = if (threadReferenceKind != null && !typedReference) displayValue else memo,
                             createdAtEpochMillis = if (imageReferenceSource != null) {
                                 rule.createdAtEpochMillis
                             } else {
@@ -9105,6 +9141,8 @@ private fun CompatThreadMediaContextDialog(
     manualSaveLocation: SaveLocation?,
     withSaveDestination: ((SaveLocation?) -> Unit) -> Unit,
     scope: CoroutineScope,
+    saveCoroutineScope: CoroutineScope,
+    onSaveResult: (String) -> Unit,
     clipboard: ClipboardManager,
     openUrl: (String) -> Unit,
     share: (String, String, String?) -> Unit,
@@ -9132,9 +9170,11 @@ private fun CompatThreadMediaContextDialog(
             mediaContextPost = null
             chooseMediaSaveDestination(mediaUrl) {
             withSaveDestination { selectedLocation ->
-            scope.launch {
+            saveCoroutineScope.launchCompatScreenAction("CompatThreadImageSave", { failure ->
+                onSaveResult(failure.toCompatUserMessage("画像を保存できませんでした"))
+            }) {
                 val saver = mediaSaver
-                if (saver == null) error = "保存機能を初期化できませんでした"
+                if (saver == null) onSaveResult("保存機能を初期化できませんでした")
                 else saver.saveMedia(
                     mediaUrl,
                     tab.boardKey,
@@ -9143,8 +9183,8 @@ private fun CompatThreadMediaContextDialog(
                     storageDirectoryOverride = "",
                     useTypeSubdirectory = false
                 )
-                    .onSuccess { error = compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) }
-                    .onFailure { error = it.toCompatUserMessage("画像を保存できませんでした") }
+                    .onSuccess { onSaveResult(compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation)) }
+                    .onFailure { onSaveResult(it.toCompatUserMessage("画像を保存できませんでした")) }
             }
             }
             }
@@ -9489,7 +9529,7 @@ private fun CompatThreadOtherMenuDialog(
                 "ng_image" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE)
                 COMPAT_COMMON_NG_MENU_KEY -> onOpenCommonNg?.invoke()
                 "ng_image_phash" -> managedNgKinds = setOf(CompatNgKind.THREAD_IMAGE_PHASH)
-                "ng_toggle" -> scope.launch {
+                "ng_toggle" -> launchThreadStoreSafely("thread NG preference persistence") {
                     store.savePreference(
                         compatPreferenceStorageKey("thread", "threadNg"),
                         if (threadNgEnabled) "OFF" else "ON"
@@ -9948,44 +9988,59 @@ private fun CompatToolbar(
         modifier = Modifier.fillMaxWidth().background(CompatTeal).navigationBarsPadding()
             .testTag("compat-main-bottom-bar")
     ) {
-        ScrollableToolbarRow(itemCount = renderedCommands.size, modifier = Modifier.fillMaxWidth().height(40.dp)) {
-            renderedCommands.forEach { command ->
-                val refreshing = command.key in refreshingCommandKeys
-                Box(
-                    modifier = Modifier.weight(1f).fillMaxSize()
-                        .testTag("compat-toolbar-command-${command.key}")
-                        .clickable(
-                        enabled = command.onClick != null && !refreshing,
-                        role = Role.Button,
-                        onClickLabel = command.label,
-                        onClick = command.onClick ?: {}
-                    ).semantics {
-                        if (command.showUpdateBadge) stateDescription = "更新あり"
-                    },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (refreshing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp).semantics {
-                                contentDescription = "更新中"
-                            },
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        CompatToolbarArtworkIcon(
-                            artwork = command.icon,
-                            contentDescription = command.label,
-                            tint = when {
-                                command.onClick == null -> Color.White.copy(alpha = 0.38f)
-                                command.selected -> Color(0xFFFFEB3B)
-                                else -> Color.White
-                            },
-                            modifier = Modifier.size(iconSize).testTag("compat-toolbar-icon-${command.key}")
-                        )
+        // Thread and catalog bars alike (M47, M76): defaults fit, "その他" stays pinned at the right edge.
+        if (onOther != null) {
+            BoxWithConstraints(Modifier.fillMaxWidth().height(40.dp)) {
+                val itemWidth = compactThreadToolbarItemWidth(maxWidth.value, renderedCommands.size).dp
+                Row(Modifier.fillMaxSize()) {
+                    ScrollableToolbarRow(itemCount = visibleCommands.size,
+                        minItemWidth = COMPAT_THREAD_TOOLBAR_MIN_ITEM_WIDTH_DP.dp,
+                        modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        visibleCommands.forEach { command ->
+                            CompatToolbarButton(command, refreshingCommandKeys, iconSize,
+                                Modifier.weight(1f).fillMaxHeight())
+                        }
                     }
+                    // Keep the menu available even when a saved all-on toolbar needs to scroll.
+                    CompatToolbarButton(renderedCommands.last(), refreshingCommandKeys, iconSize,
+                        Modifier.width(itemWidth).fillMaxHeight())
                 }
             }
+        } else {
+            ScrollableToolbarRow(itemCount = renderedCommands.size, modifier = Modifier.fillMaxWidth().height(40.dp)) {
+                renderedCommands.forEach { command ->
+                    CompatToolbarButton(command, refreshingCommandKeys, iconSize, Modifier.weight(1f).fillMaxSize())
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompatToolbarButton(
+    command: CompatToolbarCommand,
+    refreshingCommandKeys: Set<String>,
+    iconSize: Dp,
+    modifier: Modifier
+) {
+    val refreshing = command.key in refreshingCommandKeys
+    Box(
+        modifier = modifier.testTag("compat-toolbar-command-${command.key}")
+            .clickable(enabled = command.onClick != null && !refreshing, role = Role.Button,
+                onClickLabel = command.label, onClick = command.onClick ?: {})
+            .semantics { if (command.showUpdateBadge) stateDescription = "更新あり" },
+        contentAlignment = Alignment.Center
+    ) {
+        if (refreshing) {
+            CircularProgressIndicator(Modifier.size(24.dp).semantics { contentDescription = "更新中" },
+                color = Color.White, strokeWidth = 2.dp)
+        } else {
+            CompatToolbarArtworkIcon(artwork = command.icon, contentDescription = command.label,
+                tint = when {
+                    command.onClick == null -> Color.White.copy(alpha = 0.38f)
+                    command.selected -> Color(0xFFFFEB3B)
+                    else -> Color.White
+                }, modifier = Modifier.size(iconSize).testTag("compat-toolbar-icon-${command.key}"))
         }
     }
 }
@@ -10411,10 +10466,13 @@ private fun CompatNavigationDrawer(
     onClose: () -> Unit,
     onUndoClose: () -> Unit,
     /** The history tools (filter, marks, archive, refresh); null when off. See CompatHistoryTools.kt. */
-    historyTools: CompatHistoryTools? = null
+    historyTools: CompatHistoryTools? = null,
+    /** "全て削除する" also clears the history every mode shares, own-post records and auto-saved copies. */
+    historyClearReachesEveryMode: Boolean = false
 ) {
     var contextTab by remember { mutableStateOf<CompatTab?>(null) }
     var contextHistory by remember { mutableStateOf<CompatHistoryEntry?>(null) }
+    var confirmHistoryClear by remember { mutableStateOf(false) }
     var contextExternalWatcher by remember { mutableStateOf<CompatExternalWatcherEntry?>(null) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
     var checkingDeadTabs by remember { mutableStateOf(false) }
@@ -10685,10 +10743,24 @@ private fun CompatNavigationDrawer(
                         if (!tools.refreshing) transientMessage = "履歴の一括更新を開始しました"
                         tools.refresh()
                     }
-                    else -> onHistoryCleared()
+                    else -> confirmHistoryClear = true
                 }
             }
         )
+    }
+    // A clear of the whole history asks first, saying what it reaches, as ふたばー風 and ふたったー風 do (L61: it went
+    // at once, every mode's shared history, own-post records and auto-saved copies included).
+    if (confirmHistoryClear) {
+        FutachaAppLockAwareWindow { AlertDialog(
+            modifier = Modifier.testTag("compat-history-clear-confirm"),
+            onDismissRequest = { confirmHistoryClear = false },
+            title = { Text("履歴をすべて削除しますか？") },
+            text = { Text(compatHistoryClearConfirmation(uniqueHistories.size, historyClearReachesEveryMode)) },
+            confirmButton = {
+                TextButton(onClick = { confirmHistoryClear = false; onHistoryCleared() }) { Text("削除する") }
+            },
+            dismissButton = { TextButton(onClick = { confirmHistoryClear = false }) { Text("キャンセル") } }
+        ) }
     }
     contextExternalWatcher?.let { selected ->
         CompatLegacyChoiceDialog(

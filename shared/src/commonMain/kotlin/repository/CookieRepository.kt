@@ -80,6 +80,11 @@ class CookieRepository(
         storage.clearAll()
     }
 
+    /** Reports a local import's persistence failure without changing network-request behavior. */
+    suspend fun flushPendingChanges() {
+        storage.flushPendingChanges()
+    }
+
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
         return storage.commitOnSuccess(block)
     }

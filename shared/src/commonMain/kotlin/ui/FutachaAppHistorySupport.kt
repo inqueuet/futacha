@@ -17,6 +17,7 @@ import com.valoser.futacha.shared.state.AppStateHistoryScrollUpdateRequest
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.launchFinalHistoryScrollPersistence
 import com.valoser.futacha.shared.state.launchHistoryScrollPersistence
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
@@ -198,6 +199,8 @@ internal suspend fun recordFutachaVisitedThread(
     currentTimeMillis: Long,
     minimumIntervalMillis: Long = 0L
 ): Boolean {
+    // A saved thread played without its board: such a row can be neither opened nor refreshed (L29).
+    if (com.valoser.futacha.shared.model.isSavedThreadPlaceholderUrl(board.url)) return false
     val existingEntry = findFutachaVisitedHistoryEntry(
         history = history,
         threadId = threadId,
@@ -303,6 +306,18 @@ internal fun resolveHistoryEntryBoardId(entry: ThreadHistoryEntry): String? {
         .ifBlank { runCatching { BoardUrlResolver.resolveBoardSlug(entry.boardUrl) }.getOrDefault("") }
         .ifBlank { "" }
     return resolvedBoardId.ifBlank { null }
+}
+
+/**
+ * The first AppState history row whose shared-history address is [canonicalUrl] (としあき(仮)'s deletion of one row).
+ * The history holds up to 20,000 rows, each converted to compare: searched away from the caller, the screen's
+ * thread (L44).
+ */
+internal suspend fun findModernHistoryEntryFor(
+    history: List<ThreadHistoryEntry>,
+    canonicalUrl: String
+): ThreadHistoryEntry? = withContext(AppDispatchers.parsing) {
+    history.firstOrNull { it.toCompatHistoryEntry()?.canonicalUrl == canonicalUrl }
 }
 
 internal suspend fun dismissHistoryEntry(

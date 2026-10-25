@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.time.Duration
@@ -69,6 +71,7 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
+import com.valoser.futacha.shared.ui.appLockSnapshotFrameReady
 import com.valoser.futacha.shared.ui.IosReviewCompliance
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.ui.consumePlatformAiCommand
@@ -90,9 +93,7 @@ import com.valoser.futacha.shared.compat.IosArchiveReportScheduler
 import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
 import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
-import com.valoser.futacha.shared.compat.modernBoardsToCompatibility
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
-import com.valoser.futacha.shared.compat.compatibilityHistorySharedMetadata
 import com.valoser.futacha.shared.compat.CompatForegroundNetworkPolicy
 import com.valoser.futacha.shared.compat.CompatBoard
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
@@ -126,9 +127,7 @@ import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSUserDefaults
 import platform.UIKit.UIViewController
-import platform.UserNotifications.UNMutableNotificationContent
 import platform.UserNotifications.UNNotificationRequest
-import platform.UserNotifications.UNNotificationSound
 import platform.UserNotifications.UNUserNotificationCenter
 import com.valoser.futacha.shared.version.createVersionChecker
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
@@ -142,7 +141,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onEach
@@ -302,6 +300,14 @@ private object IosBoardDeepLinkBridge {
 
 /** Called from SwiftUI's `onOpenURL` for both cold and warm launches. */
 fun submitIosThreadDeepLink(raw: String): Boolean = IosThreadDeepLinkBridge.submit(raw)
+
+/**
+ * Called from the app delegate when the person taps a notification (also one that launched the app): a watch
+ * notification for one thread opens it through the same path as a thread link, as on Android and Desktop (L119).
+ * Returns false when the notification names no thread; the app is then just brought forward.
+ */
+fun openIosNotificationThread(userInfo: Map<Any?, *>): Boolean =
+    iosNotificationThreadUrl(userInfo)?.let(::submitIosThreadDeepLink) ?: false
 
 /** Whether [raw] is a `futacha://ai` command link (S4-3). */
 internal fun isIosFutachaAiLink(raw: String): Boolean {
@@ -996,42 +1002,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         }
         LaunchedEffect(initializationComplete, stateStore, compatibilityStore, activeProfile) {
             if (!initializationComplete) return@LaunchedEffect
-            coroutineScope {
-                launch {
-                    if (!activeProfile.usesAppStateData) {
-                        compatibilityStore.boards.collect { compatBoards ->
-                            val current = stateStore.boards.first()
-                            val synchronized = synchronizeModernBoardsFromCompatibility(
-                                current, compatBoards, compatibilityStore.holdsBundledTutorialBoard
-                            )
-                            if (synchronized != current) stateStore.setBoards(synchronized)
-                        }
-                    } else {
-                        var hasObservedLoadedModernBoards = false
-                        stateStore.boards.collect { modernBoards ->
-                            if (modernBoards.isNotEmpty()) hasObservedLoadedModernBoards = true
-                            if (!hasObservedLoadedModernBoards) return@collect
-                            val desired = modernBoardsToCompatibility(modernBoards)
-                            val desiredKeys = com.valoser.futacha.shared.compat.compatibilityBoardSynchronizationKeys(modernBoards)
-                            compatibilityStore.importModernBoards(modernBoards)
-                            compatibilityStore.boards.first()
-                                .filterNot { it.key in desiredKeys }
-                                .forEach { compatibilityStore.deleteBoard(it.key) }
-                            compatibilityStore.upsertBoards(desired)
-                        }
-                    }
-                }
-                launch {
-                    compatibilityStore.history
-                        .distinctUntilChangedBy(::compatibilityHistorySharedMetadata)
-                        .collect { compatHistory ->
-                        val boards = stateStore.boards.first()
-                        stateStore.updateHistory { current ->
-                            mergeCompatibilityHistory(current, compatHistory, boards)
-                        }
-                        }
-                }
-            }
+            synchronizeIosProfileData(stateStore, compatibilityStore, activeProfile.usesAppStateData)
         }
         LaunchedEffect(fileSystem) {
             (fileSystem as? com.valoser.futacha.shared.util.IosFileSystem)
@@ -1318,7 +1289,10 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         onAppUnlockedChanged = { unlocked ->
                             isFutachaAppUnlocked = unlocked
                             publishIosAppUnlockedState(unlocked)
-                        }
+                            // The in-app browser is outside Compose: close it under the lock, reopen it after (L127).
+                            com.valoser.futacha.shared.util.IosInAppBrowser.onAppUnlockedChanged(unlocked)
+                        },
+                        onSessionLocked = { com.valoser.futacha.shared.util.IosInAppBrowser.onSessionLocked() }
                     )
                 }
             }
@@ -1344,6 +1318,13 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     initializationAttempt += 1
                 }
             )
+        } else {
+            // Before the Root exists this host has no lock frame producer. Keep
+            // its existing blank system surface opaque and acknowledge its real
+            // draw, so a slow initialization can return from the background too.
+            Box(Modifier.fillMaxSize()
+                .background(if (isSystemInDarkTheme()) Color.Black else Color.White)
+                .appLockSnapshotFrameReady())
         }
     }
 }
@@ -1355,6 +1336,7 @@ private fun IosInitializationErrorScreen(message: String, onRetry: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
+                .appLockSnapshotFrameReady()
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -1665,7 +1647,10 @@ private suspend fun runIosBackgroundRefreshLocked(
                         diagnosticsStore = archiveStore,
                         repository = repo,
                         dispatcher = AppDispatchers.io
-                    ).refresh(onMatchesFound = { matches ->
+                    ).refresh(commitGate = { commit ->
+                        // Its cursor and diagnostics are not written after a mode switch (re-audit L82).
+                        profileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
+                    }, onMatchesFound = { matches ->
                         val newMatches = notifyNewIosWatchAlertMatches(matches)
                         if (newMatches.isNotEmpty()) {
                             Logger.d("BackgroundRefresh", "Detected ${newMatches.size} iOS watch alert match(es)")
@@ -1748,21 +1733,7 @@ private suspend fun postIosWatchAlertNotification(matches: List<CatalogWatchAler
     if (matches.isEmpty()) return false
     val center = UNUserNotificationCenter.currentNotificationCenter()
     val first = matches.first()
-    val title = if (matches.size == 1) {
-        "監視ワードに一致しました"
-    } else {
-        "監視ワードに ${matches.size} 件一致しました"
-    }
-    val body = if (matches.size == 1) {
-        "${first.boardName}: ${first.title}"
-    } else {
-        "${first.boardName}: ${first.title} ほか"
-    }
-    val content = UNMutableNotificationContent().apply {
-        setTitle(title)
-        setBody(body)
-        setSound(UNNotificationSound.defaultSound())
-    }
+    val content = buildIosWatchAlertNotificationContent(matches)
     val request = UNNotificationRequest.requestWithIdentifier(
         identifier = "watch-alert-${first.detectedAtEpochMillis}",
         content = content,

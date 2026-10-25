@@ -245,3 +245,30 @@ internal fun parseFtutterReadCounts(raw: String?): Map<String, Int> =
 
 internal fun encodeFtutterReadCounts(counts: Map<String, Int>): String =
     encodeFtutterList(counts.entries.map { "${it.key}\t${it.value}" })
+
+/** 既読の記録（件数・「ここまで読んだ」の境界）を1つの保存値に収める字数（保存値の上限2万字の内側）。 */
+internal const val FTUTTER_READ_RECORD_MAX_CHARS = 18_000
+
+/**
+ * 既読の記録を1つの保存値に収める（L129）。以前は最近の200件で切ったので、履歴の保存数（最大1000）より手前で古いタブの
+ * 未読数・境界が黙って消え、取り込んだ400件も次の書き込みで200件に減った。字数で切り、[keepFirst]（今のタブ・保護した
+ * スレ）を先に残し、残りは並び（新しい順）のまま入る所まで。並びは変えない。
+ */
+internal fun <T> ftutterTrimReadRecords(
+    records: List<T>, url: (T) -> String, line: (T) -> String, keepFirst: Set<String>,
+    maxChars: Int = FTUTTER_READ_RECORD_MAX_CHARS
+): List<T> {
+    var length = -1
+    val kept = HashSet<Int>()
+    for (index in records.indices.sortedBy { if (url(records[it]) in keepFirst) 0 else 1 }) {
+        val next = length + 1 + line(records[index]).length
+        if (next > maxChars) continue
+        length = next
+        kept += index
+    }
+    return records.filterIndexed { index, _ -> index in kept }
+}
+
+internal fun ftutterTrimReadCounts(counts: Map<String, Int>, keepFirst: Set<String>): Map<String, Int> =
+    ftutterTrimReadRecords(counts.entries.toList(), { it.key }, { "${it.key}\t${it.value}" }, keepFirst)
+        .associate { it.key to it.value }

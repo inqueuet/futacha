@@ -85,6 +85,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -116,7 +117,6 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked
 import com.valoser.futacha.shared.ui.board.CatalogPreviewImage
 import com.valoser.futacha.shared.ui.board.FutachaPageSaveDialog
 import com.valoser.futacha.shared.ui.board.FutachaSharedFeatures
@@ -175,12 +175,14 @@ internal fun FutaberThreadScreen(
     onPageLoaded: (List<Post>) -> Unit,
     /** Called when the page just loaded is the live thread (not an archived copy), so its history row can be marked alive. */
     onLivePageConfirmed: () -> Unit = {},
+    /** The thread was confirmed gone (404/410) while shown (L108). */
+    onConfirmedGone: () -> Unit = {},
     onScrollSettled: (index: Int, offset: Int, postId: String?, total: Int) -> Unit,
     ngWords: List<String>,
     ngHeaders: List<String>,
     ngRules: List<CompatNgRule>,
-    onChangeNgWords: (List<String>) -> Unit,
-    onChangeNgHeaders: (List<String>) -> Unit,
+    onChangeNgWords: ((List<String>) -> List<String>) -> Unit,
+    onChangeNgHeaders: ((List<String>) -> List<String>) -> Unit,
     onBack: () -> Unit,
     mediaServices: FutaberMediaServices? = null,
     /** Set while a saved copy is shown: the thread may be older than the live one, and the visit is not recorded. */
@@ -215,7 +217,8 @@ internal fun FutaberThreadScreen(
     ai: FutaberAiThreadLink? = null,
     /** B9: auto-saves the live page as ふたちゃ does (the extension "閲覧中のスレッドを自動保存"); null saves nothing. */
     autoSave: FutaberAutoSaveLink? = null,
-    initialKnownPostCount: Int? = null
+    initialKnownPostCount: Int? = null,
+    initialKnownLastPostId: String? = null
 ) {
     val colors = LocalFutaberColors.current
     var load by remember(board.id, ref.threadId) { mutableStateOf(FutaberThreadLoad()) }
@@ -282,6 +285,7 @@ internal fun FutaberThreadScreen(
             val fallback = resolveThreadLoadFallbackState(error, allowOfflineFallback = true)
             liveConfirmed = false
             confirmedGone = fallback.shouldTryArchiveFallback
+            if (fallback.shouldTryArchiveFallback && offlineNotice == null) onConfirmedGone()
             val archived = if (fallback.shouldTryArchiveFallback) {
                 futaberArchivedThread(archiveHttpClient, repository, ref.threadId, board.url, archiveSearchJson)
             } else null
@@ -329,8 +333,7 @@ internal fun FutaberThreadScreen(
     }
     // Leaving the screen, or locking the app, stops the voice and releases the speaker.
     DisposableEffect(reader) { onDispose { reader.dispose() } }
-    val appUnlocked = LocalFutachaAppUnlocked.current
-    LaunchedEffect(appUnlocked) { if (!appUnlocked) reader.stop() }
+    FutaberReadAloudAppLockEffect(reader)
     var markTarget by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     var actionPost by remember(board.id, ref.threadId) { mutableStateOf<Post?>(null) }
     // The poster's ID (else the name) of the post whose "NG登録" opened the NG dialog, ready to add.
@@ -338,7 +341,7 @@ internal fun FutaberThreadScreen(
     val longPressHaptic = rememberFutaberLongPressHaptic()
     var remoteConfirm by remember(board.id, ref.threadId) { mutableStateOf<Pair<FutaberRemoteAction, Post>?>(null) }
     var remoteNotice by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
-    var remoteBusy by remember(board.id, ref.threadId) { mutableStateOf(false) }
+    var remoteBusyHere by remember(board.id, ref.threadId) { mutableStateOf(false) }
     // Sends the action through the shared repository calls ふたちゃ uses; the result is shown as a notice. It runs in the
     // app's scope and tells its result as the app's notice when this thread has been left meanwhile (re-audit L3: leaving
     // cancelled it, and after moving to another thread the result never showed).
@@ -346,11 +349,27 @@ internal fun FutaberThreadScreen(
     val currentThreadKey by rememberUpdatedState(board.id to ref.threadId)
     var threadScreenShown by remember { mutableStateOf(true) }
     DisposableEffect(Unit) { onDispose { threadScreenShown = false } }
+    // A result goes to the state of the thread shown now when it is the one that sent it (L109: it was written to the
+    // state captured when sending, which is replaced when the thread changes, so after A→B→A it never showed and A was
+    // not reloaded), else to the app's notice.
+    val deliverHere by rememberUpdatedState { message: String, reload: Boolean ->
+        remoteNotice = message
+        if (reload) refreshTick += 1
+    }
+    fun deliverThreadResult(sentFrom: Pair<String, String>, message: String, reload: Boolean = false) {
+        if (threadScreenShown && currentThreadKey == sentFrom) deliverHere(message, reload) else appTasks?.notify(message)
+    }
+    // Read when pressed, so a second press before the next frame is refused too.
+    fun isRemoteBusy(thread: Pair<String, String>): Boolean = appTasks?.let { thread in it.busyThreads } ?: remoteBusyHere
+    fun setRemoteBusy(thread: Pair<String, String>, busy: Boolean) {
+        if (appTasks != null) { if (busy) appTasks.busyThreads[thread] = true else appTasks.busyThreads.remove(thread) }
+        else remoteBusyHere = busy
+    }
     val runRemoteAction: (FutaberRemoteAction, Post, Boolean) -> Unit = { action, target, imageOnly ->
-        if (!remoteBusy) {
-            remoteBusy = true
+        val sentFrom = board.id to ref.threadId
+        if (!isRemoteBusy(sentFrom)) {
+            setRemoteBusy(sentFrom, true)
             remoteNotice = "処理中です…"
-            val sentFrom = board.id to ref.threadId
             (appTasks?.scope ?: scope).launch {
                 var reportResult: String? = null
                 val result = performThreadAction {
@@ -378,13 +397,9 @@ internal fun FutaberThreadScreen(
                     is ThreadActionRunResult.Success -> reportResult ?: futaberRemoteSuccessMessage(action, imageOnly)
                     is ThreadActionRunResult.Failure -> buildThreadActionFailureMessage(futaberRemoteFailurePrefix(action, imageOnly), result.error)
                 }
-                if (threadScreenShown && currentThreadKey == sentFrom) {
-                    remoteBusy = false
-                    if (result is ThreadActionRunResult.Success && action != FutaberRemoteAction.Report) refreshTick += 1
-                    remoteNotice = message
-                } else {
-                    appTasks?.notify(message)
-                }
+                setRemoteBusy(sentFrom, false)
+                deliverThreadResult(sentFrom, message,
+                    reload = result is ThreadActionRunResult.Success && action != FutaberRemoteAction.Report)
             }
         }
     }
@@ -506,7 +521,11 @@ internal fun FutaberThreadScreen(
         enabled = display.extOpenSummary,
         live = liveConfirmed && !load.isLoading && !ngWaiting && offlineNotice == null && archiveNotice == null && offlineCopyNotice == null,
         truncated = load.page?.isTruncated == true,
-        onNotice = { remoteNotice = it }
+        onNotice = { remoteNotice = it }, baselineLastPostId = initialKnownLastPostId
+    )
+    com.valoser.futacha.shared.ui.board.ThreadViewedObservationEffect(
+        stateStore, board.id, ref.threadId, load.page,
+        live = liveConfirmed && !paused && !load.isLoading && offlineNotice == null && archiveNotice == null && offlineCopyNotice == null
     )
     // The tree view (an extension, off by default): replies listed under the post they quote.
     val treeNodes by produceState(emptyList<ThreadTreeNode>(), posts, display.extTree) {
@@ -605,18 +624,20 @@ internal fun FutaberThreadScreen(
     // A refreshed thread can drop posts a bubble showed, so bubbles are closed with it.
     LaunchedEffect(refreshTick, refreshSignal) { quoteStack = emptyList() }
     PlatformBackHandler(enabled = quoteStack.isNotEmpty()) { quoteStack = quoteStack.dropLast(1) }
+    // Something over the thread (a bubble, the menu, a sheet, 抽出, URL・アーカイブ): the edge gestures and volume keys
+    // leave it alone, so back closes it first (L114: Android's left-edge back opened the board list under the menu).
+    val threadOverlayOpen = quoteStack.isNotEmpty() || menuOpen || actionPost != null || extractOpen || imagePost != null || archiveOpen
     FutaberVolumeKeyEffect(
         // Not while something covers the thread: the picture list / viewer, the menus, the drawer or the panel (audit L17:
         // the keys scrolled the hidden thread, and "タブのスレッドを切り替え" closed the viewer), nor under "URL・アーカイブ"
         // or a quote popup (re-audit L2; the tab sheet comes with volumeKeysCovered).
         enabled = LocalFutaberDisplaySettings.current.extVolumeKeys && !paused && !volumeKeysCovered &&
-            !mediaOpen && !menuOpen && actionPost == null && imagePost == null && !extractOpen &&
-            !archiveOpen && quoteStack.isEmpty(),
+            !mediaOpen && !threadOverlayOpen,
         listState = listState,
         mode = LocalFutaberDisplaySettings.current.volumeKeyMode, onSwitchThread = onVolumeKeyThread
     )
     // A swipe in from the left edge opens the board list; while a bubble is open it must not.
-    ThreadDrawerBackGestureHandler(enabled = drawerGestureEnabled && quoteStack.isEmpty(), onOpenDrawer = onOpenDrawer)
+    ThreadDrawerBackGestureHandler(enabled = drawerGestureEnabled && !threadOverlayOpen, onOpenDrawer = onOpenDrawer)
     val openQuote: (FutaberQuoteKind, List<Post>, FutaberAnchor) -> Unit = { kind, related, anchor ->
         val shown = related.filter { it.id !in activeHidden }
         if (shown.isNotEmpty()) quoteStack = quoteStack + FutaberQuoteLayer(kind, shown, anchor)
@@ -628,7 +649,7 @@ internal fun FutaberThreadScreen(
     // (the system back swipe is on for those handlers), and must not open the menu at the same time.
     // Tapping the upper / lower third of the list scrolls a page (the gestures settings; off by default). Quote mode's taps quote lines.
     val tapScroll = rememberFutaberTapScroll(listState, display.tapScroll && !quoteMode)
-    val edgeMenuAllowed = quoteStack.isEmpty() && !menuOpen && actionPost == null && !extractOpen && imagePost == null
+    val edgeMenuAllowed = !threadOverlayOpen
     val edgeMenuModifier = if (isIosReviewPlatform()) {
         Modifier.pointerInput(edgeMenuAllowed) {
             if (!edgeMenuAllowed) return@pointerInput
@@ -710,6 +731,9 @@ internal fun FutaberThreadScreen(
                             onNgTap = if (display.extQuickNg) ({ ngDialogInitialHeader = futaberNgHeaderOf(post); ngDialogOpen = true }) else null,
                             smallImages = smallImages,
                             depth = row.depth,
+                            onImageTap = if (mediaServices != null && futaberImageUrlOf(post) != null) {
+                                { mediaInitialPostNo = post.id; mediaOpen = true }
+                            } else null,
                             onImageLongPress = if (futaberImageUrlOf(post) != null) {
                                 { longPressHaptic(); imagePost = post }
                             } else null,
@@ -839,10 +863,8 @@ internal fun FutaberThreadScreen(
                             else {
                                 // The reader numbers the posts as they were listed when it started; the list may change while
                                 // it reads (a search, NG), so each post is looked up in the rows of the moment.
-                                val readPosts = rows.map { it.post }
-                                reader.start(readPosts, listState.firstVisibleItemIndex) { index ->
-                                    futaberRowPositionOfPost(latestRows, readPosts.getOrNull(index)?.id)
-                                        ?.let { listState.animateScrollToItem(it) }
+                                futaberStartReadAloudFollowing(reader, rows, listState.firstVisibleItemIndex, { latestRows }) {
+                                    listState.animateScrollToItem(it)
                                 }
                             }
                             menuOpen = false
@@ -957,12 +979,17 @@ internal fun FutaberThreadScreen(
                     onDismiss = { menuOpen = false }
                 )
             }
-            if (archiveOpen) FutaberArchiveMenuSheet(
-                futaberCompatThreadUrl(board, ref.threadId), ref.title, mediaServices?.httpClient,
-                // The thread screen's scope: the sheet is gone before the registration finishes.
-                scope = scope, openUrl = openInBrowser,
-                onNotice = { remoteNotice = it }, onDismiss = { archiveOpen = false }
-            )
+            if (archiveOpen) {
+                // 「つまんね。に登録」 runs in the app's scope and reports like the remote actions (L107: leaving the
+                // thread cancelled it). After leaving, a success opens no browser and is told as the app's notice.
+                val sentFrom = board.id to ref.threadId
+                FutaberArchiveMenuSheet(
+                    futaberCompatThreadUrl(board, ref.threadId), ref.title, mediaServices?.httpClient,
+                    scope = appTasks?.scope ?: scope,
+                    openUrl = { url -> if (threadScreenShown && currentThreadKey == sentFrom) openInBrowser(url) else Unit },
+                    onNotice = { deliverThreadResult(sentFrom, it) }, onDismiss = { archiveOpen = false }
+                )
+            }
             val markContext = mediaServices?.store?.let { store ->
                 com.valoser.futacha.shared.ui.board.PostMarkContext(store, futaberHistoryThreadUrl(board, ref.threadId),
                     posts.map { it.id to it.messageHtml }, { no ->
@@ -1021,30 +1048,6 @@ internal fun FutaberThreadScreen(
                 postDetailOps, onCopy = { text -> clipboard.setText(AnnotatedString(text)); remoteNotice = "クリップボードにコピーしました" },
                 onOpenUrl = openInBrowser
             )
-            imagePost?.let { target ->
-                val url = futaberImageUrlOf(target)
-                FutaberPostActionSheet(
-                    title = "レス:${posts.indexOfFirst { it.id == target.id }.coerceAtLeast(0)}の画像",
-                    actions = listOf(
-                        FutaberPostAction("image-search", "画像検索", enabled = url != null && mediaServices != null) {
-                            imagePost = null
-                            imageSearchUrl = url
-                        },
-                        FutaberPostAction("image-ng", "画像NGに登録", enabled = url != null && mediaServices != null) {
-                            imagePost = null
-                            url?.let { imageNgTarget = target to it }
-                        }
-                    ) + futaberImageMenuExtraActions(
-                        enabled = display.extImageMenu, url = url, saver = imageSaver,
-                        viewerAvailable = mediaServices != null && load.page != null,
-                        onCopyUrl = { clipboard.setText(AnnotatedString(it)) },
-                        onOpenExternal = openInBrowser,
-                        onOpenViewer = { mediaInitialPostNo = target.id; mediaOpen = true },
-                        onDismiss = { imagePost = null }
-                    ) + FutaberPostAction("cancel", "キャンセル") { imagePost = null },
-                    onDismiss = { imagePost = null }
-                )
-            }
             val searchUrl = imageSearchUrl
             if (searchUrl != null && mediaServices != null) {
                 // The search screens read the compat palette; the picture viewer's mapping keeps them in this mode's colours.
@@ -1118,6 +1121,8 @@ internal fun FutaberThreadScreen(
                         // The post's own number, which stays valid when NG or a search narrows the list.
                         mediaPage.posts.indexOfFirst { it.id == postId }.takeIf { it >= 0 }?.let { ordinal ->
                             filter = FutaberViewFilter()
+                            // The post is not left behind a bubble (L145).
+                            quoteStack = emptyList()
                             pendingScrollOrdinal = ordinal
                         }
                     },
@@ -1142,7 +1147,34 @@ internal fun FutaberThreadScreen(
                     idLabels = idLabels,
                     replyIndex = replyIndex,
                     onNested = openQuote,
-                    onDismiss = { quoteStack = quoteStack.dropLast(1) }
+                    onDismiss = { quoteStack = quoteStack.dropLast(1) },
+                    onImageTap = if (mediaServices != null) ({ post -> mediaInitialPostNo = post.id; mediaOpen = true }) else null,
+                    onImageLongPress = { post -> longPressHaptic(); imagePost = post }
+                )
+            }
+            // Drawn after the bubbles, so the picture menu opened from a bubble is on top of it (L145).
+            imagePost?.let { target ->
+                val url = futaberImageUrlOf(target)
+                FutaberPostActionSheet(
+                    title = "レス:${posts.indexOfFirst { it.id == target.id }.coerceAtLeast(0)}の画像",
+                    actions = listOf(
+                        FutaberPostAction("image-search", "画像検索", enabled = url != null && mediaServices != null) {
+                            imagePost = null
+                            imageSearchUrl = url
+                        },
+                        FutaberPostAction("image-ng", "画像NGに登録", enabled = url != null && mediaServices != null) {
+                            imagePost = null
+                            url?.let { imageNgTarget = target to it }
+                        }
+                    ) + futaberImageMenuExtraActions(
+                        enabled = display.extImageMenu, url = url, saver = imageSaver,
+                        viewerAvailable = mediaServices != null && load.page != null,
+                        onCopyUrl = { clipboard.setText(AnnotatedString(it)) },
+                        onOpenExternal = openInBrowser,
+                        onOpenViewer = { mediaInitialPostNo = target.id; mediaOpen = true },
+                        onDismiss = { imagePost = null }
+                    ) + FutaberPostAction("cancel", "キャンセル") { imagePost = null },
+                    onDismiss = { imagePost = null }
                 )
             }
         }
@@ -1260,7 +1292,9 @@ internal fun FutaberPostRow(
     /** A tap on the post's own text (not a quote, ID, link, picture or counter), in root coordinates; null takes no tap. */
     onTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     quoteMode: Boolean = false,
-    onQuoteLine: (line: String) -> Unit = {}
+    onQuoteLine: (line: String) -> Unit = {},
+    /** Opens this post's picture in the thread's existing media viewer. */
+    onImageTap: (() -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
     val display = LocalFutaberDisplaySettings.current
@@ -1424,12 +1458,19 @@ internal fun FutaberPostRow(
                 modifier = Modifier.padding(top = 6.dp).width(if (smallImages) 66.dp else 132.dp).aspectRatio(ratio)
                     .clip(FutaberShapes.small).background(colors.catalogGap)
                     .then(
-                        if (onImageLongPress == null) Modifier else Modifier
-                            // Taken here, so the long press does not reach the post's own menu.
-                            .pointerInput(onImageLongPress) { detectTapGestures(onLongPress = { onImageLongPress() }) }
-                            .semantics { onLongClick(label = "画像の操作を開く") { onImageLongPress(); true } }
-                            .testTag("futaber-post-image")
-                    ),
+                        if (onImageTap == null && onImageLongPress == null) Modifier else Modifier
+                            // Both actions belong to the picture; a scrolling drag cancels detection.
+                            .pointerInput(onImageTap, onImageLongPress) {
+                                detectTapGestures(
+                                    onTap = onImageTap?.let { callback -> { callback() } },
+                                    onLongPress = onImageLongPress?.let { callback -> { callback() } }
+                                )
+                            }
+                            .semantics {
+                                onImageTap?.let { callback -> onClick(label = "画像を開く") { callback(); true } }
+                                onImageLongPress?.let { callback -> onLongClick(label = "画像の操作を開く") { callback(); true } }
+                            }
+                    ).testTag("futaber-post-image"),
                 fallbackTint = colors.meta
             )
         }

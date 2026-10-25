@@ -29,7 +29,11 @@ private class AndroidVoicePlatform(private val context: Context) : VoicePlatform
             pack.model.toString(), if (detectDevicePerformanceProfile(context).isLowRam) 1 else 2)
         check(handle != 0L)
         return object : VoiceNativeSession {
-            override fun query(text: String): String = VoicevoxNative.query(handle, text.encodeToByteArray()).decodeToString()
+            override fun query(text: String): String {
+                val bytes = VoicevoxNative.query(handle, text.encodeToByteArray())
+                if (bytes.isEmpty()) throw VoiceTextAnalysisException("入力テキストの解析に失敗しました")
+                return bytes.decodeToString()
+            }
             override fun synthesize(query: String): ByteArray = VoicevoxNative.synthesize(handle, query.encodeToByteArray())
             override fun close() = VoicevoxNative.close(handle)
         }

@@ -287,6 +287,7 @@ private fun ThreadScreenContent(
     val externalUrlLauncher = runtimeHandles.externalUrlLauncher
     // Leaving this thread while a reply is posting cancels the request (see runUnlessPosting).
     var isReplySending by remember { mutableStateOf(false) }
+    com.valoser.futacha.shared.ui.ReportPostingInFlight(isReplySending)
     val notifyReplySending: () -> Unit = {
         coroutineScope.launch { snackbarHostState.showSnackbar(THREAD_REPLY_SENDING_MESSAGE) }
     }
@@ -464,7 +465,7 @@ private fun ThreadScreenContent(
     val currentState = uiState.value
     val initialHistoryEntry = screenSetupHandles.initialHistoryEntry
     val newPostTracker = remember(effectiveBoardUrl, threadId) {
-        ThreadNewPostTracker(initialHistoryEntry?.replyCount)
+        ThreadNewPostTracker(knownViewedPostCount(initialHistoryEntry), initialHistoryEntry?.lastViewedSnapshot?.lastPostId)
     }
     val lazyListState = runtimeHandles.lazyListState
     val actionStateBindings = ThreadScreenActionStateBindings(
@@ -511,7 +512,8 @@ private fun ThreadScreenContent(
             }
         },
         speakText = textSpeaker::speak,
-        cancelActiveReadAloud = cancelActiveReadAloud
+        cancelActiveReadAloud = cancelActiveReadAloud,
+        interruptActiveReadAloud = { interruptThreadReadAloud(readAloudStateBindings, textSpeaker::interrupt) }
     )
     var hasRestoredInitialScroll by refreshStateRefs.hasRestoredInitialScroll
     val offlineLookupContext = screenSetupHandles.offlineLookupContext
@@ -551,7 +553,7 @@ private fun ThreadScreenContent(
             setIsRefreshing = { isRefreshing = it },
             setUiState = { nextState ->
                 if (nextState is ThreadUiState.Success) {
-                    newPostTracker.onPostsLoaded(nextState.page.posts)
+                    newPostTracker.onPostsLoaded(nextState.page.posts, complete = !nextState.page.isTruncated)
                 }
                 isShowingRestoredSnapshot = false
                 uiState.value = nextState
@@ -762,8 +764,12 @@ private fun ThreadScreenContent(
             !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current &&
             feedbackPage?.posts?.all { it.id in feedbackVisibleIds || it.id in ngHiddenPostIds || it.id in displayedPostsLayout.collapsedPostIds } == true,
         truncated = feedbackPage?.isTruncated == true,
+        baselineLastPostId = initialHistoryEntry?.lastViewedSnapshot?.lastPostId,
         onNotice = showMessage
     )
+    ThreadViewedObservationEffect(feedbackFeatures?.appStateStore, board.id, threadId, feedbackPage,
+        live = currentState is ThreadUiState.Success && !currentState.isArchived &&
+            !currentState.confirmedGone && !isShowingOfflineCopy && !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current)
     ThreadStatusObservationEffect(feedbackFeatures?.appStateStore, board.id, threadId, feedbackPage,
         live = currentState is ThreadUiState.Success && !currentState.isArchived && !currentState.confirmedGone && !isShowingOfflineCopy &&
             !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current,
@@ -875,9 +881,7 @@ private fun ThreadScreenContent(
     val resolvedThreadTitle = derivedUiState.resolvedThreadTitle
     val statusLabel = derivedUiState.statusLabel
     val readAloudSegments = derivedRuntimeState.readAloudSegments
-    val readAloudDependencies = ThreadScreenReadAloudDependencies(
-        currentSegments = { readAloudSegments }
-    )
+    val readAloudDependencies = threadScreenReadAloudDependencies(readAloudSegments)
     ThreadReadAloudWatchEffects(board.id, effectiveBoardUrl, threadId, readAloudSegments,
         currentStatus = { readAloudStatus }, currentIndex = { currentReadAloudIndex },
         setIndex = { currentReadAloudIndex = it })

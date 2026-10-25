@@ -151,6 +151,21 @@ class FutachaApplication : Application() {
     private val networkServicesErrorValue = MutableStateFlow<String?>(null)
     val networkServicesError: StateFlow<String?> = networkServicesErrorValue.asStateFlow()
 
+    @Volatile
+    private var networkServicesInitJob: Job? = null
+
+    /**
+     * MainActivity's 再試行 after the network services failed to start (L125: iOS offers one;
+     * here the app had to be restarted). Clears the failure and builds them again; nothing
+     * while they are ready or being built.
+     */
+    @Synchronized
+    fun retryNetworkServices() {
+        if (networkServicesReadyValue.value || networkServicesInitJob?.isActive == true) return
+        networkServicesErrorValue.value = null
+        launchNetworkServicesInitialization()
+    }
+
     private val profileRecoveryCompleteValue = MutableStateFlow(true)
 
     /**
@@ -314,7 +329,137 @@ class FutachaApplication : Application() {
         // Ktor's engine setup can initialize ServiceLoader/SLF4J classes and read
         // jars. Do it off the main thread; the Activity shows a short loading state
         // until this graph is ready instead of paying that cost during first frame.
+        launchNetworkServicesInitialization()
+
         applicationScope.launch {
+            // Waits through a failure: a later 再試行 that succeeds starts it then (L125).
+            networkServicesReady.first { it }
+            // The generation is part of the key: a rolled-back switch keeps the
+            // profile but must restart the sync it quiesced. The persisted pair is
+            // read because the two flows update one after the other.
+            combine(experienceProfileStore.activeProfile, experienceProfileStore.generation) { _, _ ->
+                experienceProfileStore.readActiveProfile() to experienceProfileStore.readGeneration()
+            }.distinctUntilChanged().collect { (profile, _) ->
+                if (profile == ExperienceProfile.FUTACHA) watchSyncManager.start()
+                else watchSyncManager.stopAndAwait()
+            }
+        }
+
+        applicationScope.launch {
+            // Waits through a failure: a later 再試行 that succeeds starts it then (L125).
+            networkServicesReady.first { it }
+            // Initialize WorkManager off the Application.onCreate() critical path.
+            val workManager = WorkManager.getInstance(applicationContext)
+            StorageMaintenanceWorker.enqueuePeriodic(workManager)
+            val schedulerPrefs = applicationContext.getSharedPreferences(
+                BACKGROUND_REFRESH_SCHEDULER_PREFS,
+                Context.MODE_PRIVATE
+            )
+            var hasObservedBackgroundToggle = false
+            // The compatibility preferences read before the store has loaded
+            // are an empty placeholder: evaluating them disabled the refresh,
+            // cancelled the running worker and then re-enqueued it with an
+            // unthrottled immediate run. Decide from stored values only.
+            compatibilityStore.isLoaded.first { it }
+            try {
+                combine(
+                    appStateStore.isBackgroundRefreshEnabled,
+                    appStateStore.isWatchAlertEnabled,
+                    compatibilityStore.preferences,
+                    experienceProfileStore.activeProfile,
+                    // A rolled-back switch keeps the profile but cancelled this work;
+                    // the new generation re-enqueues it.
+                    experienceProfileStore.generation
+                ) { backgroundEnabled, watchAlertEnabled, compatPreferences, _, _ ->
+                    // The two profile flows update one after the other; the persisted
+                    // pair avoids enqueuing twice for one switch.
+                    val activeProfile = experienceProfileStore.readActiveProfile()
+                    val generation = experienceProfileStore.readGeneration()
+                    val enabled = when (activeProfile) {
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> backgroundEnabled || watchAlertEnabled ||
+                            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
+                        ExperienceProfile.TOSHIAKI_COMPAT -> {
+                            val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]
+                            val existence = compatPreferences["compat.background.backgroundThreadExistCheck"]
+                            val watchWords = com.valoser.futacha.shared.compat.compatWatchEnabled(compatPreferences)
+                            compatForegroundPolicyEnabled(update) ||
+                                compatForegroundPolicyEnabled(existence) ||
+                                watchWords
+                        }
+                    }
+                    Triple(activeProfile, generation, enabled)
+                }
+                    .distinctUntilChanged()
+                    .onEach { (_, _, enabled) ->
+                        if (enabled) {
+                            val profileGeneration = experienceProfileStore.readGeneration()
+                            HistoryRefreshWorker.enqueuePeriodic(workManager, profileGeneration)
+                            val nowMillis = System.currentTimeMillis()
+                            if (
+                                shouldEnqueueImmediateBackgroundRefresh(
+                                    enabled = true,
+                                    hasObservedBackgroundToggle = hasObservedBackgroundToggle,
+                                    lastImmediateEnqueueEpochMillis = schedulerPrefs.getLong(
+                                        LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS,
+                                        0L
+                                    ),
+                                    nowEpochMillis = nowMillis
+                                )
+                            ) {
+                                HistoryRefreshWorker.enqueueImmediate(workManager, profileGeneration)
+                                schedulerPrefs
+                                    .edit()
+                                    .putLong(LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS, nowMillis)
+                                    .apply()
+                            }
+                        } else {
+                            HistoryRefreshWorker.cancel(workManager)
+                        }
+                        hasObservedBackgroundToggle = true
+                    }
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) throw cause
+                        val shouldRetry = attempt < BACKGROUND_FLOW_MAX_RETRIES
+                        if (!shouldRetry) {
+                            com.valoser.futacha.shared.util.Logger.e(
+                                "FutachaApplication",
+                                "Background refresh flow failed too many times; stopping collector",
+                                cause
+                            )
+                            return@retryWhen false
+                        }
+                        val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
+                        com.valoser.futacha.shared.util.Logger.e(
+                            "FutachaApplication",
+                            "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
+                            cause
+                        )
+                        delay(backoffMillis)
+                        true
+                    }
+                    .collect()
+                com.valoser.futacha.shared.util.Logger.w(
+                    "FutachaApplication",
+                    "Background refresh flow completed unexpectedly"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                com.valoser.futacha.shared.util.Logger.e(
+                    "FutachaApplication",
+                    "Background refresh flow collection terminated unexpectedly",
+                    e
+                )
+            }
+        }
+    }
+
+    /**
+     * Builds the network services off the main thread. Run at launch and again by
+     * [retryNetworkServices] after a failure (L125).
+     */
+    private fun launchNetworkServicesInitialization() {
+        networkServicesInitJob = applicationScope.launch {
             var initializingImages: com.valoser.futacha.shared.network.FutachaImageTransport? = null
             var initializingClient: io.ktor.client.HttpClient? = null
             runCatching {
@@ -419,126 +564,6 @@ class FutachaApplication : Application() {
                     "FutachaApplication",
                     "Failed to initialize network services",
                     error
-                )
-            }
-        }
-
-        applicationScope.launch {
-            if (!awaitNetworkServicesReady()) return@launch
-            // The generation is part of the key: a rolled-back switch keeps the
-            // profile but must restart the sync it quiesced. The persisted pair is
-            // read because the two flows update one after the other.
-            combine(experienceProfileStore.activeProfile, experienceProfileStore.generation) { _, _ ->
-                experienceProfileStore.readActiveProfile() to experienceProfileStore.readGeneration()
-            }.distinctUntilChanged().collect { (profile, _) ->
-                if (profile == ExperienceProfile.FUTACHA) watchSyncManager.start()
-                else watchSyncManager.stopAndAwait()
-            }
-        }
-
-        applicationScope.launch {
-            if (!awaitNetworkServicesReady()) return@launch
-            // Initialize WorkManager off the Application.onCreate() critical path.
-            val workManager = WorkManager.getInstance(applicationContext)
-            StorageMaintenanceWorker.enqueuePeriodic(workManager)
-            val schedulerPrefs = applicationContext.getSharedPreferences(
-                BACKGROUND_REFRESH_SCHEDULER_PREFS,
-                Context.MODE_PRIVATE
-            )
-            var hasObservedBackgroundToggle = false
-            // The compatibility preferences read before the store has loaded
-            // are an empty placeholder: evaluating them disabled the refresh,
-            // cancelled the running worker and then re-enqueued it with an
-            // unthrottled immediate run. Decide from stored values only.
-            compatibilityStore.isLoaded.first { it }
-            try {
-                combine(
-                    appStateStore.isBackgroundRefreshEnabled,
-                    appStateStore.isWatchAlertEnabled,
-                    compatibilityStore.preferences,
-                    experienceProfileStore.activeProfile,
-                    // A rolled-back switch keeps the profile but cancelled this work;
-                    // the new generation re-enqueues it.
-                    experienceProfileStore.generation
-                ) { backgroundEnabled, watchAlertEnabled, compatPreferences, _, _ ->
-                    // The two profile flows update one after the other; the persisted
-                    // pair avoids enqueuing twice for one switch.
-                    val activeProfile = experienceProfileStore.readActiveProfile()
-                    val generation = experienceProfileStore.readGeneration()
-                    val enabled = when (activeProfile) {
-                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> backgroundEnabled || watchAlertEnabled ||
-                            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
-                        ExperienceProfile.TOSHIAKI_COMPAT -> {
-                            val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]
-                            val existence = compatPreferences["compat.background.backgroundThreadExistCheck"]
-                            val watchWords = com.valoser.futacha.shared.compat.compatWatchEnabled(compatPreferences)
-                            compatForegroundPolicyEnabled(update) ||
-                                compatForegroundPolicyEnabled(existence) ||
-                                watchWords
-                        }
-                    }
-                    Triple(activeProfile, generation, enabled)
-                }
-                    .distinctUntilChanged()
-                    .onEach { (_, _, enabled) ->
-                        if (enabled) {
-                            val profileGeneration = experienceProfileStore.readGeneration()
-                            HistoryRefreshWorker.enqueuePeriodic(workManager, profileGeneration)
-                            val nowMillis = System.currentTimeMillis()
-                            if (
-                                shouldEnqueueImmediateBackgroundRefresh(
-                                    enabled = true,
-                                    hasObservedBackgroundToggle = hasObservedBackgroundToggle,
-                                    lastImmediateEnqueueEpochMillis = schedulerPrefs.getLong(
-                                        LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS,
-                                        0L
-                                    ),
-                                    nowEpochMillis = nowMillis
-                                )
-                            ) {
-                                HistoryRefreshWorker.enqueueImmediate(workManager, profileGeneration)
-                                schedulerPrefs
-                                    .edit()
-                                    .putLong(LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS, nowMillis)
-                                    .apply()
-                            }
-                        } else {
-                            HistoryRefreshWorker.cancel(workManager)
-                        }
-                        hasObservedBackgroundToggle = true
-                    }
-                    .retryWhen { cause, attempt ->
-                        if (cause is CancellationException) throw cause
-                        val shouldRetry = attempt < BACKGROUND_FLOW_MAX_RETRIES
-                        if (!shouldRetry) {
-                            com.valoser.futacha.shared.util.Logger.e(
-                                "FutachaApplication",
-                                "Background refresh flow failed too many times; stopping collector",
-                                cause
-                            )
-                            return@retryWhen false
-                        }
-                        val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
-                        com.valoser.futacha.shared.util.Logger.e(
-                            "FutachaApplication",
-                            "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
-                            cause
-                        )
-                        delay(backoffMillis)
-                        true
-                    }
-                    .collect()
-                com.valoser.futacha.shared.util.Logger.w(
-                    "FutachaApplication",
-                    "Background refresh flow completed unexpectedly"
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                com.valoser.futacha.shared.util.Logger.e(
-                    "FutachaApplication",
-                    "Background refresh flow collection terminated unexpectedly",
-                    e
                 )
             }
         }
