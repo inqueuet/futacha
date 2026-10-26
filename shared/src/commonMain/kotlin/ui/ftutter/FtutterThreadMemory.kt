@@ -125,8 +125,7 @@ internal class FtutterThreadMemory {
     fun opening(url: String): com.valoser.futacha.shared.ui.board.ThreadOpeningVisit =
         openings.getOrPut(url) { com.valoser.futacha.shared.ui.board.ThreadOpeningVisit() }
 
-    fun page(url: String, history: ThreadHistoryEntry? = null): ThreadPage? =
-        pages[url]?.takeUnless { ftutterThreadPageIsStale(it, history) }
+    fun page(url: String): ThreadPage? = pages[url]
     fun takeRefresh(url: String): Boolean = refresh.remove(url)
     fun put(url: String, page: ThreadPage) {
         pages.remove(url); pages[url] = page

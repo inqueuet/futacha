@@ -7,6 +7,18 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class HistoryEntrySupportTest {
+    @Test fun anOlderArchiveCannotUndoAConfirmedLiveLoad() {
+        val alive = historyEntry(lastVisitedEpochMillis = 100L).copy(
+            lastConfirmedAliveEpochMillis = 300L,
+            threadStatus = com.valoser.futacha.shared.model.ThreadStatus(isDead = false))
+        val archive = alive.copy(lastConfirmedAliveEpochMillis = 100L, isAutoRefreshDisabled = true,
+            threadStatus = com.valoser.futacha.shared.model.ThreadStatus(isDead = true, isIsolated = true))
+        val merged = mergeImportedHistoryEntry(alive, archive)
+        assertFalse(merged.threadStatus!!.isDead)
+        assertFalse(merged.isAutoRefreshDisabled)
+        assertTrue(merged.threadStatus!!.isIsolated)
+    }
+
     @Test
     fun mergeAppStateHistoryEntry_keepsExistingReadState_whenIncomingIsOlder() {
         val existing = historyEntry(

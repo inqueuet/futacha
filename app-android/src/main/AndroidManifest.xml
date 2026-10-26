@@ -104,10 +104,13 @@
             android:exported="false"
             tools:node="remove" />
 
+        <!-- Not exported (L153): other apps reach it only through the launcher aliases below and through
+             ExternalIntentActivity, so a share or link sent straight to this component cannot make a second
+             MainActivity in the sender's task (M66). The app's own notifications and tasks still start it. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|fontScale|density|locale|layoutDirection"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
             android:theme="@style/Theme.Futacha">

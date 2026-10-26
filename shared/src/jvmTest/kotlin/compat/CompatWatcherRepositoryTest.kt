@@ -24,6 +24,7 @@ class CompatWatcherRepositoryTest {
         var savePreferencesCalls = 0
         val store = Proxy.newProxyInstance(CompatibilityStore::class.java.classLoader, arrayOf(CompatibilityStore::class.java)) { _, method, args ->
             when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                 "getPreferences" -> preferences
                 "getHistory" -> history
                 "getBoards" -> MutableStateFlow(boards)
@@ -129,6 +130,7 @@ class CompatWatcherRepositoryTest {
         val catalog = mutableListOf(CatalogItem("1", match(1).history.originalUrl, "猫のスレ", null, null, replyCount = 3))
         val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
             when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                 "getCatalog", "getCatalogWithSettings" -> catalog.toList()
                 "probeThreadGone" -> false
                 else -> error("Unexpected repository call: ${method.name}")
@@ -233,6 +235,7 @@ class CompatWatcherRepositoryTest {
         r.record(match(2, 10)); r.record(match(3, 10))
         val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, args ->
             when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                 "getCatalog", "getCatalogWithSettings" -> listOf(CatalogItem("1", match().history.originalUrl, "猫のスレ", null, null, replyCount = 3))
                 "probeThreadGone" -> if ((args[0] as String).contains("/2.htm")) true else error("offline")
                 else -> error("Unexpected repository call: ${method.name}")
@@ -295,6 +298,7 @@ class CompatWatcherRepositoryTest {
         r.recordAll((1..25).map { match(it, 10) })
         val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
             when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                 "getCatalog", "getCatalogWithSettings" -> emptyList<CatalogItem>()
                 "probeThreadGone" -> false
                 else -> error("Unexpected repository call: ${method.name}")
@@ -315,6 +319,7 @@ class CompatWatcherRepositoryTest {
         var catalogRequests = 0
         val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
             when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                 "getCatalog", "getCatalogWithSettings" -> { catalogRequests++; emptyList<CatalogItem>() }
                 else -> error("Unexpected repository call: ${method.name}")
             }
@@ -343,6 +348,7 @@ class CompatWatcherRepositoryTest {
             if (notifyOff) f.preferences.value += (COMPAT_WATCH_NOTIFY_KEY to "OFF")
             val repository = Proxy.newProxyInstance(BoardRepository::class.java.classLoader, arrayOf(BoardRepository::class.java)) { _, method, _ ->
                 when (method.name) {
+                "getCatalogFetchSettings" -> com.valoser.futacha.shared.model.CatalogFetchSettings()
                     "getCatalog", "getCatalogWithSettings" -> listOf(CatalogItem("7", "https://may.2chan.net/b/res/7.htm", "猫スレ", null, null, replyCount = 1))
                     "probeThreadExists" -> true
                     else -> error("Unexpected repository call: ${method.name}")

@@ -149,7 +149,7 @@ internal class FutaberHistoryController(private val scope: CoroutineScope, priva
     fun openExportSelection() {
         scope.launch {
             val history = try {
-                stateStore.history.first()
+                stateStore.readHistory()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -430,7 +430,7 @@ internal class FutaberTabChecker(
                     FUTABER_TAB_CHECK_TIMEOUT_NOTICE
                 } else {
                     val failed = refresher.lastRefreshError.value?.takeIf { it.timestamp >= startedAt }?.errorCount ?: 0
-                    futaberTabCheckMessage(futaberTabCheckOutcome(targets, stateStore.history.first(), failed))
+                    futaberTabCheckMessage(futaberTabCheckOutcome(targets, stateStore.readHistory(), failed))
                 }
             } catch (busy: HistoryRefresher.RefreshAlreadyRunningException) {
                 FUTABER_TAB_CHECK_BUSY_NOTICE

@@ -34,6 +34,44 @@ class AppStateHistoryManifestFailureTest {
         AppStateHistoryFileStore(it, json, "seed").persistHistorySnapshot(original)
     }
 
+    @Test fun anActionGetsAReadFailureInsteadOfWaitingForAnUnavailableHistoryFlow(): Unit = runBlocking {
+        val files = files().apply { unreadable = setOf(main, backup) }
+        val store = AppStateStore(FakePlatformStateStorage(), AppStateHistoryFileStore(files, json, "action"), json)
+        try {
+            withTimeout(5_000) { assertFailsWith<AppStateHistoryUnavailableException> { store.readHistory() } }
+            files.unreadable = emptySet()
+            assertEquals(original, store.readHistory())
+        } finally { store.close() }
+    }
+    @Test fun anEntryWhoseDeletionFailedDoesNotReturnWhenTheManifestIsRebuilt(): Unit = runBlocking {
+        val backing = InMemoryFileSystem()
+        val files = object : FileSystem by backing {
+            override suspend fun delete(path: String): Result<Unit> =
+                if (path.startsWith("private/history_store/entries/")) Result.failure(IllegalStateException("cannot unlink"))
+                else backing.delete(path)
+        }
+        val store = AppStateHistoryFileStore(files, json, "delete")
+        store.persistHistorySnapshot(original)
+        store.persistHistorySnapshot(original.take(1))
+        backing.writeString(main, "corrupt").getOrThrow()
+        backing.writeString(backup, "corrupt").getOrThrow()
+        assertEquals(original.take(1), AppStateHistoryFileStore(files, json, "rebuild").readHistorySnapshot { "[]" })
+    }
+    @Test fun clearingWithFailedUnlinksRebuildsAnEmptyHistoryRatherThanWaiting(): Unit = runBlocking {
+        val backing = InMemoryFileSystem()
+        val files = object : FileSystem by backing {
+            override suspend fun deleteRecursively(path: String): Result<Unit> = Result.failure(IllegalStateException("cannot remove directory"))
+            override suspend fun delete(path: String): Result<Unit> =
+                if (path.startsWith("private/history_store/entries/")) Result.failure(IllegalStateException("cannot unlink"))
+                else backing.delete(path)
+        }
+        val store = AppStateHistoryFileStore(files, json, "delete")
+        store.persistHistorySnapshot(original)
+        store.persistHistorySnapshot(emptyList())
+        backing.writeString(main, "corrupt").getOrThrow()
+        backing.writeString(backup, "corrupt").getOrThrow()
+        assertEquals(emptyList(), AppStateHistoryFileStore(files, json, "rebuild").readHistorySnapshot { "[]" })
+    }
     @Test fun existingUnreadableManifestsAreNotAnEmptyLegacyHistory(): Unit = runBlocking {
         val files = files().apply { unreadable = setOf(main, backup) }
         val reader = AppStateHistoryFileStore(files, json, "read")

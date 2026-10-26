@@ -455,6 +455,7 @@ internal fun FutaberSelectSaveGallery(
 ) {
     val colors = LocalFutaberColors.current
     val scope = rememberCoroutineScope()
+    val appTasks = LocalFutaberAppTasks.current
     val apngMarkerCache = remember(scope) { CompatApngMarkerCache(scope) }
     val prepared = remember(snapshot, hiddenPostNos) { snapshot?.let { futaberGallerySnapshot(it, hiddenPostNos) } }
     val latestShowPost by rememberUpdatedState(onShowPost)
@@ -477,6 +478,7 @@ internal fun FutaberSelectSaveGallery(
             apngMarkerCache = apngMarkerCache,
             fileSystem = services.fileSystem,
             cookieRepository = services.cookieRepository,
+            saveCoroutineScope = appTasks?.scope, onSaveNotice = { appTasks?.notify(it) },
             onOpenViewer = { index, identity -> onOpenViewer(futaberViewerIndexFor(mediaPosts, identity, index), identity) },
             onOpenSettings = onOpenSettings,
             onOpenCommonSettings = onOpenSettings,

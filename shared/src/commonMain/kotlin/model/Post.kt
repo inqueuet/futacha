@@ -25,7 +25,9 @@ data class Post(
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
     /** Original file size advertised by the thumbnail tag (`alt="12345 B"`), when available. */
-    val imageFileSizeBytes: Long? = null
+    val imageFileSizeBytes: Long? = null,
+    /** Distinguishes current unresolved quotes from legacy caches without parsed mappings. */
+    val quoteReferencesParsed: Boolean = false
 )
 
 @Serializable

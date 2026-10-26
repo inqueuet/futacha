@@ -233,11 +233,13 @@ internal fun FutaberCatalogScreen(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            view.skipViewedFirstOnce = false
             view.load = view.load.copy(isLoading = false, errorMessage = futaberFriendlyLoadError(error, "カタログ"))
         }
     }
     // The threads whose picture looks like a registered NG image (the hash rules of the other modes), found by hashing the
     // pictures: the ones already known first, then the rest as they arrive. Threads vanish from the list as hashes come in.
+    val cachedImageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
     val phashHiddenIds by produceState(emptySet<String>(), load.items, phashRules, phashThreshold, archiveHttpClient, phashStore) {
         val client = archiveHttpClient
         if (phashRules.isEmpty() || client == null) {
@@ -263,6 +265,11 @@ internal fun FutaberCatalogScreen(
         try {
             collectCompatImagePhashes(
                 client, missing,
+                cachedImageLoader = cachedImageLoader,
+                fallbackImageUrl = { id -> load.items.firstOrNull { it.id == id }?.thumbnailUrl },
+                resolveMissingUrl = { id -> com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(load.items.firstOrNull { it.id == id }?.thumbnailUrl) {
+                    repository.fetchOpImageUrl(board.url, id)
+                } },
                 onComputed = { id, hash -> computed[id] = hash },
                 onPartial = { value = futaberPhashHiddenIds(known + computed, phashRules, phashThreshold) }
             )

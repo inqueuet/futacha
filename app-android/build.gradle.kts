@@ -134,8 +134,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 227
-        versionName = "13.1"
+        versionCode = 230
+        versionName = "13.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"

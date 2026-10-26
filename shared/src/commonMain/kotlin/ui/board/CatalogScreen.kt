@@ -391,7 +391,7 @@ private fun CatalogScreenContent(
                             .maxByOrNull { it.lastVisitedEpochMillis }?.threadId
                         viewedFirstModeName = catalogMode.name
                     }
-                } else if (isRefreshing && next !is CatalogUiState.Loading) viewedFirstSkipNext[0] = false
+                } else if (isRefreshing && next is CatalogUiState.Error) viewedFirstSkipNext[0] = false
             },
             onThreadCreated = { viewedFirstSkipNext[0] = true },
             currentCatalogUiState = { uiState.value },

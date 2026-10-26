@@ -166,10 +166,17 @@ internal fun FtutterGalleryScreen(
     onColumns: (Int) -> Unit,
     onOpenViewer: (index: Int) -> Unit,
     onBackToPost: (position: Int) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
+    onSaveNotice: (String) -> Unit = {}
 ) {
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()
+    val screenPresent = remember { booleanArrayOf(true) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        screenPresent[0] = true
+        onDispose { screenPresent[0] = false }
+    }
     var selecting by remember { mutableStateOf(false) }
     // 選んだ画像は位置でなく画像のアドレスで持つ（監査L5：選んでいる間にスレを取り直すと並びがずれ、別の画像を保存していた）。
     val selected = remember { mutableStateMapOf<String, Boolean>() }
@@ -278,7 +285,7 @@ internal fun FtutterGalleryScreen(
                 TextButton(enabled = progress == null, onClick = {
                     val urls = chosen.mapNotNull(::resolveCompatViewerMediaUrl).distinct()
                     progress = 0 to urls.size
-                    saveJob = scope.launch {
+                    saveJob = (saveCoroutineScope ?: scope).launch {
                         try {
                             val result = tools.saveMany(urls) { done -> progress = done to urls.size }
                             // A save stopped early (destination lost, another save) keeps the selection for a retry.
@@ -286,9 +293,11 @@ internal fun FtutterGalleryScreen(
                                 selecting = false
                                 selected.clear()
                             }
-                            message = ftutterBatchSaveMessage(result)
+                            val text = ftutterBatchSaveMessage(result)
+                            if (screenPresent[0]) message = text else onSaveNotice(text)
                         } catch (cancelled: CancellationException) {
-                            message = "保存を中止しました（中止までに保存したファイルは残ります）"
+                            val text = "保存を中止しました（中止までに保存したファイルは残ります）"
+                            if (screenPresent[0]) message = text else onSaveNotice(text)
                             throw cancelled
                         } finally {
                             progress = null
@@ -324,7 +333,9 @@ internal fun FtutterViewerScreen(
     onSearch: (imageUrl: String) -> Unit,
     onOpenBrowser: (url: String) -> Unit,
     onBackToPost: (position: Int) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
+    onSaveNotice: (String) -> Unit = {}
 ) {
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()

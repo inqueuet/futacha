@@ -30,6 +30,7 @@ private const val HISTORY_FILE_STORE_MAX_ENTRY_BYTES = 2L * 1024L * 1024L
 private const val HISTORY_FILE_STORE_MAX_KEY_LENGTH = 96
 private const val HISTORY_FILE_STORE_MAX_IDENTITY_LENGTH = 8_192
 private const val HISTORY_FILE_STORE_READ_PARALLELISM = 8
+private const val HISTORY_FILE_STORE_TOMBSTONE = "{\"deleted\":true}"
 
 /** Existing split history is unavailable, rather than an uninitialized store. */
 internal class AppStateHistoryUnavailableException : IllegalStateException("保存済みの履歴の目録を読み込めませんでした。履歴は変更していません")
@@ -378,6 +379,9 @@ internal class AppStateHistoryFileStore(
             .filterNot { it in activeKeys }
             .forEach { key ->
                 fileSystem.delete(historyEntryPath(key)).onFailure { error ->
+                    fileSystem.writeString(historyEntryPath(key), HISTORY_FILE_STORE_TOMBSTONE).onFailure { invalidation ->
+                        Logger.e(tag, "Failed to invalidate a deleted history entry '$key'", invalidation)
+                    }
                     Logger.w(tag, "Failed to delete stale split history entry '$key': ${error.message}")
                 }
                 cachedEntryContentHashes.remove(key)
@@ -404,6 +408,8 @@ internal class AppStateHistoryFileStore(
         fileNames.asSequence().take(HISTORY_FILE_STORE_MAX_ENTRIES * 2).forEach { fileName ->
             fileSystem.delete("$HISTORY_FILE_STORE_ENTRIES_DIR/$fileName")
                 .onFailure { error ->
+                    fileSystem.writeString("$HISTORY_FILE_STORE_ENTRIES_DIR/$fileName", HISTORY_FILE_STORE_TOMBSTONE)
+                        .onFailure { Logger.e(tag, "Failed to invalidate cleared history entry", it) }
                     Logger.w(tag, "Failed to delete split history orphan '$fileName': ${error.message}")
                 }
         }
@@ -449,6 +455,7 @@ internal class AppStateHistoryFileStore(
                     gate.withPermit {
                         val raw = readBoundedString(historyEntryPath(key), HISTORY_FILE_STORE_MAX_ENTRY_BYTES).getOrNull()
                             ?: return@withPermit null
+                        if (raw == HISTORY_FILE_STORE_TOMBSTONE) return@withPermit Pair<String, ThreadHistoryEntry?>(key, null)
                         withContext(AppDispatchers.io) {
                             runCatching { json.decodeFromString(ThreadHistoryEntry.serializer(), raw) }.getOrNull()
                         }?.let { key to it }
@@ -458,8 +465,9 @@ internal class AppStateHistoryFileStore(
         }
         if (keys.isNotEmpty() && loaded.isEmpty()) return null
         val seen = HashSet<String>()
-        val orderedEntries = loaded.sortedByDescending { (_, entry) -> entry.lastVisitedEpochMillis }
+        val orderedEntries = loaded.sortedByDescending { (_, entry) -> entry?.lastVisitedEpochMillis ?: Long.MIN_VALUE }
             .mapNotNull { (key, entry) ->
+                if (entry == null) return@mapNotNull null
                 val identity = historyEntryIdentity(entry).ifBlank { "entry::rebuilt::$key" }
                 if (seen.add(identity)) AppStateHistoryFileManifestEntry(key, identity) else null
             }

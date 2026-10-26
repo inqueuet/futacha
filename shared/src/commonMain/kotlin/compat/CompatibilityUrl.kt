@@ -44,6 +44,16 @@ internal fun upgradeOfficialFutabaHttpUrl(url: String): String {
     return "https://" + trimmed.substring("http://".length)
 }
 
+/**
+ * The board with its 2chan address over https (L100): としあき(仮)'s stores keep a board's original address for
+ * fetching and posting, and an http one (imported before the AppState boards moved to https, or added by the AI)
+ * could not post and, on iOS, not load. The canonical address (the board's key) is https already, so it is unchanged.
+ */
+fun CompatBoard.withOfficialHttps(): CompatBoard {
+    val upgraded = upgradeOfficialFutabaHttpUrl(originalUrl)
+    return if (upgraded == originalUrl) this else copy(originalUrl = upgraded)
+}
+
 data class CanonicalThreadUrl(
     val canonicalUrl: String,
     val canonicalBoardUrl: String,

@@ -198,6 +198,11 @@ class AppStateStore internal constructor(
         tag = TAG
     )
     val observedBoards: Flow<List<BoardSummary>> = boards.shared()
+    /** A successfully persisted empty list, rather than the UI's unloaded / unreadable empty placeholder. */
+    val boardsExplicitlyEmpty: Flow<Boolean> = storage.boardsJson.map { raw ->
+        raw?.trim()?.let { value -> value.length <= 32 && value.filterNot(Char::isWhitespace) == "[]" } == true
+    }.distinctUntilChanged()
+
 
     private val persistedHistory: Flow<List<ThreadHistoryEntry>> =
         if (historyFileStore != null) {
@@ -241,6 +246,16 @@ class AppStateStore internal constructor(
         applyPersistedSelfPostFlags(historyEntries, selfPostMap)
     }.distinctUntilChanged().flowOn(AppDispatchers.io)
     val observedHistory: Flow<List<ThreadHistoryEntry>> = history.shared()
+
+    /** For actions: an unavailable store fails promptly instead of waiting for a flow that cannot publish a row. */
+    suspend fun readHistory(): List<ThreadHistoryEntry> = withContext(AppDispatchers.io) {
+        val entries = if (historyFileStore != null) historyFileStore.readHistorySnapshot(
+            clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+        ) { storage.historyJson.first() }
+        else storage.historyJson.first()?.let { decodeAppStateHistory(it, json, TAG) }.orEmpty()
+        applyPersistedSelfPostFlags(entries, preferenceFlows.selfPostIdentifierMapFlow.first())
+    }
+
 
     val mediaFeatureSettings: Flow<MediaFeatureSettings> = storage.mediaFeatureSettingsJson
         .map(MediaFeatureSettings::decode).distinctUntilChanged()
@@ -640,7 +655,7 @@ class AppStateStore internal constructor(
         preferenceOperations.removeSelfPostIdentifiersForThreads(threads)
 
     suspend fun clearSelfPostIdentifiers() =
-        preferenceOperations.clearSelfPostIdentifiers()
+        preferenceSnapshotCoordinator.clearSelfPostIdentifierMap()
 
     /**
      * Insert or update a history entry while keeping the existing order intact.

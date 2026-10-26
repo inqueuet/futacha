@@ -190,13 +190,20 @@ private fun compatQuoteReplyPredicate(source: CompatPostSnapshot, posts: List<Co
     // A thread read by the current parser carries quote mappings; a post of it without one only has quotes the parser
     // could not resolve, which the "Nレス" count leaves out. Older caches have none anywhere and keep the compatibility
     // matching below (M12).
-    val parsedThread = posts.any { it.quoteReferences.isNotEmpty() }
+    val parsedThread = posts.any { it.quoteReferencesParsed || it.quoteReferences.isNotEmpty() }
     return predicate@{ candidate ->
         if (candidate.position <= source.position) return@predicate false
+        val plainText = candidate.messageHtml.toCompatPlainText()
+        val quotesSourceIp = plainText.lineSequence().any { line ->
+            val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
+            query.startsWith("ip:", ignoreCase = true) && query.substringAfter(':').trim().let { value ->
+                sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
+            }
+        }
+        if (quotesSourceIp) return@predicate true
         if (candidate.quoteReferences.isNotEmpty()) {
             return@predicate candidate.quoteReferences.any { source.postNo in it.replyTargetPostIds }
         }
-        val plainText = candidate.messageHtml.toCompatPlainText()
         if (parsedThread) {
             // L138: no unbounded partial-text match for those (it listed posts the count did not include); an IP quote
             // is still listed, as before (the decision for L138).

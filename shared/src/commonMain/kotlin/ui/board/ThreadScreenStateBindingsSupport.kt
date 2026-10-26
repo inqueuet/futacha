@@ -141,6 +141,7 @@ internal data class ThreadScreenRuntimeJobBindingsBundle(
 internal data class ThreadScreenRuntimeJobInputs(
     val readAloudStateBindings: ThreadScreenReadAloudStateBindings,
     val onStopPlayback: () -> Unit,
+    val onPausePlayback: () -> Unit = onStopPlayback,
     val currentAutoSaveJob: () -> Job?,
     val setAutoSaveJob: (Job?) -> Unit,
     val currentManualSaveJob: () -> Job?,
@@ -157,7 +158,8 @@ internal data class ThreadScreenRuntimeJobInputs(
 internal fun buildThreadReadAloudRuntimeBindings(
     currentState: () -> ThreadReadAloudRuntimeState,
     setState: (ThreadReadAloudRuntimeState) -> Unit,
-    onStopPlayback: () -> Unit
+    onStopPlayback: () -> Unit,
+    onPausePlayback: () -> Unit = onStopPlayback
 ): ThreadReadAloudRuntimeBindings {
     val cancelActive = {
         val state = currentState()
@@ -179,7 +181,10 @@ internal fun buildThreadReadAloudRuntimeBindings(
         },
         pause = pause@{
             val pauseState = resolveReadAloudPauseState(currentState().status) ?: return@pause null
-            cancelActive()
+            val state = currentState()
+            setState(state.copy(cancelRequestedByUser = true, job = null))
+            onPausePlayback()
+            state.job?.cancel()
             setState(
                 currentState().copy(
                     job = null,
@@ -244,7 +249,8 @@ internal fun buildThreadScreenRuntimeJobBindingsBundle(
     val readAloudRuntimeBindings = buildThreadReadAloudRuntimeBindings(
         currentState = inputs.readAloudStateBindings.currentState,
         setState = inputs.readAloudStateBindings.setState,
-        onStopPlayback = inputs.onStopPlayback
+        onStopPlayback = inputs.onStopPlayback,
+        onPausePlayback = inputs.onPausePlayback
     )
     return ThreadScreenRuntimeJobBindingsBundle(
         readAloudRuntimeBindings = readAloudRuntimeBindings,

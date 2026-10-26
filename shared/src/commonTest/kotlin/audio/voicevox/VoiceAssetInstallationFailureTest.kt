@@ -7,6 +7,18 @@ import kotlin.test.*
 
 /** Production's post-verification promotion boundary, with small verified inputs and real filesystem move faults. */
 class VoiceAssetInstallationFailureTest {
+    @Test fun aProcessDeathBetweenMovesRecoversTheModelAndFormerPackBeforeCleanup() = runBlocking<Unit> {
+        val f = Fixture()
+        try {
+            FileSystem.SYSTEM.atomicMove(f.model, f.staging.resolve("0.vvm"))
+            FileSystem.SYSTEM.atomicMove(f.current, f.root.resolve("pack.previous"))
+            recoverInterruptedVoicePack(f.fs, f.model, f.staging, f.current)
+            f.assertOriginals()
+            FileSystem.SYSTEM.deleteRecursively(f.staging, false)
+            f.assertOriginals()
+        } finally { f.close() }
+    }
+
     @Test fun finalMoveFailureKeepsTheVerifiedDownloadAndRestoresTheFormerPackForOfflineRetry() = runBlocking<Unit> {
         val f = Fixture()
         try {

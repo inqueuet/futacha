@@ -65,6 +65,18 @@ class VideoReadAloudFocusInstrumentedTest {
         }
     }
 
+    @Test fun consecutiveSpeechSessionsDoNotStartOnAServiceThatIsBeingDestroyed() {
+        repeat(12) {
+            lease?.close()
+            lease = runBlocking {
+                AndroidSpeechPlaybackService.acquire(context,
+                    onFocusPause = { pauses.incrementAndGet() },
+                    onFocusResume = { resumes.incrementAndGet() }) { stops.incrementAndGet() }
+            }
+        }
+        assertEquals(0, stops.get())
+    }
+
     @Test fun aVideoHeardPausesTheReadingWhichGoesOnAfterIt() {
         startVideo(audible = true)
         waitFor("The reading paused for the video") { pauses.get() == 1 }
@@ -89,5 +101,17 @@ class VideoReadAloudFocusInstrumentedTest {
         SystemClock.sleep(1_500)
         assertEquals(0, pauses.get())
         assertEquals(0, stops.get())
+    }
+
+    /** L161: unplugged headphones stop the reading, also one paused for this app's video, instead of the speaker. */
+    @Test fun headphonesUnpluggedStopTheReadingEvenWhilePausedForAVideo() {
+        startVideo(audible = true)
+        waitFor("The reading paused for the video") { pauses.get() == 1 }
+        // What the system's headphones-unplugged broadcast runs (only the system may send that broadcast).
+        AndroidSpeechPlaybackService.onAudioBecomingNoisy()
+        waitFor("The reading stopped") { stops.get() == 1 }
+        instrumentation.runOnMainSync { audio!!.player.pause() }
+        SystemClock.sleep(1_000)
+        assertEquals("It does not come back after the video", 0, resumes.get())
     }
 }

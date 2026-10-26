@@ -291,7 +291,11 @@ fun CompatPostDrawingScreen(
                                 if (currentPoints.lastOrNull() != point) currentPoints.add(point)
                             },
                             onEnd = {
-                                if (currentPoints.isNotEmpty()) {
+                                if (currentPoints.isNotEmpty() && !compatDrawingStrokeFits(strokes, currentPoints.size)) {
+                                    // Past the limits the drawing could no longer be saved (L68): the stroke is not
+                                    // added, and it is said now.
+                                    error = COMPAT_DRAWING_FULL_MESSAGE
+                                } else if (currentPoints.isNotEmpty()) {
                                     strokes.add(CompatDrawingStroke(
                                         colorArgb = Color(activeBrush.colorArgb).toArgb(),
                                         widthPx = currentStrokeWidth,

@@ -545,7 +545,11 @@ class AndroidFileSystem(
         val existing = findTreeChildForChange(parentDir, fileName)
         return existing?.takeIf { file -> !runInterruptible { file.isDirectory } }
             ?: (runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
-                ?.also { recordTreeChild(parentDir, fileName, it) })
+                ?.also { created ->
+                    recordTreeChild(parentDir, fileName, created)
+                    coroutineContext[SafTreeIndex]?.created?.put(created.uri.toString(),
+                        runInterruptible { created.name } ?: fileName)
+                })
             ?: throw IllegalStateException("Failed to create file: $fileName")
     }
 
@@ -603,7 +607,11 @@ class AndroidFileSystem(
             }
         }
         val listed = findTreeChild(parent, name) ?: return null
-        if (runInterruptible { listed.name } == name) return listed
+        // A document this save created for [name] is its file even when the provider named it differently (tidied
+        // the name, numbered a duplicate) (L169); only a document found by listing must still have [name].
+        val actualName = runInterruptible { listed.name }
+        val createdName = coroutineContext[SafTreeIndex]!!.created[listed.uri.toString()]
+        if (actualName == (createdName ?: name)) return listed
         forgetTreeChild(parent, name)
         return listTreeChildren(parent, setOf(name))[name]?.also { recordTreeChild(parent, name, it) }
     }
@@ -1447,4 +1455,7 @@ internal class SafTreeIndex : kotlin.coroutines.AbstractCoroutineContextElement(
     companion object Key : kotlin.coroutines.CoroutineContext.Key<SafTreeIndex>
 
     val listings = TreeChildIndex<DocumentFile>()
+
+    /** The documents this save created, by URI (L169). */
+    val created: MutableMap<String, String> = java.util.concurrent.ConcurrentHashMap()
 }

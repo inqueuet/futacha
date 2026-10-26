@@ -7,6 +7,14 @@ import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path
 
+/** Recover moves left between publication steps by process death, before the caller cleans staging. */
+internal fun recoverInterruptedVoicePack(fileSystem: FileSystem, model: Path, staging: Path, current: Path) {
+    val stagedModel = staging.resolve("0.vvm")
+    val previous = requireNotNull(current.parent).resolve("${current.name}.previous")
+    if (fileSystem.exists(stagedModel) && !fileSystem.exists(model)) fileSystem.atomicMove(stagedModel, model)
+    if (!fileSystem.exists(current) && fileSystem.exists(previous)) fileSystem.atomicMove(previous, current)
+}
+
 /**
  * Publication boundary for an already verified model and extracted dictionary.
  * The caller owns exclusive VoiceAssetAccess mutation and cleans staging on failure.

@@ -144,6 +144,7 @@ internal suspend fun persistAppStateSelfPostIdentifierMap(
             map
         )
     }
+    require(encoded.length <= APP_STATE_SETTINGS_JSON_MAX_CHARS) { "自分の投稿記録が保存上限を超えました。既存の記録は変更していません" }
     update(encoded)
 }
 

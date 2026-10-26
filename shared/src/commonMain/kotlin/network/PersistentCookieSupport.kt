@@ -44,7 +44,8 @@ internal fun isRepeatedPersistentCookie(existing: StoredCookie, received: Stored
         existing.hostOnly != received.hostOnly ||
         existing.secure != received.secure ||
         existing.httpOnly != received.httpOnly ||
-        existing.extensions != received.extensions
+        existing.extensions != received.extensions ||
+        existing.importedWithoutScope != received.importedWithoutScope
     ) {
         return false
     }

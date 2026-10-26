@@ -664,7 +664,7 @@ class WatchSyncManager(
 
     private suspend fun sendCurrentSnapshot(includePreviewThreadPages: Boolean) {
         val boards = stateStore.boards.first()
-        val history = stateStore.history.first()
+        val history = stateStore.readHistory()
         val watchWords = stateStore.watchWords.first()
         val readAloudStatus = WatchReadAloudStatusStore.status.value
         sendSnapshot(

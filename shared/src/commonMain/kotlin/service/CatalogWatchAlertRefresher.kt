@@ -124,7 +124,7 @@ class CatalogWatchAlertRefresher(
         }
 
         val nowMillis = Clock.System.now().toEpochMilliseconds()
-        val existingHistoryKeys = stateStore.history.first()
+        val existingHistoryKeys = stateStore.readHistory()
             .mapTo(mutableSetOf()) { it.watchAlertIdentityKey() }
         val matches = mutableListOf<CatalogWatchAlertMatch>()
         val seenKeys = existingHistoryKeys.toMutableSet()

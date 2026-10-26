@@ -85,21 +85,21 @@ class FtutterOpeningScrollInstrumentedTest {
     }
     @Test fun aFirstVisitStartsAtTheFirstPostAfterTheRowsArrive() {
         open()
-        rule.onNodeWithText("opening-body-100", substring = true).assertIsDisplayed()
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
         assertEquals(1, fetches.get())
     }
     @Test fun reopeningACachedPageAtASavedZeroWithoutAPostIdStartsAtTheFirstPost() {
         open(entry.copy(lastReadItemIndex = 0, lastReadItemOffset = 0, lastReadPostId = null), cached = true)
-        rule.onNodeWithText("opening-body-100", substring = true).assertIsDisplayed()
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
         assertEquals("The cached route must not fetch another page", 0, fetches.get())
     }
     @Test fun aSavedZeroPositionWithoutAPostIdAlsoStartsAtTheFirstPost() {
         open(entry.copy(lastReadItemIndex = 0, lastReadItemOffset = 0, lastReadPostId = null))
-        rule.onNodeWithText("opening-body-100", substring = true).assertIsDisplayed()
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
     }
     @Test fun anAllReadCountWithoutASavedViewportDoesNotMeanJumpToTheBottom() {
         open(history = null, readCount = posts.size)
-        rule.onNodeWithText("opening-body-100", substring = true).assertIsDisplayed()
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
     }
     @Test fun anExplicitSavedMiddlePostStillRestoresItsViewport() {
         open(entry.copy(lastReadItemIndex = 41, lastReadItemOffset = 0, lastReadPostId = "140"))

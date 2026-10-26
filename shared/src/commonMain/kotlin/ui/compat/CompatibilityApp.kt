@@ -2415,6 +2415,7 @@ private fun CompatibilityAppContent(
             onRefreshExternalWatcher = ::refreshExternalWatcher,
             historyTools = historyTools,
             historyClearReachesEveryMode = stateStore != null,
+            historyClearCount = stateStore?.let { shared -> { shared.readHistory().size } },
             onRefreshAllTabs = { repository?.let(::checkAllTabs) },
             onOpenSettings = {
                 val origin = state.host
@@ -3909,6 +3910,7 @@ private fun CompatCatalogScreen(
     var archiveSearchOpen by remember(board.key) { mutableStateOf(false) }
     var boardSelectorOpen by remember { mutableStateOf(false) }
     val catalogListState = rememberLazyListState()
+    val catalogPhashImageLoader = LocalFutachaCatalogImageLoader.current
     val catalogGridState = rememberLazyGridState()
     val openUrl = rememberUrlLauncher()
     val catalogNgEnabled = preferences["compat.catalog.NG機能"] != "OFF"
@@ -3944,7 +3946,7 @@ private fun CompatCatalogScreen(
             catalogImageNgProgress = null
         } else {
             val candidates = items.mapNotNull { item ->
-                (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it }
+                compatCatalogPhashRequestUrl(item)?.let { item.id to it }
             }.distinctBy { it.second }.take(256)
             // Image NG is optional. A storage failure (for example SQLITE_FULL)
             // must neither crash the app nor discard hashes computed here.
@@ -3986,6 +3988,11 @@ private fun CompatCatalogScreen(
                     batchTimeoutMillis = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
                     requestTimeoutMillis = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
                     publishEvery = 1,
+                    cachedImageLoader = catalogPhashImageLoader,
+                    fallbackImageUrl = { id -> items.firstOrNull { it.id == id }?.thumbnailUrl },
+                    resolveMissingUrl = { id -> resolveCompatCatalogPhashUrl(items.firstOrNull { it.id == id }?.thumbnailUrl) {
+                        effectiveRepository?.fetchOpImageUrl(board.originalUrl, id)
+                    } },
                     onComputed = { itemId, phash ->
                         computed[itemId] = phash
                         urlByItemId[itemId]?.let { url ->
@@ -4298,14 +4305,17 @@ private fun CompatCatalogScreen(
     }
     fun addCatalogImagePhashRule(item: CatalogItem, memo: String, localOnly: Boolean) {
         val client = httpClient
-        val url = item.fullImageUrl ?: item.thumbnailUrl
+        val url = compatCatalogPhashRequestUrl(item)
         if (client == null || url.isNullOrBlank()) {
             transientMessage = "画像pHashを作成できる画像がありません"
             return
         }
         transientMessage = "NG画像登録中"
         launchCatalogStoreSafely("catalog image NG persistence", "画像NGの保存に失敗しました") {
-            fetchCompatImagePhash(client, url)
+            fetchCompatImagePhash(client, url, fallbackImageUrl = item.thumbnailUrl,
+                cachedImageLoader = catalogPhashImageLoader) { resolveCompatCatalogPhashUrl(item.thumbnailUrl) {
+                effectiveRepository?.fetchOpImageUrl(board.originalUrl, item.id)
+            } }
                 .onSuccess { phash ->
                     val scopeKey = compatThreadImageNgScopeKey(board.key, localOnly)
                     store.upsertNgRule(
@@ -4314,7 +4324,7 @@ private fun CompatCatalogScreen(
                             kind = CompatNgKind.CATALOG_IMAGE_PHASH,
                             scopeKey = scopeKey,
                             normalizedValue = phash,
-                            imageUrl = url,
+                            imageUrl = item.thumbnailUrl ?: url,
                             memo = memo.take(MAX_COMPAT_NG_MEMO_CHARS),
                             createdAtEpochMillis = Clock.System.now().toEpochMilliseconds()
                         )
@@ -5441,7 +5451,7 @@ private fun CompatCatalogScreen(
     }
     catalogImageNgRegistrationItem?.let { item ->
         CompatImageNgRegistrationDialog(
-            imageUrl = item.fullImageUrl ?: item.thumbnailUrl.orEmpty(),
+            imageUrl = item.thumbnailUrl ?: item.fullImageUrl.orEmpty(),
             initialMemo = item.title.orEmpty().take(MAX_COMPAT_NG_MEMO_CHARS),
             onDismiss = { catalogImageNgRegistrationItem = null },
             onRegister = { memo, localOnly ->
@@ -6519,7 +6529,7 @@ private fun CompatThreadScreen(
                         manualRefreshNotice = notices.manualRefresh
                     }
                     if (committed) {
-                        openingLiveSnapshot = if (!loadedFromArchive && !archiveSupplemented && !primaryThreadGone && !page.isTruncated) newSnapshot else null
+                        openingLiveSnapshot = if (!loadedFromArchive && !archiveSupplemented && !primaryThreadGone && !page.isTruncated && page.quoteReferencesComplete) newSnapshot else null
                         openingLivePage = page.takeIf { openingLiveSnapshot != null }
                         val replyCount = page.compatReplyCount()
                         val statusFlags = parseCompatThreadStatusFlags(page.deletedNotice)
@@ -6790,7 +6800,7 @@ private fun CompatThreadScreen(
     fun pauseReadAloud() {
         val post = readAloudDisplayPost
         markReadAloudPaused()
-        stopReadAloud()
+        cancelReadAloud(null, keepModel = true)
         readAloudDisplayPost = post
         readAloudStatus = "一時停止中"
         readAloudDialogOpen = true
@@ -10124,7 +10134,12 @@ private val compatAppPostNumberRegex = Regex("[0-9]+")
 private val compatAppDefaultPostLabelRegex = Regex("No\\.\\d+", RegexOption.IGNORE_CASE)
 private val compatAppTrailingCountRegex = Regex("(\\d+)\\s*$")
 
-private data class CompatQuoteFrame(val title: String, val query: String, val posts: List<CompatPostSnapshot>)
+private data class CompatQuoteFrame(
+    val title: String,
+    val query: String,
+    val posts: List<CompatPostSnapshot>,
+    val listState: LazyListState = LazyListState()
+)
 
 /**
  * The legacy viewer keeps extraction results in a full-width PopupWindow below
@@ -10271,7 +10286,7 @@ private fun CompatExtractionResultPopup(
                 } else {
                     // Lazy: an image-reply or common-word extraction on a 1000-reply
                     // thread can match hundreds of posts; only visible rows are built.
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("compat-extraction-popup-list")) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("compat-extraction-popup-list"), state = frame.listState) {
                         items(frame.posts, key = { "${it.position}:${it.postNo}" }) { post ->
                             CompatPostRow(
                                 post = post,
@@ -10468,11 +10483,22 @@ private fun CompatNavigationDrawer(
     /** The history tools (filter, marks, archive, refresh); null when off. See CompatHistoryTools.kt. */
     historyTools: CompatHistoryTools? = null,
     /** "全て削除する" also clears the history every mode shares, own-post records and auto-saved copies. */
-    historyClearReachesEveryMode: Boolean = false
+    historyClearReachesEveryMode: Boolean = false,
+    /** The rows of the shared history that "全て削除する" clears (L61); null when only this mode's are cleared. */
+    historyClearCount: (suspend () -> Int)? = null
 ) {
     var contextTab by remember { mutableStateOf<CompatTab?>(null) }
     var contextHistory by remember { mutableStateOf<CompatHistoryEntry?>(null) }
     var confirmHistoryClear by remember { mutableStateOf(false) }
+    var sharedHistoryClearCount by remember { mutableStateOf<Int?>(null) }
+    var sharedHistoryClearFailed by remember { mutableStateOf(false) }
+    LaunchedEffect(confirmHistoryClear) {
+        sharedHistoryClearFailed = false
+        sharedHistoryClearCount = if (confirmHistoryClear) {
+            runSuspendCatchingPreservingCancellation { historyClearCount?.invoke() }
+                .onFailure { sharedHistoryClearFailed = true }.getOrNull()
+        } else null
+    }
     var contextExternalWatcher by remember { mutableStateOf<CompatExternalWatcherEntry?>(null) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
     var checkingDeadTabs by remember { mutableStateOf(false) }
@@ -10755,9 +10781,16 @@ private fun CompatNavigationDrawer(
             modifier = Modifier.testTag("compat-history-clear-confirm"),
             onDismissRequest = { confirmHistoryClear = false },
             title = { Text("履歴をすべて削除しますか？") },
-            text = { Text(compatHistoryClearConfirmation(uniqueHistories.size, historyClearReachesEveryMode)) },
+            // The shared history can hold far more rows than this mode lists (L61).
+            text = { Text(when {
+                sharedHistoryClearFailed -> "共有履歴の件数を確認できませんでした。履歴は変更していません。開き直して再試行してください。"
+                historyClearCount != null && sharedHistoryClearCount == null -> "共有履歴の件数を確認しています…"
+                else -> compatHistoryClearConfirmation(maxOf(uniqueHistories.size, sharedHistoryClearCount ?: 0),
+                    historyClearReachesEveryMode)
+            }) },
             confirmButton = {
-                TextButton(onClick = { confirmHistoryClear = false; onHistoryCleared() }) { Text("削除する") }
+                TextButton(enabled = !sharedHistoryClearFailed && (historyClearCount == null || sharedHistoryClearCount != null),
+                    onClick = { confirmHistoryClear = false; onHistoryCleared() }) { Text("削除する") }
             },
             dismissButton = { TextButton(onClick = { confirmHistoryClear = false }) { Text("キャンセル") } }
         ) }

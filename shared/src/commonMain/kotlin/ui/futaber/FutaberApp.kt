@@ -722,10 +722,13 @@ internal fun FutaberApp(
     var savedTick by remember { mutableStateOf(0) }
     var savedNotice by remember { mutableStateOf<String?>(null) }
     var offlineView by remember { mutableStateOf<FutaberOfflineView?>(null) }
-    // A removed board takes its favourites with it.
-    LaunchedEffect(favorites, boards) {
-        val pruned = futaberPruneFavorites(favorites, boards)
-        if (pruned != favorites) editFavorites { futaberPruneFavorites(it, boards) }
+    // A saved [] means that the last board really was deleted; an unloaded / invalid list must keep favourites.
+    val boardsExplicitlyEmpty by stateStore.boardsExplicitlyEmpty.collectAsState(false)
+    LaunchedEffect(favorites, boards, boardsExplicitlyEmpty) {
+        val pruned = if (boardsExplicitlyEmpty && boards.isEmpty()) emptyList() else futaberPruneFavorites(favorites, boards)
+        if (pruned != favorites) editFavorites {
+            if (boardsExplicitlyEmpty && boards.isEmpty()) emptyList() else futaberPruneFavorites(it, boards)
+        }
     }
     // Removing a board cleans up the tabs of its threads. A thread missing from the history does not: the other modes
     // empty or trim the history, and a restored backup brings the tabs before the history; such a tab is not shown

@@ -54,7 +54,10 @@ class TextSpeaker internal constructor(
     val supportsPitch: Boolean get() = if (configuration.value.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON) true else system.value.supportsPitch
     suspend fun availableVoices(): List<SpeechVoice> = system.value.availableVoices()
     fun configure(settings: SpeechSettings) {
-        if (configuration.value.engine != settings.engine) stop()
+        if (configuration.value.engine != settings.engine) {
+            stop()
+            if (settings.engine == SpeechEngineKind.SYSTEM) runtime?.resetUnavailableFallbackNotice()
+        }
         configuration.value = settings
     }
     suspend fun prepare() {

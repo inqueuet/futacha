@@ -577,7 +577,7 @@ private object IosWatchSnapshotBridge {
 
     private suspend fun buildSnapshot(): WatchSnapshot {
         val boards = IosAppGraph.stateStore.boards.first()
-        val history = IosAppGraph.stateStore.history.first()
+        val history = IosAppGraph.stateStore.readHistory()
         val watchWords = IosAppGraph.stateStore.watchWords.first()
         val previousCounts = withReplyCountLock { previousReplyCounts.toMap() }
         val snapshot = builder.build(
@@ -979,7 +979,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
             // to compatibility imports again before it commits, and the
             // compat -> modern merge below converges with it in either order.
             runSuspendCatchingPreservingCancellation {
-                compatibilityStore.importModernHistory(stateStore.history.first())
+                compatibilityStore.importModernHistory(stateStore.readHistory())
             }.onFailure { error ->
                 Logger.e("MainViewController", "Failed to import modern history into the compatibility store", error)
             }
@@ -1199,7 +1199,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                                 val boards = stateStore.boards.first()
                                 compatibilityStore.bootstrapBoardsIfNeeded(boards)
                                 compatibilityStore.importModernBoards(boards)
-                                compatibilityStore.importModernHistory(stateStore.history.first())
+                                compatibilityStore.importModernHistory(stateStore.readHistory())
                             } else if (!activeProfile.usesAppStateData) {
                                 val compatBoards = compatibilityStore.boards.first()
                                 val compatHistory = compatibilityStore.history.first()

@@ -21,6 +21,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PersistentCookieStorageTest {
+    @Test fun aServerCookieReplacesOnlyTheBackupsScopeLessFallback() = runBlocking {
+        val files = InMemoryFileSystem()
+        val storage = PersistentCookieStorage(files)
+        val url = Url("https://may.2chan.net/b/")
+        storage.addImportedCookie(url, Cookie("audit", "imported", domain = "2chan.net", path = "/"))
+        storage.addCookie(Url("https://img.2chan.net/b/"), Cookie("other", "preserved", path = "/"))
+        storage.addCookie(url, Cookie("audit", "server", path = "/"))
+        assertEquals(listOf("server"), storage.get(url).filter { it.name == "audit" }.map { it.value })
+        assertEquals(listOf("preserved"), storage.get(Url("https://img.2chan.net/b/")).map { it.value })
+        assertEquals(listOf("server"), PersistentCookieStorage(files).get(url).map { it.value })
+    }
+    @Test fun aServerDeletionDoesNotRevealAnOldImportedCookie() = runBlocking {
+        val storage = PersistentCookieStorage(InMemoryFileSystem())
+        val url = Url("https://may.2chan.net/b/")
+        storage.addImportedCookie(url, Cookie("audit", "imported", domain = "2chan.net", path = "/"))
+        storage.addCookie(url, Cookie("audit", "", maxAge = 0, path = "/"))
+        assertTrue(storage.get(url).isEmpty())
+    }
+
     @Test
     fun maxAgeConversionSaturatesInsteadOfOverflowing() {
         assertEquals(Int.MAX_VALUE, persistentCookieMaxAgeSeconds(Long.MAX_VALUE, 1_000L))

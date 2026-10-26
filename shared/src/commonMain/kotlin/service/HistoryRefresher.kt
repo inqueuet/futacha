@@ -182,7 +182,7 @@ class HistoryRefresher(
                 stateStore.boards.first()
             } ?: throw IllegalStateException("Timed out while reading board snapshot")
             val storedHistory = historySnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
-                stateStore.history.first()
+                stateStore.readHistory()
             } ?: throw IllegalStateException("Timed out while reading history snapshot")
             val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
             val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }

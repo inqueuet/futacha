@@ -6,6 +6,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PostingFailureSupportTest {
+    @Test fun unconfirmedActionDoesNotClaimItFailed() {
+        val failure = com.valoser.futacha.shared.network.unconfirmedHttpBoardApiActionResult("del依頼", "。確認してください", IllegalStateException("read"))
+        assertEquals(failure.message, buildThreadActionFailureMessage("del依頼に失敗しました", failure))
+    }
+
     @Test
     fun failureMessageDoesNotDuplicateCanonicalOrEquivalentPrefixes() {
         assertEquals(

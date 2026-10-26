@@ -17,6 +17,8 @@ class ThreadHtmlParserCoreTest {
         assertEquals(normal.posts.map { it.id }, outOfTime.posts.map { it.id })
         assertFalse(outOfTime.isTruncated)
         assertNull(outOfTime.truncationReason)
+        assertTrue(normal.quoteReferencesComplete)
+        assertFalse(outOfTime.quoteReferencesComplete)
     }
 
     @Test fun wordsEndingInNoAreQuotedTextInsteadOfPostNumbers() = runBlocking {

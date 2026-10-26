@@ -60,8 +60,10 @@ internal fun buildThreadReferenceData(
     val startedAt = TimeSource.Monotonic.markNow()
     var timedOut = false
     val knownPostIds = posts.mapTo(HashSet(posts.size)) { it.id }
+    val earlierPostIds = HashSet<String>(posts.size)
 
     for ((index, post) in posts.withIndex()) {
+        if (index > 0) earlierPostIds += posts[index - 1].id
         if (index % 32 == 0) {
             val elapsed = startedAt.elapsedNow().inWholeMilliseconds
             if (elapsed > config.maxReferenceBuildTimeMs) {
@@ -144,6 +146,7 @@ internal fun buildThreadReferenceData(
                 messageLineIndex = messageLineIndex,
                 mediaFileIndex = mediaFileIndex,
                 knownPostIds = knownPostIds,
+                earlierPostIds = earlierPostIds,
                 config = config
             )
             if (resolution.isExplicit) {
@@ -325,6 +328,7 @@ private fun resolveThreadQuoteTargets(
     messageLineIndex: Map<String, ThreadLineTargets>,
     mediaFileIndex: Map<String, MutableSet<String>>,
     knownPostIds: Set<String>,
+    earlierPostIds: Set<String>,
     config: ThreadReferenceBuildConfig
 ): ThreadQuoteLineResolution {
     val trimmed = quoteLine.trim()
@@ -341,6 +345,12 @@ private fun resolveThreadQuoteTargets(
         ?: config.leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
             ?.takeIf { it in knownPostIds }
     if (explicitNumber != null) {
+        // An explicit unknown number may belong to a missing post in a partial page. A number
+        // that is present here but is this post or a later one cannot be its source, however.
+        // Counting it produced "1レス" at the tail while extraction correctly found no reply.
+        if (explicitNumber in knownPostIds && explicitNumber !in earlierPostIds) {
+            return ThreadQuoteLineResolution(emptySet(), isExplicit = true)
+        }
         return ThreadQuoteLineResolution(setOf(explicitNumber), isExplicit = true)
     }
     val idMatch = config.idReferenceRegex.find(content)?.value

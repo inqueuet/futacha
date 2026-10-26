@@ -384,6 +384,7 @@ private fun ThreadScreenContent(
         runtimeJobInputs = ThreadScreenRuntimeJobInputs(
             readAloudStateBindings = readAloudStateBindings,
             onStopPlayback = textSpeaker::stop,
+            onPausePlayback = textSpeaker::interrupt,
             currentAutoSaveJob = { autoSaveJob },
             setAutoSaveJob = { autoSaveJob = it },
             currentManualSaveJob = { manualSaveJob },
@@ -763,7 +764,7 @@ private fun ThreadScreenContent(
         live = currentState is ThreadUiState.Success && !currentState.isArchived && !currentState.confirmedGone && !isShowingOfflineCopy &&
             !isShowingRestoredSnapshot && !LocalFutachaStaticThreadView.current &&
             feedbackPage?.posts?.all { it.id in feedbackVisibleIds || it.id in ngHiddenPostIds || it.id in displayedPostsLayout.collapsedPostIds } == true,
-        truncated = feedbackPage?.isTruncated == true,
+        truncated = feedbackPage?.let { it.isTruncated || !it.quoteReferencesComplete } == true,
         baselineLastPostId = initialHistoryEntry?.lastViewedSnapshot?.lastPostId,
         onNotice = showMessage
     )

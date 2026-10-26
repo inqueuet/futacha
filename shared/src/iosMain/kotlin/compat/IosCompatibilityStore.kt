@@ -1957,7 +1957,8 @@ internal class IosCompatibilityStore(
                     keys.add(board.key) && urls.add(board.canonicalUrl)
             }
             .take(MAX_BOARDS)
-            .mapIndexed { index, board -> board.copy(sortOrder = index) }
+            // 2chan boards saved with an http address move to https once, at load (L100).
+            .mapIndexed { index, board -> board.withOfficialHttps().copy(sortOrder = index) }
             .toList()
     }
 
@@ -1980,12 +1981,14 @@ internal class IosCompatibilityStore(
     private fun mergeBoards(existing: List<CompatBoard>, additions: List<CompatBoard>): List<CompatBoard> {
         val result = existing.toMutableList()
         val known = existing.mapTo(mutableSetOf(), CompatBoard::canonicalUrl)
-        additions.forEach { board -> if (known.add(board.canonicalUrl)) result += board.copy(sortOrder = result.size) }
+        additions.forEach { board ->
+            if (known.add(board.canonicalUrl)) result += board.withOfficialHttps().copy(sortOrder = result.size)
+        }
         return result.sortedBy(CompatBoard::sortOrder).mapIndexed { index, board -> board.copy(sortOrder = index) }
     }
 
     private fun replaceBoard(items: List<CompatBoard>, value: CompatBoard): List<CompatBoard> =
-        (items.filterNot { item -> item.key == value.key || item.canonicalUrl == value.canonicalUrl } + value)
+        (items.filterNot { item -> item.key == value.key || item.canonicalUrl == value.canonicalUrl } + value.withOfficialHttps())
             .sortedBy(CompatBoard::sortOrder).mapIndexed { index, board -> board.copy(sortOrder = index) }
 
     private fun replaceTab(items: List<CompatTab>, value: CompatTab): List<CompatTab> =

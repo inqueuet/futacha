@@ -18,6 +18,9 @@ internal fun buildPostingAwareFailureMessage(
     error: Throwable,
     fallbackDetail: String? = null
 ): String {
+    if (error.message?.contains(com.valoser.futacha.shared.network.HTTP_BOARD_API_ACTION_RESULT_UNCONFIRMED) == true) {
+        return error.message.orEmpty().take(POSTING_FAILURE_UI_DETAIL_MAX_CHARS)
+    }
     val detail = error.message
         ?.take(POSTING_FAILURE_UI_DETAIL_MAX_CHARS)
         ?.trim()

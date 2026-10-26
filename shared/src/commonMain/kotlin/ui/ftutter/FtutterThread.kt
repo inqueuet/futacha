@@ -112,6 +112,8 @@ import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.compat.toCompatThreadSnapshot
 import com.valoser.futacha.shared.ui.futaber.asFutaberEngine
 
@@ -194,7 +196,7 @@ private class FtutterPostActions(
  * アプリのスコープで最後まで送り、送信中の印と取れた過去ログはスレッドごとに残す（戻った画面が拾う）。
  */
 @androidx.compose.runtime.Stable
-internal class FtutterThreadActions(private val scope: kotlinx.coroutines.CoroutineScope) {
+internal class FtutterThreadActions(val scope: kotlinx.coroutines.CoroutineScope) {
     private val busy = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
     private val archivedPages = androidx.compose.runtime.mutableStateMapOf<String, ThreadPage>()
     // 状態の Map は入れた順を持たないので、捨てる順は別に持つ（L133）。
@@ -406,7 +408,7 @@ internal fun FtutterThreadScreen(
         enabled = FtutterExtension.OPEN_SUMMARY in extensions,
         live = (liveConfirmed || (initialPage != null && !refreshOnOpen)) && !loading && !archived && !fallen && view?.posts === loadedPosts &&
             reportedHidden?.first === loadedPosts,
-        truncated = page?.isTruncated == true, onNotice = onNotice, openingTracker = visitTracker
+        truncated = page?.let { it.isTruncated || !it.quoteReferencesComplete } == true, onNotice = onNotice, openingTracker = visitTracker
     )
     com.valoser.futacha.shared.ui.board.ThreadViewedObservationEffect(
         historyStateStore, board.id, ref.threadId, page,
@@ -458,14 +460,20 @@ internal fun FtutterThreadScreen(
                 ?: (currentRows.getOrNull(item.index) as? FtutterRow.HiddenRow)?.index
         }.maxOrNull()
     }
-    fun storePosition() {
+    fun saveViewport() {
         val all = currentPosts
         if (all.isEmpty() || !restored) return
         val first = listState.firstVisibleItemIndex
-        val postIndex = currentRows.drop(first).firstNotNullOfOrNull {
-            (it as? FtutterRow.PostRow)?.index ?: (it as? FtutterRow.HiddenRow)?.index
-        }
+        val row = currentRows.getOrNull(first)
+        // A read marker is its own row. Giving it the next post's identity restored that post
+        // instead of the marker, with the marker's unrelated pixel offset.
+        val postIndex = (row as? FtutterRow.PostRow)?.index ?: (row as? FtutterRow.HiddenRow)?.index
         onSavePosition(first, listState.firstVisibleItemScrollOffset, postIndex?.let { all.getOrNull(it)?.id }, all.size)
+    }
+    fun storePosition() {
+        val all = currentPosts
+        if (all.isEmpty() || !restored) return
+        saveViewport()
         lastSeenPostIndex()?.let { seen ->
             val next = ftutterReadCountAfter(readCount, seen + 1)
             if (next != readCount) {
@@ -476,6 +484,20 @@ internal fun FtutterThreadScreen(
         }
     }
     val storeOnLeave by rememberUpdatedState(::storePosition)
+    val saveSettledViewport by rememberUpdatedState(::saveViewport)
+    LaunchedEffect(restored) {
+        if (!restored) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collectLatest {
+            kotlinx.coroutines.delay(500)
+            // Persist the viewport without moving the existing "ここまで読んだ" marker on every scroll.
+            saveSettledViewport()
+        }
+    }
+    com.valoser.futacha.shared.ui.compat.CompatForegroundLifecycleEffect { foreground ->
+        if (!foreground) storeOnLeave()
+    }
     DisposableEffect(ref.threadId) { onDispose { storeOnLeave() } }
 
     val initialRefreshSignal = remember(board.id, ref.threadId) { refreshSignal }
@@ -542,8 +564,13 @@ internal fun FtutterThreadScreen(
             val index = posts.indexOfFirst { it.id == id }
             rows.indexOfFirst { (it as? FtutterRow.PostRow)?.index == index || (it as? FtutterRow.HiddenRow)?.index == index }
                 .takeIf { index >= 0 && it >= 0 }
-        } ?: history?.lastReadItemIndex?.takeIf { it > 0 }?.coerceAtMost(rows.lastIndex)
-        if (target != null) listState.scrollToItem(target, history?.lastReadItemOffset ?: 0)
+        } ?: (history?.lastReadItemIndex ?: 0).coerceIn(0, rows.lastIndex)
+        // Before the worker supplies rows the list contains only the keyed end band. LazyColumn
+        // keeps that key at the viewport when rows arrive unless we explicitly restore zero too.
+        // Wait until the actual list contains these rows, rather than scrolling its old end band.
+        androidx.compose.runtime.snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it >= rows.size + 1 }
+        listState.scrollToItem(target, history?.lastReadItemOffset?.coerceAtLeast(0) ?: 0)
         restored = true
     }
 
@@ -977,6 +1004,8 @@ internal fun FtutterThreadScreen(
                 settings = mediaSettings,
                 privacyAlpha = if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f,
                 tools = tools,
+                saveCoroutineScope = remoteActions.scope,
+                onSaveNotice = onNotice,
                 onColumns = { savePreference(FtutterKeys.GALLERY_COLUMNS, it.toString()) },
                 // 一覧から開くビューアは、設定に関係なくスレ全体（原作）。
                 onOpenViewer = { index ->

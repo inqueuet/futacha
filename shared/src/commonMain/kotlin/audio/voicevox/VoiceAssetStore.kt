@@ -118,14 +118,16 @@ internal class VoiceAssetStore(
             try {
                 val root = directory()
                 fileSystem.createDirectories(root)
-                val stage = root.resolve("${VoiceAssetManifest.PACK}.staging").also { staging = it }
+                val stage = root.resolve("${VoiceAssetManifest.PACK}.staging")
+                val model = root.resolve("${VoiceAssetManifest.model.sha256}.vvm")
+                recoverInterruptedVoicePack(fileSystem, model, stage, current)
+                staging = stage
                 if (verify(pack(current))) {
                     clearInvalid()
                     mutableState.value = VoiceAssetState(VoiceAssetStage.READY)
                     return@mutate
                 }
                 val dictionary = root.resolve("${VoiceAssetManifest.dictionary.sha256}.tar.gz")
-                val model = root.resolve("${VoiceAssetManifest.model.sha256}.vvm")
                 // Admission (L5): what is already here lowers the requirement. Verified completed downloads count
                 // fully; partial ones only for a transport that can resume them. Nothing is created or downloaded
                 // before a refusal, and a transport created only to ask about resuming is closed again.

@@ -117,7 +117,8 @@ internal fun FutaberQuoteOverlay(
             ) {
                 // Lazy: a post with hundreds of replies must not build every row at once. A shorter list still wraps its content.
                 LazyColumn(
-                    Modifier.heightIn(max = with(density) { (overlaySize.height * FUTABER_BUBBLE_MAX_HEIGHT_FRACTION).toDp() })
+                    Modifier.heightIn(max = with(density) { (overlaySize.height * FUTABER_BUBBLE_MAX_HEIGHT_FRACTION).toDp() }),
+                    state = layer.listState
                 ) {
                     // Keyed by the post, so a changed list keeps each row's state with its post (audit L26). A post listed
                     // twice gets its occurrence added, so keys never repeat.

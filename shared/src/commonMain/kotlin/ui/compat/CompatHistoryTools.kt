@@ -245,7 +245,7 @@ internal class CompatHistoryTools(
     fun openExportSelection() {
         scope.launch {
             val history = try {
-                stateStore.history.first()
+                stateStore.readHistory()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -324,7 +324,7 @@ internal class CompatHistoryTools(
                 val completed = withTimeoutOrNull(COMPAT_HISTORY_REFRESH_TIMEOUT_MILLIS) {
                     refresher.refresh(
                         boardsSnapshot = stateStore.boards.first(),
-                        historySnapshot = stateStore.history.first(),
+                        historySnapshot = stateStore.readHistory(),
                         autoSaveBudgetMillis = 0L,
                         maxThreadsPerRun = COMPAT_HISTORY_REFRESH_MAX_THREADS,
                         maxAutoSavesPerRun = 0,

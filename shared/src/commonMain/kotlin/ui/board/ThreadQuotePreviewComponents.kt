@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +65,9 @@ internal fun QuotePreviewDialog(
             var visibleLimit by remember(state.quoteText, state.targetPosts) {
                 mutableIntStateOf(initialQuotePreviewVisibleLimit(state.targetPosts.size))
             }
+            // Nested quotes replace this dialog's content at the same composition position.
+            // Their viewport must not inherit the preceding result's last visible item.
+            val listState = remember(state.quoteText, state.targetPosts) { LazyListState() }
             val visiblePosts = state.targetPosts.take(visibleLimit)
             val remainingCount = remainingQuotePreviewTargetCount(
                 totalCount = state.targetPosts.size,
@@ -86,7 +90,15 @@ internal fun QuotePreviewDialog(
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                     thickness = 1.dp
                 )
+                if (state.targetPosts.isEmpty()) {
+                    Text(
+                        "引用元のレスは非表示か、取得できていません。NGや絞り込みの設定も確認してください。",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 520.dp)

@@ -132,15 +132,6 @@ internal fun FutaberViewerScreen(
     val mediaSaver = rememberFutaberMediaSaver(store, preferences, httpClient, fileSystem, boardKey, threadKey) { message = it }
     val isSaving = mediaSaver.isSaving
     val sharingInProgress = mediaSaver.sharingInProgress
-    androidx.compose.runtime.LaunchedEffect(message) {
-        if (message == "保存しました") { kotlinx.coroutines.delay(5000); if (message == "保存しました") message = null }
-    }
-    LaunchedEffect(message) {
-        if (message != null) {
-            kotlinx.coroutines.delay(3000)
-            message = null
-        }
-    }
     val current = mediaPosts.getOrNull(pagerState.currentPage)
 
     fun saveCurrent(shareAfterSave: Boolean) {
@@ -293,12 +284,18 @@ internal fun FutaberViewerScreen(
                 }
             }
         }
-        message?.let {
-            Text(
-                it, color = ViewerText, fontSize = 14.sp,
+        message?.let { text ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 120.dp)
-                    .background(Color(0xCC000000)).padding(horizontal = 14.dp, vertical = 8.dp).testTag("futaber-viewer-message")
-            )
+                    .background(Color(0xCC000000)).padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(text, color = ViewerText, fontSize = 14.sp,
+                    modifier = Modifier.weight(1f).testTag("futaber-viewer-message"))
+                TextButton(onClick = { message = null }, modifier = Modifier.testTag("futaber-viewer-message-dismiss")) {
+                    Text("閉じる", color = ViewerText)
+                }
+            }
         }
     }
 }

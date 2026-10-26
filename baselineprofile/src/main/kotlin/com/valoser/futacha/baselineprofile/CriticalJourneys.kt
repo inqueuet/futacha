@@ -137,7 +137,8 @@ private fun scrollThread(device: UiDevice) {
 }
 
 private fun launchTarget(device: UiDevice) {
-    device.executeShellCommand("am start -W $TARGET_PACKAGE/.MainActivity")
+    // MainActivity is not exported (L153): start it as the launcher does, through the enabled launcher alias.
+    device.executeShellCommand("am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $TARGET_PACKAGE")
     device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 15_000)
     device.waitForIdle()
 }

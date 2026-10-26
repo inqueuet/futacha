@@ -36,7 +36,14 @@ internal class AppVideoAudio(private val exo: ExoPlayer, audible: Boolean) {
 
     private val listener = object : Player.Listener {
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-            if (!playWhenReady) releaseHold()
+            if (!playWhenReady) {
+                // Either receiver can run first. Stop reading before releasing this video's pause, so it cannot
+                // briefly resume through the speaker while the service is still waiting for the same broadcast.
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) {
+                    AndroidSpeechPlaybackService.onAudioBecomingNoisy()
+                }
+                releaseHold()
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {

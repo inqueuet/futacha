@@ -16,7 +16,7 @@ internal suspend fun ftutterImportCookies(repository: CookieRepository, header: 
         }.mapTo(HashSet()) { it.name }
         val additions = pairs.filterKeys { it !in existing }
         additions.forEach { (name, value) ->
-            repository.setCookie("https://www.2chan.net/", name, value, domain = "2chan.net")
+            repository.setCookie("https://www.2chan.net/", name, value, domain = "2chan.net", importedWithoutScope = true)
         }
         additions.size
     }

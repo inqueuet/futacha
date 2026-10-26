@@ -126,6 +126,24 @@ class ToolbarLayoutInstrumentedTest {
         rule.runOnIdle { assertTrue("tapped $tapped", tapped.size == 1) }
     }
 
+    /** L160: at 320dp the slots are narrower than 48dp; neighbouring buttons' touch areas must not overlap. */
+    @Test fun futachaThreadBarTouchAreasDoNotOverlapOnANarrowScreen() {
+        rule.setContent {
+            MaterialTheme {
+                Box(Modifier.width(320.dp)) {
+                    ThreadActionBar(defaultThreadMenuEntries(), onAction = {}, applyNavigationBarsPadding = false)
+                }
+            }
+        }
+        val areas = listOf("返信", "最上部", "最下部", "更新", "添付", "保存", "レスフィルター", "設定").map { label ->
+            label to rule.onNodeWithContentDescription(label).fetchSemanticsNode().touchBoundsInRoot
+        }.sortedBy { it.second.left }
+        areas.zipWithNext().forEach { (left, right) ->
+            assertTrue("${left.first} ${left.second} overlaps ${right.first} ${right.second}",
+                left.second.right <= right.second.left + 0.5f)
+        }
+    }
+
     @Test fun futachaDefaultThreadBarShowsAllEightAt360AndPinsSettings() {
         // (L67) Before, the bar scrolled below 400dp and only 8dp of 設定 showed at 360dp.
         val barWidth = mutableStateOf(360.dp)

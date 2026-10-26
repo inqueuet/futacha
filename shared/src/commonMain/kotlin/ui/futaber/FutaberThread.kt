@@ -512,6 +512,11 @@ internal fun FutaberThreadScreen(
         futaberHiddenWithAi(ngBaseHidden, phashHidden, threadAi.hidden)
     }
     val activeHidden = if (ngDisabled) emptySet() else hidden
+    val visibleReplyIndex = remember(replyIndex, activeHidden) {
+        if (activeHidden.isEmpty()) replyIndex else replyIndex.mapValues { (_, replies) ->
+            replies.filterNot { it.id in activeHidden }
+        }
+    }
     com.valoser.futacha.shared.ui.board.ThreadStatusObservationEffect(
         stateStore, board.id, ref.threadId, load.page, liveConfirmed && offlineNotice == null,
         gone = confirmedGone && offlineNotice == null
@@ -520,7 +525,7 @@ internal fun FutaberThreadScreen(
         tabKeyForNg, initialKnownPostCount, posts, selfPostIds, activeHidden,
         enabled = display.extOpenSummary,
         live = liveConfirmed && !load.isLoading && !ngWaiting && offlineNotice == null && archiveNotice == null && offlineCopyNotice == null,
-        truncated = load.page?.isTruncated == true,
+        truncated = load.page?.let { it.isTruncated || !it.quoteReferencesComplete } == true,
         onNotice = { remoteNotice = it }, baselineLastPostId = initialKnownLastPostId
     )
     com.valoser.futacha.shared.ui.board.ThreadViewedObservationEffect(
@@ -724,7 +729,7 @@ internal fun FutaberThreadScreen(
                             ordinal = row.ordinal,
                             post = post,
                             idLabel = idLabels[post.id],
-                            replyCount = futaberReplyCount(post, replyIndex),
+                            replyCount = futaberReplyCount(post, visibleReplyIndex),
                             highlighted = reader.currentPostId == post.id,
                             manuallyMarked = post.id in markedPostNos,
                             onSaidaneTap = if (display.extQuickSaidane && archiveNotice == null && offlineNotice == null && offlineCopyNotice == null) ({ runRemoteAction(FutaberRemoteAction.Saidane, post, false) }) else null,
@@ -1145,7 +1150,7 @@ internal fun FutaberThreadScreen(
                     layer = layer,
                     allPosts = posts,
                     idLabels = idLabels,
-                    replyIndex = replyIndex,
+                    replyIndex = visibleReplyIndex,
                     onNested = openQuote,
                     onDismiss = { quoteStack = quoteStack.dropLast(1) },
                     onImageTap = if (mediaServices != null) ({ post -> mediaInitialPostNo = post.id; mediaOpen = true }) else null,

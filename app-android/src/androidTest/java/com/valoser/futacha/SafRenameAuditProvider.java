@@ -21,6 +21,7 @@ public class SafRenameAuditProvider extends ContentProvider {
     private final AtomicInteger listings = new AtomicInteger();
     private File root;
     private volatile boolean writable = true;
+    private volatile boolean renameOnCreate = false;
     /** Documents renamed outside the app that keep their ID, as some providers do (L73). */
     private final java.util.Map<String, File> keptIds = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -96,6 +97,11 @@ public class SafRenameAuditProvider extends ContentProvider {
 
     @Override public Bundle call(String method, String arg, Bundle extras) {
         Bundle result = new Bundle();
+        if ("renameOnCreate".equals(method)) {
+            // As providers that tidy a new document's name or number a duplicate ("name (1)") (L169).
+            renameOnCreate = Boolean.parseBoolean(arg);
+            return result;
+        }
         if ("setWritable".equals(method)) {
             writable = Boolean.parseBoolean(arg);
             return result;
@@ -118,6 +124,7 @@ public class SafRenameAuditProvider extends ContentProvider {
         }
         if ("seed".equals(method)) {
             writable = true;
+            renameOnCreate = false;
             keptIds.clear();
             File[] former = root.listFiles();
             if (former != null) for (File child : former) {
@@ -150,7 +157,15 @@ public class SafRenameAuditProvider extends ContentProvider {
         try {
             switch (method) {
                 case "android:createDocument": {
-                    File target = new File(source, extras.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME));
+                    String requested = extras.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                    File target = new File(source, requested);
+                    if (renameOnCreate) {
+                        int dot = requested.lastIndexOf('.');
+                        String stem = "saved-" + (dot < 0 ? requested : requested.substring(0, dot));
+                        String extension = dot < 0 ? "" : requested.substring(dot);
+                        target = new File(source, stem + extension);
+                        for (int n = 1; target.exists(); n++) target = new File(source, stem + " (" + n + ")" + extension);
+                    }
                     boolean created = DocumentsContract.Document.MIME_TYPE_DIR.equals(
                         extras.getString(DocumentsContract.Document.COLUMN_MIME_TYPE))
                         ? target.mkdir() : target.createNewFile();

@@ -21,17 +21,25 @@ internal fun FutachaImageNgRegistration(features: FutachaSharedFeatures, boardKe
      * Run before a "この板のみ" rule is written, for a host whose boards the shared store may not know yet (ふたばー風
      * shares its boards here). Its failure ends the registration with its message. Null (the default) as before.
      */
-    prepareBoardScope: (suspend () -> Unit)? = null) {
+    prepareBoardScope: (suspend () -> Unit)? = null,
+    resolveMissingImageUrl: (suspend () -> String?)? = null,
+    previewImageUrl: String = imageUrl) {
     val scope = rememberCoroutineScope()
+    val imageLoader = if (source == CompatImageNgSource.CATALOG)
+        com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
+    else com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader.current
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    if (!busy) FutachaAppLockAwareWindow { CompatImageNgRegistrationDialog(imageUrl, initialMemo, onDismiss) { memo, localOnly ->
+    if (!busy) FutachaAppLockAwareWindow { CompatImageNgRegistrationDialog(previewImageUrl, initialMemo, onDismiss) { memo, localOnly ->
         busy = true
         scope.launch {
             try {
-                registerFutachaImageNgRule(features.store, source, boardKey, imageUrl, memo, localOnly,
+                registerFutachaImageNgRule(features.store, source, boardKey, previewImageUrl, memo, localOnly,
                     fetchHash = {
-                        fetchCompatImagePhash(requireNotNull(features.httpClient) { "通信機能を利用できません" }, imageUrl).getOrThrow()
+                        fetchCompatImagePhash(requireNotNull(features.httpClient) { "通信機能を利用できません" }, imageUrl,
+                            fallbackImageUrl = previewImageUrl.takeIf { source == CompatImageNgSource.CATALOG },
+                            cachedImageLoader = imageLoader,
+                            resolveMissingUrl = resolveMissingImageUrl).getOrThrow()
                     },
                     prepareBoardScope = prepareBoardScope)
                 onDismiss()

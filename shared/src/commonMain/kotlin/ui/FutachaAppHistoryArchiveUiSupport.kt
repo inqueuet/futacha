@@ -370,7 +370,7 @@ private suspend fun loadBoundedHistoryArchiveManifest(
 }
 
 private suspend fun AppStateStore.historyValue(): List<ThreadHistoryEntry> {
-    return history.first()
+    return readHistory()
 }
 
 /** Whether every current entry is in [manifest] with the same visit time. */

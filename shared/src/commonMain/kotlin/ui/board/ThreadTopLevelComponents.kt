@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.MoreVert
@@ -459,18 +458,33 @@ private fun ThreadActionBarButton(
     modifier: Modifier
 ) {
     val meta = action.id.toMeta()
-    // A slot narrower than the 48dp touch size centres the button rather than squeezing its 40dp circle.
-    IconButton(
-        onClick = {
-            AnalyticsTracker.uiControl("thread_action_bar", "スレッド操作: ${meta.label}")
-            onAction(action.id)
-        },
-        modifier = modifier.wrapContentWidth(unbounded = true)
+    // Each button is touched only within its own slot (L160): the 48dp minimum touch size reached past a narrow
+    // slot (36-43dp below about 400dp wide), so the neighbours' touch areas overlapped and the pinned 設定 took the
+    // edge of the action beside it. The button fills its slot instead; from 40dp its circle is as before.
+    val viewConfiguration = androidx.compose.ui.platform.LocalViewConfiguration.current
+    val slotTouchConfiguration = androidx.compose.runtime.remember(viewConfiguration) {
+        object : androidx.compose.ui.platform.ViewConfiguration by viewConfiguration {
+            override val minimumTouchTargetSize = androidx.compose.ui.unit.DpSize(
+                0.dp, viewConfiguration.minimumTouchTargetSize.height
+            )
+        }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides androidx.compose.ui.unit.Dp.Unspecified,
+        androidx.compose.ui.platform.LocalViewConfiguration provides slotTouchConfiguration
     ) {
-        Icon(
-            imageVector = meta.icon,
-            contentDescription = meta.label,
-            tint = LocalFutachaChromeColors.current.onBar
-        )
+        IconButton(
+            onClick = {
+                AnalyticsTracker.uiControl("thread_action_bar", "スレッド操作: ${meta.label}")
+                onAction(action.id)
+            },
+            modifier = modifier
+        ) {
+            Icon(
+                imageVector = meta.icon,
+                contentDescription = meta.label,
+                tint = LocalFutachaChromeColors.current.onBar
+            )
+        }
     }
 }

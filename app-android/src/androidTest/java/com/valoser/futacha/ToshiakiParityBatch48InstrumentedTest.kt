@@ -212,6 +212,25 @@ class ToshiakiParityBatch48InstrumentedTest {
         rule.waitUntil(10_000) { runBlocking { store.history.first() }.isEmpty() }
     }
 
+    /** L61: the count is of the shared history that "全て削除する" clears, not only of this mode's rows. */
+    @Test fun historyClearAllCountsTheSharedHistoryItClears() {
+        val (alpha, _) = seedMayBoardAndHistory()
+        runBlocking {
+            sharedStore.setHistory(sharedStore.history.first() + (1..5).map { n ->
+                ThreadHistoryEntry(threadId = "880$n", boardId = "img", title = "OTHER-$n", titleImageUrl = "",
+                    boardName = "img", boardUrl = "https://img.2chan.net/b/res/880$n.htm", lastVisitedEpochMillis = n.toLong(),
+                    replyCount = 1)
+            })
+        }
+        showApp()
+        openHistoryDrawer()
+        longPressHistory(alpha)
+        rule.onNodeWithText("全て削除する").performClick()
+        waitForTag("compat-history-clear-confirm")
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("6件", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("キャンセル").performClick()
+    }
+
     private fun settingCheckbox(key: String) =
         rule.onNode(isToggleable() and hasAnyAncestor(hasTestTag("compat-setting-$key")), useUnmergedTree = true)
 

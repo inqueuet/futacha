@@ -24,10 +24,36 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.first
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class AppStateSettingsSupportTest {
+    @Test fun damagedSelfPostRecordsStayIntactUntilAnExplicitClearAndCanThenBeUsedAgain() = kotlinx.coroutines.runBlocking {
+        val storage = FakePlatformStateStorage().apply { updateSelfPostIdentifiersJson("{broken") }
+        val store = AppStateStore(storage)
+        try {
+            kotlin.test.assertFailsWith<UnreadableStoredListException> { store.addSelfPostIdentifier("1", "100", "b") }
+            assertEquals("{broken", storage.selfPostIdentifiersJson.first())
+            store.clearSelfPostIdentifiers()
+            assertEquals("{}", storage.selfPostIdentifiersJson.first())
+            store.addSelfPostIdentifier("1", "100", "b")
+            assertEquals(mapOf("b::1" to listOf("100")), store.selfPostIdentifiersByThread.first())
+        } finally { store.close() }
+    }
+    @Test fun damagedSelfPostNumbersCannotBeReadAsAnEmptyMapForTheNextWrite() {
+        kotlin.test.assertFailsWith<UnreadableStoredListException> {
+            decodeSelfPostIdentifierMapValue("{broken", json, selfPostSerializer)
+        }
+    }
+    @Test fun selfPostNumberWritesNeverExceedTheirReadLimit() = kotlinx.coroutines.runBlocking {
+        var writes = 0
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            persistAppStateSelfPostIdentifierMap(mapOf("b::1" to listOf("1".repeat(APP_STATE_SETTINGS_JSON_MAX_CHARS))), json) { writes++ }
+        }
+        assertEquals(0, writes)
+    }
+
     @Test
     fun decodeThreadGalleryThumbnailModeValue_defaultsToCropSquare() {
         assertEquals(

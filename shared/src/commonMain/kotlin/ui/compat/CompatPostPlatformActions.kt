@@ -195,6 +195,22 @@ private const val COMPAT_DRAWING_MAX_PIXELS = 16_000_000L
 internal const val COMPAT_DRAWING_MAX_STROKES = 100_000
 internal const val COMPAT_DRAWING_MAX_POINTS = 2_000_000L
 
+/**
+ * Whether a finished stroke of [newPoints] points still fits the limits a drawing can be saved with (L68): told as
+ * the stroke ends, rather than only when the whole drawing is saved and fails.
+ */
+internal fun compatDrawingStrokeFits(strokes: List<CompatDrawingStroke>, newPoints: Int): Boolean {
+    if (strokes.size + 1 > COMPAT_DRAWING_MAX_STROKES) return false
+    var points = newPoints.toLong()
+    for (stroke in strokes) {
+        points += stroke.points.size
+        if (points > COMPAT_DRAWING_MAX_POINTS) return false
+    }
+    return points <= COMPAT_DRAWING_MAX_POINTS
+}
+
+internal const val COMPAT_DRAWING_FULL_MESSAGE = "これ以上は描けません（線の数・点の数の上限です）"
+
 internal fun validateCompatDrawingRender(
     strokes: List<CompatDrawingStroke>,
     widthPx: Int,

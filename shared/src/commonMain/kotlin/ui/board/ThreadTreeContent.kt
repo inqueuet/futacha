@@ -321,7 +321,7 @@ internal fun ThreadTreeContent(
                         )
                     } else {
                         ThreadPostCard(
-                            post = post,
+                            post = post.copy(referencedCount = referencedByMap[post.id].orEmpty().size),
                             isOp = post.id == page.posts.firstOrNull()?.id,
                             isSelfPost = isSelfPost,
                             deletionSummary = deletionSummary.takeIf { post.id == originalPostId },

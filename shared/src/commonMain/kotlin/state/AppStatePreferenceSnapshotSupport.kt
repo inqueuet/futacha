@@ -65,6 +65,12 @@ internal class AppStatePreferenceSnapshotCoordinator(
         )
     }
 
+    /** Only an explicit clear may discard unreadable own-post records; ordinary edits use the strict reader. */
+    suspend fun clearSelfPostIdentifierMap() = selfPostIdentifiersMutex.withLock {
+        persistSelfPostIdentifierMap(emptyMap())
+        cachedSelfPostIdentifierMap = emptyMap()
+    }
+
     suspend fun mutateBoardWatchWordMap(
         transform: (Map<String, List<String>>) -> Map<String, List<String>>
     ) {
@@ -99,7 +105,7 @@ internal class AppStatePreferenceSnapshotCoordinator(
             setCachedValue = { cachedSelfPostIdentifierMap = it },
             onReadFailure = { error ->
                 Logger.e(tag, "Failed to read self post identifier map", error)
-                emptyMap()
+                throw error
             },
             rethrowIfCancellation = rethrowIfCancellation
         )

@@ -68,6 +68,10 @@ internal fun CompatSpeechSettingsScreen(
         Row { TextButton(onClick = onBack) { Text("‹ 設定") }; Text("読み上げ", modifier = Modifier.padding(12.dp)) }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("モード間で共有する読み上げ設定です。利用できる日本語音声を選べます。")
+            if (speechSettingsFromPreferences(preferences).engine == SpeechEngineKind.VOICEVOX_ZUNDAMON &&
+                runtime?.platform?.available != true) {
+                Text("保存した設定はずんだもんですが、この端末では端末の音声を使います。「端末の音声」を選ぶと保存した設定も変更できます。")
+            }
             VoiceAssetSettings(runtime, settings, onEngine = { save(SPEECH_ENGINE_KEY, it) },
                 onStop = { sampleJob?.cancel(); speaker.stop(); samplePlaying = false },
                 commitEngine = { store.savePreference(SPEECH_ENGINE_KEY, it) })

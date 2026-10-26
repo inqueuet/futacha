@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.board.statusCodeOrNull
+import kotlin.coroutines.cancellation.CancellationException
+
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.CompatImagePhash
@@ -695,7 +698,10 @@ internal suspend fun collectCompatImagePhashes(
     publishEvery: Int = 16,
     onComputed: (String, String) -> Unit = { _, _ -> },
     onPartial: (Map<String, String>) -> Unit = {},
-    concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY
+    concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY,
+    resolveMissingUrl: (suspend (String) -> String?)? = null,
+    fallbackImageUrl: ((String) -> String?)? = null,
+    cachedImageLoader: coil3.ImageLoader? = null
 ): Map<String, String> {
     val found = linkedMapOf<String, String>()
     collectCompatImagePhashesConcurrently(
@@ -705,6 +711,9 @@ internal suspend fun collectCompatImagePhashes(
         requestTimeoutMillis = requestTimeoutMillis,
         publishEvery = publishEvery,
         concurrency = concurrency,
+        resolveMissingUrl = resolveMissingUrl,
+        fallbackImageUrl = fallbackImageUrl,
+        cachedImageLoader = cachedImageLoader,
         onComputed = { id, phash ->
             found[id] = phash
             onComputed(id, phash)
@@ -730,6 +739,9 @@ internal suspend fun collectCompatImagePhashesConcurrently(
     requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
     publishEvery: Int = 16,
     concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY,
+    resolveMissingUrl: (suspend (String) -> String?)? = null,
+    fallbackImageUrl: ((String) -> String?)? = null,
+    cachedImageLoader: coil3.ImageLoader? = null,
     onComputed: suspend (String, String) -> Unit,
     onPublish: suspend () -> Unit
 ) {
@@ -746,7 +758,10 @@ internal suspend fun collectCompatImagePhashesConcurrently(
                     launch {
                         for ((id, url) in queue) {
                             val phash = withTimeoutOrNull(requestTimeoutMillis) {
-                                fetchCompatImagePhash(httpClient, url).getOrNull()
+                                fetchCompatImagePhash(httpClient, url,
+                                    fallbackImageUrl = fallbackImageUrl?.invoke(id),
+                                    cachedImageLoader = cachedImageLoader,
+                                    resolveMissingUrl = resolveMissingUrl?.let { resolve -> { resolve(id) } }).getOrNull()
                             } ?: continue
                             results.trySend(id to phash)
                         }
@@ -1356,9 +1371,30 @@ private class CompatPhashRequestLock(
     var holders: Int = 0
 )
 
+/** Video originals have no bitmap pHash: register and compare their displayed thumbnail. */
+internal fun compatCatalogPhashRequestUrl(item: com.valoser.futacha.shared.model.CatalogItem): String? {
+    val original = item.fullImageUrl?.takeIf { it.isNotBlank() }
+    val thumbnail = item.thumbnailUrl?.takeIf { it.isNotBlank() }
+    return if (original != null && isCompatVideoMediaUrl(original)) thumbnail else original ?: thumbnail
+}
+
+/** Resolve a missing guessed original through the existing thread head; no extension probing. */
+internal suspend fun resolveCompatCatalogPhashUrl(thumbnail: String?, fetchOriginal: suspend () -> String?): String? {
+    val original = try { fetchOriginal() }
+    catch (cancelled: CancellationException) { throw cancelled }
+    catch (error: Exception) {
+        if (error.statusCodeOrNull() !in setOf(404, 410)) throw error
+        null
+    }
+    return if (original.isNullOrBlank() || isCompatVideoMediaUrl(original)) thumbnail else original
+}
+
 internal suspend fun fetchCompatImagePhash(
     httpClient: HttpClient,
-    url: String
+    url: String,
+    fallbackImageUrl: String? = null,
+    cachedImageLoader: coil3.ImageLoader? = null,
+    resolveMissingUrl: (suspend () -> String?)? = null
 ): Result<String> = runSuspendCatchingPreservingCancellation {
     compatPhashCacheMutex.withLock { compatPhashCache[url] }
         ?.let { return@runSuspendCatchingPreservingCancellation it }
@@ -1371,25 +1407,52 @@ internal suspend fun fetchCompatImagePhash(
             if (cached != null) {
                 cached
             } else {
-                val bytes = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
-                    withContext(AppDispatchers.io) {
-                        // Streamed so the 16 MB limit applies while receiving.
-                        httpClient.prepareGet(url).execute { response ->
-                            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
-                            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                            require(contentLength == null || contentLength <= COMPAT_PHASH_MAX_IMAGE_BYTES) {
-                                "画像が大きすぎます"
+                val hashResult = runSuspendCatchingPreservingCancellation hash@{
+                    val cachedHash = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
+                        readCompatCachedImageBytes(httpClient, cachedImageLoader, url, COMPAT_PHASH_MAX_IMAGE_BYTES.toInt())
+                            ?.let { computeCompatImagePhashFromBytes(it) }
+                    }
+                    if (cachedHash != null) return@hash cachedHash
+                    val bytes = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
+                        withContext(AppDispatchers.io) {
+                            // Streamed so the 16 MB limit applies while receiving.
+                            httpClient.prepareGet(url).execute { response ->
+                                if (!response.status.isSuccess()) throw CompatPhashHttpException(response.status.value)
+                                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                                require(contentLength == null || contentLength <= COMPAT_PHASH_MAX_IMAGE_BYTES) {
+                                    "画像が大きすぎます"
+                                }
+                                readBoundedHttpResponseBytes(
+                                    response = response,
+                                    maxBytes = COMPAT_PHASH_MAX_IMAGE_BYTES.toInt(),
+                                    totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
+                                )
                             }
-                            readBoundedHttpResponseBytes(
-                                response = response,
-                                maxBytes = COMPAT_PHASH_MAX_IMAGE_BYTES.toInt(),
-                                totalTimeoutMillis = COMPAT_MEDIA_INFO_TIMEOUT_MILLIS
-                            )
                         }
                     }
+                    require(bytes.size.toLong() <= COMPAT_PHASH_MAX_IMAGE_BYTES) { "画像が大きすぎます" }
+                    requireNotNull(computeCompatImagePhashFromBytes(bytes)) { "画像をデコードできませんでした" }
                 }
-                require(bytes.size.toLong() <= COMPAT_PHASH_MAX_IMAGE_BYTES) { "画像が大きすぎます" }
-                val phash = requireNotNull(computeCompatImagePhashFromBytes(bytes)) { "画像をデコードできませんでした" }
+                val phash = hashResult.getOrElse { failure ->
+                    if (!failure.isMissingCompatPhashImage() || (resolveMissingUrl == null && fallbackImageUrl.isNullOrBlank())) throw failure
+                    withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
+                        // Catalog thumbnails are JPEG even when the original is PNG/GIF. Ask the
+                        // existing thread-head resolver for its actual attachment; never guess extensions.
+                        val confirmed = resolveMissingUrl?.invoke()?.takeIf { it.isNotBlank() && it != url }
+                        var missingFailure = failure
+                        if (confirmed != null) {
+                            val result = fetchCompatImagePhash(httpClient, confirmed, cachedImageLoader = cachedImageLoader)
+                            result.getOrNull()?.let { return@withTimeout it }
+                            missingFailure = result.exceptionOrNull() ?: failure
+                            if (!missingFailure.isMissingCompatPhashImage()) throw missingFailure
+                        }
+                        // The thread can survive a deleted attachment. Try its thumbnail exactly
+                        // once, including when the confirmed JPEG was the already-failed URL.
+                        val thumbnail = fallbackImageUrl?.takeIf { it.isNotBlank() && it != url && it != confirmed }
+                            ?: throw missingFailure
+                        fetchCompatImagePhash(httpClient, thumbnail, cachedImageLoader = cachedImageLoader).getOrThrow()
+                    }
+                }
                 compatPhashCacheMutex.withLock {
                     compatPhashCache[url] = phash
                     while (compatPhashCache.size > COMPAT_PHASH_CACHE_MAX_ENTRIES) {
@@ -1416,6 +1479,11 @@ internal suspend fun fetchCompatImagePhash(
         }
     }
 }
+
+private class CompatPhashHttpException(val statusCode: Int) : IllegalStateException("HTTP $statusCode")
+
+private fun Throwable.isMissingCompatPhashImage(): Boolean =
+    this is CompatPhashHttpException && (statusCode == 404 || statusCode == 410)
 
 /** Number of in-flight per-URL hash request locks, for tests. */
 internal suspend fun compatPhashRequestLockCountForTest(): Int =

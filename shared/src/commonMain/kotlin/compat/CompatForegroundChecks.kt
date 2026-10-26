@@ -95,6 +95,7 @@ fun ThreadPage.toCompatThreadSnapshot(tabKey: String, revision: Long): CompatThr
         deletedNotice = deletedNotice,
         isTruncated = isTruncated,
         truncationReason = truncationReason,
+        quoteReferencesComplete = quoteReferencesComplete,
         posts = posts.mapIndexed { index, post -> post.toCompatPostSnapshot(index) }
     )
 
@@ -118,7 +119,8 @@ fun Post.toCompatPostSnapshot(position: Int): CompatPostSnapshot =
         thumbnailWidth = thumbnailWidth,
         thumbnailHeight = thumbnailHeight,
         imageFileSizeBytes = imageFileSizeBytes,
-        quoteReferences = quoteReferences
+        quoteReferences = quoteReferences,
+        quoteReferencesParsed = quoteReferencesParsed
     ))
 
 /** Futaba catalog reply counts do not include the opening post. */
@@ -132,6 +134,7 @@ fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage
     deletedNotice = deletedNotice,
     isTruncated = isTruncated,
     truncationReason = truncationReason,
+        quoteReferencesComplete = quoteReferencesComplete,
     posts = posts.map { rawCached ->
         val cached = normalizeCompatPostMedia(rawCached)
         Post(
@@ -149,6 +152,7 @@ fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage
             isIsolated = cached.isIsolated,
             referencedCount = cached.referencedCount,
             quoteReferences = cached.quoteReferences,
+            quoteReferencesParsed = cached.quoteReferencesParsed,
             mail = cached.mail,
             thumbnailWidth = cached.thumbnailWidth,
             thumbnailHeight = cached.thumbnailHeight,

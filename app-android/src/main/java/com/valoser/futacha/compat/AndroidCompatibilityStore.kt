@@ -62,6 +62,7 @@ import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_IMAGE_URL_CHARS
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_MEMO_CHARS
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_RULE_ID_CHARS
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_RULES
+import com.valoser.futacha.shared.compat.withOfficialHttps
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_SCOPE_KEY_CHARS
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_VALUE_CHARS
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -237,6 +238,7 @@ class AndroidCompatibilityStore(
             db.trimTransientPreferences()
             db.trimHistoryTombstones()
             db.trimNgRules()
+            db.upgradeOfficialHttpBoards()
             val repairDiscardedAttachments = db.repairCanonicalBoards()
             db.repairThreadSnapshotCache()
             db.enforceThreadSnapshotQuota()
@@ -2522,6 +2524,17 @@ class AndroidCompatibilityStore(
         }
     }
 
+    /** 2chan boards saved with an http address (before L100) move to https once, at start. */
+    private fun SQLiteDatabase.upgradeOfficialHttpBoards() {
+        readBoards().forEach { board ->
+            val upgraded = board.withOfficialHttps()
+            if (upgraded !== board) {
+                update("compat_board", ContentValues().apply { put("original_url", upgraded.originalUrl) },
+                    "board_key=?", arrayOf(board.key))
+            }
+        }
+    }
+
     private fun SQLiteDatabase.insertBoardIfMissing(board: CompatBoard): Boolean {
         val values = board.toValues()
         return insertWithOnConflict("compat_board", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
@@ -2655,7 +2668,8 @@ class AndroidCompatibilityStore(
         put("board_key", key)
         put("name", name)
         put("canonical_url", canonicalUrl)
-        put("original_url", originalUrl)
+        // Every board write keeps a 2chan board's address on https (L100).
+        put("original_url", withOfficialHttps().originalUrl)
         put("sort_order", sortOrder)
     }
 

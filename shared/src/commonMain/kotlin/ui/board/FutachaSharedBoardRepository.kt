@@ -36,6 +36,9 @@ internal class FutachaSharedBoardRepository(
     private val httpClient: HttpClient?,
     private val catalogCache: FutachaCatalogMemoryCache = FutachaCatalogMemoryCache()
 ) : BoardRepository by delegate {
+    override suspend fun getCatalogFetchSettings(): CatalogFetchSettings =
+        compatCatalogFetchSettingsFromPreferences(store.preferences.first()) ?: delegate.getCatalogFetchSettings()
+
     private val catalogMutex = Mutex()
     private val openedCatalogs = mutableSetOf<String>()
     override suspend fun getThread(board: String, threadId: String): ThreadPage = getThreadContent(board, threadId).page

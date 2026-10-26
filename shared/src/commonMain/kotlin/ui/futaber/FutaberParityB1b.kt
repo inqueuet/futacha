@@ -168,12 +168,13 @@ internal fun futaberSortByBoardAfter(
 
 // ---- C15: an image NG from the catalog's long press ----
 
-/** The picture of a catalog thread the image NG is made from (the full image, else the thumbnail); null without one. */
+/** Image NG uses the original image, or a video's thumbnail; null without a usable picture. */
 internal fun futaberCatalogImageUrl(item: CatalogItem): String? =
-    item.fullImageUrl?.takeIf { it.isNotBlank() } ?: item.thumbnailUrl?.takeIf { it.isNotBlank() }
+    com.valoser.futacha.shared.ui.compat.compatCatalogPhashRequestUrl(item)
 
 /** What the image NG of a catalog thread is registered with. [scopeKey] is the board of the shared store. */
-internal data class FutaberCatalogImageNgTarget(val scopeKey: String, val imageUrl: String, val memo: String)
+internal data class FutaberCatalogImageNgTarget(val scopeKey: String, val imageUrl: String, val memo: String,
+    val threadId: String = "", val previewImageUrl: String = imageUrl)
 
 /**
  * The catalog sheet's "画像NGに登録", or null while the extension is off. It is disabled for a board the shared store
@@ -189,7 +190,8 @@ internal fun futaberCatalogImageNgAction(
 ): FutaberPostAction? {
     if (!enabled) return null
     val url = futaberCatalogImageUrl(item)
-    val target = if (scopeKey != null && url != null) FutaberCatalogImageNgTarget(scopeKey, url, "No.${item.id}") else null
+    val target = if (scopeKey != null && url != null) FutaberCatalogImageNgTarget(scopeKey, url, "No.${item.id}",
+        item.id, item.thumbnailUrl ?: url) else null
     return FutaberPostAction("image-ng", "画像NGに登録", enabled = servicesAvailable && target != null) {
         target?.let(onRegister)
     }
@@ -229,7 +231,14 @@ internal fun FutaberCatalogImageNgHost(
     androidx.compose.runtime.CompositionLocalProvider(LocalCompatibilityPalette provides futaberMediaPalette(colors)) {
         // The boards are shared as a step of the registration ("この板のみ" waits for it), not alongside the dialog.
         FutachaImageNgRegistration(features, target.scopeKey, CompatImageNgSource.CATALOG, target.imageUrl, target.memo, onDismiss,
-            prepareBoardScope = futaberCatalogImageNgPreparation(features.store, boards))
+            prepareBoardScope = futaberCatalogImageNgPreparation(features.store, boards),
+            resolveMissingImageUrl = {
+                boards.firstOrNull { futaberCompatBoardKey(it) == target.scopeKey }?.let { board ->
+                    com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(target.previewImageUrl) {
+                        features.repository?.fetchOpImageUrl(futaberCanonicalBoardUrl(board), target.threadId)
+                    }
+                }
+            }, previewImageUrl = target.previewImageUrl)
     }
 }
 

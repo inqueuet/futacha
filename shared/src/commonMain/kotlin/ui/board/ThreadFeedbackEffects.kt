@@ -83,8 +83,8 @@ internal fun ThreadViewedObservationEffect(
     val history by store.history.collectAsState(emptyList())
     val hasEntry = history.any { matchesViewedThread(it, boardId, threadId, boardUrl) }
     val posts = page?.posts.orEmpty()
-    LaunchedEffect(store, boardId, threadId, posts.size, posts.lastOrNull()?.id, live, foreground, unlocked, hasEntry) {
-        if (!live || !foreground || !unlocked || !hasEntry || page?.isTruncated != false) return@LaunchedEffect
+    LaunchedEffect(store, boardId, threadId, posts.size, posts.lastOrNull()?.id, page?.quoteReferencesComplete, live, foreground, unlocked, hasEntry) {
+        if (!live || !foreground || !unlocked || !hasEntry || page?.isTruncated != false || !page.quoteReferencesComplete) return@LaunchedEffect
         observeForegroundThreadView(store, boardId, threadId, posts, Clock.System.now().toEpochMilliseconds(),
             isVisible = { visible.value && lock?.isUnlocked != false }, boardUrl = boardUrl)
     }

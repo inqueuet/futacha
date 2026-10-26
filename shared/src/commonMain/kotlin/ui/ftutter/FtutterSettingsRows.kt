@@ -146,6 +146,7 @@ internal fun FtutterSliderSetting(
     val colors = LocalFtutterColors.current
     var open by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<Pair<Double, String>?>(null) }
+    var pendingReset by remember { mutableStateOf(false) }
     val current = preferences[key]?.trim()?.toDoubleOrNull()?.takeIf { it in min..max } ?: default
     fun show(v: Double) = if (integer) v.toLong().toString() else ((v * 100).toLong() / 100.0).toString()
     Column {
@@ -181,13 +182,19 @@ internal fun FtutterSliderSetting(
                     open = false
                     val snapped = ftutterSliderSnap(value, min, max, step)
                     val question = confirm?.invoke(snapped)
+                    pendingReset = false
                     if (question != null) pending = snapped to question
                     else save(key, if (integer) snapped.toLong().toString() else snapped.toString())
                 }, modifier = Modifier.testTag("ftutter-slider-ok")) { Text("OK") }
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { open = false; save(key, "") }) { Text("リセット") }
+                    TextButton(onClick = {
+                        open = false
+                        val question = confirm?.invoke(default)
+                        pendingReset = true
+                        if (question != null) pending = default to question else save(key, "")
+                    }) { Text("リセット") }
                     TextButton(onClick = { open = false }) { Text("キャンセル") }
                 }
             }
@@ -201,7 +208,7 @@ internal fun FtutterSliderSetting(
             confirmButton = {
                 TextButton(onClick = {
                     pending = null
-                    save(key, if (integer) snapped.toLong().toString() else snapped.toString())
+                    save(key, if (pendingReset) "" else if (integer) snapped.toLong().toString() else snapped.toString())
                 }, modifier = Modifier.testTag("ftutter-slider-confirm")) { Text("変更する") }
             },
             dismissButton = { TextButton(onClick = { pending = null }, modifier = Modifier.testTag("ftutter-slider-confirm-cancel")) { Text("キャンセル") } }

@@ -82,7 +82,9 @@ internal fun buildAppStatePreferenceFlows(
         .distinctUntilChanged()
         .map { raw ->
             withContext(AppDispatchers.parsing) {
-                decodeSelfPostIdentifierMapValue(raw, json, selfPostIdentifierMapSerializer)
+                // Display can recover when storage changes; mutations use the strict reader and never overwrite it.
+                runCatching { decodeSelfPostIdentifierMapValue(raw, json, selfPostIdentifierMapSerializer) }
+                    .getOrDefault(emptyMap())
             }
         }
 

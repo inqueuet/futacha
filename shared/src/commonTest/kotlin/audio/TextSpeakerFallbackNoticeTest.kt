@@ -24,7 +24,7 @@ class TextSpeakerFallbackNoticeTest {
         }
     }
 
-    @Test fun stoppingAllowsANewReadingToExplainTheFallbackAgain() = runBlocking<Unit> {
+    @Test fun unsupportedDeviceExplainsFallbackOnceUntilAnExplicitEngineChange() = runBlocking<Unit> {
         val f = Fixture(false)
         try {
             f.speaker.configure(f.voiceSettings)
@@ -33,7 +33,7 @@ class TextSpeakerFallbackNoticeTest {
             f.runtime.clearNotice()
             f.speaker.stop()
             f.speaker.speak("次の読み上げ")
-            assertNotNull(f.runtime.notice.value)
+            assertNull(f.runtime.notice.value)
             assertEquals(2, f.backend.spoken)
         } finally { f.close() }
     }

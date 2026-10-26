@@ -216,7 +216,7 @@ internal const val FUTABER_CATALOG_PHASH_MAX_CANDIDATES = 256
 /** (thread id, picture address) of the threads whose picture can be hashed, in catalog order. */
 internal fun futaberCatalogPhashCandidates(items: List<CatalogItem>): List<Pair<String, String>> =
     items.take(FUTABER_CATALOG_PHASH_MAX_CANDIDATES).mapNotNull { item ->
-        (item.fullImageUrl?.takeIf { it.isNotBlank() } ?: item.thumbnailUrl?.takeIf { it.isNotBlank() })?.let { item.id to it }
+        com.valoser.futacha.shared.ui.compat.compatCatalogPhashRequestUrl(item)?.let { item.id to it }
     }
 
 /** The ids of the threads whose hash is close to the hash of one of the [rules] (their value is the 16-digit hash). */

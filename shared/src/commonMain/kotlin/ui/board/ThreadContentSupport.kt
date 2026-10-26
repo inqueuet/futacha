@@ -70,6 +70,7 @@ private fun buildThreadPostDerivedDataCombined(posts: List<Post>): ThreadPostDer
         }
         source.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
             reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
+                if (targetId == source.id) return@targetLoop
                 val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
                 if (!seenSourceIds.add(source.id)) return@targetLoop
                 referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
@@ -115,6 +116,7 @@ private suspend fun buildThreadPostDerivedDataCombinedCancellable(posts: List<Po
         source.quoteReferences.asSequence().take(THREAD_POST_MAX_QUOTE_REFERENCES).forEach { reference ->
             reference.replyTargetPostIds.asSequence().take(THREAD_POST_MAX_QUOTE_TARGETS_PER_REFERENCE).forEach targetLoop@{ targetId ->
                 val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
+                if (targetId == source.id) return@targetLoop
                 if (!seenSourceIds.add(source.id)) return@targetLoop
                 referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
             }

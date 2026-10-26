@@ -145,13 +145,15 @@ internal fun FtutterDrawerHost(
         ) {
             // Observe from the content's ancestor. A transparent sibling edge strip wins hit testing
             // before its gesture detector runs, so even unconsumed taps cannot reach the controls below.
-            val edgeGestures = if (settings.drawerOpenByDrag && !drawerState.isOpen) {
+            // Keep this detector installed until the finger is up, including after the opening animation completes.
+            val edgeGestures = if (settings.drawerOpenByDrag) {
                 Modifier.pointerInput(settings.drawerSide) {
                     val edgeWidth = 20.dp.toPx()
                     val openDistance = 24.dp.toPx()
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        if (drawerState.isOpen) return@awaitEachGesture
                         val fromRight = when {
                             down.position.x <= edgeWidth && settings.drawerSide != FtutterDrawerSide.RIGHT -> false
                             down.position.x >= size.width - edgeWidth && settings.drawerSide != FtutterDrawerSide.LEFT -> true

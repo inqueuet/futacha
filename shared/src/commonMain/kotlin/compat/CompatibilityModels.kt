@@ -136,7 +136,8 @@ data class CompatPostSnapshot(
     /** Non-null only for a synthetic gallery/viewer item from an inline media link. */
     val mediaKey: String? = null,
     /** Retained for modern-mode quote navigation when a compatibility cache is reused. */
-    val quoteReferences: List<QuoteReference> = emptyList()
+    val quoteReferences: List<QuoteReference> = emptyList(),
+    val quoteReferencesParsed: Boolean = false
 )
 
 @Serializable
@@ -150,7 +151,8 @@ data class CompatThreadSnapshot(
     val posts: List<CompatPostSnapshot>,
     /** Preserves parser truncation state so a partial server cache cannot replace a fuller local copy. */
     val isTruncated: Boolean = false,
-    val truncationReason: String? = null
+    val truncationReason: String? = null,
+    val quoteReferencesComplete: Boolean = true
 )
 
 @Serializable

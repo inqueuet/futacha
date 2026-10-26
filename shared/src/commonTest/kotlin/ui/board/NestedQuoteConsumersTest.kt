@@ -10,6 +10,18 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 class NestedQuoteConsumersTest {
+    @Test fun selfAndForwardAnchorsDoNotCreateRepliesOrOpenLaterPosts() {
+        fun post(id: String, body: String) = Post(id, author = null, subject = null, timestamp = "",
+            messageHtml = body, imageUrl = null, thumbnailUrl = null)
+        val posts = ThreadHtmlParserCore.rebuildReferences(listOf(post("100", ">No.100<br>>No.102"),
+            post("101", "途中"), post("102", "最後")))
+        assertTrue(posts.all { it.quoteReferences.isEmpty() && it.referencedCount == 0 })
+        assertTrue(buildThreadPostDerivedData(posts).referencedByMap.isEmpty())
+        assertTrue(futaberReplyIndex(posts).isEmpty())
+        assertTrue(ftutterReplyIndex(posts).isEmpty())
+        val legacySelf = posts.first().copy(quoteReferences = listOf(com.valoser.futacha.shared.model.QuoteReference(">No.100", listOf("100"))))
+        assertTrue(buildThreadPostDerivedData(listOf(legacySelf)).referencedByMap.isEmpty())
+    }
     private fun posts(): List<Post> {
         fun post(id: String, body: String) = Post(id = id, author = null, subject = null, timestamp = "",
             messageHtml = body, imageUrl = null, thumbnailUrl = null)

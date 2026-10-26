@@ -2,7 +2,6 @@ package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings
 import com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettingsFromPreferences
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
@@ -21,6 +20,8 @@ import kotlin.time.TimeSource
 const val COMPAT_EXISTENCE_PROBE_TIMEOUT_MILLIS = 5_000L
 const val COMPAT_EXISTENCE_BUDGET_MILLIS = 30_000L
 private const val WATCH_CHECK_WRITE_BATCH = 10
+/** The foreground compatibility catalog's default; shared refreshes use the repository's effective layout. */
+internal const val COMPAT_DEFAULT_CATALOG_THREAD_COUNT = 300
 /** Key of the last tab whose existence was probed; the next run continues after it. */
 const val COMPAT_BACKGROUND_EXISTENCE_CURSOR_KEY = "compat.background.existence_cursor"
 /**
@@ -28,8 +29,6 @@ const val COMPAT_BACKGROUND_EXISTENCE_CURSOR_KEY = "compat.background.existence_
  * so boards at the end of the list are not starved when a run's time runs out (empty = none).
  */
 const val COMPAT_BACKGROUND_UPDATE_BOARD_CURSOR_KEY = "compat.background.update_board_cursor"
-/** Thread count the catalog screen assumes when `catalogThreadSize` is not set. */
-internal const val COMPAT_DEFAULT_CATALOG_THREAD_COUNT = 300
 /** Existence probes in flight at once; the budget and the per-probe timeout are unchanged. */
 internal const val COMPAT_EXISTENCE_PROBE_PARALLELISM = 3
 
@@ -126,12 +125,9 @@ suspend fun refreshCompatTabsInBackground(
     // the update phase to the oldest tabs only hid the counts of newer ones.
     val tabs = store.tabs.first().filterNot(CompatTab::isDead)
     val boards = store.boards.first()
-    // Same catalog layout as the catalog screens; a different one makes the
-    // repository redo the board's catalog setup on each switch.
-    // With no catalogThreadSize stored the catalog screen still fetches 300 threads, so use that
-    // layout here too instead of the repository default.
+    // Shared patrols use the same AppState layout as the modern catalog (L98), independently of the active mode.
     val catalogSettings = compatCatalogFetchSettingsFromPreferences(store.preferences.first())
-        ?: compatCatalogFetchSettings(COMPAT_DEFAULT_CATALOG_THREAD_COUNT)
+        ?: repository.getCatalogFetchSettings()
     suspend fun fetchCatalog(boardUrl: String, mode: CatalogMode) =
         repository.getCatalogWithSettings(boardUrl, mode, catalogSettings)
     suspend fun loadCursor(key: String): String? = try {

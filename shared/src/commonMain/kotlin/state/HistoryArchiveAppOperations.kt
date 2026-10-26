@@ -29,7 +29,7 @@ suspend fun exportAppHistoryArchive(
     appVersion: String? = null,
     selectedEntries: List<ThreadHistoryEntry>? = null
 ): Result<HistoryArchiveExportResult> = withContext(AppDispatchers.io) {
-    val requestedEntries = selectedEntries ?: stateStore.history.first()
+    val requestedEntries = selectedEntries ?: stateStore.readHistory()
     // History holds up to 20,000 entries but an archive at most 2,000 (import
     // reads the whole manifest at once), so the most recently visited ones are
     // exported and the rest reported instead of failing the whole export.

@@ -36,7 +36,9 @@ data class StoredCookie(
     val secure: Boolean = false,
     val httpOnly: Boolean = false,
     val extensions: Map<String, String> = emptyMap(),
-    val createdAtMillis: Long = currentTimeMillis()
+    val createdAtMillis: Long = currentTimeMillis(),
+    /** Imported backups have no host/path metadata; a real server cookie replaces that fallback. */
+    val importedWithoutScope: Boolean = false
 )
 
 @Serializable
@@ -81,7 +83,11 @@ class PersistentCookieStorage(
         return block()
     }
 
-    override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
+    override suspend fun addCookie(requestUrl: Url, cookie: Cookie) = storeCookie(requestUrl, cookie, false)
+
+    suspend fun addImportedCookie(requestUrl: Url, cookie: Cookie) = storeCookie(requestUrl, cookie, true)
+
+    private suspend fun storeCookie(requestUrl: Url, cookie: Cookie, importedWithoutScope: Boolean) {
         var saveSnapshot: StoredCookieFile? = null
         withMutationSerialization {
             mutex.withLock {
@@ -112,8 +118,18 @@ class PersistentCookieStorage(
                     )
                     return@withLock
                 }
+                // A server response supplies the actual scope, including expiry/deletion. Drop only the backup's
+                // scope-less fallback, never another real host/path cookie with the same name (M39).
+                var removedImported = false
+                if (!importedWithoutScope) {
+                    val superseded = targetCookies.filterValues { stored ->
+                        stored.importedWithoutScope && stored.name == cookie.name &&
+                            persistentCookieDomainMatches(requestUrl.host.lowercase(), stored.domain, stored.hostOnly)
+                    }.keys.toList()
+                    superseded.forEach { targetCookies.remove(it); removedImported = true }
+                }
                 if (shouldDeletePersistentCookie(cookie, now)) {
-                    if (removeCookieLocked(targetCookies, domain, path, cookie.name)) {
+                    if (removeCookieLocked(targetCookies, domain, path, cookie.name) || removedImported) {
                         saveSnapshot = snapshotIfPersistingLocked(transactionId, targetCookies)
                     }
                     return@withLock
@@ -132,12 +148,13 @@ class PersistentCookieStorage(
                     extensions = cookie.extensions.mapNotNull { (key, value) ->
                         value?.let { key to it }
                     }.toMap(),
-                    createdAtMillis = now
+                    createdAtMillis = now,
+                    importedWithoutScope = importedWithoutScope
                 )
                 val existing = targetCookies[key]
                 if (existing != null && isRepeatedPersistentCookie(existing, stored)) {
                     // Still retry a snapshot an earlier write failed to persist.
-                    if (hasUnpersistedSnapshotLocked()) {
+                    if (removedImported || hasUnpersistedSnapshotLocked()) {
                         saveSnapshot = snapshotIfPersistingLocked(transactionId, targetCookies)
                     }
                     return@withLock

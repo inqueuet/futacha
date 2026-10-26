@@ -75,7 +75,13 @@ class FutaberModeInstrumentedTest {
         "compat.futaber.seen",
         "compat.futaber.post.name",
         "compat.futaber.post.email",
-        "compat.futaber.post.confirm"
+        "compat.futaber.post.confirm",
+        // Display settings the settings test changes (T4: a threshold left at 4 hid the one post with 3 replies
+        // from the operation-menu test that followed).
+        "compat.futaber.manyReplies",
+        "compat.futaber.fontSize",
+        "compat.futaber.smallImages",
+        "compat.futaber.catalog.scrollTop"
     )
     private var originalDeleteKey: String = ""
 

@@ -7,7 +7,9 @@ data class ThreadPage(
     val deletedNotice: String?,
     val posts: List<Post>,
     val isTruncated: Boolean = false,
-    val truncationReason: String? = null
+    val truncationReason: String? = null,
+    /** All posts can be present while quote processing ran out of time. */
+    val quoteReferencesComplete: Boolean = true
 )
 
 fun ThreadPage.resolveHistoryReplyCount(previousReplyCount: Int? = null): Int {

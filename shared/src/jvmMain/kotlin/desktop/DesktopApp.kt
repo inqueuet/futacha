@@ -97,7 +97,7 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
             withContext(Dispatchers.IO) {
                 if (target == ExperienceProfile.TOSHIAKI_COMPAT) {
                     synchronizeBoardsToCompatibility(stateStore.boards.first())
-                    compatibility.importModernHistory(stateStore.history.first())
+                    compatibility.importModernHistory(stateStore.readHistory())
                 } else {
                     val boards = synchronizeModernBoardsFromCompatibility(
                         stateStore.boards.first(), compatibility.boards.first(), compatibility.holdsBundledTutorialBoard

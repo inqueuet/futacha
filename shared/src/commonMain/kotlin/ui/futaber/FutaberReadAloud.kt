@@ -229,7 +229,7 @@ internal class FutaberReadAloud(
         isPaused = true
         // The run in progress no longer owns the state: its end must not clear "reading" (see [generation]).
         ++generation
-        engine?.stop()
+        engine?.interrupt()
         job?.cancel()
         if (pausedAtEnd) message = null
     }

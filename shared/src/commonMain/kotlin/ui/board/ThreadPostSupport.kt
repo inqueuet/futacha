@@ -208,7 +208,7 @@ internal fun resolveQuotePreviewState(
     targetPosts: List<Post>,
     posterIdLabels: Map<String, PosterIdLabel>
 ): QuotePreviewState? {
-    if (isScrolling || targetPosts.isEmpty()) return null
+    if (isScrolling) return null
     return QuotePreviewState(
         quoteText = quoteText,
         targetPosts = targetPosts,

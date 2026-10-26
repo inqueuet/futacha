@@ -64,7 +64,17 @@ internal fun mergeImportedHistoryEntry(
     existing: ThreadHistoryEntry,
     imported: ThreadHistoryEntry
 ): ThreadHistoryEntry = mergeAppStateHistoryEntry(existing, imported).copy(
-    threadStatus = mergeKnownThreadStatus(existing.threadStatus, imported.threadStatus),
+    // A live response explicitly clears a stale death record; an older archive must respect that confirmation.
+    threadStatus = mergeKnownThreadStatus(existing.threadStatus, imported.threadStatus)?.let { status ->
+        if (existing.lastConfirmedAliveEpochMillis != null &&
+            existing.lastConfirmedAliveEpochMillis > (imported.lastConfirmedAliveEpochMillis ?: Long.MIN_VALUE) &&
+            existing.threadStatus?.isDead != true && !existing.isAutoRefreshDisabled) status.copy(isDead = false)
+        else status
+    },
+    isAutoRefreshDisabled = if (existing.lastConfirmedAliveEpochMillis != null &&
+        existing.lastConfirmedAliveEpochMillis > (imported.lastConfirmedAliveEpochMillis ?: Long.MIN_VALUE) &&
+        existing.threadStatus?.isDead != true && !existing.isAutoRefreshDisabled) false
+        else existing.isAutoRefreshDisabled || imported.isAutoRefreshDisabled,
     lastConfirmedAliveEpochMillis = listOfNotNull(
         existing.lastConfirmedAliveEpochMillis,
         imported.lastConfirmedAliveEpochMillis

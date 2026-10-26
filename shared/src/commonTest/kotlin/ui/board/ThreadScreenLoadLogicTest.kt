@@ -1099,13 +1099,13 @@ class ThreadScreenLoadLogicTest {
             )
         )
         assertEquals(
-            null,
+            emptyList(),
             resolveQuotePreviewState(
                 isScrolling = false,
                 quoteText = ">>1",
                 targetPosts = emptyList(),
                 posterIdLabels = posterIdLabels
-            )
+            )?.targetPosts
         )
         assertFalse(canHandleThreadPostLongPress(visibleState))
         assertTrue(canHandleThreadPostLongPress(null))

@@ -23,22 +23,35 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** Holds OS playback protection for a user-started speech session, including gaps between replies. */
 class AndroidSpeechPlaybackService : Service() {
+    private var latestStartId = 0
+    private var stopping = false
+    private val destroyed = CompletableDeferred<Unit>()
     private var mediaSession: MediaSession? = null
     private var focus: AudioFocusRequest? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var pausedForFocusLoss = false
     /** Paused for this app's own video with sound (L117); resumed when the video stops. */
     private var pausedForAppVideo = false
+    /**
+     * Headphones unplugged (L161): the reading stops, as a player stops rather than going on through the speaker, and
+     * as iOS does on that route change. Also when it was paused for this app's video, which pauses for the same event,
+     * so the reading does not come back through the speaker once the video lets it go.
+     */
+    private var noisyReceiver: android.content.BroadcastReceiver? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
         if (intent?.action == ACTION_STOP) {
             stopSessions()
             finishPlayback()
@@ -87,6 +100,18 @@ class AndroidSpeechPlaybackService : Service() {
             if (focus == null && !requestSpeechFocus()) {
                 throw IOException("他の音声を再生中のため読み上げを開始できません")
             }
+            if (noisyReceiver == null) {
+                val receiver = object : android.content.BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) {
+                        if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) onAudioBecomingNoisy()
+                    }
+                }
+                val filter = android.content.IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+                // A protected broadcast: only the system sends it.
+                if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                else registerReceiver(receiver, filter)
+                noisyReceiver = receiver
+            }
             if (wakeLock == null) {
                 wakeLock = getSystemService(PowerManager::class.java)
                     .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "futacha:read-aloud").apply {
@@ -114,6 +139,8 @@ class AndroidSpeechPlaybackService : Service() {
      * volume itself, so the speech is not cut for a brief notification sound.
      */
     private fun onAudioFocusChange(change: Int) {
+        // Abandoning focus can leave a callback already queued on main after this service stopped.
+        if (instance !== this || stopping) return
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 clearFocusPause()
@@ -208,17 +235,21 @@ class AndroidSpeechPlaybackService : Service() {
         stopSessions()
         releaseResources()
         super.onDestroy()
+        destroyed.complete(Unit)
     }
 
     private fun finishPlayback() {
+        if (stopping || !stopSelfResult(latestStartId)) return
+        stopping = true
         releaseResources()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     private fun releaseResources() {
         clearFocusPause()
         pausedForAppVideo = false
+        noisyReceiver?.let { runCatching { unregisterReceiver(it) } }
+        noisyReceiver = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         focus?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
@@ -256,10 +287,19 @@ class AndroidSpeechPlaybackService : Service() {
         ): AutoCloseable {
             val id = UUID.randomUUID().toString()
             val session = Session(CompletableDeferred(), onStop, onFocusPause, onFocusResume)
-            sessions[id] = session
             try {
-                context.startForegroundService(Intent(context, AndroidSpeechPlaybackService::class.java))
-                withTimeout(5_000) { session.ready.await() }
+                withTimeout(5_000) {
+                    withContext(Dispatchers.Main.immediate) {
+                        // A service already asked to stop must finish destroying before it owns another session.
+                        // Otherwise its late onDestroy removes the new reading, or stopSelf swallows a pending FGS
+                        // start and Android kills the process for not reaching startForeground.
+                        instance?.takeIf { it.stopping }?.destroyed?.await()
+                        ensureActive()
+                        sessions[id] = session
+                        context.startForegroundService(Intent(context, AndroidSpeechPlaybackService::class.java))
+                    }
+                    session.ready.await()
+                }
                 return AutoCloseable { release(id) }
             } catch (timeout: TimeoutCancellationException) {
                 release(id)
@@ -274,6 +314,12 @@ class AndroidSpeechPlaybackService : Service() {
 
         /** Main thread only, like the service's own callbacks. */
         private var appVideoHolds = 0
+
+        /** What the headphones-unplugged broadcast does (L161); the broadcast is the system's own, so tests call this. */
+        internal fun onAudioBecomingNoisy() {
+            val noisy = Runnable { instance?.let { service -> stopSessions(); service.finishPlayback() } }
+            if (Looper.myLooper() == Looper.getMainLooper()) noisy.run() else mainHandler.post(noisy)
+        }
 
         /**
          * Held by this app's video player while it is heard (L117). The reading aloud pauses while any is held and
@@ -297,8 +343,13 @@ class AndroidSpeechPlaybackService : Service() {
         }
 
         private fun release(id: String) {
-            sessions.remove(id)
-            mainHandler.post { if (sessions.isEmpty()) instance?.finishPlayback() }
+            val close = Runnable {
+                // All registration, removal, snapshots and callbacks are on main. A concurrent removal could race
+                // Kotlin's size==1 toList fast path and throw NoSuchElementException while processing focus loss.
+                sessions.remove(id)
+                if (sessions.isEmpty()) instance?.finishPlayback()
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) close.run() else mainHandler.post(close)
         }
 
         private fun stopSessions() {

@@ -204,25 +204,28 @@ internal fun ProvideFutachaSharedFeatures(
     val activeRepository = repository ?: ownedRepository
     var settingsPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     var closedBatch by remember { mutableStateOf<com.valoser.futacha.shared.compat.ClosedTabBatch?>(null) }
-    var notification by remember { mutableStateOf<String?>(null) }
+    val notifications = remember { mutableStateListOf<String>() }
+    val notification = notifications.firstOrNull()
     val scope = rememberCoroutineScope()
     val features = remember(store, preferencesState, httpClient, activeRepository, fileSystem, cookieRepository, appVersion, appStateStore) {
         FutachaSharedFeatures(store, preferencesState, httpClient, activeRepository, fileSystem,
             cookieRepository, appVersion, openSettings = { settingsPaths = listOf(it) }, onTabsClosed = { closedBatch = it }, ngRulesState = ngRulesState, appStateStore = appStateStore,
-            lastingScope = scope, notify = { notification = it })
+            lastingScope = scope, notify = { notifications.add(it) })
     }
     SideEffect {
         features.archiveReport.onEnqueued = onArchiveReportEnqueued
         features.archiveReport.onEnabledChanged = onArchiveReportEnabledChanged
     }
-    LaunchedEffect(closedBatch, notification) {
-        if (closedBatch != null || notification != null) {
-            delay(features.intValue("control", "controlCloseToastDuration", 1000..30000)?.toLong() ?: 7000L)
-            closedBatch = null; notification = null
-        }
-    }
     var foreground by remember { mutableStateOf(true) }
     CompatForegroundLifecycleEffect { foreground = it }
+    val noticeLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    val noticeUnlocked by (noticeLock?.sessionUnlocked?.collectAsState() ?: remember { mutableStateOf(true) })
+    LaunchedEffect(closedBatch, foreground, noticeUnlocked) {
+        if (closedBatch != null && foreground && noticeUnlocked) {
+            delay(features.intValue("control", "controlCloseToastDuration", 1000..30000)?.toLong() ?: 7000L)
+            closedBatch = null
+        }
+    }
     val refreshEnabled by remember(preferencesState) {
         derivedStateOf(structuralEqualityPolicy()) {
             com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(preferencesState.value)
@@ -257,7 +260,7 @@ internal fun ProvideFutachaSharedFeatures(
         while (isActive) {
             try {
                 com.valoser.futacha.shared.compat.refreshSharedFeatures(store, activeRepository, isCompatWifiConnected(context),
-                    onNewMatches = { notification = "巡回で${it.size}件のスレッドが見つかりました" })
+                    onNewMatches = { notifications.add("巡回で${it.size}件のスレッドが見つかりました") })
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { com.valoser.futacha.shared.util.Logger.e("FutachaSharedFeatures", "Shared refresh failed", failure) }
             delay(com.valoser.futacha.shared.compat.COMPAT_FOREGROUND_TICK_MILLIS)
@@ -292,7 +295,7 @@ internal fun ProvideFutachaSharedFeatures(
             content()
             // A batch already restored (from the tab list) is no longer offered here.
             val offeredBatch = closedBatch?.takeUnless(features.closedTabsUndo::isRestored)
-            if (offeredBatch != null || notification != null) Snackbar(
+            if (foreground && noticeUnlocked && (offeredBatch != null || notification != null)) Snackbar(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp),
                 action = { if (offeredBatch != null) TextButton(
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inversePrimary),
@@ -302,9 +305,11 @@ internal fun ProvideFutachaSharedFeatures(
                     scope.launch {
                         try { features.closedTabsUndo.restore(store, batch); closedBatch = null }
                         catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { notification = "タブを復元できませんでした"; closedBatch = null }
+                        catch (_: Exception) { notifications.add("タブを復元できませんでした"); closedBatch = null }
                     }
-                }) { Text("元に戻す") } }
+                }) { Text("元に戻す") } },
+                dismissAction = { if (offeredBatch == null) TextButton(onClick = { if (notifications.isNotEmpty()) notifications.removeAt(0) },
+                    modifier = Modifier.testTag("futacha-notice-dismiss")) { Text("閉じる") } }
             ) { Text(if (offeredBatch != null) "タブを閉じました" else notification.orEmpty()) }
         }
         settingsPaths.lastOrNull()?.let { path ->
@@ -332,7 +337,7 @@ internal fun ProvideFutachaSharedFeatures(
                         restoreBoardsInto = appStateStore,
                         // Work started here goes on after the settings are closed, its result told here (L58).
                         lastingScope = scope,
-                        onLastingNotice = { notification = it }
+                        onLastingNotice = { notifications.add(it) }
                     )
                 }
             } }

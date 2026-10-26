@@ -100,6 +100,26 @@ class MainActivityIncomingIntentInstrumentedTest {
         assertNull("The app's own JSON is not taken as an attachment", offeredWithin(3_000))
     }
 
+    /** L128: the same private file named with a user before the authority (`content://0@…`) is not read either. */
+    @Test fun aShareOfTheAppsOwnPrivateFileWithAUserInTheAuthorityIsNotRead() {
+        val plain = ownUri("cookies-user.json", """{"cookies":"secret"}""".toByteArray())
+        val withUser = plain.buildUpon().encodedAuthority("${android.os.Process.myUserHandle().hashCode()}@${plain.encodedAuthority}").build()
+        launch(share(withUser))
+        assertNull("The app's own JSON is not taken as an attachment", offeredWithin(3_000))
+    }
+
+    /** L153: MainActivity is not exported; the launcher alias and the share / link entry are. */
+    @Test fun onlyTheLauncherAliasAndTheExternalEntryAreExported() {
+        val packages = target.packageManager
+        assertTrue("MainActivity is not exported", !packages.getActivityInfo(
+            android.content.ComponentName(target, MainActivity::class.java), 0).exported)
+        assertTrue("The share / link entry is exported", packages.getActivityInfo(
+            android.content.ComponentName(target, ExternalIntentActivity::class.java), 0).exported)
+        val launchers = packages.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            .setPackage(target.packageName), 0)
+        assertTrue("The launcher still finds the app: $launchers", launchers.isNotEmpty() && launchers.all { it.activityInfo.exported })
+    }
+
     @Test fun aShareOfTheAppsOwnSavedImageIsStillRead() {
         val bytes = png()
         launch(share(ownUri("saved.png", bytes)))

@@ -36,6 +36,31 @@ class CompatBackgroundRefresherBatchingTest {
         }
     }
 
+    @Test fun unsetSharedChecksUseTheApplicationLayoutIncludingItsNonDefaultRows() = runBlocking {
+        val root = Files.createTempDirectory("futacha-bg-layout").toFile()
+        val store = DesktopCompatibilityStore(JvmFileSystem(root))
+        try {
+            store.initialize()
+            val url = "https://may.2chan.net/b/"
+            seed(store, url, listOf("100"))
+            val desired = CatalogFetchSettings(rows = 100)
+            var fetched: CatalogFetchSettings? = null
+            val repo = object : BoardRepository by FakeBoardRepository() {
+                override suspend fun getCatalogFetchSettings() = desired
+                override suspend fun getCatalogWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): List<CatalogItem> {
+                    fetched = settings
+                    return emptyList()
+                }
+            }
+            refreshCompatTabsInBackground(store, repo, checkExistence = false)
+            assertEquals(desired, fetched)
+            // A size explicitly chosen in the shared catalog settings still governs the modern catalog too.
+            store.savePreference("compat.catalog.catalogThreadSize", "600")
+            refreshCompatTabsInBackground(store, repo, checkExistence = false)
+            assertEquals(com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(600), fetched)
+        } finally { store.close(); root.deleteRecursively() }
+    }
+
     @Test fun aBoardsReplyCountsAreAppliedInOneBatch() = runBlocking {
         val root = Files.createTempDirectory("futacha-bg-batch").toFile()
         val desktop = DesktopCompatibilityStore(JvmFileSystem(root))
@@ -104,7 +129,7 @@ class CompatBackgroundRefresherBatchingTest {
         }
     }
 
-    @Test fun anUnsetCatalogThreadSizeUsesTheCatalogScreenLayout() = runBlocking {
+    @Test fun anUnsetCatalogThreadSizeUsesTheApplicationLayout() = runBlocking {
         val root = Files.createTempDirectory("futacha-bg-layout").toFile()
         val store = DesktopCompatibilityStore(JvmFileSystem(root))
         try {
@@ -120,7 +145,7 @@ class CompatBackgroundRefresherBatchingTest {
                 }
             }
             refreshCompatTabsInBackground(store, repository, nowEpochMillis = 10_000_000_000L, checkExistence = false)
-            assertEquals(listOf(com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(300)), requested)
+            assertEquals(listOf(CatalogFetchSettings()), requested)
         } finally { store.close(); root.deleteRecursively() }
     }
 

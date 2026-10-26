@@ -45,6 +45,9 @@ sealed interface ConditionalThreadFetchResult {
 }
 
 interface BoardRepository {
+    /** The application's catalog layout, also used for shared patrols and update checks. */
+    suspend fun getCatalogFetchSettings(): CatalogFetchSettings = CatalogFetchSettings()
+
     suspend fun getPostingCapabilities(board: String, threadId: String? = null): BoardPostingCapabilities =
         defaultBoardPostingCapabilities(board)
     suspend fun getCatalog(
@@ -163,6 +166,8 @@ class DefaultBoardRepository(
     private val diagnosticFileSystem: FileSystem? = null,
     private val catalogFetchSettingsProvider: suspend () -> CatalogFetchSettings = { CatalogFetchSettings() }
 ) : BoardRepository {
+    override suspend fun getCatalogFetchSettings(): CatalogFetchSettings = catalogFetchSettingsProvider().normalized()
+
     // Track which boards have been initialized with cookies.
     // Access only under boardInitMutex.withLock.
     private val initializedBoards = mutableSetOf<String>()

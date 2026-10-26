@@ -13,7 +13,8 @@ class CompatDirectReplyExtractionTest {
 
     private fun verify(original: List<CompatPostSnapshot>, expected: List<List<String>>) {
         for (legacy in listOf(false, true)) {
-            val snapshots = if (legacy) original.map { it.copy(quoteReferences = emptyList()) } else original
+            // Old caches predate both the mappings and their provenance flag.
+            val snapshots = if (legacy) original.map { it.copy(quoteReferences = emptyList(), quoteReferencesParsed = false) } else original
             snapshots.forEachIndexed { index, source ->
                 val actual = extractCompatHeaderPosts(snapshots, source, CompatHeaderExtractionKind.QUOTE)
                 assertEquals(expected[index], actual.map { it.postNo }, "source=${source.postNo}, legacy=$legacy")

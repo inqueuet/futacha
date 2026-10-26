@@ -69,6 +69,7 @@ internal class SpeechRuntime(context: Any?, val platform: VoicePlatform = create
     fun clearVoiceDeletionError() { mutableDeletion.update { it.copy(error = null) } }
     private val engines = MutableStateFlow<Set<VoicevoxSpeechEngine>>(emptySet())
     private val mutableNotice = MutableStateFlow<String?>(null)
+    private val unavailableFallbackNotified = MutableStateFlow(false)
     val notice = mutableNotice.asStateFlow()
     fun createEngine(): VoicevoxSpeechEngine {
         check(!closed.value) { "読み上げは終了しました" }
@@ -79,9 +80,11 @@ internal class SpeechRuntime(context: Any?, val platform: VoicePlatform = create
     }
     fun remove(engine: VoicevoxSpeechEngine) { engines.update { it - engine } }
     fun notifyFallback() {
+        if (!platform.available && !unavailableFallbackNotified.compareAndSet(false, true)) return
         mutableNotice.value = if (!platform.available) "ずんだもんはこの端末では利用できないため、端末の音声で読み上げます。"
         else "ずんだもんの音声データが未準備のため、端末の音声で読み上げます。設定から追加できます。"
     }
+    fun resetUnavailableFallbackNotice() { unavailableFallbackNotified.value = false }
     fun clearNotice() { mutableNotice.value = null }
     fun stop() { engines.value.forEach { it.stop() } }
     fun close() { closed.value = true; assetTasks.cancel(); engines.value.toList().forEach { it.close() } }

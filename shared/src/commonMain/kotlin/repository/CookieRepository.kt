@@ -56,10 +56,12 @@ class CookieRepository(
         value: String,
         domain: String,
         path: String = "/",
-        expiresAtMillis: Long? = null
+        expiresAtMillis: Long? = null,
+        importedWithoutScope: Boolean = false
     ) {
         val parsedUrl = Url(requestUrl)
-        storage.addCookie(
+        val add: suspend (Url, Cookie) -> Unit = if (importedWithoutScope) storage::addImportedCookie else storage::addCookie
+        add(
             parsedUrl,
             Cookie(
                 name = name,

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import androidx.compose.foundation.lazy.LazyListState
 import com.valoser.futacha.shared.model.Post
 
 /** Which kind of related posts a bubble shows. */
@@ -25,7 +26,10 @@ internal data class FutaberAnchor(val x: Float, val top: Float, val bottom: Floa
 internal data class FutaberQuoteLayer(
     val kind: FutaberQuoteKind,
     val posts: List<Post>,
-    val anchor: FutaberAnchor
+    val anchor: FutaberAnchor,
+    // Each layer owns its viewport: a nested quote starts at its first result and Back restores
+    // the parent bubble's position, rather than reusing the last visible bubble's LazyColumn.
+    val listState: LazyListState = LazyListState()
 )
 
 /** Where a bubble of [cardHeight] goes relative to its anchor, and where its pointer sits. */

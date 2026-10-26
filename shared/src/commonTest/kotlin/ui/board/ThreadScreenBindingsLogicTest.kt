@@ -2346,6 +2346,7 @@ class ThreadScreenBindingsLogicTest {
     @Test
     fun threadScreenStateBindingsSupport_managesReadAloudRuntimeAndJobs() {
         var stopPlaybackCalled = false
+        var pausePlaybackCalled = false
         var readAloudState = ThreadReadAloudRuntimeState(
             job = Job(),
             status = ReadAloudStatus.Speaking(
@@ -2357,12 +2358,14 @@ class ThreadScreenBindingsLogicTest {
         val readAloudBindings = buildThreadReadAloudRuntimeBindings(
             currentState = { readAloudState },
             setState = { readAloudState = it },
-            onStopPlayback = { stopPlaybackCalled = true }
+            onStopPlayback = { stopPlaybackCalled = true },
+            onPausePlayback = { pausePlaybackCalled = true }
         )
 
         val pauseMessage = readAloudBindings.pause()
         assertEquals(buildReadAloudPausedMessage(), pauseMessage)
-        assertTrue(stopPlaybackCalled)
+        assertFalse(stopPlaybackCalled)
+        assertTrue(pausePlaybackCalled)
         assertTrue(readAloudState.cancelRequestedByUser)
         assertNull(readAloudState.job)
         assertTrue(readAloudState.status is ReadAloudStatus.Paused)

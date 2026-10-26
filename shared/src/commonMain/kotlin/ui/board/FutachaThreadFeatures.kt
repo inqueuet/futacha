@@ -505,6 +505,7 @@ internal fun FutachaThreadFeatureHost(
                         preparedSnapshot = preparedMedia, gridState = galleryGridState, restoreInitialPosition = false,
                         ngRules = ngRules, httpClient = features.httpClient, apngMarkerCache = apngCache,
                         fileSystem = features.fileSystem, cookieRepository = features.cookieRepository,
+                        saveCoroutineScope = features.lastingScope, onSaveNotice = features.notify,
                         onOpenViewer = { index, post -> viewerIndex = index; viewerPostNo = post },
                         onOpenSettings = { features.openSettings("viewer") },
                         onOpenCommonSettings = { features.openSettings("viewer") }, onBack = { mediaOpen = false })

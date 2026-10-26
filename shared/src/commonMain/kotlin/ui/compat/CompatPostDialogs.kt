@@ -670,7 +670,8 @@ internal fun CompatReplyPreviewPopup(
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 8.dp
         ) {
-            LazyColumn(Modifier.fillMaxWidth()) {
+            val quoteListState = remember(posts) { androidx.compose.foundation.lazy.LazyListState() }
+            LazyColumn(Modifier.fillMaxWidth(), state = quoteListState) {
                 items(posts, key = { "${it.postNo}:${it.position}" }) { post ->
                     CompatPostRow(
                         post = post,

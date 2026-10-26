@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity() {
                             // race the first Flow emission on a cold start.
                             if (!target.usesAppStateData) {
                                 val boards = stateStore.boards.first()
-                                val history = stateStore.history.first()
+                                val history = stateStore.readHistory()
                                 application.compatibilityStore.bootstrapBoardsIfNeeded(boards)
                                 application.compatibilityStore.importModernBoards(boards)
                                 application.compatibilityStore.importModernHistory(history)
@@ -701,7 +701,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isSharedUriAllowed(uri: android.net.Uri): Boolean {
-        val authority = uri.authority ?: return false
+        // `content://0@<authority>/...` names a user before the authority; the resolver opens the same provider for
+        // the app's own user, so the user part is dropped before asking whose provider it is (L128).
+        val authority = uri.authority?.substringAfterLast('@')?.takeIf { it.isNotEmpty() } ?: return false
         val provider = runCatching { packageManager.resolveContentProvider(authority, 0) }.getOrNull()
         if (provider?.packageName != packageName) return true
         val type = runCatching { contentResolver.getType(uri) }.getOrNull().orEmpty()

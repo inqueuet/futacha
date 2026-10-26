@@ -121,4 +121,18 @@ class CompatNgRuleLimitInstrumentedTest {
         store.deleteBoard(boardKey)
         assertEquals("Another board's is kept", otherKey, store.workspace.first().catalogHostBoardKey)
     }
+
+    /** L100: a 2chan board saved with an http address (before L100) is on https after the start, and new ones too. */
+    @Test fun httpBoardAddressesMoveToHttps() = runBlocking {
+        SQLiteDatabase.openDatabase(context.getDatabasePath(databaseName).path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.update("compat_board", ContentValues().apply { put("original_url", "http://may.2chan.net/b/") },
+                "board_key=?", arrayOf(boardKey))
+        }
+        store.closeForTest()
+        store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        store.initialize()
+        assertEquals("https://may.2chan.net/b/", store.boards.first().single { it.key == boardKey }.originalUrl)
+        store.upsertBoard(CompatBoard(otherKey, "img", otherUrl, "http://img.2chan.net/b/", 1))
+        assertEquals("https://img.2chan.net/b/", store.boards.first().single { it.key == otherKey }.originalUrl)
+    }
 }

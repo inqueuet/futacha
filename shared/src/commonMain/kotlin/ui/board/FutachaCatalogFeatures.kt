@@ -63,6 +63,7 @@ internal fun FutachaCatalogFeatureHost(
     val features = LocalFutachaSharedFeatures.current
     val boardUrl = board?.url?.let(::canonicalizeBoardUrl)
     if (features == null || board == null || boardUrl == null) { content(state); return }
+    val cachedImageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
     val boardKey = compatBoardKey(boardUrl)
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     val scope = rememberCoroutineScope()
@@ -256,7 +257,7 @@ internal fun FutachaCatalogFeatureHost(
             value = emptyMap()
             return@produceState
         }
-        val candidates = items.take(256).mapNotNull { item -> (item.fullImageUrl ?: item.thumbnailUrl)?.let { item.id to it } }
+        val candidates = items.take(256).mapNotNull { item -> com.valoser.futacha.shared.ui.compat.compatCatalogPhashRequestUrl(item)?.let { item.id to it } }
         val stored = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
             features.store.loadImagePhashes(candidates.map { compatImagePhashCachePreferenceKey(it.second) })
         }.getOrDefault(emptyMap())
@@ -269,7 +270,12 @@ internal fun FutachaCatalogFeatureHost(
         val computed = mutableMapOf<String, String>()
         try {
             // Publish each batch so matching threads disappear while the rest load.
-            computed.putAll(collectCompatImagePhashes(client, missing, onPartial = { partial ->
+            computed.putAll(collectCompatImagePhashes(client, missing,
+                cachedImageLoader = cachedImageLoader,
+                fallbackImageUrl = { id -> items.firstOrNull { it.id == id }?.thumbnailUrl },
+                resolveMissingUrl = { id -> com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(items.firstOrNull { it.id == id }?.thumbnailUrl) {
+                    repository.fetchOpImageUrl(boardUrl, id)
+                } }, onPartial = { partial ->
                 computed.putAll(partial)
                 value = cached + partial
             }))
@@ -394,7 +400,11 @@ internal fun FutachaCatalogFeatureHost(
         )
     } }
     imageNg?.let { item -> FutachaImageNgRegistration(features, boardKey, CompatImageNgSource.CATALOG,
-        item.fullImageUrl ?: item.thumbnailUrl.orEmpty(), item.title.orEmpty(), { imageNg = null }) }
+        com.valoser.futacha.shared.ui.compat.compatCatalogPhashRequestUrl(item).orEmpty(), item.title.orEmpty(), { imageNg = null },
+        resolveMissingImageUrl = { com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(item.thumbnailUrl) {
+            repository.fetchOpImageUrl(boardUrl, item.id)
+        } },
+        previewImageUrl = item.thumbnailUrl ?: item.fullImageUrl.orEmpty()) }
     message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
 }

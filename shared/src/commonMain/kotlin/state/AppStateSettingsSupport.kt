@@ -138,10 +138,12 @@ internal fun decodeSelfPostIdentifierMapValue(
     json: Json,
     serializer: KSerializer<Map<String, List<String>>>
 ): Map<String, List<String>> {
-    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyMap()
-    return runCatching {
-        json.decodeFromString(serializer, raw)
-    }.getOrDefault(emptyMap())
+    if (raw.isNullOrBlank()) return emptyMap()
+    if (raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        throw UnreadableStoredListException("Stored own-post records exceed the read limit")
+    }
+    return try { json.decodeFromString(serializer, raw) }
+    catch (error: Exception) { throw UnreadableStoredListException("Stored own-post records could not be read", error) }
 }
 
 /** [readStoredStringListValue] for the per-board lists. */

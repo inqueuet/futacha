@@ -311,7 +311,8 @@ internal object ThreadHtmlParserCore {
             val postsWithReferences = posts.map { post ->
                 post.copy(
                     referencedCount = referenceData.counts[post.id] ?: 0,
-                    quoteReferences = referenceData.references[post.id].orEmpty()
+                    quoteReferences = referenceData.references[post.id].orEmpty(),
+                    quoteReferencesParsed = true
                 )
             }
 
@@ -335,7 +336,8 @@ internal object ThreadHtmlParserCore {
                 deletedNotice = deletedNotice,
                 posts = postsWithReferences,
                 isTruncated = isTruncated,
-                truncationReason = truncationReason
+                truncationReason = truncationReason,
+                quoteReferencesComplete = !referenceData.timedOut
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // FIX: キャンセル例外は再スロー
@@ -601,7 +603,8 @@ internal object ThreadHtmlParserCore {
         return posts.map { post ->
             post.copy(
                 referencedCount = referenceData.counts[post.id] ?: 0,
-                quoteReferences = referenceData.references[post.id].orEmpty()
+                quoteReferences = referenceData.references[post.id].orEmpty(),
+                    quoteReferencesParsed = true
             )
         }
     }

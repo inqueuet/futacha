@@ -141,7 +141,7 @@ class FutaberParityB1bTest {
         assertTrue(action.enabled)
         assertEquals("image-ng", action.id)
         action.onClick()
-        assertEquals(FutaberCatalogImageNgTarget("key", "https://f/1.jpg", "No.123"), registered)
+        assertEquals(FutaberCatalogImageNgTarget("key", "https://f/1.jpg", "No.123", threadId = "123"), registered)
         // Disabled for a board the shared store cannot hold, a thread without a picture and without the services.
         assertFalse(futaberCatalogImageNgAction(true, item("https://f/1.jpg", null), null, true) {}!!.enabled)
         assertFalse(futaberCatalogImageNgAction(true, item(null, null), "key", true) {}!!.enabled)

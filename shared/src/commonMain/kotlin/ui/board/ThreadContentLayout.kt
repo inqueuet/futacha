@@ -240,7 +240,7 @@ internal fun ThreadContent(
                         )
                     } else {
                         ThreadPostCard(
-                            post = post,
+                            post = post.copy(referencedCount = referencedByMap[post.id].orEmpty().size),
                             isOp = index == 0,
                             isSelfPost = isSelfPost,
                             deletionSummary = deletionSummary.takeIf { post.id == originalPostId },

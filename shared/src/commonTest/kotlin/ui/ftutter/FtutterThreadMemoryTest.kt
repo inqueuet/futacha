@@ -11,26 +11,26 @@ class FtutterThreadMemoryTest {
 
     @Test fun backgroundUnreadCountRejectsTheOlderPage() {
         val memory = FtutterThreadMemory().apply { put(url, old); open(url, false) }
-        assertNull(memory.page(url, entry.copy(replyCount = 2)))
+        assertSame(old, memory.page(url))
         assertTrue(ftutterThreadPageIsStale(old, entry.copy(replyCount = 2)))
     }
     @Test fun anUnchangedTabKeepsItsPageAndDoesNotRequireNetwork() {
         val memory = FtutterThreadMemory().apply { put(url, old); open(url, false) }
-        assertSame(old, memory.page(url, entry))
+        assertSame(old, memory.page(url))
         assertFalse(memory.takeRefresh(url))
     }
     @Test fun allTabsRefreshReplacesThePageForBothTabsAndHistoryRevisits() {
         val fresh = old.copy(posts = old.posts + post("101"))
         val memory = FtutterThreadMemory().apply { put(url, old); put(url, fresh); open(url, false) }
-        assertSame(fresh, memory.page(url, entry.copy(replyCount = 2)))
+        assertSame(fresh, memory.page(url))
         memory.open(url, false)
-        assertSame(fresh, memory.page(url, entry.copy(replyCount = 2)))
+        assertSame(fresh, memory.page(url))
     }
     @Test fun confirmedDeathKeepsTheLastReadablePageEvenIfBackgroundCountIsHigher() {
         val history = entry.copy(replyCount = 9, isAutoRefreshDisabled = true, threadStatus = ThreadStatus(isDead = true))
         val memory = FtutterThreadMemory().apply { put(url, old) }
         assertTrue(ftutterHistoryIsFallen(history))
-        assertSame(old, memory.page(url, history))
+        assertSame(old, memory.page(url))
         assertFalse(ftutterThreadPageIsStale(old, history))
     }
     @Test fun eitherConfirmedDeathFlagRestoresTheArchiveAction() {

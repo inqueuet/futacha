@@ -46,9 +46,9 @@ class FtutterM78EdgeSwipeInstrumentedTest {
         rule.waitForIdle()
     }
 
-    private fun swipe(fromX: (Float) -> Float, toX: (Float) -> Float) {
+    private fun swipe(fromX: (Float) -> Float, toX: (Float) -> Float, duration: Long = 500) {
         rule.onNodeWithTag("m78-content").performTouchInput {
-            swipe(Offset(fromX(width.toFloat()), height / 2f), Offset(toX(width.toFloat()), height / 2f), 500)
+            swipe(Offset(fromX(width.toFloat()), height / 2f), Offset(toX(width.toFloat()), height / 2f), duration)
         }
         rule.waitForIdle()
     }
@@ -65,6 +65,32 @@ class FtutterM78EdgeSwipeInstrumentedTest {
         swipe({ it - 5f }, { it * 0.3f })
         assertTrue(drawer.isOpen)
         assertEquals(emptyList<Boolean>(), swipes.toList())
+    }
+
+    @Test fun aSlowSwipeKeepsTheWholeGestureAfterTheDrawerHasOpened() {
+        start(FtutterDrawerSide.LEFT)
+        swipe({ 5f }, { it * 0.9f }, 3000)
+        assertTrue(drawer.isOpen)
+        assertEquals(emptyList<Boolean>(), swipes.toList())
+    }
+
+    @Test fun resettingTheHistoryLimitAlsoAsksBeforeItCanCloseTabs() {
+        val saved = mutableListOf<String>()
+        rule.setContent { MaterialTheme { FtutterTheme(null, FtutterBrightness.LIGHT) {
+            FtutterSliderSetting("履歴の保存数", "test-limit", 1.0, 1000.0, 1.0, 200.0,
+                mapOf("test-limit" to "300"), save = { _, value -> saved += value },
+                confirm = { if (it < 250) "タブ50件が閉じられます" else null })
+        } } }
+        rule.onNodeWithTag("ftutter-setting-test-limit").performClick()
+        rule.onNodeWithText("リセット").performClick()
+        rule.onNodeWithTag("ftutter-slider-confirm").assertExists()
+        assertTrue(saved.isEmpty())
+        rule.onNodeWithTag("ftutter-slider-confirm-cancel").performClick()
+        assertTrue(saved.isEmpty())
+        rule.onNodeWithTag("ftutter-setting-test-limit").performClick()
+        rule.onNodeWithText("リセット").performClick()
+        rule.onNodeWithTag("ftutter-slider-confirm").performClick()
+        assertEquals(listOf(""), saved)
     }
 
     @Test fun anOrdinarySwipeFromTheMiddleStillMovesTheTab() {

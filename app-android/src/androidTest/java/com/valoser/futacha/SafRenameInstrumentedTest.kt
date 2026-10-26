@@ -104,6 +104,22 @@ class SafRenameInstrumentedTest {
         assertArrayEquals(byteArrayOf(42), fs.readBytes(location, "0.jpg").getOrThrow())
     }
 
+    /**
+     * L169: with a provider that names a new document differently from what was asked, a second write to the same path
+     * in one save goes to the document the save created, instead of making another one.
+     */
+    @Test fun aSecondWriteInTheSameSaveFindsTheFileTheProviderRenamedOnCreate() = runBlocking<Unit> {
+        context.contentResolver.call(control, "seed", "0", null)
+        context.contentResolver.call(control, "renameOnCreate", "true", null)
+        withContext(fs.saveBatchContext()) {
+            fs.writeBytes(location, "a.jpg", byteArrayOf(1)).getOrThrow()
+            fs.writeBytes(location, "a.jpg", byteArrayOf(2)).getOrThrow()
+        }
+        val names = fs.listFiles(location, "").sorted()
+        assertEquals(listOf("saved-a.jpg"), names)
+        assertArrayEquals(byteArrayOf(2), fs.readBytes(location, "saved-a.jpg").getOrThrow())
+    }
+
     @Test fun outsideCollisionIsStillProtectedAndRecordedInTheBatch() = runBlocking<Unit> {
         context.contentResolver.call(control, "seed", "20", null)
         withContext(fs.saveBatchContext()) {
