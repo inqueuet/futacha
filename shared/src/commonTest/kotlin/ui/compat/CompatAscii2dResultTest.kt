@@ -26,4 +26,25 @@ class CompatAscii2dResultTest {
             } finally { client.close() }
         }
     }
+
+    /** ascii2d.net answered a live search with an http:// result, which the in-app browser refuses as cleartext. */
+    @Test
+    fun cleartextResultIsUpgradedToHttps() = runBlocking {
+        val redirect = HttpClient(MockEngine {
+            respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "http://ascii2d.net/search/color/ca2c7c89"))
+        }) { followRedirects = false }
+        val page = HttpClient(MockEngine {
+            respond("""<a href="http://ascii2d.net/search/bovw/ca2c7c89">r</a>""", HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "text/html"))
+        })
+        try {
+            assertEquals("https://ascii2d.net/search/color/ca2c7c89",
+                searchCompatAscii2d(redirect, DEFAULT_COMPAT_ASCII2D_ENDPOINT, "https://may.2chan.net/b/src/example.jpg").getOrThrow())
+            assertEquals("https://ascii2d.net/search/bovw/ca2c7c89",
+                searchCompatAscii2d(page, DEFAULT_COMPAT_ASCII2D_ENDPOINT, "https://may.2chan.net/b/src/example.jpg").getOrThrow())
+        } finally {
+            redirect.close()
+            page.close()
+        }
+    }
 }

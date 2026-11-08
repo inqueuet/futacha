@@ -12,6 +12,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
@@ -37,7 +38,7 @@ class FutaberAuditFixesInstrumentedTest {
     private lateinit var originalProfile: ExperienceProfile
 
     private val futaberKeys = listOf(
-        "compat.futaber.lastBoardId", "compat.futaber.tabs", "compat.futaber.drafts", "compat.futaber.favorites"
+        "compat.futaber.lastBoardId", "compat.futaber.tabs", "compat.futaber.drafts", "compat.futaber.favorites", "compat.futaber.manageCategory"
     )
 
     @Before fun prepare() {
@@ -79,6 +80,15 @@ class FutaberAuditFixesInstrumentedTest {
         rule.onAllNodesWithTag("futaber-drawer-board")[0].performClick()
         waitForTag("futaber-board-address")
         waitForTag("futaber-catalog-item")
+    }
+
+    /**
+     * L-B2 (V05): the thread has no "←" any more. Its action is the title row's accessibility action
+     * 「カタログへ戻る」 (the same callback the button had); the right swipe and the system's back do the same.
+     */
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun backToCatalog() {
+        rule.onNodeWithTag("futaber-thread-title").performCustomAccessibilityActionWithLabel("カタログへ戻る")
     }
 
     @Test fun backClosesTheCatalogSheetInsteadOfLeavingTheScreen() {
@@ -151,9 +161,12 @@ class FutaberAuditFixesInstrumentedTest {
         openTutorialCatalog()
         rule.onNodeWithTag("futaber-search").performClick()
         waitForTag("futaber-search-field")
+        // L-B10 (S25): an empty word lists nothing (futaber's), so a word is typed first.
+        rule.onNodeWithTag("futaber-search-field").performTextInput("チュ")
+        waitForTag("futaber-catalog-item")
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-thread-title")
-        rule.onNodeWithTag("futaber-thread-back").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
         // 検索バーは開いたまま、一覧も読み込み直さずにそこにある。
         rule.onNodeWithTag("futaber-search-field").assertIsDisplayed()

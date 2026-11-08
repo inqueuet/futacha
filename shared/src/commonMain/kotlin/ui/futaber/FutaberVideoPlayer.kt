@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.outlined.VolumeOff
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -157,7 +157,7 @@ fun FutaberVideoPlayer(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(onClick = { muted = !muted; interactions += 1 }, modifier = Modifier.testTag("futaber-video-mute")) {
                                 FutaberIcon(
-                                    if (muted || volume <= 0f) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    if (muted || volume <= 0f) Icons.AutoMirrored.Outlined.VolumeOff else Icons.AutoMirrored.Outlined.VolumeUp,
                                     contentDescription = if (muted) "ミュート解除" else "ミュート", tint = Color.White
                                 )
                             }

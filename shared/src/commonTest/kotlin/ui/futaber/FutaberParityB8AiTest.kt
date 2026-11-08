@@ -96,12 +96,21 @@ class FutaberParityB8AiTest {
     }
 
     @Test
+    fun theFourCommandsOfTheOtherModesRunHere() {
+        val saved = assertIs<FutaberAiPlan.Run>(futaberAiPlan(command(FutachaAiAction.OpenSavedThreads), context(), enabled = true))
+        assertEquals(FutaberAiEffect.OpenManageAt(FutaberManageCategory.SavedBox), saved.effect)
+        val watch = assertIs<FutaberAiPlan.Run>(futaberAiPlan(command(FutachaAiAction.OpenWatchWords), context(), enabled = true))
+        assertEquals(FutaberAiEffect.OpenManageAt(FutaberManageCategory.Notifications), watch.effect)
+        val ng = assertIs<FutaberAiPlan.Run>(futaberAiPlan(command(FutachaAiAction.OpenNgManagement), context(), enabled = true))
+        assertEquals(FutaberAiEffect.OpenNgSettings, ng.effect)
+        val mode = assertIs<FutaberAiPlan.Run>(futaberAiPlan(command(FutachaAiAction.SetCatalogMode, "mode" to "new"), context(), enabled = true))
+        assertEquals(FutaberAiEffect.SetCatalogMode(may, com.valoser.futacha.shared.model.CatalogMode.New), mode.effect)
+        val unknown = assertIs<FutaberAiPlan.Fail>(futaberAiPlan(command(FutachaAiAction.SetCatalogMode, "mode" to "zzz"), context(), enabled = true))
+        assertTrue(unknown.message.contains("特定できません"))
+    }
+
+    @Test
     fun aCommandOutsideTheSubsetIsAnsweredAsNotSupported() {
-        listOf(FutachaAiAction.SetCatalogMode, FutachaAiAction.OpenNgManagement, FutachaAiAction.OpenWatchWords, FutachaAiAction.OpenSavedThreads)
-            .forEach { action ->
-                val plan = assertIs<FutaberAiPlan.Fail>(futaberAiPlan(command(action), context(), enabled = true))
-                assertTrue(plan.message.contains("ふたばー風モードでは使えません"), action.id)
-            }
         // Every action is either run or answered: none is left for another mode to replay.
         FutachaAiAction.entries.forEach { action ->
             val plan = futaberAiPlan(command(action), context(thread = FutaberThreadRef(may.id, "123", "t", "", 1)), enabled = true)

@@ -151,6 +151,9 @@ internal fun futaberNgDetailPalette(colors: FutaberColors): CompatibilityPalette
 @Stable
 internal class FutaberParityB7bState {
     var ngDetail by mutableStateOf<FutaberNgDetailRequest?>(null)
+
+    /** L-B6 (M16): the settings were opened by the operation menu's 「NG編集」, so they start at the NG settings. */
+    var settingsAtNg by mutableStateOf(false)
 }
 
 /**
@@ -290,21 +293,26 @@ internal fun futaberPostDetailActions(
     val position = posts.indexOfFirst { it.id == post.id }.coerceAtLeast(0)
     val identities = futaberPosterIdentityKinds(post, position)
     return buildList {
-        add(FutaberPostAction("select-copy", "項目を選んでコピー") {
+        add(FutaberPostAction("select-copy", "項目を選んでコピー", extra = true) {
             close(); ops.selection = futaberPostItemSelection(post, position, FutachaPostItemSelectionMode.COPY)
         })
-        add(FutaberPostAction("select-search", "語句を選んでGoogle検索") {
+        add(FutaberPostAction("select-search", "語句を選んでGoogle検索", extra = true) {
             close(); ops.selection = futaberPostItemSelection(post, position, FutachaPostItemSelectionMode.SEARCH)
         })
-        add(FutaberPostAction("quick-quote", "クイック引用返信") { close(); onOpenPost(futaberQuickQuote(post, position)) })
-        if (futaberHasRelatedPosts(post, posts)) add(FutaberPostAction("related", "関連レスを表示") {
+        add(FutaberPostAction("quick-quote", "クイック引用返信", extra = true) { close(); onOpenPost(futaberQuickQuote(post, position)) })
+        if (futaberHasRelatedPosts(post, posts)) add(FutaberPostAction("related", "関連レスを表示", extra = true) {
             close(); openQuote(FutaberQuoteKind.Related, futaberRelatedPosts(post, posts), ops.anchor.anchor())
+        })
+        // F-B3 E11: the whole tree of quotes the post is in (wider than the related posts); only when it holds two or more.
+        val conversation = futaberConversationOf(post, posts)
+        if (conversation.size >= 2) add(FutaberPostAction("conversation", "会話を表示", extra = true) {
+            close(); openQuote(FutaberQuoteKind.Conversation, conversation, ops.anchor.anchor())
         })
         listOf(
             CompatHeaderExtractionKind.ID to ("same-id" to "同じIDのレス"),
             CompatHeaderExtractionKind.IP to ("same-ip" to "同じIPのレス")
         ).forEach { (kind, row) ->
-            if (kind in identities) add(FutaberPostAction(row.first, row.second) {
+            if (kind in identities) add(FutaberPostAction(row.first, row.second, extra = true) {
                 close()
                 val anchor = ops.anchor.anchor()
                 ops.scope.launch {
@@ -362,7 +370,7 @@ internal fun FutaberPostDetailOpsHost(
                             Checkbox(
                                 checked = checked, onCheckedChange = null,
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = colors.accent, uncheckedColor = colors.body, checkmarkColor = colors.onAction
+                                    checkedColor = colors.accent, uncheckedColor = colors.body, checkmarkColor = colors.onAccent
                                 )
                             )
                             Text(
@@ -509,8 +517,8 @@ internal fun FutaberReadAloudPanelChip(reader: FutaberReadAloud, modifier: Modif
         if (panelOpen) FutaberReadAloudPanel(reader)
         Row(
             Modifier.padding(top = if (panelOpen) 6.dp else 0.dp)
-                .background(colors.bar, FutaberShapes.pill)
-                .border(1.dp, colors.separator, FutaberShapes.pill)
+                .background(colors.bar, FutaberShapes.card)
+                .border(0.5.dp, colors.separator, FutaberShapes.card)
                 .padding(horizontal = 4.dp)
                 .testTag("futaber-reading-chip"),
             verticalAlignment = Alignment.CenterVertically
@@ -585,4 +593,18 @@ private fun PanelChipAction(label: String, description: String, tag: String, onC
         modifier = Modifier.heightIn(min = 40.dp).clickable(onClickLabel = description, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 11.dp).testTag(tag)
     )
+}
+
+/** F-B3 E11: the posts tied to [post] by quotes, directly or not, in thread order (the same grouping ふたったー風 uses). */
+internal fun futaberConversationOf(post: Post, posts: List<Post>): List<Post> {
+    val at = posts.indexOfFirst { it.id == post.id }
+    if (at < 0) return emptyList()
+    val group = com.valoser.futacha.shared.ui.ftutter.ftutterConversationGroups(posts).firstOrNull { at in it } ?: return emptyList()
+    return group.sorted().map { posts[it] }
+}
+
+/** F-B3 E10: the ids of the popular posts and of those tied to them, as ふたったー風's 人気 lists them. */
+internal fun futaberPopularIds(posts: List<Post>, replyThreshold: Int, saidaneThreshold: Int): Set<String> {
+    val popular = com.valoser.futacha.shared.ui.ftutter.ftutterPopular(posts, replyThreshold, saidaneThreshold)
+    return (popular.main + popular.related).mapTo(HashSet()) { posts[it].id }
 }

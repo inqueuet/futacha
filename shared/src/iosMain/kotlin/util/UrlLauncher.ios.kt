@@ -8,11 +8,11 @@ import platform.UIKit.UIApplication
 import platform.UIKit.UIViewController
 
 @Composable
-actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
-    return remember(customTabs) {
+actual fun rememberUrlLauncher(customTabs: Boolean, allowAnyScheme: Boolean): (String) -> Unit {
+    return remember(customTabs, allowAnyScheme) {
         { url: String ->
             try {
-                val request = resolveUrlLaunchRequest(url)
+                val request = resolveUrlLaunchRequest(url, allowAnyScheme)
                 if (request == null) {
                     Logger.e("UrlLauncher", "Rejected URL (${describeUrlForLog(url)})", null)
                     presentIosAlert(
@@ -21,14 +21,18 @@ actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
                     )
                 } else {
                     val nsUrl = NSURL.URLWithString(request.normalizedUrl)
-                    if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
+                    // A scheme the person typed is tried without canOpenURL (iOS answers false for schemes not declared in Info.plist).
+                    if (nsUrl != null && (allowAnyScheme || UIApplication.sharedApplication.canOpenURL(nsUrl))) {
                         val parent = if (customTabs) findIosTopViewController() else null
-                        if (parent != null && request.target == UrlLaunchTarget.Browser) {
+                        val isWeb = request.normalizedUrl.startsWith("http", ignoreCase = true)
+                        if (parent != null && request.target == UrlLaunchTarget.Browser && isWeb) {
                             IosInAppBrowser.present(parent, nsUrl)
                         } else UIApplication.sharedApplication.openURL(
                             nsUrl,
                             options = emptyMap<Any?, Any?>(),
-                            completionHandler = null
+                            completionHandler = if (allowAnyScheme) { opened: Boolean ->
+                                if (!opened) presentIosAlert(title = "このリンクは開けません", message = "対応するアプリが見つかりません。")
+                            } else null
                         )
                     } else {
                         Logger.e("UrlLauncher", "Failed to open URL (${describeUrlForLog(request.normalizedUrl)})", null)

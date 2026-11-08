@@ -33,6 +33,7 @@ import com.valoser.futacha.shared.ui.compat.searchCompatImageFileTarget
 import com.valoser.futacha.shared.ui.compat.COMPAT_CUSTOM_IMAGE_SEARCH_KEY
 import com.valoser.futacha.shared.ui.compat.parseCompatImageSearchTargets
 import com.valoser.futacha.shared.ui.compat.compatAscii2dEndpoint
+import com.valoser.futacha.shared.ui.compat.compatAscii2dFailureMessage
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.TimeoutCancellationException
@@ -97,6 +98,8 @@ internal fun ThreadImageSearchDialog(
     cookieRepository: CookieRepository?,
     preferredTarget: CompatImageSearchTarget? = null,
     openExternal: ((String) -> Unit)? = null,
+    /** 開いてすぐこの検索先で検索する（null は選ぶまで待つ）。 */
+    startTarget: CompatImageSearchTarget? = null,
     onDismiss: () -> Unit
 ) {
     val platformOpenUrl = rememberUrlLauncher()
@@ -106,17 +109,22 @@ internal fun ThreadImageSearchDialog(
     val targets = remember(imageUrl, selectedTargets, preferredTarget) {
         threadImageSearchDialogTargets(imageUrl, selectedTargets, preferredTarget)
     }
-    var pendingTarget by remember(imageUrl) { mutableStateOf<CompatImageSearchTarget?>(null) }
+    var pendingTarget by remember(imageUrl) { mutableStateOf(startTarget) }
     var result by remember(imageUrl) { mutableStateOf<CompatImageSearchResult?>(null) }
     var error by remember(imageUrl) { mutableStateOf<String?>(null) }
 
     // Leaving this dialog cancels uploads and pending provider requests.
     LaunchedEffect(imageUrl, pendingTarget) {
         val target = pendingTarget ?: return@LaunchedEffect
-        searchThreadImage(httpClient, imageUrl, target,
-            compatAscii2dEndpoint(features?.preferences.orEmpty()))
+        val ascii2dEndpoint = compatAscii2dEndpoint(features?.preferences.orEmpty())
+        searchThreadImage(httpClient, imageUrl, target, ascii2dEndpoint)
             .onSuccess { result = it }
-            .onFailure { error = it.message ?: "画像検索に失敗しました" }
+            .onFailure {
+                val message = it.message ?: "画像検索に失敗しました"
+                error = if (target == CompatImageSearchTarget.ASCII2D_URL) {
+                    compatAscii2dFailureMessage(message, ascii2dEndpoint)
+                } else message
+            }
         pendingTarget = null
     }
 

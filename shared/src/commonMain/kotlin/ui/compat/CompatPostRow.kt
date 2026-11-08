@@ -16,7 +16,8 @@ import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
 import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.planHighQualityThumbnail
-import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride
+import com.valoser.futacha.shared.ui.image.rememberThreadHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberThreadThumbnailPainter
 import coil3.size.Precision
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -182,6 +183,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
@@ -515,6 +517,21 @@ internal fun compatPostQuotesOwnPost(
     }
 }
 
+/** The reader's own header size and gap between posts (「画面表示」); null keeps the reference app's. */
+internal object CompatPostLayoutState {
+    var headerFontSp by androidx.compose.runtime.mutableStateOf<Int?>(null)
+    var extraSpacingDp by androidx.compose.runtime.mutableStateOf<Int?>(null)
+}
+
+/** Every post ends with this blank (the body's own bottom padding). */
+private const val COMPAT_POST_BOTTOM_DP = 8
+
+/** The blank to take off the end of a post so the gap under it is [gapDp]; null (標準) takes nothing. */
+internal fun compatPostGapTrimDp(gapDp: Int?): Int = if (gapDp == null) 0 else (COMPAT_POST_BOTTOM_DP - gapDp).coerceAtLeast(0)
+
+/** The blank to add under a post so the gap under it is [gapDp]. */
+internal fun compatPostGapExtraDp(gapDp: Int?): Int = if (gapDp == null) 0 else (gapDp - COMPAT_POST_BOTTOM_DP).coerceAtLeast(0)
+
 @Composable
 internal fun CompatPostRow(
     post: CompatPostSnapshot,
@@ -721,8 +738,16 @@ internal fun CompatPostRow(
             }
         )
     }
+    val gapTrimDp = compatPostGapTrimDp(CompatPostLayoutState.extraSpacingDp)
     Column(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .then(
+                if (gapTrimDp == 0) Modifier else Modifier.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, (placeable.height - gapTrimDp.dp.roundToPx()).coerceAtLeast(0)) { placeable.place(0, 0) }
+                }
+            )
+            .fillMaxWidth()
             .testTag("compat-thread-post-${post.postNo}")
             .combinedClickable(
                 onClick = {
@@ -749,8 +774,8 @@ internal fun CompatPostRow(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp, vertical = 2.dp),
-                fontSize = 11.2f.sp,
-                lineHeight = 14.sp,
+                fontSize = (CompatPostLayoutState.headerFontSp?.toFloat() ?: 11.2f).sp,
+                lineHeight = (CompatPostLayoutState.headerFontSp?.let { it * 1.25f } ?: 14f).sp,
                 inlineContent = headerInlineContent,
                 color = when {
                     post.isContentRedacted -> Color.Red
@@ -773,8 +798,8 @@ internal fun CompatPostRow(
                     modifier = Modifier
                         .testTag("compat-thread-header-trailing-${post.postNo}")
                         .padding(start = 2.dp, end = 10.dp, top = 2.dp, bottom = 2.dp),
-                    fontSize = 11.2f.sp,
-                    lineHeight = 14.sp,
+                    fontSize = (CompatPostLayoutState.headerFontSp?.toFloat() ?: 11.2f).sp,
+                    lineHeight = (CompatPostLayoutState.headerFontSp?.let { it * 1.25f } ?: 14f).sp,
                     maxLines = 1
                 )
             }
@@ -884,42 +909,6 @@ internal fun CompatPostRow(
                     else -> delayedLoadingVisible = false
                 }
             }
-            LaunchedEffect(
-                painterState,
-                previewUrl,
-                requestedPreviewUrl,
-                originalMediaUrl,
-                completedPreviewRetries
-            ) {
-                if (painterState is coil3.compose.AsyncImagePainter.State.Error) {
-                    val hasOriginalFallback =
-                        !useOriginalAfterPreviewFailure &&
-                            requestedPreviewUrl != null &&
-                            originalMediaUrl != null &&
-                            requestedPreviewUrl != originalMediaUrl
-                    when (
-                        if (usesDirectApuSource) {
-                            CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
-                        } else resolveCompatThumbnailFailureAction(
-                            completedRetries = completedPreviewRetries,
-                            hasOriginalFallback = hasOriginalFallback,
-                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
-                        )
-                    ) {
-                        CompatThumbnailFailureAction.RETRY_CURRENT -> {
-                            delay(compatThumbnailRetryDelayMillis(completedPreviewRetries))
-                            completedPreviewRetries += 1
-                        }
-                        CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL -> {
-                            // up/up2 thumbnails are derived files and can
-                            // disappear independently of the source upload.
-                            useOriginalAfterPreviewFailure = true
-                            completedPreviewRetries = 0
-                        }
-                        CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR -> Unit
-                    }
-                }
-            }
             val intrinsicSize = painter.intrinsicSize
             val bounds = remember(
                 effectiveThumbnailSize,
@@ -955,18 +944,57 @@ internal fun CompatPostRow(
                         isCompatWifiConnected(platformContext)
                 )
             }
-            val highQualityPainter = rememberHighQualityThumbnailOverride(
+            val quality = rememberThreadHighQualityThumbnail(
                 plan = highQualityPlan,
                 thumbnailReady = painterState is coil3.compose.AsyncImagePainter.State.Success,
                 imageLoader = imageLoader
             )
+            val highQualityPainter = quality.painter
+            val displayPainter = if (quality.fromCache) requireNotNull(highQualityPainter) else rememberThreadThumbnailPainter(painter, highQualityPainter)
+            LaunchedEffect(
+                quality,
+                painterState,
+                previewUrl,
+                requestedPreviewUrl,
+                originalMediaUrl,
+                completedPreviewRetries
+            ) {
+                if (!quality.checkingCache && highQualityPainter == null && painterState is coil3.compose.AsyncImagePainter.State.Error) {
+                    val hasOriginalFallback =
+                        !useOriginalAfterPreviewFailure &&
+                            requestedPreviewUrl != null &&
+                            originalMediaUrl != null &&
+                            requestedPreviewUrl != originalMediaUrl
+                    when (
+                        if (usesDirectApuSource) {
+                            CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
+                        } else resolveCompatThumbnailFailureAction(
+                            completedRetries = completedPreviewRetries,
+                            hasOriginalFallback = hasOriginalFallback,
+                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
+                        )
+                    ) {
+                        CompatThumbnailFailureAction.RETRY_CURRENT -> {
+                            delay(compatThumbnailRetryDelayMillis(completedPreviewRetries))
+                            completedPreviewRetries += 1
+                        }
+                        CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL -> {
+                            // up/up2 thumbnails are derived files and can
+                            // disappear independently of the source upload.
+                            useOriginalAfterPreviewFailure = true
+                            completedPreviewRetries = 0
+                        }
+                        CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR -> Unit
+                    }
+                }
+            }
             val hasOriginalFallback =
                 !useOriginalAfterPreviewFailure &&
                     requestedPreviewUrl != null &&
                     originalMediaUrl != null &&
                     requestedPreviewUrl != originalMediaUrl
             val terminalImageError =
-                painterState is coil3.compose.AsyncImagePainter.State.Error &&
+                !quality.checkingCache && highQualityPainter == null && painterState is coil3.compose.AsyncImagePainter.State.Error &&
                     (
                         usesDirectApuSource ||
                             resolveCompatThumbnailFailureAction(
@@ -981,7 +1009,7 @@ internal fun CompatPostRow(
                     .width(bounds.first.dp)
                     .height(bounds.second.dp)
                     .background(
-                        if (delayedLoadingVisible || terminalImageError) {
+                        if ((delayedLoadingVisible && highQualityPainter == null) || terminalImageError) {
                             palette.divider.copy(alpha = 0.12f)
                         } else {
                             Color.Transparent
@@ -995,7 +1023,7 @@ internal fun CompatPostRow(
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = highQualityPainter ?: painter,
+                    painter = displayPainter,
                     contentDescription = "No.${post.postNo}の画像",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -1009,7 +1037,7 @@ internal fun CompatPostRow(
                         )
                 )
                 PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
-                if (delayedLoadingVisible) {
+                if (delayedLoadingVisible && highQualityPainter == null) {
                     CircularProgressIndicator(
                         modifier = Modifier
                             .size(20.dp)
@@ -1056,6 +1084,7 @@ internal fun CompatPostRow(
             )
         }
     }
+    compatPostGapExtraDp(CompatPostLayoutState.extraSpacingDp).takeIf { it > 0 }?.let { Spacer(Modifier.height(it.dp)) }
     HorizontalDivider(color = CompatDivider)
 }
 
@@ -1304,6 +1333,7 @@ internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLong
     ) {
         AsyncImage(
             model = tab.thumbnailUrl,
+            imageLoader = LocalFutachaImageLoader.current,
             contentDescription = null,
             fallback = noThumb,
             error = noThumb,

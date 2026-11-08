@@ -159,8 +159,11 @@ internal fun ftutterToolbarButtonWidth(
     if (buttonCount <= 0) return preferred
     val usable = totalWidth - metrics.leftSpace - metrics.rightSpace -
         (if (hasSpace) FTUTTER_TOOLBAR_SPACE_MIN else 0) - (if (hasOrder) FTUTTER_TOOLBAR_ORDER_WIDTH else 0)
-    return minOf(preferred, usable / buttonCount).coerceAtLeast(TOOLBAR_MIN_ITEM_WIDTH_DP.toFloat())
+    // M20：原作は狭い欄（二画面）ではボタンを縮めて全部を見せる。アイコン（24dp）が収まる幅までは縮め、それより狭い時だけ横に送る。
+    return minOf(preferred, usable / buttonCount).coerceAtLeast(FTUTTER_TOOLBAR_MIN_BUTTON_WIDTH)
 }
+
+internal const val FTUTTER_TOOLBAR_MIN_BUTTON_WIDTH = 28f
 
 /** Keep at least one button visible initially, even with 100dp margins in a tiny pane. */
 internal fun ftutterToolbarMetricsForWidth(width: Float, metrics: FtutterToolbarMetrics): FtutterToolbarMetrics {

@@ -31,6 +31,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -87,6 +93,16 @@ internal fun classifyFtutterBoardInput(raw: String, existing: List<BoardSummary>
     )
 }
 
+/**
+ * M63：「URLから開く」に登録していない板・スレッドのURLを入れた時、足す板のURL（板の追加と同じ正規化）。
+ * ふたばの板でない時は null（原作は「URLが対応していない形式です」）。
+ */
+internal fun ftutterOpenUrlBoard(url: String, existing: List<BoardSummary>): String? {
+    val trimmed = url.trim()
+    val base = if (trimmed.contains("/res/")) trimmed.substringBefore("/res/") + "/" else trimmed
+    return (classifyFtutterBoardInput(base, existing) as? FtutterBoardInput.OneBoard)?.url
+}
+
 /** 原作の板名の取り方：`#tit` の中身から「＠ふたば」を除き、「二次元裏」にはホストの先頭を添える。 */
 internal fun ftutterBoardNameFromPage(html: String, boardUrl: String): String? {
     val match = Regex("""id\s*=\s*["']?tit["']?[^>]*>(.*?)<""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)
@@ -100,19 +116,22 @@ internal fun ftutterBoardNameFromPage(html: String, boardUrl: String): String? {
     return name
 }
 
-/** 板のページを取得して名前を得る。取れない時は URL から付けた名前。 */
-internal suspend fun fetchFtutterBoardName(httpClient: HttpClient?, boardUrl: String): String {
+/**
+ * 板のページを取得して名前を得る。通信の部品が無い時（試験・デスクトップ）は URL から付けた名前。
+ * ページを読めない時（404 等の失敗・通信の失敗）は null：原作は読み込みの後にその板を足さない（H10）。
+ */
+internal suspend fun fetchFtutterBoardName(httpClient: HttpClient?, boardUrl: String): String? {
     val fallback = futaberDefaultBoardName(boardUrl)
     val client = httpClient ?: return fallback
     return try {
         val response = client.get(ftutterBoardBaseUrl(boardUrl) + "futaba.htm")
-        if (!response.status.isSuccess()) return fallback
+        if (!response.status.isSuccess()) return null
         val html = TextEncoding.decodeToString(response.bodyAsBytes(), response.contentType()?.toString())
         ftutterBoardNameFromPage(html, boardUrl) ?: fallback
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Throwable) {
-        fallback
+        null
     }
 }
 
@@ -142,7 +161,8 @@ internal fun FtutterBoardListScreen(
     onBulkAdd: (suspend () -> Result<Int>)?,
     onOpenUrl: (String) -> Unit,
     onNotice: (String) -> Unit,
-    boardsFromBottom: Boolean = false
+    boardsFromBottom: Boolean = false,
+    legacy: Boolean = true
 ) {
     val colors = LocalFtutterColors.current
     var adding by remember { mutableStateOf(false) }
@@ -163,11 +183,11 @@ internal fun FtutterBoardListScreen(
             verticalArrangement = if (boardsFromBottom) androidx.compose.foundation.layout.Arrangement.Bottom else androidx.compose.foundation.layout.Arrangement.Top) {
             item(key = "favorites-header") { FtutterDividerCard("お気に入り") }
             items(favorites, key = { "fav-" + it.id }) { board ->
-                FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up })
+                FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up }, legacy)
             }
             item(key = "others-header") { FtutterDividerCard("2chan.net") }
             items(others, key = { "other-" + it.id }) { board ->
-                FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up })
+                FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up }, legacy)
             }
         }
         Box(
@@ -197,10 +217,29 @@ internal fun FtutterBoardListScreen(
                 adding = false
             },
             onBulkAdd = onBulkAdd,
-            onNotice = onNotice
+            onNotice = onNotice,
+            legacy = legacy
         )
     }
-    menuFor?.let { board ->
+    if (!legacy) menuFor?.let { board ->
+        // 原作の長押し：題も「閉じる」も無い、黒い文字の2行。
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { menuFor = null },
+            modifier = Modifier.testTag("ftutter-board-menu"),
+            text = {
+                Column {
+                    Text("ブラウザで開く", color = colors.text, fontSize = 17.sp, modifier = Modifier.fillMaxWidth()
+                        .clickable { menuFor = null; onOpenUrl(ftutterBoardBaseUrl(board.url) + "futaba.htm") }
+                        .padding(vertical = 14.dp).testTag("ftutter-board-open-browser"))
+                    Text("削除", color = colors.text, fontSize = 17.sp, modifier = Modifier.fillMaxWidth()
+                        .clickable { menuFor = null; confirmDelete = board }
+                        .padding(vertical = 14.dp).testTag("ftutter-board-delete"))
+                }
+            },
+            confirmButton = {}
+        ) }
+    }
+    if (legacy) menuFor?.let { board ->
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { menuFor = null },
             title = { Text(board.name) },
@@ -281,11 +320,13 @@ private fun FtutterBoardRow(
     onOpenBoard: (BoardSummary) -> Unit,
     onEditBoards: ((List<BoardSummary>) -> List<BoardSummary>) -> Unit,
     onMenu: (BoardSummary) -> Unit,
-    onMoveToEnd: (BoardSummary, Boolean) -> Unit
+    onMoveToEnd: (BoardSummary, Boolean) -> Unit,
+    legacy: Boolean = true
 ) {
     val colors = LocalFtutterColors.current
     Row(
         Modifier.fillMaxWidth()
+            .then(if (legacy) Modifier else Modifier.heightIn(min = 72.dp))
             .combinedClickable(onClick = { onOpenBoard(board) }, onLongClick = { onMenu(board) })
             .padding(vertical = 4.dp)
             .testTag("ftutter-board-row"),
@@ -298,13 +339,13 @@ private fun FtutterBoardRow(
             Icon(
                 if (board.pinned) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                 contentDescription = if (board.pinned) "お気に入りから外す" else "お気に入りに追加",
-                tint = colors.text
+                tint = if (!legacy && board.pinned) FtutterStarYellow else colors.text
             )
         }
-        Column(Modifier.weight(1f).padding(start = 4.dp), verticalArrangement = Arrangement.Center) {
-            Text(board.name, color = colors.text, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.weight(1f).padding(start = if (legacy) 4.dp else 16.dp), verticalArrangement = Arrangement.Center) {
+            Text(board.name, color = colors.text, fontSize = if (legacy) 16.sp else 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (showUrl) {
-                Text(ftutterBoardBaseUrl(board.url), color = colors.headerText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(ftutterBoardBaseUrl(board.url), color = colors.headerText, fontSize = if (legacy) 12.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         FtutterLongPressIcon(
@@ -343,7 +384,8 @@ private fun FtutterAddBoardDialog(
     onDismiss: () -> Unit,
     onAdd: (BoardSummary) -> Unit,
     onBulkAdd: (suspend () -> Result<Int>)?,
-    onNotice: (String) -> Unit
+    onNotice: (String) -> Unit,
+    legacy: Boolean = true
 ) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -354,7 +396,21 @@ private fun FtutterAddBoardDialog(
         title = { Text("板追加") },
         text = {
             Column {
-                OutlinedTextField(
+                if (!legacy) TextField(
+                    value = input,
+                    onValueChange = { input = it; error = null },
+                    placeholder = { Text("板または掲示板のURL") },
+                    singleLine = true,
+                    isError = error != null,
+                    supportingText = error?.let { message -> { Text(message) } },
+                    trailingIcon = {
+                        if (input.isNotEmpty()) IconButton(onClick = { input = ""; error = null }, modifier = Modifier.testTag("ftutter-add-board-clear")) {
+                            Icon(Icons.Rounded.Close, contentDescription = "消す")
+                        }
+                    },
+                    colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, errorContainerColor = Color.Transparent),
+                    modifier = Modifier.fillMaxWidth().testTag("ftutter-add-board-input")
+                ) else OutlinedTextField(
                     value = input,
                     onValueChange = { input = it; error = null },
                     placeholder = { Text("板または掲示板のURL") },
@@ -370,8 +426,13 @@ private fun FtutterAddBoardDialog(
             TextButton(
                 enabled = !busy,
                 onClick = {
+                    // M62：原作は空なら黙って閉じ、形式が違えば閉じてトーストで知らせる。
+                    if (!legacy && input.isBlank()) {
+                        onDismiss()
+                        return@TextButton
+                    }
                     when (val kind = classifyFtutterBoardInput(input, existing)) {
-                        is FtutterBoardInput.Invalid -> error = kind.message
+                        is FtutterBoardInput.Invalid -> if (legacy) error = kind.message else { onNotice(kind.message); onDismiss() }
                         FtutterBoardInput.AllBoards -> {
                             val bulk = onBulkAdd
                             if (bulk == null) {
@@ -391,6 +452,11 @@ private fun FtutterAddBoardDialog(
                             scope.launch {
                                 val name = fetchFtutterBoardName(httpClient, kind.url)
                                 busy = false
+                                // 原作は板のページを読めない時（存在しない板など）は何も足さずに閉じる（H10）。
+                                if (name == null) {
+                                    onDismiss()
+                                    return@launch
+                                }
                                 onAdd(
                                     com.valoser.futacha.shared.ui.board.createCustomBoardSummary(
                                         name = name,
@@ -403,7 +469,7 @@ private fun FtutterAddBoardDialog(
                     }
                 },
                 modifier = Modifier.testTag("ftutter-add-board-ok")
-            ) { Text("追加") }
+            ) { Text(if (legacy) "追加" else "OK") }
         },
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("キャンセル") } }
     ) }

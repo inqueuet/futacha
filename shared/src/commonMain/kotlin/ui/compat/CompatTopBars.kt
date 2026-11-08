@@ -707,7 +707,7 @@ internal fun CompatTitleStrip(tabs: List<CompatTab>, current: CompatTab) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            tabs.getOrNull(index - 1)?.title.orEmpty().take(4),
+            compatTakeCharacters(tabs.getOrNull(index - 1)?.title, 4),
             modifier = Modifier.weight(1f),
             fontSize = 12.sp,
             maxLines = 1,
@@ -716,7 +716,7 @@ internal fun CompatTitleStrip(tabs: List<CompatTab>, current: CompatTab) {
             color = palette.text
         )
         Text(
-            current.title.take(4),
+            compatTakeCharacters(current.title, 4),
             modifier = Modifier.weight(1f),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -726,7 +726,7 @@ internal fun CompatTitleStrip(tabs: List<CompatTab>, current: CompatTab) {
             color = palette.text
         )
         Text(
-            tabs.getOrNull(index + 1)?.title.orEmpty().take(4),
+            compatTakeCharacters(tabs.getOrNull(index + 1)?.title, 4),
             modifier = Modifier.weight(1f),
             fontSize = 12.sp,
             maxLines = 1,

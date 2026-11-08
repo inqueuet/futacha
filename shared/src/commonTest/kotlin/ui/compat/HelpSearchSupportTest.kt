@@ -3,10 +3,32 @@ package com.valoser.futacha.shared.ui.compat
 import kotlin.test.*
 
 class HelpSearchSupportTest {
+    @Test fun modeSpecificOperationsAreSearchableInTheirOwnExpandedSections() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "ペーストボード").any { "設定のバックアップ・復元には含まれません" in it.body })
+        assertTrue(searchHelp(sections, "半角カナ").any { "本文全体" in it.body })
+        assertTrue(searchHelp(sections, "カタログの左右スワイプ").any { "最後に見たスレッド" in it.body })
+        assertTrue(searchHelp(sections, "画像一覧へ戻る位置").any { "選択保存用の一覧" in it.body })
+        assertTrue(searchHelp(sections, "スレッドを先頭から開く").any { "初期状態OFF" in it.body && "タブの切り替え" in it.body })
+        assertTrue(searchedHelpHtml(html, "ペーストボード").contains("<input checked type=\"checkbox\" id=\"futaber-help\""))
+        assertTrue(searchedHelpHtml(html, "スレッドを先頭から開く").contains("<input checked type=\"checkbox\" id=\"ftutter-opening-help\""))
+    }
+
+    @Test fun currentFeaturesAreSearchableWithoutBreakingSectionExtraction() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "ふたったー風").any { "初期状態OFF" in it.body })
+        assertTrue(searchHelp(sections, "下書き").any { "削除キーを保存しません" in it.body })
+        assertTrue(searchHelp(sections, "ずんだもん").any { "iOS 16" in it.body && "Android 10" in it.body })
+        assertTrue(searchHelp(sections, "音声データ").any { "明示操作" in it.body && "83MB" in it.body })
+        assertTrue(searchedHelpHtml(html, "ずんだもん").contains("<input checked type=\"checkbox\" id=\"speech-help\""))
+    }
+
     @Test fun aiHelpExplainsSharedSettingsProviderPrivacyAndNgRestoration() {
         val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
         val sections = helpSearchSections(html)
-        assertTrue(searchHelp(sections, "初期状態OFF").any { "両モードで共通" in it.body })
+        assertTrue(searchHelp(sections, "初期状態OFF").any { "モード間で共通" in it.body })
         assertTrue(searchHelp(sections, "スレ要約").any { "端末内AIのみ" in it.body })
         assertTrue(searchHelp(sections, "OpenAI").any { "外部サービスへ送信" in it.body })
         assertTrue(searchHelp(sections, "APIキー").any { "登録だけでは判定は始まりません" in it.body })
@@ -22,7 +44,7 @@ class HelpSearchSupportTest {
     @Test fun thumbnailHelpExplainsSharedSettingDefaultNetworkLimitsAndExclusions() {
         val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
         val sections = helpSearchSections(html)
-        assertTrue(searchHelp(sections, "サムネイルの高画質表示").any { "両モード共通" in it.body })
+        assertTrue(searchHelp(sections, "サムネイルの高画質表示").any { "4モード共通" in it.body })
         assertTrue(searchHelp(sections, "初期設定").any { "「Wi-Fi回線では元画像を取得」です" in it.body })
         assertTrue(searchHelp(sections, "4MB").any { "カタログはファイルサイズが分からない" in it.body })
         assertTrue(searchHelp(sections, "テザリング").any { "対象外" in it.body })

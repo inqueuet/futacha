@@ -711,6 +711,39 @@ class HttpBoardApiTest {
     }
 
     @Test
+    fun deletionResponsesReturnTheServersAnswerAndFailuresCarryItLikeTheOriginalShowsIt() = runBlocking {
+        // M87: ふたったー風 shows the server's answer as it came; the other modes keep their messages.
+        var body = "<html><body>ok</body></html>"
+        var status = HttpStatusCode.OK
+        val api = createApi { _ -> htmlResponse(body, status = status) }
+
+        try {
+            assertEquals(body, api.requestDeletionResponse("https://may.2chan.net/b/", "777", "123", "110"))
+            body = "<html><body>削除しました</body></html>"
+            assertEquals(body, api.deleteByUserResponse("https://may.2chan.net/b/", "777", "123", "pass1234", false))
+
+            body = "<html><body>削除キーが違います</body></html>"
+            val refused = assertFailsWith<NetworkException> {
+                api.deleteByUserResponse("https://may.2chan.net/b/", "777", "123", "wrong", false)
+            }
+            assertEquals(body, refused.serverBody)
+            assertTrue(refused.message!!.contains("本人削除に失敗しました"), refused.message)
+
+            body = "x\nsecond line"
+            status = HttpStatusCode.InternalServerError
+            val serverError = assertFailsWith<NetworkException> {
+                api.requestDeletionResponse("https://may.2chan.net/b/", "777", "123", "110")
+            }
+            assertEquals(body, serverError.serverBody)
+            assertEquals(500, serverError.statusCode)
+            // The message is the same first line as before.
+            assertTrue(serverError.message!!.endsWith("(HTTP 500: x)"), serverError.message)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
     fun voteSaidane_acceptsNumericResponseBody() = runBlocking {
         lateinit var capturedRequest: HttpRequestData
         val api = createApi { request ->
@@ -729,6 +762,18 @@ class HttpBoardApiTest {
             assertEquals("https://may.2chan.net/b/res/777.htm", capturedRequest.headers[HttpHeaders.Referrer])
         } finally {
             api.close()
+        }
+    }
+
+    @Test
+    fun voteSaidaneResponse_returnsTheCountTheServerSent() = runBlocking {
+        for (body in listOf("2", " 0\n")) {
+            val api = createApi { _ -> htmlResponse(body) }
+            try {
+                assertEquals(body.trim(), api.voteSaidaneResponse("https://may.2chan.net/b/", "777", "123"))
+            } finally {
+                api.close()
+            }
         }
     }
 

@@ -316,6 +316,10 @@ class HttpBoardApi(
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        voteSaidaneResponse(board, threadId, postId)
+    }
+
+    override suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String {
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for saidane vote")
@@ -324,7 +328,7 @@ class HttpBoardApi(
         val siteRoot = BoardUrlResolver.resolveSiteRoot(board)
         val url = "$siteRoot/sd.php?$boardSlug.$sanitizedPostId"
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        try {
+        return try {
             client.prepareGet(url) {
                 // A vote is a GET but not idempotent: a replay after a lost response
                 // can count twice. Opt out of the platform's automatic GET retries;
@@ -340,7 +344,7 @@ class HttpBoardApi(
                 if (!response.status.isSuccess()) {
                     val detail = readSmallResponseSummary(response)
                     val suffix = detail?.let { ": $it" }.orEmpty()
-                    throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
+                    throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)", statusCode = response.status.value)
                 }
                 // A 2xx whose body cannot be read may already have counted the vote:
                 // say so instead of a failure that invites another tap (L83).
@@ -354,6 +358,7 @@ class HttpBoardApi(
                 if (!isSuccessfulHttpBoardApiSaidaneResponse(result)) {
                     throw NetworkException("そうだね投票に失敗しました (応答: '${result.take(160)}')")
                 }
+                result
             }
         } catch (e: NetworkException) {
             throw e
@@ -489,7 +494,15 @@ class HttpBoardApi(
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
         ) { response ->
             if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
+                // The whole small body is kept for ふたったー風, which shows the server's answer as it came (T-B3).
+                val body = readSmallHttpBoardApiResponseBody(
+                    response = response,
+                    responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+                    maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+                    zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+                    responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+                )
+                val detail = body?.let(::summarizeSmallHttpBoardApiResponseBody)
                 val prefix = "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value})"
                 detail?.let {
                     logHttpBoardApiPostingFailureClassification(
@@ -504,7 +517,8 @@ class HttpBoardApi(
                             prefix = prefix,
                             detail = it
                         )
-                    } ?: prefix
+                    } ?: prefix,
+                    serverBody = body
                 )
             }
             // A 2xx header is not proof of acceptance or refusal. If the body
@@ -525,8 +539,8 @@ class HttpBoardApi(
         }
     }
 
-    private suspend fun submitShortForm(submission: ShortFormSubmission) {
-        executeHttpBoardApiShortFormRequest(
+    private suspend fun submitShortForm(submission: ShortFormSubmission): String {
+        return executeHttpBoardApiShortFormRequest(
             client = client,
             request = HttpBoardApiShortFormRequest(
                 url = submission.url,
@@ -541,11 +555,26 @@ class HttpBoardApi(
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
             readSmallResponseSummary = ::readSmallResponseSummary,
-            readSmallResponseBody = ::readSmallResponseBody
+            readSmallResponseBody = ::readSmallResponseBody,
+            readRefusedResponseBody = ::readRefusedResponseBody
         )
     }
 
+    /** A refused answer as it came (null when it cannot be read), for [NetworkException.serverBody] (M87). */
+    private suspend fun readRefusedResponseBody(response: HttpResponse): String? =
+        readSmallHttpBoardApiResponseBody(
+            response = response,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
+
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        requestDeletionResponse(board, threadId, postId, reasonCode)
+    }
+
+    override suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String {
         // FIX: 入力検証を最初に実行
         validateHttpBoardApiReasonCode(reasonCode)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
@@ -554,7 +583,7 @@ class HttpBoardApi(
         }
         val boardSlug = BoardUrlResolver.resolveBoardSlug(board)
         val siteRoot = BoardUrlResolver.resolveSiteRoot(board)
-        submitShortForm(
+        return submitShortForm(
             ShortFormSubmission(
                 url = "$siteRoot/del.php",
                 referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
@@ -579,6 +608,16 @@ class HttpBoardApi(
         password: String,
         imageOnly: Boolean
     ) {
+        deleteByUserResponse(board, threadId, postId, password, imageOnly)
+    }
+
+    override suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String {
         // FIX: 入力検証を最初に実行（既存のチェックを統合）
         validateHttpBoardApiDeletionPassword(password)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
@@ -616,7 +655,7 @@ class HttpBoardApi(
             }
             buildHttpBoardApiFormUrlEncodedBody(formFields, encoding)
         }
-        submitShortForm(
+        return submitShortForm(
             ShortFormSubmission(
                 url = url,
                 referer = referer,

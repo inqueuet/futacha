@@ -14,9 +14,11 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.valoser.futacha.shared.compat.ExperienceProfile
@@ -52,6 +54,7 @@ class FutaberParityB23InstrumentedTest {
         "compat.futaber.ext.draftAttachment",
         "compat.futaber.drafts",
         "compat.futaber.lastBoardId",
+        "compat.futaber.manageCategory",
         "compat.futaber.tabs",
         "compat.futaber.seen"
     )
@@ -63,7 +66,7 @@ class FutaberParityB23InstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(keys.associateWith { null })
+            app.compatibilityStore.savePreferences(keys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             app.appStateStore.updateBoards { boards ->
                 val withTutorial = if (boards.none { it.url == B23_TUTORIAL_URL }) {
                     listOf(BoardSummary("t", "チュートリアル＠ふたちゃ", "チュートリアル", B23_TUTORIAL_URL, "チュートリアル")) + boards
@@ -120,6 +123,15 @@ class FutaberParityB23InstrumentedTest {
         waitForTag("futaber-post-comment")
     }
 
+    /**
+     * L-B2 (V05): the thread has no "←" any more. Its action is the title row's accessibility action
+     * 「カタログへ戻る」 (the same callback the button had); the right swipe and the system's back do the same.
+     */
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun backToCatalog() {
+        rule.onNodeWithTag("futaber-thread-title").performCustomAccessibilityActionWithLabel("カタログへ戻る")
+    }
+
     @Test fun aReplyOnABoardWithoutReplyFilesGetsTheDrawingFromATapWithTheExtensionOff() {
         runBlocking {
             app.appStateStore.updateBoards { boards ->
@@ -129,13 +141,20 @@ class FutaberParityB23InstrumentedTest {
         openReplyOn(B23_IMG_LIKE_NAME)
         // The extension is off: the button has no long press of its own.
         rule.onNodeWithTag("futaber-post-attach").assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
-        // The tap offers the drawing (the picker would only be refused on this board) and says why.
+        // L-B8 (M37): the tap opens the camera's black menu: the original's three, then 手書き (needed on this board). The
+        // three say why when pressed (the picker would only be refused on this board) and pick nothing.
         rule.onNodeWithTag("futaber-post-attach").performClick()
-        waitForTag("futaber-post-actions")
-        rule.onNodeWithText("この板の返信には画像・動画を添付できません", substring = true).assertExists()
-        rule.onNodeWithTag("futaber-action-tool-pick").assertExists()
-        assertTrue(absent("futaber-action-tool-ups"))
-        rule.onNodeWithTag("futaber-action-tool-drawing").performClick()
+        waitForTag("futaber-callout-recent")
+        rule.onNodeWithTag("futaber-callout-file").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("この板の返信には画像・動画を添付できません", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("閉じる").performClick()
+        rule.waitUntil(10_000) { absent("futaber-post-tool-message") }
+        rule.onNodeWithTag("futaber-post-attach").performClick()
+        waitForTag("futaber-callout-recent")
+        assertTrue(absent("futaber-callout-tool-ups"))
+        rule.onNodeWithTag("futaber-callout-tool-drawing").performScrollTo().performClick()
         waitForTag("compat-drawing-canvas")
         rule.onNodeWithTag("compat-drawing-canvas").performTouchInput {
             down(center); moveBy(androidx.compose.ui.geometry.Offset(40f, 10f)); up()
@@ -153,10 +172,18 @@ class FutaberParityB23InstrumentedTest {
         rule.waitUntil(10_000) { absent("futaber-post-screen") }
     }
 
+    /** L-B8 (M37): the tools that the long press opened before are at the end of the camera's black menu. */
     @Test fun theToolsOpenFromALongPressOnlyWithTheExtensionAndInsertTheDeviceLine() {
         openReplyOn("チュートリアル")
-        // Off: no long press (a press of any length is the tap, which opens the system's file picker: not pressed here).
+        // Off: no long press, and the camera's menu has only the original's three (no tools; its 「カメラ」 is taken out).
         rule.onNodeWithTag("futaber-post-attach").assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
+        rule.onNodeWithTag("futaber-post-attach").performClick()
+        waitForTag("futaber-callout-recent")
+        listOf("recent", "file", "library").forEach { rule.onNodeWithTag("futaber-callout-$it").assertExists() }
+        assertTrue(absent("futaber-callout-camera"))
+        assertTrue(absent("futaber-callout-tool-device-info"))
+        rule.onNodeWithTag("futaber-callout-outside").performTouchInput { click(androidx.compose.ui.geometry.Offset(centerX, 40f)) }
+        rule.waitUntil(10_000) { absent("futaber-callout") }
         rule.onNodeWithTag("futaber-post-close").performClick()
         rule.waitUntil(10_000) { absent("futaber-post-screen") }
 
@@ -165,19 +192,16 @@ class FutaberParityB23InstrumentedTest {
         rule.onNodeWithTag("futaber-menu-write").performScrollTo().performClick()
         waitForTag("futaber-post-comment")
         rule.onNodeWithTag("futaber-post-comment").performTextInput("本文")
-        rule.onNodeWithTag("futaber-post-attach").assert(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick))
-        rule.onNodeWithTag("futaber-post-attach").performTouchInput { longClick() }
-        waitForTag("futaber-post-actions")
-        listOf("pick", "drawing", "ups", "voice", "network-info", "device-info", "cancel").forEach {
-            rule.onNodeWithTag("futaber-action-tool-$it").assertExists()
+        rule.onNodeWithTag("futaber-post-attach").performClick()
+        waitForTag("futaber-callout-recent")
+        listOf("recent", "file", "library", "tool-drawing", "tool-ups", "tool-voice", "tool-network-info", "tool-device-info").forEach {
+            rule.onNodeWithTag("futaber-callout-$it").assertExists()
         }
-        // On this board the picker is offered as usual.
-        rule.onNodeWithText("画像・動画を選ぶ").assertExists()
         // The device line goes under what was written, naming this app (nothing is sent).
-        rule.onNodeWithTag("futaber-action-tool-device-info").performClick()
+        rule.onNodeWithTag("futaber-callout-tool-device-info").performScrollTo().performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("ふたちゃ", substring = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("本文", substring = true).assertExists()
-        assertTrue(absent("futaber-post-actions"))
+        assertTrue(absent("futaber-callout"))
         rule.onNodeWithTag("futaber-post-close").performClick()
         rule.waitUntil(10_000) { absent("futaber-post-screen") }
     }
@@ -204,7 +228,7 @@ class FutaberParityB23InstrumentedTest {
                 clipboard.setPrimaryClip(android.content.ClipData.newUri(app.contentResolver, "test image", uri))
             }
             rule.waitForIdle(); Thread.sleep(500)
-            rule.onNodeWithTag("futaber-post-paste").performClick()
+            rule.onNodeWithTag("futaber-post-paste").performScrollTo().performClick()
             waitForTag("futaber-post-attachment")
             // The draft notes the file; the file is in the private storage.
             rule.waitUntil(15_000) { preference("compat.futaber.drafts")?.contains("attachmentLocator") == true }
@@ -215,7 +239,7 @@ class FutaberParityB23InstrumentedTest {
             // Closed; writing another post (a new thread) lets go of the file in memory, and its draft keeps no file.
             rule.onNodeWithTag("futaber-post-close").performClick()
             rule.waitUntil(10_000) { absent("futaber-post-screen") }
-            rule.onNodeWithTag("futaber-thread-back").performClick()
+            backToCatalog()
             waitForTag("futaber-create-thread")
             rule.onNodeWithTag("futaber-create-thread").performClick()
             waitForTag("futaber-post-comment")
@@ -263,7 +287,7 @@ class FutaberParityB23InstrumentedTest {
                 clipboard.setPrimaryClip(android.content.ClipData.newUri(app.contentResolver, "test image", uri))
             }
             rule.waitForIdle(); Thread.sleep(500)
-            rule.onNodeWithTag("futaber-post-paste").performClick()
+            rule.onNodeWithTag("futaber-post-paste").performScrollTo().performClick()
             waitForTag("futaber-post-attachment")
             rule.waitUntil(15_000) { preference("compat.futaber.drafts")?.contains("attachmentLocator") == true }
             val locator = Regex("\"attachmentLocator\":\"([^\"]+)\"").find(preference("compat.futaber.drafts")!!)!!.groupValues[1]

@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ai.catalogModeParameter
+import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.boardSelectorParameter
@@ -57,6 +59,12 @@ internal sealed interface FutaberAiEffect {
     /** Carried out by the catalog of [board] (scroll to the top, the search bar). */
     data class CatalogCommand(val board: BoardSummary, val command: FutachaAiCommand) : FutaberAiEffect
     data object OpenManage : FutaberAiEffect
+    /** F-B6 E3: the manage panel on one of its categories (保存箱, 通知). */
+    data class OpenManageAt(val category: FutaberManageCategory) : FutaberAiEffect
+    /** F-B6 E3: the settings on the NG page. */
+    data object OpenNgSettings : FutaberAiEffect
+    /** F-B6 E3: the catalog sort of [board] set to [mode]. */
+    data class SetCatalogMode(val board: BoardSummary, val mode: CatalogMode) : FutaberAiEffect
     data object RefreshHistory : FutaberAiEffect
     data class OpenThread(val board: BoardSummary, val ref: FutaberThreadRef) : FutaberAiEffect
     /** A board that is not registered: the usual "追加して開きますか？" question comes first. */
@@ -123,6 +131,11 @@ internal val FUTABER_AI_SUPPORTED_ACTIONS: Set<FutachaAiAction> = setOf(
     FutachaAiAction.NextSearchResult,
     FutachaAiAction.PreviousSearchResult,
     FutachaAiAction.OpenGallery,
+    // F-B6 E3: the four the other modes answer too.
+    FutachaAiAction.OpenSavedThreads,
+    FutachaAiAction.SetCatalogMode,
+    FutachaAiAction.OpenNgManagement,
+    FutachaAiAction.OpenWatchWords,
     FutachaAiAction.OpenGlobalSettings,
     FutachaAiAction.OpenCatalogSettings,
     FutachaAiAction.OpenThreadSettings,
@@ -244,6 +257,14 @@ private fun futaberAiResolve(command: FutachaAiCommand, context: FutaberAiContex
             run(FutaberAiEffect.OpenUrl(board.url), "${board.name} をブラウザで開きます")
         }
         FutachaAiAction.OpenHistoryDrawer -> run(FutaberAiEffect.OpenManage, "履歴を開きました")
+        FutachaAiAction.OpenSavedThreads -> run(FutaberAiEffect.OpenManageAt(FutaberManageCategory.SavedBox), "保存箱を開きました")
+        FutachaAiAction.OpenWatchWords -> run(FutaberAiEffect.OpenManageAt(FutaberManageCategory.Notifications), "通知（キーワード管理）を開きました")
+        FutachaAiAction.OpenNgManagement -> run(FutaberAiEffect.OpenNgSettings, "NG設定を開きました")
+        FutachaAiAction.SetCatalogMode -> {
+            val board = futaberAiBoard(command.boardSelectorParameter(), context) ?: return missingBoard()
+            val mode = futaberAiCatalogMode(command) ?: return FutaberAiPlan.Fail("カタログモードを特定できませんでした")
+            run(FutaberAiEffect.SetCatalogMode(board, mode))
+        }
         FutachaAiAction.RefreshHistory ->
             if (context.historyRefreshAvailable) run(FutaberAiEffect.RefreshHistory)
             else FutaberAiPlan.Fail("履歴更新サービスを利用できません")
@@ -499,4 +520,10 @@ internal fun List<String>.futaberAppendDistinct(value: String): List<String> {
     val trimmed = value.trim()
     if (trimmed.isEmpty() || any { it.equals(trimmed, ignoreCase = true) }) return this
     return this + trimmed
+}
+
+/** F-B6 E3: the catalog mode a command names — by its id, its label or its sort parameter, as ふたちゃ reads it. */
+internal fun futaberAiCatalogMode(command: FutachaAiCommand): CatalogMode? {
+    val normalized = command.catalogModeParameter()?.trim()?.lowercase() ?: return null
+    return CatalogMode.entries.firstOrNull { it.name.lowercase() == normalized || it.label.lowercase() == normalized || it.sortParam == normalized }
 }

@@ -121,6 +121,14 @@ interface BoardApi {
     /** Lightweight HEAD probe which is true only for an explicit 404/410. */
     suspend fun probeThreadGone(threadUrl: String): Boolean = false
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
+    /**
+     * Same vote as [voteSaidane], returning the trimmed response body (the server's count). The
+     * other modes keep [voteSaidane]; ふたったー風 reads the count like the original does.
+     */
+    suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String {
+        voteSaidane(board, threadId, postId)
+        return ""
+    }
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
     suspend fun deleteByUser(
         board: String,
@@ -129,6 +137,25 @@ interface BoardApi {
         password: String,
         imageOnly: Boolean
     )
+    /**
+     * Same del request as [requestDeletion], returning the server's answer as it came. The other modes keep
+     * [requestDeletion]; ふたったー風 shows the answer like the original does (M87).
+     */
+    suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String {
+        requestDeletion(board, threadId, postId, reasonCode)
+        return ""
+    }
+    /** Same deletion as [deleteByUser], returning the server's answer as it came (M87). */
+    suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String {
+        deleteByUser(board, threadId, postId, password, imageOnly)
+        return ""
+    }
     suspend fun replyToThread(
         board: String,
         threadId: String,

@@ -76,8 +76,8 @@ internal fun FutaberAutoScrollChip(onStop: () -> Unit, modifier: Modifier = Modi
     val colors = LocalFutaberColors.current
     Row(
         modifier.padding(8.dp)
-            .background(colors.bar, FutaberShapes.pill)
-            .border(1.dp, colors.separator, FutaberShapes.pill)
+            .background(colors.bar, FutaberShapes.card)
+            .border(0.5.dp, colors.separator, FutaberShapes.card)
             .clickable(onClickLabel = "オートスクロールを停止", onClick = onStop)
             .heightIn(min = 40.dp)
             .padding(horizontal = 14.dp)
@@ -136,6 +136,28 @@ internal fun FutaberVolumeKeyEffect(
                     }
                 }
             }
+        }
+        onDispose { CompatVolumeKeyBus.unregister(owner) }
+    }
+}
+
+/**
+ * F-B4 E6: the volume keys page the catalog up and down (Android; off by default, `compat.futaber.ext.catalogVolumeKey`).
+ * [scrollBy] moves the shown list or grid by pixels; [viewportHeight] is its height (0 before it is laid out, then the key is left alone).
+ */
+@Composable
+internal fun FutaberCatalogVolumeKeyEffect(enabled: Boolean, viewportHeight: () -> Int, scrollBy: suspend (Float) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val owner = remember { Any() }
+    val latestHeight by rememberUpdatedState(viewportHeight)
+    val latestScroll by rememberUpdatedState(scrollBy)
+    DisposableEffect(enabled) {
+        if (enabled) CompatVolumeKeyBus.register(owner) { key ->
+            val page = latestHeight()
+            if (page <= 0) return@register false
+            val up = key == CompatVolumeKey.UP
+            scope.launch { latestScroll(if (up) -page.toFloat() else page.toFloat()) }
+            true
         }
         onDispose { CompatVolumeKeyBus.unregister(owner) }
     }

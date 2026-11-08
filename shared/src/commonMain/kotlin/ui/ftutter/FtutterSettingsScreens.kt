@@ -99,14 +99,11 @@ internal fun FtutterGestureSettingsScreen(
     var resetting by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(colors.background).testTag("ftutter-gesture-settings")) {
         FtutterTopBar(title = "ジェスチャー", onBack = onBack)
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize().testTag("ftutter-gesture-settings-list")) {
             item {
                 FtutterSectionTitle("ジェスチャー")
                 FtutterCheckRow("ジェスチャーを有効にする", settings.enabled, "ftutter-gesture-enabled") {
                     savePreference(FtutterKeys.USE_GESTURE, it.toString())
-                }
-                FtutterCheckRow("スワイプで隣のタブへ移動する（※ジェスチャー無効時）", settings.moveTabBySwipe, "ftutter-gesture-swipe") {
-                    savePreference(FtutterKeys.MOVE_TAB_BY_SWIPE, it.toString())
                 }
                 FtutterSectionTitle("「前へ」で戻る")
                 FtutterCheckRow("左にタブがない時に戻る（カタログ）", settings.backByPreviousInCatalog, "ftutter-gesture-back-catalog") {
@@ -115,7 +112,6 @@ internal fun FtutterGestureSettingsScreen(
                 FtutterCheckRow("左にタブがない時に戻る（スレ）", settings.backByPreviousInThread, "ftutter-gesture-back-thread") {
                     savePreference(FtutterKeys.BACK_BY_PREVIOUS_THREAD, it.toString())
                 }
-                FtutterSliderSetting("方向を切り替える距離", FtutterKeys.GESTURE_SENSITIVITY, 0.1, 1000.0, 0.1, 20.0, preferences, savePreference, integer = false)
                 FtutterSectionTitle("割り当て")
                 Text(
                     "割り当てのリセット", color = colors.text, fontSize = 15.sp,
@@ -133,6 +129,14 @@ internal fun FtutterGestureSettingsScreen(
                     Text(action.label, color = colors.text, fontSize = 15.sp)
                 }
                 HorizontalDivider(color = colors.outline)
+            }
+            // こちらだけの行（M81）は原作の行の後ろへ。「スワイプで隣のタブへ」は原作ではタブ・ドロワーのページの行。
+            item {
+                FtutterSectionTitle(FTUTTER_MORE_LABEL)
+                FtutterCheckRow("スワイプで隣のタブへ移動する（※ジェスチャー無効時）", settings.moveTabBySwipe, "ftutter-gesture-swipe") {
+                    savePreference(FtutterKeys.MOVE_TAB_BY_SWIPE, it.toString())
+                }
+                FtutterSliderSetting("方向を切り替える距離", FtutterKeys.GESTURE_SENSITIVITY, 0.1, 1000.0, 0.1, 20.0, preferences, savePreference, integer = false, own = true)
             }
         }
     }
@@ -174,7 +178,7 @@ internal fun FtutterTabletSettingsScreen(
     val colors = LocalFtutterColors.current
     val settings = remember(preferences) { parseFtutterTabletSettings(preferences) }
     Column(Modifier.fillMaxSize().background(colors.background).testTag("ftutter-tablet-settings")) {
-        FtutterTopBar(title = "二画面", onBack = onBack)
+        FtutterTopBar(title = FTUTTER_SETTINGS_TABLET_TITLE, onBack = onBack)
         LazyColumn(Modifier.fillMaxSize()) {
             item {
                 FtutterCheckRow("二画面を有効にする", settings.enabled, "ftutter-tablet-enabled") {

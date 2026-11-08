@@ -36,7 +36,9 @@ internal data class FutaberThreadRef(
     val resumePostId: String = "",
     val resumeIndex: Int = 0,
     val resumeOffset: Int = 0,
-    val seenLastPostId: String? = null
+    val seenLastPostId: String? = null,
+    /** F-B3 E14: opened from the tab strip, so "open at the top" leaves the reading position alone. */
+    val keepPosition: Boolean = false
 )
 
 internal fun CatalogItem.toFutaberThreadRef(boardId: String): FutaberThreadRef = FutaberThreadRef(
@@ -100,23 +102,66 @@ internal fun futaberTimestampWithoutId(timestamp: String): String {
     return (if (index == -1) timestamp else timestamp.substring(0, index)).trim()
 }
 
+/**
+ * The header's date and IP, split where `IP:` begins, so the reply count can sit between them as in the original
+ * ("26/10/16(金)21:19:42 💬1 IP:106.73.*(enabler.ne.jp)"). The IP is null on boards that show none.
+ */
+internal fun futaberTimestampAndIp(timestamp: String): Pair<String, String?> {
+    val text = futaberTimestampWithoutId(timestamp)
+    val index = text.indexOf("IP:")
+    if (index == -1) return text to null
+    return text.substring(0, index).trim() to text.substring(index).trim().takeIf { it.length > 3 }
+}
+
+/**
+ * "n/N" for each post whose IP posts more than once in the thread: the original writes it after the IP, as an ID board's
+ * label counts the ID ("IP:106.73.*(enabler.ne.jp) … 1/2"). A post with an IP seen once gets nothing, as there.
+ */
+internal fun futaberIpCountLabels(posts: List<Post>): Map<String, String> {
+    val ips = posts.associate { it.id to futaberTimestampAndIp(it.timestamp).second }
+    val totals = ips.values.filterNotNull().groupingBy { it }.eachCount()
+    if (totals.values.none { it > 1 }) return emptyMap()
+    val seen = mutableMapOf<String, Int>()
+    val labels = mutableMapOf<String, String>()
+    posts.forEach { post ->
+        val ip = ips[post.id] ?: return@forEach
+        val total = totals.getValue(ip)
+        val index = (seen[ip] ?: 0) + 1
+        seen[ip] = index
+        if (total > 1) labels[post.id] = "$index/$total"
+    }
+    return labels
+}
+
+/** The file name of a post's picture ("1792153182260.jpg"), shown as a link over it as in the original; null without one. */
+internal fun futaberImageFileName(post: Post): String? =
+    post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+
 private val DEFAULT_SUBJECTS = setOf("無題", "")
 private val DEFAULT_NAMES = setOf("としあき", "名無し", "")
 
 /** Subject and name are shown only when they differ from the board defaults, unless [always]. */
-internal fun futaberPostTitleLine(post: Post, always: Boolean = false): String? {
-    val subject = post.subject?.trim().orEmpty()
-    val author = post.author?.trim().orEmpty()
-    val parts = buildList {
-        if (always) {
-            if (subject.isNotEmpty()) add(subject)
-            if (author.isNotEmpty()) add(author)
-        } else {
-            if (subject !in DEFAULT_SUBJECTS) add(subject)
-            if (author !in DEFAULT_NAMES) add(author)
-        }
+internal fun futaberPostTitleLine(post: Post, always: Boolean = false): String? =
+    futaberPostTitleLine(post.subject, post.author, always)
+
+/** [futaberPostTitleLine] of a subject and a name (the viewer's caption reads them from its own post copy). */
+internal fun futaberPostTitleLine(subject: String?, author: String?, always: Boolean): String? {
+    val (shownSubject, shownName) = futaberPostSubjectAndName(subject, author, always)
+    return listOfNotNull(shownSubject, shownName).takeIf { it.isNotEmpty() }?.joinToString("  ")
+}
+
+/**
+ * The subject and the name a post's header shows (each null when left out): only those that differ from the board's
+ * defaults ("無題", "としあき" / "名無し"), unless [always]; an empty one never.
+ */
+internal fun futaberPostSubjectAndName(subject: String?, author: String?, always: Boolean): Pair<String?, String?> {
+    val subject = subject?.trim().orEmpty()
+    val author = author?.trim().orEmpty()
+    return if (always) {
+        subject.takeIf { it.isNotEmpty() } to author.takeIf { it.isNotEmpty() }
+    } else {
+        subject.takeIf { it !in DEFAULT_SUBJECTS } to author.takeIf { it !in DEFAULT_NAMES }
     }
-    return parts.takeIf { it.isNotEmpty() }?.joinToString("  ")
 }
 
 /** A quoted line starts with `>` (ASCII or full width). */
@@ -125,13 +170,19 @@ internal fun isFutaberQuoteLine(line: String): Boolean {
     return first == '>' || first == '＞'
 }
 
+/**
+ * The colours of a poster (an IP that posts more than once, an ID). The first three are futaber's own (L-B3, read from
+ * the captures: green #50A04F, blue #4078F1, red #E35549), each made darker in its hue to 4.5:1 on white and on ふたば's
+ * beige thread; the others are this mode's, so more posters can be told apart. The dark list starts with futaber's dark
+ * IP colour (#00757C made lighter to 4.5:1); its other colours are provisional until the device capture (L-B0).
+ */
 private val LIGHT_POSTER_COLORS = listOf(
-    Color(0xFF2D6A2D), Color(0xFF8A4B00), Color(0xFF6B3FA0), Color(0xFF0B6E6E),
-    Color(0xFFA3261E), Color(0xFF3F5F9F), Color(0xFF7A5A00), Color(0xFF8A2D6B)
+    Color(0xFF376F37), Color(0xFF335FC0), Color(0xFFAC4037), Color(0xFF0B6E6E),
+    Color(0xFF8A4B00), Color(0xFF6B3FA0), Color(0xFF7A5A00), Color(0xFF8A2D6B)
 )
 private val DARK_POSTER_COLORS = listOf(
-    Color(0xFF7FD67F), Color(0xFFFFB35C), Color(0xFFC9A7F5), Color(0xFF5FD6D6),
-    Color(0xFFFF8F86), Color(0xFF9DB9F2), Color(0xFFE9C95C), Color(0xFFF08FCB)
+    Color(0xFF0098A1), Color(0xFF7FD67F), Color(0xFF9DB9F2), Color(0xFFFF8F86),
+    Color(0xFFFFB35C), Color(0xFFC9A7F5), Color(0xFFE9C95C), Color(0xFFF08FCB)
 )
 
 internal fun futaberPosterColors(isDark: Boolean): List<Color> =
@@ -177,6 +228,14 @@ internal fun futaberRestoreRowPosition(posts: List<Post>, rows: List<FutaberRow>
 /** First post that arrived after the previous visit, or null when nothing is new (or nothing was seen). */
 internal fun futaberFirstNewIndex(seenCount: Int, total: Int): Int? =
     if (seenCount in 1 until total) seenCount else null
+
+/**
+ * The thread's title row (L-B1, look doc §5.2.3). futaber shows the first post's body on one line: once the page is read,
+ * the same rule as the history's ([resolveThreadTitle]: the first line of the body, else the subject, else
+ * [openedTitle]); before that the title the thread was opened with (the catalog's, or the history's).
+ */
+internal fun futaberThreadTitle(openedTitle: String, firstPost: Post?): String =
+    if (firstPost == null) openedTitle else resolveThreadTitle(firstPost, openedTitle)
 
 /**
  * The history after a successful load: the title is worked out again from the first post (the catalog only knew a

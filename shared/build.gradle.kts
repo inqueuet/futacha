@@ -23,7 +23,7 @@ kotlin {
 
     android {
         namespace = "com.valoser.futacha.shared"
-        compileSdk = 37
+        compileSdk { version = release(37) { minorApiLevel = 2 } }
         minSdk = 26
         withHostTest {
             // commonTest is shared with the Android local test target. Android's
@@ -108,7 +108,7 @@ kotlin {
             linkerOpts("-framework", "FileProvider", "-framework", "StoreKit", "-lsqlite3")
         }
         pod("onnxruntime-c") {
-            version = libs.versions.onnxRuntime.get()
+            version = libs.versions.onnxRuntimeIos.get()
             packageName = "com.valoser.futacha.shared.ort"
             moduleName = "onnxruntime"
             headers = "onnxruntime/onnxruntime_c_api.h"
@@ -168,6 +168,8 @@ kotlin {
                 implementation(project.dependencies.platform(libs.androidx.compose.bom))
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.androidx.core.ktx)
+                // Align Coil's transitive EXIF decoder with instrumentation.
+                implementation(libs.androidx.exifinterface)
                 implementation(libs.okhttp)
                 implementation(libs.guava)
                 implementation(libs.ktor.client.okhttp)
@@ -216,17 +218,17 @@ kotlin {
         val jvmMain by getting {
             kotlin.srcDir("src/jvmAndAndroidMain/kotlin")
             dependencies {
-                implementation("net.java.dev.jna:jna-platform-jpms:5.16.0")
+                implementation("net.java.dev.jna:jna-platform-jpms:5.19.1")
                 implementation(libs.onnxruntime.jvm)
                 implementation(libs.androidx.datastore.preferences)
-                implementation("org.xerial:sqlite-jdbc:3.50.3.0")
+                implementation("org.xerial:sqlite-jdbc:3.54.1.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:${libs.versions.kotlinxCoroutines.get()}")
                 implementation(compose.desktop.currentOs)
-                implementation("uk.co.caprica:vlcj:4.12.1")
-                implementation("org.bytedeco:javacv:1.5.12") { isTransitive = false }
-                implementation("org.bytedeco:ffmpeg:7.1.1-1.5.12")
-                runtimeOnly("org.bytedeco:ffmpeg:7.1.1-1.5.12:$desktopNativeClassifier")
-                runtimeOnly("org.bytedeco:javacpp:1.5.12:$desktopNativeClassifier")
+                implementation("uk.co.caprica:vlcj:5.0.0-M6")
+                implementation("org.bytedeco:javacv:1.5.14") { isTransitive = false }
+                implementation("org.bytedeco:ffmpeg:8.1.2-1.5.14")
+                runtimeOnly("org.bytedeco:ffmpeg:8.1.2-1.5.14:$desktopNativeClassifier")
+                runtimeOnly("org.bytedeco:javacpp:1.5.14:$desktopNativeClassifier")
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.okhttp)
             }

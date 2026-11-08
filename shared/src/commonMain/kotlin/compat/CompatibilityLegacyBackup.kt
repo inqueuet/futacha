@@ -15,7 +15,9 @@ import io.ktor.http.decodeURLQueryComponent
 /** A word from the original Android viewer's keyword.cfg export. */
 data class CompatLegacyScopedWord(
     val boardUrl: String?,
-    val word: String
+    val word: String,
+    /** FutabaViewer 18-20 writes "1" as the third value of a regular-expression word. */
+    val isRegex: Boolean = false
 )
 
 data class CompatLegacyBoardRecord(
@@ -92,7 +94,7 @@ private fun parseLegacyKeywordBackup(root: JsonObject): CompatLegacyBackupData {
         val pair = item as? JsonArray ?: return@mapNotNull null
         val board = pair.stringAt(0)?.decodeLegacyComponent()?.let(::normalizeLegacyBoardScope)
         val word = pair.stringAt(1)?.decodeLegacyComponent().orEmpty().trim()
-        word.takeIf { it.isNotBlank() }?.let { CompatLegacyScopedWord(board, it) }
+        word.takeIf { it.isNotBlank() }?.let { CompatLegacyScopedWord(board, it, pair.stringAt(2) == "1") }
     }
 
     fun thread(key: String, scopedKey: String): List<CompatLegacyScopedWord> = buildList {
@@ -105,7 +107,7 @@ private fun parseLegacyKeywordBackup(root: JsonObject): CompatLegacyBackupData {
             val pair = item as? JsonArray ?: return@forEach
             val word = pair.stringAt(0)?.decodeLegacyComponent().orEmpty().trim()
             val board = pair.stringAt(1)?.decodeLegacyComponent()?.let(::normalizeLegacyBoardScope)
-            word.takeIf(String::isNotBlank)?.let { add(CompatLegacyScopedWord(board, it)) }
+            word.takeIf(String::isNotBlank)?.let { add(CompatLegacyScopedWord(board, it, pair.stringAt(2) == "1")) }
         }
     }
 
@@ -162,13 +164,15 @@ private fun parseLegacySettingBackup(root: JsonObject): CompatLegacyBackupData {
                     } else rawKey
                 }?.takeIf { it in masterKeys }
                     ?: return@mapNotNull null
-                val active = values.stringAt(1)?.toIntOrNull()?.let { it == 1 }
-                    ?: return@mapNotNull null
+                val state = values.stringAt(1)?.toIntOrNull() ?: return@mapNotNull null
+                val active = state == 1
+                // 18-20 writes 2 for 「非表示」 on the thread toolbar.
+                val hidden = state == 2 && compatToolbarOffersHidden(surface)
                 // 1.apk maps corrupt values above 20 back to zero before updating
                 // its toolbar database. Negative values are equally unusable here.
                 val position = values.stringAt(2)?.toIntOrNull()
                     ?.takeIf { it in 0..20 } ?: 0
-                CompatToolbarItem(key = key, position = position, active = active)
+                CompatToolbarItem(key = key, position = position, active = active, hidden = hidden)
             }
             if (decoded.isNotEmpty()) {
                 put(surface, reconcileCompatToolbar(surface, decoded))

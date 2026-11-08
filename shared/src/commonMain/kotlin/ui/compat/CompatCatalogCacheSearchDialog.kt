@@ -37,6 +37,11 @@ import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.normalizeCompatSearchText
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
+import com.valoser.futacha.shared.network.ArchiveSearchItem
+import com.valoser.futacha.shared.network.ArchiveSearchScope
+import com.valoser.futacha.shared.network.extractArchiveSearchScope
+import com.valoser.futacha.shared.network.searchInqueuetArchiveThreads
+import kotlinx.serialization.json.Json
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
@@ -51,12 +56,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.TimeSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -139,7 +144,7 @@ internal fun CompatCatalogCacheSearchDialog(
                 val terms = compatCacheSearchTerms(normalized)
                 val localMatches = loadCompatCacheSearchBodyTermMatches(store, localHistory, boardKey, terms)
                 val remoteResult = httpClient?.let {
-                    searchLegacyCompatCatalogCache(it, boardUrl, normalized)
+                    searchCompatCatalogCacheRemote(it, boardUrl, normalized)
                 }
                 val fetched = remoteResult?.getOrDefault(emptyList()).orEmpty()
                 val searchMode = mode
@@ -428,6 +433,74 @@ internal fun filterLegacyCompatCatalogCacheByTermMatches(
         if (mode == CompatCatalogCacheSearchMode.AND) terms.indices.all(::matches)
         else terms.indices.any(::matches)
     }
+}
+
+private const val COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS = 4
+
+/** The whole cache search (every archive term and the old server) ends within this time. */
+internal const val COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS = 60_000L
+
+internal class CompatCacheSearchTimeoutException : Exception("検索に時間がかかりすぎたため中止しました")
+private val compatCacheSearchArchiveJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * The cache search's remote results. The reference APK's own server (futabaapp.xsrv.jp) answered 403
+ * for the whole site when checked on 2026-11-08, so the archive search the thread menu uses (inqueuet, then ふたポ
+ * and ふたばフォレスト) comes first, one search per term (at most four) so OR and AND are filtered
+ * locally as before. The old server is still tried last and quietly, in case it comes back; its
+ * failure is never what the screen shows.
+ */
+internal suspend fun searchCompatCatalogCacheRemote(
+    httpClient: HttpClient,
+    boardUrl: String,
+    query: String,
+    searchArchive: suspend (String, ArchiveSearchScope) -> List<ArchiveSearchItem> = { term, scope ->
+        searchInqueuetArchiveThreads(httpClient, compatCacheSearchArchiveJson, term, scope)
+    },
+    searchLegacy: suspend () -> Result<List<CatalogItem>> = {
+        searchLegacyCompatCatalogCache(httpClient, boardUrl, query)
+    },
+    totalTimeoutMillis: Long = COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS
+): Result<List<CatalogItem>> {
+    val started = TimeSource.Monotonic.markNow()
+    fun remaining(): Long = totalTimeoutMillis - started.elapsedNow().inWholeMilliseconds
+    val scope = extractArchiveSearchScope(boardUrl)
+        ?: return withTimeoutOrNull(totalTimeoutMillis) { searchLegacy() }
+            ?: Result.failure(CompatCacheSearchTimeoutException())
+    val terms = compatCacheSearchTerms(query).map(CompatCacheSearchTerm::raw).distinct()
+        .take(COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS)
+        .ifEmpty { listOf(query.trim()) }
+    var archiveFailure: Throwable? = null
+    val archived = ArrayList<CatalogItem>()
+    for (term in terms) {
+        // The whole search shares one time limit: a slow archive ends the remaining terms.
+        val left = remaining()
+        if (left <= 0) {
+            if (archiveFailure == null) archiveFailure = CompatCacheSearchTimeoutException()
+            break
+        }
+        val found = withTimeoutOrNull(left) {
+            runSuspendCatchingPreservingCancellation { searchArchive(term, scope) }
+        } ?: Result.failure(CompatCacheSearchTimeoutException())
+        found.exceptionOrNull()?.let { if (archiveFailure == null) archiveFailure = it }
+        found.getOrNull().orEmpty().forEach { item ->
+            val url = buildCompatArchiveSourceThreadUrl(item) ?: return@forEach
+            archived += CatalogItem(
+                id = item.threadId,
+                threadUrl = url,
+                title = item.title,
+                thumbnailUrl = item.thumbUrl,
+                fullImageUrl = item.thumbUrl,
+                replyCount = item.replyCount
+            )
+        }
+    }
+    if (archived.isNotEmpty()) return Result.success(archived.distinctBy(CatalogItem::threadUrl))
+    val legacy = remaining().takeIf { it > 0 }
+        ?.let { left -> withTimeoutOrNull(left) { searchLegacy() } }
+        ?.getOrNull().orEmpty()
+    if (legacy.isNotEmpty()) return Result.success(legacy)
+    return archiveFailure?.let { Result.failure(it) } ?: Result.success(emptyList())
 }
 
 internal suspend fun searchLegacyCompatCatalogCache(

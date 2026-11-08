@@ -511,18 +511,19 @@ internal suspend fun compatNeighborPreviewVisiblePosts(
         showDeletedContent = showDeletedPosts
     )
     if (!ngEnabled) return presented
+    val index = buildCompatThreadNgRuleIndex(ngRules, scopeKey = tabKey, boardKey = boardKey)
     val filter = {
         filterCompatThreadPosts(
             posts = presented,
             ngEnabled = true,
-            index = buildCompatThreadNgRuleIndex(ngRules, scopeKey = tabKey, boardKey = boardKey),
+            index = index,
             aiHiddenPostNos = hiddenPostNos,
             imagePhashes = imagePhashes,
             imagePhashThreshold = imageNgPhashThreshold
         )
     }
     return try {
-        if (presented.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+        if (presented.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT && !index.hasRegex) {
             filter()
         } else {
             withContext(AppDispatchers.parsing) { filter() }
@@ -903,6 +904,7 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
     }) {
         AsyncImage(
             model = tab.thumbnailUrl,
+            imageLoader = LocalFutachaImageLoader.current,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.align(Alignment.Center).width(58.dp).height(40.dp)
@@ -918,7 +920,7 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
             contentAlignment = Alignment.Center
         ) {
             Text(
-                tab.title.take(4),
+                compatTakeCharacters(tab.title, 4),
                 color = Color.White,
                 fontSize = 12.sp,
                 // The selector label must not inherit the screen's 24sp body

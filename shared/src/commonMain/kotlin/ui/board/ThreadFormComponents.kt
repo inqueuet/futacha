@@ -502,7 +502,10 @@ internal fun ThreadFormDialog(
                                         )
                                     } else {
                                         androidx.compose.foundation.Image(
-                                            painter = rememberAsyncImagePainter(image.bytes),
+                                            painter = rememberAsyncImagePainter(
+                                                image.bytes,
+                                                imageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader.current
+                                            ),
                                             contentDescription = "選択した画像のプレビュー",
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()

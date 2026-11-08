@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.QueryStats
 import androidx.compose.material.icons.rounded.Refresh
@@ -97,6 +99,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.compat.CompatHeaderExtractionKind
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -155,7 +158,9 @@ internal data class FtutterPopupLayer(
     /** タップした所の上端（ルート座標px）。ポップアップの下端をそこへ合わせる。null は上詰め。 */
     val anchorTop: Float? = null,
     /** 隠したレス（削除）も出す（置換行のタップ、メニューの「削除されたレス」）。 */
-    val forceShow: Boolean = false
+    val forceShow: Boolean = false,
+    /** 返信数の一覧：原作は上部のバーのすぐ下に出す（M1）。 */
+    val pinTop: Boolean = false
 )
 
 /** レスの描画に要るスレッド全体の情報。 */
@@ -169,7 +174,11 @@ private class FtutterThreadContext(
     val settings: FtutterThreadSettings,
     val design: FtutterDesignSettings,
     val query: String,
-    val hidden: FtutterHidden = FtutterHidden()
+    val hidden: FtutterHidden = FtutterHidden(),
+    /** 「従来の動き」：スレッドの見た目を前の形にする（T-B4）。 */
+    val legacyLook: Boolean = false,
+    /** M14：このスレで送ったそうだねの数（応答の新しい数）。見出しに出し、もう押せなくする。 */
+    val soudaneSent: Map<String, Int> = emptyMap()
 )
 
 /** レスに対する操作（本体とポップアップで共通）。 */
@@ -281,6 +290,8 @@ internal fun FtutterThreadScreen(
     /** 画像の保存の道具（無ければ保存のボタンは何もしない）。 */
     mediaTools: FtutterMediaSaveTools? = null,
     onSearchImage: (String) -> Unit = {},
+    /** M60：ビューアの検索で足した検索先で検索する。 */
+    onSearchImageWith: (String, FtutterViewerSearchEngine) -> Unit = { url, _ -> onSearchImage(url) },
     onSaveThread: (ThreadPage) -> Unit = {},
     /** そうだねを送れた時（統計）。 */
     onSoudaneSent: () -> Unit = {},
@@ -302,6 +313,8 @@ internal fun FtutterThreadScreen(
     threadActions: FtutterThreadActions? = null,
     initialPage: ThreadPage? = null,
     refreshOnOpen: Boolean = true,
+    /** Show the first post instead of the saved place (the extension 「スレッドを先頭から開く」, on an opening from the catalog, history or a link). */
+    startAtTop: Boolean = false,
     onPageSnapshot: (ThreadPage) -> Unit = {},
     historyStateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     reportedPostNgRules: List<com.valoser.futacha.shared.compat.CompatNgRule> = emptyList(),
@@ -325,6 +338,8 @@ internal fun FtutterThreadScreen(
     var liveConfirmed by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var loading by remember(board.id, ref.threadId) { mutableStateOf(true) }
     var errorText by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
+    // 原作の形の更新の失敗：本文を消して「！」だけを出す（読み上げにはこの理由を渡す）。
+    var failedBlank by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     var fallen by remember(board.id, ref.threadId) { mutableStateOf(confirmedFallen) }
     LaunchedEffect(confirmedFallen) {
         if (confirmedFallen) fallen = true
@@ -339,6 +354,7 @@ internal fun FtutterThreadScreen(
     var restored by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var highlight by remember(board.id, ref.threadId) { mutableStateOf<Int?>(null) }
     val layers = remember(board.id, ref.threadId) { mutableStateListOf<FtutterPopupLayer>() }
+    val legacyPopups = remember(preferences) { ftutterLegacyPopups(preferences) }
     // The post (by number) whose ID was long-pressed: a position would point at another post once the list changed
     // (re-audit L26).
     var idMenu by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
@@ -436,7 +452,13 @@ internal fun FtutterThreadScreen(
     // 返信の対応とIDの件数は、レスが変わった時だけ作る（検索語では作り直さない）。
     val replyIndex = remember(posts) { ftutterReplyIndex(posts) }
     val idCounts = remember(posts) { ftutterIdCounts(posts) }
-    val context = remember(posts, replyIndex, idCounts, markedIds, settings, design, appliedQuery, hidden) {
+    val legacyLook = remember(preferences) { ftutterLegacyThreadLook(preferences) }
+    val legacyBoxes = preferences.ftutterBool(FTUTTER_LEGACY_POST_BOXES_KEY, false)
+    val legacyRemoteNotice = preferences.ftutterBool(FTUTTER_LEGACY_REMOTE_NOTICE_KEY, false)
+    val legacyFallen = preferences.ftutterBool(FTUTTER_LEGACY_FALLEN_KEY, false)
+    val soudaneSent = remember(ref.threadId) { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
+    val soudaneSnapshot = soudaneSent.toMap()
+    val context = remember(posts, replyIndex, idCounts, markedIds, settings, design, appliedQuery, hidden, legacyLook, soudaneSnapshot) {
         FtutterThreadContext(
             posts = posts,
             replies = replyIndex,
@@ -445,7 +467,9 @@ internal fun FtutterThreadScreen(
             settings = settings,
             design = design,
             query = appliedQuery,
-            hidden = hidden
+            hidden = hidden,
+            legacyLook = legacyLook,
+            soudaneSent = soudaneSnapshot
         )
     }
 
@@ -455,9 +479,12 @@ internal fun FtutterThreadScreen(
     fun lastSeenPostIndex(): Int? {
         val info = listState.layoutInfo
         val bottom = info.viewportEndOffset
-        return info.visibleItemsInfo.filter { it.offset < bottom }.mapNotNull { item ->
-            (currentRows.getOrNull(item.index) as? FtutterRow.PostRow)?.index
-                ?: (currentRows.getOrNull(item.index) as? FtutterRow.HiddenRow)?.index
+        val rowsSeen = ftutterLastSeenRow(
+            info.visibleItemsInfo.map { Triple(it.index, it.offset, it.size) }, bottom, legacyLook
+        )
+        return rowsSeen.mapNotNull { index ->
+            (currentRows.getOrNull(index) as? FtutterRow.PostRow)?.index
+                ?: (currentRows.getOrNull(index) as? FtutterRow.HiddenRow)?.index
         }.maxOrNull()
     }
     fun saveViewport() {
@@ -523,16 +550,18 @@ internal fun FtutterThreadScreen(
                     fetched
                 }
             } ?: fetched
+            val linked = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { content.page.ftutterRelinked(checkCancelled = { ensureActive() }) }
             if (!archived) {
                 liveConfirmed = true
                 fallen = false
-                page = content.page
-                onPageSnapshot(content.page)
+                page = linked
+                onPageSnapshot(linked)
                 errorText = null
-                onPageLoaded(content.page.posts)
+                failedBlank = null
+                onPageLoaded(linked.posts)
                 onLivePageConfirmed()
                 if (before.isNotEmpty() && !openingFetch) {
-                    ftutterRefreshNotice(before, content.page.posts, selfIds, settings)?.let(onNotice)
+                    ftutterRefreshNotice(before, linked.posts, selfIds, settings)?.let(onNotice)
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -544,21 +573,31 @@ internal fun FtutterThreadScreen(
                 // 落ち：手元のデータは残し、末尾の帯と「過去ログを取得」で知らせる（原作は404だけ、ふたちゃどおり410も）。
                 fallen = true
                 onFallen()
-                if (page == null) errorText = "スレッドは落ちています"
-                onNotice("スレッドは落ちています")
+                // M23：1度も読めていない時、原作は帯だけで知らせを出さない。
+                if (ftutterFallenBandsOnly(page != null, true, legacyFallen)) {
+                    errorText = null
+                } else {
+                    if (page == null) errorText = "スレッドは落ちています"
+                    onNotice("スレッドは落ちています")
+                }
             } else {
                 val message = futaberFriendlyLoadError(error, "スレッド")
-                if (page == null) errorText = message
-                onNotice(message)
+                if (ftutterBlanksOnFailure(preferences, status)) {
+                    failedBlank = message
+                } else {
+                    if (page == null) errorText = message
+                    onNotice(message)
+                }
             }
         } finally {
             loading = false
         }
     }
 
-    // 開いた時の位置：前回の読み位置（レス番号で探し、無ければ行の番号）。
+    // 開いた時の位置：前回の読み位置（レス番号で探し、無ければ行の番号）。拡張「スレッドを先頭から開く」で開いた時は先頭。
     LaunchedEffect(ref.threadId, rows) {
         if (restored || rows.isEmpty() || posts.isEmpty()) return@LaunchedEffect
+        val history = if (startAtTop) null else history
         val postId = history?.lastReadPostId
         val target = postId?.let { id ->
             val index = posts.indexOfFirst { it.id == id }
@@ -568,9 +607,18 @@ internal fun FtutterThreadScreen(
         // Before the worker supplies rows the list contains only the keyed end band. LazyColumn
         // keeps that key at the viewport when rows arrive unless we explicitly restore zero too.
         // Wait until the actual list contains these rows, rather than scrolling its old end band.
-        androidx.compose.runtime.snapshotFlow { listState.layoutInfo.totalItemsCount }
-            .first { it >= rows.size + 1 }
-        listState.scrollToItem(target, history?.lastReadItemOffset?.coerceAtLeast(0) ?: 0)
+        val offset = history?.lastReadItemOffset?.coerceAtLeast(0) ?: 0
+        val laidOut = kotlinx.coroutines.withTimeoutOrNull(FTUTTER_RESTORE_WAIT_MILLIS) {
+            androidx.compose.runtime.snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it >= rows.size + 1 }
+        }
+        if (laidOut != null) {
+            listState.scrollToItem(target, offset)
+        } else {
+            // The list is not on screen (another page is over it): the position is asked of its next layout, and the
+            // saving of the reading position starts now instead of waiting for ever (audit C4).
+            listState.requestScrollToItem(target, offset)
+        }
         restored = true
     }
 
@@ -624,7 +672,8 @@ internal fun FtutterThreadScreen(
     // 送信は画面より長く続ける（再監査M3）。結果の知らせはアプリ側、取り直しは開いている画面だけ。
     val currentRefresh by rememberUpdatedState { refreshTick++ }
     fun runRemote(label: String, success: String, refreshAfter: Boolean, resultMessage: () -> String = { success },
-        busyMessage: String = FTUTTER_REMOTE_BUSY_NOTICE, block: suspend () -> Unit) {
+        busyMessage: String = FTUTTER_REMOTE_BUSY_NOTICE, failureMessage: (Throwable) -> String? = { null },
+        block: suspend () -> Unit) {
         // 別の送信の途中に押した時は、送らなかったことを知らせる（L16。以前は何も起きず知らせも無かった）。
         val started = remoteActions.run("$actionKey:remote") {
             val result = com.valoser.futacha.shared.ui.board.performThreadAction {
@@ -633,14 +682,41 @@ internal fun FtutterThreadScreen(
             }
             when (result) {
                 is com.valoser.futacha.shared.ui.board.ThreadActionRunResult.Success -> {
-                    onNotice(resultMessage())
+                    // 空の知らせは出さない（M41：原作はそうだねの成功を知らせず、見出しの数だけが変わる）。
+                    resultMessage().takeIf { it.isNotEmpty() }?.let(onNotice)
                     if (refreshAfter) currentRefresh()
                 }
                 is com.valoser.futacha.shared.ui.board.ThreadActionRunResult.Failure ->
-                    onNotice(com.valoser.futacha.shared.ui.board.buildThreadActionFailureMessage(label, result.error))
+                    // M87：原作の形の知らせ（サーバーの返事など）がある時はそれ。空の返事は何も出さない。
+                    failureMessage(result.error).let { custom ->
+                        if (custom == null) onNotice(com.valoser.futacha.shared.ui.board.buildThreadActionFailureMessage(label, result.error))
+                        else if (custom.isNotEmpty()) onNotice(custom)
+                    }
             }
         }
         if (!started) onNotice(busyMessage)
+    }
+    fun sendDel(post: Post, alsoNg: Boolean) {
+        var outcome = ""
+        // M87：原作はdelの結果をサーバーの返事のまま出す。NGにも登録する拡張は今までの文（両方の結果を言うため）。
+        if (!alsoNg && !legacyRemoteNotice) {
+            runRemote("delに失敗しました", "", refreshAfter = false, resultMessage = { outcome },
+                failureMessage = { ftutterRemoteFailureNotice(it, legacy = false) }) {
+                outcome = ftutterRemoteSuccessNotice(
+                    repository.requestDeletionResponse(board.url, ref.threadId, post.id, com.valoser.futacha.shared.ui.board.DEFAULT_DEL_REASON_CODE),
+                    legacy = false, legacyText = "")
+            }
+            return
+        }
+        runRemote("delに失敗しました", "", refreshAfter = false, resultMessage = { outcome },
+            busyMessage = if (alsoNg) FTUTTER_REMOTE_BUSY_REPORT_NG_NOTICE else FTUTTER_REMOTE_BUSY_NOTICE) {
+            outcome = com.valoser.futacha.shared.ui.board.sendReportAndOptionalNg(alsoNg,
+                send = { repository.requestDeletion(board.url, ref.threadId, post.id, com.valoser.futacha.shared.ui.board.DEFAULT_DEL_REASON_CODE) },
+                registerNg = {
+                    com.valoser.futacha.shared.ui.board.registerReportedThreadPostNg(
+                        compatStore ?: error("設定の保存先を利用できません"), board, ref.threadId, post.id)
+                })
+        }
     }
     // 拡張「画像の長押しメニュー」：長押しした画像のレス。
     var imageMenuFor by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
@@ -662,14 +738,16 @@ internal fun FtutterThreadScreen(
             },
             onPostLongPress = { index -> menuPost = posts.getOrNull(index)?.id },
             onRepliesTap = { index, anchor ->
-                pushLayer(FtutterPopupLayer(context.replies[posts[index].id].orEmpty().map { it to 0 }, anchorTop = anchor))
+                pushLayer(FtutterPopupLayer(context.replies[posts[index].id].orEmpty().map { it to 0 }, anchorTop = anchor, pinTop = true))
             },
             onIdTap = { index, anchor ->
                 val identity = context.idCounts[posts[index].id]
                 if (identity != null) {
+                    // 原作：IPのタップはレス0からの一覧で、押したレスへは送らない（M3）。
+                    val fromTop = !legacyPopups && identity.kind == CompatHeaderExtractionKind.IP
                     pushLayer(FtutterPopupLayer(
                         posts.indices.filter { context.idCounts[posts[it].id]?.let { id -> id.kind == identity.kind && id.id == identity.id } == true }.map { it to 0 },
-                        highlight = index, anchorTop = anchor
+                        highlight = if (fromTop) null else index, anchorTop = anchor
                     ))
                 }
             },
@@ -762,15 +840,20 @@ internal fun FtutterThreadScreen(
     PlatformBackHandler(enabled = layers.isEmpty() && searching) { searching = false; filter = filter.copy(query = "") }
     PlatformBackHandler(enabled = layers.isEmpty() && !searching) { storePosition(); onBack() }
 
-    val title = remember(posts, ref.title) { posts.firstOrNull()?.let { resolveThreadTitle(it, ref.title) } ?: ref.title }
-    val endBand = ftutterEndBand(page?.expiresAtLabel, fallen, archived)
+    // H8：原作はスレの題名（カタログの題名の全文）と「板名 (返信の数)」の2行。従来の動きは本文の1行目を大きな1行。
+    val title = remember(posts, ref.title, history?.title, legacyLook) {
+        if (legacyLook) posts.firstOrNull()?.let { resolveThreadTitle(it, ref.title) } ?: ref.title
+        else ftutterThreadTitle(history?.title?.takeIf { it.isNotBlank() } ?: ref.title, posts.firstOrNull())
+    }
+    val subtitle = if (legacyLook) null else ftutterThreadSubtitle(board.name, posts.size)
+    val endBand = ftutterEndBand(page?.expiresAtLabel, fallen, archived, legacyFallen)
     val canFetchArchive = fallen && !archived && httpClient != null
     // 過去ログは画面より長く取り続け、取れたものはスレッドごとに残す（再監査M3）。開いている画面（戻ってきた画面を含む）が拾う。
     fun fetchArchive() {
         val client = httpClient ?: return
         remoteActions.run("$actionKey:archive") {
             val got = futaberArchivedThread(client, repository, ref.threadId, board.url, ftutterArchiveJson)
-            if (got != null) remoteActions.putArchived(actionKey, got) else onNotice("過去ログが見つかりませんでした")
+            if (got != null) remoteActions.putArchived(actionKey, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { got.ftutterRelinked(checkCancelled = { ensureActive() }) }) else onNotice("過去ログが見つかりませんでした")
         }
     }
     val heldArchive = remoteActions.archived(actionKey)
@@ -812,7 +895,7 @@ internal fun FtutterThreadScreen(
                 )
             } else {
                 FtutterTopBar(
-                    title = title, onBack = { storePosition(); onBack() },
+                    title = title, subtitle = subtitle, failed = failedBlank, onBack = { storePosition(); onBack() },
                     onOpenDrawer = if (preferences.ftutterBool(FtutterKeys.DRAWER_BUTTON_TOP_LEFT, false)) onOpenDrawer else null
                 ) {
                     IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("ftutter-thread-settings")) {
@@ -830,7 +913,19 @@ internal fun FtutterThreadScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth()
             ) {
                 val current = page
-                if (current == null) {
+                val blankReason = failedBlank
+                if (blankReason != null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Error, contentDescription = blankReason, tint = colors.text,
+                            modifier = Modifier.testTag("ftutter-thread-failed"))
+                    }
+                } else if (current == null && !loading && ftutterFallenBandsOnly(false, fallen, legacyFallen)) {
+                    // M23：原作は「ここまで読んだ」と落ちた帯だけ、その下は空白。
+                    Column(Modifier.fillMaxSize().testTag("ftutter-thread-fallen")) {
+                        FtutterBandCard("ここまで読んだ", colors.dividerCard, colors.onDividerCard, Modifier.testTag("ftutter-kokomade")) {}
+                        FtutterBandCard(endBand.text, colors.dividerCard, FTUTTER_FALLEN_TEXT, Modifier.testTag("ftutter-end-band")) {}
+                    }
+                } else if (current == null) {
                     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                         if (loading) CircularProgressIndicator(color = colors.indicator)
                         errorText?.let {
@@ -856,7 +951,7 @@ internal fun FtutterThreadScreen(
                             )
                             .testTag("ftutter-thread-list")
                     ) {
-                        items(rows, key = { it.key }) { row ->
+                        itemsIndexed(rows, key = { index, row -> ftutterRowListKey(index, row) }) { _, row ->
                             when (row) {
                                 FtutterRow.ReadMark -> FtutterBandCard("ここまで読んだ", colors.dividerCard, colors.onDividerCard,
                                     Modifier.testTag("ftutter-kokomade")) { showMyself(null) }
@@ -879,6 +974,7 @@ internal fun FtutterThreadScreen(
                                 FtutterEndState.ARCHIVED -> Color(0xFF69F0AE) to Color(0xFF000000)
                                 FtutterEndState.DANGER -> Color(0xFFF44336) to Color(0xFFFFFFFF)
                                 FtutterEndState.NORMAL -> colors.dividerCard to colors.onDividerCard
+                                FtutterEndState.FALLEN -> colors.dividerCard to FTUTTER_FALLEN_TEXT
                             }
                             FtutterBandCard(endBand.text, bg, fg, Modifier.testTag("ftutter-end-band")) { showMyself(null) }
                         }
@@ -909,6 +1005,7 @@ internal fun FtutterThreadScreen(
                 extensions = extensions,
                 reading = reader.isReading,
                 autoScrolling = autoScrolling,
+                legacyMenus = ftutterLegacyMenus(preferences),
                 onGesture = { handleGesture(it, fromMenu = true) },
                 onTool = { tool ->
                     when (tool) {
@@ -971,6 +1068,7 @@ internal fun FtutterThreadScreen(
                     context = context,
                     actions = actions,
                     toolbarHeightDp = metrics.iconHeight,
+                    legacy = legacyPopups,
                     onDismissTop = { if (layers.isNotEmpty()) layers.removeAt(layers.lastIndex) },
                     onTopListState = { popupScroll[0] = it }
                 )
@@ -1033,10 +1131,32 @@ internal fun FtutterThreadScreen(
                 },
                 onToggleStrip = { savePreference(FtutterKeys.SHOW_GALLERY_TAB, (!mediaSettings.showStrip).toString()) },
                 onSearch = onSearchImage,
+                legacy = preferences.ftutterBool(FTUTTER_LEGACY_VIEWER_KEY, false),
+                searchEngines = parseFtutterViewerSearchEngines(preferences),
+                onSaveSearchEngines = { savePreference(FTUTTER_VIEWER_SEARCH_ENGINES_KEY, encodeFtutterViewerSearchEngines(it)) },
+                onSearchWith = onSearchImageWith,
+                onNotice = onNotice,
                 onOpenBrowser = openUrl,
                 onBackToPost = backToPost,
                 onClose = { viewer = null }
             )
+        }
+        // M86：原作は送っている間（そうだね・del・削除）、画面を暗くしてスピナーを出す。押しは下へ通さない。
+        // The scrim stays at most FTUTTER_REMOTE_SCRIM_MAX_MILLIS: a server that does not answer no longer leaves the screen
+        // untouchable; the send goes on, and another press is told to wait (audit C5).
+        val remoteBusy = remoteActions.isBusy("$actionKey:remote")
+        var remoteScrimExpired by remember(remoteBusy) { mutableStateOf(false) }
+        if (remoteBusy) LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(FTUTTER_REMOTE_SCRIM_MAX_MILLIS)
+            remoteScrimExpired = true
+        }
+        if (ftutterRemoteScrimShown(remoteBusy, remoteScrimExpired)) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))
+                    .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } }
+                    .testTag("ftutter-remote-busy"),
+                contentAlignment = Alignment.Center
+            ) { androidx.compose.material3.CircularProgressIndicator(color = Color.White) }
         }
     }
 
@@ -1048,7 +1168,8 @@ internal fun FtutterThreadScreen(
         } else {
             FutachaAppLockAwareWindow { AlertDialog(
                 onDismissRequest = { idMenu = null },
-                title = { Text(id) },
+                // 原作は見出しに「ID:」「IP:」を残す（M4）。
+                title = { Text(context.idCounts[posts[index].id]?.display ?: id) },
                 text = {
                     Column {
                         Text("コピー", modifier = Modifier.fillMaxWidth().clickable {
@@ -1081,6 +1202,7 @@ internal fun FtutterThreadScreen(
                 header = { FtutterPostView(index, 0, context.copyForMenu(), FTUTTER_INERT_ACTIONS, highlighted = false, inPopup = true) },
                 entries = postMenu,
                 marked = post.id in manualMarks,
+                disabled = if (post.id in soudaneSent) setOf(FtutterPostMenuItem.SOUDANE) else emptySet(),
                 maxPreviewHeightDp = (screenHeight * 0.3f).toInt(),
                 onDismiss = { menuPost = null },
                 onReorder = { reorderMenu = true },
@@ -1092,12 +1214,18 @@ internal fun FtutterThreadScreen(
                         FtutterPostMenuItem.QUOTE_NO -> onReply(">No.${post.id}\n")
                         FtutterPostMenuItem.QUOTE_SELECT -> chooseQuoteFor = post
                         // そうだねは原作どおり確認なしで送る。
-                        FtutterPostMenuItem.SOUDANE -> runRemote("そうだねに失敗しました", "そうだねしました", refreshAfter = true) {
-                            repository.voteSaidane(board.url, ref.threadId, post.id)
+                        FtutterPostMenuItem.SOUDANE -> runRemote("そうだねに失敗しました", "", refreshAfter = true,
+                            failureMessage = { ftutterSoudaneFailureNotice(it, legacyRemoteNotice) }) {
+                            val body = repository.voteSaidaneResponse(board.url, ref.threadId, post.id)
+                            // 原作は応答の「0」を失敗とする（H12）。
+                            if (!ftutterSaidaneCounted(body)) throw FtutterSaidaneNotCountedException()
+                            soudaneSent[post.id] = ftutterSoudaneAfterVote(body, post.saidaneLabel)
                             onSoudaneSent()
                         }
                         FtutterPostMenuItem.DELETE -> deleteFor = post
-                        FtutterPostMenuItem.DEL -> delConfirm = post
+                        // M40：原作はdelを確認なしで送る。NGにも登録する拡張と、従来の動きのスイッチの時は確かめる。
+                        FtutterPostMenuItem.DEL -> if (ftutterDelAsks(preferences, FtutterExtension.REPORT_NG in extensions)) delConfirm = post
+                            else sendDel(post, alsoNg = false)
                         FtutterPostMenuItem.MARK -> onToggleMark(post.id, post.id !in manualMarks)
                         FtutterPostMenuItem.COPY -> copyFor = post
                         FtutterPostMenuItem.NG -> if (ftutterPosterIdentity(post) == null) {
@@ -1109,23 +1237,7 @@ internal fun FtutterThreadScreen(
         }
     }
     if (reorderMenu) {
-        FtutterOrderEditorDialog(
-            title = "並び替え",
-            entries = postMenu,
-            label = { it.label },
-            onDismiss = { reorderMenu = false },
-            onReset = {
-                reorderMenu = false
-                savePreference(FtutterKeys.POST_MENU_ORDER, "")
-                savePreference(FtutterKeys.POST_MENU_ENABLED, "")
-            },
-            onSave = { saved ->
-                reorderMenu = false
-                val (names, flags) = encodeFtutterToolbar(saved) { it.stored }
-                savePreference(FtutterKeys.POST_MENU_ORDER, names)
-                savePreference(FtutterKeys.POST_MENU_ENABLED, flags)
-            }
-        )
+        FtutterOrderEditorHost(FtutterOrderEditorKind.POST_MENU, preferences, savePreference, onClose = { reorderMenu = false })
     }
     chooseQuoteFor?.let { post ->
         val candidates = buildList {
@@ -1133,7 +1245,7 @@ internal fun FtutterThreadScreen(
             post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let(::add)
             addAll(com.valoser.futacha.shared.ui.board.messageHtmlToLines(post.messageHtml).filter { it.isNotBlank() })
         }
-        FtutterChooseQuoteDialog(candidates, onDismiss = { chooseQuoteFor = null }) { quote ->
+        FtutterChooseQuoteDialog(candidates, onDismiss = { chooseQuoteFor = null }, legacy = legacyBoxes) { quote ->
             chooseQuoteFor = null
             onReply(quote)
         }
@@ -1169,34 +1281,26 @@ internal fun FtutterThreadScreen(
             onDismiss = { delConfirm = null }
         ) { alsoNg ->
             delConfirm = null
-            var outcome = ""
-            runRemote("delに失敗しました", "", refreshAfter = false, resultMessage = { outcome },
-                busyMessage = if (alsoNg) FTUTTER_REMOTE_BUSY_REPORT_NG_NOTICE else FTUTTER_REMOTE_BUSY_NOTICE) {
-                outcome = com.valoser.futacha.shared.ui.board.sendReportAndOptionalNg(alsoNg,
-                    send = { repository.requestDeletion(board.url, ref.threadId, post.id, com.valoser.futacha.shared.ui.board.DEFAULT_DEL_REASON_CODE) },
-                    registerNg = {
-                        com.valoser.futacha.shared.ui.board.registerReportedThreadPostNg(
-                            compatStore ?: error("設定の保存先を利用できません"), board, ref.threadId, post.id)
-                    })
-            }
+            sendDel(post, alsoNg)
         }
     }
     deleteFor?.let { post ->
-        FtutterDeletePostDialog(post.id, deleteKey, onDismiss = { deleteFor = null }) { key, imageOnly ->
+        FtutterDeletePostDialog(post.id, deleteKey, onDismiss = { deleteFor = null }, legacy = legacyBoxes) { key, imageOnly ->
             deleteFor = null
-            runRemote("削除に失敗しました", "削除しました", refreshAfter = true) {
-                repository.deleteByUser(board.url, ref.threadId, post.id, key, imageOnly)
+            var answer = ""
+            runRemote("削除に失敗しました", "削除しました", refreshAfter = true,
+                resultMessage = { ftutterRemoteSuccessNotice(answer, legacyRemoteNotice, "削除しました") },
+                failureMessage = { ftutterRemoteFailureNotice(it, legacyRemoteNotice) }) {
+                answer = repository.deleteByUserResponse(board.url, ref.threadId, post.id, key, imageOnly)
             }
         }
     }
     copyFor?.let { post ->
-        val values = buildList {
-            post.mail?.takeIf { it.isNotBlank() }?.let { add("E-Mail" to it) }
-            add("No" to "No.${post.id}")
-            ftutterPosterIdentities(post).forEach { add(it.kind.name to it.display) }
-            post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let { add("ファイル" to it) }
-            add("本文" to com.valoser.futacha.shared.ui.board.messageHtmlToPlainText(post.messageHtml))
-        }
+        val values = ftutterCopyValues(
+            post.mail, post.id, ftutterPosterIdentities(post).map { it.kind.name to it.display },
+            post.imageUrl?.substringBefore('?')?.substringAfterLast('/'),
+            com.valoser.futacha.shared.ui.board.messageHtmlToPlainText(post.messageHtml), legacyBoxes
+        )
         FtutterCopyDialog(values, onDismiss = { copyFor = null }) { value ->
             copyFor = null
             clipboard.setText(AnnotatedString(value))
@@ -1220,9 +1324,11 @@ internal fun FtutterThreadScreen(
             boards = boards,
             existing = ngRules,
             onDismiss = { ngDraft = null },
+            legacy = preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false),
+            onRejected = onNotice,
             onSave = { rule ->
                 ngDraft = null
-                onSaveNgRules({ it + rule }, "登録しました")
+                onSaveNgRules({ it + rule }, if (preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)) "登録しました" else null)
             }
         )
     }
@@ -1235,12 +1341,15 @@ private val FTUTTER_INERT_ACTIONS = FtutterPostActions(
 )
 
 /** メニューの上のレスは、検索語の強調をしない。 */
-private fun FtutterThreadContext.copyForMenu() = FtutterThreadContext(posts, replies, idCounts, selfIds, settings, design, "", hidden)
+private fun FtutterThreadContext.copyForMenu() = FtutterThreadContext(posts, replies, idCounts, selfIds, settings, design, "", hidden, legacyLook, soudaneSent)
 
 private val ftutterArchiveJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
 internal fun ftutterThreadUrl(board: BoardSummary, threadId: String): String =
     com.valoser.futacha.shared.ui.futaber.futaberHistoryThreadUrl(board, threadId)
+
+/** 原作の落ちた帯の字の色（M23、画面で測った値）。 */
+private val FTUTTER_FALLEN_TEXT = Color(0xFFF44336)
 
 @Composable
 private fun FtutterArchiveButton(busy: Boolean, onClick: () -> Unit) {
@@ -1327,9 +1436,16 @@ private fun FtutterPostView(
                 top = settings.paddingTop.dp, bottom = settings.paddingBottom.dp
             )
         ) {
+            val hasAnyImage = !post.thumbnailUrl.isNullOrBlank()
+            // H7：原作は1レス目の画像を見出しの上に全幅で出す（最大の高さは「スレ画の最大高さ」）。
+            val opOnTop = hasAnyImage && index == 0 && !context.legacyLook && !inPopup
+            if (opOnTop) {
+                FtutterOpImage(post, settings, design, actions)
+                Spacer(Modifier.height(settings.paddingTextFile.dp))
+            }
             FtutterPostHeader(index, post, context, actions) { rowTop() }
             Spacer(Modifier.height(settings.paddingHeaderText.dp))
-            val hasImage = !post.thumbnailUrl.isNullOrBlank()
+            val hasImage = hasAnyImage && !opOnTop
             val image: @Composable () -> Unit = { FtutterPostImage(index, post, settings, design, actions) }
             if (hasImage && settings.imagePosition == FtutterImagePosition.TOP) {
                 image(); Spacer(Modifier.height(settings.paddingTextFile.dp))
@@ -1349,7 +1465,8 @@ private fun FtutterPostView(
                 Spacer(Modifier.height(settings.paddingTextFile.dp)); image()
             }
             FtutterApuPreviews(post.messageHtml, settings,
-                if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f, actions.apuLoaded) { url -> actions.onInlineImageTap(index, url) }
+                if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f, actions.apuLoaded,
+                legacy = context.legacyLook) { url -> actions.onInlineImageTap(index, url) }
         }
         HorizontalDivider(color = colors.outline)
     }
@@ -1404,9 +1521,9 @@ private fun FtutterPostHeader(
             )
         }
         Text("No.${post.id}", color = base, fontSize = size)
-        val soudane = ftutterSoudaneCount(post.saidaneLabel)
+        val soudane = maxOf(ftutterSoudaneCount(post.saidaneLabel), context.soudaneSent[post.id] ?: 0)
         if (soudane > 0) Text("そうだねx$soudane", color = ftutterSoudaneColor(soudane, colors.text), fontSize = size)
-        post.imageUrl?.substringBefore('?')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let {
+        ftutterHeaderFileName(post, context.legacyLook)?.let {
             Text(it, color = Color(0xFF448AFF), fontSize = size)
         }
     }
@@ -1425,19 +1542,25 @@ private fun FtutterPostBody(
     val colors = LocalFtutterColors.current
     // 行と色付きの本文は、画面の外へ出た行が戻ってきた時に作り直さないよう、本文・色ごとに覚えておく（再監査L29：速く
     // スクロールすると、行ごとに本文の行とリンクを作り直していた）。
-    val bodyKey = FtutterBodyKey(post.messageHtml, shorten, post.isDeleted || post.isIsolated, colors)
+    val bodyKey = FtutterBodyKey(post.messageHtml, shorten, post.isDeleted || post.isIsolated, colors, context.legacyLook)
     val cached = remember(bodyKey) { FtutterBodyCache.get(bodyKey) }
     val lines = remember(bodyKey) { cached?.first ?: ftutterBodyLines(post, shorten) }
     val query = context.query.trim()
     // 検索語に関係しない部分（色・引用・リンク）は検索語が変わっても作り直さず、強調だけを重ねる。
     val base = remember(bodyKey) { cached?.second ?: buildAnnotatedString {
+            val anchors = ftutterAnchorTargets(post.messageHtml)
+            // M11：赤字の行。省略した本文では使わない。
+            val redLines = if (context.legacyLook || shorten) emptySet() else ftutterRedLines(post.messageHtml)
+            // M12：引用の緑はHTMLの<font>に従う（行が合わない時と従来の見た目は`>`で決める）。
+            val quoteFontLines = if (context.legacyLook || shorten) null else ftutterQuoteFontLines(post.messageHtml, lines.size)
             lines.forEachIndexed { lineIndex, line ->
                 if (lineIndex > 0) append("\n")
                 val start = length
                 val isQuote = ftutterIsQuoteLine(line)
                 val color = when {
                     post.isDeleted || post.isIsolated -> colors.deleted
-                    isQuote -> colors.quote
+                    quoteFontLines?.let { lineIndex in it } ?: isQuote -> colors.quote
+                    lineIndex in redLines -> androidx.compose.ui.graphics.Color(0xFFE00000)
                     else -> colors.text
                 }
                 append(line)
@@ -1447,7 +1570,7 @@ private fun FtutterPostBody(
                 } else {
                     com.valoser.futacha.shared.compat.compatInlineLinksCached(
                         line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    ).forEach { link ->
+                    ).filter { ftutterKeepsLink(it.url, anchors, context.legacyLook) }.forEach { link ->
                         addStringAnnotation("url", link.url, start + link.start, start + link.endExclusive)
                         addStyle(SpanStyle(color = colors.link), start + link.start, start + link.endExclusive)
                     }
@@ -1508,6 +1631,33 @@ private fun FtutterPostBody(
     )
 }
 
+/** 1レス目の画像（H7）：幅いっぱいに縦横比を保って出し、高さは「スレ画の最大高さ」まで（それを超える時は中央に寄せる）。 */
+@Composable
+private fun FtutterOpImage(post: Post, settings: FtutterThreadSettings, design: FtutterDesignSettings, actions: FtutterPostActions) {
+    val box = ftutterImageBox(post, true, settings)
+    val alpha = if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f
+    val currentImageActions by rememberUpdatedState(actions)
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        val width = maxWidth.value
+        val height = minOf(box.maxHeight, width / box.aspect)
+        Box(
+            Modifier.size((height * box.aspect).dp, height.dp)
+                .pointerInput(0) { detectTapGestures(onTap = { currentImageActions.onImageTap(0) }, onLongPress = { currentImageActions.onImageLongPress(0) }) }
+                .testTag("ftutter-post-image")
+        ) {
+            FtutterThumbnail(
+                thumbnailUrl = post.thumbnailUrl.orEmpty(),
+                fullImageUrl = post.imageUrl,
+                quality = settings.opImageQuality,
+                targetSizePx = 1000,
+                contentDescription = "添付画像",
+                modifier = Modifier.fillMaxSize().alpha(alpha)
+            )
+            FtutterMovingMark(post)
+        }
+    }
+}
+
 /** レスの画像。OPは最大高さ500、他は300。タップでビューア、長押しは何もしない（原作どおり）。 */
 @Composable
 private fun FtutterPostImage(
@@ -1539,6 +1689,7 @@ private fun FtutterPostImage(
             contentDescription = "添付画像",
             modifier = Modifier.fillMaxSize().alpha(alpha)
         )
+        FtutterMovingMark(post)
     }
 }
 
@@ -1549,6 +1700,7 @@ private fun FtutterPopupStack(
     context: FtutterThreadContext,
     actions: FtutterPostActions,
     toolbarHeightDp: Int,
+    legacy: Boolean,
     onDismissTop: () -> Unit,
     onTopListState: (LazyListState) -> Unit = {}
 ) {
@@ -1558,8 +1710,10 @@ private fun FtutterPopupStack(
         val topMargin = with(density) { 56.dp.toPx() } + WindowInsets.statusBars.getTop(density)
         val bottomMargin = with(density) { (toolbarHeightDp + 50).dp.toPx() }
         layers.forEachIndexed { level, layer ->
+            // 原作は1枚ごとに下の画面を1段暗くする（M84）。
             Box(
                 Modifier.fillMaxSize()
+                    .then(if (legacy) Modifier else Modifier.background(Color.Black.copy(alpha = FTUTTER_POPUP_SCRIM_ALPHA)).testTag("ftutter-popup-scrim"))
                     .then(if (level == layers.lastIndex) Modifier.pointerInput(Unit) { detectTapGestures { onDismissTop() } } else Modifier)
             )
             Layout(
@@ -1574,11 +1728,17 @@ private fun FtutterPopupStack(
                     }
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier
+                        modifier = if (legacy) Modifier
                             .padding(horizontal = 16.dp)
                             .border(1.5.dp, colors.highlight, RoundedCornerShape(16.dp))
                             .background(colors.popUp, RoundedCornerShape(16.dp))
                             .padding(vertical = 8.dp)
+                            .testTag("ftutter-popup")
+                        // 原作：端から端までの四角い板に細い枠（H1）。
+                        else Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, colors.highlight)
+                            .background(colors.popUp)
                             .testTag("ftutter-popup")
                     ) {
                         items(layer.items, key = { it.first }) { (index, depth) ->
@@ -1596,11 +1756,8 @@ private fun FtutterPopupStack(
             ) { measurables, constraints ->
                 val maxHeight = (constraints.maxHeight - topMargin - bottomMargin).toInt().coerceAtLeast(100)
                 val placeable = measurables.first().measure(Constraints(0, constraints.maxWidth, 0, maxHeight))
-                // タップした所のすぐ上に下端を合わせ、上に収まらなければ上詰め（原作の候補B→候補A）。
-                val y = layer.anchorTop?.let { anchor ->
-                    val candidate = anchor - placeable.height
-                    if (candidate >= topMargin) candidate else topMargin
-                } ?: topMargin
+                // タップした所のすぐ上に下端を合わせ、上に収まらなければ上詰め（原作の候補B→候補A）。返信数の一覧と2枚目からは上詰め。
+                val y = ftutterPopupTop(level, layer.anchorTop, placeable.height, topMargin, layer.pinTop, legacy)
                 layout(constraints.maxWidth, constraints.maxHeight) {
                     placeable.place(0, y.toInt())
                 }
@@ -1624,6 +1781,7 @@ private fun FtutterThreadToolbar(
     extensions: FtutterExtensions,
     reading: Boolean,
     autoScrolling: Boolean,
+    legacyMenus: Boolean,
     onGesture: (FtutterGestureAction) -> Unit,
     onTool: (FtutterThreadTool) -> Unit,
     onImagePostsLongPress: () -> Unit,
@@ -1645,7 +1803,9 @@ private fun FtutterThreadToolbar(
                 IconButton(onClick = { open = true }, modifier = Modifier.testTag("ftutter-thread-tool-menu")) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = "メニュー", tint = colors.onToolBar)
                 }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                // 原作のスレッドのメニュー（H9）：削除されたレス／NG／自分のレス（ある時だけ）、ツールバー編集／プライバシー／
+                // スレを保存／URLをコピー／ブラウザで開く。こちらの項目（書き込む・画像一覧・ジェスチャー・拡張）は「その他の機能」へ。
+                val counts: @Composable () -> Unit = {
                     if (deletedCount > 0) DropdownMenuItem(
                         text = { Text("削除されたレス ($deletedCount)") },
                         onClick = { open = false; onMenu(FtutterThreadMenuItem.DELETED) },
@@ -1660,12 +1820,16 @@ private fun FtutterThreadToolbar(
                         text = { Text("自分のレス ($selfCount)") },
                         onClick = { open = false; onMenu(FtutterThreadMenuItem.MINE) }
                     )
+                }
+                val ownTools: @Composable () -> Unit = {
                     DropdownMenuItem(text = { Text("書き込む") }, onClick = { open = false; onTool(FtutterThreadTool.REPLY) },
                         modifier = Modifier.testTag("ftutter-thread-menu-reply"))
                     DropdownMenuItem(text = { Text("画像一覧") }, onClick = { open = false; onTool(FtutterThreadTool.GALLERY) },
                         modifier = Modifier.testTag("ftutter-thread-menu-gallery"))
                     DropdownMenuItem(text = { Text("ジェスチャーの操作を選ぶ") }, onClick = { open = false; gestureMenu = true },
                         modifier = Modifier.testTag("ftutter-thread-menu-gesture-actions"))
+                }
+                val originals: @Composable () -> Unit = {
                     DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onMenu(FtutterThreadMenuItem.TOOLBAR_EDIT) })
                     DropdownMenuItem(
                         text = { Text("プライバシー") },
@@ -1679,7 +1843,9 @@ private fun FtutterThreadToolbar(
                         modifier = Modifier.testTag("ftutter-thread-menu-copy-url")
                     )
                     DropdownMenuItem(text = { Text("ブラウザで開く") }, onClick = { open = false; onMenu(FtutterThreadMenuItem.BROWSER) })
-                    // 拡張機能（ONの時だけ、原作の項目の後ろに足す）。
+                }
+                // 拡張機能（ONの時だけ）。
+                val extensionItems: @Composable () -> Unit = {
                     if (FtutterExtension.MHT in extensions) DropdownMenuItem(
                         text = { Text("MHTで保存") },
                         onClick = { open = false; onMenu(FtutterThreadMenuItem.MHT) },
@@ -1696,6 +1862,18 @@ private fun FtutterThreadToolbar(
                         modifier = Modifier.testTag("ftutter-thread-menu-auto-scroll")
                     )
                 }
+                if (legacyMenus) {
+                    // 従来の動き：前の並びのまま。
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        counts(); ownTools(); originals(); extensionItems()
+                    }
+                } else {
+                    FtutterFoldedMenu(
+                        expanded = open, onDismiss = { open = false }, tag = "ftutter-thread-menu", hasExtras = true,
+                        original = { counts(); originals() },
+                        extras = { ownTools(); extensionItems() }
+                    )
+                }
             }
         } else {
             val active = when (tool) {
@@ -1706,21 +1884,7 @@ private fun FtutterThreadToolbar(
                 FtutterThreadTool.PRIVACY -> settings.isPrivacy
                 else -> false
             }
-            val icon = when (tool) {
-                FtutterThreadTool.DRAWER -> Icons.Rounded.Menu
-                FtutterThreadTool.TREE -> Icons.Rounded.AccountTree
-                FtutterThreadTool.POPULAR -> Icons.Rounded.QueryStats
-                FtutterThreadTool.IMAGE_POSTS -> Icons.Rounded.Image
-                FtutterThreadTool.TAB -> Icons.Rounded.Tab
-                FtutterThreadTool.PRIVACY -> if (active) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility
-                FtutterThreadTool.UP -> Icons.Rounded.KeyboardArrowUp
-                FtutterThreadTool.DOWN -> Icons.Rounded.KeyboardArrowDown
-                FtutterThreadTool.GALLERY -> Icons.Rounded.Collections
-                FtutterThreadTool.REPLY -> Icons.Rounded.Edit
-                FtutterThreadTool.SEARCH -> Icons.Rounded.Search
-                FtutterThreadTool.REFRESH -> Icons.Rounded.Refresh
-                else -> Icons.Rounded.MoreVert
-            }
+            val icon = ftutterThreadToolIcon(tool, active)
             Box(
                 Modifier.size(40.dp)
                     .combinedClickable(
@@ -1740,7 +1904,7 @@ private fun FtutterThreadToolbar(
 }
 
 /** What the body of a post looks like without the search: its text, whether it is shortened, its colour set. */
-private data class FtutterBodyKey(val html: String, val shorten: Boolean, val deleted: Boolean, val colors: FtutterColors)
+private data class FtutterBodyKey(val html: String, val shorten: Boolean, val deleted: Boolean, val colors: FtutterColors, val legacy: Boolean = false)
 
 /** The bodies built lately (lines and coloured text), kept across rows leaving and coming back (re-audit L29). */
 private object FtutterBodyCache {
@@ -1753,3 +1917,23 @@ private object FtutterBodyCache {
         if (entries.size > MAX) entries.remove(entries.keys.first())
     }
 }
+
+/** M10：GIF・WebM・MP4のサムネイルに原作と同じ▶の印。 */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.FtutterMovingMark(post: Post) {
+    if (!ftutterIsMovingImage(post.imageUrl)) return
+    Box(
+        Modifier.align(Alignment.Center).size(36.dp)
+            .background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.CircleShape)
+            .testTag("ftutter-moving-mark"),
+        contentAlignment = Alignment.Center
+    ) { Text("▶", color = Color.White, fontSize = 16.sp) }
+}
+
+/** How long opening waits for the list to show its rows before it leaves the position to the next layout (audit C4). */
+internal const val FTUTTER_RESTORE_WAIT_MILLIS = 3_000L
+
+/** The longest the sending scrim covers the screen (audit C5). */
+internal const val FTUTTER_REMOTE_SCRIM_MAX_MILLIS = 15_000L
+
+internal fun ftutterRemoteScrimShown(busy: Boolean, expired: Boolean): Boolean = busy && !expired

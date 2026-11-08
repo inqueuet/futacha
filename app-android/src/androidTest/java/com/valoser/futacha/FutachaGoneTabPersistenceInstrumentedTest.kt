@@ -57,6 +57,10 @@ class FutachaGoneTabPersistenceInstrumentedTest {
         loader = ImageLoader.Builder(rule.activity).build()
         failing = object : CompatibilityStore by store {
             override suspend fun updateTabIfPresent(tabKey: String, transform: (CompatTab) -> CompatTab?): Boolean {
+                // Since D-B0 the accepted page is also written to its tab through here (it rolled back a ★ and brought a
+                // closed tab back as a whole-tab write); only the death write (isDead and nothing else) is counted and failed.
+                val probe = tab.copy(isDead = false)
+                if (transform(probe) != probe.copy(isDead = true)) return store.updateTabIfPresent(tabKey, transform)
                 val attempt = attempts.incrementAndGet()
                 android.util.Log.i("AuditM50", "atomic gone write attempt=$attempt injectFailure=${fail.get()} key=$tabKey")
                 if (fail.get()) throw IOException("保存先の空き容量が不足しています")

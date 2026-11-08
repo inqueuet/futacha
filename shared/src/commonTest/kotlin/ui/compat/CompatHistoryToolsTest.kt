@@ -54,7 +54,8 @@ class CompatHistoryToolsTest {
 
         assertEquals(histories, rows.map { it.entry })
         assertEquals(listOf("alpha", "beta", "gamma"), rows.map { it.view.title })
-        assertEquals(listOf(1, 1, 1), rows.map { it.view.replyCount })
+        // D-B2 (D4): the view is the modern unit (OP included), the entry's 1 reply is 2 posts.
+        assertEquals(listOf(2, 2, 2), rows.map { it.view.replyCount })
         assertEquals(listOf(true, false, false), rows.map { it.view.isAutoRefreshDisabled })
         assertEquals(listOf(false, true, false), rows.map { it.view.hasAutoSave })
         assertEquals(listOf(null, 5L, null), rows.map { it.view.lastConfirmedAliveEpochMillis })
@@ -166,12 +167,12 @@ class CompatHistoryToolsTest {
             extension.takeLast(2).map { it.preferenceKey }
         )
         extension.takeLast(2).forEach { entry ->
-            assertEquals("OFF", entry.summary)
+            assertEquals(if (entry.preferenceKey == "controlCommonNgApply") "ON" else "OFF", entry.summary)
             assertTrue(compatIsBooleanPreference("control", entry))
             assertTrue(compatBooleanPreferenceSummary(entry.preferenceKey).isNotEmpty())
         }
         assertEquals(
-            "ONにすると、ふたちゃ・ふたばー風で登録したNGワードでもレスやスレが隠れます",
+            "ふたちゃ・ふたばー風で登録したNGワードでもレスやスレを隠します。OFFにすると、このモードでは使いません",
             compatBooleanPreferenceSummary("controlCommonNgApply")
         )
     }

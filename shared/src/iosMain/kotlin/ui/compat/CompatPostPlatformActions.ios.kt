@@ -109,7 +109,8 @@ internal actual fun compatPostDeviceInfo(appVersion: String): String = formatCom
 
 internal actual suspend fun compressCompatPostImage(
     attachment: ImageData,
-    maxBytes: Int
+    maxBytes: Int,
+    forceJpeg: Boolean
 ): Result<ImageData> = withContext(AppDispatchers.io) {
     runSuspendCatchingPreservingCancellation {
         coroutineContext.ensureActive()
@@ -122,7 +123,7 @@ internal actual suspend fun compressCompatPostImage(
         val orientation = compatExifOrientationTransform(
             if (format == CompatPostImageFormat.GIF) 1 else readIosEncodedImageSize(attachment.bytes)?.orientation ?: 1
         )
-        compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+        if (!forceJpeg) compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
             return@runSuspendCatchingPreservingCancellation ImageData(
                 bytes = sanitized,
                 fileName = compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension))
@@ -148,7 +149,8 @@ internal actual suspend fun compressCompatPostImage(
         }
         var encoded: ByteArray? = null
         var extension = "jpg"
-        if (image.hasCompatAlpha()) {
+        if (forceJpeg && image.hasCompatAlpha()) image = autoreleasepool { image.uprightCompatImage().flattenedCompatOnWhite() }
+        if (!forceJpeg && image.hasCompatAlpha()) {
             // Keep transparency as PNG when it fits; JPEG would turn it black.
             // PNG ignores UIImage.imageOrientation, so draw the pixels upright first.
             image = autoreleasepool { image.uprightCompatImage() }

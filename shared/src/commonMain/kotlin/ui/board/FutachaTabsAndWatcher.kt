@@ -82,9 +82,7 @@ internal fun FutachaTabsDialog(
                             CatalogNewRepliesBadge(tab.unreadCount)
                         } },
                         leadingContent = { TextButton(enabled = !busy, onClick = { perform {
-                            features.store.tabs.first().firstOrNull { it.key == tab.key }?.let {
-                                features.store.updateTab(it.copy(favorite = !it.favorite))
-                            }
+                            toggleFutachaTabFavorite(features.store, tab.key)
                         } }) { Text(if (tab.favorite) "★" else "☆") } },
                         trailingContent = { TextButton(enabled = !busy, onClick = { selected = tab; protect = true }) { Text("整理") } },
                         modifier = Modifier.clickable { onDismiss(); onOpenThread(tab.toFutachaHistoryEntry()) }

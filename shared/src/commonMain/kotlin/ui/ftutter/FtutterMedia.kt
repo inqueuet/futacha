@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -107,10 +108,11 @@ internal class FtutterMediaSaveTools(
 private fun FtutterIndexCard(position: Int, modifier: Modifier = Modifier, onTap: () -> Unit) {
     val colors = LocalFtutterColors.current
     Box(
-        modifier.widthIn(min = 20.dp).background(colors.popUp, CutCornerShape(topStart = 0.dp, bottomEnd = 6.dp))
-            .clickable(onClick = onTap).padding(horizontal = 4.dp).testTag("ftutter-index-card"),
+        // M34：原作の番号の印は青いタグに白い字。
+        modifier.widthIn(min = 22.dp).background(Color(0xFF1565C0), CutCornerShape(topStart = 0.dp, bottomEnd = 6.dp))
+            .clickable(onClick = onTap).padding(horizontal = 5.dp, vertical = 1.dp).testTag("ftutter-index-card"),
         contentAlignment = Alignment.Center
-    ) { Text("$position", color = colors.text, fontSize = 12.sp) }
+    ) { Text("$position", color = Color.White, fontSize = 12.sp) }
 }
 
 /** 一覧・帯の1枚。動画には再生の印を重ねる。 */
@@ -223,8 +225,12 @@ internal fun FtutterGalleryScreen(
             ) {
             LazyVerticalGrid(GridCells.Fixed(columns), state = gridState, modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(media, key = { i, _ -> i }) { index, post ->
+                    // M85：原作は切り抜かずに画像全体を出し、行の高さは行で一番高い画像に合わせて縦の中央に置く。
+                    val fit = !settings.legacyGallerySquare
+                    val cellAspect = if (fit) 1f / ftutterGalleryRowHeightFraction(media, index, columns) else 1f
+                    val ratio = if (fit) ftutterGalleryImageRatio(post) else 1f
                     Box(
-                        Modifier.aspectRatio(1f).padding(1.dp)
+                        Modifier.aspectRatio(cellAspect).padding(1.dp)
                             .combinedClickable(
                                 onClick = {
                                     if (selecting) selected[keyOf(post)] = selected[keyOf(post)] != true else onOpenViewer(index)
@@ -233,11 +239,15 @@ internal fun FtutterGalleryScreen(
                             )
                             .testTag("ftutter-gallery-cell")
                     ) {
-                        FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = settings.thumbnailPixels, useOriginal = !settings.reduceThumbnail)
+                        Box(
+                            Modifier.align(Alignment.Center).fillMaxWidth(if (ratio >= 1f) 1f else ratio).aspectRatio(ratio)
+                                .testTag("ftutter-gallery-image")
+                        ) {
+                            FtutterMediaCell(post, privacyAlpha, Modifier.fillMaxSize(), thumbnailPixels = settings.thumbnailPixels, useOriginal = !settings.reduceThumbnail)
+                            if (!selecting) FtutterIndexCard(post.position, Modifier.align(Alignment.TopStart)) { onBackToPost(post.position) }
+                        }
                         if (selecting) {
                             Checkbox(checked = selected[keyOf(post)] == true, onCheckedChange = { selected[keyOf(post)] = it }, modifier = Modifier.align(Alignment.TopEnd))
-                        } else {
-                            FtutterIndexCard(post.position, Modifier.align(Alignment.TopStart)) { onBackToPost(post.position) }
                         }
                     }
                 }
@@ -335,10 +345,18 @@ internal fun FtutterViewerScreen(
     onBackToPost: (position: Int) -> Unit,
     onClose: () -> Unit,
     saveCoroutineScope: kotlinx.coroutines.CoroutineScope? = null,
-    onSaveNotice: (String) -> Unit = {}
+    onSaveNotice: (String) -> Unit = {},
+    /** 前の形のバー（従来の動き）。 */
+    legacy: Boolean = false,
+    searchEngines: List<FtutterViewerSearchEngine> = emptyList(),
+    onSaveSearchEngines: (List<FtutterViewerSearchEngine>) -> Unit = {},
+    onSearchWith: (imageUrl: String, engine: FtutterViewerSearchEngine) -> Unit = { _, _ -> },
+    onNotice: (String) -> Unit = {}
 ) {
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()
+    var destinationDialog by remember { mutableStateOf(false) }
+    var searchDialog by remember { mutableStateOf(false) }
     val keys = remember(media) { compatUniqueMediaKeys(media) }
     val pager = rememberPagerState(initialPage = initialIndex.coerceIn(0, (media.size - 1).coerceAtLeast(0))) { media.size }
     val transforms = remember { mutableStateMapOf<String, CompatViewerTransform>() }
@@ -346,6 +364,8 @@ internal fun FtutterViewerScreen(
     var conversation by remember { mutableStateOf<List<Pair<Int, Int>>?>(null) }
     val stripState = rememberLazyListState()
     PlatformBackHandler(enabled = true, onBack = onClose)
+    // M59：全幅のレスの間は、戻るでレスだけを閉じる。
+    PlatformBackHandler(enabled = !legacy && conversation != null) { conversation = null }
     // 帯は今の画像を中央へ追う。
     LaunchedEffect(pager.currentPage, settings.showStrip) {
         if (settings.showStrip && media.isNotEmpty()) stripState.animateScrollToItem((pager.currentPage - 2).coerceAtLeast(0))
@@ -395,7 +415,13 @@ internal fun FtutterViewerScreen(
                             // 自動再生・ループは原作の設定から端末の再生部品へ渡す。
                             androidx.compose.runtime.CompositionLocalProvider(
                                 com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
-                                    com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(settings.videoAutoPlay, loop)
+                                    com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(settings.videoAutoPlay, loop),
+                                com.valoser.futacha.shared.ui.board.LocalVideoPageSwipe provides { forward ->
+                                    val target = pager.currentPage + if (forward) 1 else -1
+                                    if (target in media.indices && !pager.isScrollInProgress) {
+                                        scope.launch { pager.animateScrollToPage(target) }
+                                    }
+                                }
                             ) {
                                 FtutterViewerVideoPage(videoUrl = url, isActive = page == pager.currentPage,
                                     privacyAlpha = privacyAlpha, onOpenBrowser = onOpenBrowser)
@@ -431,7 +457,10 @@ internal fun FtutterViewerScreen(
             }
             Column(Modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding()) {
                 if (settings.showStrip) {
-                    LazyRow(state = stripState, modifier = Modifier.fillMaxWidth().height(settings.stripSize.dp).testTag("ftutter-viewer-strip")) {
+                    // M61：原作の帯は少ない時は中央に寄る。
+                    LazyRow(state = stripState,
+                        horizontalArrangement = if (legacy) Arrangement.Start else Arrangement.spacedBy(0.dp, Alignment.CenterHorizontally),
+                        modifier = Modifier.fillMaxWidth().height(settings.stripSize.dp).testTag("ftutter-viewer-strip")) {
                         itemsIndexed(media, key = { i, _ -> i }) { index, post ->
                             val selected = index == pager.currentPage
                             Box(
@@ -446,7 +475,19 @@ internal fun FtutterViewerScreen(
                     }
                 }
                 ScrollableToolbarRow(itemCount = if (isVideo) 7 else 6, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                    FtutterDestinationButton(tools, Modifier.weight(1f))
+                    if (legacy) FtutterDestinationButton(tools, Modifier.weight(1f)) else {
+                        // M57・M58：原作はフォルダの印と、下線の付いた保存先の名前。どちらも「保存先選択」を開く。
+                        IconButton(onClick = { destinationDialog = true }, modifier = Modifier.testTag("ftutter-save-destination")) {
+                            Icon(Icons.Rounded.FolderOpen, contentDescription = "保存先", tint = colors.onToolBar)
+                        }
+                        Box(Modifier.weight(1f).clickable { destinationDialog = true }.padding(horizontal = 4.dp).testTag("ftutter-save-destination-label"),
+                            contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(tools.destinationLabel, color = colors.onToolBar, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                HorizontalDivider(color = colors.outline, modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
                     IconButton(onClick = { currentUrl?.let(tools.saveOne) }, enabled = !tools.isSaving, modifier = Modifier.testTag("ftutter-viewer-save")) {
                         Icon(Icons.Rounded.Download, contentDescription = "保存", tint = colors.onToolBar)
                     }
@@ -458,7 +499,7 @@ internal fun FtutterViewerScreen(
                     }, modifier = Modifier.testTag("ftutter-viewer-res")) {
                         Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "レスを表示", tint = colors.onToolBar)
                     }
-                    IconButton(onClick = { currentUrl?.let(onSearch) }, modifier = Modifier.testTag("ftutter-viewer-search")) {
+                    IconButton(onClick = { if (legacy) currentUrl?.let(onSearch) else if (currentUrl != null) searchDialog = true }, modifier = Modifier.testTag("ftutter-viewer-search")) {
                         Icon(Icons.Rounded.Search, contentDescription = "画像検索", tint = colors.onToolBar)
                     }
                     if (isVideo) IconButton(onClick = { loop = !loop }, modifier = Modifier.testTag("ftutter-viewer-loop")) {
@@ -477,8 +518,25 @@ internal fun FtutterViewerScreen(
             }
         }
     }
+    if (destinationDialog) FtutterSaveDestinationDialog(tools.destinationLabel, onAdd = tools.chooseDestination) { destinationDialog = false }
+    if (searchDialog) currentUrl?.let { url ->
+        FtutterViewerSearchDialog(
+            engines = searchEngines,
+            onGoogle = { onOpenBrowser(ftutterGoogleImageSearchUrl(url)) },
+            onEngine = { onSearchWith(url, it) },
+            onSaveEngines = onSaveSearchEngines,
+            onSharedSearch = { onSearch(url) },
+            onNotice = onNotice,
+            onDismiss = { searchDialog = false }
+        )
+    }
     // レス表示（原作 e153）：今の画像のレスを含む会話を出す。中の画像をタップすると、ビューアがその画像へ移る。
-    conversation?.let { items ->
+    if (!legacy) conversation?.let { items ->
+        FtutterViewerConversationPopup(items, posts, media, privacyAlpha, onDismiss = { conversation = null }) { target ->
+            conversation = null
+            scope.launch { pager.scrollToPage(target) }
+        }
+    } else conversation?.let { items ->
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { conversation = null },
             containerColor = colors.popUp,
@@ -508,6 +566,44 @@ internal fun FtutterViewerScreen(
             },
             confirmButton = { TextButton(onClick = { conversation = null }) { Text("閉じる") } }
         ) }
+    }
+}
+
+/**
+ * M59：原作のレスは画面の上に全幅で出し、後ろを暗くする（外を押すと閉じる）。中の画像を押すとビューアがその画像へ移る。
+ */
+@Composable
+private fun FtutterViewerConversationPopup(
+    items: List<Pair<Int, Int>>,
+    posts: List<Post>,
+    media: List<CompatPostSnapshot>,
+    privacyAlpha: Float,
+    onDismiss: () -> Unit,
+    onImage: (index: Int) -> Unit
+) {
+    val colors = LocalFtutterColors.current
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(onClick = onDismiss).testTag("ftutter-viewer-res-scrim")) {
+        LazyColumn(
+            Modifier.fillMaxWidth().statusBarsPadding().heightIn(max = 560.dp).background(colors.popUp)
+                .border(1.dp, colors.highlight).clickable(enabled = false) {}.testTag("ftutter-viewer-conversation")
+        ) {
+            itemsIndexed(items) { _, (position, depth) ->
+                val post = posts.getOrNull(position) ?: return@itemsIndexed
+                Column(Modifier.fillMaxWidth().padding(start = (8 + ftutterIndentDp(depth)).dp, end = 8.dp, top = 6.dp, bottom = 6.dp)) {
+                    Text("$position  No.${post.id}", color = colors.headerText, fontSize = 13.sp)
+                    val plain = remember(post.messageHtml) { messageHtmlToPlainText(post.messageHtml) }
+                    Text(plain, color = colors.text, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                    val target = media.indexOfFirst { it.position == position }
+                    if (target >= 0) {
+                        Box(Modifier.padding(top = 6.dp).fillMaxWidth().aspectRatio(ftutterGalleryImageRatio(media[target]).coerceIn(0.5f, 2f))
+                            .clickable { onImage(target) }.testTag("ftutter-viewer-conversation-image")) {
+                            FtutterMediaCell(media[target], privacyAlpha, Modifier.fillMaxSize(), useOriginal = true)
+                        }
+                    }
+                }
+                HorizontalDivider(color = colors.outline)
+            }
+        }
     }
 }
 

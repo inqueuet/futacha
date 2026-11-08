@@ -29,8 +29,16 @@ data class CompatThreadNgRuleIndex(
     val bodyWords: List<String>,
     val headerWords: List<String>,
     val imageUrls: Set<String>,
-    val imagePhashes: List<String>
-)
+    val imagePhashes: List<String>,
+    /** 18-20: regular-expression words, matched against the body/header text as written. */
+    val bodyAndHeaderRegexes: List<CompatNgRegexWord> = emptyList(),
+    val bodyRegexes: List<CompatNgRegexWord> = emptyList(),
+    val headerRegexes: List<CompatNgRegexWord> = emptyList()
+) {
+    /** A regular expression is probed and matched off the main thread (Android cannot stop a running match). */
+    val hasRegex: Boolean
+        get() = bodyAndHeaderRegexes.isNotEmpty() || bodyRegexes.isNotEmpty() || headerRegexes.isNotEmpty()
+}
 
 fun buildCompatThreadNgRuleIndex(
     rules: List<CompatNgRule>,
@@ -48,7 +56,7 @@ fun buildCompatThreadNgRuleIndex(
         }
     }.toList()
     fun normalizedValues(kind: CompatNgKind): List<String> = scoped.asSequence()
-        .filter { it.kind == kind }
+        .filter { it.kind == kind && !it.isRegex }
         .map { normalizeCompatSearchText(it.normalizedValue) }
         .filter(String::isNotBlank)
         .distinct()
@@ -64,7 +72,10 @@ fun buildCompatThreadNgRuleIndex(
         imageUrls = scoped.asSequence().filter { it.kind == CompatNgKind.THREAD_IMAGE }
             .map(CompatNgRule::normalizedValue).toSet(),
         imagePhashes = scoped.asSequence().filter { it.kind == CompatNgKind.THREAD_IMAGE_PHASH }
-            .map(CompatNgRule::normalizedValue).toList()
+            .map(CompatNgRule::normalizedValue).toList(),
+        bodyAndHeaderRegexes = compatNgRegexWords(scoped.asSequence().filter { it.kind == CompatNgKind.THREAD_WORD }),
+        bodyRegexes = compatNgRegexWords(scoped.asSequence().filter { it.kind == CompatNgKind.THREAD_IGNORE }),
+        headerRegexes = compatNgRegexWords(scoped.asSequence().filter { it.kind == CompatNgKind.THREAD_REFUSE })
     )
 }
 
@@ -76,8 +87,9 @@ fun CompatPostSnapshot.matchesCompatThreadNg(
     if (matchesCompatThreadNgWithoutText(index, imagePhash, imagePhashThreshold)) return true
     if (!index.hasTextWords()) return false
 
-    val plainText = normalizeCompatSearchText(messageHtml.toCompatPlainText())
-    return compatThreadNgTextMatches(index, plainText) { compatThreadNgHeaderText() }
+    val rawText = messageHtml.toCompatPlainText()
+    val plainText = normalizeCompatSearchText(rawText)
+    return compatThreadNgTextMatches(index, plainText, { compatThreadNgHeaderText() }, { rawText }, { compatThreadNgRawHeaderFields() })
 }
 
 /** Post number, poster ID, image URL and image hash rules: everything but the word rules. */
@@ -97,23 +109,36 @@ private fun CompatPostSnapshot.matchesCompatThreadNgWithoutText(
 }
 
 private fun CompatThreadNgRuleIndex.hasTextWords(): Boolean =
-    bodyWords.isNotEmpty() || headerWords.isNotEmpty() || bodyAndHeaderWords.isNotEmpty()
+    bodyWords.isNotEmpty() || headerWords.isNotEmpty() || bodyAndHeaderWords.isNotEmpty() || hasRegexWords()
+
+private fun CompatThreadNgRuleIndex.hasRegexWords(): Boolean =
+    bodyRegexes.isNotEmpty() || headerRegexes.isNotEmpty() || bodyAndHeaderRegexes.isNotEmpty()
+
+/** The header fields one by one, so a regular expression can use ^ and $ on a name or an ID (18-20). */
+private fun CompatPostSnapshot.compatThreadNgRawHeaderFields(): List<String> =
+    listOfNotNull(subject, author, mail, timestamp)
 
 private fun CompatPostSnapshot.compatThreadNgHeaderText(): String =
-    listOfNotNull(subject, author, mail, timestamp)
-        .joinToString(" ")
-        .let(::normalizeCompatSearchText)
+    normalizeCompatSearchText(compatThreadNgRawHeaderFields().joinToString(" "))
 
 /** Word rules against an already normalized body; the header text is only built when the body does not match. */
 private inline fun compatThreadNgTextMatches(
     index: CompatThreadNgRuleIndex,
     plainText: String,
-    headerText: () -> String
+    headerText: () -> String,
+    rawText: () -> String,
+    rawHeaderFields: () -> List<String>
 ): Boolean {
     if (index.bodyWords.any(plainText::contains)) return true
     val header = headerText()
     if (index.headerWords.any(header::contains)) return true
-    return index.bodyAndHeaderWords.any { plainText.contains(it) || header.contains(it) }
+    if (index.bodyAndHeaderWords.any { plainText.contains(it) || header.contains(it) }) return true
+    if (!index.hasRegexWords()) return false
+    val raw = rawText()
+    if (index.bodyRegexes.any { it.matches(raw) }) return true
+    val rawHeader = rawHeaderFields()
+    if (index.headerRegexes.any { regex -> rawHeader.any(regex::matches) }) return true
+    return index.bodyAndHeaderRegexes.any { regex -> regex.matches(raw) || rawHeader.any(regex::matches) }
 }
 
 /**
@@ -145,10 +170,15 @@ class CompatThreadNgFilterCache internal constructor(
     internal val bodyAndHeaderWords: List<String>,
     internal val entries: Map<String, CompatThreadNgTextEntry>
 ) {
+    internal var regexes: List<List<CompatNgRegexWord>> = emptyList()
+
     internal fun sameWords(index: CompatThreadNgRuleIndex): Boolean =
         bodyWords == index.bodyWords && headerWords == index.headerWords &&
-            bodyAndHeaderWords == index.bodyAndHeaderWords
+            bodyAndHeaderWords == index.bodyAndHeaderWords && regexes == index.regexLists()
 }
+
+private fun CompatThreadNgRuleIndex.regexLists(): List<List<CompatNgRegexWord>> =
+    listOf(bodyRegexes, headerRegexes, bodyAndHeaderRegexes)
 
 /** Holds the latest cache between runs of one thread screen's filter effect. */
 class CompatThreadNgFilterCacheHolder {
@@ -189,7 +219,9 @@ fun filterCompatThreadPostsCached(
         } else {
             val plain = reusable?.plainText ?: normalizeCompatSearchText(post.messageHtml.toCompatPlainText())
             val header = reusable?.headerText ?: post.compatThreadNgHeaderText()
-            val matched = compatThreadNgTextMatches(index, plain) { header }
+            val matched = compatThreadNgTextMatches(
+                index, plain, { header }, { post.messageHtml.toCompatPlainText() }, { post.compatThreadNgRawHeaderFields() }
+            )
             CompatThreadNgTextEntry(post, plain, header, matched)
         }
         entries[post.postNo] = entry
@@ -198,6 +230,7 @@ fun filterCompatThreadPostsCached(
     return CompatThreadNgFilterResult(
         visible,
         CompatThreadNgFilterCache(index.bodyWords, index.headerWords, index.bodyAndHeaderWords, entries)
+            .also { it.regexes = index.regexLists() }
     )
 }
 

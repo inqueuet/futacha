@@ -362,6 +362,8 @@ internal class FtutterTabState(initial: FtutterTabs, initialProtected: Set<Strin
 
     /** 開いているタブ。上限で外さない。 */
     private var openingUrl: String = initial.opening
+    /** 最後に開いたタブのURL（閉じていれば[urls]に無い）。 */
+    val opening: String get() = openingUrl
 
     // 保存は非同期で、通知は遅れて届く。自分が書いてまだ届いていない値をすべて覚えておき、それが届いた時は取り込まない
     // （監査M1。以前は最後の値だけを覚えていたので、2回続けて変えると1回目の通知で手元が巻き戻った）。

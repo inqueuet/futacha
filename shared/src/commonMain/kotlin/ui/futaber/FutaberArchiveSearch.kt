@@ -112,14 +112,14 @@ internal fun FutaberArchiveSearchSheet(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f))
+            Modifier.fillMaxSize().background(colors.scrim)
                 .clickable(onClickLabel = "過去ログ検索を閉じる", onClick = onDismiss)
                 .testTag("futaber-archive-scrim")
         )
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.7f)
                 .padding(8.dp).navigationBarsPadding().testTag("futaber-archive-sheet"),
-            shape = FutaberShapes.sheet, color = colors.background, shadowElevation = 8.dp
+            shape = FutaberShapes.sheet, color = colors.background, shadowElevation = 0.dp
         ) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 Text(
@@ -131,7 +131,7 @@ internal fun FutaberArchiveSearchSheet(
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp)
                 )
                 TextButton(onClick = { allSources = true; attempt++ }, enabled = state !is FutaberArchiveSearchState.Loading) {
-                    Text("他の保存先も検索", color = colors.action)
+                    Text("他の保存先も検索", color = colors.iosBlue)
                 }
                 HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
                 when (val current = state) {
@@ -146,7 +146,7 @@ internal fun FutaberArchiveSearchSheet(
                         modifier = Modifier.padding(24.dp).testTag("futaber-archive-message")
                     )
                     is FutaberArchiveSearchState.Error -> Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(current.message, color = colors.danger, fontSize = 14.sp, modifier = Modifier.testTag("futaber-archive-message"))
+                        Text(current.message, color = colors.destructive, fontSize = 14.sp, modifier = Modifier.testTag("futaber-archive-message"))
                         TextButton(onClick = { attempt += 1 }, modifier = Modifier.testTag("futaber-archive-retry")) {
                             Text("再試行", color = colors.link)
                         }
@@ -161,7 +161,7 @@ internal fun FutaberArchiveSearchSheet(
                             ) {
                                 CatalogPreviewImage(
                                     thumbnailUrl = item.thumbUrl?.takeIf { it.isNotBlank() }, fullImageUrl = null, targetSizePx = 150,
-                                    contentDescription = "", modifier = Modifier.size(46.dp).background(colors.catalogGap),
+                                    contentDescription = "", modifier = Modifier.size(46.dp).background(colors.fill),
                                     fallbackTint = colors.meta
                                 )
                                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
@@ -189,7 +189,7 @@ internal fun FutaberArchiveSearchPill(query: String, onClick: () -> Unit, modifi
         "「${query.trim()}」を過去ログから検索", color = colors.link, fontSize = 13.sp, fontWeight = FontWeight.Medium,
         maxLines = 1, overflow = TextOverflow.Ellipsis,
         modifier = modifier.padding(12.dp)
-            .background(colors.bar, FutaberShapes.pill).border(1.dp, colors.separator, FutaberShapes.pill)
+            .background(colors.bar, FutaberShapes.card).border(0.5.dp, colors.separator, FutaberShapes.card)
             .clickable(onClickLabel = "過去ログ検索", onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 9.dp).testTag("futaber-archive-search")
     )

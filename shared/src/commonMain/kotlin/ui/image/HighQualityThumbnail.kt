@@ -1,5 +1,16 @@
 package com.valoser.futacha.shared.ui.image
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.State
+import androidx.compose.runtime.key
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
@@ -21,6 +32,7 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Precision
+import androidx.compose.ui.layout.ContentScale
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.media.source.OriginalMediaNotCached
 import com.valoser.futacha.shared.media.source.isSharedOriginalImageUrl
@@ -217,12 +229,71 @@ internal fun rememberHighQualityThumbnailOverride(
     thumbnailReady: Boolean,
     imageLoader: ImageLoader
 ): Painter? {
-    if (plan == null || !thumbnailReady) return null
+    if (plan == null) return null
+    val cached = rememberMemoryCachedHighQualityThumbnail(plan, imageLoader)
+    if (cached != null) return cached
+    if (!thumbnailReady) return null
+    return rememberHighQualityThumbnailLoad(plan, networkWanted = true, imageLoader).painter
+}
+
+internal data class ThreadThumbnailQuality(
+    val painter: Painter?,
+    /** A stored original may still turn up: hold back a failed preview's error, not the preview. */
+    val checkingCache: Boolean = false,
+    /** Already decoded when the slot appeared: shown at once, without a transition. */
+    val fromCache: Boolean = false
+)
+
+/**
+ * The thread rows' variant of [rememberHighQualityThumbnailOverride]. It does not
+ * wait for the preview, so a failed preview can still show a stored original, but
+ * it reads only stored originals until the preview is up. It waits for the slot
+ * to settle like the override, and never hides the preview while it looks: a
+ * memory hit is drawn on the first frame, a stored original fades in.
+ */
+@Composable
+internal fun rememberThreadHighQualityThumbnail(
+    plan: HighQualityThumbnailPlan?,
+    thumbnailReady: Boolean,
+    imageLoader: ImageLoader
+): ThreadThumbnailQuality {
+    if (plan == null) return ThreadThumbnailQuality(null)
+    val cached = rememberMemoryCachedHighQualityThumbnail(plan, imageLoader)
+    if (cached != null) return ThreadThumbnailQuality(cached, fromCache = true)
+    val load = rememberHighQualityThumbnailLoad(plan, networkWanted = thumbnailReady, imageLoader)
+    return ThreadThumbnailQuality(load.painter, checkingCache = !load.checked)
+}
+
+@Composable
+private fun rememberMemoryCachedHighQualityThumbnail(
+    plan: HighQualityThumbnailPlan,
+    imageLoader: ImageLoader
+): Painter? {
     val platformContext = LocalPlatformContext.current
-    val cachedImage = imageLoader.memoryCache?.get(MemoryCache.Key(highQualityThumbnailMemoryKey(plan)))?.image
-    if (cachedImage != null) return remember(cachedImage, platformContext) {
-        cachedImage.asPainter(platformContext)
-    }
+    // Snapshot on entry: switching to the memory-cache branch after this slot's
+    // own request succeeds would replace its painter and restart the transition.
+    val cachedImage = remember(plan, imageLoader) {
+        imageLoader.memoryCache?.get(MemoryCache.Key(highQualityThumbnailMemoryKey(plan)))?.image
+    } ?: return null
+    return remember(cachedImage, platformContext) { cachedImage.asPainter(platformContext) }
+}
+
+/** [checked]: one request has finished, so a stored original would have been found. */
+private class HighQualityThumbnailLoad(val painter: Painter?, val checked: Boolean)
+
+/**
+ * Requests the original once the slot has settled. While [networkWanted] is false
+ * the request only reads stored originals; it is widened once, and only while no
+ * original is shown, so a preview reloading later cannot cancel a download or
+ * drop the original it already shows.
+ */
+@Composable
+private fun rememberHighQualityThumbnailLoad(
+    plan: HighQualityThumbnailPlan,
+    networkWanted: Boolean,
+    imageLoader: ImageLoader
+): HighQualityThumbnailLoad {
+    val platformContext = LocalPlatformContext.current
     val originals = LocalOriginalMediaSource.current
     // Counted before the first request can miss. Waiting for the event only after
     // the failure was observed lost a save that finished while the cache-only
@@ -238,20 +309,32 @@ internal fun rememberHighQualityThumbnailOverride(
         delay(HIGH_QUALITY_THUMBNAIL_SETTLE_MILLIS)
         settled = true
     }
-    if (!settled) return null
+    if (!settled) return HighQualityThumbnailLoad(null, checked = false)
+    var useNetwork by remember(plan) { mutableStateOf(networkWanted) }
     var attempt by remember(plan) { mutableIntStateOf(0) }
     var persistedCountAtAttempt by remember(plan, originals) { mutableIntStateOf(0) }
     var transientRetried by remember(plan) { mutableStateOf(false) }
-    val request = remember(platformContext, plan) {
-        buildHighQualityThumbnailRequest(platformContext, plan)
+    var checked by remember(plan) { mutableStateOf(false) }
+    val request = remember(platformContext, plan, useNetwork) {
+        buildHighQualityThumbnailRequest(platformContext, if (useNetwork) plan else plan.copy(allowNetwork = false))
     }
     val painter = rememberAsyncImagePainter(model = request, imageLoader = imageLoader)
     LaunchedEffect(painter, attempt) {
         if (attempt > 0) painter.restart()
     }
+    LaunchedEffect(painter, networkWanted) {
+        // Read the live state: an original that has just loaded must stay.
+        if (networkWanted && !useNetwork && painter.state.value !is AsyncImagePainter.State.Success) {
+            useNetwork = true
+        }
+    }
     val state by painter.state.collectAsState()
     val failure = (state as? AsyncImagePainter.State.Error)?.result?.throwable
     val failed = state is AsyncImagePainter.State.Error
+    val finished = failed || state is AsyncImagePainter.State.Success
+    LaunchedEffect(finished) {
+        if (finished) checked = true
+    }
     LaunchedEffect(plan, attempt, failed, persistedCount) {
         if (!failed) return@LaunchedEffect
         if (persistedCount != persistedCountAtAttempt) {
@@ -268,7 +351,64 @@ internal fun rememberHighQualityThumbnailOverride(
             attempt += 1
         }
     }
-    return painter.takeIf { state is AsyncImagePainter.State.Success }
+    return HighQualityThumbnailLoad(
+        painter = painter.takeIf { state is AsyncImagePainter.State.Success },
+        checked = checked || finished
+    )
+}
+
+/** Keep the thumbnail's geometry while a newly loaded original fades in. */
+@Composable
+internal fun rememberThreadThumbnailPainter(thumbnail: Painter, original: Painter?): Painter = key(thumbnail) {
+    // animateFloatAsState starts at its initial target: an original already in
+    // memory appears immediately, while a later result fades in. Compose's
+    // frame clock also honours the platform's animation duration scale.
+    val progress = animateFloatAsState(if (original == null) 0f else 1f, tween(180), label = "thumbnail quality")
+    remember(thumbnail, original) {
+        if (original == null) thumbnail else ThreadThumbnailTransitionPainter(thumbnail, original, progress)
+    }
+}
+
+private class ThreadThumbnailTransitionPainter(
+    private val thumbnail: Painter,
+    private val original: Painter,
+    private val progress: State<Float>
+) : Painter() {
+    private val layerPaint = Paint()
+    private val additivePaint = Paint().apply { blendMode = BlendMode.Plus }
+    override val intrinsicSize: Size get() = thumbnail.intrinsicSize
+
+    override fun DrawScope.onDraw() {
+        val fraction = progress.value.coerceIn(0f, 1f)
+        when (fraction) {
+            0f -> drawFitted(thumbnail, 1f)
+            1f -> drawFitted(original, 1f)
+            else -> {
+                // Add premultiplied colours in an isolated layer. Fading both
+                // pictures with SrcOver would dim opaque images halfway and
+                // leave the old matte visible through transparent originals.
+                val canvas = drawContext.canvas
+                val bounds = Rect(Offset.Zero, size)
+                canvas.saveLayer(bounds, layerPaint)
+                drawFitted(thumbnail, 1f - fraction)
+                canvas.saveLayer(bounds, additivePaint)
+                drawFitted(original, fraction)
+                canvas.restore()
+                canvas.restore()
+            }
+        }
+    }
+
+    private fun DrawScope.drawFitted(painter: Painter, alpha: Float) {
+        val source = painter.intrinsicSize
+        val target = if (source.width.isFinite() && source.height.isFinite() && source.width > 0 && source.height > 0) {
+            val scale = ContentScale.Fit.computeScaleFactor(source, size)
+            Size(source.width * scale.scaleX, source.height * scale.scaleY)
+        } else size
+        translate((size.width - target.width) / 2, (size.height - target.height) / 2) {
+            with(painter) { draw(target, alpha) }
+        }
+    }
 }
 
 internal fun isTransientHighQualityFailure(failure: Throwable?): Boolean {

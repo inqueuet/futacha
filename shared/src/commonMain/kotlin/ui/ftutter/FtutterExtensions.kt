@@ -77,11 +77,16 @@ import kotlinx.coroutines.launch
 internal enum class FtutterExtension(val stored: String, val title: String, val description: String, val enabledByDefault: Boolean = false) {
     HANDWRITING("handwriting", "手書き", "書き込み画面のメニューから手書き画像を添付できます。img板の返信でも使えます"),
     OPEN_SUMMARY("openSummary", "開いた時の新着・自分への返信件数", "前回までの取得記録と比べ、新しいレスと、その中の自分の投稿への直接返信を一度だけ知らせます"),
+    OPEN_AT_TOP(
+        "openAtTop", "スレッドを先頭から開く",
+        "カタログ・履歴・リンクからスレッドを開いた時、前回の読み位置へ戻らず最初のレスから表示します。タブの切り替えと、設定などから戻った時は見ていた位置のままです"
+    ),
     TAB_STATUS("tabStatus", "タブの隔離・落ち状態", "取得して確認できた隔離・削除・落ちを、タブ帯とドロワーにも文字で表示します"),
     REPORT_NG("reportNg", "delとこのレスのNGをまとめる", "delの確認画面で、このスレッドのこのレスだけをNGにも登録できます。送信とNGの成否は別々に表示します"),
     COMMON_NG(
         "commonNg", "共通のNGを使う",
-        "ふたちゃ・ふたばー風と共有のNGワード・NGネーム等（レス）とカタログNGワードを、このモードのNGに加えて使います。編集は他のモードで行います"
+        "ふたちゃ・ふたばー風と共有のNGワード・NGネーム等（レス）とカタログNGワードを、このモードのNGに加えて使います。編集は他のモードで行います",
+        enabledByDefault = true // D-B7 (J4): the lists entered in any mode show in the others unless switched off
     ),
     IMAGE_MENU(
         "imageMenu", "画像の長押しメニュー",
@@ -115,7 +120,7 @@ internal fun parseFtutterExtensions(preferences: Map<String, String>): FtutterEx
     FtutterExtensions(FtutterExtension.entries.filterTo(mutableSetOf()) { preferences.ftutterBool(it.key, it.enabledByDefault) })
 
 /** 拡張機能の画面の冒頭の説明。 */
-internal const val FTUTTER_EXTRAS_INTRO = "原作のふたったーに無い機能です。「履歴の選択削除・すべて削除」は最初からONです。他の機能は最初はOFFで、必要なものをONにできます。"
+internal const val FTUTTER_EXTRAS_INTRO = "原作のふたったーに無い機能です。「履歴の選択削除・すべて削除」と「共通のNGを使う」は最初からONです。他の機能は最初はOFFで、必要なものをONにできます。"
 
 /**
  * 設定→拡張機能。スイッチの下に、オンの時だけ開ける画面（巡回・起動ロック・AIの設定）の行を出す。
@@ -136,6 +141,7 @@ internal fun FtutterExtrasSettingsPage(
     val extensions = remember(preferences) { parseFtutterExtensions(preferences) }
     val appState = rememberCompatAppStateSettings(stateStore)
     var appStateDialog by remember { mutableStateOf<CompatAppStateSetting?>(null) }
+    var postMenuHideOpen by remember { mutableStateOf(false) }
     FtutterSettingsPage("拡張機能", "ftutter-settings-page-extras", onBack) {
         item(key = "intro") {
             Text(FTUTTER_EXTRAS_INTRO, color = colors.text, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
@@ -161,12 +167,12 @@ internal fun FtutterExtrasSettingsPage(
                                 "　スクロール量（px）", com.valoser.futacha.shared.ui.futaber.FutaberSettingKeys.AUTO_SCROLL_PIXEL,
                                 FTUTTER_AUTO_SCROLL_PIXEL_RANGE.first.toDouble(), FTUTTER_AUTO_SCROLL_PIXEL_RANGE.last.toDouble(), 1.0,
                                 FTUTTER_AUTO_SCROLL_PIXEL_DEFAULT.toDouble(), preferences, save,
-                                note = "他のモードのオートスクロールと共有の値です"
+                                note = "他のモードのオートスクロールと共有の値です", own = true
                             )
                             FtutterSliderSetting(
                                 "　間隔（ミリ秒）", com.valoser.futacha.shared.ui.futaber.FutaberSettingKeys.AUTO_SCROLL_SPEED,
                                 FTUTTER_AUTO_SCROLL_SPEED_RANGE.first.toDouble(), FTUTTER_AUTO_SCROLL_SPEED_RANGE.last.toDouble(), 5.0,
-                                FTUTTER_AUTO_SCROLL_SPEED_DEFAULT.toDouble(), preferences, save
+                                FTUTTER_AUTO_SCROLL_SPEED_DEFAULT.toDouble(), preferences, save, own = true
                             )
                         }
                         FtutterExtension.AI -> if (sharedAvailable) {
@@ -186,9 +192,47 @@ internal fun FtutterExtrasSettingsPage(
                 HorizontalDivider(color = colors.outline)
             }
         }
+        // M29：原作のレス長押しメニュー編集は並べ替えだけ。項目を隠すのはこちらだけの機能なので、ここに置く。
+        item(key = "post-menu-hide") {
+            FtutterNavRow(FTUTTER_POST_MENU_HIDE_LABEL, "ftutter-ext-post-menu-hide") { postMenuHideOpen = true }
+            HorizontalDivider(color = colors.outline)
+        }
+        // T-B1：原作の動きを既定にし、前の動きはここで戻せる。
+        ftutterSection("従来の動き")
+        item(key = "legacy-menus") {
+            FtutterCheckSetting(FTUTTER_LEGACY_MENUS_LABEL, FTUTTER_LEGACY_MENUS_KEY, false, preferences, save, note = FTUTTER_LEGACY_MENUS_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_POPUPS_LABEL, FTUTTER_LEGACY_POPUPS_KEY, false, preferences, save, note = FTUTTER_LEGACY_POPUPS_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_POST_DIALOG_LABEL, FTUTTER_LEGACY_POST_DIALOG_KEY, false, preferences, save, note = FTUTTER_LEGACY_POST_DIALOG_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_THREAD_LOOK_LABEL, FTUTTER_LEGACY_THREAD_LOOK_KEY, false, preferences, save, note = FTUTTER_LEGACY_THREAD_LOOK_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_BOARDS_LABEL, FTUTTER_LEGACY_BOARDS_KEY, false, preferences, save, note = FTUTTER_LEGACY_BOARDS_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_CATALOG_PRESS_LABEL, FTUTTER_LEGACY_CATALOG_PRESS_KEY, false, preferences, save, note = FTUTTER_LEGACY_CATALOG_PRESS_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_DEL_CONFIRM_LABEL, FTUTTER_LEGACY_DEL_CONFIRM_KEY, false, preferences, save, note = FTUTTER_LEGACY_DEL_CONFIRM_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_KEEP_ON_FAILURE_LABEL, FTUTTER_LEGACY_KEEP_ON_FAILURE_KEY, false, preferences, save, note = FTUTTER_LEGACY_KEEP_ON_FAILURE_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_POST_BOXES_LABEL, FTUTTER_LEGACY_POST_BOXES_KEY, false, preferences, save, note = FTUTTER_LEGACY_POST_BOXES_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_REMOTE_NOTICE_LABEL, FTUTTER_LEGACY_REMOTE_NOTICE_KEY, false, preferences, save, note = FTUTTER_LEGACY_REMOTE_NOTICE_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_FALLEN_LABEL, FTUTTER_LEGACY_FALLEN_KEY, false, preferences, save, note = FTUTTER_LEGACY_FALLEN_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_GALLERY_SQUARE_LABEL, FTUTTER_LEGACY_GALLERY_SQUARE_KEY, false, preferences, save, note = FTUTTER_LEGACY_GALLERY_SQUARE_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_DIALOGS_LABEL, FTUTTER_LEGACY_DIALOGS_KEY, false, preferences, save, note = FTUTTER_LEGACY_DIALOGS_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_VIEWER_LABEL, FTUTTER_LEGACY_VIEWER_KEY, false, preferences, save, note = FTUTTER_LEGACY_VIEWER_NOTE)
+            FtutterCheckSetting(FTUTTER_LEGACY_TWO_PANE_EMPTY_LABEL, FTUTTER_LEGACY_TWO_PANE_EMPTY_KEY, false, preferences, save, note = FTUTTER_LEGACY_TWO_PANE_EMPTY_NOTE)
+        }
     }
     CompatAppStateSettingDialogs(stateStore, appStateDialog, appState) { appStateDialog = null }
+    if (postMenuHideOpen) {
+        FtutterOrderEditorDialog(
+            title = FTUTTER_POST_MENU_HIDE_LABEL, entries = parseFtutterPostMenu(preferences), label = { it.label },
+            onDismiss = { postMenuHideOpen = false },
+            onReset = { postMenuHideOpen = false; save(FtutterKeys.POST_MENU_ORDER, ""); save(FtutterKeys.POST_MENU_ENABLED, "") },
+            onSave = { saved ->
+                postMenuHideOpen = false
+                val (names, flags) = encodeFtutterToolbar(saved) { it.stored }
+                save(FtutterKeys.POST_MENU_ORDER, names); save(FtutterKeys.POST_MENU_ENABLED, flags)
+            }
+        )
+    }
 }
+
+internal const val FTUTTER_POST_MENU_HIDE_LABEL = "レス長押しメニューの項目を隠す"
 
 // ---- キーワード巡回の結果 ----
 

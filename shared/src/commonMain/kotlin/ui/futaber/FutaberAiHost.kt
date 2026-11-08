@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.model.CatalogMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,7 +24,9 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateStore
-import com.valoser.futacha.shared.state.resolveBoardWatchWordKey
+import com.valoser.futacha.shared.state.boardSetting
+import com.valoser.futacha.shared.state.boardSettingKeys
+import com.valoser.futacha.shared.state.hasBoardSetting
 import com.valoser.futacha.shared.ui.AI_SCREEN_COMMAND_EXPIRY_MILLIS
 import com.valoser.futacha.shared.ui.AiCommandEffectKey
 import com.valoser.futacha.shared.ui.AiCommandHoldDecision
@@ -146,7 +149,13 @@ internal class FutaberAiAppActions(
     /** True while a post to another target is being sent: the draft is not opened then (re-audit M13). */
     val draftRefused: (FutaberPostTarget) -> Boolean = { false },
     val savedRepository: SavedThreadRepository?,
-    val onSavedChanged: () -> Unit
+    val onSavedChanged: () -> Unit,
+    /** F-B6 E3: opens the manage panel on a category. */
+    val openManageAt: (FutaberManageCategory) -> Unit = { openManage() },
+    /** F-B6 E3: opens the settings on the NG page. */
+    val openNgSettings: () -> Unit = openSettings,
+    /** F-B6 E3: sets [CatalogMode] for the board; false when this mode does not offer that mode now. */
+    val setCatalogMode: (BoardSummary, CatalogMode) -> Boolean = { _, _ -> false }
 )
 
 /**
@@ -199,6 +208,14 @@ internal fun FutaberAiCommandHost(
                 screens.catalog.forward(effect.command)
             }
             FutaberAiEffect.OpenManage -> { a.setDrawerOpen(false); a.closeOverlays(); a.openManage() }
+            is FutaberAiEffect.OpenManageAt -> { a.setDrawerOpen(false); a.closeOverlays(); a.openManageAt(effect.category) }
+            FutaberAiEffect.OpenNgSettings -> { a.setDrawerOpen(false); a.closeOverlays(); a.openNgSettings() }
+            is FutaberAiEffect.SetCatalogMode -> {
+                a.closeOverlays(); a.setDrawerOpen(false)
+                if (ctx.currentBoard?.id != effect.board.id || ctx.currentThread != null) a.openBoard(effect.board)
+                message = if (a.setCatalogMode(effect.board, effect.mode)) "${effect.board.name} のカタログモードを ${effect.mode.label} にしました"
+                else "このカタログモードは使えません: ${effect.mode.label}"
+            }
             FutaberAiEffect.RefreshHistory -> {
                 val refresh = a.refreshHistory
                 if (refresh == null) message = "履歴更新サービスを利用できません"
@@ -250,9 +267,11 @@ internal fun FutaberAiCommandHost(
                 stateStore.updateWatchWords { it.futaberAppendDistinct(effect.word) }
                 // A board with its own watch words gets it too, as ふたちゃ's command does.
                 effect.board?.let { target ->
-                    val key = resolveBoardWatchWordKey(target)
+                    val keys = boardSettingKeys(target)
                     val perBoard = stateStore.boardWatchWords.first()
-                    if (perBoard.containsKey(key)) stateStore.setBoardWatchWords(key, perBoard[key].orEmpty().futaberAppendDistinct(effect.word))
+                    if (keys != null && perBoard.hasBoardSetting(keys)) {
+                        stateStore.setBoardWatchWords(keys, perBoard.boardSetting(keys).orEmpty().futaberAppendDistinct(effect.word))
+                    }
                 }
             }
             is FutaberAiEffect.DeleteHistory -> a.deleteHistory(effect.entry)

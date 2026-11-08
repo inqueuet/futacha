@@ -12,9 +12,18 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FutaberReadAloudTest {
+    /** Screen off: no frame is drawn, so the scroll never finishes; the reading must go on to the next post. */
+    @Test fun aScrollThatNeverFinishesDoesNotStallTheReading() = runBlocking {
+        val engine = FakeEngine()
+        val reader = FutaberReadAloud(this, { engine })
+        reader.start(posts, 0) { kotlinx.coroutines.awaitCancellation() }
+        withTimeout(15_000) { reader.awaitIdle() }
+        assertEquals(listOf("一番目", "三番目", "五番目"), engine.spoken)
+    }
+
     @Test fun liveReadingWaitsEvenWhenThereIsNoReadableInitialBody() = runBlocking {
         val engine = FakeEngine()
-        val initial = listOf(post("1", "&gt;引用だけ"))
+        val initial = listOf(post("1", "削除済み", deleted = true))
         var polls = 0
         val reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
         reader.start(initial, 0, loadNewPosts = {
@@ -23,6 +32,29 @@ class FutaberReadAloudTest {
         reader.awaitIdle()
         assertEquals(listOf("新着本文"), engine.spoken)
         assertEquals(2, polls)
+        assertFalse(reader.isReading)
+    }
+
+    /** Audit A2: a fetch that fails once (no connection for a moment) keeps the live run waiting; it reads the next poll. */
+    @Test fun aFailedLiveFetchKeepsWaitingAndReadsTheNextPoll() = runBlocking {
+        val engine = FakeEngine()
+        var polls = 0
+        val messages = mutableListOf<String?>()
+        lateinit var reader: FutaberReadAloud
+        reader = FutaberReadAloud(this, { engine }, livePollMillis = 1)
+        reader.start(posts, 0, loadNewPosts = {
+            polls++
+            when (polls) {
+                1 -> throw IllegalStateException("no connection")
+                2 -> { messages += reader.message; posts + post("6", "六番目") }
+                else -> null
+            }
+        }) {}
+        reader.awaitIdle()
+        assertEquals(listOf("一番目", "三番目", "五番目", "六番目"), engine.spoken)
+        assertEquals(listOf<String?>(FUTABER_LIVE_FETCH_RETRY_MESSAGE), messages)
+        assertEquals(3, polls)
+        assertEquals("スレッドが落ちています", reader.message)
         assertFalse(reader.isReading)
     }
 
@@ -100,14 +132,14 @@ class FutaberReadAloudTest {
 
     private val posts = listOf(
         post("1", "一番目"),
-        post("2", ">引用だけ"),
+        post("2", "削除済みの引用", deleted = true), // quote lines are read now (C24); a deleted post stays silent
         post("3", "三番目<br>http://example.com/x"),
         post("4", "削除されたもの", deleted = true),
         post("5", "五番目")
     )
 
     @Test
-    fun readsFromTheFirstVisibleRowSkippingQuotesUrlsAndDeletedPosts() = runBlocking {
+    fun readsFromTheFirstVisibleRowSkippingUrlsAndDeletedPosts() = runBlocking {
         val engine = FakeEngine()
         val scrolled = mutableListOf<Int>()
         val reader = FutaberReadAloud(this, { engine })
@@ -139,7 +171,7 @@ class FutaberReadAloudTest {
         assertTrue(engine.spoken.isEmpty())
         assertEquals(FUTABER_NOTHING_TO_READ_MESSAGE, reader.message)
         assertFalse(reader.isReading)
-        reader.start(listOf(post("9", ">だけ")), 0) {}
+        reader.start(listOf(post("9", "&gt;")), 0) {}
         reader.awaitIdle()
         assertEquals(FUTABER_NOTHING_TO_READ_MESSAGE, reader.message)
     }
@@ -424,5 +456,15 @@ class FutaberReadAloudTest {
         reader.stop()
         reader.awaitIdle()
         assertFalse(reader.isReading)
+    }
+
+    /** Audit A1: the live run reads only the unseen posts into lines, with the same rows as before. */
+    @Test
+    fun skippingTheSeenPostsGivesTheSameNewSegmentsAsFilteringTheWholeThread() {
+        val posts = (1..30).map { post("$it", if (it % 7 == 0) "" else ">>${it - 1}<br>本文$it") } + post("31", "消え", deleted = true)
+        val seen = posts.take(20).map { it.id }.toSet()
+        val whole = futaberReadAloudSegments(posts).filter { it.postId !in seen }
+        assertEquals(whole, futaberReadAloudSegments(posts, skippedPostIds = seen))
+        assertTrue(whole.isNotEmpty())
     }
 }

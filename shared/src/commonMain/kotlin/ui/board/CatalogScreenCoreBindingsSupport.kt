@@ -17,10 +17,11 @@ internal fun resolveCatalogScreenInitialMutableStateInputs(
     persistedCatalogModes: Map<String, com.valoser.futacha.shared.model.CatalogMode>,
     initialArchiveSearchScope: ArchiveSearchScope?,
     displayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
-    gridColumns: Int
+    gridColumns: Int,
+    boardUrl: String? = null
 ): CatalogScreenInitialMutableStateInputs {
     return CatalogScreenInitialMutableStateInputs(
-        catalogMode = resolveInitialCatalogMode(boardId, persistedCatalogModes),
+        catalogMode = resolveInitialCatalogMode(boardId, persistedCatalogModes, boardUrl),
         archiveSearchScope = initialArchiveSearchScope,
         displayStyle = displayStyle,
         gridColumns = gridColumns
@@ -81,7 +82,8 @@ internal fun rememberCatalogScreenCoreBindingsBundle(
         persistedCatalogModes = persistentBindings.persistedCatalogModes,
         initialArchiveSearchScope = initialArchiveSearchScope,
         displayStyle = persistentBindings.persistentDisplayStyle,
-        gridColumns = persistentBindings.persistentGridColumns
+        gridColumns = persistentBindings.persistentGridColumns,
+        boardUrl = boardUrl
     )
     val mutableStateBundle = rememberCatalogScreenMutableStateBundle(
         saveableKey = saveableKey,

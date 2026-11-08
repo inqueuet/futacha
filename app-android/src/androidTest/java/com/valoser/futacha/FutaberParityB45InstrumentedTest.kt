@@ -101,14 +101,18 @@ class FutaberParityB45InstrumentedTest {
     }
 
     private fun host(preferences: Map<String, String>) {
-        runBlocking { store.savePreferences(preferences + ("compat.futaber.lastBoardId" to "may")) }
+        runBlocking { store.savePreferences(FUTABER_EXTENSIONS_OFF + preferences + ("compat.futaber.lastBoardId" to "may")) }
         val services = FutaberMediaServices(store, null, createFileSystem(rule.activity), null)
         rule.setContent {
             val boards by appState.boards.collectAsState(emptyList())
             val history by appState.history.collectAsState(emptyList())
             val prefs by store.preferences.collectAsState(emptyMap())
             val ngRules by store.ngRules.collectAsState(emptyList())
-            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            // The catalog reads its own loader too (since 2026-10-26); without it the screen did not compose.
+            CompositionLocalProvider(
+                LocalFutachaImageLoader provides loader,
+                com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader provides loader
+            ) {
                 if (boards.isNotEmpty() && prefs["compat.futaber.lastBoardId"] != null) FutaberApp(
                     boards = boards,
                     history = history,
@@ -198,13 +202,14 @@ class FutaberParityB45InstrumentedTest {
     }
 
     @Test fun checkingAllTabsMarksTheThreadThatFell() {
-        host(mapOf("compat.futaber.ext.tabsManage" to "ON"))
+        host(mapOf("compat.futaber.ext.tabsCheck" to "ON"))
         val threadId = openFirstThread()
         tabOn(threadId)
         gone = true
         rule.onAllNodesWithTag("futaber-tab")[0].performTouchInput { longClick() }
         waitForTag("futaber-action-tab-check-all")
-        rule.onNodeWithTag("futaber-action-tab-check-all").performClick()
+        // L-B4: an item after the original's (タブをすべて削除) is inside the sheet's group, under its items.
+        rule.onNodeWithTag("futaber-action-tab-check-all").performScrollTo().performClick()
         rule.waitUntil(30_000) {
             runBlocking { appState.history.first() }.firstOrNull { it.threadId == threadId }?.isAutoRefreshDisabled == true
         }

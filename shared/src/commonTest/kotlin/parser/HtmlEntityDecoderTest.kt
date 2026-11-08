@@ -32,4 +32,10 @@ class HtmlEntityDecoderTest {
     fun namedEntitiesContainingDigitsAreDecoded() {
         assertEquals("² ½ ¾", HtmlEntityDecoder.decode("&sup2; &frac12; &frac34;"))
     }
+
+    @Test
+    fun dashesAndTheRestOfHtml4AreDecoded() {
+        assertEquals("(1523–1563) — ‹À é ß Ω›", HtmlEntityDecoder.decode("(1523&ndash;1563) &mdash; &lsaquo;&Agrave; &eacute; &szlig; &Omega;&rsaquo;"))
+        assertEquals("a\u2009b\u200Dc", HtmlEntityDecoder.decode("a&thinsp;b&zwj;c"))
+    }
 }

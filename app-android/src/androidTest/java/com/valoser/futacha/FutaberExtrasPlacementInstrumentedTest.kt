@@ -18,7 +18,7 @@ class FutaberExtrasPlacementInstrumentedTest {
 
     @After fun cleanup() { rule.runOnUiThread { rule.activity.setContent {} } }
 
-    private fun top(matcher: SemanticsMatcher) = rule.onNode(matcher, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y
+    private fun top(matcher: SemanticsMatcher) = rule.onAllNodes(matcher, useUnmergedTree = true)[0].fetchSemanticsNode().positionInRoot.y
 
     @Test fun theBoardListAndTabStateRowsAreInTheirOwnSections() {
         rule.setContent {

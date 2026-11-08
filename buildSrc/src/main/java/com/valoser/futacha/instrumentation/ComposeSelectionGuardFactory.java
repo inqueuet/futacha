@@ -8,7 +8,7 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
-/** Two narrowly scoped call-site patches for Foundation Android 1.13.0-alpha02.
+/** Two narrowly scoped call-site patches for Foundation Android 1.13.0-rc01.
  * Keep the original concrete class: Compose checks its type to populate smart menu actions.
  * No UI, IME, selection gesture, timeout or classifier implementation is replaced.
  * Remove after adopting an upstream fix; review the pinned dependency before upgrading.
@@ -22,7 +22,7 @@ public abstract class ComposeSelectionGuardFactory
     private static final String WITH_CONTEXT =
             "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;";
     /** The Foundation Android version whose bytecode both call sites were verified against. */
-    public static final String VERIFIED_FOUNDATION_ANDROID_VERSION = "1.13.0-alpha02";
+    public static final String VERIFIED_FOUNDATION_ANDROID_VERSION = "1.13.0-rc01";
 
     /** A renamed target class is never visited, so the per-class count check cannot see it.
      * Bind registration to the verified pin so a dependency change fails the build instead.

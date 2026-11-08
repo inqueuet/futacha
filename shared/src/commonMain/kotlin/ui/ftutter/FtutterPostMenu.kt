@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
@@ -73,7 +74,7 @@ internal fun parseFtutterPostMenu(p: Map<String, String>) = parseFtutterToolbar(
     FTUTTER_POST_MENU_DEFAULT
 ) { it.stored }
 
-private fun FtutterPostMenuItem.icon(): ImageVector = when (this) {
+internal fun FtutterPostMenuItem.icon(): ImageVector = when (this) {
     FtutterPostMenuItem.QUOTE, FtutterPostMenuItem.QUOTE_NO -> Icons.AutoMirrored.Rounded.Reply
     FtutterPostMenuItem.QUOTE_SELECT -> Icons.AutoMirrored.Rounded.ReplyAll
     FtutterPostMenuItem.SOUDANE -> Icons.Rounded.ThumbUp
@@ -93,12 +94,16 @@ internal fun FtutterPostMenuDialog(
     header: @Composable () -> Unit,
     entries: List<FtutterToolbarEntry<FtutterPostMenuItem>>,
     marked: Boolean,
+    /** 押せない項目（M14：送ったそうだねは灰色で押せない）。 */
+    disabled: Set<FtutterPostMenuItem> = emptySet(),
     maxPreviewHeightDp: Int,
     onDismiss: () -> Unit,
     onItem: (FtutterPostMenuItem) -> Unit,
     onReorder: () -> Unit
 ) {
     val colors = LocalFtutterColors.current
+    // M90：原作のボタンの文字とアイコンはメインカラー（ポップアップの地で読めない配色の時だけ文字の色）。
+    val accent = colors.menuAccent()
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = colors.popUp,
@@ -110,24 +115,26 @@ internal fun FtutterPostMenuDialog(
                 val shown = entries.filter { it.enabled }.map { it.tool }
                 LazyVerticalGrid(GridCells.Fixed(3), modifier = Modifier.heightIn(max = 360.dp)) {
                     items(shown, key = { it.stored }) { item ->
+                        val off = item in disabled
                         Column(
-                            Modifier.aspectRatio(1.6f).clickable { onItem(item) }.testTag("ftutter-post-menu-${item.stored}"),
+                            Modifier.aspectRatio(1.6f).alpha(if (off) 0.38f else 1f).clickable(enabled = !off) { onItem(item) }.testTag("ftutter-post-menu-${item.stored}"),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Icon(item.icon(), contentDescription = null, tint = colors.text)
+                            Icon(item.icon(), contentDescription = null, tint = accent)
                             Text(
                                 if (item == FtutterPostMenuItem.MARK && marked) "マーク解除" else item.label,
-                                color = colors.text, fontSize = 13.sp, textAlign = TextAlign.Center
+                                color = accent, fontSize = 13.sp, textAlign = TextAlign.Center
                             )
                         }
                     }
                 }
+                HorizontalDivider(color = colors.outline, modifier = Modifier.padding(top = 8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onReorder, modifier = Modifier.testTag("ftutter-post-menu-reorder")) {
-                        Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, tint = colors.text)
+                        Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, tint = accent)
                         Spacer(Modifier.width(4.dp))
-                        Text("並び替え", color = colors.text)
+                        Text("並び替え", color = accent)
                     }
                 }
             }
@@ -188,7 +195,7 @@ internal fun <T> FtutterOrderEditorDialog(
 
 /** 選択返信（原作 ChooseReplyDialog）：ID・ファイル名・本文の各行を選んで、`>`を付けて書き込みへ。 */
 @Composable
-internal fun FtutterChooseQuoteDialog(candidates: List<String>, onDismiss: () -> Unit, onQuote: (String) -> Unit) {
+internal fun FtutterChooseQuoteDialog(candidates: List<String>, onDismiss: () -> Unit, legacy: Boolean = false, onQuote: (String) -> Unit) {
     val colors = LocalFtutterColors.current
     var chosen by remember { mutableStateOf(setOf<Int>()) }
     FutachaAppLockAwareWindow { AlertDialog(
@@ -203,15 +210,17 @@ internal fun FtutterChooseQuoteDialog(candidates: List<String>, onDismiss: () ->
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(checked = index in chosen, onCheckedChange = null, modifier = Modifier.testTag("ftutter-choose-quote-$index"))
-                        Text(text, color = colors.text)
+                        // 原作（M42）：大きな字の行。何も選ばなくても「OK」で空の書き込みを開く。
+                        if (legacy) Text(text, color = colors.text)
+                        else Text(text, color = colors.text, fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                onQuote(ftutterQuoteLines(candidates.filterIndexed { i, _ -> i in chosen }))
-            }, enabled = chosen.isNotEmpty(), modifier = Modifier.testTag("ftutter-choose-quote-ok")) { Text("OK") }
+                onQuote(ftutterChosenQuote(candidates, chosen))
+            }, enabled = !legacy || chosen.isNotEmpty(), modifier = Modifier.testTag("ftutter-choose-quote-ok")) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
@@ -275,3 +284,22 @@ internal fun FtutterConfirmDialog(title: String, message: String, confirmLabel: 
         modifier = Modifier.background(colors.popUp)
     ) }
 }
+
+/** 選択返信で書き込みへ渡す文。何も選ばなければ空（原作：空の書き込みを開く）。 */
+internal fun ftutterChosenQuote(candidates: List<String>, chosen: Set<Int>): String =
+    if (chosen.isEmpty()) "" else ftutterQuoteLines(candidates.filterIndexed { i, _ -> i in chosen })
+
+/** コピーの候補（原作：E-Mail・No・ID・ファイル・本文。IDの行はIPの時も「ID」）。[legacy]は前の形（IPの時は「IP」）。 */
+internal fun ftutterCopyValues(mail: String?, postNo: String, identities: List<Pair<String, String>>, fileName: String?, body: String, legacy: Boolean): List<Pair<String, String>> =
+    buildList {
+        mail?.takeIf { it.isNotBlank() }?.let { add("E-Mail" to it) }
+        add("No" to "No.$postNo")
+        if (legacy) addAll(identities) else identities.firstOrNull()?.let { add("ID" to it.second) }
+        fileName?.takeIf { it.isNotBlank() }?.let { add("ファイル" to it) }
+        add("本文" to body)
+    }
+
+internal val FTUTTER_LEGACY_POST_BOXES_KEY: String get() = FtutterKeys.PREFIX + "legacyPostBoxes"
+internal const val FTUTTER_LEGACY_POST_BOXES_LABEL = "レスの削除・選択返信・コピーの箱を前の形にする"
+internal const val FTUTTER_LEGACY_POST_BOXES_NOTE =
+    "ONにすると、記事削除は見出し・レス番号・伏せた削除キー・キャンセルのある箱、選択返信は小さな字で何か選ぶまでOKが押せない箱、コピーはIPのレスで「IP」と出します。OFFは原作と同じ形です"

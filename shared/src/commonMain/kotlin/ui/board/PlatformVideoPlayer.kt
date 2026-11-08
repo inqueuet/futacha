@@ -8,9 +8,19 @@ import com.valoser.futacha.shared.media.video.VideoEditPlayback
 import com.valoser.futacha.shared.ui.image.LocalOriginalMediaSource
 import kotlinx.coroutines.*
 
-data class VideoPlaybackOptions(val autoPlay: Boolean = false, val loop: Boolean = false)
+data class VideoPlaybackOptions(
+    val autoPlay: Boolean = false,
+    val loop: Boolean = false,
+    /** How long the playing video's control panel stays before hiding; 0 keeps it, null is the platform's own (Android). */
+    val controlsAutoHideMillis: Int? = null,
+    /** The panel's own show/hide is reported through onControlsVisibilityChanged, so the screen's bars follow it (Android). */
+    val controlsFollowChrome: Boolean = false
+)
 
 val LocalVideoPlaybackOptions = staticCompositionLocalOf<VideoPlaybackOptions?> { null }
+
+/** Whether a player with no [LocalVideoPlaybackOptions] starts by itself (the desktop does). */
+internal expect val platformVideoAutoPlayByDefault: Boolean
 
 enum class VideoPlayerState {
     Idle,
@@ -38,6 +48,12 @@ data class VideoPlaybackError(
     val code: String? = null,
     val message: String? = null
 )
+
+/**
+ * A screen that pages between media provides this; `true` asks for the next page. iOS needs it because
+ * the native player takes the touches before Compose sees them. Other platforms' Compose gestures do the work.
+ */
+val LocalVideoPageSwipe = androidx.compose.runtime.staticCompositionLocalOf<((Boolean) -> Unit)?> { null }
 
 @Composable
 fun PlatformVideoPlayer(

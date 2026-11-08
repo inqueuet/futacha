@@ -203,6 +203,7 @@ import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
 import com.valoser.futacha.shared.compat.compatToolbarMaster
 import com.valoser.futacha.shared.compat.compatToolbarShowsOverflow
 import com.valoser.futacha.shared.compat.compatNgRuleId
+import com.valoser.futacha.shared.compat.compatNgRegexInputError
 import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.decodeCompatLegacyBackup
@@ -439,15 +440,15 @@ internal fun buildCompatLegacyRestorePlan(
     // silently widens a board-scoped rule to every board (#54).
     val catalogExtractRules = buildCompatLegacyCatalogExtractRules(backups, availableBoards, nowEpochMillis)
     val catalogNgRules = backups.flatMap { it.catalogNgWords }.flatMap { entry ->
-        val value = entry.word.trim().lowercase()
-        if (value.isBlank()) return@flatMap emptyList()
+        val value = entry.legacyRuleValue() ?: return@flatMap emptyList()
         legacyCatalogRuleScopes(entry.boardUrl, availableBoards).map { boardKey ->
             CompatNgRule(
-                id = compatNgRuleId(CompatNgKind.CATALOG_IGNORE, boardKey, value),
+                id = compatNgRuleId(CompatNgKind.CATALOG_IGNORE, boardKey, value, entry.isRegex),
                 kind = CompatNgKind.CATALOG_IGNORE,
                 scopeKey = boardKey,
                 normalizedValue = value,
-                createdAtEpochMillis = nowEpochMillis
+                createdAtEpochMillis = nowEpochMillis,
+                isRegex = entry.isRegex
             )
         }
     }
@@ -456,14 +457,14 @@ internal fun buildCompatLegacyRestorePlan(
     // rule is the only lossless choice during import and behaves like the old
     // app until the user narrows it from the NG dialog.
     fun threadRules(entries: List<CompatLegacyScopedWord>, kind: CompatNgKind) = entries.mapNotNull { entry ->
-        val value = entry.word.trim().lowercase()
-        if (value.isBlank()) return@mapNotNull null
+        val value = entry.legacyRuleValue() ?: return@mapNotNull null
         CompatNgRule(
-            id = compatNgRuleId(kind, "*", value),
+            id = compatNgRuleId(kind, "*", value, entry.isRegex),
             kind = kind,
             scopeKey = "*",
             normalizedValue = value,
-            createdAtEpochMillis = nowEpochMillis
+            createdAtEpochMillis = nowEpochMillis,
+            isRegex = entry.isRegex
         )
     }
     val threadNgRules = threadRules(backups.flatMap { it.threadNgHeaders }, CompatNgKind.THREAD_REFUSE) +
@@ -505,7 +506,7 @@ internal fun buildCompatLegacyRestorePlan(
             ?.let { items ->
                 CompatToolbarBackup(
                     surface = surface.name,
-                    items = items.map { CompatToolbarBackupItem(it.key, it.position, it.active) }
+                    items = items.map { CompatToolbarBackupItem(it.key, it.position, it.active, it.hidden) }
                 )
             }
     }
@@ -588,16 +589,27 @@ internal fun buildCompatLegacyCatalogExtractRules(
     nowEpochMillis: Long
 ): List<CompatNgRule> = backups.flatMap { backup ->
     backup.catalogWatchWords.flatMap entryLoop@ { entry ->
-        val value = entry.word.trim().lowercase()
-        if (value.isBlank()) return@entryLoop emptyList()
+        val value = entry.legacyRuleValue() ?: return@entryLoop emptyList()
         legacyCatalogRuleScopes(entry.boardUrl, boards).map { scopeKey ->
             CompatNgRule(
-                id = compatNgRuleId(CompatNgKind.CATALOG_EXTRACT, scopeKey, value),
+                id = compatNgRuleId(CompatNgKind.CATALOG_EXTRACT, scopeKey, value, entry.isRegex),
                 kind = CompatNgKind.CATALOG_EXTRACT,
                 scopeKey = scopeKey,
                 normalizedValue = value,
-                createdAtEpochMillis = nowEpochMillis
+                createdAtEpochMillis = nowEpochMillis,
+                isRegex = entry.isRegex
             )
         }
     }
+}
+
+/**
+ * The stored value of a legacy word: a plain word is lower-cased as before; a regular expression (18-20) is kept
+ * as written, and one that cannot be read or is too long is left out rather than becoming a plain word.
+ */
+private fun CompatLegacyScopedWord.legacyRuleValue(): String? {
+    val trimmed = word.trim()
+    if (trimmed.isBlank()) return null
+    if (!isRegex) return trimmed.lowercase()
+    return trimmed.takeIf { compatNgRegexInputError(it) == null }
 }

@@ -32,6 +32,17 @@ class ThreadTitleResolverTest {
     }
 
     @Test
+    fun theToshiakiTitleDropsOnlyControlDirectionMarksAndTheBomAndKeepsAJoinedEmoji() {
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"
+        assertEquals(
+            "${family}家族スレ",
+            extractFirstUsableTitleLine("\uFEFF\u0000\n\u202E${family}家族\u2066スレ\u2069\u200F\n次の行", keepJoiners = true)
+        )
+        // Without the option the other modes keep dropping every format character, as before.
+        assertEquals("\uD83D\uDC68\uD83D\uDC69\uD83D\uDC67", extractFirstUsableTitleLine(family))
+    }
+
+    @Test
     fun resolveThreadTitle_prefersFirstBodyLineOverSubjectAndFallbacks() {
         val title = resolveThreadTitle(
             firstPost = post(

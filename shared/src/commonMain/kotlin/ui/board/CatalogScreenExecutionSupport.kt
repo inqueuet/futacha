@@ -79,7 +79,7 @@ internal data class CatalogPersistenceBindings(
 internal fun buildCatalogPersistenceBindings(
     coroutineScope: CoroutineScope,
     stateStore: AppStateStore?,
-    currentBoardWatchWordKey: () -> String? = { null },
+    currentBoardSettingKeys: () -> com.valoser.futacha.shared.state.BoardSettingKeys? = { null },
     onFallbackCatalogNgWordsChanged: (List<String>) -> Unit,
     onFallbackWatchWordsChanged: (List<String>) -> Unit
 ): CatalogPersistenceBindings {
@@ -116,9 +116,10 @@ internal fun buildCatalogPersistenceBindings(
             replace = { updated ->
                 if (stateStore != null) {
                     coroutineScope.launch {
-                        val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
-                        if (boardKey.isNotEmpty()) {
-                            stateStore.setBoardWatchWords(boardKey, updated)
+                        // The board's own words go under its shared key (D-B1).
+                        val boardKeys = currentBoardSettingKeys()
+                        if (boardKeys != null) {
+                            stateStore.setBoardWatchWords(boardKeys, updated)
                         } else {
                             stateStore.setWatchWords(updated)
                         }
@@ -130,9 +131,9 @@ internal fun buildCatalogPersistenceBindings(
             atomicEdit = stateStore?.let { store ->
                 { edit ->
                     coroutineScope.launch {
-                        val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
-                        if (boardKey.isNotEmpty()) {
-                            store.updateBoardWatchWords(boardKey, edit)
+                        val boardKeys = currentBoardSettingKeys()
+                        if (boardKeys != null) {
+                            store.updateBoardWatchWords(boardKeys, edit)
                         } else {
                             store.updateWatchWords(edit)
                         }
@@ -143,10 +144,7 @@ internal fun buildCatalogPersistenceBindings(
         clearBoardWatchWordsOverride = {
             if (stateStore != null) {
                 coroutineScope.launch {
-                    val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
-                    if (boardKey.isNotEmpty()) {
-                        stateStore.clearBoardWatchWordsOverride(boardKey)
-                    }
+                    currentBoardSettingKeys()?.let { boardKeys -> stateStore.clearBoardWatchWordsOverride(boardKeys) }
                 }
             }
         }

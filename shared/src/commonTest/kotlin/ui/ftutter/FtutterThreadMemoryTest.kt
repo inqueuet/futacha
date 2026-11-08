@@ -9,6 +9,27 @@ class FtutterThreadMemoryTest {
     private val old = ThreadPage("100", null, null, null, listOf(post("100")))
     private val entry = ThreadHistoryEntry("100", "board", "title", "", "board", url, 1, 1)
 
+    // The extension 「スレッドを先頭から開く」: only an opening from the catalog, the history or a link asks for the top, and
+    // only once, so coming back to the thread (from settings) or moving between tabs keeps the place.
+    @Test fun anOpeningAsksForTheTopOnceAndATabMoveDoesNot() {
+        val memory = FtutterThreadMemory()
+        memory.open(url, refreshOnOpen = true, startAtTop = true)
+        assertTrue(memory.takeStartAtTop(url))
+        assertFalse(memory.takeStartAtTop(url))
+        memory.open(url, refreshOnOpen = false, startAtTop = false)
+        assertFalse(memory.takeStartAtTop(url))
+        memory.open(url, refreshOnOpen = true, startAtTop = true)
+        memory.open(url, refreshOnOpen = false)
+        assertFalse(memory.takeStartAtTop(url), "a tab move after an opening cancels its request")
+        memory.open(url, refreshOnOpen = true, startAtTop = true)
+        memory.remove(url)
+        assertFalse(memory.takeStartAtTop(url))
+    }
+    @Test fun theOpenAtTopExtensionIsOffUnlessTurnedOn() {
+        assertFalse(FtutterExtension.OPEN_AT_TOP in parseFtutterExtensions(emptyMap()).enabled)
+        assertTrue(FtutterExtension.OPEN_AT_TOP in parseFtutterExtensions(mapOf(FtutterExtension.OPEN_AT_TOP.key to "true")).enabled)
+        assertEquals("compat.ftutter.ext.openAtTop", FtutterExtension.OPEN_AT_TOP.key)
+    }
     @Test fun backgroundUnreadCountRejectsTheOlderPage() {
         val memory = FtutterThreadMemory().apply { put(url, old); open(url, false) }
         assertSame(old, memory.page(url))

@@ -10,7 +10,6 @@ import com.valoser.futacha.shared.audio.TextSpeaker
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.ui.board.ReadAloudSegment
 import com.valoser.futacha.shared.ui.board.buildReadAloudCompletedMessage
-import com.valoser.futacha.shared.ui.board.buildReadAloudSegments
 import com.valoser.futacha.shared.ui.board.buildThreadReadAloudRunnerCallbacks
 import com.valoser.futacha.shared.ui.board.findFirstVisibleReadAloudSegmentIndex
 import com.valoser.futacha.shared.ui.board.runThreadReadAloudSession
@@ -23,6 +22,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
 
 /** What the controller needs from a speech engine; the platform [TextSpeaker] is adapted to it. */
 internal interface FutaberSpeechEngine {
@@ -33,9 +34,21 @@ internal interface FutaberSpeechEngine {
     fun close()
 }
 
-internal fun TextSpeaker.asFutaberEngine(settings: () -> com.valoser.futacha.shared.audio.SpeechSettings = { com.valoser.futacha.shared.audio.SpeechSettings() }): FutaberSpeechEngine = object : FutaberSpeechEngine {
+internal fun TextSpeaker.asFutaberEngine(
+    /** C24: the pitch (0.5〜2.0) the quoted lines are read at; null reads them like the rest. */
+    quotePitch: () -> Float? = { null },
+    settings: () -> com.valoser.futacha.shared.audio.SpeechSettings = { com.valoser.futacha.shared.audio.SpeechSettings() }
+): FutaberSpeechEngine = object : FutaberSpeechEngine {
     override suspend fun prepare() { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.prepare() }
-    override suspend fun speak(text: String) { this@asFutaberEngine.configure(settings()); this@asFutaberEngine.speak(text) }
+    override suspend fun speak(text: String) {
+        // The quoted lines are spoken apart, each part with its own pitch (the engine keeps the rest of the settings).
+        for (run in futaberSpeechRuns(text)) {
+            val base = settings()
+            val pitch = if (run.quoted) quotePitch() else null
+            this@asFutaberEngine.configure(if (pitch != null) base.copy(pitch = pitch) else base)
+            this@asFutaberEngine.speak(run.text)
+        }
+    }
     override fun interrupt() = this@asFutaberEngine.interrupt()
     override fun stop() = this@asFutaberEngine.stop()
     override fun close() = this@asFutaberEngine.close()
@@ -130,7 +143,8 @@ internal class FutaberReadAloud(
                 ensureActive()
                 val speaker = engine ?: createEngine().also { engine = it }
                 speaker.prepare()
-                val built = buildReadAloudSegments(posts)
+                // A thread of a thousand posts takes a moment to cut into lines; not on the main thread (audit A1).
+                val built = withContext(AppDispatchers.parsing) { futaberReadAloudSegments(posts) }
                 segments = built
                 val startIndex = findFirstVisibleReadAloudSegmentIndex(built, firstVisibleRow)
                 if (built.isEmpty() || startIndex < 0) {
@@ -169,7 +183,8 @@ internal class FutaberReadAloud(
                     // A run that was paused or replaced while it moved on must not move the position of the one in charge.
                     if (runId == generation) { currentPostId = segment.postId; currentSegmentIndex = index }
                 },
-                scrollToPostIndex = scroll,
+                // With the screen off no frame is drawn, so a scroll animation never finishes and the reading stalled there.
+                scrollToPostIndex = { index -> kotlinx.coroutines.withTimeoutOrNull(1_500) { scroll(index) } },
                 speakText = { text -> speaker.speak(text) },
                 onFailure = { error -> message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE }
             )
@@ -184,8 +199,22 @@ internal class FutaberReadAloud(
         try {
             while (context.isActive && !stoppedByUser && nextIndex == segments.size) {
                 kotlinx.coroutines.delay(livePollMillis)
-                val posts = loader() ?: run { message = "スレッドが落ちています"; return }
-                val additions = buildReadAloudSegments(posts).filter { it.postId !in seenPostIds }.distinctBy { it.postId }
+                // One failed fetch (a moment without connection) no longer ends the run: it waits and asks again
+                // (audit A2). A thread that has fallen off ends it as before.
+                val posts = try {
+                    loader() ?: run { message = "スレッドが落ちています"; return }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    message = FUTABER_LIVE_FETCH_RETRY_MESSAGE
+                    continue
+                }
+                if (message == FUTABER_LIVE_FETCH_RETRY_MESSAGE) message = "新着を待っています"
+                // Only the posts not seen yet are read into lines, off the main thread (this ran over the whole thread
+                // on the main thread every poll; audit A1).
+                val seen = seenPostIds.toSet()
+                val additions = withContext(AppDispatchers.parsing) { futaberReadAloudSegments(posts, skippedPostIds = seen) }
+                    .distinctBy { it.postId }
                 seenPostIds.addAll(posts.map { it.id })
                 segments = segments + additions
             }
@@ -333,3 +362,6 @@ internal class FutaberReadAloud(
         engine = null
     }
 }
+
+/** Shown while a live run waits after a fetch failed; it asks again at the next poll (audit A2). */
+internal const val FUTABER_LIVE_FETCH_RETRY_MESSAGE = "新着を取得できませんでした。次の確認でもう一度取得します"

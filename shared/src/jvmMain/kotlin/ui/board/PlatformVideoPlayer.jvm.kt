@@ -24,13 +24,12 @@ import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.player.base.*
 import uk.co.caprica.vlcj.player.base.State as VlcState
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.*
-import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-private val DESKTOP_VLC_ACTIVE_STATES = setOf(VlcState.OPENING, VlcState.BUFFERING, VlcState.PLAYING)
+private val DESKTOP_VLC_ACTIVE_STATES = setOf(VlcState.OPENING, VlcState.PLAYING)
 private const val DESKTOP_VLC_PAUSE_WAIT_NANOS = 1_000_000_000L
 private const val DESKTOP_VLC_RELEASE_TIMEOUT_MILLIS = 3_000L
 
@@ -45,7 +44,7 @@ internal object DesktopVlc {
 
     @Synchronized fun factory(): MediaPlayerFactory {
         configure()
-        return shared ?: MediaPlayerFactory("--intf=dummy", "--quiet", "--avcodec-hw=none", "--no-video-title-show",
+        return shared ?: MediaPlayerFactory("--intf=dummy", "--quiet", "--no-hw-dec", "--no-video-title-show",
             "--no-plugins-cache", "--no-lua", "--no-metadata-network-access", "--ignore-config").also { shared = it }
     }
 
@@ -126,11 +125,13 @@ internal class DesktopVideoSession(private val frameChanged: (ImageBitmap, Int, 
             override fun error(mediaPlayer: MediaPlayer) { failed.set(true) }
             override fun finished(mediaPlayer: MediaPlayer) { ended.set(true); if (!hasFrame.get()) failed.set(true) }
         })
+        // VLC 4 uses explicit fourcc buffer formats. Keep the B/G/R byte order
+        // consumed by DesktopVideoFrameConverter instead of the default RGBA.
         val format = object : BufferFormatCallbackAdapter() {
             override fun getBufferFormat(width: Int, height: Int): BufferFormat {
-                if (width <= 0 || height <= 0 || width.toLong() * height > 33_554_432) { failed.set(true); return RV32BufferFormat(1, 1) }
+                if (width <= 0 || height <= 0 || width.toLong() * height > 33_554_432) { failed.set(true); return BufferFormat("BGRA", 1, 1, 4) }
                 val scale = minOf(1.0, 1920.0 / maxOf(width, height))
-                return RV32BufferFormat(maxOf(1, (width * scale).toInt()), maxOf(1, (height * scale).toInt()))
+                return BufferFormat("BGRA", maxOf(1, (width * scale).toInt()), maxOf(1, (height * scale).toInt()), 4)
             }
         }
         val render = object : RenderCallback {
@@ -212,7 +213,7 @@ internal actual fun NativePlatformVideoPlayer(videoUrl: String, playback: Origin
     onStateChanged: (VideoPlayerState) -> Unit, onVideoSizeKnown: (Int, Int) -> Unit, areControlsVisible: Boolean,
     onControlsVisibilityChanged: (Boolean) -> Unit, volume: Float, isMuted: Boolean,
     onMediaInfoKnown: (VideoMediaInfo) -> Unit, onPlaybackError: (VideoPlaybackError) -> Unit, editing: VideoEditPlayback?) {
-    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions(autoPlay = true)
+    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions(autoPlay = platformVideoAutoPlayByDefault)
     val currentOptions by rememberUpdatedState(options)
     val mailbox = remember(videoUrl, playback, editing) { DesktopVideoFrameMailbox() }
     val frames = remember(mailbox) { DesktopVideoFramePresentation() }
@@ -392,7 +393,7 @@ internal class DesktopVideoFrameMailbox {
 }
 
 /**
- * Turns VLC's RV32 frames into Compose bitmaps. RV32 is B, G, R, X in memory,
+ * Turns VLC's BGRA frames into Compose bitmaps, preserving the B, G, R byte order,
  * which Skia reads as BGRA once X is set to 255. The byte buffer is reused while the frame size stays the same: allocating an
  * IntArray and a ByteArray per frame cost about 0.5 GB/s at 1080p30.
  * Called from VLC's single display thread.
@@ -419,3 +420,5 @@ internal class DesktopVideoFrameConverter {
         return bitmap.asComposeImageBitmap()
     }
 }
+
+internal actual val platformVideoAutoPlayByDefault: Boolean = true

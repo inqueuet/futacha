@@ -202,17 +202,17 @@ class CompatPreferenceSchemaTest {
             // Includes the high-quality thumbnail extension and its note.
             "network" to 7,
             "storage" to 10,
-            "thread" to 17,
-            "viewer" to 3
+            "thread" to 20, // + the header size and the gap between posts (this app's own), + 18-20's reply menu size
+            "viewer" to 6 // + 18-20's tap toolbar, video panel auto hide and video autoplay
         )
         val entries = expectedCounts.flatMap { (path, count) ->
             path.compatSettingsEntries().also { assertEquals(count, it.size, path) }
                 .map { path to it }
         }
 
-        assertEquals(80, entries.size)
+        assertEquals(86, entries.size) // + four FutabaViewer 18-20 settings
         assertEquals(
-            79,
+            85,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )
@@ -322,8 +322,8 @@ class CompatPreferenceSchemaTest {
         assertEquals(
             listOf(
                 "threadDisplayMode", "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadThumbSize",
-                "threadUpsThumbSize", "threadUpsThumbMethod"
+                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadHeaderFontSize", "threadPostSpacing", "threadThumbSize",
+                "threadUpsThumbSize", "threadUpsThumbMethod", "threadContextMenuScale"
             ),
             groups[1].second.map(CompatSettingEntry::preferenceKey)
         )

@@ -84,21 +84,27 @@ data class CompatCatalogRuleIndex(
     val hiddenThreadValues: Set<String>,
     val hiddenWords: List<String>,
     val hiddenImageValues: Set<String>,
-    val extractWords: List<String>
+    val extractWords: List<String>,
+    /** 18-20: regular-expression NG and watch words, matched against the title as written. */
+    val hiddenRegexes: List<CompatNgRegexWord> = emptyList(),
+    val extractRegexes: List<CompatNgRegexWord> = emptyList()
 ) {
     fun hides(item: CatalogItem): Boolean {
         val id = item.id.normalizeCompatCatalogValue()
         val threadUrl = item.threadUrl.normalizeCompatCatalogValue()
         if (id in hiddenThreadValues || threadUrl in hiddenThreadValues) return true
-        val title = item.title.orEmpty().normalizeCompatCatalogValue()
+        val rawTitle = item.title.orEmpty()
+        val title = rawTitle.normalizeCompatCatalogValue()
         if (hiddenWords.any(title::contains)) return true
+        if (hiddenRegexes.any { it.matches(rawTitle) }) return true
         return listOfNotNull(item.fullImageUrl, item.thumbnailUrl)
             .any { it.normalizeCompatCatalogValue() in hiddenImageValues }
     }
 
     fun extracts(item: CatalogItem): Boolean {
-        val title = item.title.orEmpty().normalizeCompatCatalogValue()
-        return extractWords.any(title::contains)
+        val rawTitle = item.title.orEmpty()
+        val title = rawTitle.normalizeCompatCatalogValue()
+        return extractWords.any(title::contains) || extractRegexes.any { it.matches(rawTitle) }
     }
 }
 
@@ -106,7 +112,7 @@ fun buildCompatCatalogRuleIndex(rules: List<CompatNgRule>): CompatCatalogRuleInd
     fun values(vararg kinds: CompatNgKind): List<String> {
         val accepted = kinds.toSet()
         return rules.asSequence()
-            .filter { it.kind in accepted }
+            .filter { it.kind in accepted && !it.isRegex }
             .map { it.normalizedValue.normalizeCompatCatalogValue() }
             .filter(String::isNotBlank)
             .distinct()
@@ -116,11 +122,24 @@ fun buildCompatCatalogRuleIndex(rules: List<CompatNgRule>): CompatCatalogRuleInd
         hiddenThreadValues = values(CompatNgKind.CATALOG_THREAD, CompatNgKind.CATALOG_REFUSE).toSet(),
         hiddenWords = values(CompatNgKind.CATALOG_WORD, CompatNgKind.CATALOG_IGNORE),
         hiddenImageValues = values(CompatNgKind.CATALOG_IMAGE).toSet(),
-        extractWords = values(CompatNgKind.CATALOG_EXTRACT)
+        extractWords = values(CompatNgKind.CATALOG_EXTRACT),
+        hiddenRegexes = compatNgRegexWords(rules.asSequence().filter {
+            it.kind == CompatNgKind.CATALOG_WORD || it.kind == CompatNgKind.CATALOG_IGNORE
+        }),
+        extractRegexes = compatNgRegexWords(rules.asSequence().filter { it.kind == CompatNgKind.CATALOG_EXTRACT })
     )
 }
 
 fun compatCatalogItemMatchesRule(item: CatalogItem, rule: CompatNgRule): Boolean {
+    if (rule.isRegex) {
+        return when (rule.kind) {
+            CompatNgKind.CATALOG_WORD,
+            CompatNgKind.CATALOG_IGNORE,
+            CompatNgKind.CATALOG_EXTRACT -> compatNgRegexWordOrNull(rule.normalizedValue)
+                ?.matches(item.title.orEmpty()) == true
+            else -> false
+        }
+    }
     val value = normalizeCompatSearchText(rule.normalizedValue)
     if (value.isBlank()) return false
     return when (rule.kind) {
@@ -173,8 +192,18 @@ private fun compatCatalogMatchedWordsUnchecked(
     watchWords.map(String::trim).filter(String::isNotBlank).forEach { word ->
         if (title.contains(word.normalizeCompatCatalogValue())) add(word)
     }
+    // A regular expression is named by the part of the title it found.
     rules.asSequence()
-        .filter { it.kind == CompatNgKind.CATALOG_EXTRACT }
+        .filter { it.kind == CompatNgKind.CATALOG_EXTRACT && it.isRegex }
+        .mapNotNull { rule ->
+            // Compiled once per pattern and searched within the time limit (the catalog asks for every cell).
+            compatNgRegexWordOrNull(rule.normalizedValue)
+                ?.find(item.title.orEmpty())
+                ?.let { found -> found.takeIf(String::isNotBlank) ?: rule.normalizedValue }
+        }
+        .forEach(::add)
+    rules.asSequence()
+        .filter { it.kind == CompatNgKind.CATALOG_EXTRACT && !it.isRegex }
         .map { it.normalizedValue.trim() }
         .filter(String::isNotBlank)
         .filter { title.contains(it.normalizeCompatCatalogValue()) }

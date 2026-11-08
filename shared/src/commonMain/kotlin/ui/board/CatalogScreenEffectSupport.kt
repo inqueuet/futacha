@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.state.boardSetting
+import com.valoser.futacha.shared.state.boardSettingKeys
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
@@ -24,11 +26,13 @@ internal data class CatalogPastSearchResetState(
 
 internal fun resolveCatalogModeSyncValue(
     boardId: String?,
-    persistedCatalogModes: Map<String, CatalogMode>
+    persistedCatalogModes: Map<String, CatalogMode>,
+    boardUrl: String? = null
 ): CatalogMode? {
     val normalizedBoardId = boardId?.trim().orEmpty()
     if (normalizedBoardId.isBlank()) return null
-    return persistedCatalogModes[normalizedBoardId]
+    // Under the board's shared key, else the board id earlier versions used (D-B1).
+    return boardSettingKeys(normalizedBoardId, boardUrl)?.let(persistedCatalogModes::boardSetting)
 }
 
 internal fun resolveCatalogPastSearchResetState(

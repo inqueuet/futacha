@@ -68,7 +68,7 @@ internal fun FutaberGalleryScreen(
                 FutaberIcon(Icons.Outlined.Settings, contentDescription = "画像ビューアの設定", tint = GalleryText)
             }
             Text(
-                "${mediaPosts.size}枚", color = GalleryText, fontSize = 16.sp, textAlign = TextAlign.Center,
+                futaberGalleryTitle(mediaPosts.size), color = GalleryText, fontSize = 16.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.weight(1f).testTag("futaber-gallery-count")
             )
             IconButton(onClick = onClose, modifier = Modifier.testTag("futaber-gallery-close")) {

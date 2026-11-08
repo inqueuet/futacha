@@ -27,14 +27,14 @@ internal fun futachaDraftPersistEntry(): CompatSettingEntry =
 
 internal fun compatParityControlEntries(): List<CompatSettingEntry> = listOf(
     CompatSettingEntry("履歴の絞り込み・並べ替え・印", "OFF", preferenceKey = COMPAT_HISTORY_TOOLS_PREFERENCE_KEY),
-    CompatSettingEntry("共通NGをこのモードでも適用", "OFF", preferenceKey = COMPAT_COMMON_NG_APPLY_PREFERENCE_KEY)
+    CompatSettingEntry("共通NGをこのモードでも適用", "ON", preferenceKey = COMPAT_COMMON_NG_APPLY_PREFERENCE_KEY)
 )
 
 internal fun compatParityControlSummary(preferenceKey: String): String? = when (preferenceKey) {
     COMPAT_HISTORY_TOOLS_PREFERENCE_KEY ->
         "履歴の長押しに絞り込み・並べ替え、エクスポート／インポート、一括更新を足し、行に印（落ちた・書き込み済み・保存済み）を出します"
     COMPAT_COMMON_NG_APPLY_PREFERENCE_KEY ->
-        "ONにすると、ふたちゃ・ふたばー風で登録したNGワードでもレスやスレが隠れます"
+        "ふたちゃ・ふたばー風で登録したNGワードでもレスやスレを隠します。OFFにすると、このモードでは使いません"
     FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY ->
         "返信・スレ立ての本文と添付を端末に残し、スレッドやカタログを離れても戻します。送信に成功すると消えます。" +
             "同じスレッド・板の下書きは、としあき(仮)の書き込み画面にも出ます"
@@ -66,5 +66,6 @@ internal fun compatSettingsGroups(
 internal fun futachaDraftPersistEnabled(preferences: Map<String, String>): Boolean =
     preferences[FUTACHA_DRAFT_PERSIST_STORAGE_KEY] == "ON"
 
+/** D-B7 (J4): on until switched off, so the NG entered in any mode shows in the others (an explicit OFF is kept). */
 internal fun compatCommonNgApplyEnabled(preferences: Map<String, String>): Boolean =
-    preferences[COMPAT_COMMON_NG_APPLY_STORAGE_KEY] == "ON"
+    preferences[COMPAT_COMMON_NG_APPLY_STORAGE_KEY] != "OFF"

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -71,14 +72,41 @@ private val ViewerBackground = Color(0xFF000000)
 private val ViewerBar = Color(0xFF111111)
 private val ViewerInfo = Color(0xE6222222)
 private val ViewerText = Color(0xFFFFFFFF)
+private const val VIEWER_REPLIES_ICON = "replies"
 
-/** The line over the image: "16 26/08/31(月)07:49:43 IP:… No.325019" of the shown post. */
-internal fun futaberViewerHeader(post: CompatPostSnapshot): String = buildString {
-    append(post.position).append(' ').append(post.timestamp)
-    // The timestamp text of some boards already carries the ID, so it is added only when missing.
-    post.posterId?.takeIf { it.isNotBlank() && !post.timestamp.contains(it) }?.let { append(' ').append(it) }
-    append(" No.").append(post.postNo)
+/** V19: the caption's size and line height (futaber's about 11pt lines, close together). */
+internal const val FUTABER_VIEWER_CAPTION_SP = 11
+internal const val FUTABER_VIEWER_CAPTION_LINE_SP = 13
+
+/**
+ * The caption's header of the shown post in the original's order, split where the reply count goes (drawn between the
+ * two as a bubble and a number): "0 ひー坊 26/10/16(金)21:19:42" and "IP:106.73.*(enabler.ne.jp) 1/2 No.325108".
+ * [ipCount] is the thread's "n/N" for an IP that posts again; the subject and name follow the thread's setting.
+ */
+internal fun futaberViewerHeaderParts(
+    post: CompatPostSnapshot,
+    ipCount: String? = null,
+    alwaysShowTitleAndName: Boolean = false
+): Pair<String, String> {
+    val (date, ip) = futaberTimestampAndIp(post.timestamp)
+    val before = buildString {
+        append(post.position)
+        futaberPostTitleLine(post.subject, post.author, alwaysShowTitleAndName)?.let { append(' ').append(it) }
+        append(' ').append(date)
+    }
+    val after = buildList {
+        ip?.let(::add)
+        // The ID (or the IP some boards keep apart from the time) once, wherever it came from.
+        post.posterId?.trim()?.takeIf { it.isNotBlank() && it != ip }?.let(::add)
+        ipCount?.let(::add)
+        add("No.${post.postNo}")
+    }.joinToString(" ")
+    return before to after
 }
+
+/** The header as one line, without the reply count: "16 26/08/31(月)07:49:43 IP:… No.325019". */
+internal fun futaberViewerHeader(post: CompatPostSnapshot, ipCount: String? = null, alwaysShowTitleAndName: Boolean = false): String =
+    futaberViewerHeaderParts(post, ipCount, alwaysShowTitleAndName).let { (before, after) -> "$before $after" }
 
 /** The counter in the top bar, as the original app writes it ("9 of 9"). */
 internal fun futaberViewerCounter(index: Int, count: Int): String = "${index + 1} of $count"
@@ -107,6 +135,9 @@ internal fun FutaberViewerScreen(
     playVideoInApp: Boolean = false,
     /** Kept by the media window while settings/help temporarily replace this composable. */
     returnPosition: CompatViewerReturnPosition? = null,
+    /** The thread's "n/N" of IPs that post more than once and its reply counts, by post number, for the caption. */
+    ipCounts: Map<String, String> = emptyMap(),
+    replyCounts: Map<String, Int> = emptyMap(),
     onClose: () -> Unit
 ) {
     PlatformBackHandler(onBack = onOpenGallery)
@@ -138,6 +169,35 @@ internal fun FutaberViewerScreen(
         val mediaUrl = current?.let(::resolveCompatViewerMediaUrl) ?: return
         mediaSaver.saveOrShare(mediaUrl, shareAfterSave)
     }
+    // C27・F15: the control chosen on the viewer page hands the picture to the storage-provider picker instead of its own action.
+    val storageButton = FutaberDisplaySettings.from(preferences).viewerStorageButton
+    fun exportCurrent() {
+        val mediaUrl = current?.let(::resolveCompatViewerMediaUrl) ?: return
+        mediaSaver.exportToProvider(mediaUrl)
+    }
+    fun onSavePressed() = if (storageButton == FutaberStorageButton.Save) exportCurrent() else saveCurrent(false)
+    fun onSharePressed() = if (storageButton == FutaberStorageButton.Action) exportCurrent() else saveCurrent(true)
+    fun onPictureLongPressed() = if (storageButton == FutaberStorageButton.LongPress) exportCurrent() else saveCurrent(true)
+    // G27: how far the finger has moved since it went down; a slow swipe is not a long press.
+    val touchSlop = androidx.compose.ui.platform.LocalViewConfiguration.current.touchSlop
+    val movedPx = remember { FloatArray(1) }
+    val moveTracker = Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            movedPx[0] = 0f
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                movedPx[0] = kotlin.math.max(movedPx[0], (change.position - down.position).getDistance())
+            }
+        }
+    }
+    fun longPressWhereTheFingerStayed() {
+        if (futaberLongPressAllowed(movedPx[0], touchSlop)) { longPressHaptic(); onPictureLongPressed() }
+    }
+    // G37: the top bar, the caption and the bottom bar take their own taps and long presses (nothing reaches the picture).
+    val barTaps = Modifier.pointerInput(Unit) { detectTapGestures(onTap = {}, onLongPress = {}) }
 
     var zoomed by remember { mutableStateOf(false) }
     val currentIsVideo = current?.let(::resolveCompatViewerMediaUrl)?.let(::isCompatVideoMediaUrl) == true
@@ -167,7 +227,11 @@ internal fun FutaberViewerScreen(
             }
         }
     } else Modifier
-    Box(Modifier.fillMaxSize().background(ViewerBackground).then(closeOnSwipe).testTag("futaber-viewer")) {
+    // Read once from the settings, not again on every page (audit A8).
+    val videoPlaybackOptions = remember(preferences) {
+        com.valoser.futacha.shared.ui.board.VideoPlaybackOptions(autoPlay = FutaberDisplaySettings.from(preferences).viewerAutoplay)
+    }
+    Box(Modifier.fillMaxSize().background(ViewerBackground).then(closeOnSwipe).then(moveTracker).testTag("futaber-viewer")) {
         HorizontalPager(
             state = pagerState,
             key = { keys[it] },
@@ -180,7 +244,7 @@ internal fun FutaberViewerScreen(
                     FutaberVideoPoster(post?.thumbnailUrl, Modifier.fillMaxSize().pointerInput(mediaUrl) {
                         detectTapGestures(
                             onTap = { chromeVisible = !chromeVisible },
-                            onLongPress = { if (page == pagerState.currentPage) { longPressHaptic(); saveCurrent(true) } }
+                            onLongPress = { if (page == pagerState.currentPage) longPressWhereTheFingerStayed() }
                         )
                     })
                 } else {
@@ -207,14 +271,27 @@ internal fun FutaberViewerScreen(
                         },
                         onDimensionsKnown = { _, _ -> },
                         onClick = { chromeVisible = !chromeVisible },
-                        // A long press on the image opens the share sheet at once, as in the original.
-                        onLongClick = { if (page == pagerState.currentPage) { longPressHaptic(); saveCurrent(true) } }
+                        // A long press on the image opens the share sheet at once, as in the original (where the finger stayed: G27).
+                        onLongClick = { if (page == pagerState.currentPage) longPressWhereTheFingerStayed() },
+                        // G26: a double tap zooms in around the tapped point and the bars go; another one brings both back.
+                        onDoubleTapZoom = { zoomedIn -> chromeVisible = !zoomedIn }
                     )
                 }
                 if (mediaUrl != null && isCompatVideoMediaUrl(mediaUrl)) {
                     // The video page is the video viewer itself (no play button). Like the other modes' viewers it opens stopped,
                     // ready for a deliberate play (the shared player never autoplays); "停止" leaves it for the picture list.
                     if (playVideoInApp) {
+                        // C29: with the viewer page's 「動画を自動再生」 on, a video begins to play when it is opened.
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
+                                videoPlaybackOptions,
+                            com.valoser.futacha.shared.ui.board.LocalVideoPageSwipe provides { forward ->
+                                val target = pagerState.currentPage + if (forward) 1 else -1
+                                if (target in mediaPosts.indices && !pagerState.isScrollInProgress) {
+                                    scope.launch { pagerState.animateScrollToPage(target) }
+                                }
+                            }
+                        ) {
                         FutaberVideoPlayer(
                             videoUrl = mediaUrl,
                             posterUrl = post?.thumbnailUrl,
@@ -223,6 +300,7 @@ internal fun FutaberViewerScreen(
                             onOpenExternal = { openUrl(mediaUrl) },
                             bottomInset = 110.dp
                         )
+                        }
                     } else {
                         PrivacyVideoOverlay()
                         TextButton(onClick = { openUrl(mediaUrl) }, modifier = Modifier.align(Alignment.Center)) {
@@ -235,7 +313,7 @@ internal fun FutaberViewerScreen(
         if (chromeVisible) {
             Column(Modifier.fillMaxSize()) {
                 Row(
-                    Modifier.fillMaxWidth().background(ViewerBar).statusBarsPadding().height(FUTABER_TOP_BAR_HEIGHT_DP.dp),
+                    Modifier.fillMaxWidth().background(ViewerBar).then(barTaps).statusBarsPadding().height(FUTABER_TOP_BAR_HEIGHT_DP.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { rememberCurrentPosition(); onOpenSettings() }, modifier = Modifier.testTag("futaber-viewer-gear")) {
@@ -251,7 +329,7 @@ internal fun FutaberViewerScreen(
                     }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth())
-                Column(Modifier.fillMaxWidth().background(ViewerBar).navigationBarsPadding()) {
+                Column(Modifier.fillMaxWidth().background(ViewerBar).then(barTaps).navigationBarsPadding()) {
                     if (isSaving) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -262,24 +340,56 @@ internal fun FutaberViewerScreen(
                     }
                     current?.let { post ->
                         Column(
-                            Modifier.fillMaxWidth().background(ViewerInfo).padding(horizontal = 20.dp, vertical = 10.dp)
+                            Modifier.fillMaxWidth().background(ViewerInfo).padding(horizontal = 20.dp, vertical = 5.dp)
                                 .testTag("futaber-viewer-info"),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
                         ) {
-                            Text(futaberViewerHeader(post), color = ViewerText, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            // The original's three small lines (V19: about 11pt, close together): the header (with the reply count
+                            // after the time) on two, and the text's lines joined by a space on the third, cut with 「…」.
+                            val alwaysShowTitleAndName = FutaberDisplaySettings.from(preferences).alwaysShowTitleAndName
+                            val (before, after) = futaberViewerHeaderParts(post, ipCounts[post.postNo], alwaysShowTitleAndName)
+                            val replies = replyCounts[post.postNo] ?: 0
                             Text(
-                                messageHtmlToPlainText(post.messageHtml).trim(),
-                                color = ViewerText, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                androidx.compose.ui.text.buildAnnotatedString {
+                                    append(before)
+                                    if (replies > 0) {
+                                        append(' ')
+                                        appendInlineContent(VIEWER_REPLIES_ICON, "返信")
+                                        append(replies.toString())
+                                    }
+                                    append(' ')
+                                    append(after)
+                                },
+                                inlineContent = mapOf(
+                                    VIEWER_REPLIES_ICON to androidx.compose.foundation.text.InlineTextContent(
+                                        androidx.compose.ui.text.Placeholder(
+                                            14.sp, 14.sp, androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter
+                                        )
+                                    ) {
+                                        FutaberIcon(Icons.Outlined.ChatBubbleOutline, contentDescription = null, tint = ViewerText,
+                                            modifier = Modifier.fillMaxSize())
+                                    }
+                                ),
+                                color = ViewerText, fontSize = FUTABER_VIEWER_CAPTION_SP.sp, lineHeight = FUTABER_VIEWER_CAPTION_LINE_SP.sp,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("futaber-viewer-header")
+                            )
+                            Text(
+                                futaberViewerBodyLine(post.messageHtml),
+                                color = ViewerText, fontSize = FUTABER_VIEWER_CAPTION_SP.sp, lineHeight = FUTABER_VIEWER_CAPTION_LINE_SP.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("futaber-viewer-body")
                             )
                         }
                     }
                     ScrollableToolbarRow(itemCount = 4, minItemWidth = 48.dp, modifier = Modifier.fillMaxWidth().height(FUTABER_BOTTOM_BAR_HEIGHT_DP.dp)) {
                         ViewerBarButton(Icons.Outlined.GridView, "画像一覧", "futaber-viewer-grid", Modifier.weight(1f), onClick = onOpenGallery)
-                        ViewerBarButton(Icons.Outlined.ChatBubbleOutline, "レスに戻る", "futaber-viewer-post", Modifier.weight(1f)) {
+                        // S11: the post comes back as a bubble over the thread (a bubble holding 「…」).
+                        ViewerBarButton(FutaberBubbleDotsIcon, "レスに戻る", "futaber-viewer-post", Modifier.weight(1f)) {
                             current?.let { onShowPost(it.postNo) }
                         }
-                        ViewerBarButton(Icons.Outlined.IosShare, "共有", "futaber-viewer-share", Modifier.weight(1f), enabled = !isSaving) { saveCurrent(true) }
-                        ViewerBarButton(Icons.Outlined.SaveAlt, "保存", "futaber-viewer-save", Modifier.weight(1f), enabled = !isSaving) { saveCurrent(false) }
+                        ViewerBarButton(Icons.Outlined.IosShare, "共有", "futaber-viewer-share", Modifier.weight(1f), enabled = !isSaving) { onSharePressed() }
+                        ViewerBarButton(Icons.Outlined.SaveAlt, "保存", "futaber-viewer-save", Modifier.weight(1f), enabled = !isSaving) { onSavePressed() }
                     }
                 }
             }

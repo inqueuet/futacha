@@ -128,4 +128,22 @@ class CompatibilityOtherMenusTest {
         assertFalse(thread.any { it.key in setOf("top", "page_down", "search", "close") })
         assertTrue(thread.any { it.key == "save" })
     }
+
+    // The thread toolbar's 「リロード前に戻す」 is on by default; it must not take
+    // 「閉じたスレを元に戻す」 out of the その他 menu. Only the toolbar's own
+    // 「閉じたスレを元に戻す」 button (FutabaViewer 18-20) does that.
+    @Test
+    fun theReloadUndoButtonLeavesRestoringAClosedThreadInTheMenu() {
+        fun thread(keys: Set<String>) = compatThreadOtherMenu(
+            CompatOtherMenuRoute.THREAD_ROOT,
+            ngEnabled = true,
+            canUndoClose = true,
+            ngCount = 0,
+            activeToolbarKeys = keys
+        )
+        val defaults = compatToolbarMaster(CompatToolbarSurface.THREAD)
+            .filter(CompatToolbarMasterItem::defaultActive).mapTo(mutableSetOf()) { it.key }
+        assertTrue(thread(defaults).any { it.label == "閉じたスレを元に戻す" && it.enabled })
+        assertFalse(thread(defaults + "restoreclosed").any { it.label == "閉じたスレを元に戻す" })
+    }
 }

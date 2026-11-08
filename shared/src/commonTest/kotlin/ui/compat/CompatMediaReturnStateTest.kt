@@ -51,4 +51,29 @@ class CompatMediaReturnStateTest {
         assertEquals(selected, compatMediaIdentity(reordered[2]))
         assertEquals(2, compatViewerInitialPage(reordered, position.mediaIdentity, position.index ?: 0))
     }
+
+    // FutabaViewer 18-20: the thread toolbar opens the gallery near the post being read.
+    @Test fun theThreadToolbarOpensTheGalleryAtTheFirstMediaOfTheReadPostOrALaterOne() {
+        val posts = listOf("100", "105", "105", "120").mapIndexed { index, no ->
+            CompatPostSnapshot(index, no, timestamp = "", messageHtml = "", imageUrl = "https://example.com/$index.jpg",
+                mediaKey = if (index == 2) "inline" else null)
+        }
+        assertEquals(0, compatGalleryIndexAtOrAfterPost(posts, "90"))
+        assertEquals(1, compatGalleryIndexAtOrAfterPost(posts, "101"))
+        assertEquals(1, compatGalleryIndexAtOrAfterPost(posts, "105"))
+        assertEquals(3, compatGalleryIndexAtOrAfterPost(posts, "130"))
+        assertNull(compatGalleryIndexAtOrAfterPost(posts, null))
+        assertNull(compatGalleryIndexAtOrAfterPost(emptyList(), "100"))
+    }
+
+    // FutabaViewer 18-20: Back from the viewer returns to the image it last showed.
+    @Test fun backFromAGalleryViewerReturnsAtTheLastShownImageCentredWhenItMoved() {
+        val moved = compatViewerGalleryReturn(viewer, currentIndex = 5, currentIdentity = "6")
+        assertEquals(CompatHost.Gallery("tab", index = 5, postNo = "6", centerOnOpen = true), moved)
+        val same = compatViewerGalleryReturn(viewer, currentIndex = 2, currentIdentity = "3")
+        assertEquals(false, same?.centerOnOpen)
+        assertNull(compatViewerGalleryReturn(viewer.copy(caller = CompatViewerCaller.THREAD), 5, "6"))
+        assertNull(compatViewerGalleryReturn(viewer.copy(directMediaUrl = "https://example.com/a.jpg"), 5, "6"))
+        assertNull(compatViewerGalleryReturn(viewer, null, null))
+    }
 }

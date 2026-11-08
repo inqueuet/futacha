@@ -10,12 +10,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-actual fun rememberUrlLauncher(customTabs: Boolean): (String) -> Unit {
+actual fun rememberUrlLauncher(customTabs: Boolean, allowAnyScheme: Boolean): (String) -> Unit {
     val context = LocalContext.current
-    return remember(context, customTabs) {
+    return remember(context, customTabs, allowAnyScheme) {
         { url: String ->
             try {
-                val request = resolveUrlLaunchRequest(url)
+                val request = resolveUrlLaunchRequest(url, allowAnyScheme)
                 if (request == null) {
                     Logger.w("UrlLauncher", "Ignoring empty URL")
                     Toast.makeText(context, "リンクを開けません", Toast.LENGTH_SHORT).show()

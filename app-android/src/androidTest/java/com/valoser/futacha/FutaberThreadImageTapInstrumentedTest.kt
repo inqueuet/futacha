@@ -84,8 +84,9 @@ class FutaberThreadImageTapInstrumentedTest {
     @Test fun aThumbnailLongPressKeepsTheImageMenuAndDoesNotOpenTheViewer() {
         open()
         rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick(center) }
-        rule.onNodeWithText("レス:0の画像").assertIsDisplayed()
-        rule.onNodeWithText("画像検索").assertIsDisplayed()
+        // L-B5 (M25): the picture sheet is titled by the file name and starts with the original's 「画像を表示」.
+        rule.onNode(hasText("100.jpg") and hasAnyAncestor(hasTestTag("futaber-sheet-title"))).assertIsDisplayed()
+        rule.onNodeWithText("画像を表示").assertIsDisplayed()
         rule.onNodeWithTag("futaber-viewer").assertDoesNotExist()
     }
     @Test fun draggingFromAThumbnailScrollsWithoutOpeningTheViewer() {
@@ -103,13 +104,17 @@ class FutaberThreadImageTapInstrumentedTest {
         rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { click(center) }
         rule.onNodeWithTag("futaber-viewer").assertDoesNotExist()
         rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick(center) }
-        rule.onNodeWithText("レス:0の画像").assertIsDisplayed()
+        rule.onNode(hasText("100.jpg") and hasAnyAncestor(hasTestTag("futaber-sheet-title"))).assertIsDisplayed()
     }
     @Test fun quoteTapsAndTheBodyLongPressKeepTheirExistingActions() {
         open()
         rule.onNodeWithTag("futaber-quote-line").performTouchInput { click(center) }
         rule.onNodeWithTag("futaber-quote-close-one").assertIsDisplayed().performClick()
-        rule.onNodeWithText("body-100").performTouchInput { longClick(center) }
+        // The post's own line (the title row above the posts shows the same first line since L-B1).
+        rule.onNode(
+            androidx.compose.ui.test.hasText("body-100") and
+                androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("futaber-post"))
+        ).performTouchInput { longClick(center) }
         rule.onNodeWithText("レス:0").assertIsDisplayed()
         rule.onNodeWithTag("futaber-viewer").assertDoesNotExist()
     }
@@ -121,7 +126,7 @@ class FutaberThreadImageTapInstrumentedTest {
         val inBubble = hasTestTag("futaber-post-image") and hasAnyAncestor(hasTestTag("futaber-quote-card"))
         rule.waitUntil(5_000) { rule.onAllNodes(inBubble).fetchSemanticsNodes().isNotEmpty() }
         rule.onAllNodes(inBubble)[0].performTouchInput { longClick(center) }
-        rule.onNodeWithText("レス:0の画像").assertIsDisplayed()
+        rule.onNode(hasText("100.jpg") and hasAnyAncestor(hasTestTag("futaber-sheet-title"))).assertIsDisplayed()
         rule.onNodeWithText("キャンセル").performClick()
         rule.onAllNodes(inBubble)[0].performTouchInput { click(center) }
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer").fetchSemanticsNodes().isNotEmpty() }

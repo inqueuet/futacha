@@ -40,6 +40,45 @@ class DesktopRuntimeTest {
         } finally { graph.close(); directory.deleteRecursively() }
     }
 
+    /**
+     * D1 on the desktop (D-B1): a board restored into the compatibility store, with its tab, stays through ふたちゃ's
+     * board synchronization and the switches (the desktop deleted every store board the AppState list lacked), and
+     * a deletion in ふたちゃ's list still takes it from both.
+     */
+    @Test fun aRestoredBoardSurvivesTheDesktopSynchronizationAndTheSwitches() = runBlocking {
+        val directory = Files.createTempDirectory("futacha-d1-desktop").toFile()
+        val environment = DesktopEnvironment(directory, File(directory, "cache"))
+        environment.install()
+        val graph = DesktopAppGraph(environment)
+        try {
+            graph.initialize()
+            val may = BoardSummary("b", "二次元裏", "", "https://may.2chan.net/b/", "")
+            graph.stateStore.setBoards(graph.stateStore.boards.first() + may)
+            graph.synchronizeBoards(ExperienceProfile.FUTACHA)
+            val imgUrl = "https://img.2chan.net/b/"
+            val imgKey = compatBoardKey(imgUrl)
+            val thread = "${imgUrl}res/200.htm"
+            val tab = CompatTab(compatTabKey(thread), thread, thread, imgKey, "img", "200", "スレ",
+                insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1)
+            graph.compatibility.importSettingsBackup(encodeCompatSettingsBackup(CompatSettingsBackup(
+                exportedAtEpochMillis = 1, boards = listOf(CompatBoard(imgKey, "img", imgUrl, imgUrl, 0)), tabs = listOf(tab),
+                workspace = null
+            )))
+            graph.synchronizeBoards(ExperienceProfile.FUTACHA)
+            assertTrue(graph.stateStore.boards.first().any { it.url == imgUrl })
+            assertTrue(graph.compatibility.tabs.first().any { it.key == tab.key })
+            graph.switchTo(ExperienceProfile.TOSHIAKI_COMPAT)
+            graph.switchTo(ExperienceProfile.FUTACHA)
+            assertTrue(graph.compatibility.tabs.first().any { it.key == tab.key })
+            graph.stateStore.updateBoards { boards -> boards.filterNot { it.url == imgUrl } }
+            graph.synchronizeBoards(ExperienceProfile.FUTACHA)
+            assertTrue(graph.compatibility.boards.first().none { it.key == imgKey })
+            graph.switchTo(ExperienceProfile.TOSHIAKI_COMPAT)
+            graph.switchTo(ExperienceProfile.FUTACHA)
+            assertTrue(graph.stateStore.boards.first().none { it.url == imgUrl })
+        } finally { graph.close(); directory.deleteRecursively() }
+    }
+
     @Test fun automaticDetectionContoursTrackingAndCancellationUseNativeRuntime() = runBlocking {
         System.setProperty("futacha.resourcesDir", File("../app-desktop/resources/${DesktopPlatform.resourceDirectory}").canonicalPath)
         val directory = Files.createTempDirectory("futacha-analysis-test").toFile()

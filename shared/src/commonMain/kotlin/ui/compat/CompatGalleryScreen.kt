@@ -28,6 +28,7 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -265,6 +266,8 @@ internal fun CompatGalleryScreen(
     tab: CompatTab,
     initialIndex: Int = 0,
     initialPostNo: String? = null,
+    readingPostNo: String? = null,
+    centerOnOpen: Boolean = false,
     preparedSnapshot: com.valoser.futacha.shared.compat.CompatThreadSnapshot? = null,
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
     restoreInitialPosition: Boolean = true,
@@ -432,9 +435,20 @@ internal fun CompatGalleryScreen(
     LaunchedEffect(posts.size, initialIndex, initialPostNo) {
         if (!restoreInitialPosition || initialPositionRestored) return@LaunchedEffect
         if (posts.isNotEmpty()) {
-            val target = compatViewerInitialPage(posts, initialPostNo, initialIndex)
+            val readingTarget = compatGalleryIndexAtOrAfterPost(posts, readingPostNo)
+            val target = readingTarget ?: compatViewerInitialPage(posts, initialPostNo, initialIndex)
             withFrameNanos { }
             gridState.scrollToItem(target)
+            if (readingTarget != null || centerOnOpen) {
+                // 18-20 puts the item in the vertical middle of the grid.
+                withFrameNanos { }
+                val layout = gridState.layoutInfo
+                layout.visibleItemsInfo.firstOrNull { it.index == target }?.let { item ->
+                    val viewportMiddle = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+                    val itemMiddle = item.offset.y + item.size.height / 2
+                    gridState.scrollBy((itemMiddle - viewportMiddle).toFloat())
+                }
+            }
             initialPositionRestored = true
             onInitialPositionRestored()
         }
@@ -682,7 +696,7 @@ internal fun CompatGalleryScreen(
                     openSearchResult(resultUrl, "二次元画像類似検索")
                 }
                 .onFailure { failure ->
-                    message = failure.toCompatUserMessage("二次元画像検索に失敗しました")
+                    message = compatAscii2dFailureMessage(failure.toCompatUserMessage("二次元画像検索に失敗しました"), endpoint)
                 }
         }
     }
@@ -1261,22 +1275,29 @@ fun CompatAscii2dRegistrationDialog(
     initialEndpoint: String,
     onDismiss: () -> Unit,
     onRegister: (String) -> Unit,
-    onInvalid: () -> Unit = {}
+    onInvalid: () -> Unit = {},
+    editing: Boolean = false
 ) {
     var endpoint by remember(initialEndpoint) { mutableStateOf(initialEndpoint) }
+    var invalid by remember(initialEndpoint) { mutableStateOf(false) }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("詳細画像検索の設定") },
+        title = { Text(if (editing) "二次元画像類似検索のURL" else "詳細画像検索の設定") },
         text = {
             Column {
                 Text("アドレス ※わかる人向け")
                 TextField(
                     value = endpoint,
-                    onValueChange = { endpoint = it.take(512) },
+                    onValueChange = { endpoint = it.take(512); invalid = false },
+                    isError = invalid,
                     placeholder = { Text("https://") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("compat-ascii2d-address")
                 )
+                if (invalid) Text("ascii2d.net の検索URLを入力してください。", color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { endpoint = DEFAULT_COMPAT_ASCII2D_ENDPOINT; invalid = false }) {
+                    Text("初期値に戻す")
+                }
             }
         },
         confirmButton = {
@@ -1284,14 +1305,15 @@ fun CompatAscii2dRegistrationDialog(
                 val normalized = endpoint.trim()
                 if (isValidCompatAscii2dEndpoint(normalized)) {
                     onRegister(normalized)
+                } else if (editing) {
+                    invalid = true
                 } else {
-                    // AlertDialog#setPositiveButton in both reference APKs closes even
-                    // when validation fails, then reports the exact toast text.
+                    // Preserve the first-use registration dialog's existing behavior.
                     onDismiss()
                     onInvalid()
                 }
             }) {
-                Text("登録する")
+                Text(if (editing) "保存" else "登録する")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }

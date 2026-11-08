@@ -19,7 +19,8 @@ data class CompatToolbarBackup(
 data class CompatToolbarBackupItem(
     val key: String,
     val position: Int,
-    val active: Boolean
+    val active: Boolean,
+    val hidden: Boolean = false
 )
 
 @Serializable
@@ -114,11 +115,14 @@ val COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS = setOf(
 /** ふたったー風's delete key and drafts (FtutterKeys.DELETE_KEY / DRAFTS; spelled out here so compat/ needs no UI). */
 private const val COMPAT_BACKUP_FTUTTER_DELETE_KEY = "compat.ftutter.deleteKey"
 private const val COMPAT_BACKUP_FTUTTER_DRAFTS = "compat.ftutter.drafts"
+/** ふたばー風's "ペーストボード" (FutaberPreferenceKeys.PASTEBOARD): its pictures are files of this device, as the drafts'. */
+private const val COMPAT_BACKUP_FUTABER_PASTEBOARD = "compat.futaber.pasteboard"
 
 val COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS = setOf(
     "compat.common.commonPostDeleteKey",
     "compat.lastDeleteKey",
     "compat.futaber.drafts",
+    COMPAT_BACKUP_FUTABER_PASTEBOARD,
     COMPAT_BACKUP_FTUTTER_DELETE_KEY,
     COMPAT_BACKUP_FTUTTER_DRAFTS,
     "compat.appLock.attempts"
@@ -130,7 +134,7 @@ fun compatBackupExportPreferences(preferences: Map<String, String>): Map<String,
 /** Keys a restore must not apply even when an (older) backup file contains them. */
 private val COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS =
     COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS + "compat.futaber.drafts" + "compat.appLock.attempts" +
-        COMPAT_BACKUP_FTUTTER_DELETE_KEY + COMPAT_BACKUP_FTUTTER_DRAFTS
+        COMPAT_BACKUP_FTUTTER_DELETE_KEY + COMPAT_BACKUP_FTUTTER_DRAFTS + COMPAT_BACKUP_FUTABER_PASTEBOARD
 
 fun compatBackupRestorePreferences(preferences: Map<String, String>): Map<String, String> =
     preferences.filterKeys { it !in COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS }
@@ -268,7 +272,9 @@ fun validateCompatSettingsBackup(backup: CompatSettingsBackup) {
     require(backup.schemaVersion == CURRENT_COMPAT_SETTINGS_BACKUP_VERSION) {
         "対応していないバックアップ形式です"
     }
-    require(backup.boards.size <= 100) { "板の登録数が上限を超えています" }
+    // The same limit as the board lists themselves (D-B1): with 100 here, a person with 101 boards could not save a
+    // backup at all.
+    require(backup.boards.size <= com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS) { "板の登録数が上限を超えています" }
     require(backup.tabs.size <= MAX_COMPAT_BACKUP_TABS) { "タブの登録数が上限を超えています" }
     require(backup.history.size <= 200) { "履歴の登録数が上限を超えています" }
     require(backup.preferences.size <= 4096) { "設定項目が多すぎます" }

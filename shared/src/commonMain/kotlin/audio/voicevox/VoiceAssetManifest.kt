@@ -5,14 +5,14 @@ import com.valoser.futacha.shared.download.AssetDistribution
 internal data class VoiceDictionaryFile(val name: String, val bytes: Long, val sha256: String)
 
 internal object VoiceAssetManifest {
-    const val PACK = "zundamon-0.16.4-dictionary-1.11"
-    const val DOWNLOAD_BYTES = 81_861_222L
-    const val INSTALLED_BYTES = 165_519_192L
+    const val PACK = "zundamon-0.17.0-dictionary-1.11"
+    const val DOWNLOAD_BYTES = 82_955_331L
+    const val INSTALLED_BYTES = 166_613_301L
     const val DICTIONARY_BYTES = 107_304_813L
     const val DICTIONARY_ROOT = "open_jtalk_dic_utf_8-1.11"
     const val STAGING_SPACE_BYTES = 256L * 1024 * 1024
-    val model = AssetDistribution("https://github.com/VOICEVOX/voicevox_vvm/releases/download/0.16.4/0.vvm",
-        58_214_379, "917e592cae92a02fb7668bd9e168df4e39c8ab2f5302c2be71906c70ec4e2df2")
+    val model = AssetDistribution("https://github.com/VOICEVOX/voicevox_vvm/releases/download/0.17.0/0.vvm",
+        59_308_488, "ecd35374d4182cd883cba5040376f7f888cc6ba248b1c2f4cea07cdb34bb1318")
     val dictionary = AssetDistribution("https://github.com/r9y9/open_jtalk/releases/download/v1.11.1/open_jtalk_dic_utf_8-1.11.tar.gz",
         23_646_843, "fe6ba0e43542cef98339abdffd903e062008ea170b04e7e2a35da805902f382a")
     val files = listOf(

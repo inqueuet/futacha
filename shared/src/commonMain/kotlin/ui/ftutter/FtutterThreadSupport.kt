@@ -145,20 +145,20 @@ internal fun ftutterPostMark(post: Post, selfIds: Set<String>, depth: Int): Ftut
 
 // ---- 引用・返信・ID ----
 
-/** そのレスを引用している（返信の）レスの番号。自分より後のレスだけ。 */
+/** そのレスを引用している（返信の）レスの番号。自分は除く（添付のファイル名の引用だけは前のレスからも来る）。 */
 internal fun ftutterReplyIndex(posts: List<Post>): Map<String, List<Int>> {
     val position = posts.withIndex().associate { (i, p) -> p.id to i }
     val index = LinkedHashMap<String, MutableList<Int>>()
     posts.forEachIndexed { i, source ->
         source.quoteReferences.flatMap { it.replyTargetPostIds }.distinct().forEach { target ->
             val at = position[target] ?: return@forEach
-            if (at < i) index.getOrPut(target) { mutableListOf() }.add(i)
+            if (at != i) index.getOrPut(target) { mutableListOf() }.add(i)
         }
     }
     return index
 }
 
-/** そのレスが引用しているレスの番号（自分より前だけ）。 */
+/** そのレスが引用しているレスの番号（自分は除く。添付のファイル名の引用だけは後のレスも指す）。 */
 internal fun ftutterQuoteTargets(posts: List<Post>, index: Int): List<Int> = ftutterThreadIndexOf(posts).quoteTargets(index)
 
 /**
@@ -176,7 +176,7 @@ internal class FtutterThreadIndex(val posts: List<Post>) {
         if (refs.isEmpty()) emptyList() else {
             val out = ArrayList<Int>(2)
             refs.forEach { ref ->
-                ref.replyTargetPostIds.forEach { id -> position[id]?.let { at -> if (at < index && at !in out) out += at } }
+                ref.replyTargetPostIds.forEach { id -> position[id]?.let { at -> if (at != index && at !in out) out += at } }
             }
             out
         }
@@ -300,6 +300,16 @@ internal sealed interface FtutterRow {
         override val key: String get() = "kokomade"
     }
 }
+
+/**
+ * The thread list's key of a row. The 「ここまで読んだ」 band is keyed by where it stands: saving the read count (a refresh,
+ * the screen leaving the foreground) moves it after the posts seen, and a list that kept the band's own key followed it
+ * there. On a thread opened for the first time the band is the first row on screen, so the list ran down the thread by
+ * itself (a report on iPhone; a reopened thread has the band further down and was not moved). Keyed by its place, the
+ * band's move leaves the list where it was, as the original's list does. Posts keep their own keys.
+ */
+internal fun ftutterRowListKey(index: Int, row: FtutterRow): String =
+    if (row is FtutterRow.ReadMark) "${row.key}@$index" else row.key
 
 /** 表示の絞り込み。人気・画像はタブごと（保存しない）。 */
 internal data class FtutterThreadFilter(
@@ -612,9 +622,11 @@ internal fun ftutterQuoteLineTargets(posts: List<Post>, index: Int, line: String
         val identity = parseCompatPosterIdentity(query) ?: return emptyList()
         // Keep the original ID prefix lookup, separated by kind for IPv4/IPv6.
         // This is a popup lookup only; direct-reply references remain untouched.
-        return (0 until index).filter { at -> ftutterPosterIdentities(posts[at]).any {
+        val matches = (0 until index).filter { at -> ftutterPosterIdentities(posts[at]).any {
             it.kind == identity.kind && it.value.startsWith(identity.value)
         } }
+        // 原作：IPの引用は同じIPの最初のレス（多くはOP）だけへ飛ぶ（M6）。IDの引用は同じIDのレス全部。
+        return if (identity.kind == CompatHeaderExtractionKind.IP) matches.take(1) else matches
     }
     val position = posts.withIndex().associate { (i, p) -> p.id to i }
     return posts[index].quoteReferences
@@ -653,13 +665,14 @@ internal fun ftutterRefreshNotice(
 }
 
 /** 末尾の帯の文と色の種類。 */
-internal enum class FtutterEndState { NORMAL, DANGER, ARCHIVED }
+internal enum class FtutterEndState { NORMAL, DANGER, ARCHIVED, FALLEN }
 
 internal data class FtutterEndBand(val text: String, val state: FtutterEndState)
 
-internal fun ftutterEndBand(expiresAtLabel: String?, fallen: Boolean, archived: Boolean): FtutterEndBand = when {
+internal fun ftutterEndBand(expiresAtLabel: String?, fallen: Boolean, archived: Boolean, legacyFallen: Boolean = false): FtutterEndBand = when {
     archived -> FtutterEndBand("過去ログ取得済み", FtutterEndState.ARCHIVED)
-    fallen -> FtutterEndBand("スレッドは落ちています", FtutterEndState.DANGER)
+    // M23：原作の落ちた帯は「ここまで読んだ」と同じ地に赤い字。従来の動きは赤い地に白い字。
+    fallen -> FtutterEndBand("スレッドは落ちています", if (legacyFallen) FtutterEndState.DANGER else FtutterEndState.FALLEN)
     else -> {
         val label = expiresAtLabel.orEmpty().trim()
         // 「もうすぐ消えます」の赤い太字は解析器が別に持たないため、文言で判断する。
@@ -689,3 +702,63 @@ internal fun ftutterIndexOfPost(posts: List<Post>, id: String?): Int =
 /** True when [after] is [before] with posts only added at the end (the same posts keep their positions). */
 internal fun ftutterPostsOnlyGrew(before: List<Post>, after: List<Post>): Boolean =
     after.size >= before.size && before.indices.all { before[it].id == after[it].id }
+
+/**
+ * Whether a そうだね counted, read like the original: its response is the post's new count, and
+ * "0" is the original's 「失敗しました」 (H12). An empty body is a repository that does not report
+ * the body (other implementations of [com.valoser.futacha.shared.repo.BoardRepository.voteSaidaneResponse]).
+ */
+internal fun ftutterSaidaneCounted(body: String): Boolean = body.trim() != "0"
+
+/** Thrown inside the そうだね action when the server answered "0". */
+internal class FtutterSaidaneNotCountedException : Exception("失敗しました")
+
+/** 従来の動き：そうだね・del・削除の結果を、サーバーの返事ではなく今までの文で知らせる（M87）。 */
+internal val FTUTTER_LEGACY_REMOTE_NOTICE_KEY: String get() = FtutterKeys.PREFIX + "legacyRemoteNotice"
+internal const val FTUTTER_LEGACY_REMOTE_NOTICE_LABEL = "そうだね・del・削除の結果を前の文で知らせる"
+internal const val FTUTTER_LEGACY_REMOTE_NOTICE_NOTE =
+    "原作はdel・削除の結果をサーバーの返事のまま出し、そうだねの失敗は「失敗しました」とだけ出します。ONにすると今までの説明の文で知らせます。"
+
+/** 原作のそうだねの失敗の知らせ（H12・M87）。 */
+internal const val FTUTTER_SOUDANE_FAILED = "失敗しました"
+
+/**
+ * del・本人削除が成功した時の知らせ（M87）：原作はサーバーの返事をそのまま出す（例「<html><body>ok</body></html>」）。
+ * 返事を返さない作り（模擬の板など）は空で、何も出さない。[legacy]の時は[legacyText]。
+ */
+internal fun ftutterRemoteSuccessNotice(body: String, legacy: Boolean, legacyText: String): String =
+    if (legacy) legacyText else body.trim()
+
+/**
+ * del・本人削除が失敗した時の知らせ（M87）：サーバーの返事がある時はそのまま（HTMLもHTTP 500の本文も）。
+ * 返事が無い失敗（通信が届かない、読み取り専用等）と[legacy]の時はnull＝今までの文。
+ */
+internal fun ftutterRemoteFailureNotice(error: Throwable, legacy: Boolean): String? =
+    if (legacy) null else ftutterServerBody(error)?.trim()
+
+/**
+ * そうだねが失敗した時の知らせ（M87）：サーバーが答えた失敗（「0」・HTTPの失敗）は原作の「失敗しました」。
+ * 届かなかった時と[legacy]の時はnull＝今までの文。
+ */
+internal fun ftutterSoudaneFailureNotice(error: Throwable, legacy: Boolean): String? {
+    if (legacy) return null
+    var current: Throwable? = error
+    var depth = 0
+    while (current != null && depth < 8) {
+        if (current is FtutterSaidaneNotCountedException) return FTUTTER_SOUDANE_FAILED
+        if ((current as? com.valoser.futacha.shared.network.NetworkException)?.statusCode != null) return FTUTTER_SOUDANE_FAILED
+        current = current.cause
+        depth++
+    }
+    return null
+}
+
+/** 従来の動き：落ちたスレを前の形（赤い地の帯、1度も読めていない時は中央の文と「再読み込み」「過去ログを取得」）で出す（M23）。 */
+internal val FTUTTER_LEGACY_FALLEN_KEY: String get() = FtutterKeys.PREFIX + "legacyFallen"
+internal const val FTUTTER_LEGACY_FALLEN_LABEL = "落ちたスレを前の形で出す"
+internal const val FTUTTER_LEGACY_FALLEN_NOTE =
+    "原作は落ちたスレを「ここまで読んだ」と赤い字の「スレッドは落ちています」の帯だけで出し、1度も読めていない時はボタンも知らせも出しません。ONにすると今までの形（赤い帯、中央の文と再読み込み・過去ログの取得のボタン、知らせ）に戻します。"
+
+/** M23：1度も読めていないスレが落ちていた時、原作どおり帯だけを出すか（ボタン・知らせなし）。 */
+internal fun ftutterFallenBandsOnly(pageLoaded: Boolean, fallen: Boolean, legacy: Boolean): Boolean =
+    !pageLoaded && fallen && !legacy

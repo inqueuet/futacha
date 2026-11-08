@@ -21,7 +21,9 @@ internal data class FtutterMediaSettings(
     val videoAutoPlay: Boolean = false,
     val videoLoop: Boolean = false,
     val reduceThumbnail: Boolean = true,
-    val thumbnailPixels: Int = 200
+    val thumbnailPixels: Int = 200,
+    /** 従来の動き：画像一覧のセルを正方形に切り抜く（M85。原作は画像全体を出す）。 */
+    val legacyGallerySquare: Boolean = false
 )
 
 internal fun parseFtutterMediaSettings(p: Map<String, String>) = FtutterMediaSettings(
@@ -34,8 +36,35 @@ internal fun parseFtutterMediaSettings(p: Map<String, String>) = FtutterMediaSet
     videoLoop = p.ftutterBool(FtutterKeys.VIDEO_LOOP, false),
     reduceThumbnail = p.ftutterBool(FtutterKeys.USE_MEM_SIZE, true),
     thumbnailPixels = p.ftutterInt(FtutterKeys.MEM_SIZE, 200, 1..4096),
-    stripSize = p.ftutterInt(FtutterKeys.GALLERY_TAB_SIZE, 80, 20..300)
+    stripSize = p.ftutterInt(FtutterKeys.GALLERY_TAB_SIZE, 80, 20..300),
+    legacyGallerySquare = p.ftutterBool(FTUTTER_LEGACY_GALLERY_SQUARE_KEY, false)
 )
+
+/** 従来の動き：画像一覧のセルを正方形に切り抜く（M85）。 */
+internal val FTUTTER_LEGACY_GALLERY_SQUARE_KEY: String get() = FtutterKeys.PREFIX + "legacyGallerySquare"
+internal const val FTUTTER_LEGACY_GALLERY_SQUARE_LABEL = "画像一覧を正方形に切り抜く"
+internal const val FTUTTER_LEGACY_GALLERY_SQUARE_NOTE =
+    "原作の画像一覧は画像を切り抜かずに全体を出し、行の高さはその行で一番高い画像に合わせます。ONにすると今までの形（正方形に切り抜く）に戻します。"
+
+/** 画像の縦横比（幅÷高さ）。大きさが分からない時は1（正方形）。 */
+internal fun ftutterGalleryImageRatio(post: CompatPostSnapshot): Float {
+    val w = post.thumbnailWidth?.takeIf { it > 0 } ?: return 1f
+    val h = post.thumbnailHeight?.takeIf { it > 0 } ?: return 1f
+    return w.toFloat() / h
+}
+
+/**
+ * M85：原作の画像一覧のセルの高さ÷幅。各画像は列の幅に収めて全体を出す（高さ＝幅×min(高さ÷幅, 1)）。行の高さは
+ * その行で一番高い画像に合わせ、画像は縦の中央に置く。[index]のセルが入る行の値を返す。
+ */
+internal fun ftutterGalleryRowHeightFraction(media: List<CompatPostSnapshot>, index: Int, columns: Int): Float {
+    val cols = columns.coerceAtLeast(1)
+    val start = (index / cols) * cols
+    val end = minOf(start + cols, media.size)
+    var max = 0f
+    for (i in start until end) max = maxOf(max, 1f / maxOf(ftutterGalleryImageRatio(media[i]), 1f))
+    return if (max > 0f) max else 1f
+}
 
 /**
  * 一覧・ビューアに並べる画像（本体ファイルと、本文中の「あぷ・あぷ小」のリンク。共有の`compatViewerMediaPosts`）。

@@ -23,7 +23,11 @@ sealed interface CompatHost {
         val index: Int = 0,
         /** Stable media identity used before the index when the snapshot changed. */
         val postNo: String? = null,
-        val threadOrigin: CompatThreadOrigin = CompatThreadOrigin.CATALOG
+        val threadOrigin: CompatThreadOrigin = CompatThreadOrigin.CATALOG,
+        /** Opened from the thread toolbar: start at the first media at or after this post (18-20). */
+        val readingPostNo: String? = null,
+        /** Put the restored item in the middle of the screen (18-20). */
+        val centerOnOpen: Boolean = false
     ) : CompatHost
     data class Viewer(
         val tabKey: String,

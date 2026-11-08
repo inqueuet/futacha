@@ -89,8 +89,9 @@ class M71PosterIpTest {
                 ">IP:$ipv6", listOf("1"), isDirectReply = false
             ))), post("6", "IP:$ipv6")
         )
-        assertEquals(listOf(0, 3), ftutterQuoteLineTargets(posts, 4, ">IP:$ipv6"))
-        assertEquals(listOf(0, 3), ftutterQuoteLineTargets(posts, 4, "＞IP:2001:DB8"))
+        // T-B2（M6）：原作どおり、IPの引用は同じIPの最初のレスだけ（前は同じIPのレスを全部）。
+        assertEquals(listOf(0), ftutterQuoteLineTargets(posts, 4, ">IP:$ipv6"))
+        assertEquals(listOf(0), ftutterQuoteLineTargets(posts, 4, "＞IP:2001:DB8"))
         assertTrue(ftutterQuoteLineTargets(posts, 4, ">IP:").isEmpty())
         assertEquals(listOf(1), ftutterQuoteLineTargets(posts, 4, ">ID:2001:DB8"))
         assertTrue(ftutterReplyIndex(posts).isEmpty())

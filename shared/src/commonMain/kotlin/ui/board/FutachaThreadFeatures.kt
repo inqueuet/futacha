@@ -240,17 +240,14 @@ internal fun FutachaThreadFeatureHost(
                 features.store.saveSharedThreadSnapshot(sourceUrl, sourceUrl, board.name, threadTitle,
                     next.page.posts.firstOrNull()?.thumbnailUrl, snapshot)
             }
-            val existing = features.store.tabs.first().firstOrNull { it.key == tabKey }
-            val updated = (existing ?: CompatTab(tabKey, sourceUrl, sourceUrl, boardKey, board.name,
-                threadId, threadTitle, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now)).copy(
-                title = threadTitle, replyCount = next.page.compatReplyCount(),
-                checkedReplyCount = next.page.compatReplyCount(), snapshotRevision = if (snapshotChanged) snapshot.revision else storedSnapshot?.revision ?: snapshot.revision,
-                contentUpdatedAtEpochMillis = if (snapshotChanged) now else existing?.contentUpdatedAtEpochMillis ?: now, thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl)
-            val flags = parseCompatThreadStatusFlags(next.page.deletedNotice)
-            val confirmed = if (!isCachedPage && !next.isArchived) updated.copy(
-                isDead = next.confirmedGone, isIsolated = flags.isIsolated, isDeleted = flags.isDeleted, isExploded = flags.isAdminDeleted
-            ) else updated
-            if (existing == null) features.store.openTab(confirmed) else if (confirmed != existing) features.store.updateTab(confirmed)
+            writeFutachaThreadTab(features.store, FutachaThreadTabWrite(
+                tabKey = tabKey, sourceUrl = sourceUrl, boardKey = boardKey, boardName = board.name, threadId = threadId,
+                title = threadTitle, replyCount = next.page.compatReplyCount(), thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl,
+                snapshotChanged = snapshotChanged, snapshotRevision = snapshot.revision, storedSnapshotRevision = storedSnapshot?.revision,
+                confirmedGone = next.confirmedGone,
+                confirmedStatus = if (!isCachedPage && !next.isArchived) parseCompatThreadStatusFlags(next.page.deletedNotice) else null,
+                nowEpochMillis = now
+            ))
             latestWrittenToTab = true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
@@ -488,6 +485,7 @@ internal fun FutachaThreadFeatureHost(
                     viewerIndex != null -> CompatViewerScreen(
                         tab = tab, initialIndex = viewerIndex ?: 0, initialPostNo = viewerPostNo,
                         preparedSnapshot = preparedMedia,
+                        followsFutabaViewer = false,
                         store = features.store, preferences = features.preferences, ngRules = ngRules,
                         httpClient = features.httpClient, fileSystem = features.fileSystem,
                         cookieRepository = features.cookieRepository, toolbarRefreshToken = viewerToolbarRevision,

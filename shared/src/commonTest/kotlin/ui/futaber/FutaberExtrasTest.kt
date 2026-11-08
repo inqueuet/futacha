@@ -31,7 +31,7 @@ class FutaberExtrasTest {
 
     @Test fun everyExtensionIsOffByDefaultAndAnEmptySettingReadsAsOff() {
         val defaults = FutaberDisplaySettings()
-        assertFalse(defaults.extTree); assertFalse(defaults.extExtract); assertFalse(defaults.extIdTap); assertFalse(defaults.extAutoScroll)
+        assertFalse(defaults.extTree); assertTrue(defaults.extExtract); assertTrue(defaults.extIdTap); assertTrue(defaults.extAutoScroll)
         val read = FutaberDisplaySettings.from(emptyMap())
         assertEquals(defaults, read)
         val on = FutaberDisplaySettings.from(
@@ -106,14 +106,15 @@ class FutaberExtrasTest {
 
     @Test fun theOtherExtensionsAreOffByDefaultToo() {
         val defaults = FutaberDisplaySettings()
-        assertFalse(defaults.extHistory); assertFalse(defaults.extMailPresets); assertFalse(defaults.extVolumeKeys)
+        assertTrue(defaults.extHistory); assertTrue(defaults.extMailPresets); assertFalse(defaults.extVolumeKeys)
         // The B1 parity additions (2026-10-12) start off as well.
-        assertFalse(defaults.extTabsManage); assertFalse(defaults.extArchiveMenu); assertFalse(defaults.extSavedDetail)
-        assertFalse(defaults.extOtherFavorites); assertFalse(defaults.extScrollMenu); assertFalse(defaults.extSearchNav)
-        assertFalse(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
+        assertFalse(defaults.extTabsManage); assertTrue(defaults.extArchiveMenu); assertTrue(defaults.extSavedDetail)
+        assertTrue(defaults.extOtherFavorites); assertTrue(defaults.extScrollMenu); assertTrue(defaults.extSearchNav)
+        // G20 (L-B7): the tap to scroll is the one that starts on (futaber's default).
+        assertTrue(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
         // The second half of B1: off as well, and the volume keys keep scrolling a screen.
-        assertFalse(defaults.extSortByBoard); assertFalse(defaults.extCatalogLongPress); assertFalse(defaults.extPostDetailOps)
-        assertFalse(defaults.extGalleryColumns); assertFalse(defaults.extImageMenu)
+        assertFalse(defaults.extSortByBoard); assertTrue(defaults.extCatalogLongPress); assertTrue(defaults.extPostDetailOps)
+        assertTrue(defaults.extGalleryColumns); assertTrue(defaults.extImageMenu)
         assertEquals(FutaberVolumeKeyMode.Screen, defaults.volumeKeyMode)
         val on = FutaberDisplaySettings.from(
             mapOf(
@@ -170,7 +171,7 @@ class FutaberExtrasTest {
     }
 
     @Test fun theTabExtensionIsOffByDefaultAndTheVideoViewerIsOnUntilTurnedOff() {
-        assertFalse(FutaberDisplaySettings().extTabs)
+        assertTrue(FutaberDisplaySettings().extTabs)
         assertTrue(FutaberDisplaySettings().extVideo)
         assertTrue(FutaberDisplaySettings.from(emptyMap()).extVideo)
         assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_VIDEO to "ON")).extVideo)
@@ -200,16 +201,17 @@ class FutaberExtrasTest {
         assertTrue(futaberArchiveNotice().isNotEmpty())
     }
 
-    @Test fun theIconsAreRoundedGlyphsAndThisModesOwnIconsAreKept() {
+    @Test fun theIconsAreLineGlyphsAndThisModesOwnIconsAreKept() {
+        // L-B2 (V04): the rounded filled glyphs of 2026-10-07 gave way to the original's thin lines.
         val outlined = androidx.compose.material.icons.Icons.Outlined.Close
-        val rounded = futaberIconFor(outlined)
-        assertTrue(rounded !== outlined)
-        assertEquals("Rounded.Close", rounded.name)
+        val line = futaberIconFor(outlined)
+        assertTrue(line !== outlined)
+        assertEquals("FutaberLine.Outlined.Close", line.name)
         // A glyph the table does not know (this mode's own icons) is drawn as it is.
         assertTrue(futaberIconFor(FutaberTwoPaneIcon) === FutaberTwoPaneIcon)
         // The star shows its state by fill: a line star until the thread is starred, a solid one after.
-        assertEquals("Rounded.StarOutline", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.StarOutline).name)
-        assertEquals("Rounded.Star", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.Star).name)
+        assertEquals("FutaberLine.Outlined.StarOutline", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.StarOutline).name)
+        assertEquals("FutaberLine.Outlined.Star", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.Star).name)
     }
 
     /** 監査M17：管理パネルの履歴の行は、裏で作っても以前（その場でふたちゃの絞り込み・並べ替え→1スレ1行）と同じ。 */

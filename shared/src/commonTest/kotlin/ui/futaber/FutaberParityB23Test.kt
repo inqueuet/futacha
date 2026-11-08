@@ -37,38 +37,41 @@ class FutaberParityB23Test {
 
     @Test fun theNewExtensionsAreOffByDefault() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extPostTools)
-        assertFalse(defaults.extDraftAttachment)
+        assertTrue(defaults.extPostTools)
+        assertTrue(defaults.extDraftAttachment)
         val on = FutaberDisplaySettings.from(
             mapOf(FutaberSettingKeys.EXT_POST_TOOLS to "ON", FutaberSettingKeys.EXT_DRAFT_ATTACHMENT to "ON")
         )
         assertTrue(on.extPostTools && on.extDraftAttachment)
-        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_POST_TOOLS to "yes")).extPostTools)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_POST_TOOLS to "yes")).extPostTools)
     }
 
     // ---- P10 / P11 ----
 
-    @Test fun anImgReplyTapOffersTheDrawingAndOtherwiseTheTapPicksAFile() {
+    // L-B8 (M37): the attach button's tap opens the camera's black menu everywhere; the menu says what can be attached.
+    @Test fun anImgReplyGetsOnlyTheDrawingFromTheCameraMenuAndOtherwiseItsThreeItemsPickAFile() {
         val imgCaps = defaultBoardPostingCapabilities(img.url)
         assertFalse(imgCaps.replyAttachmentsAllowed)
-        assertEquals(FutaberAttachTap.OpenToolSheet, futaberAttachTap(isReply = true, replyAttachmentsAllowed = imgCaps.replyAttachmentsAllowed))
-        // A new thread on img and any post elsewhere pick a file as before.
-        assertEquals(FutaberAttachTap.PickFile, futaberAttachTap(isReply = false, replyAttachmentsAllowed = false))
-        assertEquals(FutaberAttachTap.PickFile, futaberAttachTap(isReply = true, replyAttachmentsAllowed = true))
+        val imgReply = futaberCameraMenu(filesRefused = !imgCaps.replyAttachmentsAllowed, toolsEnabled = false, canUpload = true)
+        assertEquals(listOf("recent", "file", "library", "tool-drawing"), imgReply.map { it.id })
+        // The three say why when pressed (the picker would only be refused); 手書き works.
+        assertTrue(imgReply.take(3).all { it.refused })
+        assertTrue(imgReply.last().enabled && !imgReply.last().refused)
+        // A new thread on img and any post elsewhere pick a file as before, and need no drawing in the menu.
+        val elsewhere = futaberCameraMenu(filesRefused = false, toolsEnabled = false, canUpload = true)
+        assertEquals(listOf("recent", "file", "library"), elsewhere.map { it.id })
+        assertTrue(elsewhere.all { it.enabled && !it.refused })
     }
 
-    @Test fun theToolSheetOffersTheDrawingAlwaysAndTheOtherToolsOnlyWithTheExtension() {
-        val onlyDrawing = futaberPostToolEntries(handwritingOnly = true, allTools = false, canUpload = true)
-        assertEquals(listOf("pick", "drawing"), onlyDrawing.map { it.id })
-        assertFalse(onlyDrawing.first { it.id == "pick" }.enabled)
-        assertTrue(onlyDrawing.first { it.id == "pick" }.label.contains("添付できません"))
-        assertTrue(onlyDrawing.first { it.id == "drawing" }.enabled)
-        val all = futaberPostToolEntries(handwritingOnly = false, allTools = true, canUpload = false)
-        assertEquals(listOf("pick", "drawing", "ups", "voice", "network-info", "device-info"), all.map { it.id })
-        assertTrue(all.first { it.id == "pick" }.enabled)
+    @Test fun theCameraMenuOffersTheOtherToolsOnlyWithTheExtensionAfterTheOriginalsItems() {
+        val all = futaberCameraMenu(filesRefused = false, toolsEnabled = true, canUpload = false)
+        assertEquals(
+            listOf("recent", "file", "library", "tool-drawing", "tool-ups", "tool-voice", "tool-network-info", "tool-device-info"),
+            all.map { it.id }
+        )
+        assertTrue(all.drop(3).all { it.extra } && all.take(3).none { it.extra })
         // Without the network there is nothing to upload to.
-        assertFalse(all.first { it.id == "ups" }.enabled)
-        assertTrue(futaberPostToolSheetTitle(true).contains("手書き"))
+        assertFalse(all.first { it.id == "tool-ups" }.enabled)
     }
 
     @Test fun theRefusalOfAnImgReplyNamesTheWayToTheDrawing() {

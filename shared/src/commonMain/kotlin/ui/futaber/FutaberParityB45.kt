@@ -402,7 +402,13 @@ internal class FutaberTabChecker(
     var running by mutableStateOf(false)
         private set
 
-    fun check(targets: List<ThreadHistoryEntry>, boards: List<BoardSummary>, onMessage: (String) -> Unit) {
+    fun check(
+        targets: List<ThreadHistoryEntry>,
+        boards: List<BoardSummary>,
+        /** F-B4 E2: called with the history once the check wrote it (not after a time-out or a failure). */
+        onChecked: ((List<ThreadHistoryEntry>) -> Unit)? = null,
+        onMessage: (String) -> Unit
+    ) {
         if (running) {
             onMessage(FUTABER_TAB_CHECK_BUSY_NOTICE)
             return
@@ -430,7 +436,9 @@ internal class FutaberTabChecker(
                     FUTABER_TAB_CHECK_TIMEOUT_NOTICE
                 } else {
                     val failed = refresher.lastRefreshError.value?.takeIf { it.timestamp >= startedAt }?.errorCount ?: 0
-                    futaberTabCheckMessage(futaberTabCheckOutcome(targets, stateStore.readHistory(), failed))
+                    val after = stateStore.readHistory()
+                    onChecked?.invoke(after)
+                    futaberTabCheckMessage(futaberTabCheckOutcome(targets, after, failed))
                 }
             } catch (busy: HistoryRefresher.RefreshAlreadyRunningException) {
                 FUTABER_TAB_CHECK_BUSY_NOTICE
@@ -470,7 +478,21 @@ internal fun futaberTabCheckAction(
     checker: FutaberTabChecker,
     onCheck: () -> Unit
 ): FutaberPostAction? = if (!enabled) null else FutaberPostAction(
-    "tab-check-all", if (checker.running) "全タブを確認（実行中）" else "全タブを確認", enabled = !checker.running
+    "tab-check-all", if (checker.running) "全タブを確認（実行中）" else "全タブを確認", enabled = !checker.running, extra = true
+) { onCheck() }
+
+/** F-B4 E2: the tabs among [keys] whose thread [history] now marks as fallen. */
+internal fun futaberFallenTabKeys(keys: List<FutaberTabKey>, history: List<ThreadHistoryEntry>): Set<FutaberTabKey> =
+    futaberTabViews(keys, history).filter { it.fallen }.mapTo(HashSet()) { it.key }
+
+/** F-B4 E2: the tab sheet's item that checks every tab and then closes the ones found fallen. */
+internal fun futaberTabCloseFallenAction(
+    enabled: Boolean,
+    checker: FutaberTabChecker,
+    onCheck: () -> Unit
+): FutaberPostAction? = if (!enabled) null else FutaberPostAction(
+    "tab-check-close", if (checker.running) "落ちたタブを確認して閉じる（実行中）" else "落ちたタブを確認して閉じる",
+    enabled = !checker.running, extra = true
 ) { onCheck() }
 
 // ---- W04: the patrol while this mode is on screen ----
@@ -654,5 +676,23 @@ internal suspend fun futaberNoteViewedThread(
         nowEpochMillis = nowEpochMillis,
         onEnqueued = onEnqueued,
         desktop = desktop
+    )
+}
+
+/** F-B4 E13: the address to open, typed in an alert. */
+@androidx.compose.runtime.Composable
+internal fun FutaberOpenUrlAlert(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
+    var text by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf("") }
+    FutaberAlert(
+        title = "URLから開く",
+        message = "スレッドか板のアドレスを入れてください",
+        field = FutaberAlertField(text, { text = it.take(300) }, placeholder = "https://", tag = "futaber-open-url-field"),
+        buttons = listOf(
+            FutaberAlertButton("open-url-cancel", "キャンセル", FutaberAlertStyle.Cancel) { onDismiss() },
+            FutaberAlertButton("open-url-submit", "開く", enabled = text.isNotBlank(), tag = "futaber-open-url-submit") {
+                onDismiss(); onSubmit(text.trim())
+            }
+        ),
+        onDismiss = onDismiss
     )
 }

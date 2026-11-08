@@ -95,6 +95,17 @@ class CompatImageSearchTest {
     }
 
     @Test
+    fun failedSearchWithAChangedEndpointSaysWhereToCorrectIt() {
+        val failed = "二次元画像検索に失敗しました"
+        // A valid host with a wrong path passes validation and fails every search.
+        val mistaken = compatAscii2dFailureMessage(failed, "https://ascii2d.net/wrong-path")
+        assertTrue(mistaken.startsWith(failed))
+        assertTrue(mistaken.endsWith(COMPAT_ASCII2D_ENDPOINT_HINT))
+        // The default endpoint failing is the service, not the setting.
+        assertEquals(failed, compatAscii2dFailureMessage(failed, " $DEFAULT_COMPAT_ASCII2D_ENDPOINT "))
+    }
+
+    @Test
     fun customSearchEnginesSerializeInStableOrderAndBuildPublicUrls() {
         val selected = setOf(
             CompatImageSearchEngine.YANDEX,

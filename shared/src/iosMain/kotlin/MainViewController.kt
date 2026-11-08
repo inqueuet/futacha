@@ -92,7 +92,8 @@ import com.valoser.futacha.shared.compat.IosModeSwitchCoordinator
 import com.valoser.futacha.shared.compat.IosArchiveReportScheduler
 import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
-import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
+import com.valoser.futacha.shared.compat.shared.SharedBoardSide
+import com.valoser.futacha.shared.compat.shared.reconcileSharedBoards
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
 import com.valoser.futacha.shared.compat.CompatForegroundNetworkPolicy
 import com.valoser.futacha.shared.compat.CompatBoard
@@ -952,6 +953,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 modeSwitchCoordinator.recoverIfNeeded().getOrThrow()
                 val boards = stateStore.boards.first()
                 compatibilityStore.bootstrapBoardsIfNeeded(boards)
+                // The shared data's migration stages (D-B1), before the first screen.
+                com.valoser.futacha.shared.compat.shared.runSharedDataMigrations(stateStore, compatibilityStore)
                 // The modern history import runs after the first frame (below):
                 // reading up to 20k history files kept the screen blank for seconds.
                 if (compatibilityStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF") {
@@ -1198,16 +1201,15 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             if (!target.usesAppStateData) {
                                 val boards = stateStore.boards.first()
                                 compatibilityStore.bootstrapBoardsIfNeeded(boards)
-                                compatibilityStore.importModernBoards(boards)
+                                // The boards as one list, with the changes of the mode being left (D-B1).
+                                reconcileSharedBoards(
+                                    stateStore, compatibilityStore, SharedBoardSide.of(activeProfile.usesAppStateData)
+                                )
                                 compatibilityStore.importModernHistory(stateStore.readHistory())
                             } else if (!activeProfile.usesAppStateData) {
-                                val compatBoards = compatibilityStore.boards.first()
+                                reconcileSharedBoards(stateStore, compatibilityStore, SharedBoardSide.COMPAT)
                                 val compatHistory = compatibilityStore.history.first()
-                                val boards = stateStore.boards.first()
-                                val mergedBoards = synchronizeModernBoardsFromCompatibility(
-                                    boards, compatBoards, compatibilityStore.holdsBundledTutorialBoard
-                                )
-                                if (mergedBoards != boards) stateStore.setBoards(mergedBoards)
+                                val mergedBoards = stateStore.boards.first()
                                 stateStore.updateHistory { current ->
                                     mergeCompatibilityHistory(current, compatHistory, mergedBoards)
                                 }

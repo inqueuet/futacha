@@ -92,7 +92,9 @@ class BoardUrlResolverTest {
             "https://may.2chan.net@evil.com/b/",
             "https://user:pass@may.2chan.net/b/",
             "https://evil.com%5C%40may.2chan.net/b/",
-            "https://may.2chan.net/\\evil.com/b/"
+            "https://may.2chan.net/\\evil.com/b/",
+            "https://may.2chan.net/%5Cevil.com/b/",
+            "https://may.2chan.net/%5cevil.com/b/"
         ).forEach { board ->
             assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveBoardBaseUrl(board) }
             assertFailsWith<IllegalArgumentException>(board) { BoardUrlResolver.resolveThreadUrl(board, "1") }

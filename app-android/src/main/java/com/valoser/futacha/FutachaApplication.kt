@@ -283,6 +283,12 @@ class FutachaApplication : Application() {
             }
         }
         applicationScope.launch {
+            // The shared data's migration stages (D-B1): once both stores are loaded. The screens read the legacy
+            // places too until it ran.
+            compatibilityStore.ensureInitialized()
+            com.valoser.futacha.shared.compat.shared.runSharedDataMigrations(appStateStore, compatibilityStore)
+        }
+        applicationScope.launch {
             compatibilityStore.ensureInitialized()
             compatibilityStore.recoverStaleArchiveReports(System.currentTimeMillis())
             // Archive reporting is optional telemetry and is not part of the

@@ -31,6 +31,9 @@ class LargeBoardRoundTripInstrumentedTest {
             } else store.upsertBoards(modernBoardsToCompatibility(modern))
             assertEquals(201, store.boards.first().size)
             assertEquals(modern, synchronizeModernBoardsFromCompatibility(modern, store.boards.first(), false))
+            // The settings backup holds every board (D-B1: it refused more than 100, so with 101 boards none could be saved).
+            val backup = store.exportSettingsBackup()
+            assertEquals(201, decodeCompatSettingsBackup(backup).boards.size)
             val last = store.boards.first().last()
             val thread = "${last.canonicalUrl}res/123456.htm"
             val tab = CompatTab(compatTabKey(thread), thread, thread, last.key, last.name, "123456", "末尾の板のスレ",
@@ -48,6 +51,9 @@ class LargeBoardRoundTripInstrumentedTest {
             assertEquals("WATCH", store.preferences.first()[preference])
             store.deleteBoard(store.boards.first().first().key)
             assertEquals(modern.drop(1), synchronizeModernBoardsFromCompatibility(modern, store.boards.first(), false))
+            // Restoring that backup brings the deleted board back, with the 200 others.
+            assertEquals(201, store.importSettingsBackup(backup).boardsImported)
+            assertEquals(201, store.boards.first().size)
         } finally { store.closeForTest(); context.deleteDatabase(database) }
     }
 }

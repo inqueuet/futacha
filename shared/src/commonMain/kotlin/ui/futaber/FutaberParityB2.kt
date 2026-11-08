@@ -1,21 +1,16 @@
 package com.valoser.futacha.shared.ui.futaber
 
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -32,7 +27,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -77,7 +71,7 @@ import kotlin.time.ExperimentalTime
  *  - P10 手書き: the shared drawing screen, opened from the attach button. A reply on a board whose replies take no file
  *    (img's) gets it by a plain tap even with the extension off (otherwise that reply has no way to attach anything).
  *  - P11 あぷ小・音声入力・回線情報・機種情報, and the Cookie guidance after a failed post: behind the extension
- *    "書き込みツール" (off by default). The tools open from a long press on the attach button; its tap is unchanged.
+ *    "書き込みツール" (off by default). L-B8: the tools are at the end of the camera's black menu (the long press is gone).
  * Nothing new is sent: the shared upload, network-information and drawing functions are called as the other modes call them.
  */
 
@@ -103,41 +97,9 @@ internal data class FutaberPostTools(
 internal fun futaberDrawingCopyLocation(preferences: Map<String, String>): SaveLocation? =
     parseCompatSaveLocation(preferences.compatPreferenceValue("storage", "dummyDrawingDir", "手書きファイルの保存先"))
 
-/** What a tap on the attach button does. */
-internal enum class FutaberAttachTap { PickFile, OpenToolSheet }
-
-/**
- * A reply on a board whose replies take no file (img) can only carry a drawing, so the tap offers the tools (the drawing
- * among them) instead of the file picker that would only be refused; everywhere else the tap picks a file as before.
- */
-internal fun futaberAttachTap(isReply: Boolean, replyAttachmentsAllowed: Boolean): FutaberAttachTap =
-    if (isReply && !replyAttachmentsAllowed) FutaberAttachTap.OpenToolSheet else FutaberAttachTap.PickFile
-
-/** One row of the tool sheet. */
-internal data class FutaberPostToolEntry(val id: String, val label: String, val enabled: Boolean = true)
-
-/**
- * The rows of the tool sheet. [handwritingOnly]: the reply takes no ordinary file (the picker row says so and is off).
- * [allTools]: the extension is on (あぷ小, voice input, network and device information).
- */
-internal fun futaberPostToolEntries(handwritingOnly: Boolean, allTools: Boolean, canUpload: Boolean): List<FutaberPostToolEntry> =
-    buildList {
-        add(
-            if (handwritingOnly) FutaberPostToolEntry("pick", "画像・動画を選ぶ（この板の返信には添付できません）", enabled = false)
-            else FutaberPostToolEntry("pick", "画像・動画を選ぶ")
-        )
-        add(FutaberPostToolEntry("drawing", "手書き"))
-        if (allTools) {
-            add(FutaberPostToolEntry("ups", "あぷ小にアップロード", enabled = canUpload))
-            add(FutaberPostToolEntry("voice", "音声入力"))
-            add(FutaberPostToolEntry("network-info", "回線情報を挿入"))
-            add(FutaberPostToolEntry("device-info", "機種情報を挿入"))
-        }
-    }
-
-/** The title of the tool sheet. */
-internal fun futaberPostToolSheetTitle(handwritingOnly: Boolean): String =
-    if (handwritingOnly) "この板の返信には画像・動画を添付できません。手書きは添付できます" else "書き込みツール"
+// L-B8 (M37): the attach button's tap opens the camera's black menu (FutaberPostTools.kt: futaberCameraMenu). The tools
+// that the long press opened before (with the extension 「書き込みツール」) are at the end of that menu, and 手書き is there
+// on a board whose replies take no file (img's), as the tap offered it before.
 
 /** The device line for a post: the same as ふたちゃ writes (this mode is part of the ふたちゃ app). */
 internal fun futaberDeviceInfoText(platformText: String): String =
@@ -156,7 +118,10 @@ internal fun futaberOffersCookieGuidance(failure: Throwable?): Boolean {
 /** The state of the tools of one write screen. */
 @Stable
 internal class FutaberPostToolsState {
-    var sheetOpen by mutableStateOf(false)
+    /** The camera's menu is open over this point (the camera button's top middle, in the root's coordinates); null = shut. */
+    var cameraMenu by mutableStateOf<FutaberAnchor?>(null)
+    /** Where the camera button is now (it moves with the keyboard's slide): the open menu follows it. */
+    var cameraAnchor by mutableStateOf<FutaberAnchor?>(null)
     var drawing by mutableStateOf(false)
     var upsImage by mutableStateOf<ImageData?>(null)
     var upsComment by mutableStateOf("")
@@ -169,37 +134,13 @@ internal class FutaberPostToolsState {
 @Composable
 internal fun rememberFutaberPostToolsState(): FutaberPostToolsState = remember { FutaberPostToolsState() }
 
-/**
- * The attach button. It looks and taps as the icon button it replaces; [onLongPress] (null = none) adds the long press.
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-internal fun FutaberAttachButton(enabled: Boolean, onTap: () -> Unit, onLongPress: (() -> Unit)?) {
-    val colors = LocalFutaberColors.current
-    val haptic = rememberFutaberLongPressHaptic()
-    Box(
-        Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape)
-            .combinedClickable(
-                enabled = enabled,
-                role = Role.Button,
-                onClickLabel = "画像・動画を添付",
-                onLongClickLabel = if (onLongPress != null) "書き込みツール" else null,
-                onLongClick = onLongPress?.let { action -> { haptic(); action() } },
-                onClick = onTap
-            )
-            .testTag("futaber-post-attach"),
-        contentAlignment = Alignment.Center
-    ) {
-        FutaberIcon(Icons.Outlined.PhotoCamera, contentDescription = "画像・動画を添付", tint = colors.icon)
-    }
-}
 
 /**
  * A chrome colour with white text at 4.5:1 or more in every theme: the shared drawing screen writes its top bar white,
  * and this mode's light bars are white too. The theme's own strong colours are tried first.
  */
 internal fun futaberWhiteTextChrome(colors: FutaberColors): Color =
-    listOf(colors.topBar, colors.action, colors.accent, colors.danger)
+    listOf(colors.navBar, colors.iosBlue, colors.accent, colors.destructive)
         .firstOrNull { futaberContrastWithWhite(it) >= 4.5f } ?: Color(0xFF2B2F33)
 
 internal fun futaberContrastWithWhite(color: Color): Float = 1.05f / (color.luminance() + 0.05f)
@@ -224,7 +165,9 @@ internal fun FutaberPostToolsHost(
     onPickFile: () -> Unit,
     onAttach: (ImageData) -> Unit,
     /** The board's address, for the Cookie guidance (whether this board's posting Cookies are kept). */
-    boardUrl: String = ""
+    boardUrl: String = "",
+    /** The camera menu's 最近の画像・ライブラリ (the OS photo picker, L-B8 M37). */
+    onPickPhoto: () -> Unit = onPickFile
 ) {
     val colors = LocalFutaberColors.current
     val scope = rememberCoroutineScope()
@@ -264,29 +207,36 @@ internal fun FutaberPostToolsHost(
         }
     )
     fun run(id: String) {
-        state.sheetOpen = false
+        state.cameraMenu = null
         when (id) {
-            "pick" -> onPickFile()
-            "drawing" -> state.drawing = true
-            "ups" -> pickUps()
-            "voice" -> speech()
-            "network-info" -> perform {
+            "recent", "library" -> onPickPhoto()
+            "file" -> onPickFile()
+            "tool-drawing" -> state.drawing = true
+            "tool-ups" -> pickUps()
+            "tool-voice" -> speech()
+            "tool-network-info" -> perform {
                 val info = fetchCompatPostNetworkInfo(tools.httpClient, futaberNetworkInfoUserAgent(tools.appVersion))
                 latestOnCommentChange(appendCompatPostText(latestComment, info))
             }
-            "device-info" -> latestOnCommentChange(
+            "tool-device-info" -> latestOnCommentChange(
                 appendCompatPostText(latestComment, futaberDeviceInfoText(compatPostDeviceInfo(tools.appVersion)))
             )
         }
     }
-    if (state.sheetOpen) {
-        val entries = futaberPostToolEntries(handwritingOnly, tools.enabled, canUpload = tools.httpClient != null)
-        FutaberPostActionSheet(
-            title = futaberPostToolSheetTitle(handwritingOnly),
-            actions = entries.map { entry -> FutaberPostAction("tool-${entry.id}", entry.label, entry.enabled) { run(entry.id) } } +
-                FutaberPostAction("tool-cancel", "キャンセル") { state.sheetOpen = false },
-            onDismiss = { state.sheetOpen = false },
-            avoidNavigationBar = true
+    state.cameraMenu?.let { opened ->
+        val anchor = state.cameraAnchor ?: opened
+        val entries = futaberCameraMenu(handwritingOnly, tools.enabled, canUpload = tools.httpClient != null)
+        // The original's black menu over the camera (the keyboard stays up, as there): its items, then this app's tools.
+        FutaberCalloutMenu(
+            anchor = anchor,
+            items = entries.map { entry ->
+                FutaberCalloutItem(entry.id, entry.label, entry.enabled) {
+                    // An img reply takes no file: the item says so (the picker would only be refused) and names the drawing.
+                    if (entry.refused) { state.cameraMenu = null; state.message = FUTABER_REPLY_ATTACHMENT_REFUSED_MESSAGE }
+                    else run(entry.id)
+                }
+            },
+            onDismiss = { state.cameraMenu = null }
         )
     }
     if (state.drawing) {

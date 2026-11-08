@@ -233,6 +233,35 @@ internal class AppStatePreferenceOperations(
         )
     }
 
+    /** Writes the board's mode under its shared key, taking away the copy under the earlier key (D-B1). */
+    suspend fun setCatalogMode(keys: BoardSettingKeys, mode: CatalogMode) {
+        mutateCatalogModeMap(
+            { error -> Logger.e(tag, "Failed to read catalog mode map snapshot", error) },
+            { error -> Logger.e(tag, "Failed to save catalog mode for ${keys.key}: ${mode.name}", error) }
+        ) { current ->
+            if (current[keys.key] == mode && (keys.legacy == null || keys.legacy !in current)) current
+            else current.withBoardSetting(keys, mode)
+        }
+    }
+
+    /**
+     * Moves board-keyed settings from the keys earlier versions used to the shared ones ([moves]: earlier key to shared
+     * key), in the catalog modes and the board watch words. The earlier value replaces one under the shared key (it is
+     * the one the person set last: the shared key is only written after this move, which also takes the earlier key
+     * away). Fails when a map cannot be read or written, so the migration runs again.
+     */
+    suspend fun moveBoardKeyedSettings(moves: Map<String, String>, boardWatchWords: Boolean) {
+        if (moves.isEmpty()) return
+        fun <V> Map<String, V>.moved(): Map<String, V> {
+            if (moves.keys.none(::containsKey)) return this
+            val next = LinkedHashMap(this)
+            moves.forEach { (from, to) -> next.remove(from)?.let { value -> next[to] = value } }
+            return next
+        }
+        mutateCatalogModeMap({ error -> throw error }, { error -> throw error }) { current -> current.moved() }
+        if (boardWatchWords) mutateBoardWatchWordMap { current -> current.moved() }
+    }
+
     suspend fun setNgHeaders(headers: List<String>) {
         setList(normalizeStoredStringList(headers), stringListSerializer, storage::updateNgHeadersJson, "NG headers")
     }
@@ -263,6 +292,26 @@ internal class AppStatePreferenceOperations(
         } catch (error: Exception) {
             rethrowIfCancellation(error)
             Logger.e(tag, "Failed to save board watch words for $normalizedBoardId (${sanitizedWords.size})", error)
+        }
+    }
+
+    /** Writes the board's own watch words under its shared key, taking away the copy under the earlier key (D-B1). */
+    suspend fun setBoardWatchWords(keys: BoardSettingKeys, words: List<String>) {
+        val sanitizedWords = normalizeStoredStringList(words)
+        try {
+            mutateBoardWatchWordMap { current -> current.withBoardSetting(keys, sanitizedWords) }
+        } catch (error: Exception) {
+            rethrowIfCancellation(error)
+            Logger.e(tag, "Failed to save board watch words for ${keys.key} (${sanitizedWords.size})", error)
+        }
+    }
+
+    suspend fun clearBoardWatchWordsOverride(keys: BoardSettingKeys) {
+        try {
+            mutateBoardWatchWordMap { current -> current.withoutBoardSetting(keys) }
+        } catch (error: Exception) {
+            rethrowIfCancellation(error)
+            Logger.e(tag, "Failed to clear board watch words override for ${keys.key}", error)
         }
     }
 

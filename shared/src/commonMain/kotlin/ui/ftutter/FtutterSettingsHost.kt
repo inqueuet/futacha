@@ -1,6 +1,9 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import androidx.compose.material.icons.rounded.Swipe
+import androidx.compose.material.icons.rounded.VerticalSplit
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.padding
 
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -34,9 +37,11 @@ private sealed interface FtutterSettingsRoute {
     data object Root : FtutterSettingsRoute
     data class Page(val page: FtutterSettingsPage) : FtutterSettingsRoute
     data object NgList : FtutterSettingsRoute
+    data class NgType(val type: FtutterNgType) : FtutterSettingsRoute
     data object Hidden : FtutterSettingsRoute
     data object Gesture : FtutterSettingsRoute
     data object Tablet : FtutterSettingsRoute
+    data object Colors : FtutterSettingsRoute
     data object Extras : FtutterSettingsRoute
     data object Watcher : FtutterSettingsRoute
 }
@@ -81,15 +86,26 @@ internal fun FtutterSettingsHost(
     PlatformBackHandler(enabled = sharedPath == null, onBack = back)
     when (val route = stack.last()) {
         FtutterSettingsRoute.Root -> FtutterSettingsPage("設定", "ftutter-settings", onBack) {
-            ftutterSection("ふたったー風")
+            // 原作の行（M27）。見出しは置かず、原作の名前・並び・アイコン。
             FtutterSettingsPage.entries.forEach { page ->
-                item(key = page.tag) { FtutterNavRow(page.title, "ftutter-settings-${page.tag}") { push(FtutterSettingsRoute.Page(page)) } }
+                item(key = page.tag) {
+                    FtutterNavRow(page.title, "ftutter-settings-${page.tag}", icon = page.icon) { push(FtutterSettingsRoute.Page(page)) }
+                }
                 if (page == FtutterSettingsPage.NETWORK) {
-                    item(key = "gesture") { FtutterNavRow("ジェスチャー", "ftutter-settings-gesture") { push(FtutterSettingsRoute.Gesture) } }
-                    item(key = "tablet") { FtutterNavRow("二画面", "ftutter-settings-tablet") { push(FtutterSettingsRoute.Tablet) } }
+                    item(key = "gesture") {
+                        FtutterNavRow(FTUTTER_SETTINGS_GESTURE_TITLE, "ftutter-settings-gesture", icon = androidx.compose.material.icons.Icons.Rounded.Swipe) {
+                            push(FtutterSettingsRoute.Gesture)
+                        }
+                    }
+                    item(key = "tablet") {
+                        FtutterNavRow(FTUTTER_SETTINGS_TABLET_TITLE, "ftutter-settings-tablet", icon = androidx.compose.material.icons.Icons.Rounded.VerticalSplit) {
+                            push(FtutterSettingsRoute.Tablet)
+                        }
+                    }
                 }
             }
-            ftutterSection("このアプリ")
+            // ここから下はこちらだけの行（M27）。
+            ftutterSection(FTUTTER_MORE_LABEL)
             item(key = "extras") { FtutterNavRow("拡張機能", "ftutter-settings-extras") { push(FtutterSettingsRoute.Extras) } }
             if (services != null) {
                 ftutterSection("他のモードと共有の設定")
@@ -127,7 +143,8 @@ internal fun FtutterSettingsHost(
             item { GlobalSettingsModeSection() }
         }
         is FtutterSettingsRoute.Page -> when (route.page) {
-            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back, onChooseFont = services?.let { { fontDialog = true } })
+            FtutterSettingsPage.DESIGN -> FtutterDesignSettings(preferences, save, back, onChooseFont = services?.let { { fontDialog = true } },
+                onOpenColors = { push(FtutterSettingsRoute.Colors) })
             FtutterSettingsPage.CATALOG -> FtutterCatalogSettingsPage(preferences, save, { onEditToolbar(FtutterOrderEditorKind.CATALOG) }, back)
             FtutterSettingsPage.THREAD -> FtutterThreadSettingsPage(
                 preferences, save, { onEditToolbar(FtutterOrderEditorKind.THREAD) }, { onEditToolbar(FtutterOrderEditorKind.POST_MENU) }, back
@@ -136,13 +153,23 @@ internal fun FtutterSettingsHost(
             FtutterSettingsPage.MEDIA -> FtutterMediaSettingsPage(preferences, save, back)
             FtutterSettingsPage.NG -> FtutterNgSettingsPage(
                 preferences, save, ngRules.size, parseFtutterHiddenThreads(preferences[FtutterKeys.HIDDEN_THREADS]).size,
-                onOpenNgList = { push(FtutterSettingsRoute.NgList) }, onOpenHidden = { push(FtutterSettingsRoute.Hidden) }, onBack = back
+                onOpenNgList = { push(FtutterSettingsRoute.NgList) }, onOpenHidden = { push(FtutterSettingsRoute.Hidden) }, onBack = back,
+                ngCounts = FtutterNgType.entries.associateWith { type -> ngRules.count { it.type == type.stored } },
+                onOpenNgType = { push(FtutterSettingsRoute.NgType(it)) }
             )
             FtutterSettingsPage.NETWORK -> FtutterNetworkSettingsPage(
                 preferences, save, deleteKey,
                 onOpenCookies = services?.cookieRepository?.let { { sharedPath = "cookies" } },
                 onOpenSharedNetwork = services?.let { { sharedPath = "network" } },
-                onBack = back
+                onBack = back,
+                onReacquireCookies = services?.cookieRepository?.let { repo ->
+                    {
+                        (appScope ?: fallbackScope).launch {
+                            val removed = runCatching { ftutterReacquireCookies(repo) }.getOrNull()
+                            onNotice(if (removed == null) "クッキーを再取得できませんでした" else FTUTTER_COOKIE_REACQUIRED)
+                        }
+                    }
+                }
             )
             FtutterSettingsPage.BACKUP -> FtutterSettingsPage("バックアップ・復元", "ftutter-settings-page-backup", back) {
                 item {
@@ -155,9 +182,11 @@ internal fun FtutterSettingsHost(
             FtutterSettingsPage.STATS -> FtutterStatsPage(preferences, appVersion, back)
         }
         FtutterSettingsRoute.NgList -> FtutterNgListScreen(ngRules, boards, onEdit = { onSaveNgRules(it, null) }, onBack = back)
+        is FtutterSettingsRoute.NgType -> FtutterNgTypeScreen(route.type, ngRules, boards, onEdit = { onSaveNgRules(it, null) }, onNotice = onNotice, onBack = back)
         FtutterSettingsRoute.Hidden -> FtutterHiddenAndNgScreen(preferences, edit, onBack = back, ngRemoved = ngRemoved, ngReasons = ngReasons)
         FtutterSettingsRoute.Gesture -> FtutterGestureSettingsScreen(preferences, save, onBack = back)
         FtutterSettingsRoute.Tablet -> FtutterTabletSettingsScreen(preferences, save, onBack = back)
+        FtutterSettingsRoute.Colors -> FtutterColorSettingsPage(preferences, save, onBack = back)
         FtutterSettingsRoute.Extras -> FtutterExtrasSettingsPage(
             preferences, save, stateStore,
             sharedAvailable = services != null && repository != null,

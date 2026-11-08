@@ -33,8 +33,8 @@ class FutaberParityB7aTest {
 
     @Test fun theNewExtensionsAreOffByDefaultAndReadOnlyAnOn() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extCatalogModes); assertFalse(defaults.extCatalogWatchHighlight); assertFalse(defaults.extReplyPriority)
-        assertFalse(defaults.extCatalogHistory); assertFalse(defaults.extCatalogTools)
+        assertTrue(defaults.extCatalogModes); assertTrue(defaults.extCatalogWatchHighlight); assertTrue(defaults.extReplyPriority)
+        assertTrue(defaults.extCatalogHistory); assertTrue(defaults.extCatalogTools)
         assertEquals(0, defaults.replyPriorityThreshold)
         assertEquals(defaults, FutaberDisplaySettings())
         val keys = listOf(
@@ -44,7 +44,7 @@ class FutaberParityB7aTest {
         assertTrue(keys.all { it.startsWith("compat.futaber.ext.") })
         val on = FutaberDisplaySettings.from(keys.associateWith { "ON" })
         assertTrue(on.extCatalogModes && on.extCatalogWatchHighlight && on.extReplyPriority && on.extCatalogHistory && on.extCatalogTools)
-        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_CATALOG_TOOLS to "on")).extCatalogTools)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_CATALOG_TOOLS to "on")).extCatalogTools)
     }
 
     @Test fun theThresholdIsTheSharedValueKeptBetweenZeroAndThirty() {

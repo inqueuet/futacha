@@ -42,7 +42,9 @@ internal fun CatalogPreviewImage(
     modifier: Modifier = Modifier,
     fallbackTint: Color = Color.Gray,
     /** The secondary URL is a cheaper thumbnail, so it is safe after any primary-image failure. */
-    allowThumbnailFallbackOnError: Boolean = false
+    allowThumbnailFallbackOnError: Boolean = false,
+    /** How the picture fills its box; null follows the shared "トリミング" setting (crop unless it is off), as before. */
+    contentScale: ContentScale? = null
 ) {
     val platformContext = LocalPlatformContext.current
     val features = LocalFutachaSharedFeatures.current
@@ -50,7 +52,8 @@ internal fun CatalogPreviewImage(
         else com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
     val lowQuality = features?.value("catalog", "catalogEco") == "ON" ||
         (features?.value("catalog", "catalogMobileEco") == "ON" && !com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext))
-    val crop = features?.value("catalog", "catalogThumbCrop")?.let { it == "ON" } ?: true
+    val crop = contentScale?.let { it == ContentScale.Crop }
+        ?: features?.value("catalog", "catalogThumbCrop")?.let { it == "ON" } ?: true
     // Eco OFF means normal thumbnails, not original-resolution downloads.
     val candidates = remember(thumbnailUrl, fullImageUrl, lowQuality) {
         listOfNotNull(thumbnailUrl?.takeIf { lowQuality }?.replace("/thumb/", "/cat/"),
@@ -139,7 +142,7 @@ internal fun CatalogPreviewImage(
             Image(
                 painter = highQualityPainter ?: imagePainter,
                 contentDescription = contentDescription,
-                contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
+                contentScale = contentScale ?: if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
         }

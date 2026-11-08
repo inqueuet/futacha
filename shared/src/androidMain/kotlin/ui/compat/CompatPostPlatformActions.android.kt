@@ -159,7 +159,8 @@ internal actual fun compatPostDeviceInfo(appVersion: String): String = formatCom
 
 internal actual suspend fun compressCompatPostImage(
     attachment: ImageData,
-    maxBytes: Int
+    maxBytes: Int,
+    forceJpeg: Boolean
 ): Result<ImageData> = withContext(Dispatchers.Default) {
     runSuspendCatchingPreservingCancellation {
         coroutineContext.ensureActive()
@@ -172,7 +173,7 @@ internal actual suspend fun compressCompatPostImage(
         )
         // GIF/PNG/WebP keep animation and transparency when only metadata
         // has to go and the original pixels already fit the limit.
-        compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+        if (!forceJpeg) compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
             val extension = requireNotNull(format.extension)
             return@runSuspendCatchingPreservingCancellation ImageData(
                 bytes = sanitized,
@@ -200,7 +201,8 @@ internal actual suspend fun compressCompatPostImage(
         val (bytes, extension) = try {
             bitmap = bitmap.applyCompatOrientation(orientation)
             var result: Pair<ByteArray, String>? = null
-            if (bitmap.hasAlpha()) {
+            if (forceJpeg && bitmap.hasAlpha()) bitmap = bitmap.flattenCompatOnWhite()
+            if (!forceJpeg && bitmap.hasAlpha()) {
                 // Keep transparency as PNG when it fits; JPEG would turn it black.
                 coroutineContext.ensureActive()
                 val output = CappedByteArrayOutputStream(maxBytes)

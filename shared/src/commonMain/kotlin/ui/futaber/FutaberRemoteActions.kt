@@ -14,8 +14,9 @@ import androidx.compose.ui.platform.testTag
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 /**
- * The actions of the post sheet that send something to the board. The original app lists them
- * after the quote and copy entries: そうだね, delete my post, and report it to the board's staff.
+ * The actions of the post sheet that send something to the board. The original app lists them after the quote and copy
+ * entries as レス削除, 不適切な投稿を通報, そうだね (the sheet's order is [FUTABER_POST_SHEET_REMOTE_ORDER]). The report asks
+ * with the original's sheet (「レス:N」 / 「delを送信」, [futaberReportConfirmActions]); レス削除 asks with this dialog.
  */
 internal enum class FutaberRemoteAction(val id: String, val sheetLabel: String) {
     Saidane("saidane", "そうだね"),
@@ -73,8 +74,7 @@ internal fun FutaberRemoteActionDialog(
     onConfirm: (imageOnly: Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** Shows "画像だけ消す" (the post detail extension, for an own post that has a picture). */
-    offerImageOnly: Boolean = false,
-    offerReportNg: Boolean = false
+    offerImageOnly: Boolean = false
 ) {
     val colors = LocalFutaberColors.current
     var imageOnly by remember(action, postNumber) { mutableStateOf(false) }
@@ -86,18 +86,17 @@ internal fun FutaberRemoteActionDialog(
             textContentColor = colors.body,
             title = { Text(action.confirmTitle.orEmpty()) },
             text = {
-                if (offerImageOnly || offerReportNg) {
+                if (offerImageOnly) {
                     Column {
                         Text("No.$postNumber\n${action.confirmBody}")
-                        if (offerImageOnly) FutaberImageOnlyCheckRow(imageOnly) { imageOnly = it }
-                        if (offerReportNg) com.valoser.futacha.shared.ui.board.ReportPostNgCheckRow(imageOnly) { imageOnly = it }
+                        FutaberImageOnlyCheckRow(imageOnly) { imageOnly = it }
                     }
                 } else {
                     Text("No.$postNumber\n${action.confirmBody}")
                 }
             },
             confirmButton = {
-                TextButton(onClick = { onConfirm((offerImageOnly || offerReportNg) && imageOnly) }, modifier = Modifier.testTag("futaber-remote-confirm")) {
+                TextButton(onClick = { onConfirm(offerImageOnly && imageOnly) }, modifier = Modifier.testTag("futaber-remote-confirm")) {
                     Text(action.confirmLabel, color = colors.accent)
                 }
             },

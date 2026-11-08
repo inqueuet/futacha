@@ -8,7 +8,8 @@ import kotlin.test.assertTrue
 
 /**
  * M2 wiring: both restore paths of the shared settings screen add the restored boards to the AppStateStore (ふたちゃ,
- * ふたばー風), and としあき(仮), whose compatibility store owns the boards, is not given one.
+ * ふたばー風, ふたったー風), and としあき(仮), whose compatibility store owns the boards, is not given one. Since D-B1 the
+ * merge is done by withSharedBoardsRestore, which also holds the board synchronization during the restore.
  */
 class CompatRestoredBoardsWiringSourceContractTest {
     private fun source(path: String): String {
@@ -18,16 +19,18 @@ class CompatRestoredBoardsWiringSourceContractTest {
     }
 
     @Test
-    fun everyRestorePathMergesTheBoardsRightAfterRecordingTheBackupDate() {
+    fun everyRestorePathHoldsTheBoardSynchronizationAndMergesTheRestoredBoards() {
         val text = source("compat/CompatSettingsScreen.kt")
-        val merges = Regex("""mergeRestoredBoardsIntoAppState\(store, restoreBoardsInto\.takeIf \{ modernPresentation \}\)""").findAll(text).toList()
-        assertEquals(2, merges.size, "the file picker and the folder picker both restore")
-        merges.forEach { match ->
-            val before = text.substring(maxOf(0, match.range.first - 220), match.range.first)
-            assertTrue(before.contains("recordCompatBackupDate("), "the merge follows a successful restore: $before")
-        }
-        // Saving a backup restores nothing, so it must not merge.
-        assertTrue(text.contains("""if (!kind.startsWith("save_")) mergeRestoredBoardsIntoAppState("""))
+        // D-B1: the restore runs inside withSharedBoardsRestore, which lifts the restored boards' tombstones and merges
+        // them into the AppStateStore (mergeRestoredBoardsIntoAppState) before any board synchronization can run.
+        val restores = Regex("""withSharedBoardsRestore\(""").findAll(text).toList()
+        assertEquals(2, restores.size, "the file picker and the folder picker both restore")
+        assertTrue(text.contains("""withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess })"""))
+        // Saving a backup restores nothing, so it neither merges nor keeps anything.
+        assertTrue(text.contains("""val restoring = !kind.startsWith("save_")"""))
+        assertTrue(text.contains("""restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess }"""))
+        assertFalse(text.contains("mergeRestoredBoardsIntoAppState("), "the merge is the wrapper's, not the screen's")
+        assertTrue(source("../compat/shared/SharedBoards.kt").contains("mergeRestoredBoardsIntoAppState(compat, appStateStore)"))
     }
 
     @Test

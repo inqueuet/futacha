@@ -42,13 +42,13 @@ class FutaberParityB7bTest {
 
     @Test fun theNewExtensionsAreOffByDefaultAndReadOnlyAnOn() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extNgDetail); assertFalse(defaults.extGallerySelectSave); assertFalse(defaults.extReadAloudPanel)
-        assertFalse(defaults.extPostDetailOps)
+        assertTrue(defaults.extNgDetail); assertFalse(defaults.extGallerySelectSave); assertTrue(defaults.extReadAloudPanel)
+        assertTrue(defaults.extPostDetailOps)
         val on = FutaberDisplaySettings.from(listOf(
             FutaberSettingKeys.EXT_NG_DETAIL, FutaberSettingKeys.EXT_GALLERY_SELECT_SAVE, FutaberSettingKeys.EXT_READ_ALOUD_PANEL
         ).associateWith { "ON" })
         assertTrue(on.extNgDetail && on.extGallerySelectSave && on.extReadAloudPanel)
-        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_NG_DETAIL to "on")).extNgDetail)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_NG_DETAIL to "on")).extNgDetail)
         assertEquals(3, setOf(FutaberSettingKeys.EXT_NG_DETAIL, FutaberSettingKeys.EXT_GALLERY_SELECT_SAVE, FutaberSettingKeys.EXT_READ_ALOUD_PANEL).size)
     }
 
@@ -162,7 +162,7 @@ class FutaberParityB7bTest {
         val none = futaberPostDetailActions(false, ops, thread[1], thread, {}, {}, { _, _, _ -> })
         assertTrue(none.isEmpty())
         val ids = futaberPostDetailActions(true, ops, thread[1], thread, {}, {}, { _, _, _ -> }).map { it.id }
-        assertEquals(listOf("select-copy", "select-search", "quick-quote", "related", "same-id"), ids)
+        assertEquals(listOf("select-copy", "select-search", "quick-quote", "related", "conversation", "same-id"), ids)
         val lone = futaberPostDetailActions(true, ops, thread[3], thread, {}, {}, { _, _, _ -> }).map { it.id }
         assertEquals(listOf("select-copy", "select-search", "quick-quote", "same-ip"), lone)
     }

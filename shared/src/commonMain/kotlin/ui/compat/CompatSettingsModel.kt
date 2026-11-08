@@ -410,6 +410,8 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
         key == "threadHeaderSoudaneDisplay" ->
             listOf("通常", "通常(右寄せ)", "シンプル", "シンプル(右寄せ)", "非表示")
         key == "threadFontSize" -> (10..30).map(Int::toString)
+        key == "threadHeaderFontSize" -> listOf("標準") + (8..16).map(Int::toString)
+        key == "threadPostSpacing" -> listOf("標準") + listOf(0, 2, 4, 6, 8, 12, 16, 20).map(Int::toString)
         key in setOf("threadThumbSize", "threadUpsThumbSize") ->
             listOf("150", "200", "250", "300", "360", "410", "480", "640", "720", "800", "1000", "1200")
         key == "threadUpsThumbMethod" ->
@@ -418,6 +420,7 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
         key == "threadExtractQuoteNum" -> (2..10).map(Int::toString)
         key == "threadImageNgPhashThreshold" -> (0..16).map(Int::toString)
         key == "viewerPreloadMode" -> listOf("常に利用する", "Wi-Fi回線のみ", "利用しない")
+        key == COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY -> COMPAT_THREAD_CONTEXT_MENU_SCALE_OPTIONS
         key == HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY -> HighQualityThumbnailMode.entries.map { it.label }
         else -> emptyList()
     }
@@ -593,6 +596,7 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
             "スレを閉じる" -> "close"
             else -> displayedValue
         }
+        COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY -> compatPostMenuScalePercent(displayedValue).toString()
         "backgroundThreadExistCheck", "backgroundThreadUpdateCheck" -> when (displayedValue) {
             "常に確認する" -> "usually"
             "Wi-Fi回線のみ" -> "wifi"
@@ -646,6 +650,7 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
         "threadAdminDeleteShow" -> when (storedValue) { "ON" -> "本文表示"; "HIDE" -> "レス非表示"; else -> "通知のみ" }
         "controlPostTapBehavior" -> if (storedValue == "related") "タップで関連レス・長押しでメニュー" else "従来の操作"
         COMPAT_THREAD_DISPLAY_MODE_KEY -> if (storedValue == "tree") "ツリー表示" else "通常表示"
+        COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY -> compatPostMenuScalePercent(storedValue).let { if (it == 100) "標準" else "$it%" }
         "designTheme" -> when (storedValue.lowercase()) {
             "default", "デフォルト" -> "デフォルト"
             "mono", "モノクロ" -> "モノクロ"
@@ -754,7 +759,7 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
         "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize",
         "catalogGridViewPortraitClmNum", "catalogGridViewLandscapeClmNum",
         "catalogListViewLineNum", "autoScrollPixel", "autoScrollSpeed",
-        "threadFontSize", "threadThumbSize", "threadUpsThumbSize",
+        "threadFontSize", "threadThumbSize", "threadUpsThumbSize", "threadHeaderFontSize", "threadPostSpacing",
         "threadExtractSoudaneNum", "threadExtractQuoteNum", "threadImageNgPhashThreshold",
         "galleryGridViewPortraitClmNum", "galleryGridViewLandscapeClmNum" ->
             storedValue.filter(Char::isDigit).ifBlank { storedValue }
@@ -771,6 +776,7 @@ internal fun compatPreferenceSummaryValue(preferenceKey: String, storedValue: St
         displayed.filter(Char::isDigit)
     }
     return when (preferenceKey) {
+        COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY -> displayed
         "designTheme" -> when (displayed) {
             "モノクロ" -> "モノクローム"
             "ブルー" -> "アオいいよね"
@@ -794,8 +800,9 @@ internal fun compatPreferenceSummaryValue(preferenceKey: String, storedValue: St
         "commonPrivacyAlpha" -> numeric.takeIf(String::isNotEmpty)?.let { "$it%" } ?: displayed
         "catalogGridViewTitleLength", "catalogListViewTitleLength", "catalogTitleLength" ->
             numeric.takeIf(String::isNotEmpty)?.let { "${it}文字" } ?: displayed
-        "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize", "threadFontSize" ->
+        "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize", "threadFontSize", "threadHeaderFontSize" ->
             numeric.takeIf(String::isNotEmpty)?.let { "${it}sp" } ?: displayed
+        "threadPostSpacing" -> numeric.takeIf(String::isNotEmpty)?.let { "${it}dp" } ?: displayed
         "catalogGridViewPortraitClmNum", "catalogGridViewLandscapeClmNum",
         "galleryGridViewPortraitClmNum", "galleryGridViewLandscapeClmNum" ->
             numeric.takeIf(String::isNotEmpty)?.let { "${it}列" } ?: displayed
@@ -996,6 +1003,8 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("削除されたレスを表示", "OFF", preferenceKey = "threadAdminDeleteShow"),
         CompatSettingEntry("プライバシー透明度", "20%", preferenceKey = "commonPrivacyAlpha"),
         CompatSettingEntry("フォントサイズ", "14sp", preferenceKey = "threadFontSize"),
+        CompatSettingEntry("レスの見出しの文字サイズ", "標準", preferenceKey = "threadHeaderFontSize"),
+        CompatSettingEntry("レス間の余白", "標準", preferenceKey = "threadPostSpacing"),
         CompatSettingEntry("サムネイルサイズ", "250dp", preferenceKey = "threadThumbSize"),
         CompatSettingEntry("あぷ小のサムネイルサイズ", "250dp", preferenceKey = "threadUpsThumbSize"),
         CompatSettingEntry(
@@ -1003,13 +1012,17 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
             COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD,
             preferenceKey = "threadUpsThumbMethod"
         ),
+        CompatSettingEntry("レスメニューの大きさ", "標準", preferenceKey = COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY),
         CompatSettingEntry("そうだねが多いレス", "3件", preferenceKey = "threadExtractSoudaneNum"),
         CompatSettingEntry("返信が多いレス", "3件", preferenceKey = "threadExtractQuoteNum")
     )
     "viewer" -> listOf(
         CompatSettingEntry("縦持ちの列数", "5列", preferenceKey = "galleryGridViewPortraitClmNum"),
         CompatSettingEntry("横持ちの列数", "7列", preferenceKey = "galleryGridViewLandscapeClmNum"),
-        CompatSettingEntry("前後の画像を先読みする", "常に利用する", preferenceKey = "viewerPreloadMode")
+        CompatSettingEntry("前後の画像を先読みする", "常に利用する", preferenceKey = "viewerPreloadMode"),
+        CompatSettingEntry("タップでツールバーを表示／非表示", "ON", preferenceKey = COMPAT_VIEWER_TAP_TOOLBAR_KEY),
+        CompatSettingEntry("動画の操作パネルを自動で隠す", "OFF", preferenceKey = COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY),
+        CompatSettingEntry("動画の自動再生", "OFF", preferenceKey = COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY)
     )
     "ptmt" -> listOf(CompatSettingEntry("ptmt値", "値は表示・ログ送信しません"), CompatSettingEntry("誤操作防止", "「後悔しません」の入力が必要"))
     else -> emptyList()
@@ -1095,14 +1108,17 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             ),
             "画面表示" to entries.compatKeys(
                 COMPAT_THREAD_DISPLAY_MODE_KEY, "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadThumbSize",
-                "threadUpsThumbSize", "threadUpsThumbMethod"
+                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadHeaderFontSize", "threadPostSpacing", "threadThumbSize",
+                "threadUpsThumbSize", "threadUpsThumbMethod", COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY
             ),
             "抽出する閾値" to entries.compatKeys("threadExtractSoudaneNum", "threadExtractQuoteNum")
         ).filter { it.second.isNotEmpty() }
         "viewer" -> listOf(
             "一覧" to entries.compatKeys("galleryGridViewPortraitClmNum", "galleryGridViewLandscapeClmNum"),
-            "閲覧" to entries.compatKeys("viewerPreloadMode")
+            "閲覧" to entries.compatKeys(
+                "viewerPreloadMode", COMPAT_VIEWER_TAP_TOOLBAR_KEY,
+                COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY
+            )
         )
         "ptmt" -> listOf("ptmtクッキー" to entries)
         else -> listOf(path.compatSettingsTitle() to entries)
@@ -1119,7 +1135,8 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
         "threadPullToRefresh", "threadFastScroll", "threadNg",
         "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple",
-        "viewerWebMSwitchMp4"
+        "viewerWebMSwitchMp4", COMPAT_VIEWER_TAP_TOOLBAR_KEY,
+        COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY
     ) || (path == "control" && entry.preferenceKey in COMPAT_PARITY_CONTROL_BOOLEAN_KEYS) ||
         (path == "network" && entry.preferenceKey == COMPAT_CACHE_ENABLED_KEY) ||
         (path == "root" && entry.preferenceKey == "archiveReportEnabled")

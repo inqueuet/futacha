@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatThreadSnapshot
+import com.valoser.futacha.shared.network.ArchiveSearchItem
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -225,6 +226,106 @@ class CompatCatalogCacheSearchDialogTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun theCacheSearchAsksTheArchiveSearchPerTermFirstAndOpensTheOriginalThread() = runBlocking {
+        val asked = mutableListOf<String>()
+        var legacyAsked = false
+        val result = searchCompatCatalogCacheRemote(
+            httpClient = HttpClient(MockEngine) { engine { addHandler { error("no network") } } },
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            query = "猫  鳥",
+            searchArchive = { term, scope ->
+                asked += "${scope.server}/${scope.board}/$term"
+                listOf(
+                    ArchiveSearchItem(
+                        threadId = if (term == "猫") "11" else "12",
+                        server = "may",
+                        board = "b",
+                        title = "$term スレ",
+                        htmlUrl = "https://may.inqueuet.com/b/$term.htm",
+                        thumbUrl = "https://may.inqueuet.com/thumb.jpg",
+                        replyCount = 120
+                    )
+                )
+            },
+            searchLegacy = { legacyAsked = true; Result.success(emptyList()) }
+        ).getOrThrow()
+
+        assertEquals(listOf("may/b/猫", "may/b/鳥"), asked)
+        assertEquals(listOf("11", "12"), result.map(CatalogItem::id))
+        assertEquals("https://may.2chan.net/b/res/11.htm", result.first().threadUrl)
+        assertEquals(120, result.first().replyCount)
+        assertTrue(!legacyAsked, "the old server is only a quiet fallback")
+    }
+
+    @Test
+    fun theOldServersForbiddenAnswerIsNeverWhatTheScreenShows() = runBlocking {
+        val forbidden = HttpClient(MockEngine) {
+            engine { addHandler { respond("Forbidden", HttpStatusCode.Forbidden) } }
+        }
+        try {
+            // The archive search finds nothing and the old server answers 403 (as it did on 2026-11-08): no error.
+            val empty = searchCompatCatalogCacheRemote(
+                httpClient = forbidden,
+                boardUrl = "https://may.2chan.net/b/",
+                query = "猫",
+                searchArchive = { _, _ -> emptyList() }
+            )
+            assertTrue(empty.isSuccess)
+            assertTrue(empty.getOrThrow().isEmpty())
+
+            // The archive search fails too: its reason is shown, not the old server's 403.
+            val failed = searchCompatCatalogCacheRemote(
+                httpClient = forbidden,
+                boardUrl = "https://may.2chan.net/b/",
+                query = "猫",
+                searchArchive = { _, _ -> throw IllegalStateException("過去ログ検索に失敗しました (HTTP 503)") }
+            )
+            assertEquals("過去ログ検索に失敗しました (HTTP 503)", failed.exceptionOrNull()?.message)
+
+            // When the old server answers again, its results are still used.
+            val legacy = searchCompatCatalogCacheRemote(
+                httpClient = forbidden,
+                boardUrl = "https://may.2chan.net/b/",
+                query = "猫",
+                searchArchive = { _, _ -> emptyList() },
+                searchLegacy = { Result.success(listOf(cacheItem("7", "猫"))) }
+            ).getOrThrow()
+            assertEquals(listOf("7"), legacy.map(CatalogItem::id))
+        } finally {
+            forbidden.close()
+        }
+    }
+
+    @Test
+    fun aStalledArchiveSearchEndsTheWholeSearchWithinItsTimeLimit() = runBlocking {
+        val asked = mutableListOf<String>()
+        var legacyAsked = false
+        val started = kotlin.time.TimeSource.Monotonic.markNow()
+        val result = searchCompatCatalogCacheRemote(
+            httpClient = HttpClient(MockEngine) { engine { addHandler { error("no network") } } },
+            boardUrl = "https://may.2chan.net/b/",
+            query = "猫 鳥 犬",
+            searchArchive = { term, _ -> asked += term; kotlinx.coroutines.awaitCancellation() },
+            searchLegacy = { legacyAsked = true; kotlinx.coroutines.awaitCancellation() },
+            totalTimeoutMillis = 300
+        )
+        assertTrue(started.elapsedNow().inWholeMilliseconds < 5_000, "the search must not wait past its limit")
+        assertTrue(result.exceptionOrNull() is CompatCacheSearchTimeoutException)
+        assertEquals(listOf("猫"), asked, "the remaining terms are not searched after the time is used up")
+        assertTrue(!legacyAsked)
+
+        // A board without an archive scope goes to the old server under the same limit.
+        val legacyOnly = searchCompatCatalogCacheRemote(
+            httpClient = HttpClient(MockEngine) { engine { addHandler { error("no network") } } },
+            boardUrl = "tutorial",
+            query = "猫",
+            searchLegacy = { kotlinx.coroutines.awaitCancellation() },
+            totalTimeoutMillis = 300
+        )
+        assertTrue(legacyOnly.exceptionOrNull() is CompatCacheSearchTimeoutException)
     }
 
     private fun cacheItem(id: String, title: String) = CatalogItem(

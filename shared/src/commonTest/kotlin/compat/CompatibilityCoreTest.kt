@@ -73,7 +73,7 @@ class CompatibilityCoreTest {
             // The catalog's dropped-thread action is a normal default command;
             // "その他" remains the fixed overflow action outside this list.
             CompatToolbarSurface.CATALOG to (13 to 10),
-            CompatToolbarSurface.THREAD to (19 to 14),
+            CompatToolbarSurface.THREAD to (20 to 14),
             CompatToolbarSurface.VIEWER to (10 to 8),
             CompatToolbarSurface.POST to (9 to 4)
         )
@@ -112,7 +112,7 @@ class CompatibilityCoreTest {
             compatToolbarMaster(CompatToolbarSurface.CATALOG).filterNot { it.defaultActive }.mapTo(mutableSetOf()) { it.key }
         )
         assertEquals(
-            setOf("privacy", "bypass", "scroll", "check", "close"),
+            setOf("privacy", "bypass", "scroll", "check", "close", "restoreclosed"),
             compatToolbarMaster(CompatToolbarSurface.THREAD).filterNot { it.defaultActive }.mapTo(mutableSetOf()) { it.key }
         )
         assertEquals(

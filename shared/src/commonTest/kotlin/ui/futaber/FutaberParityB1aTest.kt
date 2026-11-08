@@ -29,9 +29,10 @@ class FutaberParityB1aTest {
 
     @Test fun theNewExtensionsAreOffByDefaultAndReadOnlyAnOn() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extTabsManage); assertFalse(defaults.extArchiveMenu); assertFalse(defaults.extSavedDetail)
-        assertFalse(defaults.extOtherFavorites); assertFalse(defaults.extScrollMenu); assertFalse(defaults.extSearchNav)
-        assertFalse(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
+        assertFalse(defaults.extTabsManage); assertTrue(defaults.extArchiveMenu); assertTrue(defaults.extSavedDetail)
+        assertTrue(defaults.extOtherFavorites); assertTrue(defaults.extScrollMenu); assertTrue(defaults.extSearchNav)
+        // G20 (L-B7): 画面をタップしてスクロール is on unless turned off, as futaber's 「する」.
+        assertTrue(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
         assertEquals(defaults, FutaberDisplaySettings())
         val on = FutaberDisplaySettings.from(
             listOf(
@@ -42,7 +43,7 @@ class FutaberParityB1aTest {
         )
         assertTrue(on.extTabsManage && on.extArchiveMenu && on.extSavedDetail && on.extOtherFavorites)
         assertTrue(on.extScrollMenu && on.extSearchNav && on.tapScroll && on.postDestinationConfirm)
-        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.TAP_SCROLL to "yes")).tapScroll)
+        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.TAP_SCROLL to "OFF")).tapScroll)
     }
 
     @Test fun theDestinationConfirmationIsTheSharedKeyAndAlsoReadsTheLegacyTitle() {

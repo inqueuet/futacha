@@ -1,5 +1,5 @@
 VOICEVOX CORE third-party notices
-Built from public tag 0.17.0 (8f4e299c10b181cc5058d32b1a492999b5c2b2c4).
+Built from public tag 0.17.1 (68ae4b2cf3d134bd14a6e466f753f9cfaf7f441a).
 This includes licenses from normal and build dependencies in the pinned Cargo graph.
 
 ========================================================================

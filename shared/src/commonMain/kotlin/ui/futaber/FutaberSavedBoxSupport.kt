@@ -5,7 +5,6 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.ui.board.formatLastVisited
 import com.valoser.futacha.shared.ui.board.formatSize
 
 /** What the saved-thread (保存箱) list shows: the rows, or why there are none. */
@@ -63,7 +62,7 @@ internal fun futaberSavedBoardLine(thread: SavedThread, openable: Boolean): Stri
 
 /** Right of the second line of a row: when it was saved and how big it is. */
 internal fun futaberSavedDetail(thread: SavedThread): String =
-    "${formatLastVisited(thread.savedAt)}  ${formatSize(thread.totalSize)}"
+    "${futaberPanelDate(thread.savedAt)}  ${formatSize(thread.totalSize)}"
 
 /** Newest save first. */
 internal fun futaberSavedOrder(threads: List<SavedThread>): List<SavedThread> =

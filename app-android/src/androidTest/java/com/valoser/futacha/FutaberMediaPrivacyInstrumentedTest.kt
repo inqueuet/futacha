@@ -159,7 +159,7 @@ class FutaberMediaPrivacyInstrumentedTest {
         enable()
         assertDimmed("futaber-gallery-item")
         rule.onNodeWithTag("futaber-gallery-settings").performClick()
-        waitTag("compat-settings-list-viewer")
+        waitTag("futaber-viewer-settings-page")
         rule.onNode(dialogFilter, useUnmergedTree = true).assertDoesNotExist()
         Espresso.pressBack()
         waitTag("futaber-gallery-item")

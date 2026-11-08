@@ -8,7 +8,7 @@ import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
 import com.valoser.futacha.shared.model.normalizeWatchWords
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
-import com.valoser.futacha.shared.state.resolveBoardWatchWordKey
+import com.valoser.futacha.shared.state.boardSettingKeys
 import com.valoser.futacha.shared.state.resolveEffectiveWatchWordsForBoard
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.async
@@ -100,12 +100,11 @@ class CatalogWatchAlertRefresher(
         val originalTargets = stateStore.boards.first()
             .filterNot { it.isMockBoardForWatchAlert() }
             .mapNotNull { board ->
-                val boardKey = resolveBoardWatchWordKey(board)
                 val normalizedWatchWords = normalizeWatchWords(
                     resolveEffectiveWatchWordsForBoard(
                         globalWatchWords = globalWatchWords,
                         boardWatchWords = boardWatchWords,
-                        boardId = boardKey
+                        keys = boardSettingKeys(board)
                     )
                 )
                 if (normalizedWatchWords.isEmpty()) {

@@ -246,8 +246,8 @@ class ToshiakiParityBatch48InstrumentedTest {
         rule.waitUntil(5_000) { runBlocking { store.loadPreference("compat.control.controlHistoryTools") } == "ON" }
         settingCheckbox("controlHistoryTools").assertIsOn()
         list.performScrollToNode(hasText("共通NGをこのモードでも適用"))
-        rule.onNodeWithText("ONにすると、ふたちゃ・ふたばー風で登録したNGワードでもレスやスレが隠れます").assertIsDisplayed()
-        settingCheckbox("controlCommonNgApply").assertIsOff()
+        rule.onNodeWithText("ふたちゃ・ふたばー風で登録したNGワードでもレスやスレを隠します。OFFにすると、このモードでは使いません").assertIsDisplayed()
+        settingCheckbox("controlCommonNgApply").assertIsOn()
     }
 
     @Test fun theControlPageHasNoSwitchesWithoutASharedStore() {
@@ -402,6 +402,8 @@ class ToshiakiParityBatch48InstrumentedTest {
 
     @Test fun theCommonNgWordsDoNotHideWhileTheSwitchIsOff() {
         val threadUrl = seedThread()
+        // D-B7 (J4): the shared NG applies by default, so "off" is the explicit choice.
+        runBlocking { store.savePreference("compat.control.controlCommonNgApply", "OFF") }
         showApp(initialThreadDeepLink = threadUrl)
         waitForTag("compat-thread-post-7201")
         waitForTag("compat-thread-post-7202")

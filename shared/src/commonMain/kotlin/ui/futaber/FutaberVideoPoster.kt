@@ -38,7 +38,7 @@ internal fun FutaberVideoPoster(posterUrl: String?, modifier: Modifier = Modifie
     var size by remember { mutableStateOf(IntSize.Zero) }
     Box(modifier.onSizeChanged { size = it }, contentAlignment = Alignment.Center) {
         // Also stays visible when a thumbnail request fails or there is no thumbnail.
-        Icon(Icons.Outlined.Videocam, contentDescription = null, tint = Color.Gray)
+        FutaberIcon(Icons.Outlined.Videocam, contentDescription = null, tint = Color.Gray)
         if (source != null && size.width > 0 && size.height > 0) {
             val context = LocalPlatformContext.current
             val request = remember(context, source, size) {

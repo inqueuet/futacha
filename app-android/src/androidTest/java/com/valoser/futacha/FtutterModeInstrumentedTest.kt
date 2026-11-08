@@ -8,15 +8,18 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
@@ -30,6 +33,7 @@ import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.onAllNodesWithTag as allTagged
 import kotlinx.coroutines.flow.first
+import androidx.compose.ui.semantics.getOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -117,6 +121,31 @@ class FtutterModeInstrumentedTest {
         rule.allTagged("ftutter-board-row")[0].performClick()
         waitForTag("ftutter-catalog")
         waitForTag("ftutter-catalog-item")
+    }
+
+    /** M22: rotating the catalog must not open the closed drawer (the sheet is 74% of the width). */
+    @Test fun rotatingTheCatalogLeavesTheDrawerClosed() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-drawer").assertIsNotDisplayed()
+        try {
+            for (orientation in listOf(
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            )) {
+                rule.runOnUiThread { rule.activity.requestedOrientation = orientation }
+                rule.waitUntil(10_000) {
+                    val landscape = rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    landscape == (orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+                }
+                rule.waitForIdle()
+                Thread.sleep(1_000)
+                rule.waitForIdle()
+                waitForTag("ftutter-catalog")
+                rule.onNodeWithTag("ftutter-drawer").assertIsNotDisplayed()
+            }
+        } finally {
+            rule.runOnUiThread { rule.activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        }
     }
 
     private fun switchProfile(target: ExperienceProfile) {
@@ -312,8 +341,9 @@ class FtutterModeInstrumentedTest {
         rule.waitUntil(10_000) {
             runBlocking { app.appStateStore.history.first() }.firstOrNull()?.threadId == "1364612020"
         }
-        // 前回の読み位置へ戻って開くので、先頭へ動かしてから見る。未読のスレの「ここまで読んだ」は先頭の前。
-        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("kokomade")
+        // 前回の読み位置へ戻って開くので、先頭へ動かしてから見る。未読のスレの「ここまで読んだ」は先頭の前（一覧での
+        // 帯のキーは置かれた位置で決まる。ftutterRowListKey）。
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("kokomade@0")
         waitForTag("ftutter-kokomade")
 
         // 返信数のタップで返信の一覧、その中の返信数のタップでもう1枚重なる。Backで1枚ずつ閉じる。
@@ -438,13 +468,15 @@ class FtutterModeInstrumentedTest {
         openDrawerOnTabs()
         rule.waitUntil(5_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 3 }
         rule.onNodeWithTag("ftutter-drawer-restore").assertIsNotEnabled()
-        rule.onNodeWithText("タブを戻す").assertIsDisplayed()
+        // M35：原作はアイコンだけ。文は出さず、残りの件数は読み上げの説明で出す。
+        assertTrue(rule.onAllNodesWithText("タブを戻す", substring = true).fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithContentDescription("閉じたタブを戻す（残り0件）").assertIsDisplayed()
         val historyBefore = runBlocking { app.appStateStore.history.first() }
         rule.allTagged("ftutter-drawer-swipe")[1].performTouchInput { swipeRight() }
         rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab3) }
         rule.allTagged("ftutter-drawer-swipe")[1].performTouchInput { swipeRight() }
         rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl) }
-        rule.onNodeWithText("残り2件").assertIsDisplayed()
+        rule.onNodeWithContentDescription("閉じたタブを戻す（残り2件）").assertIsDisplayed()
         rule.onNodeWithTag("ftutter-drawer-content").performClick()
         rule.onNodeWithTag("ftutter-drawer-content-HISTORY").performClick()
         rule.onNodeWithTag("ftutter-drawer-restore").assertDoesNotExist()
@@ -455,7 +487,7 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-drawer-restore").performClick()
         rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab3) && preference("compat.ftutter.opening") == fakeTab3 }
         assertEquals(fakeTab3, preference("compat.ftutter.opening"))
-        rule.onNodeWithText("残り1件").assertIsDisplayed()
+        rule.onNodeWithContentDescription("閉じたタブを戻す（残り1件）").assertIsDisplayed()
         rule.onNodeWithTag("ftutter-drawer-restore-notice").assertIsDisplayed()
         saveShot("tab-undo-one-remaining")
         rule.onNodeWithTag("ftutter-drawer-content").performClick()
@@ -464,7 +496,7 @@ class FtutterModeInstrumentedTest {
         rule.waitUntil(10_000) { tabs() == listOf(tutorialUrl, fakeTab2, fakeTab3) && preference("compat.ftutter.opening") == fakeTab2 }
         assertEquals(fakeTab2, preference("compat.ftutter.opening"))
         rule.onNodeWithTag("ftutter-drawer-restore").assertIsNotEnabled()
-        rule.onNodeWithText("残り0件").assertIsDisplayed()
+        rule.onNodeWithContentDescription("閉じたタブを戻す（残り0件）").assertIsDisplayed()
         assertEquals(historyBefore, runBlocking { app.appStateStore.history.first() })
     }
 
@@ -518,6 +550,42 @@ class FtutterModeInstrumentedTest {
         runCatching { waitForTag("ftutter-post-menu-dialog", 8_000) }.onFailure { saveShot("debug-longpress-$index"); throw it }
     }
 
+    /** M39・M42：記事削除は見出しもキャンセルも無く削除キーを伏せずに出し、選択返信は何も選ばずにOKで空の書き込み（原作）。 */
+    @Test fun theDeleteAndChooseBoxesFollowTheOriginal() {
+        // 削除キーは4モードで1つ（D-B6）。前の試験が残した共有の削除キーに置き換わらないよう、両方をそろえる。
+        runBlocking {
+            app.appStateStore.setLastUsedDeleteKey("abc123")
+            app.compatibilityStore.savePreference("compat.ftutter.deleteKey", "abc123")
+        }
+        openTutorialThread()
+        longPressPost(1)
+        rule.onNodeWithTag("ftutter-post-menu-delete").performClick()
+        waitForTag("ftutter-delete-post-dialog")
+        saveShot("30-delete-box")
+        assertTrue(rule.onAllNodesWithText("abc123").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.onAllNodesWithText("キャンセル").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText("記事削除").fetchSemanticsNodes().size == 1)
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-delete-post-dialog").fetchSemanticsNodes().isEmpty() }
+        longPressPost(1)
+        rule.onNodeWithTag("ftutter-post-menu-repSelect").performClick()
+        waitForTag("ftutter-choose-quote")
+        rule.onNodeWithTag("ftutter-choose-quote-ok").assertIsEnabled()
+        // 従来の動きのスイッチがONなら前の形（見出し「記事削除」とキャンセル、OKは選ぶまで押せない）。
+        androidx.test.espresso.Espresso.pressBack()
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyPostBoxes", "true") }
+        rule.waitForIdle()
+        longPressPost(1)
+        rule.onNodeWithTag("ftutter-post-menu-repSelect").performClick()
+        waitForTag("ftutter-choose-quote")
+        rule.onNodeWithTag("ftutter-choose-quote-ok").assertIsNotEnabled()
+        androidx.test.espresso.Espresso.pressBack()
+        longPressPost(1)
+        rule.onNodeWithTag("ftutter-post-menu-delete").performClick()
+        waitForTag("ftutter-delete-post-dialog")
+        assertTrue(rule.onAllNodesWithText("キャンセル").fetchSemanticsNodes().isNotEmpty())
+    }
+
     @Test fun theLongPressMenuOffersTheNineItemsCopiesAndMarksAPost() {
         openTutorialThread()
         longPressPost(1)
@@ -562,7 +630,9 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-ng-text").performTextReplacement("[")
         rule.onNodeWithTag("ftutter-ng-regex").performClick()
         rule.onNodeWithTag("ftutter-ng-save").performClick()
-        waitForTag("ftutter-ng-error")
+        // M55/M56：原作は断った理由をトーストで出し、ダイアログを閉じる。
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("正規表現が正しくありません", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.allTagged("ftutter-ng-dialog").fetchSemanticsNodes().isEmpty())
     }
 
     /**
@@ -650,6 +720,7 @@ class FtutterModeInstrumentedTest {
     @Test fun gestureActionsCanBeRunFromTextMenusWithoutDrawingAGesture() {
         openTutorialCatalog()
         rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-catalog-menu-more").performClick()
         rule.onNodeWithTag("ftutter-catalog-menu-gesture-actions").performClick()
         rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-15"))
         rule.onNodeWithTag("ftutter-gesture-action-15").performClick()
@@ -660,6 +731,7 @@ class FtutterModeInstrumentedTest {
         assertEquals(androidx.compose.ui.semantics.Role.Button,
             rule.onNodeWithTag("ftutter-thread-tool-edit").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Role])
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
         rule.onNodeWithTag("ftutter-thread-menu-gesture-actions").performClick()
         rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-14"))
         rule.onNodeWithTag("ftutter-gesture-action-14").performClick()
@@ -671,6 +743,7 @@ class FtutterModeInstrumentedTest {
     @Test fun aGestureMenuOperationThatCannotRunSaysWhy() {
         openTutorialCatalog()
         rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-catalog-menu-more").performClick()
         rule.onNodeWithTag("ftutter-catalog-menu-gesture-actions").performClick()
         rule.onNodeWithTag("ftutter-gesture-action-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-gesture-action-8"))
         rule.onNodeWithTag("ftutter-gesture-action-8").performClick()
@@ -694,10 +767,112 @@ class FtutterModeInstrumentedTest {
     @Test fun theThreadMenuHasATextEntryToWriteAReply() {
         openTutorialThread()
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
         rule.onNodeWithTag("ftutter-thread-menu-reply").performScrollTo().performClick()
         waitForTag("ftutter-post-dialog")
         rule.onNodeWithTag("ftutter-post-send").assertIsEnabled()
         saveShot("feedback1442001717-reply-text-entry")
+    }
+
+    /** 開いているメニューの中で、文字の上から下への順。 */
+    private fun assertMenuOrder(labels: List<String>) {
+        val tops = labels.map { label ->
+            val nodes = rule.onAllNodesWithText(label).fetchSemanticsNodes()
+            assertTrue("$label is in the menu", nodes.isNotEmpty())
+            nodes.last().boundsInRoot.top
+        }
+        assertEquals(labels.toString(), tops.sorted(), tops)
+        assertEquals(labels.toString(), tops.size, tops.toSet().size)
+    }
+
+    /** T-B1（H9・M64）：カタログのメニューは原作の並びで「ブラウザで開く」があり、こちらの項目は「その他の機能」の中。 */
+    @Test fun theCatalogMenuIsTheOriginalsAndOurItemsAreBehindOneRow() {
+        openTutorialCatalog()
+        rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        waitForTag("ftutter-catalog-menu-more")
+        assertMenuOrder(listOf("ツールバー編集", "プライバシー", "非表示・NG", "URLから開く", "URLをコピー", "ブラウザで開く", "その他の機能"))
+        assertTrue(rule.allTagged("ftutter-catalog-viewed-first").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.allTagged("ftutter-catalog-menu-gesture-actions").fetchSemanticsNodes().isEmpty())
+        saveShot("t-b1-catalog-menu")
+        rule.onNodeWithTag("ftutter-catalog-menu-more").performClick()
+        waitForTag("ftutter-catalog-viewed-first")
+        rule.onNodeWithTag("ftutter-catalog-menu-gesture-actions").assertIsDisplayed()
+        assertTrue(rule.allTagged("ftutter-catalog-menu-browser").fetchSemanticsNodes().isEmpty())
+        saveShot("t-b1-catalog-menu-more")
+        // 戻ると原作の項目。
+        rule.onNodeWithTag("ftutter-catalog-menu-more-back").performClick()
+        waitForTag("ftutter-catalog-menu-browser")
+    }
+
+    /** T-B1（H9）：スレッドのメニューは原作の並び。従来の動きのスイッチをONにすると、前の並びに戻る。 */
+    @Test fun theThreadMenuIsTheOriginalsAndTheLegacySwitchListsOurItemsAgain() {
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        waitForTag("ftutter-thread-menu-more")
+        assertMenuOrder(listOf("ツールバー編集", "プライバシー", "スレを保存", "URLをコピー", "ブラウザで開く", "その他の機能"))
+        listOf("ftutter-thread-menu-reply", "ftutter-thread-menu-gallery", "ftutter-thread-menu-gesture-actions").forEach {
+            assertTrue(it, rule.allTagged(it).fetchSemanticsNodes().isEmpty())
+        }
+        saveShot("t-b1-thread-menu")
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
+        waitForTag("ftutter-thread-menu-reply")
+        assertMenuOrder(listOf("書き込む", "画像一覧", "ジェスチャーの操作を選ぶ"))
+        saveShot("t-b1-thread-menu-more")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-thread-menu-reply").fetchSemanticsNodes().isEmpty() }
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyMenus", "true") }
+        rule.waitForIdle()
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        waitForTag("ftutter-thread-menu-reply")
+        assertTrue(rule.allTagged("ftutter-thread-menu-more").fetchSemanticsNodes().isEmpty())
+        assertMenuOrder(listOf("書き込む", "画像一覧", "ジェスチャーの操作を選ぶ", "ツールバー編集", "スレを保存", "ブラウザで開く"))
+    }
+
+    /** T-B2（H1・M1・M84）：ポップアップは端から端までの板で、下を暗くする。返信数の一覧は上部のバーのすぐ下。 */
+    @Test fun thePopupsAreFullWidthOverADimmedScreenAndTheLegacySwitchBringsTheCardsBack() {
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("p10")
+        waitForTag("ftutter-reply-count")
+        val countTop = rule.allTagged("ftutter-reply-count")[0].fetchSemanticsNode().boundsInRoot.top
+        rule.allTagged("ftutter-reply-count")[0].performClick()
+        waitForTag("ftutter-popup")
+        val width = rule.onRoot().fetchSemanticsNode().boundsInRoot.width
+        val popup = rule.onNodeWithTag("ftutter-popup").fetchSemanticsNode().boundsInRoot
+        assertTrue("left=${popup.left} width=${popup.width}/$width", popup.left < 1f && popup.width > width - 2f)
+        assertEquals(1, rule.allTagged("ftutter-popup-scrim").fetchSemanticsNodes().size)
+        val pinnedTop = popup.top
+        assertTrue("$pinnedTop < $countTop", pinnedTop < countTop)
+        saveShot("t-b2-popup")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-popup").fetchSemanticsNodes().isEmpty() }
+
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyPopups", "true") }
+        rule.waitForIdle()
+        rule.allTagged("ftutter-reply-count")[0].performClick()
+        waitForTag("ftutter-popup")
+        val card = rule.onNodeWithTag("ftutter-popup").fetchSemanticsNode().boundsInRoot
+        assertTrue("left=${card.left}", card.left > 10f && card.width < width - 20f)
+        assertTrue(rule.allTagged("ftutter-popup-scrim").fetchSemanticsNodes().isEmpty())
+        saveShot("t-b2-popup-legacy")
+    }
+
+    /** T-B1（M27）：設定トップは原作の名前と並びで、こちらだけの行はその後ろの「その他の機能」の節。 */
+    @Test fun theSettingsTopHasTheOriginalsRowsThenOursUnderOneSection() {
+        openSettingsRoot()
+        val originals = listOf("デザイン", "カタログ", "スレッド", "タブ・ドロワー", "画像・動画ビューワー", "ピックアップ・NG管理",
+            "ネットワーク・書き込み", "ジェスチャー", "二画面モード", "バックアップ・復元", "統計情報")
+        val list = rule.onNodeWithTag("ftutter-settings-list")
+        originals.forEach { label ->
+            list.performScrollToNode(androidx.compose.ui.test.hasText(label))
+            rule.onNodeWithText(label).assertIsDisplayed()
+        }
+        saveShot("t-b1-settings-top")
+        list.performScrollToNode(androidx.compose.ui.test.hasText("その他の機能"))
+        val statsTop = rule.onNodeWithText("統計情報").fetchSemanticsNode().boundsInRoot.top
+        val moreTop = rule.onNodeWithText("その他の機能").fetchSemanticsNode().boundsInRoot.top
+        val extrasTop = rule.onNodeWithTag("ftutter-settings-extras").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("$statsTop < $moreTop < $extrasTop", statsTop < moreTop && moreTop < extrasTop)
+        assertTrue(rule.onAllNodesWithText("ふたったー風").fetchSemanticsNodes().isEmpty())
     }
 
     @Test fun aQuoteReplyKeepsItsDraftAndSendingOnTheTutorialBoardClearsIt() {
@@ -708,8 +883,14 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-post-dialog")
         saveShot("17-post-dialog")
         assertTrue(rule.onAllNodesWithText(">No.", substring = true).fetchSemanticsNodes().isNotEmpty())
-        // 閉じると下書きに残る（原作：閉じる時だけ保存）。
-        androidx.test.espresso.Espresso.pressBack()
+        // 閉じると下書きに残る（原作：閉じる時だけ保存）。T-B3からシートは開くと本文にキーボードが出るので、最初の戻るは
+        // キーボードだけを閉じることがある。シートが消えるまで戻る。
+        repeat(3) {
+            if (rule.allTagged("ftutter-post-dialog").fetchSemanticsNodes().isNotEmpty()) {
+                androidx.test.espresso.Espresso.pressBackUnconditionally()
+                rule.waitForIdle()
+            }
+        }
         rule.waitUntil(10_000) { preference("compat.ftutter.drafts")?.contains(">No.") == true }
         // 書き込みボタンで開くと下書きが戻る。チュートリアル板の模擬リポジトリへ送ると下書きが消える（実サーバーには送らない）。
         rule.onNodeWithTag("ftutter-thread-tool-edit").performClick()
@@ -826,7 +1007,9 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-settings-page-thread-list")
             .performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-setting-compat.ftutter.rirekiLimit"))
         rule.onNodeWithTag("ftutter-setting-compat.ftutter.rirekiLimit").performClick()
-        rule.onNodeWithTag("ftutter-slider-minus").performClick()
+        // M74：原作どおり数も −／＋ も無いので、スライダーを動かす。
+        rule.onNodeWithTag("ftutter-slider-compat.ftutter.rirekiLimit")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { it(0f) }
         rule.onNodeWithTag("ftutter-slider-ok").performClick()
         waitForTag("ftutter-slider-confirm", timeoutMillis = 5_000)
         rule.onNodeWithText("閉じられます", substring = true).assertExists()
@@ -844,7 +1027,9 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-settings-gesture")
         rule.onNodeWithTag("ftutter-settings-gesture").performClick()
         waitForTag("ftutter-gesture-settings")
-        rule.onNodeWithTag("ftutter-setting-compat.ftutter.kando").performScrollTo().performClick()
+        // M81：こちらだけの「方向を切り替える距離」は割り当ての後ろ（その他の機能）。
+        rule.onNodeWithTag("ftutter-gesture-settings-list").performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-setting-compat.ftutter.kando"))
+        rule.onNodeWithTag("ftutter-setting-compat.ftutter.kando").performClick()
         rule.onNodeWithTag("ftutter-slider-plus").performClick()
         rule.onNodeWithText("20.1").assertExists()
         rule.onNodeWithTag("ftutter-slider-ok").performClick()
@@ -856,7 +1041,7 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
         waitForTag("ftutter-thread-menu-copy-url")
         rule.onNodeWithText("ツールバー編集").performClick()
-        waitForTag("ftutter-order-editor")
+        waitForTag("ftutter-toolbar-editor")
         saveShot("20-toolbar-editor")
         rule.onNodeWithTag("ftutter-order-save").performClick()
         rule.waitUntil(10_000) { preference("compat.ftutter.sureTBOrderName")?.startsWith("drawer") == true }
@@ -876,6 +1061,18 @@ class FtutterModeInstrumentedTest {
         // 戻るは二画面全体を閉じて板一覧へ（原作）。
         androidx.test.espresso.Espresso.pressBack()
         waitForTag("ftutter-board-list")
+        // M21：原作どおり、カタログへ入り直すと最後に開いたスレッドが反対側に出る（起動し直しても同じ）。
+        rule.allTagged("ftutter-board-row")[0].performClick()
+        waitForTag("ftutter-two-pane")
+        waitForTag("ftutter-post")
+        assertTrue(rule.allTagged("ftutter-two-pane-empty").fetchSemanticsNodes().isEmpty())
+        openTutorialCatalog()
+        waitForTag("ftutter-post")
+        // 従来の動きのスイッチがONなら空のまま。
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyTwoPaneEmpty", "true") }
+        openTutorialCatalog()
+        waitForTag("ftutter-two-pane-empty")
+        assertTrue(rule.allTagged("ftutter-post").fetchSemanticsNodes().isEmpty())
     }
 
     @Test fun dragAfterALongPressReordersTheTabStrip() {
@@ -984,6 +1181,187 @@ class FtutterModeInstrumentedTest {
         rule.waitUntil(5_000) { rule.allTagged("ftutter-viewer").fetchSemanticsNodes().isEmpty() }
     }
 
+    /** M57〜M61：ビューアの下のバーは原作の形（保存先選択・原作の検索と「+ 追加」・全幅のレス）。従来の動きで前の形。 */
+    /** T-B10 M32・M62：板一覧の長押しは題も「閉じる」も無い。板の追加の形式の誤りは閉じてトースト（前の形は欄の下に出す）。 */
+    @Test fun theBoardListAndItsAddDialogFollowTheOriginal() {
+        rule.activityRule.scenario.recreate()
+        waitForTag("ftutter-board-row")
+        rule.allTagged("ftutter-board-row")[0].performTouchInput { longClick() }
+        waitForTag("ftutter-board-menu")
+        assertTrue(rule.allTagged("ftutter-board-open-browser").fetchSemanticsNodes().isNotEmpty())
+        assertEquals(0, rule.onAllNodesWithText("閉じる").fetchSemanticsNodes().size)
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-board-menu").fetchSemanticsNodes().isEmpty() }
+        val before = runBlocking { app.appStateStore.boards.first().size }
+        // 空のOKは黙って閉じる。
+        rule.onNodeWithTag("ftutter-add-board").performClick()
+        waitForTag("ftutter-add-board-input")
+        rule.onNodeWithTag("ftutter-add-board-ok").performClick()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-add-board-input").fetchSemanticsNodes().isEmpty() }
+        // 形式の誤りは閉じてトースト。
+        rule.onNodeWithTag("ftutter-add-board").performClick()
+        waitForTag("ftutter-add-board-input")
+        rule.onNodeWithTag("ftutter-add-board-input").performTextInput("abc")
+        waitForTag("ftutter-add-board-clear")
+        rule.onNodeWithTag("ftutter-add-board-ok").performClick()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-add-board-input").fetchSemanticsNodes().isEmpty() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("URLの形式が正しくありません").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(before, runBlocking { app.appStateStore.boards.first().size })
+        // 前の形：欄の下に出して閉じない。
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyBoards", "true") }
+        rule.activityRule.scenario.recreate()
+        waitForTag("ftutter-board-row")
+        rule.allTagged("ftutter-board-row")[0].performTouchInput { longClick() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("閉じる").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("閉じる").performClick()
+        rule.onNodeWithTag("ftutter-add-board").performClick()
+        waitForTag("ftutter-add-board-input")
+        rule.onNodeWithTag("ftutter-add-board-input").performTextInput("abc")
+        rule.onNodeWithTag("ftutter-add-board-ok").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("URLの形式が正しくありません").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.allTagged("ftutter-add-board-input").fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithText("キャンセル").performClick()
+    }
+
+    /** T-B10 M63：「URLから開く」で、ふたばでないURLは知らせるだけで、板一覧は変わらない。 */
+    @Test fun openFromUrlRefusesAnAddressThatIsNotFutaba() {
+        openTutorialCatalog()
+        val before = runBlocking { app.appStateStore.boards.first().size }
+        rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("URLから開く").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("URLから開く").performClick()
+        waitForTag("ftutter-open-url-input")
+        rule.onNodeWithTag("ftutter-open-url-input").performTextInput("https://example.org/foo/")
+        rule.onNodeWithTag("ftutter-open-url-ok").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("URLが対応していない形式です").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(before, runBlocking { app.appStateStore.boards.first().size })
+        waitForTag("ftutter-catalog")
+    }
+
+    /** T-B10 M31：選んだタブは枠でなく下に線（前の形は枠）。 */
+    @Test fun theSelectedTabIsUnderlinedLikeTheOriginal() {
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.showTab", "true") }
+        openTutorialThread()
+        waitForTag("ftutter-tab-strip")
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("ftutter-tab-underline", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    /**
+     * T-B11：読み上げ（TalkBack・VoiceOver）で、押せる物にはどれも名前がある（文字か説明）。原作に合わせた主な画面
+     * （板一覧・板の長押し・板の追加・カタログとメニュー・その他の機能・スレッドとメニュー・書き込みのシート・設定）を回る。
+     */
+    @Test fun everyControlOnTheMainScreensHasANameForScreenReaders() {
+        val unnamed = mutableListOf<String>()
+        fun check(screen: String) {
+            rule.waitForIdle()
+            rule.onAllNodes(androidx.compose.ui.test.hasClickAction()).fetchSemanticsNodes().forEach { node ->
+                val config = node.config
+                val text = config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString("") { it.text }.orEmpty()
+                val description = config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.joinToString("").orEmpty()
+                val editable = config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.EditableText)?.text.orEmpty()
+                if (text.isBlank() && description.isBlank() && editable.isBlank()) {
+                    val tag = config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag) ?: "(no tag)"
+                    unnamed += "$screen: $tag ${node.boundsInRoot}"
+                }
+            }
+        }
+        rule.activityRule.scenario.recreate()
+        waitForTag("ftutter-board-row")
+        check("board list")
+        rule.allTagged("ftutter-board-row")[0].performTouchInput { longClick() }
+        waitForTag("ftutter-board-menu")
+        check("board menu")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-board-menu").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithTag("ftutter-add-board").performClick()
+        waitForTag("ftutter-add-board-input")
+        rule.onNodeWithTag("ftutter-add-board-input").performTextInput("abc")
+        waitForTag("ftutter-add-board-clear")
+        check("add board")
+        rule.onNodeWithText("キャンセル").performClick()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-add-board-input").fetchSemanticsNodes().isEmpty() }
+        rule.allTagged("ftutter-board-row")[0].performClick()
+        waitForTag("ftutter-catalog-item")
+        check("catalog")
+        rule.onNodeWithTag("ftutter-catalog-tool-menu").performClick()
+        waitForTag("ftutter-catalog-menu-more")
+        check("catalog menu")
+        rule.onNodeWithTag("ftutter-catalog-menu-more").performClick()
+        waitForTag("ftutter-catalog-menu-more-back")
+        check("catalog more")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-catalog-menu-more-back").fetchSemanticsNodes().isEmpty() }
+        rule.allTagged("ftutter-catalog-item")[0].performClick()
+        waitForTag("ftutter-post")
+        check("thread")
+        rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        waitForTag("ftutter-thread-menu-more")
+        check("thread menu")
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
+        waitForTag("ftutter-thread-menu-reply")
+        rule.onNodeWithTag("ftutter-thread-menu-reply").performClick()
+        waitForTag("ftutter-post-comment")
+        check("post sheet")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) {
+            if (rule.allTagged("ftutter-post-dialog").fetchSemanticsNodes().isEmpty()) true
+            else { androidx.test.espresso.Espresso.pressBack(); false }
+        }
+        rule.onNodeWithTag("ftutter-thread-settings").performClick()
+        waitForTag("ftutter-settings")
+        check("settings")
+        assertTrue(unnamed.joinToString("\n"), unnamed.isEmpty())
+    }
+
+    @Test fun theViewerBarFollowsTheOriginal() {
+        openTutorialThread()
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("p0")
+        rule.waitUntil(20_000) { rule.onAllNodesWithTag("ftutter-post-image", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithTag("ftutter-post-image", useUnmergedTree = true)[0].performClick()
+        waitForTag("ftutter-viewer")
+        waitForTag("ftutter-save-destination-label")
+        // 保存先選択。
+        rule.onNodeWithTag("ftutter-save-destination").performClick()
+        waitForTag("ftutter-save-destination-dialog")
+        assertTrue(rule.onAllNodesWithText("保存先選択").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.allTagged("ftutter-save-destination-add").fetchSemanticsNodes().isNotEmpty())
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-save-destination-dialog").fetchSemanticsNodes().isEmpty() }
+        // 検索：google画像検索と「+ 追加」。知らないアドレスは断り、二次元画像詳細検索は名前で足す。
+        rule.onNodeWithTag("ftutter-viewer-search").performClick()
+        waitForTag("ftutter-viewer-search-dialog")
+        assertTrue(rule.allTagged("ftutter-viewer-search-google").fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithTag("ftutter-viewer-search-add").performClick()
+        waitForTag("ftutter-viewer-search-url")
+        rule.onNodeWithTag("ftutter-viewer-search-url").performTextReplacement("https://example.com/s?u=")
+        rule.onNodeWithTag("ftutter-viewer-search-url-ok").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("対応していないURLです").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("ftutter-viewer-search-url").performTextReplacement("https://ascii2d.net/")
+        rule.onNodeWithTag("ftutter-viewer-search-url-ok").performClick()
+        rule.waitUntil(10_000) { preference("compat.ftutter.viewerSearchEngines") == "ascii2d" }
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("追加しました").fetchSemanticsNodes().isNotEmpty() }
+        waitForTag("ftutter-viewer-search-ascii2d")
+        assertTrue(rule.onAllNodesWithText("二次元画像詳細検索").fetchSemanticsNodes().isNotEmpty())
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-viewer-search-dialog").fetchSemanticsNodes().isEmpty() }
+        // レスは全幅のポップアップ。外を押すと閉じる。
+        rule.onNodeWithTag("ftutter-viewer-res").performClick()
+        waitForTag("ftutter-viewer-conversation")
+        saveShot("viewer-res-popup")
+        rule.onNodeWithTag("ftutter-viewer-res-scrim").performTouchInput { click(androidx.compose.ui.geometry.Offset(centerX, bottom - 10f)) }
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-viewer-conversation").fetchSemanticsNodes().isEmpty() }
+        assertTrue(rule.allTagged("ftutter-viewer").fetchSemanticsNodes().isNotEmpty())
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) { rule.allTagged("ftutter-viewer").fetchSemanticsNodes().isEmpty() }
+        // 従来の動き：前の保存先の枠に戻る。
+        runBlocking { app.compatibilityStore.savePreference("compat.ftutter.legacyViewer", "true") }
+        rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("p0")
+        rule.onAllNodesWithTag("ftutter-post-image", useUnmergedTree = true)[0].performClick()
+        waitForTag("ftutter-viewer")
+        waitForTag("ftutter-save-destination")
+        assertTrue(rule.allTagged("ftutter-save-destination-label").fetchSemanticsNodes().isEmpty())
+    }
+
     @Test fun theGallerySavesItsColumnsAndALongPressStartsTheSelection() {
         openTutorialThread()
         rule.onNodeWithTag("ftutter-thread-tool-collection").performClick()
@@ -1081,7 +1459,9 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-settings-design")
         rule.onNodeWithTag("ftutter-settings-design").performClick()
         waitForTag("ftutter-settings-page-design")
-        // ふたば配色（#800000）。
+        // ふたば配色（#800000）。M50：原作どおり行から「メインカラー選択」を開く。
+        rule.onNodeWithTag("ftutter-setting-main-color").performClick()
+        waitForTag("ftutter-main-color-ff800000")
         rule.onNodeWithTag("ftutter-main-color-ff800000").performClick()
         rule.waitUntil(10_000) { preference("compat.ftutter.mainColor") == (0xFF800000L).toString() }
         saveShot("26-settings-design")
@@ -1152,6 +1532,11 @@ class FtutterModeInstrumentedTest {
         listOf("ftutter-thread-menu-mht", "ftutter-thread-menu-read-aloud", "ftutter-thread-menu-auto-scroll").forEach {
             assertTrue(it, rule.allTagged(it).fetchSemanticsNodes().isEmpty())
         }
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
+        waitForTag("ftutter-thread-menu-reply")
+        listOf("ftutter-thread-menu-mht", "ftutter-thread-menu-read-aloud", "ftutter-thread-menu-auto-scroll").forEach {
+            assertTrue(it, rule.allTagged(it).fetchSemanticsNodes().isEmpty())
+        }
         androidx.test.espresso.Espresso.pressBack()
         rule.onNodeWithTag("ftutter-thread-list").performScrollToKey("p2")
         rule.waitUntil(20_000) { rule.onAllNodesWithTag("ftutter-post-image", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
@@ -1181,10 +1566,24 @@ class FtutterModeInstrumentedTest {
         rule.waitUntil(5_000) { rule.allTagged("ftutter-ext-app-lock").fetchSemanticsNodes().isEmpty() }
     }
 
+    // M29: the original's long-press menu editor only reorders; hiding items is our extra on the extras page.
+    @Test fun theExtrasPageHidesLongPressMenuItems() {
+        openExtrasPage()
+        val list = rule.onNodeWithTag("ftutter-settings-page-extras-list")
+        list.performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-ext-post-menu-hide"))
+        rule.onNodeWithTag("ftutter-ext-post-menu-hide").performClick()
+        waitForTag("ftutter-order-editor")
+        rule.onAllNodes(androidx.compose.ui.test.isToggleable() and androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("ftutter-order-editor")), useUnmergedTree = true)[5].performClick()
+        rule.onNodeWithTag("ftutter-order-save").performClick()
+        rule.waitUntil(10_000) { preference("compat.ftutter.resuDOrderBool")?.split("\n")?.get(5) == "false" }
+        assertEquals("del", preference("compat.ftutter.resuDOrderName")?.split("\n")?.get(5))
+    }
+
     @Test fun theThreadExtrasAddTheirMenuItemsAndTheImageMenu() {
         enableExtensions("mht", "readAloud", "autoScroll", "imageMenu")
         openTutorialThread()
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
         waitForTag("ftutter-thread-menu-auto-scroll")
         saveShot("32-extras-thread-menu")
         assertTrue(rule.allTagged("ftutter-thread-menu-read-aloud").fetchSemanticsNodes().isNotEmpty())
@@ -1195,6 +1594,7 @@ class FtutterModeInstrumentedTest {
         rule.waitUntil(5_000) { rule.allTagged("ftutter-auto-scroll").fetchSemanticsNodes().isEmpty() }
         // MHTで保存：形式を選ぶダイアログ（保存はしない）。
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
+        rule.onNodeWithTag("ftutter-thread-menu-more").performClick()
         waitForTag("ftutter-thread-menu-mht")
         rule.onNodeWithTag("ftutter-thread-menu-mht").performClick()
         waitForTag("ftutter-mht-choice")
@@ -1221,7 +1621,8 @@ class FtutterModeInstrumentedTest {
             app.appStateStore.setNgWords(listOf("テスト3"))
             app.appStateStore.setCatalogNgWords(listOf("チュートリアル"))
         }
-        // OFF：共有のNGは効かない。
+        // OFF：共有のNGは効かない（既定はONなので、明示してOFFにする）。
+        runBlocking { app.compatibilityStore.savePreferences(mapOf("compat.ftutter.ext.commonNg" to "false")) }
         openTutorialThread()
         rule.onNodeWithTag("ftutter-thread-tool-menu").performClick()
         waitForTag("ftutter-thread-menu-copy-url")
@@ -1522,7 +1923,7 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-ng-dialog")
         rule.onNodeWithTag("ftutter-ng-text").performTextReplacement("とても長い新しいNGの言葉".repeat(10))
         rule.onNodeWithTag("ftutter-ng-save").performClick()
-        waitForTag("ftutter-ng-error")
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("NGが多すぎて保存できません", substring = true).fetchSemanticsNodes().isNotEmpty() }
         assertEquals(full, preference("compat.ftutter.NGList"))
     }
 }

@@ -267,7 +267,8 @@ private fun CatalogScreenContent(
         if (hasSyncedCatalogMode && pendingCatalogModeWrites.intValue > 0) return@LaunchedEffect
         resolveCatalogModeSyncValue(
             boardId = board?.id,
-            persistedCatalogModes = persistentBindings.persistedCatalogModes
+            persistedCatalogModes = persistentBindings.persistedCatalogModes,
+            boardUrl = board?.url
         )?.let { catalogMode = it }
         hasSyncedCatalogMode = true
     }
@@ -342,7 +343,7 @@ private fun CatalogScreenContent(
             coroutineScope = coroutineScope,
             stateStore = stateStore,
             currentBoardId = { board?.id },
-            currentBoardWatchWordKey = { persistentBindings.boardWatchWordKey },
+            currentBoardSettingKeys = { persistentBindings.boardSettingKeys },
             setCatalogMode = { catalogMode = it },
             currentCatalogNgWords = { catalogNgWords },
             currentGlobalWatchWords = { globalWatchWords },

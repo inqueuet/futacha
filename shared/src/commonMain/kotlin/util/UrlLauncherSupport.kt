@@ -13,9 +13,10 @@ internal data class UrlLaunchRequest(
 )
 
 private const val MAX_EXTERNAL_URL_LENGTH = 8_192
+private val refusedCustomUrlSchemes = setOf("javascript", "file", "data", "content", "intent", "blob", "vbscript")
 private val allowedExternalUrlSchemes = setOf("http", "https", "mailto", "futaba")
 
-internal fun resolveUrlLaunchRequest(url: String): UrlLaunchRequest? {
+internal fun resolveUrlLaunchRequest(url: String, allowAnyScheme: Boolean = false): UrlLaunchRequest? {
     val trimmed = url.trim()
     if (
         trimmed.isEmpty() || trimmed.length > MAX_EXTERNAL_URL_LENGTH ||
@@ -25,7 +26,11 @@ internal fun resolveUrlLaunchRequest(url: String): UrlLaunchRequest? {
     }
 
     val scheme = trimmed.substringBefore(':', "").lowercase()
-    if (scheme !in allowedExternalUrlSchemes) {
+    // allowAnyScheme (L-B12, C05): the person's own URL scheme (「chromeで開く」...); scripts, local files and data stay refused.
+    val customOk = allowAnyScheme && scheme.isNotEmpty() && scheme.length <= 32 &&
+        scheme.all { it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '-' || it == '.' } &&
+        scheme[0] in 'a'..'z' && scheme !in refusedCustomUrlSchemes
+    if (scheme !in allowedExternalUrlSchemes && !customOk) {
         return null
     }
 

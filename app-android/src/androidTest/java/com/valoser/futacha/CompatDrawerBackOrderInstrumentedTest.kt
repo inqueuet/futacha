@@ -57,6 +57,22 @@ class CompatDrawerBackOrderInstrumentedTest {
 
     private fun searchShown() = rule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isNotEmpty()
 
+    @Test fun theDrawerOverAThreadLeadsBackToTheCatalog() {
+        rule.setContent { MaterialTheme { CompatibilityApp(store = storage, repository = repo, onExitApplication = {}) } }
+        rule.onNodeWithText(boardUrl).performClick()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("compat-catalog-item-463", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("compat-catalog-item-463", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        rule.onRoot().performTouchInput { swipe(Offset(2f, height * 0.5f), Offset(width * 0.6f, height * 0.5f), 300) }
+        rule.waitUntil(5_000) { drawerShown() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-drawer-leave-thread").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("← カタログに戻る").assertExists()
+        rule.onNodeWithTag("compat-drawer-leave-thread").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-drawer-leave-thread").fetchSemanticsNodes().isEmpty() }
+        rule.waitUntil(5_000) { !drawerShown() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-catalog-item-463", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+    }
+
     @Test fun backClosesTheDrawerBeforeTheSearch() {
         rule.setContent { MaterialTheme { CompatibilityApp(store = storage, repository = repo, onExitApplication = {}) } }
         rule.onNodeWithText(boardUrl).performClick()

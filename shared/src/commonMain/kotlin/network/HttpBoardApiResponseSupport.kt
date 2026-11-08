@@ -376,12 +376,16 @@ internal suspend fun readSmallHttpBoardApiResponseSummary(
         zeroReadBackoffMillis = zeroReadBackoffMillis,
         responseTotalTimeoutMillis = responseTotalTimeoutMillis
     ) ?: return null
-    return decoded
+    return summarizeSmallHttpBoardApiResponseBody(decoded)
+}
+
+/** The first non-blank line of a small response, cut to 160 characters (what the refusal messages show). */
+internal fun summarizeSmallHttpBoardApiResponseBody(decoded: String): String? =
+    decoded
         .trim()
         .lineSequence()
         .firstOrNull { it.isNotBlank() }
         ?.take(160)
-}
 
 /** The decoded body of a small response (at most 64 KiB), or null when it cannot be read. */
 internal suspend fun readSmallHttpBoardApiResponseBody(

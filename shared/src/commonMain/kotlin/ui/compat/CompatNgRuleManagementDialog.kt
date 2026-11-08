@@ -326,6 +326,10 @@ import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.compatTabKey
 import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatNgRuleId
+import com.valoser.futacha.shared.compat.COMPAT_NG_REGEX_LABEL
+import com.valoser.futacha.shared.compat.COMPAT_NG_REGEX_MAX_CHARS
+import com.valoser.futacha.shared.compat.compatNgRegexInputError
+import com.valoser.futacha.shared.compat.compatNgRuleDisplayWord
 import com.valoser.futacha.shared.compat.reduceCompatibilityWorkspace
 import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
 import com.valoser.futacha.shared.compat.compatQuoteQueryForLine
@@ -521,7 +525,7 @@ private fun formatCompatImageNgCreatedAt(epochMillis: Long): String {
 }
 
 @Composable
-internal fun CompatNgRuleManagementDialog(
+fun CompatNgRuleManagementDialog(
     title: String,
     rules: List<CompatNgRule>,
     imageReferenceBoardName: String? = null,
@@ -531,8 +535,10 @@ internal fun CompatNgRuleManagementDialog(
     onDeleteAll: (List<CompatNgRule>) -> Unit,
     addScopeLabel: String? = null,
     referenceKind: CompatNgKind? = null,
-    onAdd: ((value: String, globalScope: Boolean) -> Unit)? = null,
-    onEdit: ((rule: CompatNgRule, value: String, globalScope: Boolean, memo: String) -> Unit)? = null,
+    onAdd: ((value: String, globalScope: Boolean, isRegex: Boolean) -> Unit)? = null,
+    onEdit: ((rule: CompatNgRule, value: String, globalScope: Boolean, memo: String, isRegex: Boolean) -> Unit)? = null,
+    /** FutabaViewer 18-20: the word dialogs offer a 「正規表現」 check (off by default). */
+    offerRegex: Boolean = false,
     /**
      * False hides the scope checkboxes of the add and edit dialogs: a new rule is always for every board / thread, and an
      * edited rule keeps its scope (a host that cannot keep rules per thread). True (the default) is the usual dialog.
@@ -559,6 +565,8 @@ internal fun CompatNgRuleManagementDialog(
     }
     var confirmDeleteAll by remember { mutableStateOf(false) }
     var newValue by remember { mutableStateOf("") }
+    var newIsRegex by remember { mutableStateOf(false) }
+    var editIsRegex by remember { mutableStateOf(false) }
     var globalScope by remember { mutableStateOf(!offerLocalScope) }
     var searchQuery by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
@@ -591,10 +599,17 @@ internal fun CompatNgRuleManagementDialog(
     val filteredRules = remember(ruleSearchIndex, appliedSearchQuery) {
         ruleSearchIndex.filter(appliedSearchQuery)
     }
-    fun hasReferenceDuplicate(value: String, global: Boolean, editingId: String? = null): Boolean = when {
-        isCatalogWordReference -> hasCompatCatalogManagementDuplicate(rules, value, editingId)
+    // A regular expression is the same rule only as the very same text (18-20's isSameWord); a plain word is never
+    // a duplicate of a regular expression.
+    val plainRules = remember(rules) { rules.filterNot(CompatNgRule::isRegex) }
+    fun hasReferenceDuplicate(value: String, global: Boolean, editingId: String? = null, isRegex: Boolean = false): Boolean = when {
+        isRegex -> rules.any {
+            it.id != editingId && it.isRegex && it.normalizedValue == value &&
+                (isCatalogWordReference || (it.scopeKey == "*") == global)
+        }
+        isCatalogWordReference -> hasCompatCatalogManagementDuplicate(plainRules, value, editingId)
         isThreadWordReference -> hasCompatThreadReferenceDuplicate(
-            rules = rules,
+            rules = plainRules,
             kind = referenceKind,
             value = value,
             globalScope = global,
@@ -604,19 +619,26 @@ internal fun CompatNgRuleManagementDialog(
         else -> false
     }
     fun submitReferenceAdd() {
-        val cleaned = if (isThreadWordReference) cleanCompatThreadReferenceWord(newValue) else newValue
+        val regex = offerRegex && newIsRegex
+        val cleaned = when {
+            regex -> newValue.trim().take(COMPAT_NG_REGEX_MAX_CHARS)
+            isThreadWordReference -> cleanCompatThreadReferenceWord(newValue)
+            else -> newValue
+        }
         when {
             cleaned.isBlank() -> addValidationMessage = "単語を入力して下さい"
-            referenceKind == CompatNgKind.THREAD_REFUSE && isCompatThreadRefuseForbidden(cleaned) ->
+            regex && compatNgRegexInputError(cleaned) != null -> addValidationMessage = compatNgRegexInputError(cleaned)
+            !regex && referenceKind == CompatNgKind.THREAD_REFUSE && isCompatThreadRefuseForbidden(cleaned) ->
                 addValidationMessage = "登録できない単語です"
-            hasReferenceDuplicate(cleaned, globalScope) -> {
+            hasReferenceDuplicate(cleaned, globalScope, isRegex = regex) -> {
                 addOpen = false
                 searchOpen = true
                 searchQuery = cleaned
             }
             else -> {
-                onAdd?.invoke(cleaned, globalScope)
+                onAdd?.invoke(cleaned, globalScope, regex)
                 newValue = ""
+                newIsRegex = false
                 addValidationMessage = null
                 addOpen = false
             }
@@ -694,6 +716,7 @@ internal fun CompatNgRuleManagementDialog(
                             if (onAdd != null) {
                                 IconButton(onClick = {
                                     newValue = ""
+                                    newIsRegex = false
                                     globalScope = !offerLocalScope
                                     addValidationMessage = null
                                     addOpen = true
@@ -782,6 +805,7 @@ internal fun CompatNgRuleManagementDialog(
                                             else -> rule.normalizedValue
                                         }
                                         editMemo = rule.memo
+                                        editIsRegex = rule.isRegex
                                         editGlobalScope = rule.scopeKey == "*"
                                         editValidationMessage = null
                                         editingRule = rule
@@ -882,9 +906,9 @@ internal fun CompatNgRuleManagementDialog(
                                                         ?: rule.normalizedValue
                                                 }
                                             } else if (isCatalogWordReference) {
-                                                compatCatalogManagementDisplayValue(rule)
+                                                compatNgRuleDisplayWord(compatCatalogManagementDisplayValue(rule), rule.isRegex)
                                             } else if (isThreadWordReference) {
-                                                compatThreadReferenceDisplayValue(rule)
+                                                compatNgRuleDisplayWord(compatThreadReferenceDisplayValue(rule), rule.isRegex)
                                             } else {
                                                 rule.normalizedValue
                                             },
@@ -966,7 +990,7 @@ internal fun CompatNgRuleManagementDialog(
                             TextField(
                                 value = newValue,
                                 onValueChange = {
-                                    newValue = it.take(referenceWordMaxLength)
+                                    newValue = it.take(if (offerRegex && newIsRegex) COMPAT_NG_REGEX_MAX_CHARS else referenceWordMaxLength)
                                     addValidationMessage = null
                                 },
                                 modifier = Modifier
@@ -992,10 +1016,21 @@ internal fun CompatNgRuleManagementDialog(
                             label = { Text("登録値") },
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
-                                onAdd?.invoke(newValue, globalScope)
+                                onAdd?.invoke(newValue, globalScope, false)
                                 newValue = ""
                                 addOpen = false
                             })
+                        )
+                    }
+                    if (offerRegex && isWordReference) {
+                        CompatNgRegexCheckRow(
+                            checked = newIsRegex,
+                            tag = referenceTag?.let { "$it-add-regex" },
+                            onCheckedChange = { checked ->
+                                newIsRegex = checked
+                                if (!checked) newValue = newValue.take(referenceWordMaxLength)
+                                addValidationMessage = null
+                            }
                         )
                     }
                     if (addScopeLabel != null && offerLocalScope) {
@@ -1032,6 +1067,7 @@ internal fun CompatNgRuleManagementDialog(
                             } else {
                                 "・大文字と小文字を区別しません\n" +
                                     "・全角と半角を区別しません\n" +
+                                    (if (offerRegex) "・正規表現では上の2つを区別します\n" else "") +
                                     "・リロード後に反映されます\n" +
                                     "・多いほど時間が掛かります\n" +
                                     "・登録数に注意して下さい"
@@ -1049,7 +1085,7 @@ internal fun CompatNgRuleManagementDialog(
                         if (isWordReference) {
                             submitReferenceAdd()
                         } else {
-                            onAdd?.invoke(newValue, globalScope)
+                            onAdd?.invoke(newValue, globalScope, false)
                             newValue = ""
                             addValidationMessage = null
                             addOpen = false
@@ -1060,6 +1096,7 @@ internal fun CompatNgRuleManagementDialog(
             dismissButton = {
                 TextButton(onClick = {
                     newValue = ""
+                    newIsRegex = false
                     globalScope = !offerLocalScope
                     addValidationMessage = null
                     addOpen = false
@@ -1227,7 +1264,13 @@ internal fun CompatNgRuleManagementDialog(
                             TextField(
                                 value = editValue,
                                 onValueChange = {
-                                    editValue = it.take(if (typedReference) COMPAT_THREAD_IDENTITY_EDIT_LIMIT else referenceWordMaxLength)
+                                    editValue = it.take(
+                                        when {
+                                            typedReference -> COMPAT_THREAD_IDENTITY_EDIT_LIMIT
+                                            offerRegex && editIsRegex -> COMPAT_NG_REGEX_MAX_CHARS
+                                            else -> referenceWordMaxLength
+                                        }
+                                    )
                                     editValidationMessage = null
                                 },
                                 modifier = Modifier
@@ -1247,6 +1290,17 @@ internal fun CompatNgRuleManagementDialog(
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             label = { Text("登録値") }
+                        )
+                    }
+                    if (offerRegex && isWordReference && !typedReference) {
+                        CompatNgRegexCheckRow(
+                            checked = editIsRegex,
+                            tag = referenceTag?.let { "$it-edit-regex" },
+                            onCheckedChange = { checked ->
+                                editIsRegex = checked
+                                if (!checked) editValue = editValue.take(referenceWordMaxLength)
+                                editValidationMessage = null
+                            }
                         )
                     }
                     if (isWordReference) {
@@ -1312,6 +1366,24 @@ internal fun CompatNgRuleManagementDialog(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    val regex = offerRegex && editIsRegex && isWordReference && !typedReference
+                    if (regex) {
+                        val cleaned = editValue.trim().take(COMPAT_NG_REGEX_MAX_CHARS)
+                        val unchanged = rule.isRegex && cleaned == rule.normalizedValue &&
+                            editGlobalScope == (rule.scopeKey == "*")
+                        editValidationMessage = when {
+                            cleaned.isBlank() -> "単語を入力して下さい"
+                            compatNgRegexInputError(cleaned) != null -> compatNgRegexInputError(cleaned)
+                            unchanged || hasReferenceDuplicate(cleaned, editGlobalScope, rule.id, isRegex = true) ->
+                                "既に登録されているか、または変更がありません"
+                            else -> null
+                        }
+                        if (editValidationMessage == null) {
+                            onEdit?.invoke(rule, cleaned, editGlobalScope, editMemo, true)
+                            editingRule = null
+                        }
+                        return@TextButton
+                    }
                     val typedValue = if (typedReference) compatTypedThreadReferenceEditValue(rule.kind, editValue) else null
                     val normalizedEditValue = if (typedReference) typedValue else normalizeCompatSearchText(
                         if (isThreadWordReference) cleanCompatThreadReferenceWord(editValue) else editValue
@@ -1321,7 +1393,8 @@ internal fun CompatNgRuleManagementDialog(
                     } else {
                         rule.normalizedValue
                     }
-                    val unchanged = normalizedEditValue == (if (typedReference) rule.normalizedValue else normalizeCompatSearchText(originalDisplayValue)) &&
+                    val unchanged = !rule.isRegex &&
+                        normalizedEditValue == (if (typedReference) rule.normalizedValue else normalizeCompatSearchText(originalDisplayValue)) &&
                         editGlobalScope == (rule.scopeKey == "*")
                     val duplicate = if (typedReference) rules.any {
                         it.id != rule.id && it.kind == rule.kind && it.normalizedValue == typedValue &&
@@ -1342,7 +1415,7 @@ internal fun CompatNgRuleManagementDialog(
                     ) {
                         editValidationMessage = "既に登録されているか、または変更がありません"
                     } else {
-                        onEdit?.invoke(rule, editValue, editGlobalScope, editMemo)
+                        onEdit?.invoke(rule, editValue, editGlobalScope, editMemo, false)
                         editValidationMessage = null
                         editingRule = null
                     }
@@ -1429,4 +1502,21 @@ internal fun CompatCatalogRuleScopeDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
+}
+
+/** The 「正規表現」 check of the word dialogs (FutabaViewer 18-20). */
+@Composable
+private fun CompatNgRegexCheckRow(checked: Boolean, tag: String?, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = tag?.let { Modifier.testTag(it) } ?: Modifier
+        )
+        Text(COMPAT_NG_REGEX_LABEL)
+    }
 }

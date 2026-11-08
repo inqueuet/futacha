@@ -19,12 +19,18 @@ internal object FutaberPreferenceKeys {
     const val LAST_BOARD_ID = "compat.futaber.lastBoardId"
     const val TABS = "compat.futaber.tabs"
     const val DRAFTS = "compat.futaber.drafts"
+    /** The writing screen's "ペーストボード" (FutaberPasteboard.kt); names files of this device, so it is left out of backups. */
+    const val PASTEBOARD = "compat.futaber.pasteboard"
     const val FAVORITES = "compat.futaber.favorites"
     /** The posts of each thread this person had seen when they last left it (see [FutaberSeenCount]). */
     const val SEEN = "compat.futaber.seen"
     const val POST_NAME = "compat.futaber.post.name"
     const val POST_EMAIL = "compat.futaber.post.email"
     const val POST_CONFIRM = "compat.futaber.post.confirm"
+    /** L-B8 (C43): 書き込み設定「画像の品質」, [FutaberImageQuality.persisted] (nothing stored = 高品質, as before). */
+    const val POST_IMAGE_QUALITY = "compat.futaber.post.imageQuality"
+    /** L-B10 (S24): the manage panel's category chosen last ([FutaberManageCategory.persisted]; nothing stored = 履歴). */
+    const val MANAGE_CATEGORY = "compat.futaber.manageCategory"
 }
 
 /** The six catalog layouts offered by the display-style menu. */
@@ -118,16 +124,32 @@ internal fun futaberApplyCatalogRules(
     items: List<CatalogItem>,
     words: List<String>,
     index: CompatCatalogRuleIndex?,
-    hiddenIds: Set<String> = emptySet()
+    hiddenIds: Set<String> = emptySet(),
+    sharedTitleNg: com.valoser.futacha.shared.ui.ftutter.FtutterNgMatcher? = null
 ): List<CatalogItem> {
     val listed = futaberApplyCatalogNg(items, words)
     val byRules = if (index == null) listed else listed.filterNot(index::hides)
-    return if (hiddenIds.isEmpty()) byRules else byRules.filterNot { it.id in hiddenIds }
+    val byShared = if (sharedTitleNg == null || byRules.isEmpty()) byRules else {
+        sharedTitleNg.beginPass()
+        byRules.filterNot { sharedTitleNg.hidesTitle(it.title.orEmpty()) }
+    }
+    return if (hiddenIds.isEmpty()) byShared else byShared.filterNot { it.id in hiddenIds }
 }
 
 /** `https://may.2chan.net/b/` -> `may.2chan.net/b` for the title bar. */
 internal fun futaberBoardAddress(boardUrl: String): String =
     boardUrl.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
+
+/**
+ * The catalog's title: the board's address without its page, as the original writes it ("may.2chan.net/27" for a board
+ * registered as `…/27/futaba.php`; the board list keeps the whole address, as there).
+ */
+internal fun futaberCatalogHeading(boardUrl: String): String {
+    val address = futaberBoardAddress(boardUrl)
+    val page = address.substringAfterLast('/')
+    val isBoardPage = page.startsWith("futaba.", ignoreCase = true) && address.contains('/')
+    return if (isBoardPage) address.substringBeforeLast('/') else address
+}
 
 /** Catalog title with a placeholder so a thread without a title is still tappable. */
 internal fun futaberCatalogTitle(item: CatalogItem): String =
@@ -259,3 +281,46 @@ internal fun futaberCatalogImageRuleLabel(rule: CompatNgRule): String {
 /** The title of a new thread the person just posted, until the thread is read: the subject they wrote, else "無題". */
 internal fun futaberNewThreadTitle(subject: String): String =
     subject.trim().lineSequence().firstOrNull()?.trim().orEmpty().ifEmpty { "無題" }
+
+// ---- L-B3: the catalog's rows (V27) and the read rows (V12) ----
+
+/** V27: futaber's catalog row is 40 high, its picture box 40 square 4 from the left, the title 12 after it (x = 56). */
+internal const val FUTABER_CATALOG_ROW_DP = 40
+/** "やや広め": provisional until the original's is captured (L-B0): a 56 row and picture, two title lines. */
+internal const val FUTABER_CATALOG_ROW_WIDE_DP = 56
+internal const val FUTABER_CATALOG_ROW_THUMB_START_DP = 4
+internal const val FUTABER_CATALOG_ROW_TITLE_GAP_DP = 12
+
+internal fun futaberCatalogRowHeightDp(wide: Boolean): Int = if (wide) FUTABER_CATALOG_ROW_WIDE_DP else FUTABER_CATALOG_ROW_DP
+
+/** What a screen reader reads for a catalog row or cell: the title, the count and (a grey row) that it was read. */
+internal fun futaberCatalogItemDescription(title: String, replyCount: Int, read: Boolean): String =
+    "$title、${replyCount}レス" + if (read) "、既読" else ""
+
+/**
+ * V12: the threads of [board] that are in the shared history, whichever mode read them (the history is shared, so a
+ * thread read in ふたちゃ or としあき(仮) is grey here too). A row is of the board when its board id is the board's, or
+ * when its address (the thread's own, or the board's) is of the same official board: としあき(仮)'s rows carry the shared
+ * board key as their id. The address is only parsed for rows that name the board's host and path.
+ */
+internal fun futaberReadThreadIds(
+    history: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>,
+    board: com.valoser.futacha.shared.model.BoardSummary
+): Set<String> {
+    val boardUrl = com.valoser.futacha.shared.compat.canonicalizeBoardUrl(board.url)
+    // "may.2chan.net/27/": a row of another board cannot contain it.
+    val needle = boardUrl?.substringAfter("://")
+    val read = HashSet<String>()
+    history.forEach { entry ->
+        if (entry.threadId.isBlank()) return@forEach
+        val same = entry.boardId == board.id ||
+            (needle != null && entry.boardUrl.contains(needle, ignoreCase = true) && futaberHistoryBoardUrl(entry.boardUrl) == boardUrl)
+        if (same) read += entry.threadId
+    }
+    return read
+}
+
+/** The board a history row's address belongs to (it holds the thread's own address, or the board's), or null. */
+private fun futaberHistoryBoardUrl(url: String): String? =
+    com.valoser.futacha.shared.compat.canonicalizeThreadUrl(url)?.canonicalBoardUrl
+        ?: com.valoser.futacha.shared.compat.canonicalizeBoardUrl(url)

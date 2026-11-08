@@ -20,7 +20,10 @@ internal fun isAmbiguousRequestUrl(url: URLBuilder): Boolean =
     url.encodedUser != null ||
         url.encodedPassword != null ||
         url.host.any(::isAmbiguousRequestHostChar) ||
-        url.encodedPathSegments.any { '\\' in it }
+        // Ktor 3.6 percent-encodes a literal backslash while parsing the path.
+        // Inspect decoded segments so the transport-independent guard survives
+        // that normalization, including an explicitly encoded backslash.
+        url.pathSegments.any { '\\' in it }
 
 // A host with `%`-escapes, whitespace or control characters is decoded or
 // split differently by the engines (`evil.com%5C%40may.2chan.net`); no request

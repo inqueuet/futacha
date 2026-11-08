@@ -84,6 +84,9 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -109,6 +112,15 @@ internal data class FtutterTabView(
  * 上：分類（履歴／タブ／タブ（更新順））。タブ表示の時だけ、閉じたタブを1件ずつ戻すボタン。
  * 下：書込・未読の絞り込みと、題名の検索。
  */
+/**
+ * The drawer's state, made anew when the width it is laid out in changes (M22). The sheet is 74% of
+ * the width, so after a rotation the closed drawer's old offset (minus the old width) can lie nearer
+ * the open anchor than the new closed one, and the drawer snapped open. A fresh state starts closed.
+ */
+@Composable
+internal fun rememberFtutterDrawerState(available: Boolean, widthKey: Int): DrawerState =
+    remember(available, widthKey) { DrawerState(androidx.compose.material3.DrawerValue.Closed) }
+
 @Composable
 internal fun FtutterDrawerHost(
     drawerState: DrawerState,
@@ -240,13 +252,15 @@ internal fun FtutterDrawerPanel(
             onDeleteAll = { confirmAll = true }
         )
         if (searching) {
-            TextField(
-                value = filter.query,
-                onValueChange = { onFilterChange(filter.copy(query = it)) },
-                placeholder = { Text("タイトル検索") },
-                singleLine = true,
-                colors = TextFieldDefaults.colors(focusedContainerColor = colors.popUp, unfocusedContainerColor = colors.popUp),
-                modifier = Modifier.fillMaxWidth().testTag("ftutter-drawer-search")
+            // M68：原作のドロワーの検索は←と×のある欄。
+            FtutterSearchField(
+                query = filter.query,
+                onQueryChange = { onFilterChange(filter.copy(query = it)) },
+                onClose = { searching = false; onFilterChange(filter.copy(query = "")) },
+                background = colors.popUp,
+                content = colors.text,
+                inputTag = "ftutter-drawer-search",
+                closeTag = "ftutter-drawer-search-close"
             )
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("ftutter-drawer-list")) {
@@ -412,19 +426,21 @@ private fun FtutterDrawerHeader(
                 }
                 // 原作 Drawer.dart は履歴ではこのボタンを出さない。履歴の削除・復元ではなく、タブを閉じた操作のUndo。
                 if (content != FtutterDrawerContent.HISTORY) {
-                    TextButton(
-                        onClick = { restoreNotice = onRestoreClosed() },
-                        enabled = closedCount > 0,
-                        colors = ButtonDefaults.textButtonColors(contentColor = colors.onToolBar,
-                            disabledContentColor = colors.onToolBar.copy(alpha = 0.38f)),
-                        modifier = Modifier.testTag("ftutter-drawer-restore")
+                    // 原作はアイコンだけ（M35）。残りの件数は読み上げの説明と長押しで出す。
+                    val restoreLabel = ftutterRestoreClosedLabel(closedCount)
+                    val enabled = closedCount > 0
+                    Box(
+                        Modifier.size(48.dp)
+                            .semantics { contentDescription = restoreLabel; role = Role.Button; if (!enabled) disabled() }
+                            .combinedClickable(
+                                onClick = { if (enabled) restoreNotice = onRestoreClosed() },
+                                onLongClick = { restoreNotice = restoreLabel }
+                            )
+                            .testTag("ftutter-drawer-restore"),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Rounded.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("タブを戻す", fontSize = 12.sp, maxLines = 1)
-                            Text("残り${closedCount}件", fontSize = 12.sp, maxLines = 1)
-                        }
+                        Icon(Icons.Rounded.RestoreFromTrash, contentDescription = null,
+                            tint = if (enabled) colors.onToolBar else colors.onToolBar.copy(alpha = 0.38f))
                     }
                 }
             }
@@ -436,6 +452,9 @@ private fun FtutterDrawerHeader(
         }
     }
 }
+
+/** ドロワーの「閉じたタブを戻す」の説明（読み上げ・長押し）。 */
+internal fun ftutterRestoreClosedLabel(remaining: Int): String = "閉じたタブを戻す（残り${remaining}件）"
 
 @Composable
 private fun FtutterDrawerCheck(label: String, checked: Boolean, modifier: Modifier, onClick: () -> Unit) {
@@ -522,6 +541,13 @@ private fun FtutterDrawerRow(
                     modifier = Modifier.align(Alignment.CenterVertically).padding(end = 4.dp)
                 )
             }
+            // M66：原作の保護の印はサムネイルの左の黄色い点。
+            Box(Modifier.width(10.dp).align(Alignment.CenterVertically), contentAlignment = Alignment.Center) {
+                if (row.protected) Box(
+                    Modifier.size(7.dp).background(Color(0xFFFFC107), androidx.compose.foundation.shape.CircleShape)
+                        .semantics { contentDescription = "保護" }.testTag("ftutter-drawer-protected")
+                )
+            }
             Box(Modifier.size(58.dp).clip(RoundedCornerShape(2.dp))) {
                 entry?.titleImageUrl?.takeIf { it.isNotBlank() }?.let { thumb ->
                     FtutterThumbnail(
@@ -540,9 +566,6 @@ private fun FtutterDrawerRow(
                     modifier = Modifier.weight(1f)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (row.protected) {
-                        Icon(Icons.Rounded.Lock, contentDescription = "保護", tint = colors.headerText, modifier = Modifier.size(14.dp).testTag("ftutter-drawer-protected"))
-                    }
                     if (status.isNotEmpty()) {
                         Text(status, color = colors.text, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp)
                             .testTag("ftutter-drawer-status"))
@@ -633,7 +656,9 @@ internal fun FtutterTabStrip(
     onMove: ((from: Int, to: Int) -> Unit)? = null,
     /** タブ帯の位置。スレ画面はスレッドごとに作り直すので、アプリ側で持って渡す（再監査M3：切り替えると先頭に戻った）。 */
     listState: LazyListState = rememberLazyListState(),
-    showStatus: Boolean = false
+    showStatus: Boolean = false,
+    /** 前の見た目（枠で選択・サムネイルに未読の数だけ）。OFFは原作：サムネイルに題名を重ね、選んだタブは下に線。 */
+    legacyLook: Boolean = true
 ) {
     val colors = LocalFtutterColors.current
     if (tabs.isEmpty()) return
@@ -654,7 +679,7 @@ internal fun FtutterTabStrip(
             Box(
                 Modifier.width(settings.tabWidth.dp).fillMaxHeight().padding(1.dp)
                     .then(if (dragging == tab.url) Modifier.offset { androidx.compose.ui.unit.IntOffset(dragOffset.toInt(), 0) } else Modifier)
-                    .then(if (selected) Modifier.border(2.dp, colors.onToolBarActive) else Modifier)
+                    .then(if (selected && legacyLook) Modifier.border(2.dp, colors.onToolBarActive) else Modifier)
                     .clickable { onOpen(tab.url) }
                     .pointerInput(tab.url) {
                         // 長押しで始まる。動かさずに離せばメニュー、横へ動かせば並べ替え。
@@ -690,11 +715,25 @@ internal fun FtutterTabStrip(
                     .testTag(if (selected) "ftutter-tab-selected" else "ftutter-tab")
             ) {
                 val thumb = tab.entry?.titleImageUrl.orEmpty()
-                val titleBesideUnread = thumb.isBlank() && showStatus &&
+                val titleBesideUnread = (!legacyLook && thumb.isNotBlank()) || thumb.isBlank() && showStatus &&
                     com.valoser.futacha.shared.ui.board.threadStatusBadgeText(ftutterDisplayStatus(tab.entry)).isNotEmpty()
                 if (thumb.isNotBlank()) {
                     FtutterThumbnail(thumbnailUrl = thumb, fullImageUrl = null, targetSizePx = 120, contentDescription = tab.entry?.title.orEmpty(),
                         modifier = Modifier.fillMaxSize().alpha(if (settings.privacy) (1.0 - design.privacyTabDrawer).toFloat() else 1f))
+                    if (!legacyLook) {
+                        // M31：原作はサムネイルの下に題名を重ねる（青い字に白い縁）。
+                        Row(Modifier.fillMaxWidth().align(Alignment.BottomStart), verticalAlignment = Alignment.Bottom) {
+                            Text(tab.entry?.title.orEmpty(), color = colors.link, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1, softWrap = false,
+                                overflow = TextOverflow.Clip,
+                                style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.White, blurRadius = 4f)),
+                                modifier = Modifier.weight(1f).padding(horizontal = 1.dp).testTag("ftutter-tab-title"))
+                            tab.numbers.unread?.let { unread ->
+                                Text("$unread", color = colors.onMidoku, fontSize = (design.catalogNumberFontSize - 2).coerceAtLeast(8).sp,
+                                    lineHeight = design.catalogNumberFontSize.coerceAtLeast(10).sp,
+                                    modifier = Modifier.background(colors.midoku).padding(horizontal = 2.dp))
+                            }
+                        }
+                    }
                 } else if (titleBesideUnread) {
                     Row(Modifier.fillMaxWidth().align(Alignment.BottomStart), verticalAlignment = Alignment.Bottom) {
                         Text(tab.entry?.title.orEmpty(), color = colors.onToolBar, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1,
@@ -714,6 +753,9 @@ internal fun FtutterTabStrip(
                         "$unread", color = colors.onMidoku, fontSize = (design.catalogNumberFontSize - 2).coerceAtLeast(8).sp,
                         modifier = Modifier.align(Alignment.BottomEnd).background(colors.midoku).padding(horizontal = 2.dp)
                     )
+                }
+                if (selected && !legacyLook) {
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).background(colors.onToolBarActive).testTag("ftutter-tab-underline"))
                 }
                 if (tab.protected) {
                     Icon(Icons.Rounded.Lock, contentDescription = "保護", tint = colors.onToolBar,

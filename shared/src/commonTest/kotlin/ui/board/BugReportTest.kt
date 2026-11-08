@@ -70,7 +70,7 @@ class BugReportTest {
     @Test fun theSchemeNamesFollowEachModesSettings() {
         assertEquals("ふたばクラシック・ダーク", futachaBugReportThemeName(
             com.valoser.futacha.shared.model.ThemePalette.FutabaClassic, com.valoser.futacha.shared.model.ThemeMode.Dark))
-        assertEquals("メインカラー #00A0E9・ダークモード（背景真っ黒）", com.valoser.futacha.shared.ui.ftutter.ftutterBugReportThemeName(
+        assertEquals("メインカラー #00A0E9・ダークモード（＋背景真っ黒）", com.valoser.futacha.shared.ui.ftutter.ftutterBugReportThemeName(
             0xFF00A0E9, com.valoser.futacha.shared.ui.ftutter.FtutterBrightness.BLACK))
         assertEquals("メインカラー 標準・ライトモード", com.valoser.futacha.shared.ui.ftutter.ftutterBugReportThemeName(
             null, com.valoser.futacha.shared.ui.ftutter.FtutterBrightness.LIGHT))

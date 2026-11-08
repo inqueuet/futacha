@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.valoser.futacha.shared.compat.CompatToolbarSurface
+import com.valoser.futacha.shared.compat.COMPAT_THREAD_RESTORE_CLOSED_KEY
 import futacha.shared.generated.resources.*
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
@@ -81,6 +82,8 @@ internal fun compatToolbarArtwork(
             "quickng" -> if (selected) Res.drawable.ngon else Res.drawable.ngoff
             "drawer" -> Res.drawable.drawer
             "autoscroll" -> if (selected) Res.drawable.pause else Res.drawable.autoscroll
+            // FutabaViewer 18-20 draws its restore-closed button with catalog_undo.
+            COMPAT_THREAD_RESTORE_CLOSED_KEY -> Res.drawable.catalog_undo
             "other" -> Res.drawable.menu_ico_post_toolbar_other
             else -> return CompatToolbarArtwork.Vector(compatToolbarIcon(key))
         }

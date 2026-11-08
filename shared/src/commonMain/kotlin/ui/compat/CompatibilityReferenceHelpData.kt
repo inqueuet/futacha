@@ -15,6 +15,8 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
     return html
+        .replace("<label for=\"catalog\"", currentModeHelpHtmlSection() + futaberOperationHelpHtmlSection() + ftutterOpeningHelpHtmlSection() + "<label for=\"catalog\"")
+        .replace("<label for=\"post\"", postingAndSavingHelpHtmlSection() + speechHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"post\"", aiHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"drawer\"", com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection() + "<label for=\"drawer\"")
         .replace("<label for=\"background\"", watcherHelpHtmlSection() + "<label for=\"background\"")
@@ -447,7 +449,7 @@ hr { width: 100%; height: 1px; border: none; background-color: #eeeeee; }
 		<p class="explain">指定された単語で探します</p>
 
 		<p class="title">読み上げ</p>
-		<p class="explain">表示されている位置からレスを読み上げます<br />最後まで読み上げたら自動でリロードします<br />新着レスがなければ1分後に再度リロードします<br />連続1時間まで利用できます</p>
+		<p class="explain">としあき（仮）では表示位置から読み上げ、最後まで進むと自動で更新します。新着がないときは30秒待って再度確認します。<br />読み上げ操作から位置変更・一時停止・停止ができます。声と対応OS、ずんだもんの取得方法は「読み上げ・ずんだもん」を確認してください。</p>
 
 		<p class="title">過去ログ検索</p>
 		<p class="explain">キャッシュサーバーから過去ログを取得します</p>

@@ -41,7 +41,8 @@ fun CompatHistoryEntry.toModernThreadHistoryEntry(): ThreadHistoryEntry? {
         boardName = boardName,
         boardUrl = parsed.canonicalBoardUrl,
         lastVisitedEpochMillis = lastVisitedEpochMillis,
-        replyCount = replyCount,
+        // D-B2 (D4): the modern history counts every post (OP included), the compatibility one the replies only.
+        replyCount = replyCount.coerceAtLeast(0) + 1,
         lastReadItemIndex = scrollAnchor.fallbackIndex.coerceAtLeast(0),
         lastReadItemOffset = scrollAnchor.offsetPx.coerceAtLeast(0)
     )
@@ -63,7 +64,7 @@ fun ThreadHistoryEntry.toCompatHistoryEntry(): CompatHistoryEntry? {
         threadNo = normalizedThreadId,
         title = title,
         thumbnailUrl = titleImageUrl.takeIf { it.isNotBlank() },
-        replyCount = replyCount.coerceAtLeast(0),
+        replyCount = (replyCount - 1).coerceAtLeast(0),
         contentUpdatedAtEpochMillis = lastVisitedEpochMillis,
         lastVisitedEpochMillis = lastVisitedEpochMillis,
         scrollAnchor = ScrollAnchor(

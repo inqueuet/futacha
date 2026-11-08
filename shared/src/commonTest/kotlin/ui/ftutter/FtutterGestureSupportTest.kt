@@ -48,7 +48,7 @@ class FtutterGestureSupportTest {
     fun fourSegmentsShowNothingAndDoNothing() {
         val map = FTUTTER_GESTURE_DEFAULTS
         assertEquals("更新", ftutterGestureLabel("201", map))
-        assertEquals("なし", ftutterGestureLabel("12", map))
+        assertEquals("", ftutterGestureLabel("12", map))
         assertNull(ftutterGestureLabel("2010", map))
         assertNull(ftutterGestureActionFor("2010", map))
         assertNull(ftutterGestureActionFor("12", map))

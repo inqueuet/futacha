@@ -304,7 +304,12 @@ data class CompatNgRule(
     /** pHash rules store a 16-digit hexadecimal perceptual hash here. */
     val imageUrl: String? = null,
     /** Optional user-facing note used by the reference image-NG editor. */
-    val memo: String = ""
+    val memo: String = "",
+    /**
+     * FutabaViewer 18-20: the word is a regular expression, matched against the raw text
+     * (full/half width and upper/lower case are told apart). Only word rules use it.
+     */
+    val isRegex: Boolean = false
 )
 
 const val MAX_COMPAT_NG_RULES = 10_000
@@ -325,8 +330,9 @@ fun requireValidCompatNgRule(rule: CompatNgRule) {
     require(isValidCompatNgRule(rule)) { "Compatibility NG rule is invalid or too large" }
 }
 
-fun compatNgRuleId(kind: CompatNgKind, scopeKey: String, normalizedValue: String): String =
-    "compat_ng_${kind.name.lowercase()}_${stableCompatHash("$scopeKey\u0000$normalizedValue")}"
+fun compatNgRuleId(kind: CompatNgKind, scopeKey: String, normalizedValue: String, isRegex: Boolean = false): String =
+    // A regular expression and a plain word with the same text are two rules (18-20's version key adds \u0001).
+    "compat_ng_${kind.name.lowercase()}_${stableCompatHash("$scopeKey\u0000${if (isRegex) "\u0001" else ""}$normalizedValue")}"
 
 fun isCompatNgScopeValid(
     kind: CompatNgKind,

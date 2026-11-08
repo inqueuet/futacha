@@ -62,7 +62,7 @@ class FutaberPerformanceEquivalenceTest {
         FutaberExtract.Url -> legacyUrlPattern.containsMatchIn(messageHtmlToPlainText(post.messageHtml))
         FutaberExtract.Image -> !post.imageUrl.isNullOrBlank() || !post.thumbnailUrl.isNullOrBlank()
         // Not drawn below: "NGで隠したレス" came after the replaced implementation (FutaberParityB1bTest covers it).
-        FutaberExtract.NgHidden -> false
+        FutaberExtract.NgHidden, FutaberExtract.Popular -> false
     }
 
     private fun legacySearchText(post: Post): String = buildString {

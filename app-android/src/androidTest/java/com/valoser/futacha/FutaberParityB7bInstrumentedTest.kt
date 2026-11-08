@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -65,6 +66,7 @@ class FutaberParityB7bInstrumentedTest {
         "compat.futaber.ext.readAloudPanel",
         "compat.futaber.catalog.sort",
         "compat.futaber.lastBoardId",
+        "compat.futaber.manageCategory",
         "compat.futaber.tabs",
         "compat.futaber.seen"
     )
@@ -74,7 +76,7 @@ class FutaberParityB7bInstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(keys.associateWith { null })
+            app.compatibilityStore.savePreferences(keys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             originalNgWords = app.appStateStore.ngWords.first()
             app.appStateStore.setNgWords(emptyList())
             originalDrafts = app.compatibilityStore.loadPreference("compat.futaber.drafts")
@@ -158,7 +160,8 @@ class FutaberParityB7bInstrumentedTest {
     }
 
     private fun closeSheet() {
-        rule.onNodeWithTag("futaber-action-cancel").performScrollTo().performClick()
+        // L-B4: キャンセル is a group of its own under the items, always on screen (it was the last row of the scrolling card).
+        rule.onNodeWithTag("futaber-action-cancel").assertIsDisplayed().performClick()
         rule.waitUntil(5_000) { absent("futaber-post-actions") }
     }
 

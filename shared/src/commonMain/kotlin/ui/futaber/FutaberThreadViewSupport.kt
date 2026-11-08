@@ -17,6 +17,8 @@ internal enum class FutaberExtract(val id: String, val label: String) {
     Deleted("deleted", "削除されたレス"),
     Url("url", "URLを含むレス"),
     Image("image", "画像のあるレス"),
+    /** F-B3 E10: posts replied to or liked a lot, with the conversations they sit in (as ふたったー風's 人気). */
+    Popular("popular", "人気レス（会話つき）"),
     /** The posts NG hides (they are listed while every other post is left out); see [futaberVisibleRows]. */
     NgHidden("ng", "NGで隠したレス")
 }
@@ -47,10 +49,13 @@ internal fun futaberMatchesExtract(
     post: Post,
     kind: FutaberExtract,
     selfIds: Set<String>,
-    hasUrl: Boolean? = null
+    hasUrl: Boolean? = null,
+    saidaneThreshold: Int = FUTABER_MANY_SAIDANE_THRESHOLD,
+    popular: Set<String> = emptySet()
 ): Boolean = when (kind) {
     FutaberExtract.SelfPosts -> post.id in selfIds
-    FutaberExtract.Saidane -> (futaberSaidaneCount(post.saidaneLabel) ?: 0) >= FUTABER_MANY_SAIDANE_THRESHOLD
+    FutaberExtract.Saidane -> (futaberSaidaneCount(post.saidaneLabel) ?: 0) >= saidaneThreshold
+    FutaberExtract.Popular -> post.id in popular
     FutaberExtract.Deleted -> post.isDeleted || post.isIsolated
     FutaberExtract.Url -> hasUrl ?: FUTABER_URL_PATTERN.containsMatchIn(messageHtmlToPlainText(post.messageHtml))
     FutaberExtract.Image -> !post.imageUrl.isNullOrBlank() || !post.thumbnailUrl.isNullOrBlank()
@@ -124,7 +129,9 @@ internal fun futaberVisibleRows(
     manyRepliesThreshold: Int = FUTABER_MANY_REPLIES_THRESHOLD,
     selfIds: Set<String> = emptySet(),
     texts: FutaberPostTexts? = null,
-    ngHidden: Set<String> = hidden
+    ngHidden: Set<String> = hidden,
+    saidaneThreshold: Int = FUTABER_MANY_SAIDANE_THRESHOLD,
+    popular: Set<String> = emptySet()
 ): List<FutaberRow> {
     val needle = normalizeCatalogSearchText(filter.query)
     val entries = texts?.takeIf { it.posts === posts }?.entries
@@ -134,7 +141,7 @@ internal fun futaberVisibleRows(
             ngOnly && post.id !in ngHidden -> null
             !ngOnly && post.id in hidden -> null
             filter.repliesOnly && (replyIndex[post.id]?.size ?: 0) < manyRepliesThreshold -> null
-            !ngOnly && filter.extract != null && !futaberMatchesExtract(post, filter.extract, selfIds, entries?.get(ordinal)?.hasUrl) -> null
+            !ngOnly && filter.extract != null && !futaberMatchesExtract(post, filter.extract, selfIds, entries?.get(ordinal)?.hasUrl, saidaneThreshold, popular) -> null
             filter.sameId.isNotBlank() && post.posterId != filter.sameId -> null
             needle.isNotEmpty() &&
                 !(entries?.get(ordinal)?.normalized ?: normalizeCatalogSearchText(futaberPostSearchText(post))).contains(needle) -> null
@@ -213,4 +220,15 @@ internal fun futaberApplyTree(rows: List<FutaberRow>, tree: List<com.valoser.fut
     return rows
         .map { row -> slot[row.post.id]?.let { (_, depth) -> row.copy(depth = depth) } ?: row }
         .sortedBy { row -> slot[row.post.id]?.first ?: Int.MAX_VALUE }
+}
+
+/** F-B3 E12: [hidden] plus every post that replies, directly or through other replies, to a hidden one. */
+internal fun futaberNgChain(hidden: Set<String>, replyIndex: Map<String, List<Post>>): Set<String> {
+    if (hidden.isEmpty()) return hidden
+    val result = HashSet(hidden)
+    val queue = ArrayDeque(hidden)
+    while (queue.isNotEmpty()) {
+        replyIndex[queue.removeFirst()]?.forEach { if (result.add(it.id)) queue.addLast(it.id) }
+    }
+    return result
 }

@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onAllNodesWithText
@@ -19,16 +21,19 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.valoser.futacha.shared.compat.ExperienceProfile
 import kotlinx.coroutines.flow.first
@@ -81,7 +86,14 @@ class FutaberModeInstrumentedTest {
         "compat.futaber.manyReplies",
         "compat.futaber.fontSize",
         "compat.futaber.smallImages",
-        "compat.futaber.catalog.scrollTop"
+        "compat.futaber.catalog.scrollTop",
+        // L-B6: the two switches of the old behaviour (設定→スレッド「従来の動き」).
+        "compat.futaber.legacySearchFilter",
+        "compat.futaber.legacyManyRepliesFilter",
+        "compat.futaber.legacySubjectField",
+        "compat.futaber.post.imageQuality",
+        // L-B10 (S24): the panel's category chosen last.
+        "compat.futaber.manageCategory"
     )
     private var originalDeleteKey: String = ""
 
@@ -90,7 +102,7 @@ class FutaberModeInstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(futaberKeys.associateWith { null })
+            app.compatibilityStore.savePreferences(futaberKeys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             originalDeleteKey = app.appStateStore.lastUsedDeleteKey.first()
         }
         switchProfile(ExperienceProfile.FUTABER)
@@ -103,7 +115,7 @@ class FutaberModeInstrumentedTest {
             app.appStateStore.setNgWords(emptyList())
             app.appStateStore.setLastUsedDeleteKey(originalDeleteKey)
             app.appStateStore.updateHistory { list -> list.filterNot { it.threadId == "1234567890" || it.threadId == "999001" } }
-            app.compatibilityStore.savePreferences(futaberKeys.associateWith { null })
+            app.compatibilityStore.savePreferences(futaberKeys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             // The media features are shared by every mode and start off; a test that switched one on puts it back.
             app.appStateStore.updateMediaFeatureSettings { com.valoser.futacha.shared.media.MediaFeatureSettings.Disabled }
         }
@@ -119,6 +131,12 @@ class FutaberModeInstrumentedTest {
         store.completeSwitch(store.persistRequestedProfile(journal))
     }
 
+    /** L-B9 (C45): an NG list's entries get their ⊖ under 「編集」 at the top right, as futaber's table. */
+    private fun ngEdit() {
+        rule.onNodeWithTag("futaber-settings-edit").performClick()
+        waitForTag("futaber-ng-delete", 5_000)
+    }
+
     private fun waitForTag(tag: String, timeoutMillis: Long = 20_000) {
         rule.waitUntil(timeoutMillis) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
     }
@@ -132,6 +150,15 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-drawer-board")[0].performClick()
         waitForTag("futaber-board-address")
         waitForTag("futaber-catalog-item")
+    }
+
+    /**
+     * L-B2 (V05): the thread has no "←" any more. Its action is the title row's accessibility action
+     * 「カタログへ戻る」 (the same callback the button had); the right swipe and the system's back do the same.
+     */
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun backToCatalog() {
+        rule.onNodeWithTag("futaber-thread-title").performCustomAccessibilityActionWithLabel("カタログへ戻る")
     }
 
     @Test fun drawerSelectionOpensTheCatalogAndRemembersTheBoard() {
@@ -171,6 +198,9 @@ class FutaberModeInstrumentedTest {
         val before = rule.onAllNodesWithTag("futaber-catalog-item").fetchSemanticsNodes().size
         assertTrue("catalog should list threads", before > 0)
         rule.onNodeWithTag("futaber-search").performClick()
+        // L-B10 (S25): futaber lists nothing until a word is typed.
+        waitForTag("futaber-catalog-search-blank")
+        assertTrue(rule.onAllNodesWithTag("futaber-catalog-item").fetchSemanticsNodes().isEmpty())
         rule.onNodeWithTag("futaber-search-field").performTextInput("存在しない語句zzzz")
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-catalog-item").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithText("「存在しない語句zzzz」に一致するスレッドはありません").assertIsDisplayed()
@@ -246,7 +276,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-thread-refresh").performClick()
         waitForTag("futaber-post")
 
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
         assertTrue(rule.onAllNodesWithTag("futaber-thread-title").fetchSemanticsNodes().isEmpty())
     }
@@ -269,22 +299,65 @@ class FutaberModeInstrumentedTest {
         rule.onNode(hasTestTag("futaber-board-address")).assertIsDisplayed()
     }
 
+    /**
+     * L-B5 (M05): the original's items in its order (URLスキームアクション／URLをコピー／スレッドをNG), 「履歴から削除」 only once
+     * the thread is in the history, and this app's own items after them inside the group. Nothing is sent.
+     */
     @Test fun longPressOnACatalogRowOpensTheActionSheetThatCancelsAndOffersCopyAndHistoryRemoval() {
+        val firstThread = runBlocking {
+            com.valoser.futacha.shared.repo.mock.FakeBoardRepository()
+                .getCatalogPage("https://www.example.com/t/futaba.php", com.valoser.futacha.shared.model.CatalogMode.Catalog)
+                .items.first()
+        }
+        // Not read yet: other tests may have left the tutorial thread in the shared history.
+        runBlocking { app.appStateStore.updateHistory { list -> list.filterNot { it.threadId == firstThread.id } } }
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
-        rule.onNodeWithTag("futaber-action-copy-url").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-action-remove-history").assertIsDisplayed()
+        // The heading is the thread's whole title.
+        rule.onNode(androidx.compose.ui.test.hasText(firstThread.title.orEmpty().trim()) and hasAnyAncestor(hasTestTag("futaber-sheet-title")))
+            .assertIsDisplayed()
+        val tops = listOf("url-scheme", "copy-url", "ng-thread").map { id ->
+            rule.onNodeWithTag("futaber-action-$id").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        }
+        assertEquals(tops.sorted(), tops)
+        assertTrue(rule.onAllNodesWithTag("futaber-action-remove-history").fetchSemanticsNodes().isEmpty())
+        // This app's own items come after the original's, inside the group.
+        rule.onNodeWithTag("futaber-action-browser").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("futaber-action-report").performScrollTo().assertIsDisplayed()
         capture("34-catalog-action-sheet")
         // キャンセルでシートだけが閉じ、カタログは残る（スレッドは開かない）。
         rule.onNodeWithTag("futaber-action-cancel").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
         rule.onAllNodesWithTag("futaber-catalog-item")[0].assertIsDisplayed()
         rule.onAllNodesWithTag("futaber-post").assertCountEquals(0)
+        // URLスキームアクション（未登録）：シートが閉じるだけ。
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
+        waitForTag("futaber-post-actions")
+        rule.onNodeWithTag("futaber-action-url-scheme").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
+        rule.onAllNodesWithTag("futaber-post").assertCountEquals(0)
         // URLをコピー：シートが閉じる。
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
         rule.onNodeWithTag("futaber-action-copy-url").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
+        // Read once: 「履歴から削除」 is the original's fourth item (red).
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
+        waitForTag("futaber-post")
+        rule.waitUntil(10_000) { runBlocking { app.appStateStore.history.first() }.any { it.threadId == firstThread.id } }
+        backToCatalog()
+        waitForTag("futaber-catalog-item")
+        rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
+        waitForTag("futaber-action-remove-history")
+        val ng = rule.onNodeWithTag("futaber-action-ng-thread").fetchSemanticsNode().boundsInRoot
+        val remove = rule.onNodeWithTag("futaber-action-remove-history").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue("履歴から削除 $remove is under スレッドをNG $ng", remove.top >= ng.bottom - 1f)
+        capture("34b-catalog-action-sheet-history")
+        // Not pressed here: its removal goes on in the screen's scope (auto-saved copies, own posts), which this rule only
+        // runs between test steps, and the class's @After would wait on it (it hung the class once). The pressed item's
+        // callback is covered by FutaberSheetOrderTest#theCatalogSheetOffersHistoryRemovalOnlyWhenTheThreadIsInTheHistory.
+        rule.onNodeWithTag("futaber-action-cancel").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
     }
 
@@ -298,8 +371,9 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-ng-empty").assertIsDisplayed()
         rule.onNodeWithTag("futaber-ng-input").performTextInput("チュートリアル")
         rule.onNodeWithTag("futaber-ng-add").performClick()
-        // Adding and removing go through the store; the list follows when the saved value comes back.
-        waitForTag("futaber-ng-delete", 5_000)
+        // Adding and removing go through the store; the list follows when the saved value comes back (an entry has its ⊖
+        // under 「編集」).
+        ngEdit()
         rule.onNodeWithTag("futaber-ng-delete").assertIsDisplayed()
         // 件数が行に出る。
         rule.onNodeWithTag("futaber-settings-back").performClick()
@@ -313,6 +387,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-open-settings").performClick()
         rule.onNodeWithTag("futaber-settings-row-ng").performClick()
         rule.onNodeWithTag("futaber-settings-row-ng-catalog-words").performClick()
+        ngEdit()
         rule.onNodeWithTag("futaber-ng-delete").performClick()
         waitForTag("futaber-ng-empty", 5_000)
         rule.onNodeWithTag("futaber-ng-empty").assertIsDisplayed()
@@ -353,7 +428,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-settings-back").performClick()
 
         // 通知を有効にする：他モードと共有のキー。切ると OFF、戻すと ON。
-        rule.onNodeWithTag("futaber-settings-switch-patrol-enabled").performClick()
+        rule.onNodeWithTag("futaber-settings-switch-patrol-enabled").performScrollTo().performClick()
         rule.waitUntil(10_000) { preference("compat.watcher.enabled") == "OFF" }
         rule.onNodeWithTag("futaber-settings-switch-patrol-enabled").performClick()
         rule.waitUntil(10_000) { preference("compat.watcher.enabled") == "ON" }
@@ -363,7 +438,7 @@ class FutaberModeInstrumentedTest {
     @Test fun settingsScreenChangesTheFontSizeTheRepliesThresholdTheImageSizeAndTheCatalogScroll() {
         runBlocking {
             app.compatibilityStore.savePreferences(
-                listOf("fontSize", "manyReplies", "smallImages", "catalog.scrollTop").associate { "compat.futaber.$it" to null }
+                listOf("fontSize", "manyReplies", "smallImages", "imageRatio", "catalog.scrollTop").associate { "compat.futaber.$it" to null }
             )
         }
         openTutorialCatalog()
@@ -383,8 +458,12 @@ class FutaberModeInstrumentedTest {
         capture("31-settings-thread")
         rule.onNodeWithTag("futaber-settings-plus-many-replies").performClick()
         rule.waitUntil(10_000) { preference("compat.futaber.manyReplies") == "4" }
+        // C21 (L-B9): futaber's 「画像のサイズ比率を指定」 and its 「比率 = 70%」 (−＋ in steps of 10).
         rule.onNodeWithTag("futaber-settings-row-thread-image-small").performClick()
-        rule.waitUntil(10_000) { preference("compat.futaber.smallImages") == "ON" }
+        rule.waitUntil(10_000) { preference("compat.futaber.smallImages") == "ON" && preference("compat.futaber.imageRatio") == "70" }
+        rule.onNodeWithTag("futaber-settings-value-image-ratio").assertTextContains("比率 = 70%")
+        rule.onNodeWithTag("futaber-settings-minus-image-ratio").performClick()
+        rule.waitUntil(10_000) { preference("compat.futaber.imageRatio") == "60" }
         rule.onNodeWithTag("futaber-settings-back").performClick()
 
         // カタログ：更新時のスクロールを切る。
@@ -394,13 +473,14 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-settings-back").performClick()
         rule.onNodeWithTag("futaber-settings-done").performClick()
 
-        // 反映：スレッドを開くと、画像は小さく始まる設定になっている（メニューの項目が「元の大きさにする」）。
+        // 反映：C21の比率は画像の大きさそのもの（FutaberSettingsInstrumentedTestが寸法を測る）。操作メニューの
+        // 「画像を小さくする」（M10）は、スレッドを開いた時は押していない状態（L-B6では設定の「小さく表示」で押した状態から始まった）。
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
         rule.onNodeWithTag("futaber-menu-small-images").assertIsDisplayed()
-        rule.onNodeWithContentDescription("画像を元の大きさにする").assertIsDisplayed()
+        rule.onNodeWithContentDescription("画像を小さくする").assertIsDisplayed()
     }
 
     @Test fun settingsScreenOpensPostingNgViewerAndNotificationsFromTheList() {
@@ -408,13 +488,18 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-open-settings").performClick()
         waitForTag("futaber-settings")
         rule.onNodeWithTag("futaber-settings-row-posting").performClick()
+        // L-B8 (S16): futaber's full-screen 書き込み設定, closed with 「完了」 at the top left; no 「その他」 from the settings.
         waitForTag("futaber-post-name")
-        rule.onNodeWithText("閉じる").performClick()
+        assertTrue(rule.onAllNodesWithTag("futaber-post-device-info").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-post-settings-done").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-settings-page").fetchSemanticsNodes().isEmpty() }
         // NG：カタログNG／レスNGの2グループ。件数つきの行から、リストの編集画面へ入って戻れる。
         rule.onNodeWithTag("futaber-settings-row-ng").performClick()
         rule.onNodeWithTag("futaber-settings-row-ng-catalog-words").assertIsDisplayed()
         rule.onNodeWithTag("futaber-settings-row-ng-res-words").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-settings-row-ng-res-headers").assertIsDisplayed()
+        // C37 (L-B9): the shared 「NGネーム・ID等」 shown as futaber's NGネーム and NGID/IP.
+        rule.onNodeWithTag("futaber-settings-row-ng-res-names").assertIsDisplayed()
+        rule.onNodeWithTag("futaber-settings-row-ng-res-id-ip").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("futaber-settings-row-ng-res-words").performClick()
         rule.onNodeWithTag("futaber-ng-input").assertIsDisplayed()
         rule.onNodeWithTag("futaber-settings-back").performClick()
@@ -424,7 +509,8 @@ class FutaberModeInstrumentedTest {
         capture("32-settings-viewer")
         pressSystemBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-settings").fetchSemanticsNodes().isEmpty() }
-        rule.onNodeWithTag("futaber-settings-row-notifications").performClick()
+        // L-B9: the shared patrol manager is this app's row after futaber's EULA (機能); futaber's 通知 leads to 新規スレッド通知.
+        rule.onNodeWithTag("futaber-settings-row-notifications").performScrollTo().performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("巡回管理").fetchSemanticsNodes().isNotEmpty() }
         pressSystemBack()
         rule.onNodeWithTag("futaber-settings-done").performClick()
@@ -521,8 +607,9 @@ class FutaberModeInstrumentedTest {
             rule.onNodeWithTag("futaber-settings-row-ng").performClick()
             rule.onNodeWithTag("futaber-settings-detail-ng-catalog-threads", useUnmergedTree = true).assertTextEquals("1")
             rule.onNodeWithTag("futaber-settings-row-ng-catalog-threads").performClick()
-            waitForTag("futaber-ng-delete")
-            assertTrue(rule.onAllNodesWithTag("futaber-ng-input").fetchSemanticsNodes().isEmpty())
+            ngEdit()
+            // C33 (L-B9): futaber's NGスレッドURL takes a thread's address in its field 「追加」 (before: no field).
+            assertTrue(rule.onAllNodesWithTag("futaber-ng-input").fetchSemanticsNodes().isNotEmpty())
             capture("44-catalog-ng-threads")
             rule.onNodeWithTag("futaber-ng-delete").performClick()
             rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-ng-empty").fetchSemanticsNodes().isNotEmpty() }
@@ -557,10 +644,11 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
-        rule.onNodeWithTag("futaber-menu-share-url").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-menu-open-browser").assertIsDisplayed()
+        // L-B6 (M20): this app's items follow the original's eleven inside the grid's scroll.
+        rule.onNodeWithTag("futaber-menu-share-url").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("futaber-menu-open-browser").performScrollTo().assertIsDisplayed()
         // 読み込み直しで内容が変わっていないので、戻る先は無い。
-        rule.onNodeWithTag("futaber-menu-undo-reload").assertIsDisplayed().assertIsNotEnabled()
+        rule.onNodeWithTag("futaber-menu-undo-reload").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
         capture("46-operation-menu-more")
     }
 
@@ -587,7 +675,7 @@ class FutaberModeInstrumentedTest {
         assertTrue(rule.onAllNodesWithTag("futaber-menu-image-edit").fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodesWithTag("futaber-menu-video-edit").fetchSemanticsNodes().isEmpty())
         dismissOperationMenu()
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-item")
 
         // The settings row opens a page of this mode with the four parts (it used to open an empty shared page).
@@ -647,12 +735,13 @@ class FutaberModeInstrumentedTest {
     @Test fun quickActionsAreOptionalAndCatalogReportingRequiresConfirmation() {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
-        rule.onNodeWithTag("futaber-action-report").performClick()
+        // L-B5: this app's 「不適切なスレッドを通報」 is after the original's items, inside the group.
+        rule.onNodeWithTag("futaber-action-report").performScrollTo().performClick()
         rule.onNodeWithText("通報する").assertIsDisplayed()
         rule.onNodeWithText("キャンセル").performClick()
         rule.onNodeWithText("通報する").assertDoesNotExist()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performTouchInput { longClick() }
-        rule.onNodeWithTag("futaber-action-report").performClick()
+        rule.onNodeWithTag("futaber-action-report").performScrollTo().performClick()
         rule.onNodeWithText("通報する").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("削除依頼を送りました").fetchSemanticsNodes().isNotEmpty() }
 
@@ -694,8 +783,8 @@ class FutaberModeInstrumentedTest {
         assertEquals("ON", preference("compat.futaber.ext.mailPresets"))
         assertEquals("ON", preference("compat.futaber.ext.volumeKeys"))
         assertEquals("ON", preference("compat.futaber.ext.tabs"))
-        // 動画ビューアは最初からオンなので、押すとオフになる。
-        assertEquals("OFF", preference("compat.futaber.ext.video"))
+        // 動画ビューアは最初からオンだが、この試験は拡張を切って始めるので、押すとオンになる。
+        assertEquals("ON", preference("compat.futaber.ext.video"))
         // オートスクロールを入れると、量と間隔の行が出る。
         waitForTag("futaber-settings-row-auto-scroll-pixel")
         // The extensions page grew (B1–B8 rows), so the stepper can sit below the fold: scroll to it before
@@ -708,12 +797,13 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-settings-back").performClick()
         // 書き込み設定のメール欄に、プリセットのボタンが出る。
         rule.onNodeWithTag("futaber-settings-row-posting").performScrollTo().performClick()
+        // L-B8 (S16): the full-screen 書き込み設定; the buttons are under its 名前・メール, closed with 「完了」.
         waitForTag("futaber-post-mail-preset-sage")
-        rule.onNodeWithTag("futaber-post-mail-preset-sage").performClick()
+        rule.onNodeWithTag("futaber-post-mail-preset-sage").performScrollTo().performClick()
         rule.waitUntil(5_000) { preference("compat.futaber.post.email") == "sage" }
         rule.onNodeWithTag("futaber-post-mail-preset-IP表示").assertIsDisplayed()
         capture("53-mail-presets")
-        rule.onNodeWithText("閉じる").performClick()
+        rule.onNodeWithTag("futaber-post-settings-done").performClick()
         rule.onNodeWithTag("futaber-settings-done").performClick()
         waitForTag("futaber-catalog-item")
 
@@ -726,7 +816,7 @@ class FutaberModeInstrumentedTest {
             assertTrue(rule.onAllNodesWithTag("futaber-post").fetchSemanticsNodes().isNotEmpty())
             val hasIds = runCatching { rule.waitUntil(4_000) { rule.onAllNodesWithTag("futaber-id-tap").fetchSemanticsNodes().isNotEmpty() } }.isSuccess
             if (hasIds) { opened = true; break }
-            rule.onNodeWithTag("futaber-thread-back").performClick()
+            backToCatalog()
             waitForTag("futaber-catalog-item")
         }
         assertTrue("A thread with poster IDs was not found", opened)
@@ -749,7 +839,7 @@ class FutaberModeInstrumentedTest {
         // 操作メニューの「レスを抽出」。そうだねが多いレスに絞って、解除する。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-menu-extract")
-        rule.onNodeWithTag("futaber-menu-extract").performClick()
+        rule.onNodeWithTag("futaber-menu-extract").performScrollTo().performClick()
         waitForTag("futaber-action-extract-saidane")
         capture("51-extract-sheet")
         rule.onNodeWithTag("futaber-action-extract-saidane").performClick()
@@ -775,32 +865,41 @@ class FutaberModeInstrumentedTest {
         // オートスクロールは、開始するとチップが出て、チップのタップで止まる。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-menu-auto-scroll")
-        rule.onNodeWithTag("futaber-menu-auto-scroll").performClick()
+        rule.onNodeWithTag("futaber-menu-auto-scroll").performScrollTo().performClick()
         waitForTag("futaber-auto-scroll-chip")
         capture("52-auto-scroll")
         rule.onNodeWithTag("futaber-auto-scroll-chip").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-auto-scroll-chip").fetchSemanticsNodes().isEmpty() }
     }
 
-    @Test fun theBottomBarButtonsKeepTheirPlacesWithTheRoundedIcons() {
+    /**
+     * L-B2 (V03・V04): the bottom bars are the original's: the same buttons in the same order, each in one fifth of the
+     * width and the bar's 44dp height on the white band (no floating capsule), drawn with the line icons. Opening the
+     * menu below presses one; the other tests here press the rest.
+     */
+    @Test fun theBottomBarButtonsSitInTheOriginalsFiveSlots() {
         openTutorialCatalog()
-        // 丸みのあるアイコンでも、下部バーのボタンは同じ場所にあり、押せる。
-        rule.onNodeWithTag("futaber-display-style").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-sort").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-search").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-manage").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-refresh").assertIsDisplayed()
-        capture("65-catalog-rounded-icons")
+        fun assertFiveSlots(tags: List<String>) {
+            val width = rule.onRoot().fetchSemanticsNode().size.width.toFloat()
+            val bounds = tags.map { rule.onNodeWithTag(it).assertIsDisplayed().fetchSemanticsNode().boundsInRoot }
+            val density = rule.density.density
+            bounds.forEachIndexed { index, b ->
+                assertEquals("${tags[index]} width", width / 5f, b.width, 1.5f * density)
+                assertEquals("${tags[index]} height", 44f * density, b.height, 1.5f * density)
+                assertEquals("${tags[index]} slot", width / 5f * index, b.left, 1.5f * density)
+            }
+            // All on one row.
+            bounds.forEach { assertEquals(bounds[0].top, it.top, 1f) }
+        }
+        assertFiveSlots(listOf("futaber-display-style", "futaber-sort", "futaber-search", "futaber-manage", "futaber-refresh"))
+        capture("65-catalog-line-icons")
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
-        rule.onNodeWithTag("futaber-thread-gallery").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-thread-bottom").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-thread-menu").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-thread-refresh").assertIsDisplayed()
-        capture("66-thread-rounded-icons")
+        assertFiveSlots(listOf("futaber-thread-gallery", "futaber-thread-bottom", "futaber-thread-menu", "futaber-manage", "futaber-thread-refresh"))
+        capture("66-thread-line-icons")
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
-        capture("67-menu-rounded-icons")
+        capture("67-menu-line-icons")
     }
 
     @Test fun catalogSearchOffersTheArchiveSearchForTheTypedWord() {
@@ -859,7 +958,8 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-action-tab-restore")
         rule.onNodeWithTag("futaber-action-tab-restore").assertIsEnabled()
         capture("59-tab-restore")
-        rule.onNodeWithTag("futaber-action-tab-restore").performClick()
+        // L-B4: an item after the original's (タブをすべて削除) is inside the sheet's group, under its items.
+        rule.onNodeWithTag("futaber-action-tab-restore").performScrollTo().performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes().size == 2 }
     }
 
@@ -893,6 +993,11 @@ class FutaberModeInstrumentedTest {
         }
     }
 
+    /**
+     * L-B5 (M25): the picture's sheet is titled by its file name and lists the original's six items in its order;
+     * 「画像検索」 (this app's, with the choice of services) is after them inside the group. 二次元画像詳細検索・ブラウザで
+     * 開く are not pressed (they send the picture's address out).
+     */
     @Test fun aPicturesLongPressOpensItsOwnMenuWithImageSearchAndImageNg() {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
@@ -900,24 +1005,53 @@ class FutaberModeInstrumentedTest {
         val list = rule.onNodeWithTag("futaber-thread-list")
         list.performScrollToNode(androidx.compose.ui.test.hasTestTag("futaber-post-image"))
         // 画像の長押しは、レスのメニューではなく、画像だけのメニューを開く。
+        val fileName = rule.onAllNodesWithTag("futaber-post-file")[0].fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString("")
         rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick() }
-        waitForTag("futaber-action-image-search")
-        rule.onNodeWithTag("futaber-action-image-ng").assertIsDisplayed()
+        waitForTag("futaber-action-image-viewer")
+        rule.onNode(androidx.compose.ui.test.hasText(fileName) and hasAnyAncestor(hasTestTag("futaber-sheet-title"))).assertIsDisplayed()
+        val ids = listOf("image-viewer", "image-external", "image-ascii2d", "image-url-scheme", "image-copy-url", "image-ng")
+        val tops = ids.map { id -> rule.onNodeWithTag("futaber-action-$id").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top }
+        assertEquals(tops.sorted(), tops)
+        assertTrue(rule.onAllNodesWithTag("futaber-action-image-lens").fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodesWithTag("futaber-action-quote").fetchSemanticsNodes().isEmpty())
         capture("55-image-menu")
-        // 画像検索：検索先を選ぶダイアログが開く。
-        rule.onNodeWithTag("futaber-action-image-search").performClick()
+        // 画像検索：検索先を選ぶダイアログが開く（送るのは検索先を選んだ時だけ）。
+        rule.onNodeWithTag("futaber-action-image-search").performScrollTo().performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("画像検索").fetchSemanticsNodes().isNotEmpty() }
         capture("56-image-search")
         androidx.test.espresso.Espresso.pressBack()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("画像検索").fetchSemanticsNodes().isEmpty() }
-        // 画像NG：登録のダイアログが開く。
+        // 画像をNG：登録のダイアログが開く。
         rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick() }
         waitForTag("futaber-action-image-ng")
         rule.onNodeWithTag("futaber-action-image-ng").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("NG画像に登録").fetchSemanticsNodes().isNotEmpty() }
         capture("57-image-ng-register")
         androidx.test.espresso.Espresso.pressBack()
+        // 画像を表示：その画像のビューアが開く。
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("NG画像に登録").fetchSemanticsNodes().isEmpty() }
+        rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick() }
+        waitForTag("futaber-action-image-viewer")
+        rule.onNodeWithTag("futaber-action-image-viewer").performClick()
+        waitForTag("futaber-viewer-info")
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-viewer-info").fetchSemanticsNodes().isEmpty() }
+        if (rule.onAllNodesWithTag("futaber-media").fetchSemanticsNodes().isNotEmpty()) androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-media").fetchSemanticsNodes().isEmpty() }
+        // GoogleLens検索：設定（既定オフ）を入れた時だけ、6番目の後ろに出る。
+        runBlocking { app.compatibilityStore.savePreference("compat.futaber.googleLens", "ON") }
+        try {
+            rule.onAllNodesWithTag("futaber-post-image")[0].performTouchInput { longClick() }
+            waitForTag("futaber-action-image-lens")
+            val sixth = rule.onNodeWithTag("futaber-action-image-ng").fetchSemanticsNode().boundsInRoot
+            val lens = rule.onNodeWithTag("futaber-action-image-lens").fetchSemanticsNode().boundsInRoot
+            assertTrue("Lens $lens is under 画像をNG $sixth", lens.top >= sixth.bottom - 1f)
+            rule.onNodeWithTag("futaber-action-cancel").performClick()
+            rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
+        } finally {
+            runBlocking { app.compatibilityStore.savePreferences(mapOf("compat.futaber.googleLens" to null)) }
+        }
         // 画像以外の部分の長押しは、これまでどおりレスのメニュー。
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
         rule.onNodeWithText("テスト9").performTouchInput { longClick() }
@@ -947,7 +1081,7 @@ class FutaberModeInstrumentedTest {
             }
             rule.onNodeWithTag("futaber-settings-detail-ng-res-images", useUnmergedTree = true).assertTextEquals("1")
             rule.onNodeWithTag("futaber-settings-row-ng-res-images").performClick()
-            waitForTag("futaber-ng-delete")
+            ngEdit()
             assertTrue(rule.onAllNodesWithTag("futaber-ng-input").fetchSemanticsNodes().isEmpty())
             rule.onNodeWithText("テスト画像", substring = true).assertIsDisplayed()
             capture("58-image-ng-list")
@@ -969,7 +1103,8 @@ class FutaberModeInstrumentedTest {
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
         rule.onNodeWithText("テスト9").performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
-        rule.onNodeWithTag("futaber-action-ng-register").assertIsDisplayed()
+        // L-B5 (M21): 「NG登録」 is this app's, after the original's そうだね inside the group.
+        rule.onNodeWithTag("futaber-action-ng-register").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("futaber-action-ng-register").performClick()
         waitForTag("futaber-ng-input")
         // 名前・ID等の一覧が開き、そのレスのIDか名前が入力済み（既定の名前しか無ければ、ワードの一覧が空欄で開く）。
@@ -984,13 +1119,20 @@ class FutaberModeInstrumentedTest {
     @Test fun boardsCanBeRenamedByTappingTheirNameWhileEditingAndOfferBulkAdd() {
         openTutorialCatalog()
         fun names() = runBlocking { app.appStateStore.boards.first().map { it.name } }
+        fun firstId() = runBlocking { app.appStateStore.boards.first().first().id }
         val before = names()
         rule.onNodeWithTag("futaber-open-drawer").performClick()
         waitForTag("futaber-board-edit")
         rule.onNodeWithTag("futaber-board-edit").performClick()
         waitForTag("futaber-board-add")
-        // 編集中に名前をタップすると、板は開かず改名のダイアログが出る。
+        // L-B10 (S04): a row's tap does nothing while editing (futaber's); the rename is 「名前を変更」 after futaber's
+        // 「完了」 and 「板の追加」: which board, then its name.
         rule.onAllNodesWithTag("futaber-drawer-board")[0].performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithTag("futaber-rename-board-name").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-board-rename").performClick()
+        waitForTag("futaber-action-board-rename-${firstId()}")
+        rule.onNodeWithTag("futaber-action-board-rename-${firstId()}").performClick()
         waitForTag("futaber-rename-board-name")
         rule.onNodeWithTag("futaber-rename-board-name").performTextClearance()
         rule.onNodeWithTag("futaber-rename-board-name").performTextInput("改名した板")
@@ -998,61 +1140,23 @@ class FutaberModeInstrumentedTest {
         rule.waitUntil(15_000) { names().first() == "改名した板" }
         capture("48-board-renamed")
         // 元の名前へ戻す。
-        rule.onAllNodesWithTag("futaber-drawer-board")[0].performClick()
+        rule.onNodeWithTag("futaber-board-rename").performClick()
+        waitForTag("futaber-action-board-rename-${firstId()}")
+        rule.onNodeWithTag("futaber-action-board-rename-${firstId()}").performClick()
         waitForTag("futaber-rename-board-name")
         rule.onNodeWithTag("futaber-rename-board-name").performTextClearance()
         rule.onNodeWithTag("futaber-rename-board-name").performTextInput(before.first())
         rule.onNodeWithTag("futaber-rename-board-submit").performClick()
         rule.waitUntil(15_000) { names() == before }
 
-        // 追加ダイアログに「板一覧から一括追加」の切替がある（取得は行わない）。
-        rule.onNodeWithTag("futaber-board-add").performClick()
-        waitForTag("futaber-add-board-bulk-toggle")
-        rule.onNodeWithTag("futaber-add-board-bulk-toggle").performClick()
-        waitForTag("futaber-bulk-note")
-        rule.onNodeWithTag("futaber-add-board-bulk-submit").assertIsDisplayed()
+        // 「板一覧から一括追加」 is the edit footer's other addition (asked first; not pressed, nothing is fetched).
+        rule.onNodeWithTag("futaber-board-bulk-add").performClick()
+        waitForTag("futaber-add-board-bulk-submit")
+        rule.onNodeWithTag("futaber-alert-message").assertTextContains("まだ登録していない板", substring = true)
         capture("49-board-bulk-add")
         rule.onNodeWithText("キャンセル").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-alert").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-board-edit").performClick()
-    }
-
-    @Test fun settingsOfferTheStartUpLockCheckAndTheAppIconChoice() {
-        openTutorialCatalog()
-        rule.onNodeWithTag("futaber-open-settings").performClick()
-        waitForTag("futaber-settings")
-        // 起動ロック：入力の検証だけを確かめる（実際には設定しない）。
-        rule.onNodeWithTag("futaber-settings-row-app-lock").performScrollTo().performClick()
-        waitForTag("futaber-lock-password")
-        rule.onNodeWithTag("futaber-lock-password").performTextInput("abc")
-        rule.onNodeWithTag("futaber-lock-confirmation").performTextInput("abc")
-        rule.onNodeWithTag("futaber-lock-save").performClick()
-        rule.onNodeWithText("4文字以上で入力してください。").assertIsDisplayed()
-        rule.onNodeWithTag("futaber-lock-password").performTextInput("d")
-        rule.onNodeWithTag("futaber-lock-confirmation").performTextInput("x")
-        rule.onNodeWithTag("futaber-lock-save").performClick()
-        rule.onNodeWithText("確認用パスワードが一致しません。").assertIsDisplayed()
-        capture("50-app-lock-dialog")
-        rule.onNodeWithText("キャンセル").performClick()
-        assertTrue(runBlocking { app.appStateStore.appLockPasswordHash.first() }.isNullOrBlank())
-
-        // アプリアイコン：選ぶと保存され、戻すと元へ戻る。
-        val original = runBlocking { app.appStateStore.appIconVariant.first() }
-        rule.onNodeWithTag("futaber-settings-row-app-icon").performScrollTo().performClick()
-        try {
-            rule.onNodeWithTag("futaber-settings-row-app-icon-Classic").performClick()
-            rule.waitUntil(10_000) { runBlocking { app.appStateStore.appIconVariant.first() } == com.valoser.futacha.shared.model.AppIconVariant.Classic }
-            capture("51-app-icon")
-        } finally {
-            runBlocking { app.appStateStore.setAppIconVariant(original) }
-        }
-        rule.waitUntil(10_000) { runBlocking { app.appStateStore.appIconVariant.first() } == original }
-    }
-
-    @Test fun everyIconButtonHasANameForAssistiveTechnology() {
-        openTutorialCatalog()
-        listOf(
-            "板一覧を開く", "設定", "カタログを検索", "カタログを更新"
-        ).forEach { rule.onNode(hasContentDescriptionExactly(it)).assertIsDisplayed() }
     }
 
     @Test fun boardListCanBeEditedFromTheDrawer() {
@@ -1065,19 +1169,28 @@ class FutaberModeInstrumentedTest {
         // 編集中は板を開かない。追加ダイアログは不正な入力を受け付けない。
         waitForTag("futaber-board-add")
         capture("10-drawer-edit")
+        // L-B10 (S05): futaber's alert with one field holding 「https://」; OK checks the address and says why.
         rule.onNodeWithTag("futaber-board-add").performClick()
-        rule.onNodeWithTag("futaber-add-board-url").performTextInput("zip.2chan.net/1/")
+        waitForTag("futaber-add-board-url")
+        rule.onNodeWithTag("futaber-add-board-url").performTextReplacement("zip.2chan.net/1/")
+        rule.onNodeWithTag("futaber-add-board-submit").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("http:// もしくは https:// から始まるURLを入力してください").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("http:// もしくは https:// から始まるURLを入力してください").assertIsDisplayed()
+        assertEquals(before, boardUrls())
         capture("11-add-board-invalid")
-        rule.onNodeWithTag("futaber-add-board-url").performTextClearance()
-        rule.onNodeWithTag("futaber-add-board-url").performTextInput("https://zip.2chan.net/1/")
+        rule.onNodeWithTag("futaber-add-board-url").performTextReplacement("https://zip.2chan.net/1/")
         rule.onNodeWithTag("futaber-add-board-submit").performClick()
         rule.waitUntil(15_000) { boardUrls().size == before.size + 1 }
         assertEquals("https://zip.2chan.net/1/futaba.php", boardUrls().last())
 
-        // 上へ移動 → 削除（確認ダイアログあり）で元の一覧へ戻る。
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-board-up").fetchSemanticsNodes().size >= 2 }
-        rule.onAllNodesWithTag("futaber-board-up")[1].performClick()
+        // 上へ移動（L-B10 (S04): the handle ≡ dragged up a row, as futaber's reorder） → 削除（確認あり）で元の一覧へ戻る。
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-board-handle").fetchSemanticsNodes().size >= 2 }
+        val rowHeight = rule.onAllNodesWithTag("futaber-drawer-board")[0].fetchSemanticsNode().boundsInRoot.height
+        rule.onAllNodesWithTag("futaber-board-handle")[1].performTouchInput {
+            down(center)
+            repeat(12) { moveBy(androidx.compose.ui.geometry.Offset(0f, -rowHeight * 1.1f / 12f)) }
+            up()
+        }
         rule.waitUntil(15_000) { boardUrls().first() == "https://zip.2chan.net/1/futaba.php" }
         rule.onAllNodesWithTag("futaber-board-delete")[0].performClick()
         rule.onNodeWithTag("futaber-board-delete-confirm").performClick()
@@ -1102,11 +1215,13 @@ class FutaberModeInstrumentedTest {
         val inCard = hasTestTag("futaber-quote-line") and hasAnyAncestor(hasTestTag("futaber-quote-card"))
         assertTrue("bubble has a quote line", rule.onAllNodes(inCard).fetchSemanticsNodes().isNotEmpty())
         rule.onAllNodes(inCard)[0].performClick()
-        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().isNotEmpty() }
+        // L-B4 (F01): 元の吹き出しは下に見えたまま残り、2枚が描かれる（外側のタップを受けるのは上の1枚だけ）。
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().size == 2 }
+        assertEquals(1, rule.onAllNodesWithTag("futaber-quote-scrim").fetchSemanticsNodes().size)
         capture("13-nested-bubble")
         // 1枚閉じると、元の吹き出しに戻る。
         rule.onNodeWithTag("futaber-quote-close-one").performClick()
-        waitForTag("futaber-quote-card")
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().size == 1 }
         rule.onNodeWithTag("futaber-quote-close-all").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().isEmpty() }
         waitForTag("futaber-thread-refresh")
@@ -1138,7 +1253,7 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-tab")
 
         // カタログへ戻っても帯は残り、再生成後も残る。
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
         waitForTag("futaber-tab")
         rule.activityRule.scenario.recreate()
@@ -1172,6 +1287,11 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-tab")[0].performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
         rule.onNodeWithTag("futaber-action-tab-remove-all").assertIsDisplayed()
+        // L-B5: the heading has the thread's thumbnail before its title, as the original's tab sheet.
+        rule.onNodeWithTag("futaber-sheet-title-thumbnail", useUnmergedTree = true).assertExists()
+        val thumb = rule.onNodeWithTag("futaber-sheet-title-thumbnail", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val title = rule.onNodeWithTag("futaber-sheet-title", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("the thumbnail $thumb sits at the heading's left $title", thumb.left - title.left < thumb.width)
         rule.onNodeWithTag("futaber-action-tab-cancel").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty() }
         assertTrue(rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes().isNotEmpty())
@@ -1205,6 +1325,9 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
         rule.onNodeWithTag("futaber-menu-favorite").performClick()
+        // L-B12 (M14): a thread with pictures asks first; answer 「ダウンロードしない」.
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-favorite-images-none").fetchSemanticsNodes().isNotEmpty() || stored() != null }
+        if (rule.onAllNodesWithTag("futaber-favorite-images-none").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithTag("futaber-favorite-images-none").performClick()
         rule.waitUntil(10_000) { stored() != null }
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
@@ -1228,7 +1351,7 @@ class FutaberModeInstrumentedTest {
 
         // お気に入りから開き直せる。
         rule.onNodeWithTag("futaber-manage-close").performClick()
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
         rule.onNodeWithTag("futaber-manage").performClick()
         rule.onNodeWithTag("futaber-manage-category-Favorites").performClick()
@@ -1326,7 +1449,7 @@ class FutaberModeInstrumentedTest {
             // 操作メニュー → スレッドを保存 → 保存形式「HTMLのみ」（通信しない）。
             rule.onNodeWithTag("futaber-thread-menu").performClick()
             waitForTag("futaber-operation-menu")
-            rule.onNodeWithTag("futaber-menu-save").performClick()
+            rule.onNodeWithTag("futaber-menu-save").performScrollTo().performClick()
             rule.waitUntil(10_000) { rule.onAllNodesWithText("保存形式").fetchSemanticsNodes().isNotEmpty() }
             capture("26-save-format")
             rule.onNodeWithText("HTMLのみ").performClick()
@@ -1351,7 +1474,7 @@ class FutaberModeInstrumentedTest {
             dismissOperationMenu()
             capture("29-saved-copy")
             assertEquals(historyBefore, runBlocking { app.appStateStore.history.first() }.size)
-            rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+            backToCatalog()
             rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-offline-notice").fetchSemanticsNodes().isEmpty() }
 
             // 編集で削除すると、保存済みの索引からも消える。
@@ -1395,12 +1518,13 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-mht-summary").assertTextContains("1項目", substring = true)
         capture("38-mht-box")
         val historyBefore = runBlocking { app.appStateStore.history.first() }.size
-        rule.onAllNodesWithTag("futaber-mht-row")[0].performClick()
+        // L-B10 (S21): a tap shares the file (futaber's); the row's 「開く」 opens it in the app (this app's).
+        rule.onAllNodesWithTag("futaber-mht-open")[0].performClick()
         waitForTag("futaber-offline-notice")
         waitForTag("futaber-post")
         capture("39-mht-opened")
         assertEquals(historyBefore, runBlocking { app.appStateStore.history.first() }.size)
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-offline-notice").fetchSemanticsNodes().isEmpty() }
 
         // 編集で削除すると一覧から消える。
@@ -1441,29 +1565,33 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-post")
         val fullCount = { rule.onAllNodesWithTag("futaber-post").fetchSemanticsNodes().size }
 
-        // 検索：一致する件数が出て、メニューを閉じても絞り込みの表示が残り、解除で全件へ戻る。
+        // 検索（L-B6のM08、futaberの動き）：欄を使うと並びが消えて一致の件数と一覧が出て、検索キーで一致したレスを
+        // 吹き出しで重ねる（スレッドは絞り込まない）。閉じると全件のまま。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
         capture("18-operation-menu")
+        rule.onNodeWithTag("futaber-menu-search").performClick()
         rule.onNodeWithTag("futaber-menu-search").performTextInput("テスト10_2")
         // The result is applied after a short wait for further typing.
         waitForTag("futaber-menu-result-count")
-        rule.onNodeWithTag("futaber-menu-result-count").assertIsDisplayed()
-        // The keyboard lifts the menu (it is not covered by it); the search key puts it away and shows the result.
+        rule.onNodeWithTag("futaber-menu-result-count").assertTextEquals("1レスが見つかりました")
+        assertTrue(rule.onAllNodesWithTag("futaber-menu-grid").fetchSemanticsNodes().isEmpty())
+        // The keyboard lifts the menu (it is not covered by it); the search key puts it away and shows the found post.
         rule.onNodeWithTag("futaber-menu-search").performImeAction()
-        waitForTag("futaber-filter-chip")
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post").fetchSemanticsNodes().size == 1 }
-        rule.onNodeWithTag("futaber-filter-chip").performClick()
-        rule.waitUntil(10_000) { fullCount() > 1 }
+        waitForTag("futaber-quote-card")
+        rule.onNodeWithTag("futaber-quote-card").assert(hasContentDescription("検索結果、1件"))
         assertTrue(rule.onAllNodesWithTag("futaber-filter-chip").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-quote-close-all").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().isEmpty() }
+        assertTrue(fullCount() > 1)
 
-        // 返信が多いレスだけを表示する（トグル）。
+        // 返信が多いレス（L-B6のM11）：吹き出しで重ね、スレッドは絞り込まない。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         rule.onNodeWithTag("futaber-menu-many-replies").performClick()
-        waitForTag("futaber-filter-chip")
-        rule.waitUntil(10_000) { fullCount() in 1..3 }
-        rule.onNodeWithTag("futaber-filter-chip").performClick()
-        rule.waitUntil(10_000) { fullCount() > 3 }
+        waitForTag("futaber-quote-card")
+        assertTrue(rule.onAllNodesWithTag("futaber-filter-chip").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-quote-close-all").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-quote-card").fetchSemanticsNodes().isEmpty() }
 
         // URLをコピー：スレッド自身のアドレスがクリップボードに入る。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
@@ -1482,10 +1610,12 @@ class FutaberModeInstrumentedTest {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
-        // 初回はまだ「新着」はなく、メニューの項目も押せない。
+        // 初回はまだ「新着」はない。メニューの項目はfutaberどおり押せて（L-B6のM18）、新着の印は出ない。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
-        rule.onNodeWithTag("futaber-menu-new").assertIsNotEnabled()
+        rule.onNodeWithTag("futaber-menu-new").assertIsEnabled()
         dismissOperationMenu()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-operation-menu").fetchSemanticsNodes().isEmpty() }
+        assertTrue(rule.onAllNodesWithTag("futaber-new-marker").fetchSemanticsNodes().isEmpty())
 
         // 読み位置：途中までスクロールして戻ると、履歴に位置が保存される。
         rule.onNodeWithTag("futaber-thread-list").performScrollToIndex(8)
@@ -1493,7 +1623,7 @@ class FutaberModeInstrumentedTest {
             (runBlocking { app.appStateStore.history.first() }.firstOrNull { it.boardId == "t" && it.threadId == opened() }
                 ?.lastReadItemIndex ?: 0) >= 5
         }
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
 
         // 前回見た件数を減らして開き直すと、増えた分が新着になり、OPには戻らず読み位置から始まる。
@@ -1523,15 +1653,24 @@ class FutaberModeInstrumentedTest {
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
         list.performScrollToIndex(0)
 
-        // NG編集：ふたちゃと共有のワード一覧へ追加すると、その語を含むレスが消える。
+        // NG編集（L-B6のM16）：全画面の「NG設定」が開き、左上は「完了」。ふたちゃと共有のワード一覧へ追加すると、
+        // その語を含むレスが消える。「完了」でスレッドへ戻る。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         rule.onNodeWithTag("futaber-menu-ng-edit").performClick()
+        waitForTag("futaber-settings")
+        rule.onNodeWithTag("futaber-settings-title").assertTextEquals("NG設定")
+        rule.onNodeWithTag("futaber-settings-done").assertIsDisplayed()
+        capture("20-ng-settings-from-menu")
+        rule.onNodeWithTag("futaber-settings-row-ng-res-words").performClick()
         waitForTag("futaber-ng-input")
         rule.onNodeWithTag("futaber-ng-input").performTextInput("テスト9")
         rule.onNodeWithTag("futaber-ng-add").performClick()
         rule.waitUntil(10_000) { runBlocking { app.appStateStore.ngWords.first() } == listOf("テスト9") }
-        capture("20-ng-dialog")
-        rule.onNodeWithText("閉じる").performClick()
+        rule.onNodeWithTag("futaber-settings-back").performClick()
+        rule.onNodeWithTag("futaber-settings-title").assertTextEquals("NG設定")
+        rule.onNodeWithTag("futaber-settings-done").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-settings").fetchSemanticsNodes().isEmpty() }
+        waitForTag("futaber-post")
         assertTrue(
             "the NG'd post is gone from the list",
             runCatching { list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9")) }.isFailure
@@ -1543,12 +1682,18 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-menu-ng-toggle").performClick()
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
 
-        // 登録の削除：削除すると、無効化を戻しても隠れない。
+        // 登録の削除：削除すると、無効化を戻しても隠れない。システムの戻るも「NG設定」からスレッドへ戻る。
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         rule.onNodeWithTag("futaber-menu-ng-edit").performClick()
-        waitForTag("futaber-ng-delete")
+        waitForTag("futaber-settings-row-ng-res-words")
+        rule.onNodeWithTag("futaber-settings-row-ng-res-words").performClick()
+        ngEdit()
         rule.onAllNodesWithTag("futaber-ng-delete")[0].performClick()
         rule.waitUntil(10_000) { runBlocking { app.appStateStore.ngWords.first() }.isEmpty() }
+        pressSystemBack()
+        rule.onNodeWithTag("futaber-settings-title").assertTextEquals("NG設定")
+        pressSystemBack()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-settings").fetchSemanticsNodes().isEmpty() }
     }
 
     /** この端末（エミュレーター）に日本語の音声があるとは限らない。実発声は確認せず、開始・停止と失敗の通知だけを見る。 */
@@ -1575,7 +1720,7 @@ class FutaberModeInstrumentedTest {
             rule.waitUntil(5_000) { rule.onAllNodesWithTag("futaber-reading-message").fetchSemanticsNodes().isEmpty() }
         }
         // 戻ると読み上げは止まる（画面の破棄）。
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
     }
 
@@ -1606,9 +1751,9 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-post-settings").performClick()
         waitForTag("futaber-post-deletekey")
         rule.onNodeWithTag("futaber-post-deletekey").performTextInput("pass1234")
-        rule.onNodeWithTag("futaber-post-name").performTextInput("試験者")
+        rule.onNodeWithTag("futaber-post-name").performScrollTo().performTextInput("試験者")
         rule.waitUntil(10_000) { runBlocking { app.appStateStore.lastUsedDeleteKey.first() } == "pass1234" }
-        rule.onNodeWithText("閉じる").performClick()
+        rule.onNodeWithTag("futaber-post-settings-done").performClick()
 
         // 閉じても下書きが残り、開き直すと戻る。
         rule.waitUntil(10_000) { preference("compat.futaber.drafts")?.contains("テスト投稿") == true }
@@ -1627,9 +1772,16 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-post")
         rule.waitUntil(10_000) { preference("compat.futaber.drafts")?.contains("テスト投稿") != true }
 
-        // スレ立て：カタログの＋から書き、送ると新しいスレッドが開く。
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        // スレ立て：カタログの＋から書き、送ると新しいスレッドが開く。L-B8（F17）：futaberどおり題名の欄は無い。
+        backToCatalog()
         waitForTag("futaber-catalog-grid")
+        rule.onNodeWithTag("futaber-create-thread").performClick()
+        waitForTag("futaber-post-comment")
+        assertTrue(rule.onAllNodesWithTag("futaber-post-subject").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-post-close").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-screen").fetchSemanticsNodes().isEmpty() }
+        // 設定→スレッドの「従来の動き」で題名の欄が戻る（題名つきで立てる今までの動き）。
+        runBlocking { app.compatibilityStore.savePreference("compat.futaber.legacySubjectField", "ON") }
         rule.onNodeWithTag("futaber-create-thread").performClick()
         waitForTag("futaber-post-subject")
         rule.onNodeWithTag("futaber-post-subject").performTextInput("新しいスレ")
@@ -1648,11 +1800,15 @@ class FutaberModeInstrumentedTest {
         val list = rule.onNodeWithTag("futaber-thread-list")
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
 
-        // コピー：本文がクリップボードに入る。
+        // コピー（L-B5 M23）：futaberのコピー画面が開き、本文が選ばれた状態。メニューの「コピー」で本文がクリップボードに入る。
         rule.onNodeWithText("テスト9").performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
         capture("24-post-actions")
         rule.onNodeWithTag("futaber-action-copy").performClick()
+        waitForTag("futaber-copy-panel")
+        assertTrue(rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty())
+        waitForTag("futaber-copy-menu-copy")
+        rule.onNodeWithTag("futaber-copy-menu-copy").performClick()
         rule.waitUntil(10_000) {
             var text = ""
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -1661,7 +1817,8 @@ class FutaberModeInstrumentedTest {
             }
             text.contains("テスト9")
         }
-        assertTrue(rule.onAllNodesWithTag("futaber-post-actions").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("futaber-copy-close").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-copy-panel").fetchSemanticsNodes().isEmpty() }
 
         // 引用：本文の各行に「>」を付けて、書き込み画面の末尾へ入る。
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
@@ -1702,20 +1859,20 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-remote-notice").assertTextContains("そうだね", substring = true)
         rule.onNodeWithTag("futaber-remote-notice").performClick()
 
-        // 通報：確認ダイアログが先に出て、キャンセルでは送らない。確定すると通知が出る。
+        // 通報：確認が先に出て（L-B5 M24：futaberと同じシート「レス:N」／「delを送信」）、キャンセルでは送らない。確定すると通知が出る。
         list.performScrollToNode(androidx.compose.ui.test.hasText("テスト9"))
         rule.onNodeWithText("テスト9").performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
         rule.onNodeWithTag("futaber-action-report").performClick()
-        waitForTag("futaber-remote-confirm")
-        rule.onNodeWithText("キャンセル").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-remote-confirm").fetchSemanticsNodes().isEmpty() }
+        waitForTag("futaber-action-del-send")
+        rule.onNodeWithTag("futaber-action-cancel").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-action-del-send").fetchSemanticsNodes().isEmpty() }
         assertTrue(rule.onAllNodesWithTag("futaber-remote-notice").fetchSemanticsNodes().isEmpty())
         rule.onNodeWithText("テスト9").performTouchInput { longClick() }
         waitForTag("futaber-post-actions")
         rule.onNodeWithTag("futaber-action-report").performClick()
-        waitForTag("futaber-remote-confirm")
-        rule.onNodeWithTag("futaber-remote-confirm").performClick()
+        waitForTag("futaber-action-del-send")
+        rule.onNodeWithTag("futaber-action-del-send").performClick()
         waitForTag("futaber-remote-notice")
         rule.onNodeWithTag("futaber-remote-notice").assertTextContains("削除依頼", substring = true)
     }
@@ -1730,7 +1887,7 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-post-comment").performTextInput("前置き")
 
         // 引用モードへ：スレッドが見え、下書きは小さなカードに残る。
-        rule.onNodeWithTag("futaber-post-quote-mode").performClick()
+        rule.onNodeWithTag("futaber-post-quote-mode").performScrollTo().performClick()
         waitForTag("futaber-quote-strip")
         assertTrue(rule.onAllNodesWithTag("futaber-post-screen").fetchSemanticsNodes().isEmpty())
         capture("25-quote-mode")
@@ -1776,7 +1933,7 @@ class FutaberModeInstrumentedTest {
             }
             // 貼り付けはクリップボードの更新がアプリに届いてから読む。
             rule.waitForIdle(); Thread.sleep(500)
-            rule.onNodeWithTag("futaber-post-paste").performClick()
+            rule.onNodeWithTag("futaber-post-paste").performScrollTo().performClick()
             waitForTag("futaber-post-error")
             assertTrue(rule.onAllNodesWithTag("futaber-post-attachment").fetchSemanticsNodes().isEmpty())
             rule.onNodeWithText("画像つき").assertIsDisplayed()
@@ -1794,17 +1951,17 @@ class FutaberModeInstrumentedTest {
                 clipboard.setPrimaryClip(android.content.ClipData.newUri(app.contentResolver, "test image", uri))
             }
             rule.waitForIdle(); Thread.sleep(500)
-            rule.onNodeWithTag("futaber-post-paste").performClick()
+            rule.onNodeWithTag("futaber-post-paste").performScrollTo().performClick()
             waitForTag("futaber-post-attachment")
             capture("26-attachment")
 
             // 外すと消え、もう一度貼って、そのまま送ると添付つきで送られて消える。
             rule.onNodeWithTag("futaber-post-attachment-remove").performClick()
             rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-post-attachment").fetchSemanticsNodes().isEmpty() }
-            rule.onNodeWithTag("futaber-post-paste").performClick()
+            rule.onNodeWithTag("futaber-post-paste").performScrollTo().performClick()
             waitForTag("futaber-post-attachment")
             // 引用モードを往復しても添付は残る。
-            rule.onNodeWithTag("futaber-post-quote-mode").performClick()
+            rule.onNodeWithTag("futaber-post-quote-mode").performScrollTo().performClick()
             waitForTag("futaber-quote-strip")
             rule.onNodeWithTag("futaber-quote-strip").performClick()
             waitForTag("futaber-post-attachment")
@@ -1854,7 +2011,8 @@ class FutaberModeInstrumentedTest {
     private fun toggleTabFromMenu() {
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
-        rule.onNodeWithTag("futaber-menu-tab").performClick()
+        // L-B6 (M20): 「タブに追加」 is this app's item, after the original's eleven inside the grid's scroll.
+        rule.onNodeWithTag("futaber-menu-tab").performScrollTo().performClick()
     }
 
     private val galleryItem = SemanticsMatcher("gallery item") {
@@ -1892,11 +2050,14 @@ class FutaberModeInstrumentedTest {
         rule.onNodeWithTag("futaber-thread-list").assertIsDisplayed()
     }
 
-    @Test fun viewerCanJumpBackToTheSourcePostWhichClearsASearchFilter() {
+    @Test fun viewerBringsTheSourcePostBackAsABubbleEvenWhileASearchFilterHidesIt() {
         openTutorialCatalog()
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
-        // 絞り込み中でも、元のレスへ戻ると絞り込みが解除されて表示される。
+        // 絞り込み中でも、「レスに戻る」で元のレスがスレッドの上の吹き出しとして出る（L-B11のS11。スクロールも絞り込みの解除もしない）。検索ワードの絞り込みはL-B6から従来の動き
+        // （設定→スレッドの末尾のスイッチ、既定OFF）なので、ここではONにして絞り込む。
+        runBlocking { app.compatibilityStore.savePreference("compat.futaber.legacySearchFilter", "ON") }
+        rule.waitForIdle()
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-operation-menu")
         rule.onNodeWithTag("futaber-menu-search").performTextInput("テスト10_2")
@@ -1909,7 +2070,8 @@ class FutaberModeInstrumentedTest {
         waitForTag("futaber-viewer-info")
         rule.onNodeWithContentDescription("レスに戻る").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-media").fetchSemanticsNodes().isEmpty() }
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-filter-chip").fetchSemanticsNodes().isEmpty() }
+        waitForTag("futaber-quote-card")
+        rule.onNodeWithTag("futaber-filter-chip").assertExists()
         rule.onNodeWithTag("futaber-thread-list").assertIsDisplayed()
     }
 
@@ -1933,7 +2095,7 @@ class FutaberModeInstrumentedTest {
             waitForTag("futaber-operation-menu")
             capture("theme-$theme-menu")
             dismissOperationMenu()
-            rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+            backToCatalog()
             waitForTag("futaber-catalog-item")
         }
         runBlocking { app.compatibilityStore.savePreference("compat.futaber.theme", "system") }
@@ -1961,7 +2123,7 @@ class FutaberModeInstrumentedTest {
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         capture("6-thread")
-        rule.onNodeWithContentDescription("カタログへ戻る").performClick()
+        backToCatalog()
         waitForTag("futaber-catalog-list")
         rule.onNodeWithTag("futaber-open-settings").performClick()
         waitForTag("futaber-settings")

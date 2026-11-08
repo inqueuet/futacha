@@ -225,7 +225,7 @@ internal object BoardUrlResolver {
         if (url.encodedUser != null ||
             url.encodedPassword != null ||
             url.host.any(::isAmbiguousAuthorityChar) ||
-            '\\' in url.encodedPath
+            url.rawSegments.any { '\\' in it }
         ) {
             throw IllegalArgumentException("Ambiguous board URL authority")
         }

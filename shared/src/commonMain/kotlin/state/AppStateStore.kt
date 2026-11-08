@@ -478,6 +478,22 @@ class AppStateStore internal constructor(
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) =
         preferenceOperations.setCatalogMode(boardId, mode)
 
+    /** The board's catalog mode under its shared key ([BoardSettingKeys], D-B1). */
+    suspend fun setCatalogMode(keys: BoardSettingKeys, mode: CatalogMode) =
+        preferenceOperations.setCatalogMode(keys, mode)
+
+    /**
+     * The migration of the board-keyed settings (D-B1, stage `boardkeyed-maps-v1`): moves them from the keys earlier
+     * versions used to the shared ones ([moves]: earlier key to shared key). Fails when a map cannot be read or
+     * written; an unreadable board watch word map is left as it is.
+     */
+    internal suspend fun moveBoardKeyedSettings(moves: Map<String, String>) {
+        if (moves.isEmpty()) return
+        wordListEditMutex.withLock {
+            preferenceOperations.moveBoardKeyedSettings(moves, boardWatchWords = storedBoardWatchWordsForEdit() != null)
+        }
+    }
+
     // The word lists below are not saved over while the stored one cannot be read (L87): see storedWordListForEdit.
     suspend fun setNgHeaders(headers: List<String>) {
         if (storedWordListForEdit(AppStateWordList.NG_HEADERS) != null) preferenceOperations.setNgHeaders(headers)
@@ -501,6 +517,26 @@ class AppStateStore internal constructor(
 
     suspend fun clearBoardWatchWordsOverride(boardId: String) {
         if (storedBoardWatchWordsForEdit() != null) preferenceOperations.clearBoardWatchWordsOverride(boardId)
+    }
+
+    /** The board's own watch words under its shared key ([BoardSettingKeys], D-B1). */
+    suspend fun setBoardWatchWords(keys: BoardSettingKeys, words: List<String>) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.setBoardWatchWords(keys, words)
+    }
+
+    suspend fun clearBoardWatchWordsOverride(keys: BoardSettingKeys) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.clearBoardWatchWordsOverride(keys)
+    }
+
+    /** [updateBoardWatchWords] for [keys]' board: read under either key, written under the shared one (D-B1). */
+    suspend fun updateBoardWatchWords(keys: BoardSettingKeys, edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            val boardLists = storedBoardWatchWordsForEdit() ?: return@withLock
+            val base = boardLists.boardSetting(keys)
+                ?: storedWordListForEdit(AppStateWordList.WATCH_WORDS)
+                ?: return@withLock
+            preferenceOperations.setBoardWatchWords(keys, edit(base))
+        }
     }
 
     /** Atomically re-applies [edit] to the latest stored NG headers. */

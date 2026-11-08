@@ -19,6 +19,9 @@ internal enum class FtutterOrder(val stored: Int, val label: String, val mode: C
     MOMENTUM(5, "勢順", CatalogMode.Momentum),
     SOUDANE(6, "そ順", CatalogMode.So);
 
+    /** M53：設定の並び順のダイアログでの名前（原作は「カタ」でなく「カタログ」）。 */
+    val dialogLabel: String get() = if (this == CATALOG) "カタログ" else label
+
     companion object {
         /** 設定の「デフォルトの並び順」の7番目＝「前回の並び順を保存する」。 */
         const val PREVIOUS = 7
@@ -43,6 +46,8 @@ internal data class FtutterCatalogSettings(
     val maxThumbHeight: Double = 1.2,
     val minThumbHeight: Double = 0.8,
     val useZoom: Boolean = true,
+    /** 従来の動き：セルのどこを長押ししても同じ動き（H5）。 */
+    val legacyPress: Boolean = false,
     val numberPosition: FtutterNumberPosition = FtutterNumberPosition.OVERLAY,
     val kitaShorten: Boolean = true,
     val titleLines: Int = 2,
@@ -71,6 +76,7 @@ internal fun parseFtutterCatalogSettings(p: Map<String, String>) = FtutterCatalo
     maxThumbHeight = p.ftutterDouble(FtutterKeys.MAX_THUMB_HEIGHT, 1.2, 1.0..5.0),
     minThumbHeight = p.ftutterDouble(FtutterKeys.MIN_THUMB_HEIGHT, 0.8, 0.0..1.0),
     useZoom = p.ftutterBool(FtutterKeys.USE_ZOOM, true),
+    legacyPress = ftutterLegacyCatalogPress(p),
     numberPosition = FtutterNumberPosition.entries[p.ftutterInt(FtutterKeys.NUMBER_ON_THUMB, 1, 0..4)],
     kitaShorten = p.ftutterBool(FtutterKeys.KITA_SHORTEN, true),
     titleLines = p.ftutterInt(FtutterKeys.MAX_TITLE_LINES, 2, 0..10),
@@ -272,3 +278,9 @@ internal fun <T> ftutterTrimReadRecords(
 internal fun ftutterTrimReadCounts(counts: Map<String, Int>, keepFirst: Set<String>): Map<String, Int> =
     ftutterTrimReadRecords(counts.entries.toList(), { it.key }, { "${it.key}\t${it.value}" }, keepFirst)
         .associate { it.key to it.value }
+
+/** 原作のタブにあるスレのセルの枠（内側へ寄せる幅と枠の太さ、dp）。タブに無いセルは枠なし。 */
+internal data class FtutterCatalogTabFrame(val inset: Float, val width: Float)
+
+internal fun ftutterCatalogTabFrame(inTab: Boolean): FtutterCatalogTabFrame? =
+    if (inTab) FtutterCatalogTabFrame(inset = 1.5f, width = 1f) else null

@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.QuoteReference
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -64,6 +65,22 @@ class FtutterThreadSupportTest {
         assertEquals(60, ftutterIndentDp(4))
         assertEquals(67, ftutterIndentDp(5))
         assertEquals(74, ftutterIndentDp(6))
+    }
+
+    // A thread opened for the first time ran to its bottom by itself (a report on iPhone): the list followed the band's key
+    // when saving the read count moved it. The band is keyed by its place, so a move is a new key the list does not follow.
+    @Test
+    fun theReadMarksListKeyChangesWithItsPlaceWhilePostsKeepTheirs() = runBlocking {
+        val posts = listOf(post("1"), post("2"), post("3"))
+        fun keys(read: Int) = runBlocking {
+            ftutterBuildRows(posts, FtutterThreadSettings(), FtutterThreadFilter(), readCount = read)
+                .mapIndexed { index, row -> ftutterRowListKey(index, row) }
+        }
+        assertEquals(listOf("kokomade@0", "p0", "p1", "p2"), keys(0))
+        assertEquals(listOf("p0", "p1", "p2", "kokomade@3"), keys(3))
+        assertTrue(keys(0).first() !in keys(3), "the band's key on a new thread must not survive its move")
+        assertEquals(keys(0).filter { it.startsWith("p") }, keys(3).filter { it.startsWith("p") })
+        assertEquals(keys(2).size, keys(2).toSet().size)
     }
 
     @Test
@@ -214,7 +231,12 @@ class FtutterThreadSupportTest {
     fun theEndBandSaysFallenArchivedOrTheExpiry() {
         assertEquals(FtutterEndBand("19:54頃消えます", FtutterEndState.NORMAL), ftutterEndBand("19:54頃消えます", false, false))
         assertEquals(FtutterEndState.DANGER, ftutterEndBand("もうすぐ消えます", false, false).state)
-        assertEquals(FtutterEndBand("スレッドは落ちています", FtutterEndState.DANGER), ftutterEndBand("x", true, false))
+        // M23：原作の落ちた帯は「ここまで読んだ」と同じ地に赤い字。従来の動きは赤い地。
+        assertEquals(FtutterEndBand("スレッドは落ちています", FtutterEndState.FALLEN), ftutterEndBand("x", true, false))
+        assertEquals(FtutterEndState.DANGER, ftutterEndBand("x", true, false, legacyFallen = true).state)
+        assertTrue(ftutterFallenBandsOnly(pageLoaded = false, fallen = true, legacy = false))
+        assertFalse(ftutterFallenBandsOnly(pageLoaded = true, fallen = true, legacy = false))
+        assertFalse(ftutterFallenBandsOnly(pageLoaded = false, fallen = true, legacy = true))
         assertEquals(FtutterEndState.ARCHIVED, ftutterEndBand("x", true, true).state)
     }
 
@@ -253,5 +275,14 @@ class FtutterThreadSupportTest {
         assertEquals("3", inserted[ftutterIndexOfPost(inserted, chosen)].id)
         assertEquals(-1, ftutterIndexOfPost(listOf(post("1")), chosen))
         assertEquals(-1, ftutterIndexOfPost(before, null))
+    }
+
+    @Test
+    fun aSaidaneAnsweredZeroDidNotCountLikeTheOriginal() {
+        assertTrue(ftutterSaidaneCounted("1"))
+        assertTrue(ftutterSaidaneCounted("12"))
+        assertTrue(ftutterSaidaneCounted(""))
+        assertEquals(false, ftutterSaidaneCounted("0"))
+        assertEquals(false, ftutterSaidaneCounted(" 0\n"))
     }
 }

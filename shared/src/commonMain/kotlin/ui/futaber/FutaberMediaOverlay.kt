@@ -19,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
 import com.valoser.futacha.shared.compat.appliesToThreadImage
@@ -39,6 +38,8 @@ import com.valoser.futacha.shared.ui.compat.CompatViewerReturnPosition
 import com.valoser.futacha.shared.ui.compat.LocalCompatibilityPalette
 import com.valoser.futacha.shared.ui.compat.normalizeCompatThreadSnapshot
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.ui.compat.compatMediaIdentity
+import com.valoser.futacha.shared.ui.compat.resolveCompatViewerMediaUrl
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.withContext
 
@@ -58,6 +59,14 @@ internal fun FutaberMediaOverlay(
     hiddenPostNos: Set<String> = emptySet(),
     /** The post whose picture the viewer opens on at once ("ビューアで表示" of the image menu); null opens the picture list. */
     initialPostNo: String? = null,
+    /**
+     * The picture list's scroll position, kept by the thread while it is open: closing the list and opening it again
+     * comes back where it was (the original went back to the top, docs/thread-feedback-1444136530-2026-10-27.md).
+     */
+    galleryState: androidx.compose.foundation.lazy.grid.LazyGridState? = null,
+    /** The thread's "n/N" of IPs that post more than once and its reply counts, by post number, for the viewer's caption. */
+    ipCounts: Map<String, String> = emptyMap(),
+    replyCounts: Map<String, Int> = emptyMap(),
     onShowPost: (postId: String) -> Unit,
     onClose: () -> Unit
 ) {
@@ -65,8 +74,12 @@ internal fun FutaberMediaOverlay(
     val palette = remember(colors) { futaberMediaPalette(colors) }
     val scope = rememberCoroutineScope()
     val preferences by services.store.preferences.collectAsState(emptyMap())
+    // C28: the list and the viewer stay upright while the setting is on.
+    ApplyFutaberViewerOrientation(FutaberDisplaySettings.from(preferences).viewerPortraitLock)
     val ngRules by services.store.ngRules.collectAsState(emptyList<CompatNgRule>())
-    val galleryGridState = rememberLazyGridState()
+    val galleryGridState = galleryState ?: rememberLazyGridState()
+    // The picture the viewer showed when its "画像一覧" was pressed: the list shows it (scrolled to it when it is not on screen).
+    var galleryFocus by remember { mutableStateOf<Int?>(null) }
     var viewerIndex by rememberSaveable { mutableStateOf<Int?>(null) }
     var viewerPostNo by rememberSaveable { mutableStateOf<String?>(null) }
     var toolbarEditorOpen by rememberSaveable { mutableStateOf(false) }
@@ -112,8 +125,17 @@ internal fun FutaberMediaOverlay(
             viewerPostNo = com.valoser.futacha.shared.ui.compat.compatMediaIdentity(mediaPosts[index])
         }
     }
+    // iPhone: the status bar is the bars' near black with white glyphs while this is up, as the original's; closing
+    // gives the screens' own back.
+    val statusOverride = LocalFutaberStatusBarOverride.current
+    if (futaberMediaDarkensStatusBar && statusOverride != null) {
+        androidx.compose.runtime.DisposableEffect(statusOverride) {
+            statusOverride.color = FutaberMediaBarColor
+            onDispose { statusOverride.color = null }
+        }
+    }
     FutachaAppLockAwareWindow {
-        Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Dialog(onDismissRequest = onClose, properties = futaberMediaDialogProperties()) {
             CompositionLocalProvider(LocalCompatibilityPalette provides palette) {
                 Surface(Modifier.fillMaxSize().testTag("futaber-media"), color = colors.background) {
                     val settingsPath = settingsPaths.lastOrNull()
@@ -130,11 +152,19 @@ internal fun FutaberMediaOverlay(
                                 PlatformBackHandler(onBack = closeSettings)
                                 CompatHelpScreen(onBack = closeSettings)
                             }
+                            // L-B11 (M34・C04): the gear opens futaber's 「画像ビューア」 page, 「完了」 at the top left.
+                            settingsPath == "viewer" -> {
+                                PlatformBackHandler(onBack = closeSettings)
+                                FutaberViewerSettingsStorePage(
+                                    services.store, onDone = closeSettings,
+                                    onOpenShared = { settingsPaths = settingsPaths + FUTABER_VIEWER_SHARED_PATH }
+                                )
+                            }
                             settingsPath != null -> {
                                 PlatformBackHandler(onBack = closeSettings)
                                 val appTasks = LocalFutaberAppTasks.current
                                 CompatSettingsScreen(
-                                    path = settingsPath,
+                                    path = futaberSharedSettingsPath(settingsPath),
                                     store = services.store,
                                     preferences = preferences,
                                     fileSystem = services.fileSystem,
@@ -162,6 +192,8 @@ internal fun FutaberMediaOverlay(
                                     mediaPosts = viewerMedia,
                                     initialIndex = viewerIndex ?: 0,
                                     returnPosition = viewerReturnPosition,
+                                    ipCounts = ipCounts,
+                                    replyCounts = replyCounts,
                                     boardKey = tab.boardKey,
                                     threadKey = tab.threadNo,
                                     store = services.store,
@@ -173,7 +205,14 @@ internal fun FutaberMediaOverlay(
                                         onShowPost(postNo)
                                         onClose()
                                     },
-                                    onOpenGallery = { viewerIndex = null },
+                                    onOpenGallery = {
+                                        galleryFocus = futaberGalleryFocusIndex(
+                                            mediaPosts.map { resolveCompatViewerMediaUrl(it) ?: compatMediaIdentity(it) },
+                                            viewerReturnPosition.mediaIdentity,
+                                            viewerReturnPosition.index
+                                        )
+                                        viewerIndex = null
+                                    },
                                     onOpenSettings = { settingsPaths = listOf("viewer") },
                                     swipeDownToClose = FutaberDisplaySettings.from(preferences).viewerSwipeClose,
                                     playVideoInApp = FutaberDisplaySettings.from(preferences).extVideo,
@@ -195,7 +234,15 @@ internal fun FutaberMediaOverlay(
                                 onOpenSettings = { settingsPaths = listOf("viewer") },
                                 onClose = onClose
                             )
-                            else -> FutaberGalleryScreen(
+                            else -> {
+                                androidx.compose.runtime.LaunchedEffect(galleryFocus) {
+                                    val target = galleryFocus ?: return@LaunchedEffect
+                                    galleryFocus = null
+                                    // After the list has been laid out, so a picture already on screen does not move it.
+                                    androidx.compose.runtime.withFrameNanos { }
+                                    if (!futaberGridItemFullyVisible(galleryGridState, target)) galleryGridState.scrollToItem(target)
+                                }
+                                FutaberGalleryScreen(
                                 mediaPosts = mediaPosts,
                                 gridState = galleryGridState,
                                 onOpenViewer = { index, postNo ->
@@ -206,9 +253,10 @@ internal fun FutaberMediaOverlay(
                                 onClose = onClose,
                                 // The shared viewer settings' column counts (an extension); the original's 3 otherwise.
                                 sharedColumns = if (FutaberDisplaySettings.from(preferences).extGalleryColumns) {
-                                    futaberSharedGalleryColumns(preferences)
+                                    futaberSavedSharedGalleryColumns(preferences)
                                 } else null
                             )
+                            }
                         }
                     }
                 }

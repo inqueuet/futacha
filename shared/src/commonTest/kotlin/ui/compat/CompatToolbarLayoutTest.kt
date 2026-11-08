@@ -22,7 +22,7 @@ class CompatToolbarLayoutTest {
 
     @Test fun allOnScrollsRatherThanShrinkingAndTheFixedMenuKeepsItsOwnSlot() {
         val count = compatToolbarMaster(CompatToolbarSurface.THREAD).size + 1
-        assertEquals(20, count)
+        assertEquals(21, count)
         listOf(240f, 375f, 393f, 411f).forEach { width ->
             val menuWidth = compactThreadToolbarItemWidth(width, count)
             assertEquals(24f, menuWidth)

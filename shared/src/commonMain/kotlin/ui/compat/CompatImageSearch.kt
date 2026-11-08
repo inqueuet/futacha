@@ -53,6 +53,13 @@ internal fun compatAscii2dEndpoint(preferences: Map<String, String>): String =
         ?.takeIf(String::isNotEmpty)
         ?: DEFAULT_COMPAT_ASCII2D_ENDPOINT
 
+internal const val COMPAT_ASCII2D_ENDPOINT_HINT =
+    "検索先のURLは、設定の「画像検索」→「二次元画像類似検索のURL」で変更・初期値に戻せます。"
+
+/** A mistyped endpoint fails every search: say where it is corrected, not only that it failed. */
+internal fun compatAscii2dFailureMessage(message: String, endpoint: String): String =
+    if (endpoint.trim() == DEFAULT_COMPAT_ASCII2D_ENDPOINT) message else "$message\n$COMPAT_ASCII2D_ENDPOINT_HINT"
+
 internal fun isCompatAscii2dRegistered(preferences: Map<String, String>): Boolean {
     val configured = preferences[COMPAT_ASCII2D_ENDPOINT_KEY]?.trim().orEmpty()
     // A valid endpoint is also treated as an explicit registration. This is
@@ -566,6 +573,11 @@ private fun normalizeCompatAscii2dResultUrl(raw: String): String? {
         val url = Url(absolute)
         absolute.takeIf {
             url.protocol.name in setOf("http", "https") && isAscii2dHost(url.host)
+        }?.let {
+            // ascii2d answers live searches with http:// result links, which the
+            // in-app browser refuses as cleartext (Android network security
+            // config, iOS ATS). The site serves the same page over HTTPS.
+            if (url.protocol.name == "http") "https://" + it.substringAfter("://") else it
         }
     }.getOrNull()
 }

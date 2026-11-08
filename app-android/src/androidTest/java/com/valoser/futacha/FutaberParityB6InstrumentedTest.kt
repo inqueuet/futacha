@@ -84,14 +84,18 @@ class FutaberParityB6InstrumentedTest {
     }
 
     private fun host(preferences: Map<String, String>, httpClient: HttpClient? = null) {
-        runBlocking { store.savePreferences(preferences + ("compat.futaber.lastBoardId" to "may")) }
+        runBlocking { store.savePreferences(FUTABER_EXTENSIONS_OFF + preferences + ("compat.futaber.lastBoardId" to "may")) }
         val services = FutaberMediaServices(store, httpClient, createFileSystem(rule.activity), null)
         rule.setContent {
             val boards by appState.boards.collectAsState(emptyList())
             val history by appState.history.collectAsState(emptyList())
             val prefs by store.preferences.collectAsState(emptyMap())
             val ngRules by store.ngRules.collectAsState(emptyList())
-            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            // The catalog reads its own loader too (since 2026-10-26); without it the screen did not compose.
+            CompositionLocalProvider(
+                LocalFutachaImageLoader provides loader,
+                com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader provides loader
+            ) {
                 if (boards.isNotEmpty() && prefs["compat.futaber.lastBoardId"] != null) FutaberApp(
                     boards = boards,
                     history = history,

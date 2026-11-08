@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		04CC2E37E45F15C21472D23B /* libPods-iosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 00FCF61D06F1D8B343375557 /* libPods-iosApp.a */; };
+		0A7722673F6511CC6F68BBCF /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 6D6FC7F1F416ACD2AE171FE0 /* FirebaseCrashlytics */; };
+		4D63E18F9240BA88AFA41BBC /* FirebasePerformance in Frameworks */ = {isa = PBXBuildFile; productRef = 1CECF619DA74CC27471C3358 /* FirebasePerformance */; };
+		7C2A8563C797C56A46D779DA /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 0B2FA0A000DA70004FDFD90F /* FirebaseAnalytics */; };
 		F7A1C00AF7A1C00AF7A1C00A /* watchApp.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F7A1C001F7A1C001F7A1C001 /* watchApp.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -341,11 +344,15 @@
 		};
 		9135B878D9EB55DD1D4C52A9 /* Configuration */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = Configuration;
 			sourceTree = "<group>";
 		};
 		C0D3E001C0D3E001C0D3E001 /* iosAppUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = iosAppUITests;
 			sourceTree = "<group>";
 		};
@@ -379,6 +386,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				04CC2E37E45F15C21472D23B /* libPods-iosApp.a in Frameworks */,
+				7C2A8563C797C56A46D779DA /* FirebaseAnalytics in Frameworks */,
+				0A7722673F6511CC6F68BBCF /* FirebaseCrashlytics in Frameworks */,
+				4D63E18F9240BA88AFA41BBC /* FirebasePerformance in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2685,6 +2695,11 @@
 				529658B8C1F0E941FDCAC756 /* iosApp */,
 			);
 			name = iosApp;
+			packageProductDependencies = (
+				0B2FA0A000DA70004FDFD90F /* FirebaseAnalytics */,
+				6D6FC7F1F416ACD2AE171FE0 /* FirebaseCrashlytics */,
+				1CECF619DA74CC27471C3358 /* FirebasePerformance */,
+			);
 			productName = iosApp;
 			productReference = 7FE8AFC77F4F4EA4D8D76CF1 /* futacha.app */;
 			productType = "com.apple.product-type.application";
@@ -2760,6 +2775,9 @@
 			);
 			mainGroup = 0A9D7C4CB472774EDC3BF6DD;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				919A5A7F5773C8114F6B62FC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A970358FE7E33D5FFF4934B6 /* Products */;
 			projectDirPath = "";
@@ -2881,13 +2899,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-resources-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -2912,7 +2926,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nGOOGLE_SERVICE_PLIST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n\nif [ \"${CONFIGURATION}\" = \"Debug\" ] || [ \"${CODE_SIGNING_ALLOWED:-}\" = \"NO\" ]; then\n  echo \"note: Skipping Crashlytics dSYM upload for Debug or unsigned verification builds.\"\n  exit 0\nfi\n# GoogleService-Info.plist is git-ignored; checkouts without it still build.\nif [ ! -f \"$GOOGLE_SERVICE_PLIST\" ]; then\n  echo \"warning: Skipping Crashlytics dSYM upload: $GOOGLE_SERVICE_PLIST is missing.\"\n  exit 0\nfi\n\n\"${PODS_ROOT}/FirebaseCrashlytics/run\" -gsp \"$GOOGLE_SERVICE_PLIST\"\n";
+			shellScript = "set -eu\nGOOGLE_SERVICE_PLIST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\n\nif [ \"${CONFIGURATION}\" = \"Debug\" ] || [ \"${CODE_SIGNING_ALLOWED:-}\" = \"NO\" ]; then\n  echo \"note: Skipping Crashlytics dSYM upload for Debug or unsigned verification builds.\"\n  exit 0\nfi\n# GoogleService-Info.plist is git-ignored; checkouts without it still build.\nif [ ! -f \"$GOOGLE_SERVICE_PLIST\" ]; then\n  echo \"warning: Skipping Crashlytics dSYM upload: $GOOGLE_SERVICE_PLIST is missing.\"\n  exit 0\nfi\n\n\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\" -gsp \"$GOOGLE_SERVICE_PLIST\"\n";
 			showEnvVarsInLog = 0;
 		};
 		DDB63AAC9AE9A66591DBF172 /* [CP] Embed Pods Frameworks */ = {
@@ -2923,13 +2937,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -3069,7 +3079,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 216;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
@@ -3094,7 +3104,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.2;
+				MARKETING_VERSION = 13.9;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3115,7 +3125,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 216;
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(TEAM_ID)";
@@ -3139,7 +3149,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.2;
+				MARKETING_VERSION = 13.9;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3250,7 +3260,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 216;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3263,7 +3273,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.2;
+				MARKETING_VERSION = 13.9;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).watch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -3287,7 +3297,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 216;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3300,7 +3310,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 13.2;
+				MARKETING_VERSION = 13.9;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FUTACHA_PRODUCT_BUNDLE_IDENTIFIER).watch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -3357,6 +3367,35 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		919A5A7F5773C8114F6B62FC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
+			requirement = {
+				kind = exactVersion;
+				version = 13.1.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0B2FA0A000DA70004FDFD90F /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 919A5A7F5773C8114F6B62FC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		1CECF619DA74CC27471C3358 /* FirebasePerformance */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 919A5A7F5773C8114F6B62FC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebasePerformance;
+		};
+		6D6FC7F1F416ACD2AE171FE0 /* FirebaseCrashlytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 919A5A7F5773C8114F6B62FC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCrashlytics;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 907A7B74B29A84A3DD1B34CE /* Project object */;
 }

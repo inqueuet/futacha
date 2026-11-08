@@ -180,6 +180,7 @@ import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.compat.CompatReplyDraft
 import com.valoser.futacha.shared.compat.CompatTab
 import com.valoser.futacha.shared.compat.CompatToolbarItem
+import com.valoser.futacha.shared.compat.compatToolbarMenuItems
 import com.valoser.futacha.shared.compat.CompatToolbarSurface
 import com.valoser.futacha.shared.compat.COMPAT_REFERENCE_HELP_TITLE
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -399,6 +400,7 @@ fun CompatPostAttachmentPreview(
                 }
                 AsyncImage(
                     model = attachment.bytes,
+                    imageLoader = LocalFutachaImageLoader.current,
                     contentDescription = "添付画像をプレビュー",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -1463,6 +1465,7 @@ internal fun CompatPostScreen(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     AsyncImage(
                         model = previewAttachment.bytes,
+                        imageLoader = LocalFutachaImageLoader.current,
                         contentDescription = "添付画像プレビューを閉じる",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.8f)
@@ -1623,7 +1626,7 @@ private fun SecondaryToolbarOverflowPopup(
     pasteEnabled: Boolean,
     onDismiss: () -> Unit
 ) {
-    val inactive = items.sortedBy(CompatToolbarItem::position).filterNot(CompatToolbarItem::active)
+    val inactive = compatToolbarMenuItems(items.sortedBy(CompatToolbarItem::position))
     CompatBottomPopup(
         alignment = Alignment.BottomEnd,
         testTag = "compat-post-toolbar-overflow-popup",

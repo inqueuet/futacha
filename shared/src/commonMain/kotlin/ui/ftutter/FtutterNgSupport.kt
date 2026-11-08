@@ -152,7 +152,11 @@ internal fun ftutterRegexIsTooSlow(
     pattern: String,
     stepLimit: Duration = FTUTTER_NG_REGEX_STEP_LIMIT,
     /** The input as the engine sees it; the test passes the plain string to act like Android (no deadline checks). */
-    input: (String, TimeMark) -> CharSequence = { probe, deadline -> FtutterDeadlineCharSequence(probe, deadline) }
+    input: (String, TimeMark) -> CharSequence = { probe, deadline -> FtutterDeadlineCharSequence(probe, deadline) },
+    /** The probe lengths; としあき(仮) probes long texts further ([compatRegexIsSafeForLongText]). */
+    lengths: List<Int> = FTUTTER_NG_REGEX_PROBE_LENGTHS,
+    /** The time one probe of this length may take. */
+    stepLimitFor: (Int) -> Duration = { stepLimit }
 ): Boolean {
     // ICU copies the input to native String storage, so neither coroutine cancellation
     // nor DeadlineCharSequence can stop a bad match. Reject this structural family
@@ -164,12 +168,13 @@ internal fun ftutterRegexIsTooSlow(
     val literals = (pattern.filter { it.isLetterOrDigit() }.toList().distinct().take(8) + symbols + listOf('a', '1', ' ', 'あ', '.')).distinct()
     val units = literals.map { it.toString() } + literals.joinToString("")
     return units.any { unit ->
-        FTUTTER_NG_REGEX_PROBE_LENGTHS.any { length ->
+        lengths.any { length ->
             val probe = unit.repeat((length / unit.length).coerceAtLeast(1)) + "\u0001"
+            val limit = stepLimitFor(length)
             val started = TimeSource.Monotonic.markNow()
             try {
-                regex.containsMatchIn(input(probe, started + stepLimit * 4))
-                started.elapsedNow() > stepLimit
+                regex.containsMatchIn(input(probe, started + limit * 4))
+                started.elapsedNow() > limit
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
@@ -185,7 +190,7 @@ internal fun ftutterRegexIsTooSlow(
  * 普通のパターンでも2乗の遅さはある（`a+b`を`aaa…`に当てる）ので、それを断らないよう長くしすぎない（iOSの正規表現は
  * JVMより遅く、2,048文字では`a+b`も25msを超えた）。
  */
-private val FTUTTER_NG_REGEX_PROBE_LENGTHS: List<Int> =
+internal val FTUTTER_NG_REGEX_PROBE_LENGTHS: List<Int> =
     (2..40 step 2).toList() + generateSequence(60) { (it * 3) / 2 }.takeWhile { it <= 256 }.toList()
 
 /** 試しの1回に使える時間。普通の正規表現は数マイクロ秒で終わる。 */
@@ -484,3 +489,12 @@ internal fun ftutterNgReplaced(stored: List<FtutterNgRule>, old: FtutterNgRule, 
  * 保存しない（監査A9・M2）。
  */
 internal typealias FtutterNgEdit = (transform: (List<FtutterNgRule>) -> List<FtutterNgRule>, savedNotice: String?) -> Unit
+
+/** 1件足しただけの時の知らせ（M55、原作「abc を追加しました」）。それ以外は null。 */
+internal fun ftutterNgAddedNotice(before: List<FtutterNgRule>, after: List<FtutterNgRule>): String? {
+    if (after.size != before.size + 1) return null
+    // A set of the rules before: one look per rule (a list was walked for each, the count squared; audit C7).
+    val known = before.toHashSet()
+    val added = after.firstOrNull { it !in known } ?: return null
+    return "${added.text} を追加しました"
+}

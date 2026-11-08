@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -508,11 +510,50 @@ fun CompatDroppedCatalogScreen(
     entries: List<CompatDroppedCatalogItem>,
     onBack: () -> Unit,
     onOpenThread: (CatalogItem) -> Unit,
-    onDeleteDieEntries: suspend () -> Unit
+    onDeleteDieEntries: suspend () -> Unit,
+    /** FutabaViewer 18-20 「新しいタブに追加」; null leaves it out. */
+    onAddTab: ((CatalogItem) -> Unit)? = null,
+    isTabOpen: (CatalogItem) -> Boolean = { false },
+    /** FutabaViewer 18-20 「del」 (reason 110); null leaves it out. Asked for first, like the catalog's del. */
+    onSendDel: (suspend (CatalogItem) -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
     val palette = LocalCompatibilityPalette.current
     var message by remember { mutableStateOf<String?>(null) }
+    var pendingDel by remember { mutableStateOf<CatalogItem?>(null) }
+    var sendingDel by remember { mutableStateOf(false) }
+    pendingDel?.let { item ->
+        val send = onSendDel
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { if (!sendingDel) pendingDel = null },
+            title = { Text("削除依頼 ${item.title.orEmpty()}") },
+            confirmButton = {
+                TextButton(
+                    enabled = !sendingDel && send != null,
+                    modifier = Modifier.testTag("compat-dropped-del-confirm"),
+                    onClick = {
+                        val action = send ?: return@TextButton
+                        sendingDel = true
+                        scope.launch {
+                            try {
+                                action(item)
+                                message = "送信しました"
+                                pendingDel = null
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Throwable) {
+                                Logger.e("CompatibilityCatalog", "Failed to send del for a dropped thread", failure)
+                                message = failure.toCompatUserMessage("delを送信できませんでした")
+                            } finally {
+                                sendingDel = false
+                            }
+                        }
+                    }
+                ) { Text(if (sendingDel) "送信中" else "送信する") }
+            },
+            dismissButton = { TextButton(enabled = !sendingDel, onClick = { pendingDel = null }) { Text("キャンセル") } }
+        ) }
+    }
     LaunchedEffect(message) {
         if (message != null) {
             delay(2_000)
@@ -589,6 +630,7 @@ fun CompatDroppedCatalogScreen(
                                 if (entry.item.thumbnailUrl != null) {
                                     AsyncImage(
                                         model = entry.item.thumbnailUrl,
+                                        imageLoader = LocalFutachaImageLoader.current,
                                         contentDescription = null,
                                         modifier = Modifier
                                             .size(60.dp)
@@ -650,6 +692,35 @@ fun CompatDroppedCatalogScreen(
                                 tonalElevation = 0.dp,
                                 shadowElevation = 8.dp
                             ) {
+                                if (onAddTab != null && entry.item.threadUrl.isNotBlank()) {
+                                    DropdownMenuItem(
+                                        text = { Text("新しいタブに追加") },
+                                        colors = compatibilityMenuItemColors(),
+                                        modifier = Modifier.testTag("compat-dropped-add-tab"),
+                                        onClick = {
+                                            menuOpen = false
+                                            message = if (isTabOpen(entry.item)) {
+                                                "既に追加されています"
+                                            } else {
+                                                onAddTab(entry.item)
+                                                "${compatTakeCharacters(entry.item.title, 4)} をタブに追加しました"
+                                            }
+                                        }
+                                    )
+                                }
+                                if (onSendDel != null && entry.item.threadUrl.isNotBlank() &&
+                                    (entry.item.id.toLongOrNull() ?: 0L) > 0L
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("del") },
+                                        colors = compatibilityMenuItemColors(),
+                                        modifier = Modifier.testTag("compat-dropped-del"),
+                                        onClick = {
+                                            menuOpen = false
+                                            pendingDel = entry.item
+                                        }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("落ちスレを履歴から削除") },
                                     colors = compatibilityMenuItemColors(),

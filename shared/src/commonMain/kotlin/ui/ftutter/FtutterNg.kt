@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -40,8 +42,9 @@ import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.model.BoardSummary
 
 /**
- * NGの登録・編集（原作 NGDialog）。文字列・種類・正規表現・有効・板（全板か1つの板）を選ぶ。
- * 保存の前に [ftutterNgValidationError] で検査し、問題があればダイアログに出して閉じない。
+ * NGの登録・編集。M56：原作の形は種類ごとの題（ピックアップは「ピックアップ」）、下線の欄、「正規表現」（NGID・IPには無い）、
+ * 板の選択（「全ての板」）と「キャンセル／OK」。検査で断った時はダイアログを閉じて理由を知らせる（[onRejected]、原作のトースト）。
+ * [legacy]（従来のダイアログ）の時は前の「NG・ピックアップの追加」（種類・有効を選べ、理由はダイアログの中）。
  */
 @Composable
 internal fun FtutterNgDialog(
@@ -49,6 +52,116 @@ internal fun FtutterNgDialog(
     boards: List<BoardSummary>,
     existing: List<FtutterNgRule>,
     title: String = "NG・ピックアップの追加",
+    onDismiss: () -> Unit,
+    legacy: Boolean = false,
+    onRejected: ((String) -> Unit)? = null,
+    onSave: (FtutterNgRule) -> Unit
+) {
+    if (legacy || onRejected == null) FtutterNgLegacyDialog(initial, boards, existing, title, onDismiss, onSave)
+    else FtutterNgOriginalDialog(initial, boards, existing, onDismiss, onRejected, onSave)
+}
+
+/** 種類ごとの頁の説明の文（原作の文）。 */
+internal fun ftutterNgTypeDescription(type: FtutterNgType): String = when (type) {
+    FtutterNgType.TITLE -> "この文字列が含まれるスレをカタログから非表示にします"
+    FtutterNgType.WORD -> "この文字列が含まれるレスを非表示にします"
+    FtutterNgType.ID -> "このID・IPからの投稿を非表示にします"
+    FtutterNgType.PICKUP -> "この文字列が含まれるスレをカタログの上部に強調表示します"
+}
+
+/** ダイアログの題（原作はピックアップだけ「ピックアップ」）。 */
+internal fun ftutterNgDialogTitle(type: FtutterNgType): String = if (type == FtutterNgType.PICKUP) "ピックアップ" else type.label
+
+internal const val FTUTTER_NG_ALL_BOARDS = "全ての板"
+internal const val FTUTTER_NG_ID_HINT = "'ID:'または'IP:'を含めて入力"
+
+@Composable
+private fun FtutterNgOriginalDialog(
+    initial: FtutterNgRule,
+    boards: List<BoardSummary>,
+    existing: List<FtutterNgRule>,
+    onDismiss: () -> Unit,
+    onRejected: (String) -> Unit,
+    onSave: (FtutterNgRule) -> Unit
+) {
+    val colors = LocalFtutterColors.current
+    val type = FtutterNgType.of(initial) ?: FtutterNgType.WORD
+    var text by remember { mutableStateOf(initial.text) }
+    var isReg by remember { mutableStateOf(initial.isReg) }
+    var board by remember { mutableStateOf(initial.ita) }
+    var checking by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.popUp,
+        modifier = Modifier.testTag("ftutter-ng-dialog"),
+        title = { Text(ftutterNgDialogTitle(type), color = colors.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = if (type == FtutterNgType.ID) ({ Text(FTUTTER_NG_ID_HINT) }) else null,
+                    singleLine = true,
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        focusedTextColor = colors.text, unfocusedTextColor = colors.text,
+                        focusedPlaceholderColor = colors.text, unfocusedPlaceholderColor = colors.text
+                    ),
+                    modifier = Modifier.fillMaxWidth().testTag("ftutter-ng-text")
+                )
+                if (type != FtutterNgType.ID) {
+                    Row(Modifier.fillMaxWidth().clickable { isReg = !isReg }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = isReg, onCheckedChange = { isReg = it }, modifier = Modifier.testTag("ftutter-ng-regex"))
+                        Text("正規表現", color = colors.text)
+                    }
+                }
+                var boardOpen by remember { mutableStateOf(false) }
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Row(
+                        Modifier.clickable { boardOpen = true }.padding(vertical = 8.dp).testTag("ftutter-ng-board"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(board?.name?.ifBlank { null } ?: FTUTTER_NG_ALL_BOARDS, color = colors.text)
+                        Icon(Icons.Rounded.ArrowDropDown, contentDescription = null, tint = colors.text)
+                    }
+                    DropdownMenu(expanded = boardOpen, onDismissRequest = { boardOpen = false }) {
+                        DropdownMenuItem(text = { Text(FTUTTER_NG_ALL_BOARDS) }, onClick = { boardOpen = false; board = null })
+                        boards.forEach { candidate ->
+                            DropdownMenuItem(
+                                text = { Text(candidate.name) },
+                                onClick = { boardOpen = false; board = FtutterNgBoard(candidate.name, candidate.url) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !checking, onClick = {
+                val rule = FtutterNgRule(text, type.stored, isReg && type != FtutterNgType.ID, initial.isActive, board)
+                checking = true
+                scope.launch {
+                    val problem = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                        ftutterNgValidationError(rule, existing - initial)
+                    } ?: ftutterNgCapacityError((existing - initial) + rule)
+                    checking = false
+                    // 原作：断った理由はトーストで出し、ダイアログは閉じる。
+                    if (problem != null) { onDismiss(); onRejected(problem) } else onSave(rule)
+                }
+            }, modifier = Modifier.testTag("ftutter-ng-save")) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, modifier = Modifier.testTag("ftutter-ng-cancel")) { Text("キャンセル") } }
+    ) }
+}
+
+@Composable
+private fun FtutterNgLegacyDialog(
+    initial: FtutterNgRule,
+    boards: List<BoardSummary>,
+    existing: List<FtutterNgRule>,
+    title: String,
     onDismiss: () -> Unit,
     onSave: (FtutterNgRule) -> Unit
 ) {
@@ -147,7 +260,90 @@ internal fun FtutterNgDialog(
     ) }
 }
 
-/** NG・ピックアップの一覧（設定の「ピックアップ・NG」）。行のタップで編集、ゴミ箱で削除、右上の＋で追加。 */
+/**
+ * M56：原作の種類ごとの頁。上部バーの題と右上の＋、説明の帯、行は左にON／OFFのスイッチ・文字列と板・右に×（「削除しますか？」）。
+ * 行のタップで編集。
+ */
+@Composable
+internal fun FtutterNgTypeScreen(
+    type: FtutterNgType,
+    rules: List<FtutterNgRule>,
+    boards: List<BoardSummary>,
+    onEdit: ((List<FtutterNgRule>) -> List<FtutterNgRule>) -> Unit,
+    onNotice: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    val colors = LocalFtutterColors.current
+    var editing by remember { mutableStateOf<FtutterNgRule?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<FtutterNgRule?>(null) }
+    val ofType = rules.filter { it.type == type.stored }
+    Column(Modifier.fillMaxSize().testTag("ftutter-ng-type-page")) {
+        FtutterTopBar(title = type.label, onBack = onBack) {
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { adding = true },
+                colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(containerColor = colors.onToolBar, contentColor = colors.toolBar),
+                modifier = Modifier.padding(end = 8.dp).testTag("ftutter-ng-add")
+            ) { Icon(Icons.Rounded.Add, contentDescription = "追加") }
+        }
+        Text(
+            ftutterNgTypeDescription(type), color = colors.text, fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth().background(colors.outline).padding(horizontal = 8.dp, vertical = 2.dp).testTag("ftutter-ng-type-description")
+        )
+        LazyColumn(Modifier.fillMaxSize()) {
+            itemsIndexed(ofType, key = { i, _ -> "r$i" }) { _, rule ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { editing = rule }.padding(horizontal = 12.dp, vertical = 6.dp).testTag("ftutter-ng-row"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.Switch(
+                        checked = rule.isActive,
+                        onCheckedChange = { on -> onEdit { stored -> ftutterNgReplaced(stored, rule, rule.copy(isActive = on)) } },
+                        modifier = Modifier.testTag("ftutter-ng-row-switch")
+                    )
+                    Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                        Text(rule.text, color = colors.text, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(rule.ita?.name?.ifBlank { null } ?: FTUTTER_NG_ALL_BOARDS, color = colors.headerText, fontSize = 13.sp)
+                        // こちらだけ：使われていないルール（正規表現が作れない・時間がかかりすぎて止めた）。
+                        remember(rule) { ftutterNgRuleProblem(rule) }?.let { problem ->
+                            Text(problem, color = colors.deleted, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-ng-row-problem"))
+                        }
+                    }
+                    IconButton(onClick = { deleting = rule }, modifier = Modifier.testTag("ftutter-ng-delete")) {
+                        Icon(Icons.Rounded.Close, contentDescription = "削除", tint = colors.text)
+                    }
+                }
+            }
+        }
+    }
+    deleting?.let { rule ->
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { deleting = null },
+            containerColor = colors.popUp,
+            title = { Text("削除しますか？", color = colors.text) },
+            confirmButton = {
+                TextButton(onClick = { deleting = null; onEdit { stored -> ftutterNgWithout(stored, rule) } },
+                    modifier = Modifier.testTag("ftutter-ng-delete-ok")) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("キャンセル") } }
+        ) }
+    }
+    if (adding || editing != null) {
+        val initial = editing ?: FtutterNgRule("", type.stored)
+        FtutterNgDialog(
+            initial = initial, boards = boards, existing = rules,
+            onDismiss = { adding = false; editing = null },
+            onRejected = onNotice,
+            onSave = { saved ->
+                val old = editing
+                adding = false; editing = null
+                onEdit { stored -> if (old == null) stored + saved else ftutterNgReplaced(stored, old, saved) }
+            }
+        )
+    }
+}
+
+/** NG・ピックアップの一覧（従来の形。その他の機能から開く）。行のタップで編集、ゴミ箱で削除、右上の＋で追加。 */
 @Composable
 internal fun FtutterNgListScreen(
     rules: List<FtutterNgRule>,

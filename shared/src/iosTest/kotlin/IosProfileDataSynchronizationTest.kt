@@ -8,6 +8,8 @@ import com.valoser.futacha.shared.state.PlatformStateStorage
 import com.valoser.futacha.shared.util.createFileSystem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -30,6 +32,61 @@ class IosProfileDataSynchronizationTest {
 
     private enum class Path { MODERN_BOARDS, COMPAT_BOARDS, HISTORY }
 
+    /**
+     * D1 (D-B1): a board restored into the compatibility store, with what hangs under it, survives the synchronization
+     * of the AppState modes (it used to be deleted with its tab and board NG rule) and of としあき(仮); a deletion in the
+     * mode's own list still takes it from both.
+     */
+    @Test fun aRestoredBoardSurvivesTheAppStateModesSynchronization() = verifyRestoredBoard(usesAppStateData = true)
+    @Test fun aRestoredBoardSurvivesToshiakisSynchronization() = verifyRestoredBoard(usesAppStateData = false)
+
+    private fun verifyRestoredBoard(usesAppStateData: Boolean) = runBlocking {
+        val fs = createFileSystem()
+        fs.deleteRecursively("compatibility").getOrThrow()
+        val modern = AppStateStore(FakePlatformStateStorage())
+        val compat = IosCompatibilityStore(fs)
+        val may = BoardSummary("b", "may", "", "https://may.2chan.net/b/futaba.php", "")
+        val img = BoardSummary("img", "img", "", "https://img.2chan.net/b/futaba.php", "")
+        val imgKey = compatBoardKey("https://img.2chan.net/b/")
+        val thread = "https://img.2chan.net/b/res/200.htm"
+        val tab = CompatTab(compatTabKey(thread), thread, thread, imgKey, "img", "200", "スレ", insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1)
+        val rule = CompatNgRule(compatNgRuleId(CompatNgKind.CATALOG_WORD, imgKey, "荒らし"), CompatNgKind.CATALOG_WORD, imgKey, "荒らし", 2)
+        suspend fun synchronizeUntil(timeoutMillis: Long = 10_000, done: suspend () -> Boolean): Boolean {
+            val job = launch { synchronizeIosProfileData(modern, compat, usesAppStateData) { _, error -> throw error } }
+            val reached = withTimeoutOrNull(timeoutMillis) { while (!done()) delay(20); delay(100); true } ?: false
+            job.cancelAndJoin()
+            return reached
+        }
+        try {
+            compat.initialize()
+            modern.setBoards(listOf(may))
+            compat.upsertBoards(modernBoardsToCompatibility(listOf(may)))
+            synchronizeUntil { true }
+            compat.importSettingsBackup(
+                encodeCompatSettingsBackup(
+                    CompatSettingsBackup(
+                        exportedAtEpochMillis = 1, boards = modernBoardsToCompatibility(listOf(img)), tabs = listOf(tab),
+                        ngRules = listOf(rule), workspace = null
+                    )
+                )
+            )
+            assertTrue(synchronizeUntil { modern.boards.first().any { it.url == img.url || it.id == imgKey } })
+            assertTrue(compat.boards.first().any { it.key == imgKey }, "the restored board stays in the store")
+            assertTrue(compat.tabs.first().any { it.key == tab.key }, "with its tab")
+            assertTrue(compat.ngRules.first().any { it.id == rule.id }, "and its NG rule")
+            if (usesAppStateData) modern.updateBoards { boards -> boards.filterNot { it.url == img.url || it.id == imgKey } }
+            else compat.deleteBoard(imgKey)
+            assertTrue(synchronizeUntil {
+                modern.boards.first().none { it.url == img.url || it.id == imgKey } && compat.boards.first().none { it.key == imgKey }
+            }, "a deletion in the mode's own list takes it from both")
+            synchronizeUntil(timeoutMillis = 500) { false }
+            assertTrue(modern.boards.first().none { it.url == img.url || it.id == imgKey }, "and it stays deleted")
+        } finally {
+            modern.close()
+            fs.deleteRecursively("compatibility").getOrThrow()
+        }
+    }
+
     private fun verifyFailure(path: Path) = runBlocking {
         val fs = createFileSystem()
         fs.deleteRecursively("compatibility").getOrThrow()
@@ -49,7 +106,10 @@ class IosProfileDataSynchronizationTest {
         modern.setBoards(listOf(original))
         val real = IosCompatibilityStore(fs)
         real.initialize()
-        real.upsertBoards(modernBoardsToCompatibility(listOf(original)))
+        // The board sync skips a write when nothing changed (audit D5), so for the failing modern write the
+        // compatibility copy starts with an older name: the first sync then has a real change to write.
+        val seeded = if (path == Path.MODERN_BOARDS) original.copy(name = "同期前の板") else original
+        real.upsertBoards(modernBoardsToCompatibility(listOf(seeded)))
         val boards = Channel<List<CompatBoard>>(Channel.UNLIMITED)
         val history = Channel<List<CompatHistoryEntry>>(Channel.UNLIMITED)
         val reported = Channel<Throwable>(Channel.UNLIMITED)

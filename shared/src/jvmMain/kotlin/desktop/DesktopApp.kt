@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.compat.shared.SharedBoardSide
+import com.valoser.futacha.shared.compat.shared.reconcileSharedBoards
 import com.valoser.futacha.shared.media.source.*
 import com.valoser.futacha.shared.network.*
 import com.valoser.futacha.shared.model.CatalogFetchSettings
@@ -83,6 +85,8 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
             selfPostIdentifierMap = emptyMap(), catalogModeMap = emptyMap(), lastUsedDeleteKey = ""))
         compatibility.initialize()
         compatibility.bootstrapBoardsIfNeeded(stateStore.boards.first())
+        // The shared data's migration stages (D-B1), before the first screen.
+        com.valoser.futacha.shared.compat.shared.runSharedDataMigrations(stateStore, compatibility)
         val saved = if (profileFile.isFile) profileFile.readLines() else emptyList()
         profile = ExperienceProfile.fromPersistedValue(saved.firstOrNull())
         generation = saved.getOrNull(1)?.toLongOrNull() ?: 0
@@ -95,14 +99,12 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         switching = true
         try {
             withContext(Dispatchers.IO) {
+                // The boards as one list, with the changes of the mode being left (D-B1, compat/shared/SharedBoards.kt).
+                reconcileSharedBoards(stateStore, compatibility, SharedBoardSide.of(profile.usesAppStateData))
                 if (target == ExperienceProfile.TOSHIAKI_COMPAT) {
-                    synchronizeBoardsToCompatibility(stateStore.boards.first())
                     compatibility.importModernHistory(stateStore.readHistory())
                 } else {
-                    val boards = synchronizeModernBoardsFromCompatibility(
-                        stateStore.boards.first(), compatibility.boards.first(), compatibility.holdsBundledTutorialBoard
-                    )
-                    stateStore.setBoards(boards)
+                    val boards = stateStore.boards.first()
                     val history = compatibility.history.first()
                     stateStore.updateHistory { mergeCompatibilityHistory(it, history, boards) }
                 }
@@ -113,23 +115,10 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
         } finally { switching = false }
     }
 
-    private suspend fun synchronizeBoardsToCompatibility(boards: List<com.valoser.futacha.shared.model.BoardSummary>) {
-        val desired = modernBoardsToCompatibility(boards)
-        // The tutorial has an intentional example.com URL accepted by the store's importer.
-        val keys = compatibility.modernBoardKeys(boards)
-        compatibility.boards.first().filterNot { it.key in keys }.forEach { compatibility.deleteBoard(it.key) }
-        compatibility.importModernBoards(boards)
-        compatibility.upsertBoards(desired)
-    }
-
+    /** One pass of the board synchronization of [observedProfile] while it is the mode in use (D-B1). */
     internal suspend fun synchronizeBoards(observedProfile: ExperienceProfile) = profileMutex.withLock {
         if (switching || observedProfile != profile) return@withLock
-        if (profile == ExperienceProfile.FUTACHA) synchronizeBoardsToCompatibility(stateStore.boards.first())
-        else {
-            val current = stateStore.boards.first()
-            val updated = synchronizeModernBoardsFromCompatibility(current, compatibility.boards.first(), compatibility.holdsBundledTutorialBoard)
-            if (current != updated) stateStore.setBoards(updated)
-        }
+        reconcileSharedBoards(stateStore, compatibility, SharedBoardSide.of(profile.usesAppStateData))
     }
 
     internal suspend fun refreshCompatibility(manual: Boolean = false): String {
@@ -282,10 +271,17 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
     LaunchedEffect(graph.profile, graph.switching) {
         if (graph.switching) return@LaunchedEffect
         val observedProfile = graph.profile
-        if (observedProfile == ExperienceProfile.FUTACHA) {
-            graph.stateStore.boards.collect { graph.synchronizeBoards(observedProfile) }
-        } else {
-            graph.compatibility.boards.collect { graph.synchronizeBoards(observedProfile) }
+        // The mode's own list drives the passes; an empty list is not taken for the boards until it was not empty once,
+        // and a failed pass is logged and taken up again by the next change, as on Android and iOS.
+        var hasObservedBoards = false
+        val sizes = if (observedProfile.usesAppStateData) graph.stateStore.boards.map { it.size }
+        else graph.compatibility.boards.map { it.size }
+        sizes.collect { size ->
+            if (size > 0) hasObservedBoards = true
+            if (!hasObservedBoards) return@collect
+            try { graph.synchronizeBoards(observedProfile) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { Logger.e("DesktopApp", "Failed to synchronize the boards", failure) }
         }
     }
     LaunchedEffect(graph) {

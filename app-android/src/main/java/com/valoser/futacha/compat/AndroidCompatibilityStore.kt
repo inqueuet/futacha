@@ -7,6 +7,7 @@ import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import com.valoser.futacha.shared.compat.CompatSharedTabView
 import com.valoser.futacha.shared.compat.isValidCompatImagePhash
 import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
 import com.valoser.futacha.shared.compat.pinnedTo
@@ -81,6 +82,8 @@ import com.valoser.futacha.shared.compat.decodeCompatSettingsBackup
 import com.valoser.futacha.shared.compat.encodeCompatSettingsBackup
 import com.valoser.futacha.shared.compat.validateCompatSettingsBackup
 import com.valoser.futacha.shared.compat.requireValidCompatPreference
+import com.valoser.futacha.shared.compat.requireValidCompatSharedDataKey
+import com.valoser.futacha.shared.compat.COMPAT_SHARED_DATA_KEY_PREFIX
 import com.valoser.futacha.shared.compat.isValidCompatNgRule
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.ui.compat.cleanupCompatPostAttachmentLocators
@@ -475,6 +478,22 @@ class AndroidCompatibilityStore(
             db.trimHistory()
             AttachmentCleanupMutation(Unit, trimmedAttachments, db.readRetainedAttachmentLocators())
         }
+    }
+
+    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int {
+        var added = 0
+        mutate(refresh = setOf(CompatObservableState.TABS)) { db ->
+            // The boards are read once for the whole batch (audit D6: they were read again for every tab).
+            val boardKeys = db.readBoards().mapTo(HashSet()) { it.key }
+            tabs.distinctBy { it.key }.forEach { tab ->
+                // A tab of a board this store does not hold would break the foreign key.
+                if (tab.boardKey in boardKeys && db.readTab(tab.key) == null) {
+                    db.upsertTab(tab)
+                    added++
+                }
+            }
+        }
+        return added
     }
 
     override suspend fun updateTab(tab: CompatTab) = mutate(
@@ -955,7 +974,7 @@ class AndroidCompatibilityStore(
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
-                add(CompatToolbarItem(cursor.getString(0), cursor.getInt(1), cursor.getInt(2) != 0))
+                add(compatToolbarItemFromColumn(cursor.getString(0), cursor.getInt(1), cursor.getInt(2)))
             }
         }
     }
@@ -1248,6 +1267,50 @@ class AndroidCompatibilityStore(
         )
     }
 
+    override suspend fun loadSharedData(): Map<String, String> = read { db ->
+        db.query(
+            "compat_metadata", arrayOf("key", "value"), "key GLOB ?",
+            arrayOf("$COMPAT_SHARED_DATA_KEY_PREFIX*"), null, null, null
+        ).use { cursor ->
+            buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1)) }
+        }
+    }
+
+    override suspend fun saveSharedData(values: Map<String, String?>) {
+        if (values.isEmpty()) return
+        values.keys.forEach(::requireValidCompatSharedDataKey)
+        // Nothing the screens observe changes.
+        mutate(refresh = emptySet()) { db ->
+            values.forEach { (key, value) ->
+                if (value == null) db.delete("compat_metadata", "key=?", arrayOf(key)) else db.putMetadata(key, value)
+            }
+        }
+    }
+
+    override suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = read { db ->
+        db.query(
+            "compat_tab_view", arrayOf("tab_key", "ordinal", "added_at"), "profile=?", arrayOf(profile),
+            null, null, "ordinal ASC"
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(CompatSharedTabView(cursor.getString(0), profile, cursor.getInt(1), cursor.getLong(2))) }
+        }
+    }
+
+    override suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) {
+        // The mode's own marks are not something the screens observe.
+        mutate(refresh = emptySet()) { db ->
+            db.delete("compat_tab_view", "profile=?", arrayOf(profile))
+            views.filter { it.profile == profile }.distinctBy { it.tabKey }.forEach { view ->
+                // A tab that does not exist has no view (the foreign key would refuse it).
+                db.execSQL(
+                    "INSERT INTO compat_tab_view(tab_key, profile, ordinal, added_at) " +
+                        "SELECT ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM compat_tab WHERE tab_key=?)",
+                    arrayOf<Any?>(view.tabKey, profile, view.ordinal, view.addedAtEpochMillis, view.tabKey)
+                )
+            }
+        }
+    }
+
     override suspend fun loadPreference(key: String): String? = read { db ->
         db.query(
             "compat_preference",
@@ -1353,7 +1416,7 @@ class AndroidCompatibilityStore(
                 CompatToolbarBackup(
                     surface = surface.name,
                     items = persisted.map { item ->
-                        CompatToolbarBackupItem(item.key, item.position, item.active)
+                        CompatToolbarBackupItem(item.key, item.position, item.active, item.hidden)
                     }
                 )
             }
@@ -1438,7 +1501,7 @@ class AndroidCompatibilityStore(
                     val surface = runCatching { CompatToolbarSurface.valueOf(toolbar.surface) }.getOrNull()
                         ?: return@forEach
                     val items = toolbar.items.map { item ->
-                        CompatToolbarItem(item.key, item.position, item.active)
+                        CompatToolbarItem(item.key, item.position, item.active, item.hidden)
                     }
                     if (validateCompatToolbar(surface, items)) db.replaceToolbar(surface, items)
                 }
@@ -1841,7 +1904,7 @@ class AndroidCompatibilityStore(
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
-                    add(CompatToolbarItem(cursor.getString(0), cursor.getInt(1), cursor.getInt(2) != 0))
+                    add(compatToolbarItemFromColumn(cursor.getString(0), cursor.getInt(1), cursor.getInt(2)))
                 }
             }
         }
@@ -2553,7 +2616,7 @@ class AndroidCompatibilityStore(
                     put("surface", surface.name)
                     put("command_key", item.key)
                     put("position", item.position)
-                    put("active", item.active.asInt())
+                    put("active", item.toolbarColumn())
                 }
             )
         }
@@ -2808,7 +2871,8 @@ class AndroidCompatibilityStore(
                 val payload = runCatching { cursor.getString(5)?.let(::JSONObject) }.getOrNull()
                 val imageUrl = payload?.optString("imageUrl")?.takeIf(String::isNotBlank)
                 val memo = payload?.optString("memo").orEmpty().take(MAX_COMPAT_NG_MEMO_CHARS)
-                add(CompatNgRule(cursor.getString(0), kind, scope, cursor.getString(3), cursor.getLong(4), imageUrl, memo))
+                val isRegex = payload?.optBoolean("regex", false) == true
+                add(CompatNgRule(cursor.getString(0), kind, scope, cursor.getString(3), cursor.getLong(4), imageUrl, memo, isRegex))
             }
         }
     }
@@ -3565,6 +3629,10 @@ private class CompatibilityDatabaseHelper(
             CompatibilityDatabaseSchema.migration12To13.forEach(db::execSQL)
             version = 13
         }
+        if (version == 13 && newVersion >= 14) {
+            CompatibilityDatabaseSchema.migration13To14.forEach(db::execSQL)
+            version = 14
+        }
         check(version == newVersion) {
             "Unsupported compatibility DB migration $oldVersion -> $newVersion (stopped at $version)"
         }
@@ -3576,10 +3644,20 @@ private class CompatibilityDatabaseHelper(
 private fun CompatNgRule.compatPayloadJson(): String = JSONObject().apply {
     imageUrl?.takeIf(String::isNotBlank)?.let { put("imageUrl", it) }
     memo.takeIf(String::isNotBlank)?.let { put("memo", it) }
+    if (isRegex) put("regex", true)
 }.toString()
 
 internal object CompatibilityDatabaseSchema {
-    const val version = 13
+    const val version = 14
+    /**
+     * D-B3: two tables the shared data of the four modes will use (not read or written yet).
+     * [compat_tab_view] keeps one mode's mark and order on a shared tab; [compat_draft] is the
+     * draft of every mode, keyed "reply:<tab key>" or "build:<board key>" with no foreign key.
+     */
+    val migration13To14 = listOf(
+        "CREATE TABLE compat_tab_view(tab_key TEXT NOT NULL, profile TEXT NOT NULL, ordinal INTEGER NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY(tab_key, profile), FOREIGN KEY(tab_key) REFERENCES compat_tab(tab_key) ON DELETE CASCADE)",
+        "CREATE TABLE compat_draft(draft_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, attachment_handwriting INTEGER NOT NULL DEFAULT 0, attachment_owner TEXT, delete_key TEXT NOT NULL DEFAULT '', writer_profile TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)"
+    )
     val migration12To13 = listOf(
         "ALTER TABLE compat_reply_draft ADD COLUMN attachment_handwriting INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE compat_build_draft ADD COLUMN attachment_handwriting INTEGER NOT NULL DEFAULT 0"
@@ -3682,5 +3760,18 @@ internal object CompatibilityDatabaseSchema {
         "CREATE TABLE compat_ng_rule(rule_id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, scope_key TEXT, normalized_value TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE compat_watch_rule(rule_id TEXT PRIMARY KEY NOT NULL, board_key TEXT, normalized_value TEXT NOT NULL, display_value TEXT NOT NULL, created_at INTEGER NOT NULL)"
     ) + migration1To2 + migration3To4 + migration4To5 + migration5To6 + migration7To8 + migration10To11 +
-        migration11To12
+        migration11To12 + migration13To14
+}
+
+/**
+ * compat_toolbar.active keeps 18-20's three values: 1 on the toolbar, 0 in the
+ * その他 menu, 2 hidden. Older builds read 2 as "on the toolbar".
+ */
+private fun compatToolbarItemFromColumn(key: String, position: Int, value: Int) =
+    CompatToolbarItem(key, position, active = value == 1, hidden = value == 2)
+
+private fun CompatToolbarItem.toolbarColumn(): Int = when {
+    active -> 1
+    hidden -> 2
+    else -> 0
 }

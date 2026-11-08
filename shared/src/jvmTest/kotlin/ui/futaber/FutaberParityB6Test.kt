@@ -19,13 +19,15 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.assertNotEquals
 
-/** ふたばー風 B6：メディアのみ保存とカスタムフォントの拡張（どちらも既定OFF）、共通フォントの書き込み。 */
+/** ふたばー風 B6：メディアのみ保存とカスタムフォントの拡張（どちらも既定ON、F-B1）、共通フォントの書き込み。 */
 class FutaberParityB6Test {
     @Test
-    fun bothExtensionsAreOffByDefaultAndReadTheirOwnKeys() {
+    fun bothExtensionsAreOnByDefaultAndReadTheirOwnKeys() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extMediaOnlySave)
-        assertFalse(defaults.extCustomFont)
+        assertTrue(defaults.extMediaOnlySave) // F-B1: on from the start
+        assertTrue(defaults.extCustomFont)
+        val off = FutaberDisplaySettings.from(mapOf("compat.futaber.ext.mediaOnlySave" to "OFF", "compat.futaber.ext.customFont" to "OFF"))
+        assertFalse(off.extMediaOnlySave || off.extCustomFont)
         val on = FutaberDisplaySettings.from(mapOf(
             "compat.futaber.ext.mediaOnlySave" to "ON", "compat.futaber.ext.customFont" to "ON"
         ))

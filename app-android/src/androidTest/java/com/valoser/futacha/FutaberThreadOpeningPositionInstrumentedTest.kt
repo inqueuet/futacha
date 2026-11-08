@@ -83,7 +83,9 @@ class FutaberThreadOpeningPositionInstrumentedTest {
         fetchGate.complete(Unit)
         awaitPosition("810000", 0)
         assertStillAt("810000", 0)
-        rule.onNodeWithText("thread-810000 row-0", substring = true).assertIsDisplayed()
+        // The post itself (the title row above the list shows the first post's line too since L-B1).
+        rule.onNode(hasText("thread-810000 row-0", substring = true) and hasAnyAncestor(hasTestTag("futaber-thread-list")))
+            .assertIsDisplayed()
     }
     @Test fun aSavedPostWinsOverAnOutdatedLargeIndexAndTheSeenCount() {
         opened = ref("810000").copy(seenCount = 900, resumePostId = id("810000", 20), resumeIndex = 9_000)

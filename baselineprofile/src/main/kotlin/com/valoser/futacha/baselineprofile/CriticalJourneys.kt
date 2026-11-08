@@ -97,12 +97,15 @@ private fun MacrobenchmarkScope.runFutaberNavigation() {
     clickText(device, "チュートリアル＠ふたちゃ")
     waitFor(device, By.desc("カタログを更新"), "ふたばー風カタログ")
     click(device, By.descContains("チュートリアル、"), "ふたばー風チュートリアル")
-    waitFor(device, By.textStartsWith("No."), "ふたばー風スレッド本文")
+    // The header's visible text contains zero-width wrap opportunities; its
+    // accessibility description preserves the plain post number after name/date/IP.
+    waitFor(device, By.descContains("No."), "ふたばー風スレッド本文")
     scrollThread(device)
     click(device, By.desc("画像一覧"), "ふたばー風画像一覧")
     waitFor(device, By.desc("画像一覧を閉じる"), "ふたばー風画像一覧の表示")
     device.pressBack()
-    click(device, By.desc("カタログへ戻る"), "ふたばー風カタログへの復帰")
+    // The title exposes return as an accessibility action, not a separate button.
+    device.pressBack()
     waitFor(device, By.desc("カタログを更新"), "ふたばー風カタログへの復帰")
     normalizeToBoardRoot(device, FutachaProfile.FUTABER)
 }
@@ -138,7 +141,18 @@ private fun scrollThread(device: UiDevice) {
 
 private fun launchTarget(device: UiDevice) {
     // MainActivity is not exported (L153): start it as the launcher does, through the enabled launcher alias.
-    device.executeShellCommand("am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $TARGET_PACKAGE")
+    // A package-restricted implicit start requires DEFAULT matching, whereas a
+    // launcher filter has LAUNCHER. Resolve the enabled alias and start that
+    // component explicitly, exactly as a launcher does.
+    val component = device.executeShellCommand(
+        "cmd package resolve-activity --brief -a android.intent.action.MAIN " +
+            "-c android.intent.category.LAUNCHER $TARGET_PACKAGE"
+    ).lineSequence().map(String::trim).firstOrNull { it.startsWith("$TARGET_PACKAGE/") }
+    check(component != null) { "No enabled launcher alias for $TARGET_PACKAGE" }
+    val result = device.executeShellCommand(
+        "am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $component"
+    )
+    check("Error:" !in result) { "Failed to start launcher alias: $result" }
     device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 15_000)
     device.waitForIdle()
 }

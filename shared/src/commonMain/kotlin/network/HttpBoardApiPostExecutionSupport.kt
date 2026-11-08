@@ -83,7 +83,7 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
     }
     // An explicit refusal always wins over incidental links or a redirect URL.
     extractHttpBoardApiServerError(responseBody)?.let { detail ->
-        throw NetworkException(buildHttpBoardApiPostingFailureMessage(if (mode == HttpBoardApiPostResponseMode.REPLY) "返信に失敗しました" else "スレッド作成に失敗しました", detail))
+        throw NetworkException(buildHttpBoardApiPostingFailureMessage(if (mode == HttpBoardApiPostResponseMode.REPLY) "返信に失敗しました" else "スレッド作成に失敗しました", detail), serverBody = responseBody)
     }
     return when (mode) {
         HttpBoardApiPostResponseMode.CREATE_THREAD -> {
@@ -111,7 +111,8 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
                     buildHttpBoardApiPostingFailureMessage(
                         prefix = "スレッド作成に失敗しました",
                         detail = errorDetail
-                    )
+                    ),
+                    serverBody = responseBody
                 )
             }
             if (isSuccessfulHttpBoardApiPostResponse(responseBody)) {
@@ -127,7 +128,8 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
                     buildHttpBoardApiPostingFailureMessage(
                         prefix = "スレッドIDの取得に失敗しました",
                         detail = summary
-                    )
+                    ),
+                    serverBody = responseBody
                 )
             }
         }
@@ -146,7 +148,8 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
                     buildHttpBoardApiPostingFailureMessage(
                         prefix = "返信に失敗しました",
                         detail = detail
-                    )
+                    ),
+                    serverBody = responseBody
                 )
             }
             tryExtractHttpBoardApiThisNo(responseBody)

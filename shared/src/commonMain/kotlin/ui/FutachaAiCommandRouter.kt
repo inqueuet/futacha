@@ -23,7 +23,9 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
-import com.valoser.futacha.shared.state.resolveBoardWatchWordKey
+import com.valoser.futacha.shared.state.boardSetting
+import com.valoser.futacha.shared.state.boardSettingKeys
+import com.valoser.futacha.shared.state.hasBoardSetting
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.ui.board.buildAddBoardValidationState
@@ -259,7 +261,8 @@ internal suspend fun executeFutachaAiCommand(
             val board = currentOrRequestedBoard(command, inputs) ?: return missingBoardOutcome(command)
             val mode = resolveCatalogMode(command)
                 ?: return FutachaAiCommandOutcome.Failed("カタログモードを特定できませんでした")
-            inputs.stateStore.setCatalogMode(board.id, mode)
+            // Under the board's shared key, as the catalog screen writes it (D-B1).
+            boardSettingKeys(board)?.let { keys -> inputs.stateStore.setCatalogMode(keys, mode) }
             inputs.updateNavigationState(selectFutachaBoard(inputs.navigationState, board.id))
             FutachaAiCommandOutcome.Completed("${board.name} のカタログモードを ${mode.label} にしました")
         }
@@ -270,12 +273,12 @@ internal suspend fun executeFutachaAiCommand(
             inputs.stateStore.setWatchWords(words)
             val targetBoard = currentOrRequestedBoard(command, inputs)
             if (targetBoard != null) {
-                val boardKey = resolveBoardWatchWordKey(targetBoard)
+                val boardKeys = boardSettingKeys(targetBoard)
                 val boardWatchWords = inputs.stateStore.boardWatchWords.first()
-                if (boardWatchWords.containsKey(boardKey)) {
+                if (boardKeys != null && boardWatchWords.hasBoardSetting(boardKeys)) {
                     inputs.stateStore.setBoardWatchWords(
-                        boardKey,
-                        boardWatchWords[boardKey].orEmpty().appendDistinct(word)
+                        boardKeys,
+                        boardWatchWords.boardSetting(boardKeys).orEmpty().appendDistinct(word)
                     )
                 }
             }

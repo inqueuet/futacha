@@ -41,9 +41,9 @@ class FutaberParityB45Test {
 
     @Test fun theNewExtensionsAreOffAndTheArchiveReportIsOnByDefault() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extHistoryArchive)
-        assertFalse(defaults.extForegroundPatrol)
-        assertFalse(defaults.extExternalWatcher)
+        assertTrue(defaults.extHistoryArchive)
+        assertTrue(defaults.extForegroundPatrol)
+        assertTrue(defaults.extExternalWatcher)
         // The decision of 2026-10-12: the shared switch is on until someone turns it off.
         assertTrue(defaults.archiveReportEnabled)
         val on = FutaberDisplaySettings.from(

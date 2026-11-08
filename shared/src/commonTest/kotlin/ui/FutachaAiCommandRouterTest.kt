@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.FutachaAiCommandOutcome
+import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveStatus
@@ -13,6 +14,7 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
+import com.valoser.futacha.shared.ui.board.resolveInitialCatalogMode
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -447,7 +449,11 @@ class FutachaAiCommandRouterTest {
             )
 
             assertIs<FutachaAiCommandOutcome.Completed>(outcome)
-            assertEquals(CatalogMode.New, harness.stateStore.catalogModes.first()["b"])
+            // Under the board's shared key, where the catalog screen reads it (D-B1); the board id is not written.
+            val modes = harness.stateStore.catalogModes.first()
+            assertEquals(CatalogMode.New, modes[compatBoardKey("https://may.2chan.net/b/")])
+            assertEquals(CatalogMode.New, resolveInitialCatalogMode("b", modes, "https://may.2chan.net/b/"))
+            assertFalse("b" in modes)
             assertEquals("b", harness.navigationState.selectedBoardId)
         }
     }
@@ -468,7 +474,11 @@ class FutachaAiCommandRouterTest {
             )
 
             assertIs<FutachaAiCommandOutcome.Completed>(outcome)
-            assertEquals(CatalogMode.Many, harness.stateStore.catalogModes.first()["b"])
+            // Under the board's shared key, where the catalog screen reads it (D-B1); the board id is not written.
+            val modes = harness.stateStore.catalogModes.first()
+            assertEquals(CatalogMode.Many, modes[compatBoardKey("https://may.2chan.net/b/")])
+            assertEquals(CatalogMode.Many, resolveInitialCatalogMode("b", modes, "https://may.2chan.net/b/"))
+            assertFalse("b" in modes)
             assertEquals("b", harness.navigationState.selectedBoardId)
         }
     }

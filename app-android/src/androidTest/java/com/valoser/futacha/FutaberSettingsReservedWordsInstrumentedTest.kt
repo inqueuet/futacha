@@ -33,9 +33,10 @@ class FutaberSettingsReservedWordsInstrumentedTest {
         CompatNgRule(word, CompatNgKind.CATALOG_WORD, "*", word, index.toLong())
     })
     private enum class Target(val tag: String, val title: String) {
-        Body("ng-res-words", "レスのNGワード"),
-        Headers("ng-res-headers", "レスのNGネーム・ID等"),
-        Catalog("ng-catalog-words", "カタログのNGワード"),
+        // L-B9: futaber's page titles; the shared 「NGネーム・ID等」 is futaber's NGネーム (no word here starts with ID:/IP:).
+        Body("ng-res-words", "レスNGワード"),
+        Headers("ng-res-names", "レスNGネーム"),
+        Catalog("ng-catalog-words", "カタログNGワード"),
         Watch("watch-words", "監視ワード（アラート用）"),
         Rules("ng-catalog-word-rules", "NGワード（詳細）")
     }
@@ -109,6 +110,8 @@ class FutaberSettingsReservedWordsInstrumentedTest {
         assertEquals(words, saved(target))
         for (word in words) showRow(target, word)
         var expected = words
+        // L-B9 (C45): the entries' ⊖ are under 「編集」 at the top right.
+        rule.onNodeWithTag("futaber-settings-edit").performClick()
         for (word in reserved) {
             showRow(target, word)
             rule.onNodeWithContentDescription("「${rowLabel(target, word)}」を削除").performClick()

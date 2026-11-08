@@ -20,6 +20,8 @@ class FtutterCatalogSupportTest {
     @Test
     fun theSevenOrdersAreServerSortsWithTheOriginalNumbers() {
         assertEquals(listOf("カタ", "新順", "古順", "多順", "少順", "勢順", "そ順"), FtutterOrder.entries.map { it.label })
+        // M53：設定のダイアログでは原作どおり「カタログ」。
+        assertEquals(listOf("カタログ", "新順", "古順", "多順", "少順", "勢順", "そ順"), FtutterOrder.entries.map { it.dialogLabel })
         assertEquals((0..6).toList(), FtutterOrder.entries.map { it.stored })
         assertEquals(
             listOf(CatalogMode.Catalog, CatalogMode.New, CatalogMode.Old, CatalogMode.Many, CatalogMode.Few, CatalogMode.Momentum, CatalogMode.So),
@@ -183,7 +185,8 @@ class FtutterCatalogSupportTest {
         assertEquals(parsed, parseFtutterToolbar(decodeFtutterList(names), decodeFtutterList(switches), FTUTTER_CATALOG_TOOLBAR_DEFAULT) { it.stored })
         // Preserve the original size when it fits; keep 40dp and scroll when it does not.
         assertEquals(45f, ftutterToolbarButtonWidth(411f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
-        assertEquals(40f, ftutterToolbarButtonWidth(274f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
+        assertEquals(30f, // M20: shrinks below 40dp in a narrow pane
+            ftutterToolbarButtonWidth(274f, FtutterToolbarMetrics(), 6, hasSpace = true, hasOrder = true))
     }
 
     /** 監査M10：カタログごとに1回作る表で絞っても、以前（毎回、重複を除き題名とURLを正規化）と同じ結果になる。 */

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.RestorePage
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
@@ -59,6 +60,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -88,6 +90,9 @@ import com.valoser.futacha.shared.compat.CompatToolbarGlyph
 import com.valoser.futacha.shared.compat.CompatToolbarSurface
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.compatToolbarMaster
+import com.valoser.futacha.shared.compat.compatToolbarMenuItems
+import com.valoser.futacha.shared.compat.compatToolbarOffersHidden
+import com.valoser.futacha.shared.compat.compatToolbarStateLabel
 import com.valoser.futacha.shared.compat.compatToolbarGlyph
 import com.valoser.futacha.shared.compat.compatToolbarShowsOverflow
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
@@ -295,7 +300,7 @@ fun CompatToolbarEditorScreen(
                                         role = Role.Checkbox,
                                         onValueChange = { checked ->
                                             persist(items.map { candidate ->
-                                                if (candidate.key == item.key) candidate.copy(active = checked) else candidate
+                                                if (candidate.key == item.key) candidate.copy(active = checked, hidden = false) else candidate
                                             })
                                         }
                                     )
@@ -331,6 +336,20 @@ fun CompatToolbarEditorScreen(
                                     fontSize = 14.sp,
                                     maxLines = 1
                                 )
+                            }
+                            if (compatToolbarOffersHidden(surface) && !item.active) {
+                                // FutabaViewer 18-20's third state: a command off the
+                                // toolbar can also leave the その他 menu.
+                                TextButton(
+                                    onClick = {
+                                        persist(items.map { candidate ->
+                                            if (candidate.key == item.key) candidate.copy(hidden = !candidate.hidden) else candidate
+                                        })
+                                    },
+                                    modifier = Modifier.testTag("compat-toolbar-state-${item.key}")
+                                ) {
+                                    Text(compatToolbarStateLabel(item), fontSize = 12.sp, color = palette.text, maxLines = 1)
+                                }
                             }
                             Icon(
                                 Icons.Filled.DragHandle,
@@ -387,7 +406,7 @@ fun CompatToolbarEditorScreen(
                 }
                 CompatToolbarPreviewRow(
                     surface = surface,
-                    items = items.filterNot(CompatToolbarItem::active),
+                    items = compatToolbarMenuItems(items),
                     master = masterByKey,
                     showMore = false,
                     active = false,
@@ -486,5 +505,7 @@ internal fun compatToolbarIcon(key: String): ImageVector = when (compatToolbarGl
     CompatToolbarGlyph.INFO -> Icons.Filled.Info
     CompatToolbarGlyph.VOICE_INPUT -> Icons.Filled.Mic
     CompatToolbarGlyph.DEVICE_INFO -> Icons.Filled.PhoneAndroid
+    // Not the reload-undo arrow: the thread toolbar carries both (18-20 restore-closed).
+    CompatToolbarGlyph.RESTORE_CLOSED -> Icons.Filled.RestorePage
     CompatToolbarGlyph.MORE -> Icons.Filled.MoreVert
 }

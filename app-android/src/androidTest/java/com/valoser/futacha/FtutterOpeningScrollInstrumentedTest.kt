@@ -30,7 +30,10 @@ class FtutterOpeningScrollInstrumentedTest {
     private lateinit var loader: ImageLoader
     private val posts = object : AbstractList<Post>() {
         private val data = (100..219).map { n -> Post("$n", author = null, subject = null, timestamp = "",
-            messageHtml = "opening-body-$n<br>local fixture line<br>local fixture line", imageUrl = null, thumbnailUrl = null) }
+            messageHtml = "opening-body-$n<br>local fixture line<br>local fixture line", imageUrl = null, thumbnailUrl = null,
+            // T-B2から取得した一覧は原作の規則で引用を結び直す。結んだ後と同じ（引用なし・結び済み）にして、一覧がそのまま
+            // 行の準備に渡るようにする（写されると、この一覧の止める仕掛けが働かない）。
+            quoteReferencesParsed = true) }
         override val size: Int get() = data.size
         override fun get(index: Int): Post {
             // Gate only the existing row worker, leaving all UI/lifecycle/repository reads free.
@@ -58,14 +61,14 @@ class FtutterOpeningScrollInstrumentedTest {
         rule.waitForIdle()
         if (::loader.isInitialized) loader.shutdown()
     }
-    private fun open(history: ThreadHistoryEntry? = null, readCount: Int? = null, cached: Boolean = false) {
+    private fun open(history: ThreadHistoryEntry? = null, readCount: Int? = null, cached: Boolean = false, startAtTop: Boolean = false) {
         rule.setContent {
             CompositionLocalProvider(LocalFutachaImageLoader provides loader, LocalFutachaCatalogImageLoader provides loader) {
                 FtutterTheme(null, FtutterBrightness.LIGHT) {
                     FtutterThreadScreen(board, FtutterThreadRef(board.id, "100", "Opening fixture"), repository, null,
                         emptyMap(), parseFtutterDesign(emptyMap()), history, emptySet(), readCount,
                         { _, _ -> }, {}, {}, {}, { _, _, _, _ -> }, {}, {}, {}, {},
-                        initialPage = if (cached) page else null, refreshOnOpen = !cached)
+                        initialPage = if (cached) page else null, refreshOnOpen = !cached, startAtTop = startAtTop)
                 }
             }
         }
@@ -109,6 +112,37 @@ class FtutterOpeningScrollInstrumentedTest {
         open(entry.copy(lastReadItemIndex = 120, lastReadItemOffset = 0, lastReadPostId = "219"))
         rule.onNodeWithText("opening-body-219", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("ftutter-end-band").assertIsDisplayed()
+    }
+    // A report (iPhone): a thread opened for the first time ended up at its bottom, while reopened threads kept their place.
+    // On a new thread the 「ここまで読んだ」 band is the first row on screen; saving the read count (a refresh, the screen
+    // leaving the foreground) moved the band after the posts seen, and the list followed the band down.
+    @Test fun aRefreshRightAfterOpeningANewThreadStaysAtTheTop() {
+        open()
+        val first = hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body")
+        rule.onNode(first, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("ftutter-thread-tool-refresh").performClick()
+        rule.waitUntil(10_000) { fetches.get() == 2 }
+        rule.waitForIdle()
+        rule.onNode(first, useUnmergedTree = true).assertIsDisplayed()
+    }
+    @Test fun leavingTheForegroundRightAfterOpeningANewThreadStaysAtTheTop() {
+        open()
+        val first = hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body")
+        rule.onNode(first, useUnmergedTree = true).assertIsDisplayed()
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.waitForIdle()
+        rule.onNode(first, useUnmergedTree = true).assertIsDisplayed()
+    }
+    // The extension 「スレッドを先頭から開く」 (a report: a thread read to the end opened at its end every time).
+    @Test fun aThreadReadToTheEndOpensAtTheFirstPostWhenAskedToStartAtTheTop() {
+        open(entry.copy(lastReadItemIndex = 120, lastReadItemOffset = 0, lastReadPostId = "219"), startAtTop = true)
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("ftutter-end-band").assertIsNotDisplayed()
+    }
+    @Test fun aCachedThreadReadToTheEndAlsoOpensAtTheFirstPostWhenAskedToStartAtTheTop() {
+        open(entry.copy(lastReadItemIndex = 120, lastReadItemOffset = 0, lastReadPostId = "219"), cached = true, startAtTop = true)
+        rule.onNode(hasText("opening-body-100", substring = true) and hasTestTag("ftutter-post-body"), useUnmergedTree = true).assertIsDisplayed()
     }
     @Test fun anExplicitRefreshDoesNotReapplyTheOpeningTopAfterManualScrolling() {
         open()

@@ -62,7 +62,8 @@ class CompatCommonNgTest {
 
     @Test
     fun theSwitchIsOffByDefault() {
-        assertFalse(compatCommonNgApplyEnabled(emptyMap()))
+        assertTrue(compatCommonNgApplyEnabled(emptyMap())) // D-B7 (J4)
+        assertFalse(compatCommonNgApplyEnabled(mapOf("compat.control.controlCommonNgApply" to "OFF")))
         assertTrue(compatCommonNgApplyEnabled(mapOf("compat.control.controlCommonNgApply" to "ON")))
     }
 

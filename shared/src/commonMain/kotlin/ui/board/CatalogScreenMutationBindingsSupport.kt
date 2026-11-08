@@ -31,7 +31,7 @@ internal fun buildCatalogScreenMutationBindings(
     coroutineScope: CoroutineScope,
     stateStore: AppStateStore?,
     currentBoardId: () -> String?,
-    currentBoardWatchWordKey: () -> String?,
+    currentBoardSettingKeys: () -> com.valoser.futacha.shared.state.BoardSettingKeys?,
     setCatalogMode: (CatalogMode) -> Unit,
     currentCatalogNgWords: () -> List<String>,
     currentGlobalWatchWords: () -> List<String>,
@@ -52,7 +52,7 @@ internal fun buildCatalogScreenMutationBindings(
     val persistenceBindings = buildCatalogPersistenceBindings(
         coroutineScope = coroutineScope,
         stateStore = stateStore,
-        currentBoardWatchWordKey = currentBoardWatchWordKey,
+        currentBoardSettingKeys = currentBoardSettingKeys,
         onFallbackCatalogNgWordsChanged = onFallbackCatalogNgWordsChanged,
         onFallbackWatchWordsChanged = onFallbackWatchWordsChanged
     )
@@ -72,12 +72,13 @@ internal fun buildCatalogScreenMutationBindings(
                 )
             )
             setCatalogMode(mode)
-            val boardId = currentBoardId()
-            if (boardId != null && stateStore != null) {
+            // Written under the board's shared key (D-B1).
+            val keys = currentBoardSettingKeys()
+            if (currentBoardId() != null && keys != null && stateStore != null) {
                 onCatalogModeWriteStarted()
                 coroutineScope.launch {
                     try {
-                        stateStore.setCatalogMode(boardId, mode)
+                        stateStore.setCatalogMode(keys, mode)
                     } finally {
                         onCatalogModeWriteFinished()
                     }

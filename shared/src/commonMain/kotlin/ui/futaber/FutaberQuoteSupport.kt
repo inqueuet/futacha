@@ -16,21 +16,70 @@ internal enum class FutaberQuoteKind(val label: String) {
 
     /** The posts whose header shows the same ID / IP (the post detail extension). */
     SameId("同じIDのレス"),
-    SameIp("同じIPのレス")
+    SameIp("同じIPのレス"),
+
+    /** The posts the operation menu's search word finds (M08; opened from L-B6). */
+    Search("検索結果"),
+
+    /** The posts with many replies (M11; opened from L-B6). */
+    ManyReplies("返信が多いレス"),
+
+    /** A post opened from the picture viewer's description (opened from L-B11). */
+    FromViewer("ビューアのレス"),
+
+    /** The whole conversation the long-pressed post is in: every post tied to it by quotes (F-B3 E11). */
+    Conversation("会話")
 }
+
+/**
+ * The darkness laid over a bubble that has [levelsAbove] bubbles over it (F01): the original keeps the lower bubbles in
+ * sight, each one 20% darker per bubble over it (63-02: white reads #CCCCCC under one), while the thread's veil stays
+ * one. 0 for the bubble on top.
+ */
+internal fun futaberBubbleVeilAlpha(levelsAbove: Int): Float {
+    if (levelsAbove <= 0) return 0f
+    var light = 1f
+    repeat(levelsAbove) { light *= 1f - FUTABER_BUBBLE_VEIL_ALPHA }
+    return 1f - light
+}
+
+/** One level of the veil: the thread under the first bubble, and each bubble under another one (20%). */
+internal const val FUTABER_BUBBLE_VEIL_ALPHA = 0.2f
 
 /** Root-coordinate bounds of the line or counter that was tapped (px). */
 internal data class FutaberAnchor(val x: Float, val top: Float, val bottom: Float)
 
-/** One bubble, placed beside [anchor] and pointing at it. */
+/**
+ * One bubble, placed beside [anchor] and pointing at it. A bubble the operation menu opens (M08・M11) has no line to
+ * point at: it stands at an [edge] of the thread instead (the anchor is then not read), and an empty one says
+ * [FUTABER_NOTHING_FOUND].
+ */
 internal data class FutaberQuoteLayer(
     val kind: FutaberQuoteKind,
     val posts: List<Post>,
     val anchor: FutaberAnchor,
     // Each layer owns its viewport: a nested quote starts at its first result and Back restores
     // the parent bubble's position, rather than reusing the last visible bubble's LazyColumn.
-    val listState: LazyListState = LazyListState()
+    val listState: LazyListState = LazyListState(),
+    val edge: FutaberBubbleEdge? = null
 )
+
+/**
+ * Where a bubble of the operation menu stands: the search's found posts over the bottom bar, pointing down at it
+ * (futaber's 40-03), 「返信が多いレスを表示」 under the title, pointing up (43-01).
+ */
+internal enum class FutaberBubbleEdge { Top, Bottom }
+
+/** The bubble of the menu's search word (M08) or of 「返信が多いレスを表示」 (M11); empty when nothing was found. */
+internal fun futaberMenuBubble(kind: FutaberQuoteKind, posts: List<Post>): FutaberQuoteLayer = FutaberQuoteLayer(
+    kind = kind,
+    posts = posts,
+    anchor = FutaberAnchor(0f, 0f, 0f),
+    edge = if (kind == FutaberQuoteKind.ManyReplies) FutaberBubbleEdge.Top else FutaberBubbleEdge.Bottom
+)
+
+/** The x of a menu bubble's pointer, as a fraction of the thread's width (futaber's point near the left, 40-03・43-01). */
+internal const val FUTABER_MENU_BUBBLE_POINTER_X = 0.07f
 
 /** Where a bubble of [cardHeight] goes relative to its anchor, and where its pointer sits. */
 internal data class FutaberBubblePlacement(val top: Float, val pointerOnTop: Boolean)

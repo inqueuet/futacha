@@ -157,11 +157,12 @@ class HandwritingModesInstrumentedTest {
     @Test fun futaberPostingToolsReturnRapidHandwriting() {
         rule.setContent { FutaberTheme(FutaberThemeMode.Light) {
             val state = rememberFutaberPostToolsState()
-            TextButton(onClick = { state.sheetOpen = true }) { Text("添付を開く") }
+            // L-B8: the camera's black menu, opened over a point as the camera button opens it.
+            TextButton(onClick = { state.cameraMenu = FutaberAnchor(200f, 600f, 640f) }) { Text("添付を開く") }
             FutaberPostToolsHost(state, FutaberPostTools(), true, "本文", {}, "TEST", {}, { saved.add(it) })
         } }
         rule.onNodeWithText("添付を開く").performClick()
-        rule.onNodeWithTag("futaber-action-tool-drawing").performClick()
+        rule.onNodeWithTag("futaber-callout-tool-drawing").performScrollTo().performClick()
         drawAndSave("futaber")
         rule.runOnIdle { assertTrue(saved.single().isHandwriting) }
     }
@@ -170,12 +171,16 @@ class HandwritingModesInstrumentedTest {
         ftutterPost(handwriting = false)
         rule.onNodeWithTag("ftutter-post-menu").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").assertDoesNotExist()
+        // 拡張がOFFなら「その他の機能」も出ない。
+        rule.onNodeWithTag("ftutter-post-menu-more").assertDoesNotExist()
     }
 
     @Test fun ftutterDrawingCanBeAttachedToAnImgReplyAndSentThroughTheExistingPath() {
         ftutterPost(handwriting = true, img = true)
         rule.onNodeWithTag("ftutter-post-attach").assertDoesNotExist()
         rule.onNodeWithTag("ftutter-post-menu").performClick()
+        // T-B1：手書き（拡張）は︙の「その他の機能」の中。
+        rule.onNodeWithTag("ftutter-post-menu-more").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").performClick()
         drawAndSave("ftutter-img")
         rule.onNodeWithText("drawing_", substring = true).assertExists()
@@ -189,6 +194,8 @@ class HandwritingModesInstrumentedTest {
     @Test fun ftutterHandwritingCopyFailureStaysInsideThePostDialog() {
         ftutterPost(handwriting = true, onHandwritingSaved = { "手書き画像のコピーを保存できませんでした（添付はそのままです）" })
         rule.onNodeWithTag("ftutter-post-menu").performClick()
+        // T-B1：手書き（拡張）は︙の「その他の機能」の中。
+        rule.onNodeWithTag("ftutter-post-menu-more").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").performClick()
         drawAndSave("ftutter-copy-failure")
         rule.onNodeWithTag("ftutter-post-error").performScrollTo().assertTextContains("手書き画像のコピーを保存できませんでした", substring = true)
@@ -247,17 +254,20 @@ class HandwritingModesInstrumentedTest {
     @Test fun futaberDrawingHelpIsTheHandwritingSection() {
         rule.setContent { FutaberTheme(FutaberThemeMode.Light) {
             val state = rememberFutaberPostToolsState()
-            TextButton(onClick = { state.sheetOpen = true }) { Text("添付を開く") }
+            // L-B8: the camera's black menu, opened over a point as the camera button opens it.
+            TextButton(onClick = { state.cameraMenu = FutaberAnchor(200f, 600f, 640f) }) { Text("添付を開く") }
             FutaberPostToolsHost(state, FutaberPostTools(), true, "本文", {}, "TEST", {}, { saved.add(it) })
         } }
         rule.onNodeWithText("添付を開く").performClick()
-        rule.onNodeWithTag("futaber-action-tool-drawing").performClick()
+        rule.onNodeWithTag("futaber-callout-tool-drawing").performScrollTo().performClick()
         assertTrue(drawingHelpIsTheHandwritingSection())
     }
 
     @Test fun ftutterDrawingHelpIsTheHandwritingSection() {
         ftutterPost(handwriting = true)
         rule.onNodeWithTag("ftutter-post-menu").performClick()
+        // T-B1：手書き（拡張）は︙の「その他の機能」の中。
+        rule.onNodeWithTag("ftutter-post-menu-more").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").performClick()
         assertTrue(drawingHelpIsTheHandwritingSection())
     }
@@ -325,13 +335,14 @@ class HandwritingModesInstrumentedTest {
         val fileSystem = heldCopies()
         rule.setContent { FutaberTheme(FutaberThemeMode.Light) {
             val state = rememberFutaberPostToolsState()
-            TextButton(onClick = { state.sheetOpen = true }) { Text("添付を開く") }
+            // L-B8: the camera's black menu, opened over a point as the camera button opens it.
+            TextButton(onClick = { state.cameraMenu = FutaberAnchor(200f, 600f, 640f) }) { Text("添付を開く") }
             FutaberPostToolsHost(state, FutaberPostTools(fileSystem = fileSystem,
                 drawingCopyLocation = com.valoser.futacha.shared.model.SaveLocation.Path(copyFolder.absolutePath)),
                 true, "本文", {}, "TEST", {}, { saved.add(it) })
         } }
         rule.onNodeWithText("添付を開く").performClick()
-        rule.onNodeWithTag("futaber-action-tool-drawing").performClick()
+        rule.onNodeWithTag("futaber-callout-tool-drawing").performScrollTo().performClick()
         drawAndSave("futaber-copy-held")
         rule.runOnIdle { assertTrue(saved.single().isHandwriting) }
         assertTheCopyIsWrittenAfterwards()
@@ -344,6 +355,8 @@ class HandwritingModesInstrumentedTest {
             null
         })
         rule.onNodeWithTag("ftutter-post-menu").performClick()
+        // T-B1：手書き（拡張）は︙の「その他の機能」の中。
+        rule.onNodeWithTag("ftutter-post-menu-more").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").performClick()
         drawAndSave("ftutter-copy-held")
         rule.onNodeWithText("drawing_", substring = true).assertExists()

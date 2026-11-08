@@ -12,6 +12,9 @@ import com.valoser.futacha.shared.state.APP_STATE_STRING_LIST_MAX_ENTRIES
 import com.valoser.futacha.shared.ui.board.buildPostHeaderText
 import com.valoser.futacha.shared.ui.board.canonicalThreadSearchText
 import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
+import com.valoser.futacha.shared.ui.ftutter.FtutterNgMatcher
+import com.valoser.futacha.shared.ui.ftutter.FtutterNgType
+import com.valoser.futacha.shared.ui.ftutter.parseFtutterNgList
 
 // The limits of the lists the store keeps (ふたちゃ edits the same lists): a lower limit here refused an addition to a
 // list that ふたちゃ had already filled beyond it.
@@ -44,10 +47,12 @@ internal class FutaberNgPrepared(
     val headers: List<String>,
     val words: List<String>,
     val ruleIndex: CompatThreadNgRuleIndex?,
-    val tabKey: String
+    val tabKey: String,
+    /** The NG ふたったー風 keeps (words, ID / IP, regular expressions), shared with every mode; null when none applies. */
+    val shared: FtutterNgMatcher? = null
 ) {
     /** Nothing can be hidden: no post needs to be looked at. */
-    val isEmpty: Boolean get() = headers.isEmpty() && words.isEmpty() && ruleIndex == null
+    val isEmpty: Boolean get() = headers.isEmpty() && words.isEmpty() && ruleIndex == null && shared == null
 
     /** What looking at one post costs, in word comparisons (a rough weight, to tell a small list from a big one). */
     internal val costPerPost: Long
@@ -75,11 +80,12 @@ internal fun futaberNgPrepare(
     ngHeaders: List<String>,
     rules: List<CompatNgRule>,
     tabKey: String,
-    boardKey: String
+    boardKey: String,
+    shared: FtutterNgMatcher? = null
 ): FutaberNgPrepared {
     val index = if (rules.isEmpty()) null
     else buildCompatThreadNgRuleIndex(rules, tabKey, boardKey).takeIf { it.canHideAnything() }
-    return FutaberNgPrepared(futaberNgFold(ngHeaders), futaberNgFold(ngWords), index, tabKey)
+    return FutaberNgPrepared(futaberNgFold(ngHeaders), futaberNgFold(ngWords), index, tabKey, shared?.takeUnless { it.isEmpty })
 }
 
 private fun futaberNgPostMatchesLists(post: Post, headers: List<String>, words: List<String>): Boolean {
@@ -115,6 +121,14 @@ internal fun futaberNgEvaluate(
             if (!futaberNgPostMatchesLists(post, prepared.headers, prepared.words)) kept += post.id
         }
         posts.forEach { if (it.id !in kept) hidden += it.id }
+    }
+    val shared = prepared.shared
+    if (shared != null) {
+        shared.beginPass()
+        posts.forEachIndexed { position, post ->
+            if (position % FUTABER_NG_CANCEL_CHECK_INTERVAL == 0) ensureActive()
+            if (post.id !in hidden && shared.hidesPost(post, ensureActive)) hidden += post.id
+        }
     }
     val index = prepared.ruleIndex
     if (index != null) {
@@ -236,3 +250,15 @@ private val FUTABER_DEFAULT_NAMES = setOf("としあき", "無念", "名無し",
 /** One line for an NG thread rule in the settings: the first letters of its title, then its address. */
 internal fun futaberCatalogThreadRuleLabel(rule: com.valoser.futacha.shared.compat.CompatNgRule): String =
     listOf(rule.memo.trim(), rule.normalizedValue.trim()).filter { it.isNotEmpty() }.joinToString("　")
+
+/**
+ * The NG ふたったー風 keeps (`compat.ftutter.NGList`: words, ID / IP and regular expressions, for every board or one
+ * board) as a matcher for this board; every mode reads the same list. Null when the shared NG is switched off
+ * ([sharedOn], the switch the common lists use) or the list holds nothing for this board.
+ */
+internal fun futaberSharedNgMatcher(raw: String?, sharedOn: Boolean, boardUrl: String?): FtutterNgMatcher? {
+    if (!sharedOn) return null
+    val rules = parseFtutterNgList(raw).filter { it.type != FtutterNgType.PICKUP.stored }
+    if (rules.isEmpty()) return null
+    return FtutterNgMatcher(rules, boardUrl).takeUnless { it.isEmpty }
+}

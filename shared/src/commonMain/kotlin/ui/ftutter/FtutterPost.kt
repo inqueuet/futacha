@@ -17,6 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.DriveFolderUpload
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -43,6 +46,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -254,7 +259,15 @@ internal fun FtutterPostDialog(
     /** 手書きのコピーを保存する。失敗した時はその文を返し、書き込み画面の中に出す（L22）。 */
     onHandwritingSaved: suspend (ImageData) -> String? = { null },
     /** 書いている手書きを残す場所。アプリと一緒に消えた手書きを、次に開いた時に復元できる（L69）。null なら残さない。 */
-    drawingRecoveryFileSystem: com.valoser.futacha.shared.util.FileSystem? = null
+    drawingRecoveryFileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    /** 従来の動き：︙の「手書き」を「その他の機能」にまとめず、前のように末尾に並べる。 */
+    legacyMenus: Boolean = false,
+    /** 従来の動き：前の中央のダイアログ（失敗しても閉じずに理由を出す）。OFFは原作の下付きのシート（T-B3）。 */
+    legacyDialog: Boolean = true,
+    /** シートの時の失敗：シートを閉じてトーストを出す。添付は[image]で返し、次に開いた時に戻す。 */
+    onFailed: (toast: FtutterPostToast, image: ImageData?) -> Unit = { _, _ -> },
+    /** 前に失敗した時の添付（シートの時だけ）。 */
+    initialImage: ImageData? = null
 ) {
     val colors = LocalFtutterColors.current
     val scope = rememberCoroutineScope()
@@ -277,7 +290,7 @@ internal fun FtutterPostDialog(
     // この画面で変えた削除キーは、保存が届く前でもすぐ使う（監査L11：変えてすぐ送ると古いキーで送っていた）。
     var deleteKeyNow by remember(deleteKey) { mutableStateOf(deleteKey) }
     var upsBusy by remember { mutableStateOf(false) }
-    val attachment = remember { FutaberAttachment(scope) }
+    val attachment = remember { FutaberAttachment(scope).also { it.restore(initialImage) } }
     // 送信に成功した後は、遅れて動く自動保存が送った本文を下書きへ戻さない。
     var sent by remember { mutableStateOf(false) }
     fun draft() = FtutterDraft(title, name, mail, comment, sourceAttachmentPath)
@@ -308,12 +321,17 @@ internal fun FtutterPostDialog(
             onSaveDraft(current, false)
         }
     }
+    // シートの時は原作どおりファイルの選択で、jpg・jpeg・png・gif・webp・mp4・webmに絞る（M89）。従来の動きは共有の選び方の設定。
     val pick = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
-        preference = pickerPreference,
+        preference = if (legacyDialog) pickerPreference else AttachmentPickerPreference.DOCUMENT,
+        mimeType = if (legacyDialog) "image/*" else "*/*",
         maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
         preferredFileManagerPackage = preferredFileManagerPackage,
         onSelectionError = { attachment.error = it },
-        onImageSelected = { attachment.offer(it, capabilities, isReply) }
+        onImageSelected = { picked ->
+            if (!legacyDialog && !ftutterAttachmentExtensionAllowed(picked.fileName)) attachment.error = FTUTTER_ATTACHMENT_EXTENSION_REFUSED
+            else attachment.offer(picked, capabilities, isReply)
+        }
     )
     val pickUps = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
         preference = pickerPreference,
@@ -361,10 +379,159 @@ internal fun FtutterPostDialog(
                 sent = true
                 onSaveDraft(FtutterDraft(), false)
                 onSent(posted)
-            }.onFailure { error = it.message ?: "書き込みに失敗しました" }
+            }.onFailure { failure ->
+                if (legacyDialog) {
+                    error = failure.message ?: "書き込みに失敗しました"
+                } else {
+                    // 原作：シートを閉じてサーバーの本文をトーストで出す。本文は下書きに残す（H11・M18）。
+                    onSaveDraft(draft(), false)
+                    onFailed(ftutterPostFailureToast(failure), attachment.image)
+                }
+            }
         }
     }
-    FutachaAppLockAwareWindow { AlertDialog(
+    var menu by remember { mutableStateOf(false) }
+    // ︙の中身。原作：クリア／削除キー（値を見せる）／端末情報（文を見せる）／アップロードキャッシュのクリア（M46）。
+    // こちらの「手書き」（拡張）は「その他の機能」へ（T-B1）。
+    val menuOriginals: @Composable () -> Unit = {
+        DropdownMenuItem(text = { Text("クリア") }, onClick = { menu = false; clearOpen = true },
+            modifier = Modifier.testTag("ftutter-post-clear"))
+        DropdownMenuItem(
+            text = { if (legacyDialog) Text("削除キー") else FtutterMenuTwoLines("削除キー", deleteKeyNow) },
+            onClick = { menu = false; deleteKeyOpen = true }, modifier = Modifier.testTag("ftutter-post-delete-key"))
+        val info = if (legacyDialog) null else deviceInfo()
+        DropdownMenuItem(
+            text = { if (info == null) Text("端末情報") else FtutterMenuTwoLines("端末情報", info) },
+            onClick = {
+                menu = false
+                // 原作は今の本文の後ろへそのまま足す（M47）。従来の動きは改行して足す。
+                comment = if (legacyDialog) com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, deviceInfo())
+                else comment + (info ?: deviceInfo())
+            }, modifier = Modifier.testTag("ftutter-post-device-info"))
+        if (!legacyDialog) DropdownMenuItem(
+            text = { Text("アップロードキャッシュのクリア") },
+            enabled = !sending,
+            onClick = {
+                menu = false
+                // 選んで取り込んだファイルを手放す（こちらは選んだファイルをメモリに持つだけで、キャッシュはこれだけ）。
+                attachment.clear()
+                handwritingError = null
+            },
+            modifier = Modifier.testTag("ftutter-post-clear-upload-cache")
+        )
+    }
+    val menuHandwriting: @Composable () -> Unit = {
+        if (handwritingEnabled) DropdownMenuItem(
+            text = { Text("手書き") },
+            enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
+            onClick = { menu = false; drawingOpen = true },
+            modifier = Modifier.testTag("ftutter-post-handwriting")
+        )
+    }
+    val menuButton: @Composable () -> Unit = {
+        Box {
+            IconButton(onClick = { menu = true }, modifier = Modifier.testTag("ftutter-post-menu")) {
+                Icon(Icons.Rounded.MoreVert, contentDescription = "メニュー", tint = colors.text)
+            }
+            if (legacyMenus) {
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuOriginals(); menuHandwriting() }
+            } else {
+                FtutterFoldedMenu(
+                    expanded = menu, onDismiss = { menu = false }, tag = "ftutter-post-menu", hasExtras = handwritingEnabled,
+                    original = { menuOriginals() }, extras = { menuHandwriting() }
+                )
+            }
+        }
+    }
+    val onSendTap: () -> Unit = {
+        if (validateForSend()) {
+            if (confirmBeforePost) confirmOpen = true else send()
+        }
+    }
+    if (!legacyDialog) {
+        FtutterPostSheet(
+            sending = sending,
+            onDismiss = ::close,
+            fields = { focus ->
+                if (!imgB) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        com.valoser.futacha.shared.ui.board.ImeOutlinedTextField(title, { title = it }, label = { Text("題名") }, singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("ftutter-post-title"))
+                        com.valoser.futacha.shared.ui.board.ImeOutlinedTextField(name, { name = it }, label = { Text("おなまえ") }, singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("ftutter-post-name"))
+                    }
+                }
+                com.valoser.futacha.shared.ui.board.ImeOutlinedTextField(mail, { mail = it }, label = { Text("E-mail") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("ftutter-post-mail"))
+                com.valoser.futacha.shared.ui.board.ImeOutlinedTextField(comment, { comment = it }, label = { Text("コメント") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).focusRequester(focus).testTag("ftutter-post-comment"))
+                if (!(imgB && isReply) || attachment.image?.isHandwriting == true) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
+                            Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "画像を足す", tint = colors.text)
+                        }
+                        val shown = attachment.image?.fileName ?: if (attachment.processing) "準備中…" else null
+                        if (shown != null) Text(shown, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
+                        if (attachment.image != null) {
+                            IconButton(onClick = { attachment.clear(); handwritingError = null }, modifier = Modifier.testTag("ftutter-post-detach")) {
+                                Icon(Icons.Rounded.Close, contentDescription = "添付を外す", tint = colors.text)
+                            }
+                        }
+                    }
+                }
+                if (sourceAttachmentPath.isNotEmpty()) {
+                    val canAttach = !(imgB && isReply)
+                    Text(ftutterSourceAttachmentNotice(sourceAttachmentPath.substringAfterLast('/'), canAttach),
+                        color = colors.text, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-draft-attachment-reselect"))
+                    if (!canAttach) TextButton(onClick = { sourceAttachmentPath = "" },
+                        modifier = Modifier.testTag("ftutter-draft-attachment-dismiss")) { Text("案内を消す") }
+                }
+                if (!(imgB && isReply)) {
+                    com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending) {
+                        attachment.offer(it, capabilities, isReply)
+                    }
+                }
+                ftutterPostErrors(attachment.error, handwritingError, error).forEach {
+                    Text(it, color = colors.deleted, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-post-error"))
+                }
+                if (attachment.processing || upsBusy) Text(
+                    if (upsBusy) "アップロードが終わると書き込めます" else "添付ファイルの準備が終わると書き込めます",
+                    color = colors.text, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-post-busy-reason"))
+                attachment.pendingCompression?.let { pending ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("容量を超えています。圧縮しますか？", color = colors.text, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { attachment.compress(pending, capabilities) }) { Text("圧縮") }
+                        TextButton(onClick = { attachment.cancelCompression() }) { Text("やめる") }
+                    }
+                }
+                if (deleteKeyNow.isBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("投稿には削除キーの設定が必要です", color = colors.text, fontSize = 12.sp,
+                            modifier = Modifier.weight(1f).testTag("ftutter-post-key-required"))
+                        TextButton(onClick = { deleteKeyOpen = true }, enabled = !sending,
+                            modifier = Modifier.testTag("ftutter-post-set-delete-key")) { Text("削除キーを設定") }
+                    }
+                }
+            },
+            bar = {
+                menuButton()
+                if (uploadUps != null && !(imgB && isReply)) {
+                    TextButton(onClick = pickUps, enabled = !upsBusy, modifier = Modifier.testTag("ftutter-post-ups")) {
+                        Icon(Icons.Rounded.DriveFolderUpload, contentDescription = null, tint = colors.text)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (upsBusy) "アップロード中…" else "あぷ小", color = colors.text)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                androidx.compose.material3.Button(
+                    onClick = onSendTap,
+                    enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
+                    modifier = Modifier.testTag("ftutter-post-send")
+                ) { Text("書き込む") }
+            }
+        )
+    } else FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = ::close,
         properties = ftutterInputDialogProperties(),
         containerColor = colors.popUp,
@@ -373,27 +540,7 @@ internal fun FtutterPostDialog(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (isReply) "返信" else "スレ立て（$boardName）", color = colors.text, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                var menu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { menu = true }, modifier = Modifier.testTag("ftutter-post-menu")) {
-                        Icon(Icons.Rounded.MoreVert, contentDescription = "メニュー", tint = colors.text)
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("クリア") }, onClick = { menu = false; clearOpen = true },
-                            modifier = Modifier.testTag("ftutter-post-clear"))
-                        DropdownMenuItem(text = { Text("削除キー") }, onClick = { menu = false; deleteKeyOpen = true })
-                        DropdownMenuItem(text = { Text("端末情報") }, onClick = {
-                            menu = false
-                            comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, deviceInfo())
-                        })
-                        if (handwritingEnabled) DropdownMenuItem(
-                            text = { Text("手書き") },
-                            enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
-                            onClick = { menu = false; drawingOpen = true },
-                            modifier = Modifier.testTag("ftutter-post-handwriting")
-                        )
-                    }
-                }
+                menuButton()
             }
         },
         text = {
@@ -477,11 +624,7 @@ internal fun FtutterPostDialog(
                         CircularProgressIndicator(Modifier.padding(end = 8.dp))
                     }
                     TextButton(
-                        onClick = {
-                            if (validateForSend()) {
-                                if (confirmBeforePost) confirmOpen = true else send()
-                            }
-                        },
+                        onClick = onSendTap,
                         enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
                         modifier = Modifier.testTag("ftutter-post-send")
                     ) { Text("書き込む") }
@@ -552,7 +695,7 @@ internal fun FtutterPostDialog(
         ) }
     }
     if (deleteKeyOpen) {
-        FtutterDeleteKeyDialog(deleteKeyNow, onDismiss = { deleteKeyOpen = false }) { key ->
+        FtutterDeleteKeyDialog(deleteKeyNow, original = !legacyDialog, onDismiss = { deleteKeyOpen = false }) { key ->
             deleteKeyOpen = false
             deleteKeyNow = key
             error = null
@@ -561,23 +704,39 @@ internal fun FtutterPostDialog(
     }
 }
 
-/** 削除キーの入力（英数字だけ、8文字まで。空は断る）。 */
+/**
+ * 削除キーの入力（英数字だけ、8文字まで。空は断る）。[original]は原作の形（M48）：右上に「自動生成」、値は伏せずに見せ、
+ * 下に「N/8」（読み上げは「残り N 文字（半角相当）」）。従来の動きは伏せ字だけ。
+ */
 @Composable
-internal fun FtutterDeleteKeyDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+internal fun FtutterDeleteKeyDialog(current: String, original: Boolean = false, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var value by remember { mutableStateOf(current) }
     var error by remember { mutableStateOf<String?>(null) }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         properties = ftutterInputDialogProperties(),
-        modifier = if (com.valoser.futacha.shared.util.isAndroid()) Modifier.imePadding() else Modifier,
-        title = { Text("削除キー") },
+        modifier = (if (com.valoser.futacha.shared.util.isAndroid()) Modifier.imePadding() else Modifier).testTag("ftutter-delete-key-dialog"),
+        title = if (original) null else ({ Text("削除キー") }),
         text = {
             Column {
+                if (original) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { value = ftutterGenerateDeleteKey(); error = null },
+                            modifier = Modifier.testTag("ftutter-delete-key-generate")) { Text("自動生成") }
+                    }
+                }
                 // 英数字のパスワード用キーボード（監査L10：日本語のキーボードの変換中の文字を捨てて文字が重なり、学習辞書にも残った）。
                 OutlinedTextField(value, { value = ftutterNormalizeDeleteKey(it); error = null }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (original) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth().testTag("ftutter-delete-key"))
+                if (original) {
+                    val remaining = ftutterDeleteKeyRemainingLabel(value)
+                    Text("${value.length}/$FTUTTER_DELETE_KEY_MAX", fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = remaining }.testTag("ftutter-delete-key-count"),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                }
                 error?.let { Text(it) }
             }
         },
@@ -588,11 +747,49 @@ internal fun FtutterDeleteKeyDialog(current: String, onDismiss: () -> Unit, onSa
     ) }
 }
 
-/** 記事削除（原作 DeleteResuDialog）：削除キー（伏せ字、初期値は保存の削除キー）と「画像だけ」。 */
+/**
+ * 記事削除（原作 DeleteResuDialog）：見出しの無い小さな箱に、削除キー（伏せずに下線の欄、初期値は保存の削除キー）と
+ * 「画像だけ」、塗りの「記事削除」だけ（M39）。キャンセルの釦は無く、外を押すか戻るで閉じる。[legacy]は前の形。
+ */
 @Composable
-internal fun FtutterDeletePostDialog(postNo: String, deleteKey: String, onDismiss: () -> Unit, onDelete: (key: String, imageOnly: Boolean) -> Unit) {
+internal fun FtutterDeletePostDialog(postNo: String, deleteKey: String, onDismiss: () -> Unit, legacy: Boolean = false, onDelete: (key: String, imageOnly: Boolean) -> Unit) {
     var key by remember { mutableStateOf(deleteKey) }
     var imageOnly by remember { mutableStateOf(false) }
+    if (!legacy) {
+        val colors = LocalFtutterColors.current
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = onDismiss,
+            containerColor = colors.popUp,
+            modifier = Modifier.testTag("ftutter-delete-post-dialog"),
+            text = {
+                Column {
+                    androidx.compose.material3.TextField(
+                        key, { key = ftutterNormalizeDeleteKey(it) }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii),
+                        colors = androidx.compose.material3.TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                            focusedTextColor = colors.text, unfocusedTextColor = colors.text
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("ftutter-delete-post-key")
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Row(Modifier.weight(1f).clickable { imageOnly = !imageOnly }, verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(checked = imageOnly, onCheckedChange = { imageOnly = it })
+                            Spacer(Modifier.width(4.dp))
+                            Text("画像だけ", color = colors.text)
+                        }
+                        androidx.compose.material3.Button(
+                            onClick = { onDelete(key, imageOnly) }, enabled = key.isNotEmpty(),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = colors.midoku, contentColor = colors.onMidoku),
+                            modifier = Modifier.testTag("ftutter-delete-post-send")
+                        ) { Text("記事削除") }
+                    }
+                }
+            },
+            confirmButton = {}
+        ) }
+        return
+    }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("ftutter-delete-post-dialog"),
@@ -610,7 +807,27 @@ internal fun FtutterDeletePostDialog(postNo: String, deleteKey: String, onDismis
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onDelete(key, imageOnly) }, enabled = key.isNotEmpty()) { Text("削除") } },
+        confirmButton = { TextButton(onClick = { onDelete(key, imageOnly) }, enabled = key.isNotEmpty(), modifier = Modifier.testTag("ftutter-delete-post-send")) { Text("削除") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
+}
+
+/** What to write so this mode and the shared delete key (AppState's last used one) become one key (D-B6, J6). */
+internal data class FtutterDeleteKeySync(val own: String? = null, val shared: String? = null)
+
+/**
+ * The delete key is one for all four modes. [lastSynced] is the value both sides last agreed on in this run (null at the
+ * start): the shared one wins at the start, so the key the other modes use stays; later, whichever side moved wins.
+ */
+internal fun ftutterDeleteKeySync(own: String?, shared: String?, lastSynced: String?, generate: () -> String): FtutterDeleteKeySync {
+    val mine = own?.takeIf { it.isNotBlank() }
+    val common = shared?.takeIf { it.isNotBlank() }
+    return when {
+        mine == null && common == null -> generate().let { FtutterDeleteKeySync(it, it) }
+        mine == null -> FtutterDeleteKeySync(own = common)
+        common == null -> FtutterDeleteKeySync(shared = mine)
+        mine == common -> FtutterDeleteKeySync()
+        lastSynced == null || mine == lastSynced -> FtutterDeleteKeySync(own = common)
+        else -> FtutterDeleteKeySync(shared = mine)
+    }
 }

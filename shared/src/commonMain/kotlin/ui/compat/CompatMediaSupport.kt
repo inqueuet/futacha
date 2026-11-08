@@ -808,6 +808,21 @@ internal fun compatViewerInitialPage(
 }
 
 /**
+ * FutabaViewer 18-20 opens the gallery from the thread toolbar at the first
+ * media of the post being read, or of a later post; past the last one it
+ * opens at the last media. Post numbers grow along a thread.
+ */
+internal fun compatGalleryIndexAtOrAfterPost(
+    posts: List<CompatPostSnapshot>,
+    readingPostNo: String?
+): Int? {
+    if (posts.isEmpty()) return null
+    val reading = readingPostNo?.toLongOrNull() ?: return null
+    val index = posts.indexOfFirst { (it.postNo.toLongOrNull() ?: Long.MIN_VALUE) >= reading }
+    return if (index >= 0) index else posts.lastIndex
+}
+
+/**
  * A viewer toolbar command has an absolute destination in both reference APKs.
  * It must not be resolved through the caller-sensitive system Back behavior.
  */
@@ -1402,7 +1417,7 @@ internal suspend fun fetchCompatImagePhash(
         compatPhashRequestLocks.getOrPut(url) { CompatPhashRequestLock() }.also { it.holders += 1 }
     }
     try {
-        requestLock.mutex.withLock {
+        requestLock.mutex.withLock<Any> {
             val cached = compatPhashCacheMutex.withLock { compatPhashCache[url] }
             if (cached != null) {
                 cached
@@ -1433,38 +1448,35 @@ internal suspend fun fetchCompatImagePhash(
                     require(bytes.size.toLong() <= COMPAT_PHASH_MAX_IMAGE_BYTES) { "画像が大きすぎます" }
                     requireNotNull(computeCompatImagePhashFromBytes(bytes)) { "画像をデコードできませんでした" }
                 }
-                val phash = hashResult.getOrElse { failure ->
+                hashResult.getOrElse { failure ->
                     if (!failure.isMissingCompatPhashImage() || (resolveMissingUrl == null && fallbackImageUrl.isNullOrBlank())) throw failure
-                    withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
-                        // Catalog thumbnails are JPEG even when the original is PNG/GIF. Ask the
-                        // existing thread-head resolver for its actual attachment; never guess extensions.
-                        val confirmed = resolveMissingUrl?.invoke()?.takeIf { it.isNotBlank() && it != url }
-                        var missingFailure = failure
-                        if (confirmed != null) {
-                            val result = fetchCompatImagePhash(httpClient, confirmed, cachedImageLoader = cachedImageLoader)
-                            result.getOrNull()?.let { return@withTimeout it }
-                            missingFailure = result.exceptionOrNull() ?: failure
-                            if (!missingFailure.isMissingCompatPhashImage()) throw missingFailure
-                        }
-                        // The thread can survive a deleted attachment. Try its thumbnail exactly
-                        // once, including when the confirmed JPEG was the already-failed URL.
-                        val thumbnail = fallbackImageUrl?.takeIf { it.isNotBlank() && it != url && it != confirmed }
-                            ?: throw missingFailure
-                        fetchCompatImagePhash(httpClient, thumbnail, cachedImageLoader = cachedImageLoader).getOrThrow()
-                    }
-                }
-                compatPhashCacheMutex.withLock {
-                    compatPhashCache[url] = phash
-                    while (compatPhashCache.size > COMPAT_PHASH_CACHE_MAX_ENTRIES) {
-                        val iterator = compatPhashCache.entries.iterator()
-                        if (iterator.hasNext()) {
-                            iterator.next()
-                            iterator.remove()
-                        }
-                    }
-                }
-                phash
+                    // The fallbacks are fetched after this address's lock is let go (below): each takes its own lock,
+                    // and two requests whose addresses cross waited for each other until they timed out (audit D4).
+                    return@withLock CompatPhashNeedsFallback(failure)
+                }.also { phash -> rememberCompatPhash(url, phash) }
             }
+        }.let { primary ->
+            if (primary !is CompatPhashNeedsFallback) return@let primary as String
+            val failure = primary.failure
+            val phash = withTimeout(COMPAT_MEDIA_INFO_TIMEOUT_MILLIS) {
+                // Catalog thumbnails are JPEG even when the original is PNG/GIF. Ask the
+                // existing thread-head resolver for its actual attachment; never guess extensions.
+                val confirmed = resolveMissingUrl?.invoke()?.takeIf { it.isNotBlank() && it != url }
+                var missingFailure = failure
+                if (confirmed != null) {
+                    val result = fetchCompatImagePhash(httpClient, confirmed, cachedImageLoader = cachedImageLoader)
+                    result.getOrNull()?.let { return@withTimeout it }
+                    missingFailure = result.exceptionOrNull() ?: failure
+                    if (!missingFailure.isMissingCompatPhashImage()) throw missingFailure
+                }
+                // The thread can survive a deleted attachment. Try its thumbnail exactly
+                // once, including when the confirmed JPEG was the already-failed URL.
+                val thumbnail = fallbackImageUrl?.takeIf { it.isNotBlank() && it != url && it != confirmed }
+                    ?: throw missingFailure
+                fetchCompatImagePhash(httpClient, thumbnail, cachedImageLoader = cachedImageLoader).getOrThrow()
+            }
+            rememberCompatPhash(url, phash)
+            phash
         }
     } finally {
         // Callers commonly time out (3 s) before the request itself (8 s).
@@ -1481,6 +1493,22 @@ internal suspend fun fetchCompatImagePhash(
 }
 
 private class CompatPhashHttpException(val statusCode: Int) : IllegalStateException("HTTP $statusCode")
+
+/** The address itself had no picture; its fallbacks are tried after its lock is let go (audit D4). */
+private class CompatPhashNeedsFallback(val failure: Throwable)
+
+private suspend fun rememberCompatPhash(url: String, phash: String) {
+    compatPhashCacheMutex.withLock {
+        compatPhashCache[url] = phash
+        while (compatPhashCache.size > COMPAT_PHASH_CACHE_MAX_ENTRIES) {
+            val iterator = compatPhashCache.entries.iterator()
+            if (iterator.hasNext()) {
+                iterator.next()
+                iterator.remove()
+            }
+        }
+    }
+}
 
 private fun Throwable.isMissingCompatPhashImage(): Boolean =
     this is CompatPhashHttpException && (statusCode == 404 || statusCode == 410)
@@ -1500,3 +1528,9 @@ internal fun formatCompatMediaByteSize(bytes: Long?): String = when {
         "$whole.$decimal MB ($bytes bytes)"
     }
 }
+
+/** FutabaViewer 18-20 keeps the screen on while the shown video plays; paused, ended or buffering lets it sleep. */
+internal fun compatViewerKeepsScreenOn(
+    isCurrentPage: Boolean,
+    state: com.valoser.futacha.shared.ui.board.VideoPlayerState
+): Boolean = isCurrentPage && state == com.valoser.futacha.shared.ui.board.VideoPlayerState.Ready

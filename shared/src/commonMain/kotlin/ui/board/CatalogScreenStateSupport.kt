@@ -12,6 +12,10 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.BoardSettingKeys
+import com.valoser.futacha.shared.state.boardSetting
+import com.valoser.futacha.shared.state.boardSettingKeys
+import com.valoser.futacha.shared.state.hasBoardSetting
 import com.valoser.futacha.shared.state.resolveEffectiveWatchWordsForBoard
 import com.valoser.futacha.shared.util.ImageData
 import kotlinx.coroutines.CoroutineScope
@@ -36,19 +40,13 @@ internal fun resolveCatalogScreenSaveableKey(
     return DEFAULT_CATALOG_SCREEN_SAVEABLE_KEY
 }
 
-internal fun resolveCatalogScreenBoardWatchWordKey(
-    boardId: String?,
-    boardUrl: String?
-): String {
-    return boardId?.trim()?.takeIf(String::isNotEmpty)
-        ?: boardUrl?.trim().orEmpty()
-}
-
 internal fun resolveInitialCatalogMode(
     boardId: String?,
-    persistedModes: Map<String, CatalogMode>
+    persistedModes: Map<String, CatalogMode>,
+    boardUrl: String? = null
 ): CatalogMode {
-    return persistedModes[boardId.orEmpty()] ?: CatalogMode.default
+    // Under the board's shared key, else the board id earlier versions used (D-B1).
+    return boardSettingKeys(boardId, boardUrl)?.let(persistedModes::boardSetting) ?: CatalogMode.default
 }
 
 internal data class CatalogScreenPersistentBindings(
@@ -59,7 +57,7 @@ internal data class CatalogScreenPersistentBindings(
     val globalWatchWords: List<String>,
     val boardWatchWordsOverride: List<String>?,
     val isWatchWordsLoaded: Boolean,
-    val boardWatchWordKey: String,
+    val boardSettingKeys: BoardSettingKeys?,
     val lastUsedDeleteKey: String,
     val updateLastUsedDeleteKey: (String) -> Unit,
     val onFallbackCatalogNgWordsChanged: (List<String>) -> Unit,
@@ -96,11 +94,13 @@ internal fun rememberCatalogScreenPersistentBindings(
     val persistentGridColumnsState =
         stateStore?.observedCatalogGridColumns?.collectPreferenceAsState(initial = DEFAULT_CATALOG_SCREEN_GRID_COLUMNS)
 
-    val boardWatchWordKey = resolveCatalogScreenBoardWatchWordKey(boardId, boardUrl)
+    // The board's own words are read under its shared key, else the key earlier versions used, and written under
+    // the shared key (D-B1).
+    val boardSettingKeys = boardSettingKeys(boardId, boardUrl)
     val boardWatchWordMap = boardWatchWordsState?.value
     val globalWatchWords = watchWordsState?.value ?: fallbackWatchWordsState.value
-    val boardOverride = if (boardWatchWordKey.isNotEmpty() && boardWatchWordMap?.containsKey(boardWatchWordKey) == true) {
-        boardWatchWordMap[boardWatchWordKey].orEmpty()
+    val boardOverride = if (boardSettingKeys != null && boardWatchWordMap?.hasBoardSetting(boardSettingKeys) == true) {
+        boardWatchWordMap.boardSetting(boardSettingKeys).orEmpty()
     } else {
         null
     }
@@ -111,7 +111,7 @@ internal fun rememberCatalogScreenPersistentBindings(
             resolveEffectiveWatchWordsForBoard(
                 globalWatchWords = globalWatchWords,
                 boardWatchWords = boardWatchWordMap,
-                boardId = boardWatchWordKey
+                keys = boardSettingKeys
             )
         }
     } else {
@@ -126,7 +126,7 @@ internal fun rememberCatalogScreenPersistentBindings(
         globalWatchWords = globalWatchWords,
         boardWatchWordsOverride = boardOverride,
         isWatchWordsLoaded = stateStore == null || boardWatchWordMap != null,
-        boardWatchWordKey = boardWatchWordKey,
+        boardSettingKeys = boardSettingKeys,
         lastUsedDeleteKey = lastUsedDeleteKeyState?.value ?: fallbackDeleteKey,
         updateLastUsedDeleteKey = { value ->
             val sanitized = sanitizeStoredDeleteKey(value)

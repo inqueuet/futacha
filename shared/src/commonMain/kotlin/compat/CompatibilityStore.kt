@@ -19,6 +19,15 @@ fun requireValidCompatPreference(key: String, value: String) {
     require(isValidCompatPreference(key, value)) { "Compatibility preference is invalid or too large" }
 }
 
+/** Key prefix of the shared data layer's rows ([CompatibilityStore.loadSharedData]). */
+const val COMPAT_SHARED_DATA_KEY_PREFIX = "shared."
+
+fun requireValidCompatSharedDataKey(key: String) {
+    require(key.startsWith(COMPAT_SHARED_DATA_KEY_PREFIX) && key.length in (COMPAT_SHARED_DATA_KEY_PREFIX.length + 1)..MAX_COMPAT_PREFERENCE_KEY_CHARS) {
+        "Shared data key is invalid"
+    }
+}
+
 /**
  * としあき(仮)'s per-board "そ順"/"監視" order (ui/compat/CompatCatalogExtraMode.kt). The stores remove it with the
  * board, so a board added again starts in its own order.
@@ -76,6 +85,12 @@ interface CompatibilityStore {
     suspend fun deleteBoard(boardKey: String)
 
     suspend fun openTab(tab: CompatTab, historyEntry: CompatHistoryEntry? = null)
+    /**
+     * D-B4: adds the tabs not yet present, as one change, without selecting one, trimming or touching the history.
+     * For a mode that keeps its own tab strip and shows those tabs to the others. Returns how many were added.
+     */
+    suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int = 0
+
     suspend fun updateTab(tab: CompatTab)
 
     /**
@@ -193,6 +208,26 @@ interface CompatibilityStore {
         boardKey: String,
         classification: CompatCatalogDroppedClass
     ): Int
+
+    /**
+     * The shared data layer's own rows (D-B1, docs/futaber-evolution-data-2026-10-31.md §3.1): the board
+     * synchronization's record (the deleted boards and the boards it last saw) and the migration marks, under keys
+     * starting with [COMPAT_SHARED_DATA_KEY_PREFIX]. They are not settings: they are not in the settings backup and
+     * do not count against Android's read of the settings rows (Android `compat_metadata`, the iOS / desktop state).
+     */
+    suspend fun loadSharedData(): Map<String, String>
+
+    /** Writes [values] as one change; a null value removes the key. Every key starts with [COMPAT_SHARED_DATA_KEY_PREFIX]. */
+    suspend fun saveSharedData(values: Map<String, String?>)
+
+    /**
+     * D-B4: one mode's mark and order on the shared tabs (Android `compat_tab_view`). Only views of tabs that exist
+     * are returned; a view goes with its tab. Stores that do not keep them return nothing and ignore writes.
+     */
+    suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = emptyList()
+
+    /** Replaces every view of [profile] with [views] (views of tabs that do not exist are dropped); one change. */
+    suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) {}
 
     suspend fun loadPreference(key: String): String?
     suspend fun savePreference(key: String, value: String)

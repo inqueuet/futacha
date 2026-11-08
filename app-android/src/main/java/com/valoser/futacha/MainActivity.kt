@@ -35,8 +35,9 @@ import com.valoser.futacha.shared.compat.ExperienceProfileUiController
 import com.valoser.futacha.shared.compat.CompatVolumeKey
 import com.valoser.futacha.shared.compat.CompatVolumeKeyBus
 import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
-import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
 import com.valoser.futacha.shared.compat.bridgeProfileBoardsAndHistory
+import com.valoser.futacha.shared.compat.shared.SharedBoardSide
+import com.valoser.futacha.shared.compat.shared.reconcileSharedBoards
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
 import com.valoser.futacha.shared.compat.isExperienceProfileSessionCurrent
 import com.valoser.futacha.shared.compat.rememberExperienceProfileActivityResultLauncher
@@ -289,16 +290,15 @@ class MainActivity : ComponentActivity() {
                                 val boards = stateStore.boards.first()
                                 val history = stateStore.readHistory()
                                 application.compatibilityStore.bootstrapBoardsIfNeeded(boards)
-                                application.compatibilityStore.importModernBoards(boards)
+                                // The boards as one list, with the changes of the mode being left (D-B1).
+                                reconcileSharedBoards(
+                                    stateStore, application.compatibilityStore, SharedBoardSide.of(activeProfile.usesAppStateData)
+                                )
                                 application.compatibilityStore.importModernHistory(history)
                             } else if (!activeProfile.usesAppStateData) {
-                                val compatBoards = application.compatibilityStore.boards.first()
+                                reconcileSharedBoards(stateStore, application.compatibilityStore, SharedBoardSide.COMPAT)
                                 val compatHistory = application.compatibilityStore.history.first()
-                                val currentBoards = stateStore.boards.first()
-                                val mergedBoards = synchronizeModernBoardsFromCompatibility(
-                                    currentBoards, compatBoards, application.compatibilityStore.holdsBundledTutorialBoard
-                                )
-                                if (mergedBoards != currentBoards) stateStore.setBoards(mergedBoards)
+                                val mergedBoards = stateStore.boards.first()
                                 stateStore.updateHistory { currentHistory ->
                                     mergeCompatibilityHistory(currentHistory, compatHistory, mergedBoards)
                                 }

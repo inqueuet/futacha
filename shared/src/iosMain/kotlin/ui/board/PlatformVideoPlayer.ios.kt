@@ -266,6 +266,14 @@ private fun NativeAvVideoPlayer(
         }
     }
     val gestureHandler = remember { NativeAvDoubleTapHandler() }
+    val showControlsHandler = remember { NativeAvShowControlsHandler() }
+    val currentShowControls by rememberUpdatedState({ onControlsVisibilityChanged(true) })
+    val currentControlsVisible by rememberUpdatedState(areControlsVisible)
+    SideEffect {
+        showControlsHandler.controlsVisible = { currentControlsVisible }
+        showControlsHandler.showControls = { currentShowControls() }
+    }
+    val pageSwipe = rememberVideoPageSwipe()
     val doubleTapGesture = remember {
         UITapGestureRecognizer(
             target = gestureHandler,
@@ -273,6 +281,17 @@ private fun NativeAvVideoPlayer(
         ).apply {
             numberOfTapsRequired = 2uL
             cancelsTouchesInView = false
+        }
+    }
+    // Playing hides the controls, and AVKit takes no tap while they are off: a tap has to bring them back here.
+    val showControlsTap = remember {
+        UITapGestureRecognizer(
+            target = showControlsHandler,
+            action = NSSelectorFromString("handleTap:")
+        ).apply {
+            cancelsTouchesInView = false
+            delegate = showControlsHandler
+            requireGestureRecognizerToFail(doubleTapGesture)
         }
     }
     SideEffect {
@@ -434,11 +453,15 @@ private fun NativeAvVideoPlayer(
         factory = {
             val view = requireNotNull(controller.view)
             view.addGestureRecognizer(doubleTapGesture)
+            view.addGestureRecognizer(showControlsTap)
+            pageSwipe.attach(view)
             view
         },
         modifier = modifier,
         onRelease = { view ->
             view.removeGestureRecognizer(doubleTapGesture)
+            view.removeGestureRecognizer(showControlsTap)
+            pageSwipe.detach(view)
             controller.player = null
         },
         update = {
@@ -446,6 +469,68 @@ private fun NativeAvVideoPlayer(
             controller.showsPlaybackControls = areControlsVisible
         }
     )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+/** Pages the viewer from a swipe on the picture. The lower part is the native control bar and stays its own. */
+private class VideoPageSwipeHandler : NSObject(), platform.UIKit.UIGestureRecognizerDelegateProtocol {
+    var onSwipe: ((Boolean) -> Unit)? = null
+    private val left = recognizer(platform.UIKit.UISwipeGestureRecognizerDirectionLeft)
+    private val right = recognizer(platform.UIKit.UISwipeGestureRecognizerDirectionRight)
+
+    private fun recognizer(way: platform.UIKit.UISwipeGestureRecognizerDirection) =
+        platform.UIKit.UISwipeGestureRecognizer(target = this, action = NSSelectorFromString("handleSwipe:")).apply {
+            direction = way
+            cancelsTouchesInView = false
+            delegate = this@VideoPageSwipeHandler
+        }
+
+    fun attach(view: platform.UIKit.UIView) { view.addGestureRecognizer(left); view.addGestureRecognizer(right) }
+    fun detach(view: platform.UIKit.UIView) { view.removeGestureRecognizer(left); view.removeGestureRecognizer(right) }
+
+    @ObjCAction
+    fun handleSwipe(recognizer: platform.UIKit.UISwipeGestureRecognizer) {
+        val view = recognizer.view ?: return
+        val height = view.bounds.useContents { size.height }
+        val y = recognizer.locationInView(view).useContents { this.y }
+        if (y > height * 0.72) return
+        onSwipe?.invoke(recognizer.direction == platform.UIKit.UISwipeGestureRecognizerDirectionLeft)
+    }
+
+    override fun gestureRecognizer(
+        gestureRecognizer: platform.UIKit.UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWithGestureRecognizer: platform.UIKit.UIGestureRecognizer
+    ): Boolean = true
+}
+
+@Composable
+private fun rememberVideoPageSwipe(): VideoPageSwipeHandler {
+    val handler = remember { VideoPageSwipeHandler() }
+    handler.onSwipe = LocalVideoPageSwipe.current
+    return handler
+}
+
+private class NativeAvShowControlsHandler : NSObject(), platform.UIKit.UIGestureRecognizerDelegateProtocol {
+    var showControls: (() -> Unit)? = null
+    var controlsVisible: () -> Boolean = { true }
+    /** Decided when the finger lands: the tap on the play button itself must not undo the hiding it causes. */
+    private var hiddenAtTouch = false
+
+    override fun gestureRecognizer(
+        gestureRecognizer: platform.UIKit.UIGestureRecognizer,
+        shouldReceiveTouch: platform.UIKit.UITouch
+    ): Boolean {
+        hiddenAtTouch = !controlsVisible()
+        return true
+    }
+
+    override fun gestureRecognizer(
+        gestureRecognizer: platform.UIKit.UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWithGestureRecognizer: platform.UIKit.UIGestureRecognizer
+    ): Boolean = true
+
+    @ObjCAction
+    fun handleTap(recognizer: UITapGestureRecognizer) { if (hiddenAtTouch) showControls?.invoke() }
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -551,6 +636,7 @@ private fun WebVideoPlayer(
         logVideoPlaybackDiagnostic("native-capability", "AVURLAsset(video/webm)=${AVURLAsset.isPlayableExtendedMIMEType("video/webm")} selected=WKWebView")
         onDispose { delegate.detach() }
     }
+    val pageSwipe = rememberVideoPageSwipe()
     LaunchedEffect(videoUrl) {
         onStateChanged(VideoPlayerState.Buffering)
         delay(WEB_VIDEO_LOAD_TIMEOUT_MS)
@@ -571,6 +657,7 @@ private fun WebVideoPlayer(
             }
             WKWebView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0), configuration = configuration).apply {
                 navigationDelegate = delegate
+                pageSwipe.attach(this)
                 if (localDocument == null) loadHTMLString(html, baseURL = null)
                 else {
                     viewPin = localDocument.retain()
@@ -581,6 +668,7 @@ private fun WebVideoPlayer(
         },
         modifier = modifier,
         onRelease = { view ->
+            pageSwipe.detach(view)
             view.stopLoading()
             view.loadHTMLString("", baseURL = null)
             syncTracker.clear()
@@ -786,3 +874,5 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
         fail(VideoPlaybackError("webkit_terminated", "動画の再生処理が終了しました"))
     }
 }
+
+internal actual val platformVideoAutoPlayByDefault: Boolean = false

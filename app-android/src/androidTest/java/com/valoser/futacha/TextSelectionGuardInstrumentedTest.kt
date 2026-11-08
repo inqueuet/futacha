@@ -47,7 +47,7 @@ class TextSelectionGuardInstrumentedTest {
     @After fun restoreClassifier() { manager.setTextClassifier(original) }
 
     private fun suggest(text: String, range: TextRange): TextRange? = runBlocking {
-        PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, null)
+        PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, androidx.compose.ui.text.intl.LocaleList.current)
             .suggestSelectionForLongPressOrDoubleClick(text, range)
     }
 
@@ -104,7 +104,7 @@ class TextSelectionGuardInstrumentedTest {
 
     @Test fun invalidToolbarRequestAlsoFallsBack() {
         runBlocking {
-            PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, null)
+            PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, androidx.compose.ui.text.intl.LocaleList.current)
                 .onShowSelectionToolbar("abc", TextRange(1, 4))
         }
         assertEquals(0, classifications)
@@ -112,7 +112,7 @@ class TextSelectionGuardInstrumentedTest {
 
     @Test fun invalidContextMenuRequestAlsoFallsBack() {
         runBlocking {
-            PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, null)
+            PlatformSelectionBehaviorsImpl(Dispatchers.Default, context, SelectedTextType.EditableText, androidx.compose.ui.text.intl.LocaleList.current)
                 .onShowContextMenu("abc", TextRange(1, 4), null)
         }
         assertEquals(0, classifications)

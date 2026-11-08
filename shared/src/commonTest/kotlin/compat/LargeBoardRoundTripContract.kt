@@ -19,6 +19,9 @@ internal suspend fun verifyLargeBoardRoundTrip(
     } else store.upsertBoards(modernBoardsToCompatibility(modern))
     assertEquals(201, store.boards.first().size)
     assertEquals(modern, synchronizeModernBoardsFromCompatibility(modern, store.boards.first(), store.holdsBundledTutorialBoard))
+    // The settings backup holds every board (D-B1: it refused more than 100, so with 101 boards none could be saved).
+    val backup = store.exportSettingsBackup()
+    assertEquals(201, decodeCompatSettingsBackup(backup).boards.size)
 
     val last = store.boards.first().last()
     val thread = "${last.canonicalUrl}res/123456.htm"
@@ -36,4 +39,7 @@ internal suspend fun verifyLargeBoardRoundTrip(
 
     restarted.deleteBoard(restarted.boards.first().first().key)
     assertEquals(modern.drop(1), synchronizeModernBoardsFromCompatibility(modern, restarted.boards.first(), restarted.holdsBundledTutorialBoard))
+    // Restoring that backup brings the deleted board back, with the 200 others.
+    assertEquals(201, restarted.importSettingsBackup(backup).boardsImported)
+    assertEquals(201, restarted.boards.first().size)
 }

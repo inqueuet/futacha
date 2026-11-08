@@ -94,7 +94,8 @@ internal actual fun compatPostDeviceInfo(appVersion: String): String = "ふた�
 
 internal actual suspend fun compressCompatPostImage(
     attachment: ImageData,
-    maxBytes: Int
+    maxBytes: Int,
+    forceJpeg: Boolean
 ): Result<ImageData> = withContext(Dispatchers.IO) { runSuspendCatchingPreservingCancellation {
     require(maxBytes > 0)
     // ImageIO ignores the EXIF orientation; read it like the image editor does so phone
@@ -102,7 +103,7 @@ internal actual suspend fun compressCompatPostImage(
     val format = detectCompatPostImageFormat(attachment.bytes)
     val orientation = compatExifOrientationTransform(if (format == CompatPostImageFormat.GIF) 1 else readCompatPostEncodedOrigin(attachment.bytes))
     // GIF/PNG/WebP keep animation and transparency when only metadata has to go.
-    compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
+    if (!forceJpeg) compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
         return@runSuspendCatchingPreservingCancellation ImageData(sanitized, compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension)))
     }
     val image = ImageIO.read(ByteArrayInputStream(attachment.bytes)) ?: run {
@@ -128,7 +129,7 @@ internal actual suspend fun compressCompatPostImage(
         } finally { g.dispose() }
         return out
     }
-    if (image.colorModel.hasAlpha() && image.width <= 2048 && image.height <= 2048) {
+    if (!forceJpeg && image.colorModel.hasAlpha() && image.width <= 2048 && image.height <= 2048) {
         // Keep transparency as PNG when it fits; the JPEG path below flattens onto white.
         val upright = if (orientation.isIdentity) image else render(uprightWidth, uprightHeight, BufferedImage.TYPE_INT_ARGB)
         val png = ByteArrayOutputStream().also { ImageIO.write(upright, "png", it) }.toByteArray()

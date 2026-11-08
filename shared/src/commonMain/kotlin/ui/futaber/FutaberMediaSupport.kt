@@ -53,8 +53,8 @@ internal fun futaberMediaPalette(colors: FutaberColors): CompatibilityPalette = 
     dialogSurface = colors.bar,
     uiPrimaryText = colors.body,
     uiSecondaryText = colors.meta,
-    searchResultBackground = colors.catalogGap,
-    searchTextHighlight = colors.catalogGap,
+    searchResultBackground = colors.fill,
+    searchTextHighlight = colors.fill,
     accent = colors.link,
     inputCursor = colors.link,
     closedThreadUndoAction = colors.link,
@@ -87,3 +87,19 @@ internal fun futaberMediaTab(board: BoardSummary, ref: FutaberThreadRef, snapsho
 
 /** Posts that carry an image or a video; zero keeps the gallery entry disabled. */
 internal fun futaberMediaPostCount(posts: List<Post>): Int = posts.count { !it.imageUrl.isNullOrBlank() }
+
+/**
+ * Where the picture list goes back to from the viewer: the picture with [identity] in the list as it is now (a refresh
+ * or an NG behind the viewer can have moved it), else the viewer's [index] when it is still in the list.
+ */
+internal fun futaberGalleryFocusIndex(identities: List<String>, identity: String?, index: Int?): Int? {
+    identity?.let { wanted -> identities.indexOf(wanted).takeIf { it >= 0 }?.let { return it } }
+    return index?.takeIf { it in identities.indices }
+}
+
+/** Whether item [index] of the grid is wholly on screen (a picture cut at the edge is scrolled to). */
+internal fun futaberGridItemFullyVisible(state: androidx.compose.foundation.lazy.grid.LazyGridState, index: Int): Boolean {
+    val info = state.layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+    return item.offset.y >= info.viewportStartOffset && item.offset.y + item.size.height <= info.viewportEndOffset
+}

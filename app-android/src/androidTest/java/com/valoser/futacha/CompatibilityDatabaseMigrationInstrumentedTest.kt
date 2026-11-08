@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.compat.CompatSharedTabView
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -120,7 +122,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(expectedBytes, db.scalarInt("SELECT byte_count FROM compat_thread_snapshot WHERE tab_key='tab12'"))
         }
     }
@@ -158,7 +160,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         val reloaded = store.tabs.first().single()
         assertTrue(reloaded.isDeleted)
         assertTrue(reloaded.refreshOnActivation)
-        assertEquals(13, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+        assertEquals(14, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
     }
 
     @Test
@@ -200,9 +202,82 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
     }
 
     @Test
-    fun version13SchemaExport_matchesCurrentStatementsAndFreshDatabase() = runBlocking {
+    fun version13To14_addsTheSharedTablesAndKeepsEveryRow() = runBlocking {
+        val statements = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("compatibility-schema/13.sql").bufferedReader().useLines { lines ->
+                lines.map(String::trim).filter { it.isNotEmpty() && !it.startsWith("--") }
+                    .map { it.removeSuffix(";") }.toList()
+            }
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            statements.forEach(db::execSQL)
+            db.execSQL("INSERT INTO compat_board(board_key,name,canonical_url,original_url,sort_order) VALUES('img','img','https://img.2chan.net/b/','https://img.2chan.net/b/',0)")
+            db.execSQL("INSERT INTO compat_build_draft(board_key,name,email,subject,comment,attachment_uri,delete_key,updated_at) VALUES('img','','','','keep me',NULL,'key',1)")
+        }
+        val store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        assertEquals("keep me", checkNotNull(store.loadBuildDraft("img")).comment)
+        store.closeForTest()
+        openStore = null
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(14, db.version)
+            // Both tables exist and are empty; a tab view goes with its tab (ON DELETE CASCADE).
+            db.rawQuery("SELECT COUNT(*) FROM compat_tab_view", null).use { c -> c.moveToFirst(); assertEquals(0, c.getInt(0)) }
+            db.rawQuery("SELECT COUNT(*) FROM compat_draft", null).use { c -> c.moveToFirst(); assertEquals(0, c.getInt(0)) }
+        }
+    }
+
+    @Test
+    fun tabViewsAreKeptPerProfileInOrderAndGoWithTheirTab() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        fun threadUrl(no: Int) = "${boardUrl}res/$no.htm"
+        fun tab(no: Int) = CompatTab(
+            compatTabKey(threadUrl(no)), threadUrl(no), threadUrl(no), compatBoardKey(boardUrl), "板", "$no", "スレ$no",
+            replyCount = 1, insertedAtEpochMillis = 1L, contentUpdatedAtEpochMillis = 1L
+        )
+        fun view(no: Int, profile: String, ordinal: Int) = CompatSharedTabView(compatTabKey(threadUrl(no)), profile, ordinal, 5L)
+        val store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        store.importModernBoards(listOf(BoardSummary("m", "板", "", boardUrl, "")))
+        (1..3).forEach { store.openTab(tab(it)) }
+        store.replaceTabViews("futaber", listOf(view(2, "futaber", 1), view(1, "futaber", 0), view(9, "futaber", 2)))
+        assertEquals(listOf(compatTabKey(threadUrl(1)), compatTabKey(threadUrl(2))), store.loadTabViews("futaber").map { it.tabKey })
+        store.replaceTabViews("ftutter", listOf(view(3, "ftutter", 0)))
+        store.replaceTabViews("futaber", listOf(view(3, "futaber", 0)))
+        assertEquals(listOf(compatTabKey(threadUrl(3))), store.loadTabViews("futaber").map { it.tabKey })
+        assertEquals(1, store.loadTabViews("ftutter").size)
+        store.closeTabs(setOf(compatTabKey(threadUrl(3))), nowEpochMillis = 10L)
+        assertTrue(store.loadTabViews("futaber").isEmpty())
+        assertTrue(store.loadTabViews("ftutter").isEmpty())
+    }
+
+    @Test
+    fun addTabsIfAbsentKeepsExistingTabsAndTheSelectedOne() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        fun threadUrl(no: Int) = "${boardUrl}res/$no.htm"
+        fun tab(no: Int, board: String = compatBoardKey(boardUrl), title: String = "スレ$no") = CompatTab(
+            compatTabKey(threadUrl(no)), threadUrl(no), threadUrl(no), board, "板", "$no", title,
+            replyCount = 1, insertedAtEpochMillis = 1L, contentUpdatedAtEpochMillis = 1L
+        )
+        val store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        openStore = store
+        store.initialize()
+        store.importModernBoards(listOf(BoardSummary("m", "板", "", boardUrl, "")))
+        store.openTab(tab(1))
+        val selected = store.workspace.first().activeTabKey
+        val added = store.addTabsIfAbsent(listOf(tab(1, title = "上書き"), tab(2), tab(3, board = "no-such-board")))
+        assertEquals(1, added)
+        val tabs = store.tabs.first()
+        assertEquals(setOf("1", "2"), tabs.map { it.threadNo }.toSet())
+        assertEquals("スレ1", tabs.single { it.threadNo == "1" }.title)
+        assertEquals(selected, store.workspace.first().activeTabKey)
+    }
+
+    @Test
+    fun version14SchemaExport_matchesCurrentStatementsAndFreshDatabase() = runBlocking {
         val exportedStatements = InstrumentationRegistry.getInstrumentation().context.assets
-            .open("compatibility-schema/13.sql")
+            .open("compatibility-schema/14.sql")
             .bufferedReader()
             .useLines { lines ->
                 lines.map(String::trim)
@@ -212,7 +287,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             }
         val expectedStatements = CompatibilityDatabaseSchema.createStatements +
             CompatibilityDatabaseSchema.initialWorkspaceStatement +
-            "PRAGMA user_version=13"
+            "PRAGMA user_version=14"
         assertEquals(expectedStatements, exportedStatements)
 
         val production = AndroidCompatibilityStore(context, databaseName = databaseName)
@@ -237,7 +312,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_workspace WHERE singleton_id=1"))
             db.schemaSignature()
         }
@@ -269,7 +344,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(
                 1,
                 db.scalarInt(
@@ -308,7 +383,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         openStore = store
         store.initialize()
 
-        assertEquals(13, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+        assertEquals(14, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
         val migrated = store.loadCatalogPreference("may-b")
         assertEquals(false, migrated.replyPriorityEnabled)
         assertEquals(true, migrated.showNonPriority)
@@ -346,7 +421,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
                     "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 arrayOf<Any?>("tab88", threadUrl, threadUrl, "may-b", "虹裏", "88", "newer", null, 3, 1, 0, 0, 0, 0, 1, 10L, 20L, "{}", 0L)
             )
-            db.version = 14
+            db.version = 15
         }
         var store = AndroidCompatibilityStore(context, databaseName = databaseName)
         openStore = store
@@ -355,10 +430,10 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         store.closeForTest()
         openStore = null
         context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(
                 1,
-                db.scalarInt("SELECT COUNT(*) FROM compat_metadata WHERE key='schema.appliedVersion' AND value='14'")
+                db.scalarInt("SELECT COUNT(*) FROM compat_metadata WHERE key='schema.appliedVersion' AND value='15'")
             )
             // Re-running 11 -> 12 here would fail on the duplicate byte_count column.
             db.version = 11
@@ -369,7 +444,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
         assertEquals("tab88", store.tabs.first().single().key)
         store.closeForTest()
         openStore = null
-        assertEquals(13, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
+        assertEquals(14, context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { it.version })
     }
 
     @Test
@@ -378,7 +453,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             CompatibilityDatabaseSchema.createStatements.forEach(db::execSQL)
             db.execSQL(CompatibilityDatabaseSchema.initialWorkspaceStatement)
             db.execSQL("DROP TABLE compat_watch_rule")
-            db.version = 14
+            db.version = 15
         }
         val databaseFile = context.getDatabasePath(databaseName)
         try {
@@ -389,15 +464,15 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             store.closeForTest()
             openStore = null
             val backups = databaseFile.parentFile!!.listFiles { file ->
-                file.name.startsWith("${databaseFile.name}.newer-v14-") && !file.name.endsWith("-wal") &&
+                file.name.startsWith("${databaseFile.name}.newer-v15-") && !file.name.endsWith("-wal") &&
                     !file.name.endsWith("-shm") && !file.name.endsWith("-journal")
             }.orEmpty()
             assertEquals(1, backups.size)
             SQLiteDatabase.openDatabase(backups.single().path, null, SQLiteDatabase.OPEN_READWRITE).use { backup ->
-                assertEquals(14, backup.version)
+                assertEquals(15, backup.version)
             }
             context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
-                assertEquals(13, db.version)
+                assertEquals(14, db.version)
                 assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE name='compat_watch_rule'"))
             }
         } finally {
@@ -484,7 +559,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_thread_snapshot WHERE tab_key='$tabKey'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_post WHERE tab_key='$tabKey'"))
             assertEquals(0, db.scalarInt("SELECT COUNT(*) FROM compat_reply_draft WHERE tab_key='$tabKey'"))
@@ -538,7 +613,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='compat_closed_batch'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_closed_batch_expires_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -639,7 +714,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='compat_closed_batch'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_closed_batch_expires_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -689,7 +764,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_build_draft WHERE board_key='$boardKey'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archive_report_outbox'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -753,7 +828,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM archive_report_outbox"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_archive_report_outbox_due'"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_archive_report_outbox_batch'"))
@@ -834,7 +909,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM compat_catalog_dropped"))
             assertEquals(1, db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='compat_catalog_dropped_recent_idx'"))
             assertEquals(0, db.foreignKeyViolationCount())
@@ -896,7 +971,7 @@ class CompatibilityDatabaseMigrationInstrumentedTest {
             null,
             SQLiteDatabase.OPEN_READONLY
         ).use { db ->
-            assertEquals(13, db.version)
+            assertEquals(14, db.version)
             assertEquals(3, db.scalarInt("SELECT COUNT(*) FROM pragma_table_info('compat_catalog_dropped') WHERE name IN ('last_seen_at','drop_class','inserted_at')"))
             assertEquals(12_345, db.scalarInt("SELECT last_seen_at FROM compat_catalog_dropped WHERE thread_id='123'"))
             assertEquals(12_345, db.scalarInt("SELECT inserted_at FROM compat_catalog_dropped WHERE thread_id='123'"))

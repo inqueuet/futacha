@@ -76,14 +76,15 @@ configurations.configureEach {
 
 android {
     namespace = "com.valoser.futacha.wear"
-    compileSdk = 37
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100_000_027
-        versionName = "13.1"
+        versionCode = 100_000_029
+        versionName = "13.5"
     }
 
     signingConfigs {
@@ -148,7 +149,7 @@ androidComponents {
 dependencies {
     constraints {
         implementation(libs.androidx.compose.foundation.guarded) {
-            because("ComposeSelectionGuardFactory patches two verified 1.13.0-alpha02 call sites; review before upgrading")
+            because("ComposeSelectionGuardFactory patches two verified 1.13.0-rc01 call sites; review before upgrading")
         }
     }
 

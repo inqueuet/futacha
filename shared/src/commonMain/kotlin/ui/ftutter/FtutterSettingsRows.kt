@@ -14,6 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
@@ -38,10 +44,13 @@ import androidx.compose.ui.unit.sp
 
 /** 設定の1画面：上のバーと一覧。 */
 @Composable
-internal fun FtutterSettingsPage(title: String, tag: String, onBack: () -> Unit, content: LazyListScope.() -> Unit) {
+internal fun FtutterSettingsPage(
+    title: String, tag: String, onBack: () -> Unit,
+    actions: @Composable () -> Unit = {}, content: LazyListScope.() -> Unit
+) {
     val colors = LocalFtutterColors.current
     Column(Modifier.fillMaxSize().background(colors.background).testTag(tag)) {
-        FtutterTopBar(title = title, onBack = onBack)
+        FtutterTopBar(title = title, onBack = onBack, actions = actions)
         // Keep the last setting tappable above Android's navigation bar and the
         // iOS home indicator; the edge-to-edge theme only paints their background.
         LazyColumn(Modifier.fillMaxSize().navigationBarsPadding().testTag("$tag-list"), content = content)
@@ -52,7 +61,12 @@ internal fun FtutterSettingsPage(title: String, tag: String, onBack: () -> Unit,
 internal fun LazyListScope.ftutterSection(text: String) {
     item(key = "section-$text") {
         val colors = LocalFtutterColors.current
-        Text(text, color = colors.onToolBarActive, fontSize = 14.sp, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp))
+        // M78：原作の節見出しは端から端までの灰色の帯。
+        Text(
+            text, color = colors.text, fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth().background(colors.outline.copy(alpha = 0.35f))
+                .padding(start = 16.dp, top = 6.dp, bottom = 6.dp)
+        )
     }
 }
 
@@ -66,14 +80,25 @@ private fun FtutterRowNote(note: String?) {
 
 /** 押すと次の画面へ進む行。 */
 @Composable
-internal fun FtutterNavRow(label: String, tag: String, detail: String? = null, onClick: () -> Unit) {
+internal fun FtutterNavRow(
+    label: String, tag: String, detail: String? = null,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    /** 原作の「個別設定」のように、行の右に → を出す。 */
+    trailingArrow: Boolean = false, onClick: () -> Unit
+) {
     val colors = LocalFtutterColors.current
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        icon?.let {
+            androidx.compose.material3.Icon(it, contentDescription = null, tint = colors.text,
+                modifier = Modifier.padding(end = 24.dp).size(28.dp))
+        }
         Text(label, color = colors.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
         detail?.let { Text(it, color = colors.text, fontSize = 14.sp) }
+        if (trailingArrow) androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = null, tint = colors.text)
     }
     HorizontalDivider(color = colors.outline)
 }
@@ -90,8 +115,9 @@ internal fun FtutterCheckSetting(
             Modifier.fillMaxWidth().clickable { save(key, (!checked).toString()) }.padding(horizontal = 8.dp).testTag("ftutter-setting-$key"),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // M78：原作は名前が左、チェックが右。
+            Text(label, color = colors.text, fontSize = 15.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
             Checkbox(checked = checked, onCheckedChange = { save(key, it.toString()) })
-            Text(label, color = colors.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
         }
         FtutterRowNote(note)
     }
@@ -101,30 +127,38 @@ internal fun FtutterCheckSetting(
 @Composable
 internal fun FtutterChoiceSetting(
     label: String, key: String, options: List<Pair<Int, String>>, default: Int,
-    preferences: Map<String, String>, save: (String, String) -> Unit, note: String? = null
+    preferences: Map<String, String>, save: (String, String) -> Unit, note: String? = null,
+    /** 選ぶダイアログに出す名前（原作は一覧の名前と違うことがある。null なら [options] と同じ）。 */
+    dialogOptions: List<Pair<Int, String>>? = null,
+    /** L1：原作の「明るさ」は丸の印も無い、文字だけの行。 */
+    plainRows: Boolean = false
 ) {
     val colors = LocalFtutterColors.current
     var open by remember { mutableStateOf(false) }
     val current = preferences[key]?.trim()?.toIntOrNull()?.takeIf { v -> options.any { it.first == v } } ?: default
+    val legacy = preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)
     Column {
-        Row(Modifier.fillMaxWidth().clickable { open = true }.padding(16.dp).testTag("ftutter-setting-$key"), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, color = colors.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-            Text(options.firstOrNull { it.first == current }?.second.orEmpty(), color = colors.text, fontSize = 14.sp)
+        // M78：原作は値を名前の下に小さな字で出す。
+        Column(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 10.dp).testTag("ftutter-setting-$key")) {
+            Text(label, color = colors.text, fontSize = 15.sp)
+            Text(options.firstOrNull { it.first == current }?.second.orEmpty(), color = colors.text, fontSize = 13.sp)
         }
         FtutterRowNote(note)
     }
     if (open) {
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { open = false },
-            title = { Text(label) },
+            // M75：原作の選ぶダイアログは題が無い（従来の動きでは題を出す）。
+            title = if (legacy) ({ Text(label) }) else null,
             text = {
-                Column {
-                    options.forEach { (value, text) ->
+                Column(Modifier.testTag("ftutter-choice-dialog")) {
+                    (if (legacy) options else dialogOptions ?: options).forEach { (value, text) ->
                         Row(
-                            Modifier.fillMaxWidth().clickable { open = false; save(key, value.toString()) }.testTag("ftutter-option-$value"),
+                            Modifier.fillMaxWidth().clickable { open = false; save(key, value.toString()) }.testTag("ftutter-option-$value")
+                                .then(if (plainRows && !legacy) Modifier.padding(vertical = 12.dp) else Modifier),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(selected = value == current, onClick = { open = false; save(key, value.toString()) })
+                            if (legacy || !plainRows) RadioButton(selected = value == current, onClick = { open = false; save(key, value.toString()) })
                             Text(text)
                         }
                     }
@@ -141,7 +175,9 @@ internal fun FtutterSliderSetting(
     label: String, key: String, min: Double, max: Double, step: Double, default: Double,
     preferences: Map<String, String>, save: (String, String) -> Unit, integer: Boolean = true, note: String? = null,
     /** OK の前に確かめること（値を受け取り、確かめる文を返す。null なら確かめずに保存する）。 */
-    confirm: ((Double) -> String?)? = null
+    confirm: ((Double) -> String?)? = null,
+    /** こちらだけの設定（その他の機能）。原作に無いので、数と −／＋ のある前の形のまま。 */
+    own: Boolean = false
 ) {
     val colors = LocalFtutterColors.current
     var open by remember { mutableStateOf(false) }
@@ -150,21 +186,25 @@ internal fun FtutterSliderSetting(
     val current = preferences[key]?.trim()?.toDoubleOrNull()?.takeIf { it in min..max } ?: default
     fun show(v: Double) = if (integer) v.toLong().toString() else ((v * 100).toLong() / 100.0).toString()
     Column {
-        Row(Modifier.fillMaxWidth().clickable { open = true }.padding(16.dp).testTag("ftutter-setting-$key"), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, color = colors.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-            Text(show(current), color = colors.text, fontSize = 14.sp)
+        Column(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 10.dp).testTag("ftutter-setting-$key")) {
+            Text(label, color = colors.text, fontSize = 15.sp)
+            Text(show(current), color = colors.text, fontSize = 13.sp)
         }
         FtutterRowNote(note)
     }
     if (open) {
         var value by remember { mutableStateOf(current) }
         // 段が多い時は目盛りを描かない（L21：数千段で狙った値に合わせにくく、目盛りの点も重かった）。範囲・刻みは原作どおり。
-        val steps = ftutterSliderSteps(min, max, step)
+        val full = own || preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)
+        // M74：原作の数のダイアログは題と目盛りの無いスライダーだけ（数・−／＋・キャンセルは無い）。
+        val steps = if (full) ftutterSliderSteps(min, max, step) else 0
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { open = false },
             title = { Text(label) },
             text = {
-                Column {
+                if (!full) Slider(value = value.toFloat(), onValueChange = { value = it.toDouble() }, valueRange = min.toFloat()..max.toFloat(),
+                    modifier = Modifier.testTag("ftutter-slider-$key"))
+                else Column {
                     Text(show(ftutterSliderSnap(value, min, max, step)), fontSize = 20.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
                     Slider(value = value.toFloat(), onValueChange = { value = it.toDouble() }, valueRange = min.toFloat()..max.toFloat(), steps = steps,
                         modifier = Modifier.testTag("ftutter-slider-$key"))
@@ -194,8 +234,8 @@ internal fun FtutterSliderSetting(
                         val question = confirm?.invoke(default)
                         pendingReset = true
                         if (question != null) pending = default to question else save(key, "")
-                    }) { Text("リセット") }
-                    TextButton(onClick = { open = false }) { Text("キャンセル") }
+                    }, modifier = Modifier.testTag("ftutter-slider-reset")) { Text("リセット") }
+                    if (full) TextButton(onClick = { open = false }) { Text("キャンセル") }
                 }
             }
         ) }
@@ -215,6 +255,12 @@ internal fun FtutterSliderSetting(
         ) }
     }
 }
+
+/** M74／M75：設定の数・選ぶダイアログを前の形（題・数・−／＋・キャンセル・丸の印）にする。既定OFF。 */
+internal val FTUTTER_LEGACY_DIALOGS_KEY: String get() = FtutterKeys.PREFIX + "legacySettingDialogs"
+internal const val FTUTTER_LEGACY_DIALOGS_LABEL = "設定のダイアログを前の形にする"
+internal const val FTUTTER_LEGACY_DIALOGS_NOTE =
+    "数を選ぶダイアログに数と −／＋・キャンセルを、選ぶダイアログに題を出します（原作は出しません）"
 
 /** これより段が多いスライダーは目盛りを描かない連続のものにする（L21）。 */
 internal const val FTUTTER_SLIDER_MAX_TICKS = 100
@@ -245,13 +291,19 @@ internal fun FtutterColorSetting(label: String, name: String, shown: Color, pref
     val colors = LocalFtutterColors.current
     var open by remember { mutableStateOf(false) }
     val key = FtutterKeys.colorOverride(name)
+    val legacy = preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)
     Row(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 10.dp).testTag("ftutter-color-$name"),
         verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = colors.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-        if (preferences[key].isNullOrBlank().not()) Text("個別  ", color = colors.text, fontSize = 12.sp)
-        Box(Modifier.size(28.dp).background(shown, CircleShape).border(1.dp, colors.outline, CircleShape))
+        if (legacy && preferences[key].isNullOrBlank().not()) Text("個別  ", color = colors.text, fontSize = 12.sp)
+        // M51：原作は行の右に大きめの丸（約40dp）。
+        Box(Modifier.size(if (legacy) 28.dp else 40.dp).background(shown, CircleShape).border(1.dp, colors.outline, CircleShape))
     }
-    if (open) {
+    HorizontalDivider(color = colors.outline)
+    if (open && !legacy) {
+        FtutterColorPickerDialog(label, shown, onReset = { open = false; save(key, "") },
+            onOk = { open = false; save(key, it.toString()) }, onDismiss = { open = false })
+    } else if (open) {
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { open = false },
             title = { Text(label) },
@@ -270,6 +322,117 @@ internal fun FtutterColorSetting(label: String, name: String, shown: Color, pref
         ) }
     }
 }
+
+/** M50：原作の「メインカラー」は1行（名前・「テーマの元となる色」・右に今の色の丸）で、押すと「メインカラー選択」。 */
+@Composable
+internal fun FtutterMainColorSetting(current: Long, save: (String, String) -> Unit) {
+    val colors = LocalFtutterColors.current
+    var open by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 10.dp).testTag("ftutter-setting-main-color"),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("メインカラー", color = colors.text, fontSize = 15.sp)
+            Text("テーマの元となる色", color = colors.text, fontSize = 13.sp)
+        }
+        Box(Modifier.size(40.dp).background(Color(current.toInt()), CircleShape).testTag("ftutter-main-color-current"))
+    }
+    HorizontalDivider(color = colors.outline)
+    if (open) {
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("メインカラー選択") },
+            text = { FtutterMainColorCircles(current, size = 56) { open = false; save(FtutterKeys.MAIN_COLOR, it.toString()) } },
+            confirmButton = {}
+        ) }
+    }
+}
+
+/** メインカラーの19色の丸。4列に並べる（原作の「メインカラー選択」）。 */
+@Composable
+internal fun FtutterMainColorCircles(current: Long, size: Int, columns: Int = 4, onPick: (Long) -> Unit) {
+    val colors = LocalFtutterColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        FTUTTER_SEED_COLORS.toList().chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { argb ->
+                    // 原作は選ばれた色に印を付けない。読み上げのために「選択中」だけ伝える。
+                    Box(
+                        Modifier.size(size.dp).background(Color(argb.toInt()), CircleShape).clickable { onPick(argb) }
+                            .androidxSemanticsSelected(argb == current)
+                            .testTag("ftutter-main-color-${argb.toString(16)}")
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Modifier.androidxSemanticsSelected(selected: Boolean): Modifier =
+    this.then(Modifier.semantics { this.selected = selected })
+
+/**
+ * M76：原作の「画像の透過度」は1行で、押すとスライダー1本（5つをまとめて動かす）と「個別設定」の開閉、
+ * 「キャンセル」「OK」のダイアログ。保存する値は今までどおり5つ。
+ */
+@Composable
+internal fun FtutterPrivacySetting(preferences: Map<String, String>, save: (String, String) -> Unit) {
+    val colors = LocalFtutterColors.current
+    var open by remember { mutableStateOf(false) }
+    val keys = FTUTTER_PRIVACY_ROWS.map { it.second }
+    fun value(key: String) = preferences[key]?.trim()?.toDoubleOrNull()?.takeIf { it in 0.0..1.0 } ?: 0.8
+    Column(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 10.dp).testTag("ftutter-setting-privacy")) {
+        Text("画像の透過度", color = colors.text, fontSize = 15.sp)
+        Text(((value(keys.first()) * 100).toLong() / 100.0).toString(), color = colors.text, fontSize = 13.sp)
+    }
+    HorizontalDivider(color = colors.outline)
+    if (open) {
+        val values = remember { androidx.compose.runtime.mutableStateListOf(*keys.map { value(it).toFloat() }.toTypedArray()) }
+        var all by remember { mutableStateOf(values.first()) }
+        var expanded by remember { mutableStateOf(false) }
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("画像の透過度") },
+            text = {
+                Column(Modifier.verticalScrollCompat()) {
+                    Slider(value = all, onValueChange = { v -> all = v; values.indices.forEach { values[it] = v } }, valueRange = 0f..1f, steps = 19,
+                        modifier = Modifier.testTag("ftutter-privacy-all"))
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 16.dp, vertical = 12.dp)
+                        .testTag("ftutter-privacy-each"), verticalAlignment = Alignment.CenterVertically) {
+                        Text("個別設定", fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Icon(
+                            if (expanded) androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp else androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null)
+                    }
+                    if (expanded) FTUTTER_PRIVACY_ROWS.forEachIndexed { i, (label, key) ->
+                        Text(label, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
+                        Slider(value = values[i], onValueChange = { values[i] = it }, valueRange = 0f..1f, steps = 19,
+                            modifier = Modifier.testTag("ftutter-slider-$key"))
+                    }
+                    HorizontalDivider()
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    open = false
+                    keys.forEachIndexed { i, key -> save(key, ftutterSliderSnap(values[i].toDouble(), 0.0, 1.0, 0.05).toString()) }
+                }, modifier = Modifier.testTag("ftutter-privacy-ok")) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { open = false }) { Text("キャンセル") } }
+        ) }
+    }
+}
+
+/** 画像の透過度の5つ（名前と保存の鍵）。 */
+internal val FTUTTER_PRIVACY_ROWS: List<Pair<String, String>> get() = listOf(
+    "カタログ" to FtutterKeys.PRIVACY_CATALOG, "カタログ（長押し拡大時）" to FtutterKeys.PRIVACY_CATALOG_ZOOM,
+    "スレッド" to FtutterKeys.PRIVACY_THREAD, "スレッド（拡大時）" to FtutterKeys.PRIVACY_THREAD_ZOOM,
+    "タブ、ドロワー、他" to FtutterKeys.PRIVACY_TAB_DRAWER
+)
+
+@Composable
+private fun Modifier.verticalScrollCompat(): Modifier =
+    this.then(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()))
 
 /** 複数を選ぶ行（ピックアップを行う並び順）。 */
 @Composable

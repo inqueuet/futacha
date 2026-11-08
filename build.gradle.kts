@@ -14,6 +14,7 @@ plugins {
     alias(libs.plugins.firebase.crashlytics) apply false
 }
 
+
 val validateQualityContracts by tasks.registering {
     group = "verification"
     description = "Validates the user-visible feature and closed-issue regression inventories."
@@ -112,8 +113,10 @@ val validateQualityContracts by tasks.registering {
             }
         }
 
+        // ALL: the four modes, for what they share (docs/futaber-evolution-data-2026-10-31.md, feature shared-data).
         fun expandMode(scope: String): Set<String> = when (scope) {
             "BOTH" -> setOf("FUTACHA", "TOSHIAKI_COMPAT")
+            "ALL" -> setOf("FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")
             else -> setOf(scope)
         }
 
@@ -134,7 +137,7 @@ val validateQualityContracts by tasks.registering {
             "Feature inventory is missing mandatory groups: ${requiredFeatureIds - featureIds.toSet()}"
         }
         featureRows.forEach { row ->
-            require(row[2] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
+            require(row[2] in setOf("BOTH", "ALL", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
                 "${row[0]} has invalid mode scope ${row[2]}"
             }
             require(row[3] in setOf("BOTH", "ANDROID", "IOS")) {
@@ -160,7 +163,7 @@ val validateQualityContracts by tasks.registering {
             val feature = requireNotNull(featureById[row[1]]) {
                 "$behaviorId references unknown feature ${row[1]}"
             }
-            require(row[3] in setOf("BOTH", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
+            require(row[3] in setOf("BOTH", "ALL", "FUTACHA", "TOSHIAKI_COMPAT", "FUTABER", "FTUTTER")) {
                 "$behaviorId has invalid mode scope ${row[3]}"
             }
             require(row[4] in setOf("BOTH", "ANDROID", "IOS")) {
@@ -649,4 +652,28 @@ tasks.register("qualityGate") {
         ":app-android:lintDebug",
         ":app-android:assembleDebug"
     )
+}
+// Keep audited transitive runtime/test libraries current across Android, iOS and
+// Desktop. Buildscript/plugin dependencies retain their upstream compatibility
+// graph. Exact module pins also cover platform-specific KMP publications.
+val auditedRuntimeVersions = file("gradle/audited-runtime-versions.tsv")
+    .readLines().drop(1).filter { it.isNotBlank() }
+    .associate { line -> line.split('\t').let { it[0] to it[1] } }
+subprojects {
+    configurations.configureEach {
+        // Lint and compiler configurations carry tool-private Kotlin/ASM APIs.
+        // Apply application pins only to source compile/runtime/test graphs.
+        val applicationGraph = name.endsWith("CompileClasspath") ||
+            name.endsWith("RuntimeClasspath") || name.endsWith("CompileKlibraries") ||
+            name.endsWith("DependenciesMetadata") ||
+            name in setOf("compileClasspath", "runtimeClasspath", "testCompileClasspath", "testRuntimeClasspath")
+        if (applicationGraph) {
+            resolutionStrategy.eachDependency {
+                auditedRuntimeVersions["${requested.group}:${requested.name}"]?.let { auditedVersion ->
+                    useVersion(auditedVersion)
+                    because("Individual dependency audit, including prereleases, 2026-10-27")
+                }
+            }
+        }
+    }
 }

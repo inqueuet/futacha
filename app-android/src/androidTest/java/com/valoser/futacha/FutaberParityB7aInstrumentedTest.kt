@@ -66,6 +66,7 @@ class FutaberParityB7aInstrumentedTest {
         "compat.futaber.catalog.sort",
         "compat.futaber.catalog.sortByBoard",
         "compat.futaber.lastBoardId",
+        "compat.futaber.manageCategory",
         "compat.futaber.tabs",
         "compat.futaber.seen"
     )
@@ -75,7 +76,7 @@ class FutaberParityB7aInstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(keys.associateWith { null })
+            app.compatibilityStore.savePreferences(keys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             originalWatchWords = app.appStateStore.watchWords.first()
             originalWatchRules = app.compatibilityStore.loadPreference(COMPAT_WATCH_RULES_KEY)
             originalThreshold = app.compatibilityStore.loadPreference(THRESHOLD_KEY)
@@ -364,6 +365,9 @@ class FutaberParityB7aInstrumentedTest {
         rule.onNodeWithTag("futaber-ng-input").performTextInput("b7a監視")
         rule.onNodeWithTag("futaber-ng-add").performClick()
         rule.waitUntil(10_000) { runBlocking { app.appStateStore.watchWords.first() } == listOf("b7a監視") }
+        // L-B9 (C45): the entry's ⊖ is under 「編集」 at the top right.
+        rule.onNodeWithTag("futaber-settings-edit").performClick()
+        waitForTag("futaber-ng-delete")
         rule.onNodeWithTag("futaber-ng-delete").performClick()
         rule.waitUntil(10_000) { runBlocking { app.appStateStore.watchWords.first() }.isEmpty() }
         // Back goes to the settings list, not to the NG page.

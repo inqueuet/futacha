@@ -11,6 +11,7 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.PersistentCookieStorage
+import io.ktor.client.engine.mock.respond
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -400,6 +401,67 @@ class DefaultBoardRepositoryTest {
             "32x25x256x0x1",
             storage.listCookies().first { it.name == "cxyl" }.value
         )
+    }
+
+    /**
+     * L-B1 (docs/futaber-evolution-look-2026-10-31.md §5.3): ふたばー風 asks the server for the whole titles (cl=256);
+     * ふたちゃ, right after it on the same board and repository, still asks for its own 16 letters and sends its own
+     * cxyl cookie, and としあき(仮) for its own layout. Over the real HTTP client, cookies included.
+     */
+    @Test
+    fun futaberCatalogAsksForWholeTitlesWithoutChangingTheOtherModesLayouts() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+        val setupTitleLetters = mutableListOf<String?>()
+        val catalogCookies = mutableListOf<String?>()
+        val engine = io.ktor.client.engine.mock.MockEngine { request ->
+            if (request.url.parameters["mode"] == "catset") {
+                val body = request.body as io.ktor.http.content.OutgoingContent.ByteArrayContent
+                setupTitleLetters += io.ktor.http.parseQueryString(body.bytes().decodeToString())["cl"]
+            } else {
+                catalogCookies += request.headers[io.ktor.http.HttpHeaders.Cookie]
+            }
+            respond(
+                content = "<html><table id='cattable'><td><a href='res/1.htm'>one</a></td></table></html>",
+                headers = io.ktor.http.headersOf(io.ktor.http.HttpHeaders.ContentType, "text/html; charset=UTF-8")
+            )
+        }
+        val cookieStorage = storage
+        val client = io.ktor.client.HttpClient(engine) {
+            install(io.ktor.client.plugins.cookies.HttpCookies) { this.storage = cookieStorage }
+        }
+        val repository = DefaultBoardRepository(
+            api = com.valoser.futacha.shared.network.HttpBoardApi(client),
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            // ふたちゃ's layout: the saved rows, the default 16-letter titles.
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+        try {
+            com.valoser.futacha.shared.ui.futaber.futaberFetchCatalogPage(repository, boardUrl, CatalogMode.Catalog, emptyList())
+            repository.getCatalogPage(boardUrl, CatalogMode.Catalog)
+            com.valoser.futacha.shared.ui.compat.fetchCompatCatalogItems(
+                repository = repository,
+                boardUrl = boardUrl,
+                baseMode = CatalogMode.Catalog,
+                extraMode = null,
+                settings = com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(300),
+                watchWords = { emptyList() }
+            )
+        } finally {
+            client.close()
+        }
+
+        assertEquals(listOf<String?>("256", "16", "256"), setupTitleLetters)
+        assertEquals(3, catalogCookies.size)
+        assertTrue(catalogCookies[0].orEmpty().contains("cxyl=5x60x256x0x1"), catalogCookies.toString())
+        assertTrue(catalogCookies[1].orEmpty().contains("cxyl=5x60x16x0x1"), catalogCookies.toString())
+        assertTrue(catalogCookies[2].orEmpty().contains("cxyl=12x25x256x0x1"), catalogCookies.toString())
+        assertEquals("12x25x256x0x1", storage.listCookies().single { it.name == "cxyl" }.value)
     }
 
     @Test

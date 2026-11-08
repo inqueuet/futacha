@@ -62,6 +62,38 @@ class CatalogImageNgRecoveryTest {
         } finally { source.closeAndAwait(); root.deleteRecursively() }
     }
 
+    /**
+     * Audit D4: two requests whose addresses cross (A falls back to B, B to A) no longer wait for each other until they
+     * time out (8 s); before the fix each held its own lock while it took the other's.
+     */
+    @Test fun crossedFallbacksDoNotWaitForEachOther(): Unit = runBlocking {
+        val prefix = "https://example.invalid/crossed-${System.nanoTime()}"
+        val a = "$prefix/src/a.jpg"
+        val b = "$prefix/src/b.jpg"
+        val payload = picture()
+        val bothAsked = CompletableDeferred<Unit>()
+        val firstAsked = mutableSetOf<String>()
+        HttpClient(MockEngine { request ->
+            val url = request.url.toString()
+            // Both first requests are answered only once both have arrived, so both hold their lock at once.
+            val first = synchronized(firstAsked) { firstAsked.add(url).also { if (firstAsked.size == 2) bothAsked.complete(Unit) } }
+            if (first && (url == a || url == b)) bothAsked.await()
+            when {
+                "/thumb/" in url -> respond(payload, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+                else -> respondError(HttpStatusCode.NotFound)
+            }
+        }).use { client ->
+            val started = System.nanoTime()
+            val results = listOf(
+                async(Dispatchers.Default) { fetchCompatImagePhash(client, a, fallbackImageUrl = "$prefix/thumb/a.jpg") { b } },
+                async(Dispatchers.Default) { fetchCompatImagePhash(client, b, fallbackImageUrl = "$prefix/thumb/b.jpg") { a } }
+            ).awaitAll()
+            val seconds = (System.nanoTime() - started) / 1e9
+            assertTrue(seconds < 4.0, "took $seconds s")
+            results.forEach { assertEquals(computeCompatImagePhashFromBytes(payload), it.getOrThrow()) }
+        }
+    }
+
     @Test fun deletedPngUsesTheSurvivingThumbnailForRegistrationAndNextCatalog() = deletedOriginal("png")
     @Test fun deletedJpegDoesNotRetryItselfAndUsesTheSurvivingThumbnail() = deletedOriginal("jpg")
 

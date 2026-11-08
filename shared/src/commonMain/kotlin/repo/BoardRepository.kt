@@ -102,6 +102,11 @@ interface BoardRepository {
     suspend fun probeThreadExists(threadUrl: String): Boolean = false
     suspend fun probeThreadGone(threadUrl: String): Boolean = false
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
+    /** See [com.valoser.futacha.shared.network.BoardApi.voteSaidaneResponse]. */
+    suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String {
+        voteSaidane(board, threadId, postId)
+        return ""
+    }
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
     suspend fun deleteByUser(
         board: String,
@@ -110,6 +115,25 @@ interface BoardRepository {
         password: String,
         imageOnly: Boolean
     )
+    /**
+     * Same del request as [requestDeletion], returning the server's answer as it came. The other modes keep
+     * [requestDeletion]; ふたったー風 shows the answer like the original does (M87).
+     */
+    suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String {
+        requestDeletion(board, threadId, postId, reasonCode)
+        return ""
+    }
+    /** Same deletion as [deleteByUser], returning the server's answer as it came (M87). */
+    suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String {
+        deleteByUser(board, threadId, postId, password, imageOnly)
+        return ""
+    }
     suspend fun replyToThread(
         board: String,
         threadId: String,
@@ -505,6 +529,15 @@ class DefaultBoardRepository(
         }
     }
 
+    override suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.voteSaidaneResponse(board, threadId, postId)
+            }
+            body
+        }
+
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
         withContext(AppDispatchers.io) {
             runWithInitializedCookies(board) {
@@ -526,6 +559,30 @@ class DefaultBoardRepository(
             }
         }
     }
+
+    override suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.requestDeletionResponse(board, threadId, postId, reasonCode)
+            }
+            body
+        }
+
+    override suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.deleteByUserResponse(board, threadId, postId, password, imageOnly)
+            }
+            body
+        }
 
     override suspend fun replyToThread(
         board: String,

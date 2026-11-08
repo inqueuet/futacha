@@ -42,11 +42,13 @@ internal fun FutaberQuoteStrip(
             .testTag("futaber-quote-strip")
     ) {
         HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
+        // V38: an empty draft is a plain white panel, as the original's (the description above still says what it is).
         Text(
-            if (shown.isBlank()) "引用したい行をタップしてください" else shown,
-            color = if (shown.isBlank()) colors.meta else colors.body,
+            shown,
+            color = colors.body,
             fontSize = 17.sp,
             maxLines = 3,
+            minLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 14.dp)
                 .testTag("futaber-quote-strip-text")

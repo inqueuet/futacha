@@ -109,13 +109,14 @@ configurations.configureEach {
 
 android {
     namespace = "com.valoser.futacha"
-    compileSdk = 37
-    ndkVersion = "29.0.14206865"
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
+    buildToolsVersion = "37.0.0"
+    ndkVersion = "30.0.16248370"
 
     externalNativeBuild {
         cmake {
             path = rootProject.file("shared/src/nativeInterop/CMakeLists.txt")
-            version = "3.22.1"
+            version = "4.1.2"
         }
     }
 
@@ -134,8 +135,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 230
-        versionName = "13.3"
+        versionCode = 238
+        versionName = "13.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -333,7 +334,7 @@ dependencies {
 
     constraints {
         implementation(libs.androidx.compose.foundation.guarded) {
-            because("ComposeSelectionGuardFactory patches two verified 1.13.0-alpha02 call sites; review before upgrading")
+            because("ComposeSelectionGuardFactory patches two verified 1.13.0-rc01 call sites; review before upgrading")
         }
     }
 

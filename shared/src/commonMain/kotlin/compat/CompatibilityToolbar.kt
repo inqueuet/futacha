@@ -10,7 +10,7 @@ enum class CompatToolbarGlyph {
     CHECK_UPDATES, UNDO, HISTORY, FILTER, NG_TOGGLE, DRAWER, TOP,
     PAGE_UP, PAGE_DOWN, BOTTOM, GALLERY, BACK_TO_POST, SCROLL, CLOSE, AUTO_SCROLL,
     PREVIOUS, NEXT, SHARE, DOWNLOAD, ATTACH, UPLOAD, INFO, VOICE_INPUT,
-    DEVICE_INFO, SCREEN, MORE
+    DEVICE_INFO, SCREEN, RESTORE_CLOSED, MORE
 }
 
 /**
@@ -30,6 +30,7 @@ fun compatToolbarGlyph(key: String): CompatToolbarGlyph = when (key) {
     "check" -> CompatToolbarGlyph.CHECK_UPDATES
     "undo" -> CompatToolbarGlyph.UNDO
     "dropped" -> CompatToolbarGlyph.HISTORY
+    COMPAT_THREAD_RESTORE_CLOSED_KEY -> CompatToolbarGlyph.RESTORE_CLOSED
     "extract" -> CompatToolbarGlyph.FILTER
     "quickng" -> CompatToolbarGlyph.NG_TOGGLE
     "drawer" -> CompatToolbarGlyph.DRAWER
@@ -73,8 +74,37 @@ data class CompatToolbarMasterItem(
 data class CompatToolbarItem(
     val key: String,
     val position: Int,
-    val active: Boolean
+    val active: Boolean,
+    /**
+     * FutabaViewer 18-20's third state 「非表示」: neither on the toolbar nor in
+     * the その他 menu. Only the thread toolbar offers it, as in 18-20.
+     */
+    val hidden: Boolean = false
 )
+
+/** The thread toolbar alone has the 18-20 state 「非表示」. */
+fun compatToolbarOffersHidden(surface: CompatToolbarSurface): Boolean = surface == CompatToolbarSurface.THREAD
+
+/** Commands that go to the その他 menu: off the toolbar and not hidden. */
+fun compatToolbarMenuItems(items: List<CompatToolbarItem>): List<CompatToolbarItem> =
+    items.filter { !it.active && !it.hidden }
+
+/** Keys the その他 menu leaves out: on the toolbar, or hidden. */
+fun compatToolbarKeysOutOfMenu(items: List<CompatToolbarItem>): Set<String> =
+    items.filter { it.active || it.hidden }.mapTo(mutableSetOf()) { it.key }
+
+/** The 18-20 tap order: ツールバーに表示 → メニューに表示 → 非表示 → ツールバーに表示. */
+fun CompatToolbarItem.nextCompatToolbarState(): CompatToolbarItem = when {
+    active -> copy(active = false, hidden = false)
+    !hidden -> copy(active = false, hidden = true)
+    else -> copy(active = true, hidden = false)
+}
+
+fun compatToolbarStateLabel(item: CompatToolbarItem): String = when {
+    item.active -> "ツールバーに表示"
+    item.hidden -> "非表示"
+    else -> "メニューに表示"
+}
 
 val COMPAT_TOOLBAR_MASTERS: Map<CompatToolbarSurface, List<CompatToolbarMasterItem>> = mapOf(
     CompatToolbarSurface.CATALOG to listOf(
@@ -116,7 +146,9 @@ val COMPAT_TOOLBAR_MASTERS: Map<CompatToolbarSurface, List<CompatToolbarMasterIt
         CompatToolbarMasterItem("close", "スレを閉じる", false),
         CompatToolbarMasterItem("quickng", "NG切り替え", true),
         CompatToolbarMasterItem("drawer", "ドロワーを開く", true),
-        CompatToolbarMasterItem("autoscroll", "オートスクロール", true)
+        CompatToolbarMasterItem("autoscroll", "オートスクロール", true),
+        // FutabaViewer 18-20 adds this button, off by default.
+        CompatToolbarMasterItem(COMPAT_THREAD_RESTORE_CLOSED_KEY, "閉じたスレを元に戻す", false)
     ),
     CompatToolbarSurface.VIEWER to listOf(
         CompatToolbarMasterItem("download", "保存する", true),
@@ -157,7 +189,7 @@ fun compatToolbarMaster(surface: CompatToolbarSurface): List<CompatToolbarMaster
 fun compatToolbarShowsOverflow(
     surface: CompatToolbarSurface,
     items: List<CompatToolbarItem>
-): Boolean = surface != CompatToolbarSurface.POST || items.any { !it.active }
+): Boolean = surface != CompatToolbarSurface.POST || compatToolbarMenuItems(items).isNotEmpty()
 
 fun reconcileCompatToolbar(
     surface: CompatToolbarSurface,
@@ -174,7 +206,9 @@ fun reconcileCompatToolbar(
             }
         }
     } else persisted
+    val offersHidden = compatToolbarOffersHidden(surface)
     val existing = canonicalPersisted
+        .map { item -> if (item.hidden && (item.active || !offersHidden)) item.copy(hidden = false) else item }
         .asSequence()
         .filter { it.key in masterByKey }
         .distinctBy(CompatToolbarItem::key)

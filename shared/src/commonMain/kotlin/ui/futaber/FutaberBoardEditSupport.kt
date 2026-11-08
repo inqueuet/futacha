@@ -61,7 +61,28 @@ internal fun futaberMoveBoard(latest: List<BoardSummary>, boardId: String, up: B
     return if (index < 0) latest else moveBoardSummary(latest, index, up)
 }
 
+/**
+ * The list with the boards of [orderIds] (the order a drag left, as shown) put in that order in the places they hold; a
+ * board stored twice keeps its second copy where it is, and an id no longer stored is skipped (audit B4).
+ */
+internal fun futaberReorderBoards(latest: List<BoardSummary>, orderIds: List<String>): List<BoardSummary> {
+    val first = HashMap<String, Int>()
+    latest.forEachIndexed { index, board -> if (board.id !in first) first[board.id] = index }
+    val ids = orderIds.distinct().filter { it in first }
+    val slots = ids.map { first.getValue(it) }.sorted()
+    val result = latest.toMutableList()
+    ids.forEachIndexed { i, id -> result[slots[i]] = latest[first.getValue(id)] }
+    return result
+}
+
 /** The list with the board [boardId] renamed; an empty name, an unknown board or an unchanged name leaves it as it is. */
+/** F-B4 E1: the pin of one board flipped; the order and the other boards stay. */
+internal fun futaberTogglePin(latest: List<BoardSummary>, boardId: String): List<BoardSummary> {
+    val index = latest.indexOfFirst { it.id == boardId }
+    if (index < 0) return latest
+    return latest.toMutableList().also { it[index] = it[index].copy(pinned = !it[index].pinned) }
+}
+
 internal fun futaberRenameBoard(latest: List<BoardSummary>, boardId: String, nameInput: String): List<BoardSummary> {
     val name = nameInput.trim().let { futaberSafeTake(it, FUTABER_BOARD_NAME_MAX_CHARS) }
     if (name.isEmpty()) return latest

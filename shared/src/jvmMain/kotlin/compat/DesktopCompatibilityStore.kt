@@ -361,6 +361,16 @@ internal class DesktopCompatibilityStore(
         )
     }
 
+    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int = mutate {
+        val have = it.tabs.mapTo(HashSet()) { tab -> tab.key }
+        // The board keys are made once, not again for every tab (audit D7).
+        val boardKeys = it.boards.mapTo(HashSet(), CompatBoard::key)
+        val added = tabs.distinctBy { tab -> tab.key }.filter { tab -> tab.key !in have && tab.boardKey in boardKeys }
+        if (added.isEmpty()) return@mutate 0
+        state = it.copy(tabs = added.fold(it.tabs) { acc, tab -> replaceTab(acc, tab) })
+        added.size
+    }
+
     override suspend fun updateTab(tab: CompatTab) = mutate {
         val anchor = it.tabs.firstOrNull { current -> current.key == tab.key }?.scrollAnchor
         state = it.copy(tabs = replaceTab(it.tabs, anchor?.let { tab.copy(scrollAnchor = it) } ?: tab))
@@ -784,6 +794,31 @@ internal class DesktopCompatibilityStore(
         count
     }
 
+    override suspend fun loadSharedData(): Map<String, String> = read { current -> current.sharedData }
+
+    override suspend fun saveSharedData(values: Map<String, String?>) {
+        if (values.isEmpty()) return
+        values.keys.forEach(::requireValidCompatSharedDataKey)
+        mutate {
+            val updated = it.sharedData.toMutableMap()
+            values.forEach { (key, value) -> if (value == null) updated.remove(key) else updated[key] = value }
+            state = it.copy(sharedData = updated)
+        }
+    }
+
+    override suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = read { current ->
+        val keys = current.tabs.mapTo(HashSet()) { it.key }
+        current.tabViews.filter { it.profile == profile && it.tabKey in keys }.sortedBy { it.ordinal }
+    }
+
+    override suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) = mutate {
+        val keys = it.tabs.mapTo(HashSet()) { tab -> tab.key }
+        val next = views.filter { view -> view.profile == profile && view.tabKey in keys }.distinctBy { view -> view.tabKey }
+        // A view goes with its tab, as Android's ON DELETE CASCADE does.
+        val kept = it.tabViews.filter { view -> view.profile != profile && view.tabKey in keys }
+        state = it.copy(tabViews = kept + next)
+    }
+
     override suspend fun loadPreference(key: String): String? = read { current -> current.preferences[key] }
 
     override suspend fun savePreference(key: String, value: String) = mutate {
@@ -842,7 +877,7 @@ internal class DesktopCompatibilityStore(
                 toolbars = current.toolbars.map { toolbar ->
                     CompatToolbarBackup(
                         surface = toolbar.surface,
-                        items = toolbar.items.map { item -> CompatToolbarBackupItem(item.key, item.position, item.active) }
+                        items = toolbar.items.map { item -> CompatToolbarBackupItem(item.key, item.position, item.active, item.hidden) }
                     )
                 }
             )
@@ -892,12 +927,12 @@ internal class DesktopCompatibilityStore(
             .fold(it.catalogPreferences) { all, pref -> replaceBy(all, pref, CompatCatalogPreference::boardKey) } else it.catalogPreferences
         val nextToolbars = if (restoreUserSettings) backup.toolbars.fold(it.toolbars) { all, toolbar ->
             val surface = runCatching { CompatToolbarSurface.valueOf(toolbar.surface) }.getOrNull()
-            val items = toolbar.items.map { item -> CompatToolbarItem(item.key, item.position, item.active) }
+            val items = toolbar.items.map { item -> CompatToolbarItem(item.key, item.position, item.active, item.hidden) }
             if (surface == null || !validateCompatToolbar(surface, items)) all else replaceBy(
                 all,
                 ToolbarRecord(
                     toolbar.surface,
-                    toolbar.items.map { item -> ToolbarItemRecord(item.key, item.position, item.active) }
+                    toolbar.items.map { item -> ToolbarItemRecord(item.key, item.position, item.active, item.hidden) }
                 ),
                 ToolbarRecord::surface
             )
@@ -1094,15 +1129,15 @@ internal class DesktopCompatibilityStore(
 
     override suspend fun loadToolbar(surface: CompatToolbarSurface): List<CompatToolbarItem> = mutate {
         val current = it.toolbars.firstOrNull { record -> record.surface == surface.name }
-            ?.items?.map { item -> CompatToolbarItem(item.key, item.position, item.active) }.orEmpty()
+            ?.items?.map { item -> CompatToolbarItem(item.key, item.position, item.active, item.hidden) }.orEmpty()
         val reconciled = reconcileCompatToolbar(surface, current)
-        if (reconciled != current) state = it.copy(toolbars = replaceBy(it.toolbars, ToolbarRecord(surface.name, reconciled.map { item -> ToolbarItemRecord(item.key, item.position, item.active) }), ToolbarRecord::surface))
+        if (reconciled != current) state = it.copy(toolbars = replaceBy(it.toolbars, ToolbarRecord(surface.name, reconciled.map { item -> ToolbarItemRecord(item.key, item.position, item.active, item.hidden) }), ToolbarRecord::surface))
         reconciled
     }
 
     override suspend fun saveToolbar(surface: CompatToolbarSurface, items: List<CompatToolbarItem>) = mutate {
         require(validateCompatToolbar(surface, items)) { "Invalid compatibility toolbar" }
-        state = it.copy(toolbars = replaceBy(it.toolbars, ToolbarRecord(surface.name, items.map { item -> ToolbarItemRecord(item.key, item.position, item.active) }), ToolbarRecord::surface))
+        state = it.copy(toolbars = replaceBy(it.toolbars, ToolbarRecord(surface.name, items.map { item -> ToolbarItemRecord(item.key, item.position, item.active, item.hidden) }), ToolbarRecord::surface))
     }
 
     override suspend fun upsertNgRule(rule: CompatNgRule): Boolean = mutate {
@@ -1540,9 +1575,6 @@ internal class DesktopCompatibilityStore(
         require(snapshot.posts.indices.all { index -> snapshot.posts[index].position == index }) { "Compatibility snapshot positions must be contiguous and zero-based" }
     }
 
-    internal fun modernBoardKeys(boards: List<BoardSummary>): Set<String> =
-        validatedModernBoards(boards).mapTo(mutableSetOf(), CompatBoard::key)
-
     private fun validatedModernBoards(boards: List<BoardSummary>): List<CompatBoard> {
         val seen = mutableSetOf<String>()
         return boards.asSequence().take(MAX_BOARDS).mapIndexedNotNull { index, board ->
@@ -1723,7 +1755,12 @@ private data class PersistedCompatibilityState(
     val toolbars: List<ToolbarRecord> = emptyList(),
     val closedBatch: ClosedTabBatch? = null,
     val historyTombstones: Map<String, Long> = emptyMap(),
-    val archiveRows: List<ArchiveRow> = emptyList()
+    val archiveRows: List<ArchiveRow> = emptyList(),
+    /** The shared data layer's rows ([CompatibilityStore.loadSharedData]): not settings, not in the settings backup. */
+    val sharedData: Map<String, String> = emptyMap(),
+    /** D-B3: the shared tab views (one mode's mark and order on a tab) and drafts, keyed like the Android tables. Not read or written yet. */
+    val tabViews: List<CompatSharedTabView> = emptyList(),
+    val drafts: List<CompatSharedDraft> = emptyList()
 )
 
 @Serializable
@@ -1749,7 +1786,7 @@ private data class DroppedCatalogRecord(
 private data class ToolbarRecord(val surface: String, val items: List<ToolbarItemRecord>)
 
 @Serializable
-private data class ToolbarItemRecord(val key: String, val position: Int, val active: Boolean)
+private data class ToolbarItemRecord(val key: String, val position: Int, val active: Boolean, val hidden: Boolean = false)
 
 @Serializable
 private data class ArchiveRow(

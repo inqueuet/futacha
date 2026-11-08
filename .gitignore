@@ -23,7 +23,12 @@ app-android/nonMinifiedRelease/
 /app-android/src/main/generated/
 /artifacts/
 iosApp/Pods/
-iosApp/iosApp.xcworkspace/
+iosApp/iosApp.xcworkspace/*
+!iosApp/iosApp.xcworkspace/xcshareddata/
+iosApp/iosApp.xcworkspace/xcshareddata/*
+!iosApp/iosApp.xcworkspace/xcshareddata/swiftpm/
+iosApp/iosApp.xcworkspace/xcshareddata/swiftpm/*
+!iosApp/iosApp.xcworkspace/xcshareddata/swiftpm/Package.resolved
 /iosApp/iosApp copy-Info.plist
 *.dSYM/
 

@@ -502,6 +502,10 @@ struct ComposeView: UIViewControllerRepresentable {
                ["mp4", "webm"].contains(ext) {
                 let file = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation.\(ext)")
                 if (try? data.write(to: file)) != nil {
+                    if let mode = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_VIEWER"] {
+                        return FutachaComposeHostViewController(content:
+                            CompatViewerVideoValidationControllerKt.CompatViewerVideoValidationController(filePath: file.path, mode: mode))
+                    }
                     var fallbackPath: String?
                     if let encoded = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FALLBACK_BASE64"], let bytes = Data(base64Encoded: encoded) {
                         let fallback = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation-fallback.mp4")
@@ -543,6 +547,8 @@ private final class FutachaComposeHostViewController: UIViewController {
     private var statusUsesDarkIcons = false
     private var viewerChromeHidden = false
     private var systemBarColor = UIColor.black
+    /// L-B11 (C28): the ふたばー風 picture list / viewer asks to be held upright; nothing else posts this.
+    private var portraitLocked = false
     private var observers: [NSObjectProtocol] = []
 
     init(content: UIViewController) {
@@ -566,6 +572,24 @@ private final class FutachaComposeHostViewController: UIViewController {
             self?.setNeedsStatusBarAppearanceUpdate()
             self?.setNeedsUpdateOfHomeIndicatorAutoHidden()
         })
+        observers.append(center.addObserver(
+            forName: Notification.Name("com.valoser.futacha.futaber-orientation-lock"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, let locked = (notification.userInfo?["portrait"] as? NSNumber)?.boolValue else { return }
+            self.portraitLocked = locked
+            if #available(iOS 16.0, *) {
+                self.setNeedsUpdateOfSupportedInterfaceOrientations()
+                if locked, let scene = self.view.window?.windowScene,
+                   scene.interfaceOrientation.isLandscape {
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+                }
+            } else {
+                // iOS 15: the system re-reads the supported orientations on this call.
+                UIViewController.attemptRotationToDeviceOrientation()
+            }
+        })
     }
 
     required init?(coder: NSCoder) {
@@ -585,6 +609,12 @@ private final class FutachaComposeHostViewController: UIViewController {
         content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(content.view)
         content.didMove(toParent: self)
+    }
+
+    /// The Info.plist's own list (iPhone: upright and both sides; iPad: all four) unless the viewer asked to be upright.
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        if portraitLocked { return .portrait }
+        return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
     }
 
     override var childForStatusBarStyle: UIViewController? { nil }

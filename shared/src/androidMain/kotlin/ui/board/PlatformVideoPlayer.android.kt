@@ -180,6 +180,12 @@ internal actual fun NativePlatformVideoPlayer(
             PlayerView(context).apply {
                 targetView = this
                 useController = editing == null
+                options.controlsAutoHideMillis?.let { controllerShowTimeoutMs = it }
+                if (options.controlsFollowChrome) {
+                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+                        currentControlsCallback(visibility == android.view.View.VISIBLE)
+                    })
+                }
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 this.player = videoAudio?.player ?: player
                 setOnTouchListener { _, event ->
@@ -276,3 +282,5 @@ private fun isAndroidEmulator(): Boolean {
         model.contains("emulator") ||
         product.contains("sdk_gphone")
 }
+
+internal actual val platformVideoAutoPlayByDefault: Boolean = false

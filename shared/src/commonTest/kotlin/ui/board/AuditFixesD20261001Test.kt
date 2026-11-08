@@ -109,7 +109,7 @@ class AuditFixesD20261001Test {
         val bindings = buildCatalogPersistenceBindings(
             coroutineScope = scope,
             stateStore = store,
-            currentBoardWatchWordKey = { "img" },
+            currentBoardSettingKeys = { com.valoser.futacha.shared.state.BoardSettingKeys("img") },
             onFallbackCatalogNgWordsChanged = {},
             onFallbackWatchWordsChanged = {}
         )

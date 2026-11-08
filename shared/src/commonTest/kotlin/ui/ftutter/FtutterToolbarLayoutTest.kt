@@ -11,8 +11,8 @@ class FtutterToolbarLayoutTest {
     }
 
     @Test fun crowdedButtonsHaveAUsableMinimumEvenWhenThePreferenceIsThirty() {
-        assertEquals(40f, ftutterToolbarButtonWidth(82f, FtutterToolbarMetrics(), 13, true, false))
-        assertEquals(40f, ftutterToolbarButtonWidth(411f, FtutterToolbarMetrics(leftSpace = 100, rightSpace = 100), 13, true, false))
+        assertEquals(FTUTTER_TOOLBAR_MIN_BUTTON_WIDTH, ftutterToolbarButtonWidth(82f, FtutterToolbarMetrics(), 13, true, false))
+        assertEquals(FTUTTER_TOOLBAR_MIN_BUTTON_WIDTH, ftutterToolbarButtonWidth(411f, FtutterToolbarMetrics(leftSpace = 100, rightSpace = 100), 13, true, false))
         assertEquals(40f, ftutterToolbarButtonWidth(411f, FtutterToolbarMetrics(iconWidth = 30), 3, false, false))
         assertEquals(80f, ftutterToolbarButtonWidth(1000f, FtutterToolbarMetrics(iconWidth = 80), 3, true, false))
     }

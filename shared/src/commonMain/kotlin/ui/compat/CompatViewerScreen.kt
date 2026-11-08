@@ -113,6 +113,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -260,12 +261,18 @@ import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.time.Clock
 
+/** The post's words as the media info dialog shows them. */
+internal fun compatViewerInfoComment(messageHtml: String): String =
+    com.valoser.futacha.shared.ui.board.messageHtmlToPlainText(messageHtml).trim()
+
 @Composable
 internal fun CompatViewerScreen(
     tab: CompatTab,
     initialIndex: Int,
     initialPostNo: String? = null,
     preparedSnapshot: com.valoser.futacha.shared.compat.CompatThreadSnapshot? = null,
+    /** としあき(仮) follows FutabaViewer 18-20's video defaults; ふたちゃ's shared viewer keeps its own until set. */
+    followsFutabaViewer: Boolean = true,
     directMediaUrl: String? = null,
     directSourcePosition: Int? = null,
     store: CompatibilityStore,
@@ -371,6 +378,7 @@ internal fun CompatViewerScreen(
     val switchWebmToMp4 = preferences.compatPreferenceValue(
         "viewer", "viewerWebMSwitchMp4", "WebMをMP4で再生する"
     ) == "ON"
+    val viewerBehaviour = compatViewerBehaviour(preferences, reference = followsFutabaViewer)
     val platformContext = LocalPlatformContext.current
     fun openSearchResult(url: String, title: String) {
         if (isCompatReverseSearchBrowserUrl(url)) {
@@ -618,7 +626,7 @@ internal fun CompatViewerScreen(
                     openSearchResult(resultUrl, "二次元画像類似検索")
                 }
                 .onFailure { failure ->
-                    message = failure.toCompatUserMessage("二次元画像検索に失敗しました")
+                    message = compatAscii2dFailureMessage(failure.toCompatUserMessage("二次元画像検索に失敗しました"), endpoint)
                 }
         }
     }
@@ -1049,10 +1057,13 @@ internal fun CompatViewerScreen(
                             return@pointerInput
                         }
                         awaitEachGesture {
-                            awaitFirstDown(
+                            val down = awaitFirstDown(
                                 requireUnconsumed = false,
                                 pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                             )
+                            // The platform player marks every touch it receives as consumed, which silently stopped the page
+                            // swipe on a video. Only a touch that starts on its control bar (the lower part) is left to it.
+                            val startedOnControls = down.position.y > size.height * 0.72f
                             var horizontalDragDistance = 0f
                             var verticalDragDistance = 0f
                             var cancelled = false
@@ -1061,7 +1072,7 @@ internal fun CompatViewerScreen(
                                     pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
                                 )
                                 val pointerCount = event.changes.count { it.pressed }
-                                if (event.changes.any { it.isConsumed } || pointerCount >= 2) {
+                                if ((startedOnControls && event.changes.any { it.isConsumed }) || pointerCount >= 2) {
                                     cancelled = true
                                     break
                                 }
@@ -1096,6 +1107,9 @@ internal fun CompatViewerScreen(
                     var playbackState by remember(mediaUrl, switchWebmToMp4) { mutableStateOf(VideoPlayerState.Buffering) }
                     var playbackError by remember(mediaUrl, switchWebmToMp4) { mutableStateOf<VideoPlaybackError?>(null) }
                     val playingUrl = videoCandidates[videoCandidateIndex.coerceIn(0, videoCandidates.lastIndex)]
+                    com.valoser.futacha.shared.ui.board.PlatformKeepScreenOnEffect(
+                        compatViewerKeepsScreenOn(page == pagerState.currentPage, playbackState)
+                    )
                     val videoPromptMetadata = rememberGenerationMetadata(playingUrl,
                         visible = page == pagerState.currentPage && !threadPrivacyEnabled)
                     val posterUrl = post?.thumbnailUrl
@@ -1104,7 +1118,12 @@ internal fun CompatViewerScreen(
                         compatPrivacyRenderAlpha(threadPrivacyEnabled, threadPrivacyAlpha)
                     )
                     Box(modifier = Modifier.fillMaxSize()) {
-                        PlatformVideoPlayer(
+                        CompositionLocalProvider(com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
+                            viewerBehaviour.videoOptions,
+                            com.valoser.futacha.shared.ui.board.LocalVideoPageSwipe provides { forward ->
+                            val target = pagerState.currentPage + if (forward) 1 else -1
+                            if (target in posts.indices) launchScreenAction { pagerState.animateScrollToPage(target) }
+                        }) { PlatformVideoPlayer(
                             videoUrl = playingUrl + reloadSuffix,
                             isActive = page == pagerState.currentPage,
                             modifier = Modifier.fillMaxSize(),
@@ -1122,7 +1141,7 @@ internal fun CompatViewerScreen(
                             onPlaybackError = { playbackError = it },
                             areControlsVisible = chromeVisible,
                             onControlsVisibilityChanged = { visible -> chromeVisible = visible }
-                        )
+                        ) }
                         if (posterUrl != null && playbackState == VideoPlayerState.Buffering) {
                             val posterPainter = rememberAsyncImagePainter(
                                 model = ImageRequest.Builder(platformContext)
@@ -1205,7 +1224,7 @@ internal fun CompatViewerScreen(
                                 mediaDimensions[mediaUrl] = dimensions
                             }
                         },
-                        onClick = { chromeVisible = !chromeVisible },
+                        onClick = { if (viewerBehaviour.tapTogglesToolbar) chromeVisible = !chromeVisible },
                         onLongClick = { quickMenu = true }
                     )
                 }
@@ -1256,10 +1275,13 @@ internal fun CompatViewerScreen(
             onDismissRequest = { infoOpen = false },
             title = { Text(if (isVideo) "動画情報" else "画像情報") },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                     Text("${pagerState.currentPage + 1} / ${posts.size}")
                     current?.let { post ->
                         Text("No.${post.postNo}")
+                        // The post's own words, so the comment is read without going back to the thread.
+                        val comment = remember(post.messageHtml) { compatViewerInfoComment(post.messageHtml) }
+                        if (comment.isNotEmpty()) Text("コメント:\n$comment", modifier = Modifier.testTag("compat-viewer-info-comment"))
                         Text("ファイル: ${mediaUrl?.substringAfterLast('/')?.substringBefore('?').orEmpty()}")
                         Text("形式: ${mediaInfo?.contentType ?: mediaUrl?.substringAfterLast('.', "不明")?.substringBefore('?')?.uppercase()}")
                         Text("サイズ: ${formatCompatMediaByteSize(mediaInfo?.contentLengthBytes)}")
@@ -1339,10 +1361,16 @@ internal fun CompatViewerImagePage(
     onHorizontalSwipe: (Float, Float) -> Unit,
     onDimensionsKnown: (Int, Int) -> Unit,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    /**
+     * ふたばー風 only: a double tap zooms in around the tapped point and again zooms out (the others cycle fit / width /
+     * original). Called with true when it zoomed in; null (the default) keeps the cycle.
+     */
+    onDoubleTapZoom: ((zoomedIn: Boolean) -> Unit)? = null
 ) {
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
+    var lastDownPosition by remember(mediaUrl) { mutableStateOf(Offset.Zero) }
     var localTransform by remember(mediaUrl) { mutableStateOf(viewerTransform) }
     var gestureActive by remember(mediaUrl) { mutableStateOf(false) }
     // Read localTransform only in the layer, gesture and semantics blocks:
@@ -1479,10 +1507,10 @@ internal fun CompatViewerImagePage(
             .pointerInput(mediaUrl, isCurrentPage, resetKey) {
                 if (isCurrentPage) {
                     awaitEachGesture {
-                        awaitFirstDown(
+                        lastDownPosition = awaitFirstDown(
                             requireUnconsumed = false,
                             pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
-                        )
+                        ).position
                         // Keep a gesture-local copy as well as the screen-owned
                         // state. The parent callback may recompose the Pager
                         // only after the current pointer batch has completed;
@@ -1552,7 +1580,11 @@ internal fun CompatViewerImagePage(
                                     lastWasZoomed = nowZoomed
                                     onZoomedChanged(nowZoomed)
                                 }
-                                event.changes.forEach { it.consume() }
+                                // With the double-tap zoom (ふたばー風), a still finger is a tap, not a pan: leave it
+                                // unconsumed so the double tap that zooms back out reaches the click detector.
+                                if (onDoubleTapZoom == null || pointerCount >= 2 || pan != Offset.Zero) {
+                                    event.changes.forEach { it.consume() }
+                                }
                             } else {
                                 val pan = event.calculatePan()
                                 horizontalDragDistance += pan.x
@@ -1619,6 +1651,18 @@ internal fun CompatViewerImagePage(
             .combinedClickable(
                 onClick = onClick,
                 onDoubleClick = {
+                    if (onDoubleTapZoom != null) {
+                        val (scale, x, y) = compatViewerDoubleTapTransform(
+                            localTransform.scale, lastDownPosition.x, lastDownPosition.y,
+                            viewportSize.width.toFloat(), viewportSize.height.toFloat()
+                        )
+                        val updated = CompatViewerTransform(scale, Offset(x, y))
+                        localTransform = updated
+                        onZoomedChanged(scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD)
+                        onTransformChanged(updated.scale, updated.translation)
+                        onDoubleTapZoom(scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD)
+                        return@combinedClickable
+                    }
                     displayMode = (displayMode + 1) % 3
                     // Double-tap changes the APK-compatible display mode.
                     // Do not reset the independent pinch transform here: the

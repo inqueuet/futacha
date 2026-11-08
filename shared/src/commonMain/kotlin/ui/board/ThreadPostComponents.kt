@@ -7,7 +7,8 @@ import com.valoser.futacha.shared.ui.image.InlinePrompt
 import com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
 import com.valoser.futacha.shared.ui.image.planHighQualityThumbnail
-import com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailOverride
+import com.valoser.futacha.shared.ui.image.rememberThreadHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberThreadThumbnailPainter
 import androidx.compose.ui.platform.LocalWindowInfo
 import coil3.size.Precision
 
@@ -145,7 +146,8 @@ internal fun ThreadPostCard(
             .postPressFeedback(post.id, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .padding(
                 horizontal = if (compactHeader) 8.dp else 12.dp,
-                vertical = if (compactHeader) 6.dp else 10.dp
+                vertical = LocalFutachaSharedFeatures.current?.intValue("thread", "threadPostSpacing", 0..20)?.dp
+                    ?: if (compactHeader) 6.dp else 10.dp
             ),
         verticalArrangement = Arrangement.spacedBy(if (compactHeader) 5.dp else 8.dp)
     ) {
@@ -236,13 +238,15 @@ internal fun ThreadPostCard(
                         com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
                 )
             }
-            val highQualityPainter = rememberHighQualityThumbnailOverride(
+            val quality = rememberThreadHighQualityThumbnail(
                 plan = highQualityPlan,
                 thumbnailReady = thumbnailPainterState is AsyncImagePainter.State.Success,
                 imageLoader = imageLoader
             )
+            val highQualityPainter = quality.painter
+            val displayPainter = if (quality.fromCache) requireNotNull(highQualityPainter) else rememberThreadThumbnailPainter(thumbnailPainter, highQualityPainter)
             val promptMetadata = rememberGenerationMetadata(resolvePostTargetMediaUrl(post), thumbnailPainterState)
-            val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
+            val shouldShowThumbnailFallback = !quality.checkingCache && highQualityPainter == null && thumbnailPainterState is AsyncImagePainter.State.Error
             // Measured with layout modifiers instead of BoxWithConstraints: that is a
             // SubcomposeLayout per image post, only to read the available width.
             val thumbnailBoundsFor: Density.(Int) -> ThreadPostThumbnailDisplayBounds = { maxWidthPx ->
@@ -305,7 +309,7 @@ internal fun ThreadPostCard(
                             layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                         }) {
                             Image(
-                                painter = highQualityPainter ?: thumbnailPainter,
+                                painter = displayPainter,
                                 contentDescription = "添付画像",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize()
@@ -494,31 +498,34 @@ internal fun ThreadPostMetadata(
     compactHeader: Boolean = false
 ) {
     val threadColors = LocalFutabaThreadColors.current
+    val headerSp = LocalFutachaSharedFeatures.current?.intValue("thread", "threadHeaderFontSize", 8..16)
+    fun androidx.compose.ui.text.TextStyle.headerSized() =
+        if (headerSp == null) this else copy(fontSize = headerSp.sp, lineHeight = (headerSp * 1.4f).sp)
     val orderStyle = MaterialTheme.typography.labelLarge.withThreadTextSize(
         bodyTextSize = bodyTextSize,
         fallbackFontSize = 14.sp,
         fallbackLineHeight = 20.sp
-    )
+    ).headerSized()
     val subjectStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
         bodyTextSize = bodyTextSize,
         fallbackFontSize = 14.sp,
         fallbackLineHeight = 20.sp
-    )
+    ).headerSized()
     val authorStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
         bodyTextSize = bodyTextSize,
         fallbackFontSize = 14.sp,
         fallbackLineHeight = 20.sp
-    )
+    ).headerSized()
     val secondaryStyle = MaterialTheme.typography.bodySmall.withThreadTextSize(
         bodyTextSize = bodyTextSize,
         fallbackFontSize = 12.sp,
         fallbackLineHeight = 16.sp
-    )
+    ).headerSized()
     val labelStyle = MaterialTheme.typography.labelMedium.withThreadTextSize(
         bodyTextSize = bodyTextSize,
         fallbackFontSize = 12.sp,
         fallbackLineHeight = 16.sp
-    )
+    ).headerSized()
     Column(
         modifier = Modifier.fillMaxWidth().testTag("futacha-post-header-${post.id}"),
         verticalArrangement = Arrangement.spacedBy(if (compactHeader) 2.dp else 6.dp)

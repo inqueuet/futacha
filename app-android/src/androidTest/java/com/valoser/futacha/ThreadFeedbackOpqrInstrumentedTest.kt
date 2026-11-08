@@ -54,6 +54,12 @@ class ThreadFeedbackOpqrInstrumentedTest {
             fetches++; if (fail) error("模擬通信失敗")
             return items
         }
+        // ふたばー風 fetches its catalog with the whole-title layout (L-B1); without this the delegation answered with the
+        // bundled tutorial catalog instead of these threads.
+        override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): CatalogPageContent {
+            fetches++; if (fail) error("模擬通信失敗")
+            return CatalogPageContent(items)
+        }
     }
     @Before fun prepare() {
         rule.activity.deleteDatabase(db)
@@ -176,12 +182,13 @@ class ThreadFeedbackOpqrInstrumentedTest {
         val cb = runBlocking { store.boards.first().single() }
         val tab = CompatTab("q", "${board.url}res/123.htm", "${board.url}res/123.htm", cb.key, board.name, "123", "状態の検証タイトル",
             replyCount = 12, checkedReplyCount = 10, isIsolated = true, isDead = true, insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1)
-        rule.setContent { CompatibilityProfileTheme("mono") {
+        // The tab thumbnails read the image loaders; without them the list did not compose.
+        rule.setContent { Images { CompatibilityProfileTheme("mono") {
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 CompatTabSelector(listOf(tab), tab.key, true, {}, {})
                 CompatThreadMetadataRow(tab, {}, {})
             }
-        } }
+        } } }
         rule.onNodeWithTag("compat-tab-status-q", useUnmergedTree = true).assertTextEquals("隔離")
         val badge = rule.onNodeWithTag("compat-tab-status-q", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val title = rule.onNodeWithTag("compat-tab-title-q", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
@@ -443,25 +450,35 @@ class ThreadFeedbackOpqrInstrumentedTest {
         rule.waitUntil(15_000) { fetches > before && toshiakiPinned("3", "1") }
     }
 
+    /**
+     * L-B5 (M24): ふたばー風 asks the report with the original's sheet (「レス:N」 / 「delを送信」). The extension's NG stays
+     * optional: 「delを送信」 sends without it, the extension's own item (after the original's) sends with it, キャンセル sends
+     * nothing. (It was a check box in a dialog before L-B5.)
+     */
     @Test fun futaberReportDialogKeepsNgOptionalAndForwardsOnlyTheConfirmedChoice() {
         val choices = mutableListOf<Boolean>()
         var open by mutableStateOf(true)
         rule.setContent { FutaberTheme(FutaberThemeMode.Light) {
-            if (open) FutaberRemoteActionDialog(FutaberRemoteAction.Report, "456",
-                onConfirm = { choices += it; open = false }, onDismiss = { open = false }, offerReportNg = true)
+            if (open) FutaberActionSheet(
+                title = "レス:3",
+                actions = futaberReportConfirmActions(
+                    onSend = { choices += false; open = false },
+                    extras = futaberReportConfirmExtras(offerNg = true) { choices += true; open = false }
+                ),
+                onDismiss = { open = false }
+            )
         } }
-        rule.onNode(isToggleable()).assertIsOff()
-        rule.onNodeWithTag("futaber-remote-confirm").performClick()
+        rule.onNodeWithText("レス:3").assertExists()
+        rule.onNodeWithTag("futaber-action-del-send").performClick()
         rule.waitForIdle()
         assertEquals(listOf(false), choices)
         rule.runOnUiThread { open = true }
-        rule.onNode(isToggleable()).assertIsOff().performClick()
-        rule.onNodeWithTag("futaber-remote-confirm").performClick()
+        rule.onNodeWithTag("futaber-action-del-send-ng").performScrollTo().performClick()
         rule.waitForIdle()
         assertEquals(listOf(false, true), choices)
         rule.runOnUiThread { open = true }
-        rule.onNode(isToggleable()).assertIsOff()
-        rule.onNodeWithText("キャンセル").performClick()
+        rule.onNodeWithTag("futaber-action-cancel").performClick()
+        rule.waitForIdle()
         assertEquals(2, choices.size)
     }
 

@@ -2,6 +2,7 @@ package com.valoser.futacha
 
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
@@ -49,7 +50,7 @@ class FutaberParityB8AiInstrumentedTest {
     private var originalModeration = false
     private var originalArchiveReport: String? = null
 
-    private val keys = listOf("compat.futaber.lastBoardId", "compat.futaber.tabs", "compat.futaber.seen")
+    private val keys = listOf("compat.futaber.lastBoardId", "compat.futaber.tabs", "compat.futaber.seen", "compat.futaber.manageCategory")
 
     @Before fun prepare() {
         app = ApplicationProvider.getApplicationContext()
@@ -218,8 +219,9 @@ class FutaberParityB8AiInstrumentedTest {
     @Test fun aCommandOutsideTheSubsetIsAnsweredAsNotSupported() {
         setAiCommands(true)
         openTutorialCatalog()
-        send(FutachaAiAction.SetCatalogMode, "mode" to "new")
-        waitForNotice("ふたばー風モードでは使えません")
+        // F-B6: the catalog mode runs here now; a mode nobody knows is answered.
+        send(FutachaAiAction.SetCatalogMode, "mode" to "zzz")
+        waitForNotice("カタログモードを特定できませんでした")
         // A thread of an official board that is not registered asks to add it first (and nothing is added on Back).
         send(FutachaAiAction.OpenThread, "url" to "https://dat.2chan.net/b/res/1.htm")
         waitForTag("futaber-board-add-question")
@@ -261,9 +263,13 @@ class FutaberParityB8AiInstrumentedTest {
     @Test fun summaryAndHidingChangeNothingWhileOffAndShowTheirStateWhenOn() {
         openTutorialThread()
         assertTrue("no summary panel while the switch is off", absent("compat-thread-ai-panel"))
+        // How many rows the thread lists with nothing hidden (L-B6 (M17): 「NGを無効にする」 can be pressed at any time
+        // now, so what is hidden is read from the list itself).
+        val listedRows = { rule.waitForIdle(); rule.onNodeWithTag("futaber-thread-list").fetchSemanticsNode().config[SemanticsProperties.CollectionInfo].rowCount }
+        val allRows = listedRows()
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-menu-ng-toggle")
-        rule.onNodeWithTag("futaber-menu-ng-toggle").assertIsNotEnabled()
+        rule.onNodeWithTag("futaber-menu-ng-toggle").assertContentDescriptionEquals("NGを無効にする")
         Espresso.pressBack()
         rule.waitUntil(5_000) { absent("futaber-operation-menu") }
 
@@ -278,10 +284,11 @@ class FutaberParityB8AiInstrumentedTest {
         // The panel folds.
         rule.onNodeWithText("スレ要約・閉じる").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithText("スレ要約・開く").fetchSemanticsNodes().isNotEmpty() }
-        // Nothing judged, so nothing hidden: "NGを無効にする" stays off.
+        // Nothing judged, so nothing hidden: the thread lists every row, and "NGを無効にする" is not switched.
+        assertEquals(allRows, listedRows())
         rule.onNodeWithTag("futaber-thread-menu").performClick()
         waitForTag("futaber-menu-ng-toggle")
-        rule.onNodeWithTag("futaber-menu-ng-toggle").assertIsNotEnabled()
+        rule.onNodeWithTag("futaber-menu-ng-toggle").assertContentDescriptionEquals("NGを無効にする")
         Espresso.pressBack()
         rule.waitUntil(5_000) { absent("futaber-operation-menu") }
 

@@ -43,14 +43,15 @@ internal fun ftutterThumbnailSources(
 @Composable
 internal fun FtutterThumbnail(
     thumbnailUrl: String?, fullImageUrl: String?, targetSizePx: Int, contentDescription: String,
-    modifier: Modifier = Modifier, fallbackTint: Color = Color.Gray, quality: Int = 0, catalog: Boolean = false
+    modifier: Modifier = Modifier, fallbackTint: Color = Color.Gray, quality: Int = 0, catalog: Boolean = false,
+    contentScale: androidx.compose.ui.layout.ContentScale? = null
 ) {
     val wifi = isCompatWifiConnected(LocalPlatformContext.current)
     val sources = ftutterThumbnailSources(thumbnailUrl, fullImageUrl, quality, wifi, catalog)
     CompositionLocalProvider(LocalHighQualityThumbnailMode provides HighQualityThumbnailMode.OFF) {
         CatalogPreviewImage(sources.primary, sources.fallback,
             targetSizePx, contentDescription, modifier, fallbackTint,
-            allowThumbnailFallbackOnError = sources.fallback != null)
+            allowThumbnailFallbackOnError = sources.fallback != null, contentScale = contentScale)
     }
 }
 

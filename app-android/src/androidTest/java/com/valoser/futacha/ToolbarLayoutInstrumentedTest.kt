@@ -206,7 +206,11 @@ class ToolbarLayoutInstrumentedTest {
     @Test fun futaberNarrowCatalogKeepsTheRefreshButtonReachable() {
         val loader = ImageLoader(rule.activity).also { images = it }
         rule.setContent {
-            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            // The catalog reads both loaders (the catalog's own since 2026-10-26); without it the screen did not compose.
+            CompositionLocalProvider(
+                LocalFutachaImageLoader provides loader,
+                com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader provides loader
+            ) {
                 FutaberTheme(FutaberThemeMode.Light) {
                     Box(Modifier.width(180.dp).fillMaxHeight()) {
                         FutaberCatalogScreen(

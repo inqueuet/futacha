@@ -94,7 +94,12 @@ internal fun compatPostAttachmentToolbarLabel(hasAttachment: Boolean): String =
 
 internal expect suspend fun compressCompatPostImage(
     attachment: ImageData,
-    maxBytes: Int
+    maxBytes: Int,
+    /**
+     * Draw the picture as JPEG even where its own format could be kept (a GIF, PNG or WebP that fits) and flatten its
+     * transparency onto white: ふたばー風's 「画像の品質」→「JPG圧縮」 (L-B8 C43). Off: as before, for every other caller.
+     */
+    forceJpeg: Boolean = false
 ): Result<ImageData>
 
 /** Returns a safe width/height ratio for the post-form preview, if decodable. */

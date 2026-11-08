@@ -56,9 +56,18 @@ final class IosAppUITests: XCTestCase {
             if element("futaber-drawer-board").waitForExistence(timeout: 8) { tap(element("futaber-drawer-board")) }
             tap(element("futaber-catalog-item"))
             tap(element("futaber-thread-menu"))
+            // F-B2: 「書き込む」 is behind 「その他の機能」.
+            if element("futaber-menu-more").waitForExistence(timeout: 5) { tap(element("futaber-menu-more")) }
             tap(element("futaber-menu-write"))
             tap(element("futaber-post-attach"))
-            tap(element("futaber-action-tool-drawing"))
+            // L-B4 → L-B8 (M37): the camera's black menu opens over the keyboard (the tools sheet before L-B4 was under it,
+            // and 「手書き」 could not be pressed); 手書き is after the original's three, so the menu is scrolled to it.
+            let drawing = element("futaber-callout-tool-drawing")
+            XCTAssertTrue(drawing.waitForExistence(timeout: 10), app.debugDescription)
+            mhtAttach(app, "handwriting-futaber-camera-menu")
+            for _ in 0..<4 where !drawing.isHittable { element("futaber-callout").swipeLeft() }
+            XCTAssertTrue(drawing.isHittable, "手書き \(drawing.frame) cannot be pressed")
+            drawing.tap()
         default:
             tap(element("ftutter-board-row"))
             tap(element("ftutter-catalog-item"))
@@ -73,18 +82,23 @@ final class IosAppUITests: XCTestCase {
             func handwritingIsOn() -> Bool {
                 // Compose exposes the nested checkbox beside the clickable row in
                 // UIKit's accessibility tree, so it need not be a row descendant.
+                // T-B7（M78）でチェックが行の右へ移ってからは、値1の切り替え（Switch）としても読まれる。
                 app.descendants(matching: .any).matching(NSPredicate(format: "selected == YES"))
                     .allElementsBoundByIndex.contains {
                         toggle.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+                    } || app.switches.allElementsBoundByIndex.contains {
+                        toggle.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) && "\($0.value ?? "")" == "1"
                     }
             }
             if !handwritingIsOn() { tap(toggle) }
             XCTAssertTrue(handwritingIsOn(), app.debugDescription)
             app.buttons["戻る"].firstMatch.tap(); app.buttons["戻る"].firstMatch.tap()
             tap(element("ftutter-thread-tool-menu"))
+            tap(element("ftutter-thread-menu-more"))
             tap(element("ftutter-thread-menu-gesture-actions"))
             tap(element("ftutter-gesture-action-14"))
             tap(element("ftutter-post-menu"))
+            tap(element("ftutter-post-menu-more"))
             tap(element("ftutter-post-handwriting"))
         }
         let canvas = element("compat-drawing-canvas")
@@ -922,10 +936,12 @@ final class IosAppUITests: XCTestCase {
         tapVisible(element("ftutter-board-row"))
         XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20))
         tapVisible(element("ftutter-catalog-tool-menu"))
+        tapVisible(element("ftutter-catalog-menu-more"))
         let setting = element("ftutter-catalog-viewed-first")
         XCTAssertTrue(setting.waitForExistence(timeout: 5))
         tapVisible(setting)
         tapVisible(element("ftutter-catalog-tool-menu"))
+        tapVisible(element("ftutter-catalog-menu-more"))
         XCTAssertTrue(app.staticTexts["更新時に閲覧スレを先頭へ：ON"].waitForExistence(timeout: 5), app.debugDescription)
         mhtAttach(app, "feedback-opqr-catalog-board-option")
         tapVisible(setting) // restore OFF
@@ -969,6 +985,7 @@ final class IosAppUITests: XCTestCase {
         tap(element("ftutter-board-row"))
         XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20))
         tap(element("ftutter-catalog-tool-menu"))
+        tap(element("ftutter-catalog-menu-more"))
         tap(element("ftutter-catalog-menu-gesture-actions"))
         tap(element("ftutter-gesture-action-15"))
         XCTAssertTrue(element("ftutter-search-input").waitForExistence(timeout: 5))
@@ -977,16 +994,24 @@ final class IosAppUITests: XCTestCase {
         element("ftutter-catalog-item").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
         XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 15))
         tap(element("ftutter-thread-tool-menu"))
+        tap(element("ftutter-thread-menu-more"))
         tap(element("ftutter-thread-menu-gesture-actions"))
         tap(element("ftutter-gesture-action-14"))
         XCTAssertTrue(element("ftutter-post-dialog").waitForExistence(timeout: 5))
         let comment = app.textViews["ftutter-post-comment"]
-        tap(comment); comment.typeText("keep-this-draft")
+        // 日本語キーボードへ一度に打つと自動操作で文字が抜けることがある（"kep-his-raft"）。1文字ずつ打つ。
+        tap(comment)
+        // 前の回の下書きが残っていれば消してから打つ（下書きは保存されるため）。
+        let leftover = (comment.value as? String ?? "").count
+        if leftover > 0 && (comment.value as? String) != "コメント" {
+            comment.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: leftover))
+        }
+        for character in "keep-this-draft" { comment.typeText(String(character)); usleep(150_000) }
         // Compare the actual input before/after settings, independently of Japanese IME composition.
         let draftBeforeKey = comment.value as? String ?? ""
         XCTAssertTrue(draftBeforeKey.contains("draft"), app.debugDescription)
         tap(element("ftutter-post-menu"))
-        tap(app.buttons["削除キー"].firstMatch)
+        tap(element("ftutter-post-delete-key"))
         let key = element("ftutter-delete-key")
         XCTAssertTrue(key.waitForExistence(timeout: 5)); tap(key)
         app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "TEST1234")
@@ -994,7 +1019,14 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(comment.waitForExistence(timeout: 5))
         XCTAssertEqual(comment.value as? String ?? "", draftBeforeKey, app.debugDescription)
         mhtAttach(app, "feedback-ftutter-key-return-keeps-draft")
-        tap(app.buttons["閉じる"].firstMatch)
+        // 外の暗い所（読み上げの名前は「閉じる」）は画面全体で、キーボードが出ている間はシートが上まで伸び、見えるのは
+        // 上の細い帯だけ。シートの上端のすぐ上を押す。
+        let sheetTop = element("ftutter-post-dialog").frame.minY
+        XCTAssertGreaterThan(sheetTop, 30, app.debugDescription)
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width / 2, dy: sheetTop - 8)).tap()
+        XCTAssertTrue(element("ftutter-thread-settings").waitForExistence(timeout: 5))
+        let sheetGone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: sheetGone, object: element("ftutter-post-dialog"))], timeout: 5), .completed, app.debugDescription)
         tap(element("ftutter-thread-settings"))
         tap(element("ftutter-shared-help"))
         tap(element("help-operation-guide"))
@@ -1055,6 +1087,719 @@ final class IosAppUITests: XCTestCase {
         attach("ftutter-4-extras")
     }
 
+    /// T-B11：ふたったー風の代表の画面が原作の形になっていること（板一覧の長押し・板の追加・カタログとスレッドのメニュー・
+    /// その他の機能・書き込みのシート・選んだタブの下線）。チュートリアル板の模擬データだけを使い、何も送らない。
+    func testFtutterRepresentativeScreensFollowTheOriginal() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "ftutter",
+            "-experience.profile_generation", "1302",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The ftutter host did not reach the foreground.")
+        // 「外を押す」は状態表示の帯（アプリに届かない）より下の、どのメニュー・ダイアログにも掛からない高さ。
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func gone(_ identifier: String) -> Bool {
+            let target = element(identifier)
+            let deadline = Date().addingTimeInterval(5)
+            while target.exists && Date() < deadline { usleep(200_000) }
+            return !target.exists
+        }
+
+        // 板一覧：長押しは題名の無いメニュー（ブラウザで開く・削除）、閉じるボタンは無い。
+        let row = element("ftutter-board-row")
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "The board list is empty.")
+        row.press(forDuration: 1.0)
+        XCTAssertTrue(element("ftutter-board-menu").waitForExistence(timeout: 5), "The board long-press menu did not open.")
+        XCTAssertTrue(element("ftutter-board-open-browser").exists)
+        XCTAssertFalse(app.staticTexts["閉じる"].exists, "The original's board menu has no close button.")
+        attach("ftutter-orig-1-board-menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.14)).tap()
+        XCTAssertTrue(gone("ftutter-board-menu"), "Tapping outside did not close the board menu.")
+
+        // 板の追加：空のOKは黙って閉じる。
+        element("ftutter-add-board").tap()
+        XCTAssertTrue(element("ftutter-add-board-input").waitForExistence(timeout: 5), "The add dialog did not open.")
+        attach("ftutter-orig-2-add-board")
+        element("ftutter-add-board-ok").tap()
+        XCTAssertTrue(gone("ftutter-add-board-input"), "An empty OK did not close the add dialog.")
+
+        // カタログのメニュー：原作の項目と「その他の機能」の1行、押すとこちらの項目。
+        row.tap()
+        XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        element("ftutter-catalog-tool-menu").tap()
+        XCTAssertTrue(element("ftutter-catalog-menu-more").waitForExistence(timeout: 5), "The catalog menu has no 「その他の機能」.")
+        XCTAssertTrue(element("ftutter-catalog-menu-browser").exists)
+        XCTAssertFalse(element("ftutter-catalog-viewed-first").exists, "Our items must sit behind 「その他の機能」.")
+        attach("ftutter-orig-3-catalog-menu")
+        element("ftutter-catalog-menu-more").tap()
+        XCTAssertTrue(element("ftutter-catalog-viewed-first").waitForExistence(timeout: 5), "「その他の機能」 did not list our items.")
+        attach("ftutter-orig-4-catalog-more")
+        element("ftutter-catalog-menu-more-back").tap()
+        XCTAssertTrue(element("ftutter-catalog-menu-browser").waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.14)).tap()
+        XCTAssertTrue(gone("ftutter-catalog-menu-more"), "The catalog menu did not close.")
+
+        // スレッドのメニュー：書き込むは「その他の機能」の中。開くと下付きのシートで本文に入力できる。
+        element("ftutter-catalog-item").tap()
+        XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 20), "The thread shows no post.")
+        element("ftutter-thread-tool-menu").tap()
+        XCTAssertTrue(element("ftutter-thread-menu-more").waitForExistence(timeout: 5), "The thread menu has no 「その他の機能」.")
+        XCTAssertFalse(element("ftutter-thread-menu-reply").exists, "書き込む must sit behind 「その他の機能」.")
+        attach("ftutter-orig-5-thread-menu")
+        element("ftutter-thread-menu-more").tap()
+        XCTAssertTrue(element("ftutter-thread-menu-reply").waitForExistence(timeout: 5))
+        element("ftutter-thread-menu-reply").tap()
+        let comment = element("ftutter-post-comment")
+        XCTAssertTrue(comment.waitForExistence(timeout: 10), "The post sheet did not open.")
+        XCTAssertGreaterThan(comment.frame.midY, app.frame.height * 0.3, "The post sheet should sit at the bottom.")
+        attach("ftutter-orig-6-post-sheet")
+    }
+
+    /// 実機で、本物のfutaber（bundle ID `futaber`）とふたばー風を同じ板・同じスレで同じ順に操作し、画面を並べて撮る。
+    /// 見比べ用で合否は付けない。実在の板を読むだけで、投稿・そうだね・delは送らない。書き込み画面の試験用の文字はクリアして閉じる。
+    /// 実行するときは TEST_RUNNER_FUTABER_COMPARE=1 を付ける（futaberが入った実機だけ）。
+    func testFutaberSideBySideWithTheOriginalOnDevice() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["FUTABER_COMPARE"] == "1", "Set TEST_RUNNER_FUTABER_COMPARE=1 on a device with futaber.")
+        let original = XCUIApplication(bundleIdentifier: "futaber")
+        func shot(_ name: String) {
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func point(_ app: XCUIApplication, _ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y))
+        }
+        func swipe(_ app: XCUIApplication, from x1: CGFloat, to x2: CGFloat, y: CGFloat = 380) {
+            point(app, x1, y).press(forDuration: 0.02, thenDragTo: point(app, x2, y), withVelocity: .fast, thenHoldForDuration: 0)
+            sleep(2)
+        }
+        let width = XCUIScreen.main.screenshot().image.size.width
+
+        // ---- The original: the catalog it shows, the thread with the most replies among the first rows ----
+        original.terminate()
+        original.activate()
+        sleep(5)
+        // The original sometimes asks for an App Store rating on launch; that is put away first.
+        for owner in [original, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let notNow = owner.buttons["今はしない"]
+            if notNow.exists { notNow.tap(); sleep(1) }
+        }
+        shot("F01-catalog")
+        var title = ""
+        var best = -1
+        var bestCell: XCUIElement?
+        for cell in original.cells.allElementsBoundByIndex.prefix(14) where cell.exists && cell.frame.minY > 60 && cell.frame.maxY < 600 {
+            let texts = cell.staticTexts.allElementsBoundByIndex.map(\.label)
+            guard let name = texts.first, let count = texts.dropFirst().compactMap({ Int($0) }).first else { continue }
+            if count > best { best = count; title = name; bestCell = cell }
+        }
+        let key = String(title.prefix(6))
+        XCTAssertFalse(key.isEmpty, "No thread was found in the original's catalog.")
+        bestCell?.tap()
+        sleep(5)
+        shot("F02-thread")
+        // Picture list: open, scroll, close, open again (where does it come back?), then viewer → list.
+        point(original, 37, 647).tap(); sleep(3); shot("F03-gallery")
+        point(original, width / 2, 560).press(forDuration: 0.02, thenDragTo: point(original, width / 2, 140), withVelocity: .fast, thenHoldForDuration: 0.1)
+        sleep(2); shot("F04-gallery-scrolled")
+        original.buttons.allElementsBoundByIndex.filter { $0.exists && $0.frame.minY < 80 }.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        sleep(2)
+        point(original, 37, 647).tap(); sleep(3); shot("F05-gallery-reopened")
+        point(original, 60, 160).tap(); sleep(3); shot("F06-viewer")
+        original.buttons.allElementsBoundByIndex.filter { $0.exists && $0.frame.minY > 560 }.min(by: { $0.frame.minX < $1.frame.minX })?.tap()
+        sleep(2); shot("F07-viewer-to-list")
+        original.buttons.allElementsBoundByIndex.filter { $0.exists && $0.frame.minY < 80 }.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        sleep(2)
+        // Swipes.
+        swipe(original, from: 80, to: width - 30); shot("F08-thread-right-swipe")
+        swipe(original, from: width - 50, to: 30); shot("F09-catalog-left-swipe")
+        swipe(original, from: 2, to: width * 0.7); shot("F10-thread-left-edge")
+        point(original, width - 20, 380).tap(); sleep(2)
+        swipe(original, from: width - 50, to: 30); shot("F11-thread-left-swipe-writing")
+        original.textViews.firstMatch.typeText("すけべしまる")
+        sleep(1)
+        let tools = original.buttons.allElementsBoundByIndex
+            .filter { $0.exists && $0.frame.minY > 250 && $0.frame.maxY < 460 && $0.frame.width < 60 }
+            .sorted { $0.frame.minX < $1.frame.minX }
+        if tools.count >= 5 {
+            tools[1].tap(); sleep(1); shot("F12-kana")
+            tools[4].tap(); sleep(1)
+            tools[2].tap(); sleep(2); shot("F13-pasteboard")
+            original.buttons["閉じる"].firstMatch.tap(); sleep(1)
+        }
+        point(original, 27, 42).tap(); sleep(1)
+        original.terminate()
+
+        // ---- ふたばー風 on the same board and thread ----
+        let ours = makeApplication()
+        let boards = [["id": "may27", "name": "ねこ", "category": "比較", "url": "https://may.2chan.net/27/futaba.php", "description": "比較"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        ours.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1201",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        ours.launch()
+        func element(_ identifier: String) -> XCUIElement { ours.descendants(matching: .any).matching(identifier: identifier).firstMatch }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20), "Our catalog shows no thread.")
+        sleep(3)
+        shot("O01-catalog")
+        let ourThread = ours.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", key)).firstMatch
+        if ourThread.waitForExistence(timeout: 10) { ourThread.tap() } else { element("futaber-catalog-item").tap() }
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 20))
+        sleep(3)
+        shot("O02-thread")
+        element("futaber-thread-gallery").tap(); sleep(3); shot("O03-gallery")
+        point(ours, width / 2, 560).press(forDuration: 0.02, thenDragTo: point(ours, width / 2, 140), withVelocity: .fast, thenHoldForDuration: 0.1)
+        sleep(2); shot("O04-gallery-scrolled")
+        element("futaber-gallery-close").tap(); sleep(2)
+        element("futaber-thread-gallery").tap(); sleep(3); shot("O05-gallery-reopened")
+        element("futaber-gallery-item").tap(); sleep(3); shot("O06-viewer")
+        element("futaber-viewer-grid").tap(); sleep(2); shot("O07-viewer-to-list")
+        element("futaber-gallery-close").tap(); sleep(2)
+        swipe(ours, from: 80, to: width - 30); shot("O08-thread-right-swipe")
+        swipe(ours, from: width - 50, to: 30); shot("O09-catalog-left-swipe")
+        swipe(ours, from: 2, to: width * 0.7); shot("O10-thread-left-edge")
+        if element("futaber-drawer-scrim").exists { element("futaber-drawer-scrim").tap() } else { point(ours, width - 20, 380).tap() }
+        sleep(2)
+        swipe(ours, from: width - 50, to: 30); shot("O11-thread-left-swipe-writing")
+        let comment = element("futaber-post-comment")
+        func clearComment() { element("futaber-post-clear").tap(); sleep(1); comment.tap() }
+        // Typing probes (the first runs lost the "し" after "べ"): all at once, the same without a voiced letter, and one
+        // character at a time.
+        comment.tap()
+        comment.typeText("すけべしまる"); sleep(1); shot("O11b-typed-at-once")
+        clearComment()
+        comment.typeText("すけへしまる"); sleep(1); shot("O11c-typed-without-voiced")
+        clearComment()
+        for character in "すけべしまる" { comment.typeText(String(character)); usleep(400_000) }
+        sleep(1); shot("O11d-typed-one-by-one")
+        element("futaber-post-kana").tap(); sleep(1); shot("O12-kana")
+        element("futaber-post-clear").tap(); sleep(1)
+        element("futaber-post-pasteboard").tap(); sleep(2); shot("O13-pasteboard")
+        element("futaber-pasteboard-close").tap(); sleep(1)
+        element("futaber-post-close").tap(); sleep(1)
+    }
+
+    /// ふたったー風で、実在の may/b のスレッドを開いた時の位置を確かめる（「スレを開くと勝手に最下部まで行く」の報告）。
+    /// 読むだけで、投稿・そうだね・delは送らない。通信が要るので、TEST_RUNNER_FTUTTER_LIVE=1 を付けた時だけ動く。
+    /// 各スレッドで、開いた直後と5秒後に、一覧の末尾の帯が画面にあるかと一番上のレスを記録し、画面を撮る。
+    func testFtutterOpensLiveMayThreadsWhereTheyShould() throws {
+        // Run on a fresh install of the app (`xcrun devicectl device uninstall app …` first): it counts on new threads and the
+        // extension starting off.
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["FTUTTER_LIVE"] == "1", "Set TEST_RUNNER_FTUTTER_LIVE=1 (reads may.2chan.net).")
+        let app = makeApplication()
+        let boards = [["id": "ftutter-live-may", "name": "may/b", "category": "二次元裏",
+            "url": "https://may.2chan.net/b/futaba.php", "description": "may"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "ftutter",
+            "-experience.profile_generation", String(Int(Date().timeIntervalSince1970)),
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: identifier).firstMatch }
+        func all(_ identifier: String) -> [XCUIElement] {
+            app.descendants(matching: .any).matching(identifier: identifier).allElementsBoundByIndex.filter { $0.exists }
+        }
+        func shot(_ name: String) {
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func note(_ text: String) {
+            let attachment = XCTAttachment(string: text)
+            attachment.name = "note"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            print("FtutterLiveProbe: \(text)")
+        }
+        let screen = app.frame
+        func onScreen(_ e: XCUIElement) -> Bool { e.exists && e.frame.maxY > 0 && e.frame.minY < screen.maxY && !e.frame.isEmpty }
+        func where_() -> (endBand: Bool, topPost: String, topY: CGFloat) {
+            let end = all("ftutter-end-band").contains(where: onScreen)
+            let posts = all("ftutter-post").filter(onScreen).sorted { $0.frame.minY < $1.frame.minY }
+            let top = posts.first
+            return (end, String((top?.label ?? "").replacingOccurrences(of: "\n", with: " ").prefix(60)), top?.frame.minY ?? -1)
+        }
+
+        XCTAssertTrue(element("ftutter-board-row").waitForExistence(timeout: 30), "No board row.")
+        let rows = all("ftutter-board-row")
+        (rows.first { $0.label.contains("may") } ?? rows.first!).tap()
+        XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 60), "The may/b catalog did not load.")
+        sleep(2)
+        shot("00-catalog")
+        var report: [String] = []
+        var bottoms = 0
+        for index in 0..<6 {
+            let items = all("ftutter-catalog-item")
+            guard index < items.count else { break }
+            items[index].tap()
+            XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 60), "Thread #\(index) showed no post.")
+            sleep(1)
+            let soon = where_()
+            shot("\(index + 1)a-opened")
+            sleep(5)
+            let later = where_()
+            shot("\(index + 1)b-5s-later")
+            let line = "first visit #\(index): soon end=\(soon.endBand) top=\(soon.topPost) | later end=\(later.endBand) top=\(later.topPost)"
+            note(line)
+            report.append(line)
+            if soon.endBand || later.endBand { bottoms += 1 }
+            // Back to the catalog with the top bar's ← (the left edge opens the drawer in this mode).
+            element("ftutter-back").tap()
+            XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 15), "Did not get back to the catalog after #\(index).")
+            sleep(1)
+        }
+        note(report.joined(separator: "\n"))
+
+        // A new thread must stay where it opened when the app leaves the foreground and comes back, and on a refresh (the
+        // report: new threads ran to their bottom; saving the read count moved the 「ここまで読んだ」 band and the list went with it).
+        var stays: [String] = []
+        do {
+            let items = all("ftutter-catalog-item")
+            if items.count > 7 {
+                items[6].tap()
+                XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 60))
+                sleep(3)
+                let opened = where_()
+                XCUIDevice.shared.press(.home)
+                sleep(2)
+                app.activate()
+                sleep(3)
+                let afterBackground = where_()
+                shot("40-new-thread-after-background")
+                stays.append("background: \(opened.topPost) -> end=\(afterBackground.endBand) \(afterBackground.topPost)")
+                XCTAssertEqual(afterBackground.topPost, opened.topPost, "A new thread moved after the app came back to the foreground.")
+                element("ftutter-back").tap()
+                XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 15))
+                sleep(1)
+                all("ftutter-catalog-item")[7].tap()
+                XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 60))
+                sleep(3)
+                let opened2 = where_()
+                element("ftutter-thread-tool-refresh").tap()
+                sleep(4)
+                let afterRefresh = where_()
+                shot("41-new-thread-after-refresh")
+                stays.append("refresh: \(opened2.topPost) -> end=\(afterRefresh.endBand) \(afterRefresh.topPost)")
+                XCTAssertEqual(afterRefresh.topPost, opened2.topPost, "A new thread moved after a refresh.")
+                element("ftutter-back").tap()
+                XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 15))
+                sleep(1)
+            }
+        }
+        note("new thread stays: " + stays.joined(separator: " | "))
+
+        // Reopening: untouched, read partway, read to the end, and after the app is started again. Threads are found by
+        // their catalog label, as the catalog's order can change between visits.
+        func label(_ index: Int) -> (String, Int) { (all("ftutter-catalog-item")[index].label, index) }
+        func open(_ wanted: (String, Int)) {
+            let items = all("ftutter-catalog-item")
+            let byLabel = wanted.0.isEmpty ? nil : (items.first { $0.label == wanted.0 } ?? items.first { $0.label.hasPrefix(String(wanted.0.prefix(8))) })
+            (byLabel ?? items[min(wanted.1, items.count - 1)]).tap()
+            XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 60))
+            sleep(3)
+        }
+        func back() {
+            element("ftutter-back").tap()
+            XCTAssertTrue(element("ftutter-catalog-item").waitForExistence(timeout: 15))
+            sleep(1)
+        }
+        func scrollDown(_ times: Int) {
+            for _ in 0..<times {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+                    .press(forDuration: 0.02, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)), withVelocity: .fast, thenHoldForDuration: 0.05)
+                usleep(300_000)
+            }
+            sleep(2)
+        }
+        var reopen: [String] = []
+        note("catalog labels: " + all("ftutter-catalog-item").prefix(6).map { String($0.label.prefix(30)) }.joined(separator: " | "))
+        let untouchedThread = label(4), partwayThread = label(5), endThread = label(3)
+        open(untouchedThread); let untouched = where_(); back()
+        open(untouchedThread); let untouchedAgain = where_(); shot("30-untouched-reopened"); back()
+        reopen.append("untouched: \(untouched.topPost) -> \(untouchedAgain.topPost)")
+        open(partwayThread); scrollDown(2); let partway = where_(); shot("31-left-partway"); back()
+        open(partwayThread); let partwayAgain = where_(); shot("32-partway-reopened"); back()
+        reopen.append("partway: \(partway.topPost) -> \(partwayAgain.topPost) end=\(partwayAgain.endBand)")
+        open(endThread); let endFirst = where_(); scrollDown(12); let end = where_(); shot("33-left-at-the-end"); back()
+        open(endThread); let endAgain = where_(); shot("34-end-reopened"); back()
+        reopen.append("read to the end: end=\(end.endBand) \(end.topPost) -> end=\(endAgain.endBand) \(endAgain.topPost)")
+        // The extension 「スレッドを先頭から開く」: turned on in the settings, the thread read to the end opens at its first post.
+        open(endThread)
+        let beforeSettings = where_()
+        let extrasRow = element("ftutter-settings-extras")
+        func openExtras() {
+            element("ftutter-thread-settings").tap()
+            XCTAssertTrue(extrasRow.waitForExistence(timeout: 10))
+            // On a small iPhone the row is below the fold.
+            for _ in 0..<6 where !extrasRow.isHittable { app.swipeUp() }
+            extrasRow.tap()
+        }
+        openExtras()
+        let extrasPage = element("ftutter-settings-page-extras")
+        if !extrasPage.waitForExistence(timeout: 3) { extrasRow.tap() }
+        XCTAssertTrue(extrasPage.waitForExistence(timeout: 10))
+        let toggle = element("ftutter-setting-compat.ftutter.ext.openAtTop")
+        for _ in 0..<8 where !toggle.isHittable { extrasPage.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        // Run on a fresh install (the switch starts off): one tap turns it on, one at the end turns it off again.
+        toggle.tap()
+        sleep(1)
+        shot("35-extension-on")
+        app.buttons["戻る"].firstMatch.tap(); app.buttons["戻る"].firstMatch.tap()
+        XCTAssertTrue(element("ftutter-post").waitForExistence(timeout: 15))
+        sleep(2)
+        let backFromSettings = where_()
+        shot("36-back-from-settings")
+        back()
+        open(endThread); let endWithExtension = where_(); shot("37-end-reopened-from-the-top"); back()
+        reopen.append("extension on: back from settings end=\(backFromSettings.endBand) \(backFromSettings.topPost) | reopened end=\(endWithExtension.endBand) \(endWithExtension.topPost)")
+        XCTAssertTrue(endWithExtension.topPost == endFirst.topPost && !endWithExtension.endBand,
+            "With 「スレッドを先頭から開く」 on, the thread read to the end did not open where it first opened: \(endWithExtension) vs \(endFirst)")
+        XCTAssertEqual(backFromSettings.topPost, beforeSettings.topPost, "Coming back from the settings moved the thread.")
+        // Leave the extension off again for other runs.
+        open(endThread)
+        openExtras()
+        if !extrasPage.waitForExistence(timeout: 3) { extrasRow.tap() }
+        for _ in 0..<8 where !toggle.isHittable { extrasPage.swipeUp() }
+        if toggle.waitForExistence(timeout: 10) { toggle.tap() }
+        app.buttons["戻る"].firstMatch.tap(); app.buttons["戻る"].firstMatch.tap()
+        note(reopen.joined(separator: "\n"))
+        // A first visit shows its end band only when the thread fits on the screen (a new thread with few posts); the
+        // screenshots record each opening for the reader, so that is not asserted here.
+        _ = bottoms
+    }
+
+    /// ふたばー風のスワイプが、実機のfutaberで確かめた動作と同じになる（docs/thread-feedback-1444136530-2026-10-27.md）。
+    /// スレッド：左端から右で板一覧、中央から右でカタログへ、左で書き込み。カタログ：左で最後に見たスレッド、右で板一覧。
+    func testFutaberSwipesFollowTheOriginal() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1201",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y))
+        }
+        let width = app.frame.width
+        let midY = app.frame.height * 0.5
+        func swipe(from x1: CGFloat, to x2: CGFloat) {
+            point(x1, midY).press(forDuration: 0.02, thenDragTo: point(x2, midY), withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        func waitGone(_ identifier: String, timeout: TimeInterval = 10) -> Bool {
+            let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element(identifier))
+            return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
+        }
+
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+        XCTAssertTrue(waitGone("futaber-drawer"), "The board list stayed open over the catalog.")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread shows no post.")
+
+        // The left edge opens the board list over the thread (it used to open the operation menu).
+        swipe(from: 2, to: width * 0.7)
+        XCTAssertTrue(element("futaber-drawer").waitForExistence(timeout: 5), "A swipe from the left edge did not open the board list.")
+        XCTAssertFalse(element("futaber-operation-menu").exists, "The left edge still opened the operation menu.")
+        attach("futaber-swipe-1-edge-board-list")
+        // Tapping the thread beside the list closes it.
+        point(width * 0.92, midY).tap()
+        XCTAssertTrue(waitGone("futaber-drawer"), "The board list did not close.")
+
+        // Further in, a swipe to the right goes back to the catalog.
+        swipe(from: width * 0.25, to: width * 0.9)
+        XCTAssertTrue(waitGone("futaber-thread-title"), "A right swipe did not leave the thread.")
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 5))
+        attach("futaber-swipe-2-back-to-catalog")
+
+        // On the catalog a swipe to the left goes back into the thread last read.
+        swipe(from: width * 0.85, to: width * 0.1)
+        XCTAssertTrue(element("futaber-thread-title").waitForExistence(timeout: 10), "A left swipe on the catalog did not reopen the thread.")
+
+        // On the thread a swipe to the left opens the writing screen; closing it sends nothing.
+        swipe(from: width * 0.85, to: width * 0.1)
+        XCTAssertTrue(element("futaber-post-screen").waitForExistence(timeout: 5), "A left swipe did not open the writing screen.")
+        attach("futaber-swipe-3-writing")
+        element("futaber-post-close").tap()
+        XCTAssertTrue(waitGone("futaber-post-screen"))
+
+        // Back on the catalog, a swipe to the right opens the board list.
+        futaberBackToCatalog(app)
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+        swipe(from: width * 0.25, to: width * 0.9)
+        XCTAssertTrue(element("futaber-drawer").waitForExistence(timeout: 5), "A right swipe on the catalog did not open the board list.")
+        attach("futaber-swipe-4-catalog-board-list")
+    }
+
+    /// L-B2「見た目の土台」: the catalog and the thread look like futaber 5.1.2 at the foundation level. The bottom bars
+    /// are white bands 44pt high with five equal slots (no floating capsule), the catalog's navigation bar is white with
+    /// the red board address, the thread has no bar at the top (its title is one red line under the status area and the
+    /// posts start 20pt below it), no teal (the 2026-10-06 redesign) is left on the bars, and ダークテーマ paints the
+    /// bars in futaber's dark grey. Run on the tutorial board only; the theme is put back to 「端末の設定に合わせる」.
+    func testFutaberLookMatchesTheOriginal() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1201",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func settle(_ seconds: TimeInterval = 1.0) { Thread.sleep(forTimeInterval: seconds) }
+        struct Pixels {
+            let width: Int, height: Int, scale: CGFloat
+            var data: [UInt8]
+            init(_ image: UIImage) {
+                let cg = image.cgImage!
+                width = cg.width; height = cg.height; scale = CGFloat(cg.width) / image.size.width
+                data = [UInt8](repeating: 0, count: cg.width * cg.height * 4)
+                let w = width, h = height
+                data.withUnsafeMutableBytes { raw in
+                    let context = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                    context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+                }
+            }
+            func at(_ x: CGFloat, _ y: CGFloat) -> (Int, Int, Int) {
+                let px = min(max(Int(x * scale), 0), width - 1), py = min(max(Int(y * scale), 0), height - 1)
+                let i = (py * width + px) * 4
+                return (Int(data[i]), Int(data[i + 1]), Int(data[i + 2]))
+            }
+            /// The average colour of the pixels in `rect` that differ most from `ground` (a text's ink).
+            func ink(in rect: CGRect, ground: (Int, Int, Int)) -> (Int, Int, Int)? {
+                var sum = (0, 0, 0), count = 0
+                var y = rect.minY
+                while y < rect.maxY {
+                    var x = rect.minX
+                    while x < rect.maxX {
+                        let p = at(x, y)
+                        if abs(p.0 - ground.0) + abs(p.1 - ground.1) + abs(p.2 - ground.2) > 300 {
+                            sum = (sum.0 + p.0, sum.1 + p.1, sum.2 + p.2); count += 1
+                        }
+                        x += 0.5
+                    }
+                    y += 0.5
+                }
+                return count == 0 ? nil : (sum.0 / count, sum.1 / count, sum.2 / count)
+            }
+            /// How far above `y` the first non-white pixel (the hairline over a white bar) is, at `x`.
+            func hairlineAbove(x: CGFloat, from y: CGFloat) -> CGFloat {
+                var distance: CGFloat = 0.5
+                while distance < 60 {
+                    let p = at(x, y - distance)
+                    if p.0 < 245 || p.1 < 245 || p.2 < 245 { return distance }
+                    distance += 0.5
+                }
+                return distance
+            }
+            /// Pixels of the redesign's teal (#0E7C73, #5FD0C4) in `rect`.
+            func teal(in rect: CGRect) -> Int {
+                var count = 0
+                var y = rect.minY
+                while y < rect.maxY {
+                    var x = rect.minX
+                    while x < rect.maxX {
+                        let p = at(x, y)
+                        for t in [(0x0E, 0x7C, 0x73), (0x5F, 0xD0, 0xC4)] where abs(p.0 - t.0) + abs(p.1 - t.1) + abs(p.2 - t.2) <= 60 { count += 1 }
+                        x += 1
+                    }
+                    y += 1
+                }
+                return count
+            }
+        }
+        func close(_ a: (Int, Int, Int), _ b: (Int, Int, Int), _ tolerance: Int = 9) -> Bool {
+            abs(a.0 - b.0) + abs(a.1 - b.1) + abs(a.2 - b.2) <= tolerance
+        }
+        let white = (255, 255, 255)
+        let width = app.frame.width
+
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+        settle(1.5)
+
+        // The catalog: the bottom bar is a white band 44pt high, the navigation bar white with the red address.
+        // (An accessibility frame is grown to the 48pt touch size, so the height is read from the pixels: the button sits
+        // in the middle of the band, 22pt under the hairline over the bar.)
+        let refresh = element("futaber-refresh").frame
+        XCTAssertEqual(refresh.width, width / 5, accuracy: 1, "The bottom bar's slots are not one fifth of the width.")
+        var pixels = Pixels(app.screenshot().image)
+        XCTAssertEqual(pixels.hairlineAbove(x: width / 5, from: refresh.midY), 22, accuracy: 1.5, "The bottom bar is not 44pt high.")
+        for slot in 1...4 {
+            let p = pixels.at(width / 5 * CGFloat(slot), refresh.midY)
+            XCTAssertTrue(close(p, white), "The bottom bar between the buttons is \(p), not white (a floating capsule?).")
+        }
+        let address = element("futaber-board-address").frame
+        XCTAssertTrue(close(pixels.at(address.minX + 1, address.minY + 1), white), "The navigation bar is not white.")
+        if let ink = pixels.ink(in: address, ground: white) {
+            XCTAssertTrue(ink.0 > 150 && ink.1 < 90 && ink.2 < 90, "The board address is \(ink), not red.")
+        } else { XCTFail("The board address shows no text.") }
+        XCTAssertEqual(pixels.teal(in: CGRect(x: 0, y: 0, width: width, height: address.maxY)), 0, "Teal on the catalog's top.")
+        XCTAssertEqual(pixels.teal(in: CGRect(x: 0, y: refresh.minY - 2, width: width, height: app.frame.height - refresh.minY + 2)), 0,
+            "Teal on the catalog's bottom bar.")
+        attach("futaber-look-1-catalog")
+
+        // The thread: no bar at the top; the title under the status area, the posts 20pt below it.
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread shows no post.")
+        settle(1.5)
+        let title = element("futaber-thread-title").frame
+        let list = element("futaber-thread-list").frame
+        XCTAssertEqual(list.minY - title.minY, 20.5, accuracy: 2, "The posts do not start 20pt under the title's top.")
+        XCTAssertLessThanOrEqual(title.minY, 60, "The title is not right under the status area.")
+        pixels = Pixels(app.screenshot().image)
+        if let ink = pixels.ink(in: title, ground: white) {
+            XCTAssertTrue(ink.0 > 150 && ink.1 < 90 && ink.2 < 90, "The thread title is \(ink), not red.")
+        } else { XCTFail("The thread title shows no text.") }
+        let threadRefresh = element("futaber-thread-refresh").frame
+        XCTAssertEqual(pixels.hairlineAbove(x: width / 5 * 2, from: threadRefresh.midY), 22, accuracy: 1.5,
+            "The thread's bottom bar is not 44pt high.")
+        XCTAssertTrue(close(pixels.at(width / 5 * 2, threadRefresh.midY), white), "The thread's bottom bar is not white.")
+        XCTAssertEqual(pixels.teal(in: CGRect(x: 0, y: 0, width: width, height: list.minY)), 0, "Teal on the thread's top.")
+        XCTAssertFalse(app.buttons["カタログへ戻る"].exists, "The thread still shows a ← button.")
+        // L-B3 (V08・V25): a post's header is one text: the number first, the date, and "No." last, in the same element.
+        let header = element("futaber-post-header")
+        XCTAssertTrue(header.waitForExistence(timeout: 10), "No post header.")
+        XCTAssertNotNil(header.label.range(of: #"^\d+ .*\d\d/\d\d/\d\d.* No\.\d+$"#, options: .regularExpression),
+            "The header is not one text in futaber's order: \(header.label)")
+        // V11: a picture is 0.7 of its thumbnail (the tutorial's are 250, 229, 191, 168 or 125 wide).
+        let picture = element("futaber-post-image")
+        if picture.exists {
+            let shown = picture.frame.width
+            XCTAssertTrue([250, 229, 191, 168, 125].contains { abs(CGFloat($0) * 0.7 - shown) < 1.5 },
+                "The picture is \(shown)pt wide, not 0.7 of its thumbnail.")
+        }
+        attach("futaber-look-2-thread")
+        // F22: the thread ends with the grey footer and "…頃消えます" at its right.
+        element("futaber-thread-bottom").tap()
+        settle(1.0)
+        let expiry = element("futaber-thread-expiry")
+        for _ in 0..<6 where !(expiry.exists && expiry.frame.maxY < threadRefresh.minY - 2) {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+            settle(0.6)
+        }
+        XCTAssertTrue(expiry.exists, "The thread does not end with 「…頃消えます」.")
+        XCTAssertEqual(expiry.label, "19:54頃消えます")
+        settle(1.0)
+        pixels = Pixels(app.screenshot().image)
+        let footer = element("futaber-thread-end").frame
+        XCTAssertTrue(close(pixels.at(footer.minX + 3, footer.minY + 2), (0xF2, 0xF2, 0xF2), 6),
+            "The footer is \(pixels.at(footer.minX + 3, footer.minY + 2)), not futaber's grey.")
+        if let ink = pixels.ink(in: CGRect(x: footer.midX, y: expiry.frame.minY, width: footer.width / 2, height: expiry.frame.height),
+                                ground: (0xF2, 0xF2, 0xF2)) {
+            XCTAssertTrue(abs(ink.0 - ink.1) < 20, "「…頃消えます」 is \(ink), not grey.")
+        } else { XCTFail("「…頃消えます」 is not at the right of the footer.") }
+        attach("futaber-look-2b-thread-end")
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        settle(0.8)
+        attach("futaber-look-3-menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        settle(0.8)
+        futaberBackToCatalog(app)
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10), "A right swipe did not go back to the catalog.")
+        // L-B3 (V12): the thread just read is in the shared history, so its cell's strip is grey (#EEEEEE).
+        settle(1.0)
+        let readCell = element("futaber-catalog-item")
+        XCTAssertTrue(readCell.label.contains("、既読"), "The read thread's cell does not say so: \(readCell.label)")
+        pixels = Pixels(app.screenshot().image)
+        let strip = pixels.at(readCell.frame.minX + 2, readCell.frame.maxY - 3)
+        XCTAssertTrue(close(strip, (0xEE, 0xEE, 0xEE), 6), "The read cell's strip is \(strip), not futaber's grey.")
+        attach("futaber-look-3b-catalog-read")
+
+        // ダークテーマ: futaber's dark grey bars (#1D1F21), the theme list in futaber's order.
+        element("futaber-open-settings").tap()
+        element("futaber-settings-row-theme").tap()
+        XCTAssertTrue(element("futaber-settings-row-theme-light").waitForExistence(timeout: 10))
+        let order = ["light", "olddark", "dark", "futaba", "system"].map { element("futaber-settings-row-theme-\($0)").frame.minY }
+        XCTAssertEqual(order, order.sorted(), "The themes are not in futaber's order, then 端末の設定に合わせる.")
+        attach("futaber-look-4-themes")
+        element("futaber-settings-row-theme-dark").tap()
+        settle(0.5)
+        element("futaber-settings-back").tap()
+        element("futaber-settings-done").tap()
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+        settle(1.5)
+        pixels = Pixels(app.screenshot().image)
+        let dark = (0x1D, 0x1F, 0x21)
+        XCTAssertTrue(close(pixels.at(width / 5, element("futaber-refresh").frame.midY), dark),
+            "The dark bottom bar is \(pixels.at(width / 5, element("futaber-refresh").frame.midY)).")
+        attach("futaber-look-5-catalog-dark")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        settle(1.5)
+        attach("futaber-look-6-thread-dark")
+        futaberBackToCatalog(app)
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+
+        // 後始末：テーマを端末の設定へ戻す。
+        element("futaber-open-settings").tap()
+        element("futaber-settings-row-theme").tap()
+        element("futaber-settings-row-theme-system").tap()
+        settle(0.5)
+        element("futaber-settings-back").tap()
+        element("futaber-settings-done").tap()
+    }
+
     func testFutaberPreviewModeReachesCatalogThreadAndTabs() throws {
         let app = makeApplication()
         // 板の一覧は既存の試験と同じく起動引数で固定し、端末に残った状態に左右されないようにする。
@@ -1099,15 +1844,20 @@ final class IosAppUITests: XCTestCase {
         // 手動登録：登録すると帯が出て、カタログへ戻っても残る。
         element("futaber-thread-menu").tap()
         XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        // L-B6 (M20): 「タブに追加」 follows the original's eleven items inside the grid's scroll.
+        futaberRevealInMenu(app, element("futaber-menu-tab"))
         element("futaber-menu-tab").tap()
         XCTAssertTrue(element("futaber-tab").waitForExistence(timeout: 10), "The registered tab strip did not appear.")
         attach("futaber-4-tab")
-        app.buttons["カタログへ戻る"].firstMatch.tap()
+        futaberBackToCatalog(app)
         XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
         XCTAssertTrue(element("futaber-tab").exists, "The tab strip must stay on the catalog.")
 
-        // 管理画面の履歴に、今開いたスレッドが記録されている。
+        // 管理画面の履歴に、今開いたスレッドが記録されている（L-B10: the panel opens on the category chosen last, so the
+        // history is chosen first）。
         element("futaber-manage").tap()
+        XCTAssertTrue(element("futaber-manage-category-History").waitForExistence(timeout: 10))
+        element("futaber-manage-category-History").tap()
         XCTAssertTrue(element("futaber-history-row").waitForExistence(timeout: 10), "The history list is empty after opening a thread.")
         attach("futaber-5-manage")
         element("futaber-manage-close").tap()
@@ -1117,10 +1867,93 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 10))
         element("futaber-thread-menu").tap()
         XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        // L-B6 (M20): 「タブに追加」 follows the original's eleven items inside the grid's scroll.
+        futaberRevealInMenu(app, element("futaber-menu-tab"))
         element("futaber-menu-tab").tap()
         let gone = NSPredicate(format: "exists == false")
         expectation(for: gone, evaluatedWith: element("futaber-tab"), handler: nil)
         waitForExpectations(timeout: 10)
+    }
+
+    /// L-B2 (V05): the thread has no "←" any more (futaber has none); a right swipe across the posts goes back to the
+    /// catalog, as in the original (the title's accessibility action 「カタログへ戻る」 does the same for VoiceOver).
+    /// L-B7（S22・G21・F03）：カタログの行を押すと行が青く「Loading...」が出て、読み込めてからスレッドが開く。
+    /// スレッドの末尾には「引っ張って...」があり、末尾で上へ引いて離すと更新して「新着 N」が出て消える。
+    /// チュートリアル板のスレッドは起動引数 `-futaber.uitest.threadDelayMillis` だけ遅れて返る（デバッグ版だけ）。
+    func testFutaberOpensWithLoadingAndPullsToRefresh() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1201",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument,
+            "-futaber.uitest.threadDelayMillis", "2500"
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) {
+            element("futaber-drawer-board").tap()
+        }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+
+        // S22: the row is pressed (selected) and "Loading..." shows; the thread opens once its page is there.
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-hud").waitForExistence(timeout: 2), "No Loading... over the catalog.")
+        XCTAssertFalse(element("futaber-post").exists, "The thread must wait for its page.")
+        XCTAssertTrue(element("futaber-catalog-item").isSelected, "The pressed row is not marked.")
+        attach("futaber-open-1-loading")
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread did not open after loading.")
+        let hudGone = NSPredicate(format: "exists == false")
+        expectation(for: hudGone, evaluatedWith: element("futaber-hud"), handler: nil)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(element("futaber-toast").exists, "Opened from the catalog: no 新着 N.")
+
+        // G21: the end row has 「引っ張って...」; a pull up past it refreshes and 「新着 N」 shows (F03).
+        let list = element("futaber-thread-list")
+        let pull = element("futaber-thread-pull")
+        for _ in 0..<12 where !(pull.exists && pull.isHittable) {
+            list.swipeUp(velocity: .fast)
+        }
+        XCTAssertTrue(pull.waitForExistence(timeout: 5) && pull.isHittable, "The end row 引っ張って... is missing.")
+        // The last swipe that reached the end may have pulled past it already: let that refresh and its box finish first.
+        Thread.sleep(forTimeInterval: 3.5) // a refresh started by that swipe answers in 2.5 s
+        let boxGone = NSPredicate(format: "exists == false")
+        expectation(for: boxGone, evaluatedWith: element("futaber-toast"), handler: nil)
+        waitForExpectations(timeout: 15)
+        XCTAssertFalse(element("futaber-toast").exists, "No refresh may be pending before the pull.")
+        attach("futaber-open-2-end")
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        start.press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)),
+                    withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(element("futaber-toast").waitForExistence(timeout: 10), "The pull did not refresh with 新着 N.")
+        attach("futaber-open-3-new-count")
+        let toastGone = NSPredicate(format: "exists == false")
+        expectation(for: toastGone, evaluatedWith: element("futaber-toast"), handler: nil)
+        waitForExpectations(timeout: 8)
+    }
+
+    private func futaberBackToCatalog(_ app: XCUIApplication) {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let midY = app.frame.height * 0.5
+        origin.withOffset(CGVector(dx: app.frame.width * 0.25, dy: midY)).press(
+            forDuration: 0.02,
+            thenDragTo: origin.withOffset(CGVector(dx: app.frame.width * 0.9, dy: midY)),
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
     }
 
     // MARK: - MHT（ふたばー風・ふたちゃ・としあき(仮)）
@@ -1166,17 +1999,18 @@ final class IosAppUITests: XCTestCase {
         mhtAttach(app, "futaber-mht-2-done")
         element("futaber-mht-close").tap()
 
-        app.buttons["カタログへ戻る"].firstMatch.tap()
+        futaberBackToCatalog(app)
         XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
         element("futaber-manage").tap()
         element("futaber-manage-category-SavedBox").tap()
         XCTAssertTrue(element("futaber-mht-row").waitForExistence(timeout: 15), "The MHT file is not listed in the saved box.")
         mhtAttach(app, "futaber-mht-3-box")
-        element("futaber-mht-row").tap()
+        // L-B10 (S21): a tap on the row shares the file (futaber's); the row's 「開く」 opens it in the app.
+        element("futaber-mht-open").tap()
         XCTAssertTrue(element("futaber-offline-notice").waitForExistence(timeout: 20), "The saved copy did not open.")
         XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
         mhtAttach(app, "futaber-mht-4-opened")
-        app.buttons["カタログへ戻る"].firstMatch.tap()
+        futaberBackToCatalog(app)
         XCTAssertTrue(element("futaber-catalog-grid").waitForExistence(timeout: 10))
 
         // 後始末：保存したMHTを消し、次の試験に残さない。
@@ -1447,6 +2281,28 @@ final class IosAppUITests: XCTestCase {
         return app
     }
 
+    /// L-B5: scrolls the open sheet's group (from just above キャンセル, a place that is always in the group) until [target]
+    /// can be pressed: this app's items come after the original's inside the group.
+    func futaberRevealInSheet(_ app: XCUIApplication, _ target: XCUIElement) {
+        let cancel = app.descendants(matching: .any).matching(identifier: "futaber-action-cancel").firstMatch
+        for _ in 0..<6 where !(target.exists && target.isHittable) {
+            guard cancel.exists else { break }
+            let frame = cancel.frame
+            let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY - 36))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)))
+            // Read again once the group has stopped moving (the target's place is the same twice in a row).
+            var last = target.exists ? target.frame : .zero
+            var stable = 0
+            for _ in 0..<20 where stable < 2 {
+                Thread.sleep(forTimeInterval: 0.15)
+                let now = target.exists ? target.frame : .zero
+                stable = now == last ? stable + 1 : 0
+                last = now
+            }
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(target) did not come into the sheet's group")
+    }
+
     func testFutaberManualResponseMarkCanBeAddedListedAndRemoved() throws {
         let app = try futaberTutorialApp(generation: "1501")
         app.launch()
@@ -1457,9 +2313,15 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
         element("futaber-catalog-item").tap()
         XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        // L-B5 (M21): 「レスをマーク／一覧」 is this app's item, after the original's そうだね inside the sheet's group.
+        func revealMark() -> XCUIElement {
+            let mark = element("futaber-action-mark")
+            XCTAssertTrue(mark.waitForExistence(timeout: 10))
+            futaberRevealInSheet(app, mark)
+            return mark
+        }
         element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
-        XCTAssertTrue(element("futaber-action-mark").waitForExistence(timeout: 10))
-        element("futaber-action-mark").tap()
+        revealMark().tap()
         let add = app.buttons["☆ レスをマーク"]
         let remove = app.buttons["★ マーク解除"]
         if remove.waitForExistence(timeout: 2) { remove.tap() }
@@ -1474,9 +2336,321 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["マーク一覧"].exists, "Returning to the post must close the mark controls.")
         element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
-        element("futaber-action-mark").tap()
+        revealMark().tap()
         XCTAssertTrue(remove.waitForExistence(timeout: 10)); remove.tap()
         XCTAssertTrue(add.waitForExistence(timeout: 10))
+    }
+
+    /// L-B4 (M47): the post sheet holds the original's 7 items, its heading and キャンセル on an iPhone SE, all hittable, and the
+    /// veil is over the bottom bar too (a tap there closes the sheet). Nothing is sent: the sheet is closed with キャンセル.
+    /// L-B6 (M20): this app's items follow the original's eleven inside the menu's grid, which shows three rows; the grid
+    /// is moved up from its third row until [target] can be pressed.
+    func futaberRevealInMenu(_ app: XCUIApplication, _ target: XCUIElement) {
+        let row3 = app.descendants(matching: .any).matching(identifier: "futaber-menu-ng-toggle").firstMatch
+        _ = target.waitForExistence(timeout: 10)
+        for _ in 0..<6 where !(target.exists && target.isHittable) {
+            guard row3.exists else { break }
+            let frame = row3.frame
+            let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -160)))
+            var last = target.exists ? target.frame : .zero
+            var stable = 0
+            for _ in 0..<20 where stable < 2 {
+                Thread.sleep(forTimeInterval: 0.15)
+                let now = target.exists ? target.frame : .zero
+                stable = now == last ? stable + 1 : 0
+                last = now
+            }
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(target) did not come into the menu's grid")
+    }
+
+    /// L-B6「操作メニュー」: the original's eleven items in its 4×3 cells (the 11th empty until L-B12), the card standing on
+    /// the bar's top, iOS's edge swipe leaving the menu open (G34), the search word's list and bubble, and the MHT alert
+    /// over the menu. Pictures for the side-by-side with futaber. Nothing is sent (the alert is cancelled).
+    func testFutaberOperationMenuMatchesTheOriginal() throws {
+        let app = try futaberTutorialApp(generation: "1601")
+        app.launch()
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        // The bar's top, read before the menu's veil covers it (an element under the veil is not exposed).
+        XCTAssertTrue(element("futaber-thread-refresh").waitForExistence(timeout: 10))
+        let refresh = element("futaber-thread-refresh").frame
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.8)
+        let slots = ["copy-url", "small-images", "many-replies", "read-aloud", "url-scheme", "favorite", "mht-save", "ng-edit",
+            "ng-toggle", "new"]
+        let frames = slots.map { element("futaber-menu-\($0)").frame }
+        for (index, id) in slots.enumerated() {
+            let item = element("futaber-menu-\(id)")
+            XCTAssertTrue(item.exists && item.isHittable, "\(id) is not in sight")
+            let column = index % 4, row = index / 4
+            XCTAssertEqual(frames[index].minX, frames[row * 4].minX + CGFloat(column) * frames[0].width, accuracy: 2, "\(id) column")
+            XCTAssertEqual(frames[index].minY, frames[column].minY + CGFloat(row) * 100, accuracy: 2, "\(id) row")
+        }
+        // L-B12 filled the 11th cell: 「プレイヤーを表示」 is there now.
+        XCTAssertTrue(element("futaber-menu-player").exists, "「プレイヤーを表示」 is the 11th cell since L-B12")
+        let card = element("futaber-operation-menu").frame
+        // The bar is 44 high round the button's centre (its accessibility frame is widened to the minimum touch size).
+        XCTAssertEqual(card.maxY, refresh.midY - 22, accuracy: 1.5, "the card's bottom is the bar's top")
+        XCTAssertEqual(card.minX, 8, accuracy: 1.5)
+        mhtAttach(app, "futaber-lb6-menu")
+        // G34: a swipe in from the left edge does not close the menu (nor open the board list).
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let midY = app.frame.height * 0.3
+        origin.withOffset(CGVector(dx: 2, dy: midY)).press(forDuration: 0.02,
+            thenDragTo: origin.withOffset(CGVector(dx: app.frame.width * 0.7, dy: midY)), withVelocity: .fast, thenHoldForDuration: 0)
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(element("futaber-operation-menu").exists, "The edge swipe closed the menu.")
+        XCTAssertFalse(element("futaber-drawer").exists, "The edge swipe opened the board list over the menu.")
+        // M15: the MHT alert over the menu; キャンセル leaves the menu.
+        element("futaber-menu-mht-save").tap()
+        XCTAssertTrue(element("futaber-mht-choose-cancel").waitForExistence(timeout: 10), "The MHT alert did not open.")
+        mhtAttach(app, "futaber-lb6-mht-alert")
+        element("futaber-mht-choose-cancel").tap()
+        XCTAssertTrue(element("futaber-mht-choose-cancel").waitForNonExistence(timeout: 5))
+        XCTAssertTrue(element("futaber-menu-mht-save").exists, "The menu closed with the alert.")
+        // M08: the field puts the grid away for the found posts; the search key shows them as a bubble.
+        element("futaber-menu-search").tap()
+        XCTAssertTrue(element("futaber-menu-search-cancel").waitForExistence(timeout: 5), "「キャンセル」 did not appear.")
+        element("futaber-menu-search").typeText("テスト")
+        XCTAssertTrue(element("futaber-menu-result-count").waitForExistence(timeout: 5), "The count of the found posts is missing.")
+        XCTAssertFalse(element("futaber-menu-new").exists, "The grid stayed while searching.")
+        mhtAttach(app, "futaber-lb6-search-typed")
+        element("futaber-menu-search").typeText("\n")
+        XCTAssertTrue(element("futaber-quote-card").waitForExistence(timeout: 10), "The found posts' bubble did not open.")
+        XCTAssertFalse(element("futaber-filter-chip").exists, "The thread was narrowed.")
+        mhtAttach(app, "futaber-lb6-search-bubble")
+        element("futaber-quote-close-all").tap()
+        XCTAssertTrue(element("futaber-quote-card").waitForNonExistence(timeout: 5))
+        // M11: the posts with many replies as a bubble.
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-menu-many-replies").waitForExistence(timeout: 10))
+        element("futaber-menu-many-replies").tap()
+        XCTAssertTrue(element("futaber-quote-card").waitForExistence(timeout: 10), "The many-replies bubble did not open.")
+        mhtAttach(app, "futaber-lb6-many-replies")
+        element("futaber-quote-close-all").tap()
+        XCTAssertTrue(element("futaber-quote-card").waitForNonExistence(timeout: 5))
+        // M10: the pictures at 0.3; the label turns.
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-menu-small-images").waitForExistence(timeout: 10))
+        element("futaber-menu-small-images").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForNonExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.8)
+        mhtAttach(app, "futaber-lb6-image-small")
+        element("futaber-thread-menu").tap()
+        XCTAssertTrue(element("futaber-menu-small-images").waitForExistence(timeout: 10))
+        // VoiceOver reads the item's name (and its label text after it).
+        XCTAssertTrue(element("futaber-menu-small-images").label.hasPrefix("画像を大きくする"), element("futaber-menu-small-images").label)
+        element("futaber-menu-small-images").tap()
+        XCTAssertTrue(element("futaber-operation-menu").waitForNonExistence(timeout: 5))
+    }
+
+    func testFutaberPostSheetFitsOnTheSmallScreen() throws {
+        let app = try futaberTutorialApp(generation: "1504")
+        app.launch()
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        func openSheet() {
+            element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
+            XCTAssertTrue(element("futaber-action-cancel").waitForExistence(timeout: 10), "The post sheet did not open.")
+        }
+        // Where the bottom bar's 「更新」 is, read before the sheet covers it (an element under the veil is not exposed).
+        XCTAssertTrue(element("futaber-thread-refresh").waitForExistence(timeout: 10), "The bottom bar's refresh button was not found.")
+        let refresh = element("futaber-thread-refresh").frame
+        openSheet()
+        Thread.sleep(forTimeInterval: 1.2) // the scroll bar's flash on opening
+        let screen = app.windows.firstMatch.frame
+        for id in ["quote", "quote-number", "quote-last", "copy", "delete-own", "report", "saidane", "cancel"] {
+            let item = element("futaber-action-\(id)")
+            XCTAssertTrue(item.exists, "\(id) is missing")
+            XCTAssertTrue(item.isHittable, "\(id) is not hittable: \(item.frame)")
+            XCTAssertTrue(screen.contains(item.frame), "\(id) \(item.frame) is outside the screen \(screen)")
+        }
+        // キャンセル is the bottom group, 8pt over the screen's bottom (an SE has no home indicator).
+        let cancel = element("futaber-action-cancel").frame
+        XCTAssertLessThanOrEqual(cancel.maxY, screen.maxY - 7, "キャンセル \(cancel) is not 8pt over the bottom")
+        mhtAttach(app, "futaber-post-sheet-small-screen")
+        // M47 (1): the veil covers the bottom bar: a tap where 「更新」 is closes the sheet.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: refresh.midX, dy: refresh.midY)).tap()
+        XCTAssertTrue(element("futaber-action-cancel").waitForNonExistence(timeout: 5), "A tap on the veil over the bar must close the sheet.")
+        openSheet()
+        element("futaber-action-cancel").tap()
+        XCTAssertTrue(element("futaber-action-cancel").waitForNonExistence(timeout: 5))
+    }
+
+    /// L-B8: the writing screen as futaber's on an iPhone SE: the original's six tools and 「送信」 in their places, the
+    /// camera's black menu over the camera, quote mode by pulling the text down, and a right swipe that closes the writing
+    /// (the draft is kept). Nothing is sent.
+    func testFutaberPostScreenMatchesTheOriginal() throws {
+        let app = try futaberTutorialApp(generation: "1508")
+        app.launch()
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+        func openWriting() {
+            element("futaber-thread-menu").tap()
+            // F-B2: this app's items (「書き込む」 among them) are behind 「その他の機能」, the 12th cell.
+            let more = element("futaber-menu-more")
+            if more.waitForExistence(timeout: 5) { more.tap() }
+            let write = element("futaber-menu-write")
+            XCTAssertTrue(write.waitForExistence(timeout: 10))
+            for _ in 0..<12 where !write.isHittable { app.swipeUp(); Thread.sleep(forTimeInterval: 1.0) }
+            Thread.sleep(forTimeInterval: 1.0) // the grid's fling stops: a tap while it scrolls only stops it
+            write.tap()
+            XCTAssertTrue(element("futaber-post-comment").waitForExistence(timeout: 10), "The writing screen did not open.")
+            Thread.sleep(forTimeInterval: 1.0) // the keyboard's slide
+        }
+        openWriting()
+        let screen = app.windows.firstMatch.frame
+        // The six places from the left (the paper plane's empty), each about 44 wide, and 送信's 90 wide frame on the right.
+        let six = ["futaber-post-attach", "futaber-post-kana", "futaber-post-pasteboard", "futaber-post-clear", "futaber-post-settings"]
+        let frames = six.map { element($0).frame }
+        // iOS widens a small control's accessibility frame to 48 (and cuts it at the screen's side): the places are read
+        // from the middles, 44 apart within the widening's few points.
+        for (id, frame) in zip(six, frames) {
+            XCTAssertTrue(screen.contains(frame), "\(id) \(frame) is off the screen \(screen)")
+            XCTAssertGreaterThanOrEqual(frame.width, 44, "\(id) \(frame)")
+        }
+        let middles = frames.map(\.midX)
+        XCTAssertEqual(middles, middles.sorted(), "the tools are not in the original's order: \(frames)")
+        XCTAssertLessThanOrEqual(frames[0].minX, 4.5, "the camera is not the original's first place: \(frames)")
+        XCTAssertEqual(middles[1], 4 + 44 + 22, accuracy: 3, "ｶﾅ is not the original's second place: \(frames)")
+        XCTAssertEqual(middles[2] - middles[1], 44, accuracy: 3, "用紙 is not the third place: \(frames)")
+        // × and the gear are the 5th and 6th places (the 4th, the paper plane, is kept empty).
+        XCTAssertEqual(middles[3] - middles[2], 88, accuracy: 3, "× is not two places after the paper: \(frames)")
+        XCTAssertEqual(middles[4] - middles[3], 44, accuracy: 3, "the gear is not after ×: \(frames)")
+        let send = element("futaber-post-send-frame").frame
+        XCTAssertEqual(send.width, 90, accuracy: 1.5)
+        XCTAssertEqual(send.height, 30, accuracy: 1.5)
+        XCTAssertGreaterThanOrEqual(send.minX, frames[4].midX + 22, "送信 \(send) is over the gear \(frames[4])")
+        XCTAssertLessThanOrEqual(send.maxX, screen.maxX - 6, "送信 \(send) is not 8 from the right")
+        XCTAssertFalse(element("futaber-post-send").isEnabled, "送信 must be a frame that cannot be pressed while empty")
+        XCTAssertTrue(app.staticTexts["0行 / 0B"].exists, "The empty counter is not 「0行 / 0B」")
+        mhtAttach(app, "futaber-post-se-tools")
+        // M37: the camera's black menu over the camera, the original's items without its 「カメラ」 (taken out on
+        // 2026-11-04, the user's decision) in their order; the keyboard stays.
+        element("futaber-post-attach").tap()
+        let recent = element("futaber-callout-recent")
+        XCTAssertTrue(recent.waitForExistence(timeout: 5), "The camera's menu did not open.")
+        XCTAssertFalse(element("futaber-callout-camera").exists, "The camera item is still in the menu.")
+        let items = ["recent", "file", "library"].map { element("futaber-callout-\($0)").frame }
+        XCTAssertEqual(items.map(\.minX), items.map(\.minX).sorted())
+        XCTAssertLessThanOrEqual(element("futaber-callout").frame.maxY, frames[0].minY + 1, "The menu is not over the camera.")
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard went away when the menu opened.")
+        mhtAttach(app, "futaber-post-se-camera-menu")
+        // Outside the menu, near the top (the middle of the screen is on the menu of a short screen such as an SE's).
+        element("futaber-callout-outside").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        XCTAssertTrue(recent.waitForNonExistence(timeout: 5))
+        // G12: pulling the text down at its top goes into quote mode; the draft strip takes the writing back.
+        element("futaber-post-comment").typeText("引用前")
+        // From the text's first line (the original's 91-04 drags from the body).
+        let body = element("futaber-post-body")
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+            .press(forDuration: 0.1, thenDragTo: body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)),
+                withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(element("futaber-quote-strip").waitForExistence(timeout: 5), "Pulling the text down did not enter quote mode.")
+        mhtAttach(app, "futaber-post-se-quote-mode")
+        element("futaber-quote-strip").tap()
+        XCTAssertTrue(element("futaber-post-comment").waitForExistence(timeout: 5))
+        // G29: a right swipe from the middle closes the writing, and the draft is there when it opens again.
+        let comment = element("futaber-post-comment")
+        comment.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
+            .press(forDuration: 0.05, thenDragTo: comment.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.3)))
+        XCTAssertTrue(element("futaber-post-screen").waitForNonExistence(timeout: 5), "A right swipe did not close the writing.")
+        openWriting()
+        XCTAssertTrue((element("futaber-post-comment").value as? String ?? "").contains("引用前"), "The draft was not kept.")
+        element("futaber-post-clear").tap()
+        element("futaber-post-close").tap()
+        XCTAssertTrue(element("futaber-post-screen").waitForNonExistence(timeout: 5))
+    }
+
+    /// L-B4: pictures of the sheets and the bubbles for the side-by-side with futaber, in light and dark (no assertions;
+    /// nothing is sent, each sheet is closed with キャンセル). Run with TEST_RUNNER_FUTABER_SHEETS=1.
+    func testFutaberSheetsCaptureForReview() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["FUTABER_SHEETS"] == "1", "Set TEST_RUNNER_FUTABER_SHEETS=1 to take the pictures.")
+        let app = try futaberTutorialApp(generation: "1505")
+        app.launch()
+        defer { app.terminate() }
+        func element(_ id: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: id).firstMatch
+        }
+        func settle(_ seconds: TimeInterval = 1.2) { Thread.sleep(forTimeInterval: seconds) }
+        func cancelSheet() {
+            if element("futaber-action-cancel").exists { element("futaber-action-cancel").tap() }
+            _ = element("futaber-post-actions").waitForNonExistence(timeout: 5)
+        }
+        func useTheme(_ theme: String) {
+            element("futaber-open-settings").tap()
+            element("futaber-settings-row-theme").tap()
+            XCTAssertTrue(element("futaber-settings-row-theme-\(theme)").waitForExistence(timeout: 10))
+            element("futaber-settings-row-theme-\(theme)").tap()
+            settle(0.5)
+            element("futaber-settings-back").tap()
+            element("futaber-settings-done").tap()
+            XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20))
+        for theme in ["light", "dark"] {
+            useTheme(theme)
+            element("futaber-catalog-item").press(forDuration: 1)
+            if element("futaber-action-cancel").waitForExistence(timeout: 8) { settle(); mhtAttach(app, "sheets-\(theme)-catalog-row") }
+            cancelSheet()
+            element("futaber-catalog-item").tap()
+            XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15))
+            settle()
+            element("futaber-post").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).press(forDuration: 1)
+            if element("futaber-action-cancel").waitForExistence(timeout: 8) { settle(); mhtAttach(app, "sheets-\(theme)-post") }
+            cancelSheet()
+            let picture = element("futaber-post-image")
+            if picture.waitForExistence(timeout: 5) && picture.isHittable {
+                picture.press(forDuration: 1)
+                if element("futaber-action-cancel").waitForExistence(timeout: 8) { settle(); mhtAttach(app, "sheets-\(theme)-picture") }
+                cancelSheet()
+            }
+            let replies = element("futaber-reply-count")
+            if replies.exists && replies.isHittable {
+                replies.tap()
+                let card = element("futaber-quote-card")
+                if card.waitForExistence(timeout: 8) {
+                    let line = card.descendants(matching: .any).matching(identifier: "futaber-quote-line").firstMatch
+                    if line.exists && line.isHittable { line.tap(); settle() }
+                    mhtAttach(app, "sheets-\(theme)-bubbles")
+                }
+                if element("futaber-quote-close-all").exists { element("futaber-quote-close-all").tap() }
+                _ = element("futaber-quote-card").waitForNonExistence(timeout: 5)
+            }
+            element("futaber-manage").press(forDuration: 1)
+            let tab = element("futaber-tab")
+            if tab.waitForExistence(timeout: 8) {
+                tab.press(forDuration: 1)
+                if element("futaber-action-tab-cancel").waitForExistence(timeout: 8) { settle(); mhtAttach(app, "sheets-\(theme)-tab") }
+                if element("futaber-action-tab-remove").exists { element("futaber-action-tab-remove").tap() }
+                _ = element("futaber-tab").waitForNonExistence(timeout: 5)
+            }
+            futaberBackToCatalog(app)
+            XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+        }
+        useTheme("system")
     }
 
     func testToshiakiSwipingPastTheFirstTabReturnsToCatalog() throws {
@@ -1498,6 +2672,113 @@ final class IosAppUITests: XCTestCase {
         }
         XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
         mhtAttach(app, "feedback-first-tab-catalog")
+    }
+
+    /// L-B10: futaber's manage panel (「編集」 with 「すべて削除」, the category kept), the board list's edit (red −, the
+    /// handle, 「板の追加」 with 「https://」), iOS's edge swipe closing neither (S27・G36), the search that lists nothing
+    /// until a word is typed with the iOS-style field (S25・V30), and the popover a tap outside only closes (V29・M52).
+    func testFutaberPanelDrawerAndSearchMatchTheOriginal() throws {
+        let app = try futaberTutorialApp(generation: "1510")
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y))
+        }
+        let width = app.frame.width
+        func edgeSwipe(at y: CGFloat) {
+            point(2, y).press(forDuration: 0.02, thenDragTo: point(width * 0.7, y), withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        func waitGone(_ target: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+            let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: target)
+            return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 20), "The catalog lists no thread.")
+        XCTAssertTrue(waitGone(element("futaber-drawer-scrim")))
+
+        // The panel: 「編集」 → 「完了」 with 「すべて削除」 at the left; the category is kept when it opens again.
+        element("futaber-manage").tap()
+        XCTAssertTrue(element("futaber-manage-panel").waitForExistence(timeout: 10))
+        element("futaber-manage-category-Notifications").tap()
+        XCTAssertTrue(element("futaber-watch-manage").waitForExistence(timeout: 10), "キーワード管理 is not at the end of the notices.")
+        element("futaber-manage-category-History").tap()
+        XCTAssertTrue(element("futaber-manage-edit").waitForExistence(timeout: 5))
+        XCTAssertEqual(element("futaber-manage-edit").label, "編集")
+        element("futaber-manage-edit").tap()
+        XCTAssertTrue(element("futaber-manage-clear").waitForExistence(timeout: 5), "すべて削除 is missing while editing.")
+        XCTAssertEqual(element("futaber-manage-edit").label, "完了")
+        mhtAttach(app, "lb10-panel-history-edit")
+        element("futaber-manage-edit").tap()
+        // G36: an edge swipe (from the heading, where nothing is under the finger) does not close the panel.
+        edgeSwipe(at: element("futaber-manage-title").frame.midY)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(element("futaber-manage-panel").exists, "An edge swipe closed the panel.")
+        element("futaber-manage-category-Favorites").tap()
+        element("futaber-manage-close").tap()
+        XCTAssertTrue(waitGone(element("futaber-manage-panel")))
+        element("futaber-manage").tap()
+        XCTAssertTrue(element("futaber-manage-panel").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("futaber-manage-category-Favorites").isSelected, "The panel did not open on the category chosen last.")
+        mhtAttach(app, "lb10-panel-favorites")
+        element("futaber-manage-category-History").tap()
+        element("futaber-manage-close").tap()
+        XCTAssertTrue(waitGone(element("futaber-manage-panel")))
+
+        // The board list: an edge swipe does not close it (S27); futaber's edit and its add alert.
+        element("futaber-open-drawer").tap()
+        XCTAssertTrue(element("futaber-drawer-heading").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.6)
+        edgeSwipe(at: element("futaber-drawer-heading").frame.midY)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(element("futaber-drawer-scrim").exists, "An edge swipe closed the board list.")
+        element("futaber-board-edit").tap()
+        XCTAssertTrue(element("futaber-board-handle").waitForExistence(timeout: 5), "The edit has no reorder handle.")
+        XCTAssertTrue(element("futaber-board-delete").exists)
+        XCTAssertTrue(element("futaber-board-add").exists)
+        mhtAttach(app, "lb10-drawer-edit")
+        element("futaber-board-add").tap()
+        let field = element("futaber-add-board-url")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "The board-add alert did not open.")
+        XCTAssertEqual(field.value as? String, "https://")
+        mhtAttach(app, "lb10-drawer-add-alert")
+        element("futaber-add-board-submit").tap()
+        XCTAssertTrue(element("futaber-alert-message").waitForExistence(timeout: 5), "OK with only https:// did not say why.")
+        element("futaber-add-board-cancel").tap()
+        XCTAssertTrue(waitGone(element("futaber-alert")))
+        element("futaber-board-edit").tap()
+        element("futaber-drawer-scrim").tap()
+        XCTAssertTrue(waitGone(element("futaber-drawer-scrim")))
+
+        // The search: nothing listed until a word is typed, 「検索ワード」, the clear button, cancel with every thread.
+        element("futaber-search").tap()
+        XCTAssertTrue(element("futaber-search-field").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("futaber-catalog-search-blank").waitForExistence(timeout: 5), "The search listed threads before a word was typed.")
+        XCTAssertFalse(element("futaber-catalog-item").exists)
+        mhtAttach(app, "lb10-search-open")
+        element("futaber-search-field").tap()
+        element("futaber-search-field").typeText("チュ")
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("futaber-search-clear").exists, "The field has no clear button.")
+        mhtAttach(app, "lb10-search-typed")
+        element("futaber-search-cancel").tap()
+        XCTAssertTrue(waitGone(element("futaber-search-field")))
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 10))
+
+        // The display-style popover over its button; a tap outside (on the thread) only closes it.
+        XCTAssertTrue(element("futaber-display-style").waitForExistence(timeout: 10), "The display-style button did not come back after the search was cancelled.")
+        // The popover covers its button, which then leaves the accessibility tree: read the button's place first.
+        let styleButtonTop = element("futaber-display-style").frame.minY
+        let item = element("futaber-catalog-item").frame
+        element("futaber-display-style").tap()
+        XCTAssertTrue(element("futaber-popover").waitForExistence(timeout: 5), "The display-style popover did not open.")
+        XCTAssertLessThanOrEqual(element("futaber-popover").frame.maxY, styleButtonTop + 1)
+        mhtAttach(app, "lb10-popover")
+        point(item.midX, item.midY).tap()
+        XCTAssertTrue(waitGone(element("futaber-popover")))
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(element("futaber-post").exists, "The tap outside the popover opened the thread.")
     }
 
     /// ふたばー風：カタログ検索に語を入れると「過去ログから検索」が出て、押すと結果のシートが開く（丸みのあるアイコンの下部バーも操作できる）。
@@ -1542,16 +2823,140 @@ final class IosAppUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.8) // スクロールの慣性が止まってから押す
         XCTAssertTrue(picture.exists, "The thread shows no picture.")
         picture.press(forDuration: 1.0)
-        XCTAssertTrue(element("futaber-action-image-search").waitForExistence(timeout: 10), "The picture menu did not open.")
-        XCTAssertTrue(element("futaber-action-image-ng").exists)
+        XCTAssertTrue(element("futaber-action-image-viewer").waitForExistence(timeout: 10), "The picture menu did not open.")
+        // L-B5 (M25): titled by the file name (the heading right above the first item); the original's six items in its
+        // order, all on screen.
+        let firstTop = element("futaber-action-image-viewer").frame.minY
+        let fileNames = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "^[0-9A-Za-z_.-]+\\.(jpg|jpeg|png|gif|webp|webm|mp4)$"))
+            .allElementsBoundByIndex.filter { $0.frame.maxY <= firstTop + 1 && $0.frame.maxY > firstTop - 60 }
+        XCTAssertFalse(fileNames.isEmpty, "The sheet is not titled by the picture's file name.")
+        var lastY: CGFloat = -1
+        for id in ["image-viewer", "image-external", "image-ascii2d", "image-url-scheme", "image-copy-url", "image-ng"] {
+            let item = element("futaber-action-\(id)")
+            XCTAssertTrue(item.exists && item.isHittable, "\(id) is not on screen")
+            XCTAssertGreaterThan(item.frame.minY, lastY, "\(id) is out of the original's order")
+            lastY = item.frame.minY
+        }
         XCTAssertFalse(element("futaber-action-quote").exists, "The post menu opened instead of the picture menu.")
         mhtAttach(app, "futaber-picture-menu")
-        element("futaber-action-image-search").tap()
+        // 「画像検索」 (the choice of services) is this app's, after the original's items inside the group. 二次元画像詳細検索
+        // and ブラウザで開く are not pressed (they send the picture's address out).
+        let search = element("futaber-action-image-search")
+        futaberRevealInSheet(app, search)
+        search.tap()
         XCTAssertTrue(app.staticTexts["検索先を選択してください。URL方式は画像URL、File方式は画像を検索先へ送信します。"].firstMatch.waitForExistence(timeout: 10), "The image search dialog did not open.")
         mhtAttach(app, "futaber-picture-search")
     }
 
     /// ふたばー風の設定：共有ページ（保存先・キャッシュ）、ヘルプ、起動ロック、アプリアイコン、バージョンが並び、開ける。
+    /// L-B9: futaber's settings as the iOS grouped table (V21・C47・C25・C46・G35). The rows across the width in futaber's
+    /// order, this app's after the EULA, 設定→スレッド's tap-scroll choices and 「従来の動き」, the gestures page, and the
+    /// edge swipe that goes back from a page but does not close the settings (only 「完了」 does).
+    func testFutaberSettingsMatchesTheOriginal() throws {
+        let app = try futaberTutorialApp(generation: "1409")
+        app.launch()
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func settle(_ target: XCUIElement) {
+            var lastFrame = target.exists ? target.frame : .zero
+            var stableReads = 0
+            for _ in 0..<40 where stableReads < 2 {
+                Thread.sleep(forTimeInterval: 0.2)
+                let frame = target.exists ? target.frame : .zero
+                stableReads = frame == lastFrame ? stableReads + 1 : 0
+                lastFrame = frame
+            }
+        }
+        func reveal(_ identifier: String) -> XCUIElement {
+            let target = element(identifier)
+            for _ in 0..<8 where !(target.exists && target.isHittable) { app.swipeUp() }
+            for _ in 0..<12 where !(target.exists && target.isHittable) { app.swipeDown() }
+            settle(target)
+            return target
+        }
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y))
+        }
+        let width = app.frame.width
+        // Started on a section heading (no row there): XCUI's fast drag arrives in Compose as a tap when the edge does not
+        // go back, and a row under it would open.
+        func edgeSwipe(at y: CGFloat? = nil) {
+            let y = y ?? app.frame.height * 0.5
+            point(2, y).press(forDuration: 0.02, thenDragTo: point(width * 0.7, y), withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-open-settings").waitForExistence(timeout: 20))
+        element("futaber-open-settings").tap()
+        XCTAssertTrue(element("futaber-settings-row-theme").waitForExistence(timeout: 10))
+        settle(element("futaber-settings-row-theme"))
+        // futaber's 全般 in its order, rows across the whole width about 50 high (futaber 49.5).
+        let general = ["theme", "catalog", "thread", "viewer", "font-size", "posting", "gesture"].map { element("futaber-settings-row-\($0)").frame }
+        for (upper, lower) in zip(general, general.dropFirst()) { XCTAssertLessThan(upper.minY, lower.minY) }
+        let theme = general[0]
+        XCTAssertEqual(theme.minX, 0, accuracy: 1)
+        XCTAssertEqual(theme.width, width, accuracy: 1)
+        XCTAssertTrue((44...56).contains(theme.height), "row height \(theme.height)")
+        mhtAttach(app, "lb9-settings-top")
+        // 通知 and the EULA, then this app's rows after it.
+        let eula = reveal("futaber-settings-row-eula")
+        XCTAssertTrue(eula.exists)
+        XCTAssertLessThan(element("futaber-settings-row-new-thread-notify").frame.minY, eula.frame.minY)
+        mhtAttach(app, "lb9-settings-eula-row")
+        let storage = reveal("futaber-settings-row-storage")
+        XCTAssertTrue(storage.exists)
+        XCTAssertLessThanOrEqual(element("futaber-settings-row-eula").frame.maxY, storage.frame.minY)
+        // G35: an edge swipe does not close the settings at their top.
+        let heading = element("futaber-settings-group-data")
+        XCTAssertTrue(heading.exists)
+        edgeSwipe(at: heading.frame.midY)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(element("futaber-settings").exists, "An edge swipe closed the settings.")
+        // 設定→スレッド: futaber's 「画面をタップしてスクロール」 choices, the read-aloud steps, the four 「従来の動き」.
+        reveal("futaber-settings-row-thread").tap()
+        XCTAssertTrue(element("futaber-settings-row-thread-title-default").waitForExistence(timeout: 10))
+        mhtAttach(app, "lb9-settings-thread")
+        XCTAssertTrue(reveal("futaber-settings-row-speech-pitch").exists)
+        let tapOn = reveal("futaber-settings-row-thread-tap-scroll-on")
+        XCTAssertTrue(tapOn.exists)
+        XCTAssertTrue(element("futaber-settings-row-thread-tap-scroll-off").exists)
+        mhtAttach(app, "lb9-settings-thread-lower")
+        for id in ["thread-instant-copy", "thread-legacy-search", "thread-legacy-many-replies", "thread-legacy-subject"] {
+            XCTAssertTrue(reveal("futaber-settings-switch-\(id)").exists, "The switch \(id) is missing.")
+        }
+        mhtAttach(app, "lb9-settings-thread-legacy")
+        // A page goes back with the edge swipe (iOS's own).
+        edgeSwipe()
+        XCTAssertTrue(element("futaber-settings-row-theme").waitForExistence(timeout: 5), "The edge swipe did not go back from スレッド.")
+        // ジェスチャー: futaber's switch and its 「他」, no tap-scroll there any more.
+        reveal("futaber-settings-row-gesture").tap()
+        XCTAssertTrue(element("futaber-settings-switch-gesture-viewer-swipe").waitForExistence(timeout: 10))
+        XCTAssertFalse(element("futaber-settings-switch-gesture-tap-scroll").exists)
+        XCTAssertTrue(element("futaber-settings-gesture-note").exists)
+        mhtAttach(app, "lb9-settings-gesture")
+        app.buttons["‹ 設定"].firstMatch.tap()
+        // NG: futaber's rows; an NG list's 「編集」.
+        reveal("futaber-settings-row-ng").tap()
+        XCTAssertTrue(element("futaber-settings-row-ng-res-id-ip").waitForExistence(timeout: 10))
+        mhtAttach(app, "lb9-settings-ng")
+        element("futaber-settings-row-ng-res-words").tap()
+        XCTAssertTrue(element("futaber-settings-edit").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("futaber-ng-input").exists)
+        mhtAttach(app, "lb9-settings-ng-list")
+        app.buttons["‹ NG設定"].firstMatch.tap()
+        app.buttons["‹ 設定"].firstMatch.tap()
+        // EULA.
+        reveal("futaber-settings-row-eula").tap()
+        XCTAssertTrue(element("futaber-settings-eula-page").waitForExistence(timeout: 10))
+        mhtAttach(app, "lb9-settings-eula")
+        app.buttons["‹ 設定"].firstMatch.tap()
+        // Only 「完了」 closes them.
+        XCTAssertTrue(element("futaber-settings-done").waitForExistence(timeout: 10))
+        element("futaber-settings-done").tap()
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element("futaber-settings"))
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 10), .completed)
+    }
+
     func testFutaberSettingsOfferSharedPagesHelpLockAndIcon() throws {
         let app = try futaberTutorialApp(generation: "1401")
         app.launch()
@@ -1747,6 +3152,74 @@ final class IosAppUITests: XCTestCase {
         XCTAssertFalse(element("futaber-media").exists)
     }
 
+    /// L-B11: 画像一覧の題名「N photos」、ビューアの説明（小さな字・本文1行）、画像ビューアの設定頁、レスに戻るは吹き出し。
+    func testFutaberViewerMatchesTheOriginal() throws {
+        let app = makeApplication()
+        let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
+            "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1203",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "The futaber host did not reach the foreground.")
+
+        func element(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+        func attach(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        if element("futaber-drawer-board").waitForExistence(timeout: 15) { element("futaber-drawer-board").tap() }
+        XCTAssertTrue(element("futaber-catalog-item").waitForExistence(timeout: 15), "The catalog lists no thread.")
+        element("futaber-catalog-item").tap()
+        XCTAssertTrue(element("futaber-post").waitForExistence(timeout: 15), "The thread shows no post.")
+
+        element("futaber-thread-gallery").tap()
+        XCTAssertTrue(element("futaber-media").waitForExistence(timeout: 15), "The gallery did not open.")
+        let items = app.descendants(matching: .any).matching(identifier: "futaber-gallery-item")
+        XCTAssertTrue(items.firstMatch.waitForExistence(timeout: 20), "The gallery lists no image.")
+        // V18: the title reads "N photos".
+        let title = element("futaber-gallery-count")
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(title.label.hasSuffix(" photos") || title.label == "1 photo", "gallery title was \(title.label)")
+        attach("futaber-ios-gallery-title")
+
+        items.firstMatch.tap()
+        let info = element("futaber-viewer-info")
+        XCTAssertTrue(info.waitForExistence(timeout: 20), "The viewer did not open.")
+        // V19: the caption is a few small close lines (read before anything opens over the viewer).
+        let captionHeight = info.frame.height
+        XCTAssertLessThanOrEqual(captionHeight, 13.0 * 3 + 10 + 8, "the caption is too tall: \(captionHeight)")
+        attach("futaber-ios-viewer-caption")
+
+        // C27・C28・C29: the viewer's settings page.
+        element("futaber-viewer-gear").tap()
+        XCTAssertTrue(element("futaber-viewer-settings-page").waitForExistence(timeout: 10), "The viewer's settings page did not open.")
+        for choice in ["none", "save", "action", "longpress"] {
+            XCTAssertTrue(element("futaber-viewer-storage-\(choice)").exists, "storage choice \(choice)")
+        }
+        XCTAssertTrue(element("futaber-viewer-portrait-lock").exists)
+        XCTAssertTrue(element("futaber-viewer-autoplay").exists)
+        attach("futaber-ios-viewer-settings")
+        element("futaber-viewer-settings-done").tap()
+        XCTAssertTrue(element("futaber-viewer-info").waitForExistence(timeout: 10), "Done must return to the same viewer.")
+
+        // S11: 「レスに戻る」 closes the viewer and the post stands as a bubble over the thread.
+        element("futaber-viewer-post").tap()
+        // The bubble covers the thread, whose rows then leave the accessibility tree: look for the bubble, not the list.
+        XCTAssertTrue(element("futaber-quote-card").waitForExistence(timeout: 10), "The post must stand as a bubble.")
+        XCTAssertFalse(element("futaber-media").exists, "The viewer must be closed.")
+        attach("futaber-ios-viewer-post-bubble")
+    }
+
     /// ふたばー風モードの目視確認用の巡回。各画面を撮影し、要素が無い場合は止まらず次へ進む（判定は最後の1か所だけ）。
     func testFutaberExploratoryWalkCapturesEveryScreen() throws {
         // 手動確認用の巡回。長く、途中で止まると設定を残すため、通常の実行には含めない。
@@ -1914,10 +3387,10 @@ final class IosAppUITests: XCTestCase {
         _ = element("futaber-offline-notice").waitForExistence(timeout: 10)
         settle(1.5); attach("w16-saved-copy")
         // 保存コピーから戻ると元のスレッド、もう一度戻るとカタログ。
-        app.buttons["カタログへ戻る"].firstMatch.tap()
+        futaberBackToCatalog(app)
         settle(0.8)
         attach("w16b-after-copy")
-        if app.buttons["カタログへ戻る"].firstMatch.exists { app.buttons["カタログへ戻る"].firstMatch.tap() }
+        if app.descendants(matching: .any).matching(identifier: "futaber-thread-title").firstMatch.exists { futaberBackToCatalog(app) }
         settle(0.8)
 
         // 設定：暗いテーマ
@@ -1944,7 +3417,7 @@ final class IosAppUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap(); settle(0.5)
         tap("futaber-thread-menu"); tap("futaber-menu-tab"); settle(0.5)
         tap("futaber-thread-menu"); tap("futaber-menu-favorite"); settle(0.5)
-        app.buttons["カタログへ戻る"].firstMatch.tap(); settle(0.8)
+        futaberBackToCatalog(app); settle(0.8)
         tap("futaber-open-settings"); settle(0.8)
         tap("futaber-settings-row-theme"); tap("futaber-settings-row-theme-system"); settle(0.5)
         tap("futaber-settings-back"); tap("futaber-settings-done")
@@ -1988,13 +3461,31 @@ final class IosAppUITests: XCTestCase {
             let frame = replyCount.frame
             return frame.minY > 130 && frame.maxY < app.frame.height - 170
         }
+        // スレッドは前回の読み位置（ほかの試験が末尾まで送ったなど）から開くので、まず先頭のレスまで戻す。
+        let firstHeader = app.staticTexts.matching(NSPredicate(format: "identifier == 'futaber-post-header' AND label BEGINSWITH '0 '")).firstMatch
+        // The finger rests before lifting so the list does not fling (a tap on a flinging list only stops it).
+        for _ in 0..<20 where !firstHeader.exists {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.3))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .fast, thenHoldForDuration: 0.2)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
         for _ in 0..<30 where !visibleInList() {
             let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.62))
             let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.45))
-            from.press(forDuration: 0.05, thenDragTo: to)
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
             Thread.sleep(forTimeInterval: 0.3)
         }
+        if !visibleInList() { add(XCTAttachment(string: app.debugDescription)) }
         XCTAssertTrue(visibleInList(), "No reply count could be reached.")
+        // Until the list has come to rest: the mark stays where it is for a moment.
+        var resting = replyCount.frame
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.3)
+            let now = replyCount.frame
+            if now == resting { break }
+            resting = now
+        }
         attach("bubble-1-before")
         replyCount.tap()
         let opened = element("futaber-quote-card").waitForExistence(timeout: 8)
@@ -2292,6 +3783,52 @@ final class IosAppUITests: XCTestCase {
 
         app.buttons["開いているタブ"].tap()
         XCTAssertTrue(app.staticTexts["閲覧中のスレッド"].waitForExistence(timeout: 10))
+    }
+
+    func testToshiakiThreadDrawerLeadsBackToTheCatalog() {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1370",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        board.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 15))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        XCTAssertTrue(app.otherElements["compat-thread-pager"].waitForExistence(timeout: 15))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.55))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.55)))
+        let leave = app.buttons["← カタログに戻る"].firstMatch
+        XCTAssertTrue(leave.waitForExistence(timeout: 10), app.debugDescription)
+        leave.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 15), app.debugDescription)
+    }
+
+    func testToshiakiCommonNgSwitchReadsAsItWorks() {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1371",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        app.buttons["その他"].firstMatch.tap()
+        app.buttons["設定"].firstMatch.tap()
+        let control = app.staticTexts["コントロール"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 10), app.debugDescription)
+        control.tap()
+        XCTAssertTrue(app.staticTexts["カタログ画面"].waitForExistence(timeout: 10))
+        let summary = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "OFFにすると、このモードでは使いません")).firstMatch
+        let controlList = app.otherElements["compat-settings-list-control"]
+        var tries = 0
+        while !summary.exists && tries < 15 { controlList.swipeUp(); tries += 1 }
+        XCTAssertTrue(summary.exists, app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "ONにすると、ふたちゃ")).firstMatch.exists)
     }
 
     func testToshiakiLeftEdgeSwipeIsOwnedByDrawerWithoutBackOrProfileSwitch() {
@@ -3347,6 +4884,69 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["選択中"].firstMatch.exists,
             "The dedicated checkbox page still exposes the non-reference selection summary."
         )
+    }
+
+    /// 2026-10-28 review: a mistyped ascii2d address must be correctable from the shared image-search page.
+    /// Only deletion and buttons are used, so the Japanese IME cannot change the input.
+    func testToshiakiAscii2dEndpointCanBeResetAndRejectsAnEmptyAddress() {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1428"
+        ]
+        app.launch()
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        let defaultEndpoint = "https://ascii2d.net/imagesearch/search"
+
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let more = app.buttons["その他"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "The compatibility board menu is missing.")
+        more.tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        let imageSearch = app.staticTexts["画像検索"].firstMatch
+        XCTAssertTrue(imageSearch.waitForExistence(timeout: 10))
+        imageSearch.tap()
+
+        let row = element("compat-ascii2d-endpoint-setting")
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "The ascii2d address setting is missing.")
+        XCTAssertTrue(app.staticTexts["二次元画像類似検索のURL"].firstMatch.exists)
+
+        // Reset to the default and save.
+        row.tap()
+        let field = element("compat-ascii2d-address")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "The address dialog did not open.")
+        app.buttons["初期値に戻す"].firstMatch.tap()
+        XCTAssertEqual(field.value as? String, defaultEndpoint, app.debugDescription)
+        app.buttons["保存"].firstMatch.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5), "Saving a valid address must close the dialog.")
+        XCTAssertTrue(app.staticTexts[defaultEndpoint].firstMatch.waitForExistence(timeout: 5),
+                      "The saved default address is not shown on the settings row.")
+
+        // An emptied address is refused in place; cancelling keeps the saved value.
+        row.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        for _ in 0..<4 {
+            let text = field.value as? String ?? ""
+            if text.isEmpty || text == "https://" { break }
+            // A long address scrolls: after the first pass the rest fits, so the
+            // trailing edge puts the cursor at the end.
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+            app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count + 2))
+        }
+        app.buttons["保存"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["ascii2d.net の検索URLを入力してください。"].firstMatch.waitForExistence(timeout: 5),
+                      app.debugDescription)
+        XCTAssertTrue(field.exists, "A refused address must keep the dialog open.")
+        let refused = XCTAttachment(screenshot: app.screenshot())
+        refused.name = "ascii2d-endpoint-refused"
+        refused.lifetime = .keepAlways
+        add(refused)
+        app.buttons["キャンセル"].firstMatch.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[defaultEndpoint].firstMatch.exists,
+                      "Cancelling must keep the saved address.")
     }
 
     func testToshiakiFutachaInformationScreensOpenInternally() {
@@ -6319,10 +7919,164 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(loaded.exists)
     }
 
+    private func launchViewer(_ mode: String, ext: String = "mp4", fixture: String? = nil) -> (XCUIApplication, XCUIElement) {
+        let app = makeApplication()
+        app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_BASE64"] = fixture ?? (ext == "webm" ? originalVideoWebmFixture : originalVideoMp4Fixture)
+        app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_EXTENSION"] = ext
+        app.launchEnvironment["FUTACHA_VIDEO_VIEWER"] = mode
+        app.launch()
+        let video = ext == "webm" ? app.webViews.firstMatch : app.otherElements["ビデオ"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 30), app.debugDescription)
+        sleep(2)
+        return (app, video)
+    }
+
+    private func swipeAcross(_ app: XCUIApplication, y: CGFloat = 0.4) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: y)).press(forDuration: 0.05,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: y)), withVelocity: .fast, thenHoldForDuration: 0)
+    }
+
+    private func expectGone(_ element: XCUIElement, _ app: XCUIApplication) {
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 6), .completed, app.debugDescription)
+    }
+
+    func testFutaberViewerSwipeOnTheVideoMovesPage() {
+        let (app, video) = launchViewer("futaber"); swipeAcross(app); expectGone(video, app)
+    }
+
+    func testFtutterViewerSwipeOnTheVideoMovesPage() {
+        let (app, video) = launchViewer("ftutter"); swipeAcross(app); expectGone(video, app)
+    }
+
+    func testFutachaPreviewSwipeOnTheVideoMovesPage() {
+        let (app, _) = launchViewer("futacha"); swipeAcross(app)
+        XCTAssertTrue(app.staticTexts["page-two"].waitForExistence(timeout: 6), app.debugDescription)
+    }
+
+    /// Plays with the Simulator silent (the Mac's output is checked muted by the runner script).
+    func testCompatViewerSwipeWhilePlayingAndSeekKeepsThePage() {
+        let (app, video) = launchViewer("compat")
+        // Off-centre: shows the controls without pressing the play button in the middle.
+        video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(slider.waitForExistence(timeout: 5), app.debugDescription)
+        let before = slider.value as? String
+        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).press(forDuration: 0.1,
+            thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        usleep(500_000)
+        XCTAssertTrue(app.staticTexts["1/2"].exists, app.debugDescription)
+        if slider.exists { XCTAssertNotEqual(before, slider.value as? String, app.debugDescription) }
+        let play = app.buttons["Play/Pause"].firstMatch
+        if !play.exists { video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap() }
+        XCTAssertTrue(play.waitForExistence(timeout: 5), app.debugDescription)
+        play.tap()
+        sleep(1)
+        swipeAcross(app)
+        expectGone(video, app)
+    }
+
+    func testCompatViewerTapBringsTheControlsBackWhilePlayingMp4() {
+        let (app, video) = launchViewer("compat")
+        video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+        let play = app.buttons["Play/Pause"].firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 5), app.debugDescription)
+        play.tap()
+        let chrome = app.staticTexts["1/2"]
+        expectGone(chrome, app)
+        video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+        XCTAssertTrue(chrome.waitForExistence(timeout: 3), app.debugDescription)
+        // The bars are back; AVKit's own controls answer the next tap, so it can be paused.
+        if !play.waitForExistence(timeout: 1) { video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap() }
+        XCTAssertTrue(play.waitForExistence(timeout: 3), app.debugDescription)
+        play.tap()
+    }
+
+    func testCompatViewerTapBringsTheControlsBackWhilePlayingWebm() {
+        let (app, video) = launchViewer("compat", ext: "webm")
+        video.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        sleep(2)
+        let chrome = app.staticTexts["1/2"]
+        if !chrome.exists {
+            video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+            XCTAssertTrue(chrome.waitForExistence(timeout: 3), app.debugDescription)
+        }
+    }
+
+    private func verifyControlsComeBackWhilePlaying(_ mode: String) {
+        let (app, video) = launchViewer(mode, fixture: longSilentVideoMp4Fixture)
+        let spot = video.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25))
+        let play = app.buttons["Play/Pause"].firstMatch
+        if !play.waitForExistence(timeout: 1) { spot.tap() }
+        XCTAssertTrue(play.waitForExistence(timeout: 5), app.debugDescription)
+        play.tap()
+        sleep(1)
+        var tries = 0
+        while !play.exists && tries < 2 { spot.tap(); tries += 1; usleep(800_000) }
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "controls-\(mode)"; shot.lifetime = .keepAlways; add(shot)
+        XCTAssertTrue(play.exists, "\(mode) tries=\(tries) \(app.debugDescription)")
+        XCTAssertEqual(play.label, "一時停止", "\(mode) must still be playing, tries=\(tries)")
+        play.tap()
+    }
+
+    func testCompatControlsComeBackWhilePlaying() { verifyControlsComeBackWhilePlaying("compat") }
+    func testFutaberControlsComeBackWhilePlaying() { verifyControlsComeBackWhilePlaying("futaber") }
+    func testFtutterControlsComeBackWhilePlaying() { verifyControlsComeBackWhilePlaying("ftutter") }
+    func testFutachaControlsComeBackWhilePlaying() { verifyControlsComeBackWhilePlaying("futacha") }
+
+    func testCompatViewerInfoShowsTheComment() {
+        let (app, _) = launchViewer("compat")
+        app.descendants(matching: .any)["compat-viewer-toolbar-icon-info"].firstMatch.tap()
+        let comment = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "コメント:")).firstMatch
+        XCTAssertTrue(comment.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(comment.label.contains("video"))
+    }
+
+    func testCompatViewerSwipeOnTheMp4PictureMovesToTheNextPage() {
+        verifyViewerVideoSwipe(ext: "mp4", fixture: originalVideoMp4Fixture)
+    }
+
+    func testCompatViewerSwipeOnTheWebmPictureMovesToTheNextPage() {
+        verifyViewerVideoSwipe(ext: "webm", fixture: originalVideoWebmFixture)
+    }
+
+    /// The real viewer over the real native player. Playback is never started, so nothing sounds.
+    private func verifyViewerVideoSwipe(ext: String, fixture: String) {
+        let app = makeApplication()
+        app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_BASE64"] = fixture
+        app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_EXTENSION"] = ext
+        app.launchEnvironment["FUTACHA_VIDEO_VIEWER"] = "compat"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["1/2"].waitForExistence(timeout: 30), app.debugDescription)
+        let video = ext == "webm" ? app.webViews.firstMatch : app.otherElements["ビデオ"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 15), app.debugDescription)
+        sleep(2)
+        let before = XCTAttachment(screenshot: app.screenshot())
+        before.name = "viewer-\(ext)-before-swipe"
+        before.lifetime = .keepAlways
+        add(before)
+        // The player's lower part is its control bar: a swipe there must not change the page.
+        let barY = 0.1 + 0.8 * 0.85
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: barY)).press(forDuration: 0.05,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: barY)), withVelocity: .fast, thenHoldForDuration: 0)
+        sleep(1)
+        XCTAssertTrue(app.staticTexts["1/2"].exists, app.debugDescription)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.4))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.4))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+        let moved = app.staticTexts["2/2"].waitForExistence(timeout: 5)
+        let after = XCTAttachment(screenshot: app.screenshot())
+        after.name = "viewer-\(ext)-after-swipe"
+        after.lifetime = .keepAlways
+        add(after)
+        XCTAssertTrue(moved, app.debugDescription)
+    }
+
     private func verifySharedOriginalVideo(ext: String, fixture: String) {
         let app = makeApplication()
         app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_BASE64"] = fixture
         app.launchEnvironment["FUTACHA_VIDEO_FIXTURE_EXTENSION"] = ext
+        app.launchEnvironment["FUTACHA_VIDEO_MUTED"] = "1"
         app.launch()
         let loaded = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "requests:1 size:240x320")).firstMatch
         XCTAssertTrue(loaded.waitForExistence(timeout: 30), app.debugDescription)

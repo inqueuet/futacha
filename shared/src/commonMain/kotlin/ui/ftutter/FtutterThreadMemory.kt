@@ -32,7 +32,7 @@ internal fun ftutterHistoryMarkAlive(
 internal fun ftutterHistoryAfterLiveLoad(
     history: List<ThreadHistoryEntry>, boardId: String, threadId: String, posts: List<Post>, now: Long
 ): List<ThreadHistoryEntry> = ftutterHistoryMarkAlive(
-    com.valoser.futacha.shared.ui.futaber.futaberHistoryAfterLoad(history, boardId, threadId, posts),
+    ftutterHistoryAfterLoad(history, boardId, threadId, posts),
     boardId, threadId, now
 )
 
@@ -116,8 +116,11 @@ internal class FtutterThreadMemory {
     private val pages = LinkedHashMap<String, ThreadPage>()
     private val refresh = mutableSetOf<String>()
     private val openings = LinkedHashMap<String, com.valoser.futacha.shared.ui.board.ThreadOpeningVisit>()
-    fun open(url: String, refreshOnOpen: Boolean, postCount: Int? = null, lastPostId: String? = null) {
+    /** Threads opened afresh (from the catalog, the history, a link), which start at the top when [FtutterExtension.OPEN_AT_TOP] is on. */
+    private val atTop = mutableSetOf<String>()
+    fun open(url: String, refreshOnOpen: Boolean, postCount: Int? = null, lastPostId: String? = null, startAtTop: Boolean = false) {
         if (refreshOnOpen) refresh += url else refresh -= url
+        if (startAtTop) atTop += url else atTop -= url
         openings.remove(url)
         openings[url] = com.valoser.futacha.shared.ui.board.ThreadOpeningVisit().apply { initialize(postCount, lastPostId) }
         while (openings.size > 12) openings.remove(openings.keys.first())
@@ -127,9 +130,11 @@ internal class FtutterThreadMemory {
 
     fun page(url: String): ThreadPage? = pages[url]
     fun takeRefresh(url: String): Boolean = refresh.remove(url)
+    /** Whether this opening asked for the top; asked once, so coming back to the thread (from settings) keeps its place. */
+    fun takeStartAtTop(url: String): Boolean = atTop.remove(url)
     fun put(url: String, page: ThreadPage) {
         pages.remove(url); pages[url] = page
         while (pages.size > 12) pages.remove(pages.keys.first())
     }
-    fun remove(url: String) { pages.remove(url); refresh.remove(url); openings.remove(url) }
+    fun remove(url: String) { pages.remove(url); refresh.remove(url); atTop.remove(url); openings.remove(url) }
 }

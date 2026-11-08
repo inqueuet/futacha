@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +56,7 @@ import com.valoser.futacha.shared.ui.futaber.FutaberMediaServices
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.ui.isMockBoard
 
 /** 画面の行き先。段階ごとに増やす。 */
@@ -135,6 +137,24 @@ internal fun FtutterApp(
     // 保存値が後から届いた時（起動直後の読み込み、バックアップの取り込み）は、自分が書いた値でなければ取り込む。
     LaunchedEffect(preferences[FtutterKeys.TABS], preferences[FtutterKeys.PROTECTED]) { tabState.sync(preferences) }
 
+    // D-B5: this mode's tab strip is shown to the other modes as shared tabs (their own tab and active tab stay).
+    val latestHistoryForShare by rememberUpdatedState(history)
+    val latestBoardsState = rememberUpdatedState(boards)
+    LaunchedEffect(tabState.urls, boards, mediaServices?.store) {
+        val store = mediaServices?.store ?: return@LaunchedEffect
+        delay(600)
+        try {
+            val plan = ftutterSharedTabsPlan(tabState.urls, boards, latestHistoryForShare, kotlin.time.Clock.System.now().toEpochMilliseconds())
+            com.valoser.futacha.shared.ui.futaber.futaberApplySharedTabs(
+                store, plan, boards.filter { com.valoser.futacha.shared.ui.futaber.futaberNgScopeKey(it) != null }, emptySet(), FTUTTER_TAB_PROFILE
+            )
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            com.valoser.futacha.shared.util.Logger.e("Ftutter", "Failed to share the tabs", error)
+        }
+    }
+
     // AI commands: this stage runs none of them, so every one is answered (left alone they would pile up and replay).
     val currentInbox by rememberUpdatedState(aiInbox)
     DisposableEffect(aiInbox) {
@@ -198,10 +218,22 @@ internal fun FtutterApp(
     val editBoards: ((List<BoardSummary>) -> List<BoardSummary>) -> Unit = { transform ->
         scope.launch { stateStore.updateBoards(transform) }
     }
+    var lastCatalogBoardId by remember { mutableStateOf(preferences[FtutterKeys.LAST_BOARD].orEmpty()) }
+    // Whether the screen is drawn in two panes now (set by the layout; audit C8).
+    var twoPaneNow by remember { mutableStateOf(false) }
     fun openCatalog(board: BoardSummary, tabMove: Boolean = false) {
         catalogHolder.openBoard(board.id, tabMove,
             preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false))
         savePreference(FtutterKeys.LAST_BOARD, board.id)
+        // Two panes with this board's open tab beside the catalog: the catalog opening would put that same thread back
+        // at once (M21), so the thread pane is kept instead of being closed and built again (audit C8).
+        val shown = screen
+        if (shown is FtutterScreen.Thread && ftutterTwoPaneKeepsThread(twoPaneNow,
+                preferences.ftutterBool(FTUTTER_LEGACY_TWO_PANE_EMPTY_KEY, false), shown.boardId, board.id,
+                ftutterTwoPaneReopenId(tabState.opening, tabState.urls, board, legacy = false), shown.ref.threadId)) {
+            lastCatalogBoardId = board.id
+            return
+        }
         screen = FtutterScreen.Catalog(board.id)
     }
     // 統計（端末の中だけ）。
@@ -210,13 +242,16 @@ internal fun FtutterApp(
     }
     val selfPostMap by stateStore.selfPostIdentifiersByThread.collectAsState(emptyMap<String, List<String>>())
     // スレッドを開くと履歴の先頭へ（原作：開く・個別に更新するたびに先頭へ移る）。閲覧時刻は開いた時だけ書く。
-    fun openThread(board: BoardSummary, ref: FtutterThreadRef, back: FtutterScreen, refreshOnOpen: Boolean = true) {
+    // [startAtTop]: an opening from the catalog, the history or a link (the extension 「スレッドを先頭から開く」 then shows the
+    // first post); moving between tabs passes false and keeps the place.
+    fun openThread(board: BoardSummary, ref: FtutterThreadRef, back: FtutterScreen, refreshOnOpen: Boolean = true, startAtTop: Boolean = true) {
         val openingUrl = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, ref.threadId))
         val baseline = parseFtutterReadCounts(preferences[FtutterKeys.READ_COUNTS])[openingUrl]?.let(::ftutterPostsReadFromStored)
         val viewed = com.valoser.futacha.shared.ui.futaber.findFutaberHistoryEntry(history, board, ref.threadId)?.lastViewedSnapshot
         threadMemory.open(openingUrl, refreshOnOpen, baseline,
             ftutterReadBoundaryId(preferences[FTUTTER_READ_BOUNDARIES_KEY], openingUrl, baseline)
-                ?: viewed?.lastPostId?.takeIf { viewed.postCount == baseline })
+                ?: viewed?.lastPostId?.takeIf { viewed.postCount == baseline },
+            startAtTop = startAtTop)
         screen = FtutterScreen.Thread(board.id, ref, back)
         countStat(FtutterKeys.STATS_OPENED)
         val url = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, ref.threadId))
@@ -308,7 +343,11 @@ internal fun FtutterApp(
             when {
                 after == before -> null
                 problem != null -> { notice = problem; null }
-                else -> { savedNotice?.let { notice = it }; encodeFtutterNgListForStore(after) }
+                else -> {
+                    // M55：原作は足した時に「abc を追加しました」と知らせる。
+                    (savedNotice ?: ftutterNgAddedNotice(before, after))?.let { notice = it }
+                    encodeFtutterNgListForStore(after)
+                }
             }
         }
     }
@@ -317,8 +356,18 @@ internal fun FtutterApp(
     }
     // 削除キー：初回に英数字8文字を作る（原作どおり。他モードの削除キーとは別に持つ）。
     val deleteKey = preferences[FtutterKeys.DELETE_KEY]?.takeIf { it.isNotBlank() }
-    LaunchedEffect(deleteKey == null) { if (deleteKey == null) savePreference(FtutterKeys.DELETE_KEY, ftutterGenerateDeleteKey()) }
+    // D-B6 (J6)：削除キーは4モードで1つ。共有の最後に使った削除キーと同じ値にそろえる（初回は共有側が勝つ）。
+    val sharedDeleteKey by stateStore.observedLastUsedDeleteKey.collectAsState(null)
+    var syncedDeleteKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(deleteKey, sharedDeleteKey) {
+        val plan = ftutterDeleteKeySync(deleteKey, sharedDeleteKey, syncedDeleteKey) { ftutterGenerateDeleteKey() }
+        plan.own?.let { savePreference(FtutterKeys.DELETE_KEY, it) }
+        plan.shared?.let { stateStore.setLastUsedDeleteKey(it) }
+        syncedDeleteKey = plan.own ?: plan.shared ?: deleteKey
+    }
     var postRequest by remember { mutableStateOf<Pair<FtutterPostTarget, String?>?>(null) }
+    // シートで送信に失敗した時の添付（下書きにはファイルが残らないので、次に同じ所へ開いた時に戻す。T-B3）。
+    var failedAttachment by remember { mutableStateOf<Pair<String, com.valoser.futacha.shared.util.ImageData>?>(null) }
     var threadRefreshSignal by remember { mutableStateOf(0) }
     val pickerPreference by stateStore.attachmentPickerPreference.collectAsState(com.valoser.futacha.shared.util.AttachmentPickerPreference.MEDIA)
     val preferredFileManager by stateStore.getPreferredFileManager().collectAsState(null)
@@ -449,12 +498,7 @@ internal fun FtutterApp(
                     }
                     mediaServices?.store?.savePreferences(values) ?: values.forEach { (k, v) -> savePreference(k, v) }
                 }
-                stateStore.updateBoards { current ->
-                    val favorites = plan.boards.filter { it.pinned }.map { it.url }
-                    current.map { board ->
-                        if (favorites.any { ftutterBoardForUrl(listOf(board), it) != null }) board.copy(pinned = true) else board
-                    } + plan.boards.filter { candidate -> current.none { it.id == candidate.id } && ftutterBoardForUrl(current, candidate.url) == null }
-                }
+                stateStore.updateBoards { current -> ftutterMergeBackupBoards(current, plan.boards) }
                 if (plan.history.isNotEmpty()) stateStore.prependOrReplaceHistoryEntries(plan.history)
                 val supplements = ftutterApplyBackupSupplements(plan.cookieHeader, mediaServices?.cookieRepository) {
                     // Cookie failure must not skip the marks; report each optional stage independently.
@@ -499,8 +543,8 @@ internal fun FtutterApp(
         protected = url in tabState.protected,
         isTab = url in tabUrlSet
     )
-    // タブのURLからスレッドを開く（戻るとその板のカタログ）。
-    fun openTabUrl(url: String) {
+    // タブのURLからスレッドを開く（戻るとその板のカタログ）。ドロワーの「履歴」から開く時だけ[startAtTop]。
+    fun openTabUrl(url: String, startAtTop: Boolean = false) {
         val threadId = ftutterThreadIdFromUrl(url) ?: return
         val board = ftutterBoardForUrl(boards, url)
         if (board == null) {
@@ -513,7 +557,7 @@ internal fun FtutterApp(
             preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false)) threadRefreshSignal++
         openThread(board, FtutterThreadRef(board.id, threadId, entry?.title.orEmpty(), entry?.titleImageUrl.orEmpty()), FtutterScreen.Catalog(board.id),
             refreshOnOpen = preferences.ftutterBool(
-                FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false))
+                FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false), startAtTop = startAtTop)
     }
     // 開いているスレッドのタブが閉じられた時：残りがあれば同じ位置のタブへ、無ければ（設定ON）カタログへ1段だけ戻る。
     fun afterClose(before: List<String>) {
@@ -649,7 +693,8 @@ internal fun FtutterApp(
                     onProgress = { done, total -> tabRefreshProgress = done to total }
                 )
                 completed = true
-                notice = if (failed == 0) "タブを全て更新しました" else "タブを全て更新しました（$failed 件は取得できませんでした）"
+                // M72：原作は成功を知らせない。取得できなかったタブがある時だけ知らせる。
+                if (failed > 0) notice = "タブを全て更新しました（$failed 件は取得できませんでした）"
             } finally {
                 if (!completed) notice = "タブの更新を中止しました（取得できた分は反映しました）"
                 tabRefreshProgress = null
@@ -661,7 +706,8 @@ internal fun FtutterApp(
     // ドロワーはカタログ・スレッドだけ。それ以外の画面へ移ったら閉じた状態に戻す（監査A3：板一覧へ移っても開いたまま残り、
     // 次にカタログへ入るとドロワーが開いた状態で出た）。
     val drawerAvailable = screen is FtutterScreen.Catalog || screen is FtutterScreen.Thread
-    val drawerState = remember(drawerAvailable) { androidx.compose.material3.DrawerState(androidx.compose.material3.DrawerValue.Closed) }
+    // 画面の幅が変わる（回転）と作り直す：古い閉じた位置が開いた位置に近くなり、ドロワーが開いた（M22）。
+    val drawerState = rememberFtutterDrawerState(drawerAvailable, androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.width)
     // ドロワー「無効」では描かれないので、開く側も戻る側もそれを見る（L23：見えないドロワーが開いた扱いになり、次の戻るが空振りした）。
     val drawerUsable = drawerAvailable && tabSettings.drawerSide != FtutterDrawerSide.NONE
     val drawerShowing = drawerUsable && (drawerState.isOpen || drawerState.targetValue == androidx.compose.material3.DrawerValue.Open)
@@ -693,6 +739,7 @@ internal fun FtutterApp(
                 opening = currentThreadUrl,
                 listState = tabStripState,
                 showStatus = FtutterExtension.TAB_STATUS in extensions,
+                legacyLook = ftutterLegacyThreadLook(preferences),
                 settings = tabSettings,
                 design = design,
                 onOpen = ::openTabUrl,
@@ -705,7 +752,6 @@ internal fun FtutterApp(
     val gesture = remember(preferences) { parseFtutterGestureSettings(preferences) }
     val tablet = remember(preferences) { parseFtutterTabletSettings(preferences) }
     var toolbarEditor by remember { mutableStateOf<FtutterOrderEditorKind?>(null) }
-    var lastCatalogBoardId by remember { mutableStateOf(preferences[FtutterKeys.LAST_BOARD].orEmpty()) }
     // スレッドの「前へ・次へ」は隣のタブ（原作のスレッドはタブを横に並べたページ）。
     // 実行しなかった時は理由を返す（L17。メニューから選んだ時だけ知らせる）。
     fun threadGesture(action: FtutterGestureAction, current: FtutterScreen.Thread, board: BoardSummary, twoPane: Boolean): String? {
@@ -809,7 +855,33 @@ internal fun FtutterApp(
             onOpenHiddenAndNg = { screen = FtutterScreen.HiddenAndNg(current) },
             onOpenUrl = { url ->
                 val target = ftutterBoardForUrl(boards, url)
-                if (target != null && !url.contains("/res/")) openCatalog(target) else openThreadUrl(url, current)
+                when {
+                    target != null && !url.contains("/res/") -> openCatalog(target)
+                    target != null || ftutterLegacyBoards(preferences) -> openThreadUrl(url, current)
+                    // M63：原作は登録していない板のURLならその板を板一覧に足して開き、ふたばでないURLは知らせるだけ。
+                    else -> when (val kind = ftutterOpenUrlBoard(url, boards)) {
+                        null -> notice = "URLが対応していない形式です"
+                        else -> scope.launch {
+                            val name = fetchFtutterBoardName(httpClient, kind)
+                            if (name == null) {
+                                notice = "板を読み込めませんでした"
+                                return@launch
+                            }
+                            val added = com.valoser.futacha.shared.ui.board.createCustomBoardSummary(name = name, url = kind, existingBoards = boards)
+                            var board = added
+                            stateStore.updateBoards { latest ->
+                                ftutterBoardForUrl(latest, kind)?.let { board = it; latest } ?: (latest + added)
+                            }
+                            // 画面の板一覧に届くまで待つ（届く前に開くと「板が無い」として板一覧へ戻るため）。
+                            kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                                androidx.compose.runtime.snapshotFlow { latestBoardsState.value }.first { list -> list.any { it.id == board.id } }
+                            }
+                            val threadId = ftutterThreadIdFromUrl(url)
+                            if (threadId == null) openCatalog(board)
+                            else openThread(board, FtutterThreadRef(board.id, threadId, title = ""), current)
+                        }
+                    }
+                }
             },
             onDeleteHistory = { entry ->
                 // 原作：タブを閉じて履歴から削除する（ドロワーの「履歴から削除」と同じ後片付け）。
@@ -860,12 +932,14 @@ internal fun FtutterApp(
         val board = board.copy(url = ftutterNetworkUrl(board.url))
         val url = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, current.ref.threadId))
         val refreshOnOpen = remember(current) { threadMemory.takeRefresh(url) }
+        val startAtTop = remember(current) { threadMemory.takeStartAtTop(url) } && FtutterExtension.OPEN_AT_TOP in extensions
         FtutterThreadHost(
             board = board,
             ref = current.ref,
             initialPage = threadMemory.page(url),
             openingVisit = threadMemory.opening(url),
             refreshOnOpen = refreshOnOpen,
+            startAtTop = startAtTop,
             onPageSnapshot = { threadMemory.put(url, it) },
             repository = if (board.isMockBoard()) mockRepository else threadRepository,
             httpClient = httpClient,
@@ -954,7 +1028,10 @@ internal fun FtutterApp(
                     onContentChange = { drawerContent = it; savePreference(FtutterKeys.DRAWER_CONTENT, it.stored.toString()) },
                     onFilterChange = { drawerFilter = it },
                     onRestoreClosed = ::restoreClosed,
-                    onOpen = { url -> scope.launch { drawerState.close() }; openTabUrl(url) },
+                    onOpen = { url ->
+                        scope.launch { drawerState.close() }
+                        openTabUrl(url, startAtTop = drawerContent == FtutterDrawerContent.HISTORY)
+                    },
                     // 原作：「履歴」の行の長押しはカタログと同じメニュー（タブの行でも）。「タブ」の表示はタブのメニュー。
                     onLongPress = { url ->
                         if (drawerContent == FtutterDrawerContent.HISTORY) historyMenu = url
@@ -972,10 +1049,12 @@ internal fun FtutterApp(
         ) {
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().testTag("ftutter-root")) {
             val twoPane = ftutterIsTwoPane(tablet, maxWidth.value)
+            androidx.compose.runtime.SideEffect { twoPaneNow = twoPane }
             // 二画面の列数は、ペインではなく画面全体の向きで縦・横を選ぶ（原作）。
             val tabletColumns = if (maxWidth > maxHeight) tablet.columnsLandscape else tablet.columnsPortrait
             when (val current = screen) {
                 FtutterScreen.Boards -> FtutterBoardListScreen(
+                    legacy = ftutterLegacyBoards(preferences),
                     boardsFromBottom = com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences),
                     boards = boards,
                     httpClient = httpClient,
@@ -999,6 +1078,18 @@ internal fun FtutterApp(
                         val catalogBoard = if (thread == null) board else boards.firstOrNull { it.id == lastCatalogBoardId } ?: board
                         val catalogScreen = current as? FtutterScreen.Catalog ?: FtutterScreen.Catalog(catalogBoard.id)
                         PlatformBackHandler(enabled = true) { handleBack(true) { screen = FtutterScreen.Boards } }
+                        if (thread == null) {
+                            // 原作：二画面でカタログを開くと、最後に開いたスレッドを反対側に出す（M21）。
+                            val reopenId = ftutterTwoPaneReopenId(tabState.opening, tabState.urls, board,
+                                preferences.ftutterBool(FTUTTER_LEGACY_TWO_PANE_EMPTY_KEY, false))
+                            LaunchedEffect(board.id, reopenId) {
+                                val id = reopenId ?: return@LaunchedEffect
+                                if (screen != current) return@LaunchedEffect
+                                lastCatalogBoardId = board.id
+                                val title = com.valoser.futacha.shared.ui.futaber.findFutaberHistoryEntry(history, board, id)?.title.orEmpty()
+                                openThread(board, FtutterThreadRef(board.id, id, title), current, refreshOnOpen = false, startAtTop = false)
+                            }
+                        }
                         FtutterTwoPane(
                             tablet,
                             catalog = { strip -> CatalogPane(catalogBoard, catalogScreen, tabletColumns, strip) },
@@ -1054,7 +1145,18 @@ internal fun FtutterApp(
                     contentColor = colors.text
                 ) { Text("タブを更新しています $done/$total") }
             }
-            notice?.let { text ->
+            val newCountCapsule = notice?.takeIf { ftutterIsNewCountNotice(it) && !ftutterLegacyThreadLook(preferences) }
+            if (newCountCapsule != null) {
+                // M7：原作の新着の知らせは、画面の中央やや下の濃い青のカプセル。
+                Text(
+                    newCountCapsule,
+                    color = androidx.compose.ui.graphics.Color.White,
+                    fontSize = 14.sp,
+                    modifier = Modifier.align(Alignment.Center).padding(top = 240.dp)
+                        .background(androidx.compose.ui.graphics.Color(0xFF1A3A8F), androidx.compose.foundation.shape.RoundedCornerShape(50))
+                        .padding(horizontal = 20.dp, vertical = 8.dp).testTag("ftutter-notice")
+                )
+            } else notice?.let { text ->
                 // 原作のトーストと同じく下寄せだが、下部のツールバー（最大80dp）を覆って押せなくしないよう、その上に出す。
                 Snackbar(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
@@ -1141,7 +1243,12 @@ internal fun FtutterApp(
                 boards = boards,
                 existing = ngRules,
                 onDismiss = { historyNgDraft = null },
-                onSave = { rule -> historyNgDraft = null; saveNgRules({ it + rule }, "登録しました") }
+                legacy = preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false),
+                onRejected = { notice = it },
+                onSave = { rule ->
+                    historyNgDraft = null
+                    saveNgRules({ it + rule }, if (preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)) "登録しました" else null)
+                }
             )
         }
         protectedConfirm?.let { url ->
@@ -1151,49 +1258,7 @@ internal fun FtutterApp(
             )
         }
         toolbarEditor?.let { kind ->
-            if (kind == FtutterOrderEditorKind.POST_MENU) {
-                FtutterOrderEditorDialog(
-                    title = "レス長押しメニューの並び",
-                    entries = parseFtutterPostMenu(preferences),
-                    label = { it.label },
-                    onDismiss = { toolbarEditor = null },
-                    onReset = { toolbarEditor = null; savePreference(FtutterKeys.POST_MENU_ORDER, ""); savePreference(FtutterKeys.POST_MENU_ENABLED, "") },
-                    onSave = { saved ->
-                        toolbarEditor = null
-                        val (names, flags) = encodeFtutterToolbar(saved) { it.stored }
-                        savePreference(FtutterKeys.POST_MENU_ORDER, names)
-                        savePreference(FtutterKeys.POST_MENU_ENABLED, flags)
-                    }
-                )
-            } else if (kind == FtutterOrderEditorKind.CATALOG) {
-                FtutterOrderEditorDialog(
-                    title = "ツールバー編集（カタログ）",
-                    entries = parseFtutterCatalogToolbar(preferences),
-                    label = { it.label },
-                    onDismiss = { toolbarEditor = null },
-                    onReset = { toolbarEditor = null; savePreference(FtutterKeys.CATALOG_TOOLBAR_ORDER, ""); savePreference(FtutterKeys.CATALOG_TOOLBAR_ENABLED, "") },
-                    onSave = { saved ->
-                        toolbarEditor = null
-                        val (names, flags) = encodeFtutterToolbar(saved) { it.stored }
-                        savePreference(FtutterKeys.CATALOG_TOOLBAR_ORDER, names)
-                        savePreference(FtutterKeys.CATALOG_TOOLBAR_ENABLED, flags)
-                    }
-                )
-            } else {
-                FtutterOrderEditorDialog(
-                    title = "ツールバー編集（スレッド）",
-                    entries = parseFtutterThreadToolbar(preferences),
-                    label = { it.label },
-                    onDismiss = { toolbarEditor = null },
-                    onReset = { toolbarEditor = null; savePreference(FtutterKeys.THREAD_TOOLBAR_ORDER, ""); savePreference(FtutterKeys.THREAD_TOOLBAR_ENABLED, "") },
-                    onSave = { saved ->
-                        toolbarEditor = null
-                        val (names, flags) = encodeFtutterToolbar(saved) { it.stored }
-                        savePreference(FtutterKeys.THREAD_TOOLBAR_ORDER, names)
-                        savePreference(FtutterKeys.THREAD_TOOLBAR_ENABLED, flags)
-                    }
-                )
-            }
+            FtutterOrderEditorHost(kind, preferences, savePreference, onClose = { toolbarEditor = null })
         }
         if (backupLoading != null) {
             FutachaAppLockAwareWindow { androidx.compose.material3.AlertDialog(
@@ -1234,6 +1299,7 @@ internal fun FtutterApp(
                 postRequest = null
             } else {
                 val draftKey = ftutterDraftKey(target, board.url)
+                val legacyPostDialog = ftutterLegacyPostDialog(preferences)
                 val drafts = remember(draftKey) { parseFtutterDrafts(preferences[FtutterKeys.DRAFTS]) }
                 var capabilities by remember(draftKey) { mutableStateOf(com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(board.url)) }
                 LaunchedEffect(draftKey) {
@@ -1258,7 +1324,9 @@ internal fun FtutterApp(
                     pickerPreference = pickerPreference,
                     preferredFileManagerPackage = preferredFileManager?.packageName,
                     deviceInfo = {
-                        com.valoser.futacha.shared.ui.futaber.futaberDeviceInfoText(com.valoser.futacha.shared.ui.compat.compatPostDeviceInfo(appVersion))
+                        val platform = com.valoser.futacha.shared.ui.compat.compatPostDeviceInfo(appVersion)
+                        if (legacyPostDialog) com.valoser.futacha.shared.ui.futaber.futaberDeviceInfoText(platform)
+                        else ftutterDeviceInfoText(appVersion, platform)
                     },
                     uploadUps = httpClient?.let { client ->
                         { image, key -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(client, image, "", key, appVersion) }
@@ -1276,6 +1344,7 @@ internal fun FtutterApp(
                     onSend = { input -> sendPost(target, input) },
                     onSent = { posted ->
                         postRequest = null
+                        failedAttachment = null
                         when (target) {
                             is FtutterPostTarget.Reply -> {
                                 countStat(FtutterKeys.STATS_REPLIED)
@@ -1292,8 +1361,23 @@ internal fun FtutterApp(
                             }
                         }
                     },
-                    onDismiss = { postRequest = null },
+                    onDismiss = { postRequest = null; failedAttachment = null },
+                    legacyDialog = legacyPostDialog,
+                    initialImage = failedAttachment?.takeIf { it.first == draftKey }?.second,
+                    onFailed = { toast, image ->
+                        failedAttachment = image?.let { draftKey to it }
+                        postRequest = null
+                        notice = toast.text
+                        // 原作はipの拒否の後に、続けて別のトーストで案内を出す（M37）。
+                        toast.followUp?.let { followUp ->
+                            scope.launch {
+                                delay(FTUTTER_POST_FOLLOW_UP_DELAY_MS)
+                                notice = followUp
+                            }
+                        }
+                    },
                     handwritingEnabled = FtutterExtension.HANDWRITING in extensions,
+                    legacyMenus = ftutterLegacyMenus(preferences),
                     onHandwritingSaved = { image ->
                         // 失敗の文は書き込み画面の中に出す（L22。アプリの知らせはダイアログの背面に隠れ、4秒で消えていた）。
                         // コピーはこのモードのスコープで書き、書き込み画面が先に閉じても最後まで書く。その時の失敗はアプリの知らせ（L39）。
@@ -1338,6 +1422,10 @@ private suspend fun markFallen(stateStore: AppStateStore, boardId: String, threa
 @Composable
 internal fun FtutterTopBar(
     title: String,
+    /** 原作のスレッドの上部バー（H8）：題名の下の小さな2行目。ある時は題名とまとめて中央に小さく出す。 */
+    subtitle: String? = null,
+    /** 原作の形の更新の失敗：題名の代わりに「！」だけを出す。値は読み上げの理由。 */
+    failed: String? = null,
     onBack: (() -> Unit)? = null,
     /** 設定「左上にドロワーを開くボタンを表示」がONの時に渡す。 */
     onOpenDrawer: (() -> Unit)? = null,
@@ -1360,7 +1448,19 @@ internal fun FtutterTopBar(
         } else {
             Box(Modifier.padding(start = 16.dp))
         }
-        Text(
+        if (failed != null) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Error, contentDescription = failed, tint = colors.onToolBar,
+                    modifier = Modifier.testTag("ftutter-thread-title-failed"))
+            }
+        } else if (subtitle != null) {
+            Column(Modifier.weight(1f).padding(horizontal = 4.dp).testTag("ftutter-thread-title"), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(title, color = colors.onToolBar, fontSize = 15.sp, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(subtitle, color = colors.onToolBar, fontSize = 12.sp, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+        } else Text(
             title,
             color = colors.onToolBar,
             fontSize = 22.sp,
@@ -1378,6 +1478,7 @@ private fun FtutterThreadHost(
     ref: FtutterThreadRef,
     initialPage: com.valoser.futacha.shared.model.ThreadPage?,
     refreshOnOpen: Boolean,
+    startAtTop: Boolean,
     openingVisit: com.valoser.futacha.shared.ui.board.ThreadOpeningVisit,
     onPageSnapshot: (com.valoser.futacha.shared.model.ThreadPage) -> Unit,
     repository: BoardRepository,
@@ -1466,6 +1567,7 @@ private fun FtutterThreadHost(
         isSaving = saver?.isSaving == true
     )
     var searchUrl by remember { mutableStateOf<String?>(null) }
+    var searchStart by remember { mutableStateOf<com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget?>(null) }
     var savePage by remember { mutableStateOf<com.valoser.futacha.shared.model.ThreadPage?>(null) }
     val features = sharedFeatures
     searchUrl?.let { url ->
@@ -1476,7 +1578,8 @@ private fun FtutterThreadHost(
                 com.valoser.futacha.shared.ui.board.LocalFutachaSharedFeatures provides features
             ) {
                 com.valoser.futacha.shared.ui.board.ThreadImageSearchDialog(url, client, mediaServices.cookieRepository,
-                    onDismiss = { searchUrl = null }, openExternal = rememberFtutterUrlLauncher(preferences), preferredTarget = if (preferences.ftutterBool(FtutterKeys.IMAGE_SEARCH_ASCII2D, false))
+                    startTarget = searchStart,
+                    onDismiss = { searchUrl = null; searchStart = null }, openExternal = rememberFtutterUrlLauncher(preferences), preferredTarget = if (preferences.ftutterBool(FtutterKeys.IMAGE_SEARCH_ASCII2D, false))
                         com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget.ASCII2D_URL else com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget.GOOGLE_URL)
             }
         } else {
@@ -1633,6 +1736,7 @@ private fun FtutterThreadHost(
         ref = ref,
         initialPage = initialPage,
         refreshOnOpen = refreshOnOpen,
+        startAtTop = startAtTop,
         onPageSnapshot = onPageSnapshot,
         repository = repository,
         httpClient = httpClient,
@@ -1663,7 +1767,7 @@ private fun FtutterThreadHost(
         },
         onPageLoaded = { posts ->
             launchStore("update history after load") {
-                stateStore.updateHistory { com.valoser.futacha.shared.ui.futaber.futaberHistoryAfterLoad(it, board.id, ref.threadId, posts) }
+                stateStore.updateHistory { ftutterHistoryAfterLoad(it, board.id, ref.threadId, posts) }
             }
         },
         onLivePageConfirmed = {
@@ -1726,7 +1830,11 @@ private fun FtutterThreadHost(
         onSwipeTab = onSwipeTab,
         onEditToolbar = onEditToolbar,
         mediaTools = mediaTools,
-        onSearchImage = { searchUrl = it },
+        onSearchImage = { searchStart = null; searchUrl = it },
+        onSearchImageWith = { url, engine ->
+            searchStart = when (engine) { FtutterViewerSearchEngine.ASCII2D -> com.valoser.futacha.shared.ui.compat.CompatImageSearchTarget.ASCII2D_URL }
+            searchUrl = url
+        },
         onSaveThread = { savePage = it },
         onSoudaneSent = onSoudaneSent,
         extensions = extensions,

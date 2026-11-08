@@ -72,6 +72,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
@@ -85,6 +87,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
@@ -203,6 +207,25 @@ internal class FtutterCatalogHolder {
      * スレッド側の戻るが先に受けるので、アプリ側がこれを見て先に閉じる（監査A3）。
      */
     var paneBack by mutableStateOf<(() -> Unit)?>(null)
+    /**
+     * Where the user last left the list (key, index, offset). A jump to the top that nobody asked for (the list rebuilt on the way
+     * back from a thread) is put back from here; every deliberate jump calls [forgetScroll] first.
+     */
+    var keptScroll: Triple<String, Int, Int>? = null
+    fun forgetScroll() { keptScroll = null }
+}
+
+internal enum class FtutterKeptScrollStep { RESTORE, KEEP, FORGET, NOTHING }
+
+/**
+ * What the catalog's position net does with one look at the list: away from the top the place is kept; at the top it is
+ * put back only when nobody moved the list there (no scroll running and no drag of the user's since the last stop).
+ */
+internal fun ftutterKeptScrollStep(atTop: Boolean, hasKept: Boolean, scrolling: Boolean, userGesture: Boolean): FtutterKeptScrollStep = when {
+    !atTop -> FtutterKeptScrollStep.KEEP
+    scrolling || userGesture -> FtutterKeptScrollStep.FORGET
+    hasKept -> FtutterKeptScrollStep.RESTORE
+    else -> FtutterKeptScrollStep.NOTHING
 }
 
 /** カタログの長押しダイアログ（原作の ThumbDialog）の項目。長押し拡大がOFFの時に出る。 */
@@ -276,6 +299,7 @@ internal fun FtutterCatalogScreen(
     var zoomed by remember { mutableStateOf<CatalogItem?>(null) }
     var thumbMenu by remember { mutableStateOf<CatalogItem?>(null) }
     var openUrlDialog by remember { mutableStateOf(false) }
+    val openCatalogInBrowser = rememberFtutterUrlLauncher()
     var refreshFromBottom by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -290,6 +314,7 @@ internal fun FtutterCatalogScreen(
 
     LaunchedEffect(board.id) {
         if (holder.scrolledBoardId != null && holder.scrolledBoardId != board.id) {
+            holder.forgetScroll()
             holder.gridState.scrollToItem(0)
             holder.staggeredState.scrollToItem(0)
         }
@@ -317,6 +342,7 @@ internal fun FtutterCatalogScreen(
             editPreference(FtutterKeys.HIDDEN_THREADS) { stored -> ftutterPrunedHiddenValue(stored, board.url, page.items) }
             if (refreshFromBottom) {
                 // 原作：下に引っ張った更新の後は先頭へ戻る。
+                holder.forgetScroll()
                 holder.gridState.scrollToItem(0)
                 holder.staggeredState.scrollToItem(0)
                 refreshFromBottom = false
@@ -403,6 +429,39 @@ internal fun FtutterCatalogScreen(
         }
     }
     val visible = rememberFtutterVisibleCatalog(ngResult.items, settings.maxThreadCount, load?.viewedFirstId.takeIf { viewedFirstEnabled })
+    // 勝手に先頭へ戻された位置を戻す（スレッドから戻るとカタログの先頭へ飛ぶ、という報告への安全網）。指で動かしている間と、
+    // 意図した移動（先頭・末尾・板の切り替え・下からの更新）は、先に覚えた位置を消してあるので戻さない。
+    val visibleCount by androidx.compose.runtime.rememberUpdatedState(visible.size)
+    LaunchedEffect(key, settings.sameHeight) {
+        val grid = holder.gridState
+        val staggered = holder.staggeredState
+        // A list the user flung to the top settles there with no finger on it; without this mark the net took that for an
+        // unrequested jump and pulled the list back (audit C2). Set by the user's drag, cleared once that scroll has ended.
+        var userGesture = false
+        var sawScrolling = false
+        launch {
+            val source = if (settings.sameHeight) grid.interactionSource else staggered.interactionSource
+            source.interactions.collect { if (it is androidx.compose.foundation.interaction.DragInteraction.Start) userGesture = true }
+        }
+        androidx.compose.runtime.snapshotFlow {
+            val place = if (settings.sameHeight) grid.firstVisibleItemIndex to grid.firstVisibleItemScrollOffset
+            else staggered.firstVisibleItemIndex to staggered.firstVisibleItemScrollOffset
+            val dragging = if (settings.sameHeight) grid.isScrollInProgress else staggered.isScrollInProgress
+            Triple(place, dragging, visibleCount)
+        }.collect { (place, dragging, count) ->
+            val kept = holder.keptScroll?.takeIf { it.first == key }
+            when (ftutterKeptScrollStep(place.first == 0 && place.second == 0, kept != null, dragging, userGesture)) {
+                FtutterKeptScrollStep.RESTORE -> if (kept != null && count > kept.second) {
+                    if (settings.sameHeight) grid.scrollToItem(kept.second, kept.third) else staggered.scrollToItem(kept.second, kept.third)
+                }
+                FtutterKeptScrollStep.KEEP -> holder.keptScroll = Triple(key, place.first, place.second)
+                FtutterKeptScrollStep.FORGET -> holder.keptScroll = null
+                FtutterKeptScrollStep.NOTHING -> Unit
+            }
+            if (dragging) sawScrolling = true
+            else if (sawScrolling) { sawScrolling = false; userGesture = false }
+        }
+    }
     var ngDraft by remember { mutableStateOf<FtutterNgRule?>(null) }
     var delTarget by remember { mutableStateOf<CatalogItem?>(null) }
     var historyDeleteTarget by remember { mutableStateOf<CatalogItem?>(null) }
@@ -418,8 +477,9 @@ internal fun FtutterCatalogScreen(
     fun handleGesture(action: FtutterGestureAction, fromMenu: Boolean = false) {
         // カタログでは、ツリー・人気・画像抽出は何もしない（原作）。
         when (action) {
-            FtutterGestureAction.TOP -> scope.launch { holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0) }
+            FtutterGestureAction.TOP -> scope.launch { holder.forgetScroll(); holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0) }
             FtutterGestureAction.BOTTOM -> scope.launch {
+                holder.forgetScroll()
                 val last = (visible.size - 1).coerceAtLeast(0)
                 holder.gridState.scrollToItem(last); holder.staggeredState.scrollToItem(last)
             }
@@ -508,6 +568,8 @@ internal fun FtutterCatalogScreen(
                     onToolbarEdit = onEditToolbar,
                     onHiddenAndNg = onOpenHiddenAndNg,
                     onOpenFromUrl = { openUrlDialog = true },
+                    legacy = ftutterLegacyMenus(preferences),
+                    onOpenBrowser = { openCatalogInBrowser(ftutterBoardBaseUrl(board.url) + "futaba.php?mode=cat") },
                     onCopyUrl = {
                         clipboard.setText(AnnotatedString(ftutterBoardBaseUrl(board.url) + "futaba.php?mode=cat"))
                         onNotice("URLをコピーしました")
@@ -523,9 +585,11 @@ internal fun FtutterCatalogScreen(
                             FtutterCatalogTool.TAB -> savePreference(FtutterKeys.SHOW_TAB, (!settings.showTab).toString())
                             FtutterCatalogTool.PRIVACY -> savePreference(FtutterKeys.IS_PRIVACY, (!settings.privacy).toString())
                             FtutterCatalogTool.UP -> scope.launch {
+                                holder.forgetScroll()
                                 holder.gridState.scrollToItem(0); holder.staggeredState.scrollToItem(0)
                             }
                             FtutterCatalogTool.DOWN -> scope.launch {
+                                holder.forgetScroll()
                                 val last = (visible.size - 1).coerceAtLeast(0)
                                 holder.gridState.scrollToItem(last); holder.staggeredState.scrollToItem(last)
                             }
@@ -572,7 +636,9 @@ internal fun FtutterCatalogScreen(
             boards = boards,
             existing = ngRules,
             onDismiss = { ngDraft = null },
-            onSave = { rule -> ngDraft = null; onSaveNgRules({ it + rule }, "登録しました") }
+            legacy = preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false),
+            onRejected = onNotice,
+            onSave = { rule -> ngDraft = null; onSaveNgRules({ it + rule }, if (preferences.ftutterBool(FTUTTER_LEGACY_DIALOGS_KEY, false)) "登録しました" else null) }
         )
     }
     delTarget?.let { item ->
@@ -645,45 +711,70 @@ private fun FtutterCatalogTopBar(
     }
 }
 
+/**
+ * 検索欄（H6・M68）：原作は←・枠線の欄・×で、開くとキーボードが出る。←は検索を閉じ、×は語を消す。
+ */
 @Composable
 internal fun FtutterSearchBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
     val colors = LocalFtutterColors.current
+    Box(Modifier.fillMaxWidth().background(colors.toolBar).statusBarsPadding()) {
+        FtutterSearchField(query, onQueryChange, onClose, colors.toolBar, colors.onToolBar, "ftutter-search-input", "ftutter-search-close")
+    }
+}
+
+/**
+ * 検索欄（H6・M68）：原作は←・枠線の欄・×で、開くとキーボードが出る。←は検索を閉じ、×は語を消す。
+ */
+@Composable
+internal fun FtutterSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+    background: Color,
+    content: Color,
+    inputTag: String,
+    closeTag: String
+) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Row(
-        Modifier.fillMaxWidth().background(colors.toolBar).statusBarsPadding().height(56.dp),
+        Modifier.fillMaxWidth().background(background).height(56.dp).padding(end = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TextField(
+        IconButton(onClick = onClose, modifier = Modifier.testTag(closeTag)) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "検索を閉じる", tint = content)
+        }
+        androidx.compose.foundation.text.BasicTextField(
             value = query,
             onValueChange = onQueryChange,
-            placeholder = { Text("検索") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = colors.toolBar, unfocusedContainerColor = colors.toolBar,
-                focusedTextColor = colors.onToolBar, unfocusedTextColor = colors.onToolBar
-            ),
-            modifier = Modifier.weight(1f).testTag("ftutter-search-input")
+            textStyle = androidx.compose.ui.text.TextStyle(color = content, fontSize = 16.sp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(content),
+            modifier = Modifier.weight(1f).height(40.dp).focusRequester(focus).testTag(inputTag),
+            decorationBox = { inner ->
+                Row(
+                    Modifier.fillMaxSize().border(1.dp, content, androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                        .padding(start = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        if (query.isEmpty()) Text("検索", color = content, fontSize = 16.sp)
+                        inner()
+                    }
+                    if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp).testTag("$inputTag-clear")) {
+                        Icon(Icons.Rounded.Close, contentDescription = "語を消す", tint = content)
+                    }
+                }
+            }
         )
-        IconButton(onClick = onClose, modifier = Modifier.testTag("ftutter-search-close")) {
-            Icon(Icons.Rounded.Close, contentDescription = "検索を閉じる", tint = colors.onToolBar)
-        }
     }
 }
 
 @Composable
 private fun FtutterToolButton(tool: FtutterCatalogTool, active: Boolean, onClick: () -> Unit) {
     val colors = LocalFtutterColors.current
-    val icon = when (tool) {
-        FtutterCatalogTool.DRAWER -> Icons.Rounded.Menu
-        FtutterCatalogTool.TAB -> Icons.Rounded.WebAsset
-        FtutterCatalogTool.PRIVACY -> if (active) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility
-        FtutterCatalogTool.UP -> Icons.Rounded.KeyboardArrowUp
-        FtutterCatalogTool.DOWN -> Icons.Rounded.KeyboardArrowDown
-        FtutterCatalogTool.CREATE -> Icons.Rounded.Edit
-        FtutterCatalogTool.SEARCH -> Icons.Rounded.Search
-        FtutterCatalogTool.REFRESH -> Icons.Rounded.Refresh
-        else -> Icons.Rounded.MoreVert
-    }
+    val icon = ftutterCatalogToolIcon(tool, active)
     IconButton(onClick = onClick, modifier = Modifier.testTag("ftutter-catalog-tool-${tool.stored}")) {
         FtutterToggleIcon(icon, contentDescription = tool.label, active = active)
     }
@@ -723,34 +814,57 @@ private fun FtutterCatalogMenu(
     onHiddenAndNg: () -> Unit,
     onOpenFromUrl: () -> Unit,
     onCopyUrl: () -> Unit,
-    onGesture: (FtutterGestureAction) -> Unit
+    onGesture: (FtutterGestureAction) -> Unit,
+    legacy: Boolean = false,
+    onOpenBrowser: () -> Unit = {}
 ) {
     val colors = LocalFtutterColors.current
     var gestureMenu by remember { mutableStateOf(false) }
     if (gestureMenu) FtutterGestureActionDialog(false, { gestureMenu = false }, onGesture)
     var open by remember { mutableStateOf(false) }
+    val viewedFirst: @Composable () -> Unit = {
+        DropdownMenuItem(text = { Text("更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF") },
+            onClick = { open = false; onToggleViewedFirst() }, modifier = Modifier.testTag("ftutter-catalog-viewed-first"))
+    }
+    val gesture: @Composable () -> Unit = {
+        DropdownMenuItem(text = { Text("ジェスチャーの操作を選ぶ") }, onClick = { open = false; gestureMenu = true },
+            modifier = Modifier.testTag("ftutter-catalog-menu-gesture-actions"))
+    }
+    // 原作のカタログのメニュー（H9・M64）：ツールバー編集／プライバシー／非表示・NG／URLから開く／URLをコピー／ブラウザで開く。
+    val original: @Composable (withViewedFirst: Boolean) -> Unit = { withViewedFirst ->
+        if (withViewedFirst) viewedFirst()
+        DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onToolbarEdit() })
+        DropdownMenuItem(
+            text = { Text("プライバシー") },
+            leadingIcon = { Checkbox(checked = privacy, onCheckedChange = null) },
+            onClick = { open = false; onTogglePrivacy() }
+        )
+        DropdownMenuItem(
+            text = { Text("非表示・NG") },
+            onClick = { open = false; onHiddenAndNg() },
+            modifier = Modifier.testTag("ftutter-menu-hidden-ng")
+        )
+        DropdownMenuItem(text = { Text("URLから開く") }, onClick = { open = false; onOpenFromUrl() })
+        DropdownMenuItem(text = { Text("URLをコピー") }, onClick = { open = false; onCopyUrl() })
+        DropdownMenuItem(text = { Text("ブラウザで開く") }, onClick = { open = false; onOpenBrowser() },
+            modifier = Modifier.testTag("ftutter-catalog-menu-browser"))
+    }
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.testTag("ftutter-catalog-tool-menu")) {
             Icon(Icons.Rounded.MoreVert, contentDescription = "メニュー", tint = colors.onToolBar)
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(text = { Text("更新時に閲覧スレを先頭へ：" + if (viewedFirstEnabled) "ON" else "OFF") },
-                onClick = { open = false; onToggleViewedFirst() }, modifier = Modifier.testTag("ftutter-catalog-viewed-first"))
-            DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onToolbarEdit() })
-            DropdownMenuItem(
-                text = { Text("プライバシー") },
-                leadingIcon = { Checkbox(checked = privacy, onCheckedChange = null) },
-                onClick = { open = false; onTogglePrivacy() }
+        if (legacy) {
+            // 従来の動き：前の並びのまま。
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                original(true)
+                gesture()
+            }
+        } else {
+            FtutterFoldedMenu(
+                expanded = open, onDismiss = { open = false }, tag = "ftutter-catalog-menu", hasExtras = true,
+                original = { original(false) },
+                extras = { viewedFirst(); gesture() }
             )
-            DropdownMenuItem(
-                text = { Text("非表示・NG") },
-                onClick = { open = false; onHiddenAndNg() },
-                modifier = Modifier.testTag("ftutter-menu-hidden-ng")
-            )
-            DropdownMenuItem(text = { Text("URLから開く") }, onClick = { open = false; onOpenFromUrl() })
-            DropdownMenuItem(text = { Text("URLをコピー") }, onClick = { open = false; onCopyUrl() })
-            DropdownMenuItem(text = { Text("ジェスチャーの操作を選ぶ") }, onClick = { open = false; gestureMenu = true },
-                modifier = Modifier.testTag("ftutter-catalog-menu-gesture-actions"))
         }
     }
 }
@@ -894,18 +1008,32 @@ private fun FtutterCatalogCell(
     val currentOnOpen by androidx.compose.runtime.rememberUpdatedState(onOpen)
     val currentOnZoom by androidx.compose.runtime.rememberUpdatedState(onZoom)
     val currentOnThumbMenu by androidx.compose.runtime.rememberUpdatedState(onThumbMenu)
+    // H5：画像の下端（セルの中のy）。題名の部分の長押しはメニュー、画像の部分は押している間だけ拡大。
+    val imageBottom = remember { floatArrayOf(-1f) }
+    val legacyPress = settings.legacyPress
     Column(
         Modifier
-            .background(if (inTab) colors.inTab else colors.background)
+            .background(colors.background)
             .border(0.5.dp, colors.outline)
-            .pointerInput(item.threadUrl, settings.useZoom) {
+            // 原作：タブにあるスレのセルは少し内側に寄せ、未読の数と同じ色の細い枠で囲む。
+            .then(
+                ftutterCatalogTabFrame(inTab)?.let { frame ->
+                    Modifier.padding(frame.inset.dp).border(frame.width.dp, colors.midoku)
+                } ?: Modifier
+            )
+            .background(if (inTab) colors.inTab else colors.background)
+            .pointerInput(item.threadUrl, settings.useZoom, legacyPress) {
+                var zooming = false
                 detectTapGestures(
                     onTap = { currentOnOpen(currentItem) },
-                    onLongPress = { if (settings.useZoom) currentOnZoom(currentItem) else currentOnThumbMenu(currentItem) },
+                    onLongPress = { at ->
+                        val press = ftutterCatalogPress(at.y, imageBottom[0].takeIf { it >= 0f }, settings.useZoom, legacyPress)
+                        if (press == FtutterCatalogPress.ZOOM) { zooming = true; currentOnZoom(currentItem) } else currentOnThumbMenu(currentItem)
+                    },
                     onPress = {
                         // 原作：長押し拡大は押している間だけ。指を離すと閉じる。
                         tryAwaitRelease()
-                        if (settings.useZoom) currentOnZoom(null)
+                        if (zooming) { zooming = false; currentOnZoom(null) }
                     }
                 )
             }
@@ -913,7 +1041,9 @@ private fun FtutterCatalogCell(
     ) {
         if (settings.numberPosition == FtutterNumberPosition.ABOVE) numbersRow()
         val aspect = if (settings.sameHeight) 1f else ftutterThumbAspectRatio(item.thumbnailWidth, item.thumbnailHeight, settings)
-        Box(Modifier.fillMaxWidth().aspectRatio(aspect)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(aspect).onGloballyPositioned { coords ->
+            imageBottom[0] = if (settings.titleLines > 0) coords.positionInParent().y + coords.size.height else -1f
+        }) {
             FtutterThumbnail(
                 thumbnailUrl = item.thumbnailUrl,
                 fullImageUrl = item.fullImageUrl,
@@ -988,7 +1118,8 @@ internal fun FtutterThumbDialog(hasHistory: Boolean, onDismiss: () -> Unit, onAc
                 FtutterThumbAction.entries.forEach { action ->
                     val enabled = action != FtutterThumbAction.DELETE_HISTORY || hasHistory
                     Row(
-                        Modifier.fillMaxWidth().clickable(enabled = enabled) { onAction(action) }.padding(vertical = 10.dp)
+                        // L7：原作は1行が約56、字は17で、文字の色（灰色でない）。
+                        Modifier.fillMaxWidth().clickable(enabled = enabled) { onAction(action) }.padding(vertical = 16.dp)
                             .testTag("ftutter-thumb-${action.name}"),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1001,9 +1132,11 @@ internal fun FtutterThumbDialog(hasHistory: Boolean, onDismiss: () -> Unit, onAc
                                 FtutterThumbAction.DELETE_HISTORY -> Icons.Rounded.Delete
                                 FtutterThumbAction.ADD_TAB -> Icons.Rounded.LibraryAdd
                             },
-                            contentDescription = null
+                            contentDescription = null,
+                            tint = LocalFtutterColors.current.text.copy(alpha = if (enabled) 1f else 0.38f)
                         )
-                        Text(action.label, modifier = Modifier.padding(start = 16.dp).alpha(if (enabled) 1f else 0.38f))
+                        Text(action.label, color = LocalFtutterColors.current.text, fontSize = 17.sp,
+                            modifier = Modifier.padding(start = 24.dp).alpha(if (enabled) 1f else 0.38f))
                     }
                 }
             }
@@ -1021,19 +1154,25 @@ internal fun FtutterHistoryDeleteConfirm(threadTitle: String, onDismiss: () -> U
 @Composable
 private fun FtutterOpenUrlDialog(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
     var input by remember { mutableStateOf("") }
+    // 原作：題の無いダイアログに下線の欄（「板またはスレのURL」）と「キャンセル／OK」。空のOKは黙って閉じる。
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("URLから開く") },
         text = {
-            OutlinedTextField(
+            androidx.compose.material3.TextField(
                 value = input,
                 onValueChange = { input = it },
-                placeholder = { Text("スレッドまたは板のURL") },
+                placeholder = { Text("板またはスレのURL") },
                 singleLine = true,
+                colors = androidx.compose.material3.TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent
+                ),
                 modifier = Modifier.fillMaxWidth().testTag("ftutter-open-url-input")
             )
         },
-        confirmButton = { TextButton(onClick = { onOpen(input.trim()) }, enabled = input.isNotBlank()) { Text("開く") } },
+        confirmButton = {
+            TextButton(onClick = { if (input.isBlank()) onDismiss() else onOpen(input.trim()) },
+                modifier = Modifier.testTag("ftutter-open-url-ok")) { Text("OK") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
 }

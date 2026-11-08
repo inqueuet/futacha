@@ -142,6 +142,13 @@ internal fun futaberTabViews(keys: List<FutaberTabKey>, history: List<ThreadHist
     }
 }
 
+/**
+ * F27: the count the tab strip and the panel's history and tabs show: replies, as futaber (and the catalog) count them.
+ * The history keeps the posts including the first (the shared unit, docs/futaber-evolution-data-2026-10-31.md §2.2), so
+ * one is taken off for showing only; nothing stored changes.
+ */
+internal fun futaberShownReplyCount(storedPosts: Int): Int = (storedPosts - 1).coerceAtLeast(0)
+
 /** The thread to open for a history row, or null when its board is no longer registered. */
 internal fun futaberRefForHistory(entry: ThreadHistoryEntry, boards: List<BoardSummary>): FutaberThreadRef? {
     val board = boards.firstOrNull { it.id == entry.boardId }

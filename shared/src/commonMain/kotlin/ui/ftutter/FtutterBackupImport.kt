@@ -187,6 +187,17 @@ private fun JsonObject.int(name: String): Int? = (this[name] as? JsonPrimitive)?
 private fun JsonObject.bool(name: String): Boolean? = (this[name] as? JsonPrimitive)?.booleanOrNull
 
 /**
+ * `.ftt` の板を今の板一覧へ足す（[FtutterBackupPlan.boards]、取り込みの確定の時）。原作で★の板は、今ある同じ板にも★を付ける。
+ * 今の板は消さず、並びも変えない。
+ */
+internal fun ftutterMergeBackupBoards(current: List<BoardSummary>, imported: List<BoardSummary>): List<BoardSummary> {
+    val favorites = imported.filter { it.pinned }.map { it.url }
+    return current.map { board ->
+        if (favorites.any { ftutterBoardForUrl(listOf(board), it) != null }) board.copy(pinned = true) else board
+    } + imported.filter { candidate -> current.none { it.id == candidate.id } && ftutterBoardForUrl(current, candidate.url) == null }
+}
+
+/**
  * 設定XMLの中身から、このモードへ入れる内容を作る。[boards]は今の板（足した後の一覧を返す）、[existingNg]は今のNG
  * （同じものは足さない）、[now]は履歴の時刻（原作の並び順を保つため、先頭ほど新しくする）。
  */

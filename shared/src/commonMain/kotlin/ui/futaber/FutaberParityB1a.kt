@@ -274,7 +274,7 @@ internal fun FutaberArchiveMenuSheet(
     register: suspend (HttpClient, String, String) -> Result<String> = ::registerCompatTsumanne
 ) {
     val links = remember(threadUrl) { futaberArchiveLinks(threadUrl) }
-    FutaberPostActionSheet(
+    FutaberActionSheet(
         title = "URL・アーカイブ",
         actions = listOf(
             FutaberPostAction("archive-ftbucket", "FTBucketに登録") { onDismiss(); openUrl(links.ftbucket) },
@@ -289,8 +289,7 @@ internal fun FutaberArchiveMenuSheet(
             FutaberPostAction("archive-futapo", "ふたポで開く") {
                 onDismiss()
                 links.futapo?.let(openUrl) ?: onNotice("ふたポのURLを作成できませんでした（may/img板のみ対応）")
-            },
-            FutaberPostAction("cancel", "キャンセル") { onDismiss() }
+            }
         ),
         onDismiss = onDismiss
     )
@@ -358,6 +357,22 @@ internal data class FutaberOtherFavorite(val tab: CompatTab, val ref: FutaberThr
 internal fun futaberOtherModeFavorites(tabs: List<CompatTab>, boards: List<BoardSummary>): List<FutaberOtherFavorite> {
     val byKey = boards.associateBy { futaberCompatBoardKey(it) }
     return tabs.filter { it.favorite && it.threadNo.isNotBlank() }.distinctBy { it.key }.map { tab ->
+        val board = byKey[tab.boardKey]
+        FutaberOtherFavorite(
+            tab,
+            board?.let { FutaberThreadRef(it.id, tab.threadNo, tab.title.ifBlank { "(無題)" }, tab.thumbnailUrl.orEmpty(), tab.replyCount) }
+        )
+    }
+}
+
+/**
+ * D-B4 (J1): the tabs the other modes have open, to list read only in the manage panel's tab category. [ownKeys] are the
+ * shared keys this mode's own strip and stars were written under (they are not "other"); closed-on-purpose tabs are not
+ * in the shared tabs at all. The favourites are listed on their own page, so a starred tab is left out here.
+ */
+internal fun futaberOtherModeOpenTabs(tabs: List<CompatTab>, boards: List<BoardSummary>, ownKeys: Set<String>): List<FutaberOtherFavorite> {
+    val byKey = boards.associateBy { futaberCompatBoardKey(it) }
+    return tabs.filter { !it.favorite && it.threadNo.isNotBlank() && it.key !in ownKeys }.distinctBy { it.key }.map { tab ->
         val board = byKey[tab.boardKey]
         FutaberOtherFavorite(
             tab,

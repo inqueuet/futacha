@@ -31,3 +31,26 @@ internal class CompatMediaReturnState {
     var galleryInitialPositionApplied = false
     val viewerPosition = CompatViewerReturnPosition()
 }
+
+/**
+ * Back from a viewer opened from the gallery returns to the gallery at the
+ * image the viewer last showed, centred when it is not the one that opened
+ * the viewer (FutabaViewer 18-20). Null keeps the ordinary Back.
+ */
+internal fun compatViewerGalleryReturn(
+    host: CompatHost.Viewer,
+    currentIndex: Int?,
+    currentIdentity: String?
+): CompatHost.Gallery? {
+    if (host.caller != com.valoser.futacha.shared.compat.CompatViewerCaller.GALLERY) return null
+    if (host.directMediaUrl != null) return null
+    val index = currentIndex ?: return null
+    val identity = currentIdentity ?: return null
+    return CompatHost.Gallery(
+        tabKey = host.tabKey,
+        index = index,
+        postNo = identity,
+        threadOrigin = host.threadOrigin,
+        centerOnOpen = identity != host.postNo
+    )
+}

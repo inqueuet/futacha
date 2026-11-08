@@ -1,11 +1,10 @@
 package com.valoser.futacha.shared
 
 import com.valoser.futacha.shared.compat.CompatibilityStore
-import com.valoser.futacha.shared.compat.compatibilityBoardSynchronizationKeys
 import com.valoser.futacha.shared.compat.compatibilityHistorySharedMetadata
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
-import com.valoser.futacha.shared.compat.modernBoardsToCompatibility
-import com.valoser.futacha.shared.compat.synchronizeModernBoardsFromCompatibility
+import com.valoser.futacha.shared.compat.shared.SharedBoardSide
+import com.valoser.futacha.shared.compat.shared.synchronizeSharedBoards
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
@@ -30,32 +29,13 @@ internal suspend fun synchronizeIosProfileData(
             .onFailure { error -> onFailure(operation, error) }
     }
     launch {
-        if (!usesAppStateData) {
-            compatibilityStore.boards.collect { compatBoards ->
-                synchronize("compatibility boards") {
-                    val current = stateStore.boards.first()
-                    val synchronized = synchronizeModernBoardsFromCompatibility(
-                        current, compatBoards, compatibilityStore.holdsBundledTutorialBoard
-                    )
-                    if (synchronized != current) stateStore.setBoards(synchronized)
-                }
-            }
-        } else {
-            var hasObservedLoadedModernBoards = false
-            stateStore.boards.collect { modernBoards ->
-                if (modernBoards.isNotEmpty()) hasObservedLoadedModernBoards = true
-                if (!hasObservedLoadedModernBoards) return@collect
-                synchronize("modern boards") {
-                    val desired = modernBoardsToCompatibility(modernBoards)
-                    val desiredKeys = compatibilityBoardSynchronizationKeys(modernBoards)
-                    compatibilityStore.importModernBoards(modernBoards)
-                    compatibilityStore.boards.first()
-                        .filterNot { it.key in desiredKeys }
-                        .forEach { compatibilityStore.deleteBoard(it.key) }
-                    compatibilityStore.upsertBoards(desired)
-                }
-            }
-        }
+        // The boards of the two stores as one list (D-B1, compat/shared/SharedBoards.kt), as on Android and the desktop.
+        synchronizeSharedBoards(
+            stateStore,
+            compatibilityStore,
+            SharedBoardSide.of(usesAppStateData),
+            appStateBoards = stateStore.boards
+        ) { error -> onFailure(if (usesAppStateData) "modern boards" else "compatibility boards", error) }
     }
     launch {
         compatibilityStore.history

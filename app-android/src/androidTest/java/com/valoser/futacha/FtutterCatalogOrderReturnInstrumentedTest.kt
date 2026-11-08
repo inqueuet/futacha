@@ -29,6 +29,8 @@ class FtutterCatalogOrderReturnInstrumentedTest {
     private var holder by mutableStateOf(FtutterCatalogHolder())
     private var child by mutableStateOf<String?>(null)
     private var preferences by mutableStateOf(mapOf(FtutterKeys.DEFAULT_ORDER_MODE to "0", FtutterKeys.PREVIOUS_ORDER_MODE to "2"))
+    private var ngRules by mutableStateOf<List<FtutterNgRule>>(emptyList())
+    private var commonWords by mutableStateOf<List<String>>(emptyList())
     private val calls = CopyOnWriteArrayList<Pair<String, CatalogMode>>()
     private lateinit var loader: ImageLoader
     private val repository = object : BoardRepository by FakeBoardRepository() {
@@ -52,6 +54,7 @@ class FtutterCatalogOrderReturnInstrumentedTest {
                         editPreference = { k, edit -> edit(preferences[k])?.let { preferences = preferences + (k to it) } },
                         onBack = {}, onSwitchBoard = { board = it }, onOpenSettings = { child = "settings" },
                         onOpenThread = { child = "thread" }, onOpenHiddenAndNg = {}, onOpenUrl = {}, onDeleteHistory = {}, onNotice = {},
+                        ngRules = ngRules, commonCatalogNgWords = commonWords,
                         columnsOverride = 3)
                     else Column {
                         Text("M69 $child")
@@ -116,5 +119,71 @@ class FtutterCatalogOrderReturnInstrumentedTest {
         rule.onNodeWithTag("ftutter-catalog-order").assertTextContains("多順")
         assertEquals(2, calls.size)
         assertEquals("3", preferences[FtutterKeys.PREVIOUS_ORDER_MODE])
+    }
+    @Test fun theScrollPlaceSurvivesAThreadWhileNgRulesAndCommonWordsAreOn() {
+        ngRules = listOf(FtutterNgRule("zzz-nothing", 0), FtutterNgRule("M69 item 5\\d", 0, isReg = true))
+        commonWords = listOf("qqq-nothing")
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+        rule.waitForIdle()
+        val position = holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset
+        assertTrue(position.first > 0)
+        rule.onNodeWithText("M69 item 31").performTouchInput { click(center) }
+        rule.onNodeWithText("M69 thread").assertExists()
+        returnFromChild()
+        repeat(5) { rule.waitForIdle(); Thread.sleep(300) }
+        assertEquals(position, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
+    }
+    @Test fun theStaggeredGridKeepsItsPlaceAcrossAThreadToo() {
+        preferences = preferences + (FtutterKeys.SAME_HEIGHT_GRID to "false")
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+        rule.waitForIdle()
+        val position = holder.staggeredState.firstVisibleItemIndex to holder.staggeredState.firstVisibleItemScrollOffset
+        assertTrue(position.first > 0)
+        rule.onNodeWithText("M69 item ${position.first + 1}").performTouchInput { click(center) }
+        rule.onNodeWithText("M69 thread").assertExists()
+        returnFromChild()
+        repeat(5) { rule.waitForIdle(); Thread.sleep(300) }
+        assertEquals(position, holder.staggeredState.firstVisibleItemIndex to holder.staggeredState.firstVisibleItemScrollOffset)
+    }
+    @Test fun anUnaskedJumpToTheTopIsPutBackButAskedOnesAreNot() {
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+        rule.waitForIdle()
+        val position = holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset
+        assertTrue(position.first > 0)
+        // Something resets the list silently (as the report on return from a thread describes).
+        rule.runOnUiThread { kotlinx.coroutines.runBlocking { holder.gridState.requestScrollToItem(0) } }
+        rule.waitUntil(5_000) { holder.gridState.firstVisibleItemIndex == position.first }
+        assertEquals(position, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
+        // The top tool is a request: it stays at the top.
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+        rule.waitForIdle()
+        rule.runOnUiThread { holder.forgetScroll(); kotlinx.coroutines.runBlocking { holder.gridState.requestScrollToItem(0) } }
+        rule.waitForIdle(); Thread.sleep(800)
+        assertEquals(0, holder.gridState.firstVisibleItemIndex)
+    }
+    @Test fun flickingBackToTheTopByHandStaysAtTheTop() {
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(12)
+        rule.waitForIdle()
+        assertTrue(holder.gridState.firstVisibleItemIndex > 0)
+        repeat(8) {
+            rule.onNodeWithTag("ftutter-catalog-grid").performTouchInput { swipeDown(startY = height * .2f, endY = height * .9f, durationMillis = 60) }
+            Thread.sleep(250)
+        }
+        rule.waitForIdle(); Thread.sleep(1_000); rule.waitForIdle()
+        assertEquals(0 to 0, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
+    }
+    /** Audit C2: one flick that reaches the top only by its momentum stays there (the net pulled it back). */
+    @Test fun aFlingThatCoastsToTheTopStaysAtTheTop() {
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(8)
+        rule.waitForIdle()
+        assertTrue(holder.gridState.firstVisibleItemIndex > 0)
+        rule.onNodeWithTag("ftutter-catalog-grid").performTouchInput { swipeDown(startY = height * .3f, endY = height * .7f, durationMillis = 40) }
+        rule.waitForIdle(); Thread.sleep(1_500); rule.waitForIdle()
+        assertEquals(0 to 0, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
     }
 }

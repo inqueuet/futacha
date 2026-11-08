@@ -4,6 +4,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -47,9 +51,11 @@ class FutaberParityB1aInstrumentedTest {
         "compat.futaber.ext.otherFavorites",
         "compat.futaber.ext.scrollMenu",
         "compat.futaber.ext.searchNav",
+        "compat.futaber.legacySearchFilter",
         "compat.futaber.tapScroll",
         "compat.control.controlPostDestinationConfirm",
         "compat.futaber.lastBoardId",
+        "compat.futaber.manageCategory",
         "compat.futaber.tabs",
         "compat.futaber.favorites",
         "compat.futaber.seen"
@@ -60,7 +66,7 @@ class FutaberParityB1aInstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(keys.associateWith { null })
+            app.compatibilityStore.savePreferences(keys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             // The tests read the bundled tutorial board; put it back if an earlier run lost it.
             if (app.appStateStore.boards.first().none { it.url == TUTORIAL_URL }) {
                 app.appStateStore.updateBoards { boards ->
@@ -142,11 +148,15 @@ class FutaberParityB1aInstrumentedTest {
         openTutorialThread()
         openMenu()
         for (id in listOf("archive", "page-up", "page-down", "top")) assertTrue("menu $id", absent("futaber-menu-$id"))
+        // L-B6 (M08): the search word shows the found posts as a bubble (futaber's); no chip and no ▲▼.
+        rule.onNodeWithTag("futaber-menu-search").performClick()
         rule.onNodeWithTag("futaber-menu-search").performTextInput("テスト")
         rule.onNodeWithTag("futaber-menu-search").performImeAction()
-        waitForTag("futaber-filter-chip")
+        waitForTag("futaber-quote-card")
         assertTrue(absent("futaber-search-next"))
-        rule.onNodeWithTag("futaber-filter-chip").performClick()
+        assertTrue(absent("futaber-filter-chip"))
+        rule.onNodeWithTag("futaber-quote-close-all").performClick()
+        rule.waitUntil(5_000) { absent("futaber-quote-card") }
         // The panel's favourites have no other modes' section.
         rule.onNodeWithTag("futaber-manage").performClick()
         rule.onNodeWithTag("futaber-manage-category-Favorites").performClick()
@@ -171,14 +181,26 @@ class FutaberParityB1aInstrumentedTest {
             "ext-other-favorites" to "compat.futaber.ext.otherFavorites"
         )
         for ((id, key) in switches) {
-            assertEquals(null, preference(key))
+            assertTrue(preference(key) in listOf(null, "OFF"))
             rule.onNodeWithTag("futaber-settings-switch-$id").performScrollTo().performClick()
             rule.waitUntil(5_000) { preference(key) == "ON" }
         }
         rule.onNodeWithTag("futaber-settings-back").performClick()
-        rule.onNodeWithTag("futaber-settings-row-gesture").performScrollTo().performClick()
-        rule.onNodeWithTag("futaber-settings-switch-gesture-tap-scroll").performClick()
+        // C25 (L-B9): futaber's 「画面をタップしてスクロール」 is in 設定→スレッド, as its two choices (する／しない).
+        rule.onNodeWithTag("futaber-settings-row-thread").performScrollTo().performClick()
+        // G20 (L-B7): on with nothing stored (futaber's 「する」); turning it off is kept, and on again.
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-on").performScrollTo().assertIsSelected()
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-off").assertIsNotSelected()
+        assertEquals(null, preference("compat.futaber.tapScroll"))
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-off").performClick()
+        rule.waitUntil(5_000) { preference("compat.futaber.tapScroll") == "OFF" }
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-off").assertIsSelected()
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-on").assertIsNotSelected()
+        rule.onNodeWithTag("futaber-settings-row-thread-tap-scroll-on").performClick()
         rule.waitUntil(5_000) { preference("compat.futaber.tapScroll") == "ON" }
+        // The gestures page still tells what the taps do.
+        rule.onNodeWithTag("futaber-settings-back").performClick()
+        rule.onNodeWithTag("futaber-settings-row-gesture").performScrollTo().performClick()
         rule.onNodeWithTag("futaber-settings-gesture-note").assertTextContains("画面をタップしてスクロール", substring = true)
     }
 
@@ -211,7 +233,8 @@ class FutaberParityB1aInstrumentedTest {
     }
 
     @Test fun theSearchChipMovesBetweenTheFoundPosts() {
-        turnOn("compat.futaber.ext.searchNav")
+        // ▲▼ goes with the old narrowing of the search word (L-B6: 設定→スレッド「従来の動き」, off by default).
+        turnOn("compat.futaber.ext.searchNav", "compat.futaber.legacySearchFilter")
         openTutorialThread()
         openMenu()
         rule.onNodeWithTag("futaber-menu-search").performTextInput("テスト")
@@ -233,7 +256,7 @@ class FutaberParityB1aInstrumentedTest {
     }
 
     @Test fun tappingTheLowerOrUpperThirdScrollsAPageAndTheMiddleDoesNot() {
-        turnOn("compat.futaber.tapScroll")
+        // G20 (L-B7): on with nothing stored, as futaber's 「する」.
         openTutorialThread()
         val list = rule.onNodeWithTag("futaber-thread-list")
         val start = listScroll()
@@ -246,6 +269,13 @@ class FutaberParityB1aInstrumentedTest {
         val down = listScroll()
         list.performTouchInput { click(Offset(width - 4f, height * 0.1f)) }
         rule.waitUntil(5_000) { listScroll() < down }
+        // An explicit OFF stays off: the taps do nothing.
+        runBlocking { app.compatibilityStore.savePreference("compat.futaber.tapScroll", "OFF") }
+        rule.waitForIdle()
+        val still = listScroll()
+        list.performTouchInput { click(Offset(width - 4f, height * 0.9f)) }
+        rule.waitForIdle()
+        assertEquals(still, listScroll(), 1f)
     }
 
     @Test fun closingAllTabsKeepsTheStarredOnesWithTheExtension() {

@@ -1,7 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber.mht
 
 import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.ui.board.formatLastVisited
 import com.valoser.futacha.shared.ui.futaber.futaberCompatBoardKey
 import com.valoser.futacha.shared.ui.board.formatSize
 import kotlin.io.encoding.Base64
@@ -22,13 +21,13 @@ internal data class FutaberMhtBox(
     val onImport: () -> Unit = {}
 )
 
-/** "154KB 1項目の合計", as the original app words it; a note replaces it while something is being done. */
+/** "154KB 1項目の合計", as the original app words it; a note replaces it while something is being done (S21, L-B10). */
 internal fun futaberMhtSummary(entries: List<FutaberMhtEntry>, busyMessage: String?): String =
-    busyMessage ?: "MHTファイル　${formatSize(entries.sumOf { it.sizeBytes })} ${entries.size}項目の合計"
+    com.valoser.futacha.shared.ui.futaber.futaberMhtTotalLine(entries.sumOf { it.sizeBytes }, entries.size, busyMessage)
 
 /** Right of a row's second line: when it was saved, and how big the file is. */
 internal fun futaberMhtDetail(entry: FutaberMhtEntry): String =
-    (if (entry.savedAtMillis > 0) formatLastVisited(entry.savedAtMillis) + "  " else "") + formatSize(entry.sizeBytes)
+    (if (entry.savedAtMillis > 0) com.valoser.futacha.shared.ui.futaber.futaberPanelDate(entry.savedAtMillis) + "  " else "") + formatSize(entry.sizeBytes)
 
 /**
  * The thumbnail kept in the file's header, as an address the image loader can show. The address is built once per thumbnail
@@ -131,4 +130,20 @@ internal fun futaberBoardForMht(thread: FutaberMhtThread, boards: List<BoardSumm
         url = url,
         description = ""
     )
+}
+
+/**
+ * Deletes [mht] then [saved] one after another in one job and returns how many could not be deleted
+ * (the saved box's 「すべて削除」, audit B2). A cancellation stops it.
+ */
+internal suspend fun <M, S> futaberClearSavedBox(
+    mht: List<M>,
+    saved: List<S>,
+    deleteMht: suspend (M) -> Result<Unit>,
+    deleteSaved: suspend (S) -> Result<Unit>
+): Int {
+    var failed = 0
+    for (entry in mht) if (deleteMht(entry).isFailure) failed++
+    for (thread in saved) if (deleteSaved(thread).isFailure) failed++
+    return failed
 }

@@ -186,6 +186,7 @@ import com.valoser.futacha.shared.compat.ArchiveReportOutboxStats
 import com.valoser.futacha.shared.compat.COMPAT_SETTINGS_BACKUP_FILE_NAME
 import com.valoser.futacha.shared.compat.COMPAT_WATCH_NG_BACKUP_FILE_NAME
 import com.valoser.futacha.shared.compat.MAX_COMPAT_SETTINGS_BACKUP_BYTES
+import com.valoser.futacha.shared.compat.shared.withSharedBoardsRestore
 import com.valoser.futacha.shared.compat.MAX_COMPAT_LEGACY_BACKUP_BYTES
 import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_MEMO_CHARS
 import com.valoser.futacha.shared.compat.CURRENT_COMPAT_SETTINGS_BACKUP_VERSION
@@ -324,6 +325,7 @@ internal fun CompatSettingsScreen(
         } else compatSettingsGroups(path, modernPresentation, includeAppStateEntries = stateStore != null && !modernPresentation)
     }
     var modeDialog by remember { mutableStateOf(false) }
+    var ascii2dEndpointDialog by remember(path) { mutableStateOf(false) }
     var editingEntry by remember(path) { mutableStateOf<CompatSettingEntry?>(null) }
     var directoryMenuEntry by remember(path) { mutableStateOf<CompatSettingEntry?>(null) }
     var backgroundAlwaysNotice by remember(path) { mutableStateOf<CompatSettingEntry?>(null) }
@@ -464,8 +466,10 @@ internal fun CompatSettingsScreen(
             launchSettingsSafely {
               try {
                 // Decoding/validating a backup of up to 2MB and the restore
-                // itself must not run on the UI thread.
-                val result = withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
+                // itself must not run on the UI thread. The board synchronization waits for the restore and the
+                // boards it brings (D-B1), so a restored board is not deleted again in between (D1).
+                val result = withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess }) {
+                  withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val raw = selected.bytes.decodeToString()
                     if (backupKind == "ng") {
                         val currentPayload = runCatching { decodeCompatWatchNgBackup(raw) }
@@ -497,11 +501,9 @@ internal fun CompatSettingsScreen(
                         )
                         compatBackupSuccessMessage(backupKind, report)
                     }
-                } }
-                if (result.isSuccess) {
-                    recordCompatBackupDate(backupKind)
-                    mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
+                  } }
                 }
+                if (result.isSuccess) recordCompatBackupDate(backupKind)
                 tell(result.getOrElse { error -> compatBackupFailureMessage(backupKind, error) }) { backupMessage = it }
               } finally {
                 // A failure after the restore (e.g. saving the date) must not
@@ -537,7 +539,13 @@ internal fun CompatSettingsScreen(
             backupInProgress = true
             launchSettingsSafely {
               try {
-                val result = withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
+                // Saving a backup restores nothing; every other kind (settings, NG, the old app's files) can bring
+                // boards, and the board synchronization waits for them (D-B1, see the file picker above).
+                val restoring = !kind.startsWith("save_")
+                val result = withSharedBoardsRestore(
+                    store, restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess }
+                ) {
+                  withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val payload = if (kind == "save_settings") {
                         encodeCompatSettingsBackup(
                             decodeCompatSettingsBackup(store.exportSettingsBackup()).settingsOnly()
@@ -607,12 +615,9 @@ internal fun CompatSettingsScreen(
                     } else if (kind == "legacy") {
                         payload
                     } else null
-                } }
-                if (result.isSuccess) {
-                    recordCompatBackupDate(kind)
-                    // Saving a backup restores nothing; every other kind (settings, NG, the old app's files) can bring boards.
-                    if (!kind.startsWith("save_")) mergeRestoredBoardsIntoAppState(store, restoreBoardsInto.takeIf { modernPresentation })
+                  } }
                 }
+                if (result.isSuccess) recordCompatBackupDate(kind)
                 val message = result.getOrElse { error -> compatBackupFailureMessage(kind, error) }
                 if (message == null) backupMessage = null else tell(message) { backupMessage = it }
               } finally {
@@ -758,6 +763,14 @@ internal fun CompatSettingsScreen(
             state = settingsListState,
             modifier = Modifier.fillMaxSize().padding(padding).testTag("compat-settings-list-$path")
         ) {
+            if (path == "image_search") item(key = "ascii2d-endpoint") {
+                Column(Modifier.fillMaxWidth().clickable { ascii2dEndpointDialog = true }.padding(16.dp)
+                    .testTag("compat-ascii2d-endpoint-setting")) {
+                    Text("二次元画像類似検索のURL", color = MaterialTheme.colorScheme.onSurface)
+                    Text(compatAscii2dEndpoint(preferences), color = MaterialTheme.colorScheme.onSurface)
+                    Text("タップして変更・初期値に戻す", color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
             if (path == "privacy") item(key = "privacy-settings") {
                 com.valoser.futacha.shared.ui.privacy.PrivacySettingsControls()
             }
@@ -1332,6 +1345,20 @@ internal fun CompatSettingsScreen(
                 TextButton(onClick = { referenceVersionMessage = null }) { Text("閉じる") }
             }
         ) }
+    }
+    if (ascii2dEndpointDialog) {
+        CompatAscii2dRegistrationDialog(
+            initialEndpoint = compatAscii2dEndpoint(preferences),
+            onDismiss = { ascii2dEndpointDialog = false },
+            onRegister = { endpoint ->
+                launchSettingsSafely {
+                    store.savePreference(COMPAT_ASCII2D_ENDPOINT_KEY, endpoint)
+                    store.savePreference(COMPAT_ASCII2D_ENABLED_KEY, "ON")
+                    ascii2dEndpointDialog = false
+                }
+            },
+            editing = true
+        )
     }
     if (infoDialog != null) {
         val title = infoDialog.orEmpty()

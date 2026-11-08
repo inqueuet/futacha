@@ -85,7 +85,7 @@ class FutaberViewerSettingsReturnInstrumentedTest {
     }
     private fun settingsAndBack(expected: String) {
         rule.onNodeWithTag("futaber-viewer-gear").performClick()
-        waitTag("compat-settings-list-viewer")
+        waitTag("futaber-viewer-settings-page")
         Espresso.pressBack()
         waitCounter(expected)
         rule.onNodeWithTag("futaber-viewer-counter").assertTextEquals(expected)

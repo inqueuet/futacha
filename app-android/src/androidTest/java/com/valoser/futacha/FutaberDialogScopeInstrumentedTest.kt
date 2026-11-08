@@ -87,7 +87,11 @@ class FutaberDialogScopeInstrumentedTest {
             val history by appState.history.collectAsState(emptyList())
             val prefs by store.preferences.collectAsState(emptyMap())
             val ngRules by store.ngRules.collectAsState(emptyList())
-            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+            // The catalog reads its own loader too (since 2026-10-26); without it the screen did not compose.
+            CompositionLocalProvider(
+                LocalFutachaImageLoader provides loader,
+                com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader provides loader
+            ) {
                 if (boards.isNotEmpty() && prefs["compat.futaber.lastBoardId"] != null) FutaberApp(
                     boards = boards,
                     history = history,
@@ -129,7 +133,7 @@ class FutaberDialogScopeInstrumentedTest {
                 respond("", HttpStatusCode.NotFound)
             }
         })
-        host(mapOf("compat.futaber.ext.archiveMenu" to "ON"), client)
+        host(mapOf("compat.futaber.ext.archiveMenu" to "ON", "compat.futaber.foldExtras" to "OFF"), client)
         waitForTag("futaber-catalog-item")
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
@@ -158,7 +162,7 @@ class FutaberDialogScopeInstrumentedTest {
                 respond("", HttpStatusCode.NotFound)
             }
         })
-        host(mapOf("compat.futaber.ext.archiveMenu" to "ON"), client)
+        host(mapOf("compat.futaber.ext.archiveMenu" to "ON", "compat.futaber.foldExtras" to "OFF"), client)
         waitForTag("futaber-catalog-item")
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")

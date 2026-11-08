@@ -34,7 +34,7 @@ class FtutterFreezeRegressionTest {
     private fun oldQuoteTargets(posts: List<Post>, index: Int): List<Int> {
         val position = posts.withIndex().associate { (i, p) -> p.id to i }
         return posts[index].quoteReferences.flatMap { it.targetPostIds }.mapNotNull { position[it] }
-            .filter { it < index }.distinct()
+            .filter { it != index }.distinct() // T-B2：自分以外（添付のファイル名の引用は後のレスも指す）
     }
 
     private fun oldConversationGroups(posts: List<Post>): List<Set<Int>> {

@@ -84,11 +84,11 @@ internal fun FutaberHistoryBand(
     val refreshMessage = tasks.historyRefreshMessage
     Column(Modifier.fillMaxWidth().background(colors.bar).padding(horizontal = 12.dp, vertical = 8.dp).testTag("futaber-history-band")) {
         if (showViewTools) Row(
-            Modifier.fillMaxWidth().clip(FutaberShapes.pill).background(colors.catalogGap)
+            Modifier.fillMaxWidth().clip(FutaberShapes.field).background(colors.menuSearchField)
                 .heightIn(min = 40.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FutaberIcon(Icons.Outlined.Search, contentDescription = null, tint = colors.meta)
+            FutaberIcon(Icons.Outlined.Search, contentDescription = null, tint = colors.menuSearchPlaceholder)
             Box(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 BasicTextField(
                     value = settings.titleQuery,
@@ -102,7 +102,7 @@ internal fun FutaberHistoryBand(
                         .semantics { contentDescription = "履歴をスレタイで検索" }
                         .testTag("futaber-history-search"),
                     decorationBox = { inner ->
-                        if (settings.titleQuery.isEmpty()) Text("スレタイで検索", color = colors.meta, fontSize = 14.sp)
+                        if (settings.titleQuery.isEmpty()) Text("スレタイで検索", color = colors.menuSearchPlaceholder, fontSize = 14.sp)
                         inner()
                     }
                 )
@@ -164,13 +164,13 @@ private fun BandChip(label: String, tag: String, active: Boolean, onClick: () ->
     val colors = LocalFutaberColors.current
     Text(
         label,
-        color = if (active) colors.onAction else colors.body,
+        color = if (active) colors.onIosBlue else colors.body,
         fontSize = 12.sp,
         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
         modifier = Modifier
-            .clip(FutaberShapes.pill)
-            .background(if (active) colors.action else colors.background)
-            .border(1.dp, if (active) colors.action else colors.separator, FutaberShapes.pill)
+            .clip(FutaberShapes.button)
+            .background(if (active) colors.iosBlue else colors.background)
+            .border(1.dp, if (active) colors.iosBlue else colors.separator, FutaberShapes.button)
             .clickable(role = Role.Button, onClickLabel = label, onClick = onClick)
             .heightIn(min = 32.dp)
             .padding(horizontal = 12.dp, vertical = 7.dp)

@@ -25,3 +25,6 @@ internal actual fun ApplyFutaberHostBackground(color: Color) {
         }
     }
 }
+
+@Composable
+internal actual fun ApplyFutaberNavigationBar(color: Color, darkIcons: Boolean, statusColor: Color) = Unit

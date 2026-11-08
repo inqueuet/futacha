@@ -231,7 +231,7 @@ internal fun ftutterBugReportThemeName(mainColor: Long?, brightness: FtutterBrig
     val light = when (brightness) {
         FtutterBrightness.LIGHT -> "ライトモード"
         FtutterBrightness.DARK -> "ダークモード"
-        FtutterBrightness.BLACK -> "ダークモード（背景真っ黒）"
+        FtutterBrightness.BLACK -> "ダークモード（＋背景真っ黒）"
     }
     return "$color・$light"
 }
@@ -279,3 +279,13 @@ internal fun FtutterTheme(
         }
     }
 }
+
+/** 2つの色のコントラスト比（WCAG）。 */
+internal fun ftutterContrast(foreground: Color, background: Color): Float {
+    val a = foreground.luminance() + 0.05f
+    val b = background.luminance() + 0.05f
+    return if (a > b) a / b else b / a
+}
+
+/** メニューのボタンの色（原作のメインカラー）。ポップアップの地で4.5:1に届かない配色では文字の色。 */
+internal fun FtutterColors.menuAccent(): Color = if (ftutterContrast(highlight, popUp) >= 4.5f) highlight else text

@@ -192,7 +192,7 @@ internal fun futaberCatalogImageNgAction(
     val url = futaberCatalogImageUrl(item)
     val target = if (scopeKey != null && url != null) FutaberCatalogImageNgTarget(scopeKey, url, "No.${item.id}",
         item.id, item.thumbnailUrl ?: url) else null
-    return FutaberPostAction("image-ng", "画像NGに登録", enabled = servicesAvailable && target != null) {
+    return FutaberPostAction("image-ng", "画像NGに登録", enabled = servicesAvailable && target != null, extra = true) {
         target?.let(onRegister)
     }
 }
@@ -290,7 +290,7 @@ internal fun FutaberImageOnlyCheckRow(checked: Boolean, onCheckedChange: (Boolea
     ) {
         Checkbox(
             checked = checked, onCheckedChange = onCheckedChange,
-            colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.body, checkmarkColor = colors.onAction)
+            colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.body, checkmarkColor = colors.onAccent)
         )
         Text("画像だけ消す", color = colors.body, modifier = Modifier.padding(start = 4.dp))
     }
@@ -305,6 +305,17 @@ internal fun futaberSharedGalleryColumns(preferences: Map<String, String>): Pair
     val landscape = preferences.compatPreferenceValue("viewer", "galleryGridViewLandscapeClmNum", "横持ちの列数")
         ?.toIntOrNull()?.coerceIn(2, 16) ?: 7
     return portrait to landscape
+}
+
+/**
+ * F-B1: the shared counts only when the person saved some (as the ふたちゃ list does); null otherwise, so an unsaved
+ * app keeps futaber's 3 columns even with the extension on (it is on from the start).
+ */
+internal fun futaberSavedSharedGalleryColumns(preferences: Map<String, String>): Pair<Int, Int>? {
+    val portrait = preferences.compatPreferenceValue("viewer", "galleryGridViewPortraitClmNum", "縦持ちの列数")?.toIntOrNull()
+    val landscape = preferences.compatPreferenceValue("viewer", "galleryGridViewLandscapeClmNum", "横持ちの列数")?.toIntOrNull()
+    if (portrait == null && landscape == null) return null
+    return (portrait?.coerceIn(2, 16) ?: FUTABER_GALLERY_DEFAULT_COLUMNS) to (landscape?.coerceIn(2, 16) ?: FUTABER_GALLERY_DEFAULT_COLUMNS)
 }
 
 /** The columns for a list [landscape] or not: the shared counts with the extension, else the original's 3. */
@@ -334,6 +345,8 @@ internal class FutaberMediaSaver {
     internal var saver: SingleMediaSaveService? = null
     internal var fileSystem: FileSystem? = null
     internal var share: (String, String, String?) -> Unit = { _, _, _ -> }
+    /** C27・F15: hands the saved file to the system's document picker (a storage provider): the file's path, its name, and the end ([success]). */
+    internal var export: (String, String, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) }
     internal var withSaveDestination: ((SaveLocation?) -> Unit) -> Unit = {}
     internal var choosePhotoSaveDestination: (String, () -> Unit) -> Unit = { _, next -> next() }
     internal var boardKey: String = ""
@@ -354,7 +367,13 @@ internal class FutaberMediaSaver {
         else choosePhotoSaveDestination(mediaUrl) { withSaveDestination { saveNow(mediaUrl, false, it) } }
     }
 
-    private fun saveNow(mediaUrl: String, shareAfterSave: Boolean, location: SaveLocation?) {
+    /** C27・F15: saves [mediaUrl] to a place the person picks (a storage provider) instead of sharing or saving it in the app's folder. */
+    fun exportToProvider(mediaUrl: String) {
+        if (isSaving) return
+        withSaveDestination { saveNow(mediaUrl, true, it, export = true) }
+    }
+
+    private fun saveNow(mediaUrl: String, shareAfterSave: Boolean, location: SaveLocation?, export: Boolean = false) {
         if (isSaving) return
         val launchScope = scope ?: return
         isSaving = true
@@ -372,9 +391,14 @@ internal class FutaberMediaSaver {
                     mediaUrl, boardKey, threadKey,
                     baseSaveLocation = location,
                     storageDirectoryOverride = if (shareAfterSave) null else "",
-                    useTypeSubdirectory = shareAfterSave
+                    useTypeSubdirectory = shareAfterSave,
+                    // M48: what is shared keeps the picture's own file name (the share sheet's title), not a name with a number added.
+                    outputFileNameOverride = if (shareAfterSave) futaberViewerFileName(mediaUrl) else null
                 ).onSuccess { saved ->
-                    if (shareAfterSave && screenGone) {
+                    if (export) {
+                        val path = fs.resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
+                        this@FutaberMediaSaver.export(path, saved.fileName) { ok -> onMessage(if (ok) "保存しました" else "保存先に書き込めませんでした") }
+                    } else if (shareAfterSave && screenGone) {
                         // The viewer that asked has closed: its share sheet is gone with it, the file is kept.
                         onMessage("画像を保存しました（画面を閉じたため共有はしていません）")
                     } else if (shareAfterSave) {
@@ -441,6 +465,7 @@ internal fun rememberFutaberMediaSaver(
         onDispose { holder.screenGone = true }
     }
     val share = rememberCompatShareLauncher()
+    val exportFile = rememberFutaberFileExporter()
     val saver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) SingleMediaSaveService(httpClient, fileSystem) else null
     }
@@ -453,6 +478,7 @@ internal fun rememberFutaberMediaSaver(
     holder.saver = saver
     holder.fileSystem = fileSystem
     holder.share = share
+    holder.export = exportFile
     holder.withSaveDestination = withSaveDestination
     holder.choosePhotoSaveDestination = choosePhotoSaveDestination
     holder.boardKey = boardKey
@@ -480,27 +506,20 @@ internal fun rememberFutaberThreadImageSaver(
 }
 
 /**
- * The entries the extension adds to a picture's long-press menu (after "画像検索" / "画像NGに登録"): save, share, copy the
- * address, open it elsewhere, and open it in the viewer. Empty while the extension is off.
+ * The entries the extension adds to a picture's long-press sheet, after the original's items and 「画像検索」: save and
+ * share. Empty while the extension is off. (Its URLをコピー / 外部で開く / ビューアで表示 are the original's 画像のURLをコピー /
+ * ブラウザで開く / 画像を表示 since L-B5, so they left the extension: plan-features §4.1.) The sheet closes before an item runs.
  */
 internal fun futaberImageMenuExtraActions(
     enabled: Boolean,
     url: String?,
-    saver: FutaberMediaSaver?,
-    viewerAvailable: Boolean,
-    onCopyUrl: (String) -> Unit,
-    onOpenExternal: (String) -> Unit,
-    onOpenViewer: () -> Unit,
-    onDismiss: () -> Unit
+    saver: FutaberMediaSaver?
 ): List<FutaberPostAction> {
     if (!enabled) return emptyList()
     val canSave = url != null && saver != null && !saver.isSaving
     return listOf(
-        FutaberPostAction("image-save", "保存", enabled = canSave) { onDismiss(); url?.let { saver?.saveOrShare(it, false) } },
-        FutaberPostAction("image-share", "共有", enabled = canSave) { onDismiss(); url?.let { saver?.saveOrShare(it, true) } },
-        FutaberPostAction("image-copy-url", "URLをコピー", enabled = url != null) { onDismiss(); url?.let(onCopyUrl) },
-        FutaberPostAction("image-external", "外部で開く", enabled = url != null) { onDismiss(); url?.let(onOpenExternal) },
-        FutaberPostAction("image-viewer", "ビューアで表示", enabled = url != null && viewerAvailable) { onDismiss(); onOpenViewer() }
+        FutaberPostAction("image-save", "保存", enabled = canSave, extra = true) { url?.let { saver?.saveOrShare(it, false) } },
+        FutaberPostAction("image-share", "共有", enabled = canSave, extra = true) { url?.let { saver?.saveOrShare(it, true) } }
     )
 }
 

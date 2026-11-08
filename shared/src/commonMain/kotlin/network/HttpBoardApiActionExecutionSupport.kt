@@ -83,8 +83,13 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
     accept: String,
     acceptLanguage: String,
     readSmallResponseSummary: suspend (HttpResponse) -> String?,
-    readSmallResponseBody: suspend (HttpResponse) -> String? = readSmallResponseSummary
-) {
+    readSmallResponseBody: suspend (HttpResponse) -> String? = readSmallResponseSummary,
+    /**
+     * Reads a refused (non-2xx) answer whole, so the failure can carry it as [NetworkException.serverBody] (M87).
+     * The message still shows its first line, the same as [readSmallResponseSummary]. Null keeps the summary only.
+     */
+    readRefusedResponseBody: (suspend (HttpResponse) -> String?)? = null
+): String {
     // Streamed so the small-response reader bounds the body; submitForm()
     // buffered the whole response before it could be checked.
     val statement = try {
@@ -115,12 +120,19 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
     } catch (e: Exception) {
         throw NetworkException("${request.failureMessage}: ${e.message}", cause = e)
     }
+    var answered = ""
     val failure: NetworkException? = try {
         statement.execute { response ->
             if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
+                val raw = readRefusedResponseBody?.invoke(response)
+                val detail = if (readRefusedResponseBody != null) raw?.let(::summarizeSmallHttpBoardApiResponseBody)
+                    else readSmallResponseSummary(response)
                 val suffix = detail?.let { ": $it" }.orEmpty()
-                NetworkException("${request.responseFailureMessage} (HTTP ${response.status.value}$suffix)")
+                NetworkException(
+                    "${request.responseFailureMessage} (HTTP ${response.status.value}$suffix)",
+                    statusCode = response.status.value,
+                    serverBody = raw
+                )
             } else {
                 // A body that could not be read is not an empty (successful) one:
                 // the deletion may or may not have happened (L83). Not resent.
@@ -137,8 +149,9 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
                 }
                 // Futaba answers a rejected deletion (wrong key, missing post,
                 // duplicate request...) with HTTP 200 and the reason as text.
+                answered = body.orEmpty()
                 extractHttpBoardApiShortFormFailure(body)
-                    ?.let { detail -> NetworkException("${request.responseFailureMessage}: $detail") }
+                    ?.let { detail -> NetworkException("${request.responseFailureMessage}: $detail", serverBody = body) }
             }
         }
     } catch (e: CancellationException) {
@@ -149,6 +162,7 @@ internal suspend fun executeHttpBoardApiShortFormRequest(
         throw NetworkException("${request.failureMessage}: ${e.message}", cause = e)
     }
     failure?.let { throw it }
+    return answered
 }
 
 internal suspend fun initializeHttpBoardApiCatalogSetup(

@@ -20,8 +20,8 @@ class FutaberParityB9Test {
 
     @Test fun theNewExtensionsAreOffByDefaultAndReadOnlyAnOn() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extCatalogFineTune)
-        assertFalse(defaults.extAutoSaveView)
+        assertTrue(defaults.extCatalogFineTune)
+        assertTrue(defaults.extAutoSaveView)
         assertEquals(FutaberCatalogFineTune(), defaults.catalogFine)
         assertEquals(defaults, FutaberDisplaySettings())
         val on = FutaberDisplaySettings.from(
@@ -32,8 +32,8 @@ class FutaberParityB9Test {
         val other = FutaberDisplaySettings.from(
             mapOf(FutaberSettingKeys.EXT_CATALOG_FINE_TUNE to "on", FutaberSettingKeys.EXT_AUTO_SAVE_VIEW to "1")
         )
-        assertFalse(other.extCatalogFineTune)
-        assertFalse(other.extAutoSaveView)
+        assertTrue(other.extCatalogFineTune)
+        assertTrue(other.extAutoSaveView)
         assertTrue(FutaberSettingKeys.EXT_CATALOG_FINE_TUNE.startsWith("compat.futaber."))
         assertTrue(FutaberSettingKeys.EXT_AUTO_SAVE_VIEW.startsWith("compat.futaber."))
     }

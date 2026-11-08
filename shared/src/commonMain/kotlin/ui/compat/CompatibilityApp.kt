@@ -11,6 +11,7 @@ import com.valoser.futacha.shared.compat.isCompatTypedThreadReference
 import com.valoser.futacha.shared.compat.compatTypedThreadReferenceEditValue
 
 import com.valoser.futacha.shared.compat.toThreadPage
+import com.valoser.futacha.shared.compat.COMPAT_THREAD_RESTORE_CLOSED_KEY
 import com.valoser.futacha.shared.compat.replaceNgRuleMerging
 
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
@@ -284,6 +285,7 @@ import com.valoser.futacha.shared.compat.compatReferenceThreadNgCandidates
 import com.valoser.futacha.shared.compat.hasCompatThreadReferenceDuplicate
 import com.valoser.futacha.shared.compat.isCompatThreadRefuseForbidden
 import com.valoser.futacha.shared.compat.buildCompatCatalogRuleIndex
+import com.valoser.futacha.shared.compat.compatWarmNgRegexWords
 import com.valoser.futacha.shared.compat.buildCompatCatalogReplyDeltas
 import com.valoser.futacha.shared.compat.compatCatalogReplyDeltaKey
 import com.valoser.futacha.shared.compat.CompatCatalogReplyIndicator
@@ -314,6 +316,8 @@ import com.valoser.futacha.shared.compat.CompatThreadSnapshot
 import com.valoser.futacha.shared.compat.CompatSelectorActionEffect
 import com.valoser.futacha.shared.compat.CompatToolbarSurface
 import com.valoser.futacha.shared.compat.CompatToolbarItem
+import com.valoser.futacha.shared.compat.compatToolbarMenuItems
+import com.valoser.futacha.shared.compat.compatToolbarKeysOutOfMenu
 import com.valoser.futacha.shared.compat.CompatViewerCaller
 import com.valoser.futacha.shared.compat.CompatibilityEvent
 import com.valoser.futacha.shared.compat.CompatibilityEffect
@@ -477,6 +481,8 @@ import io.ktor.client.HttpClient
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.ui.util.ThreadDrawerBackGestureHandler
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.addPlatformImageComponents
+import coil3.serviceLoaderEnabled
 import com.valoser.futacha.shared.ui.image.VideoThumbnailRequestPriority
 import com.valoser.futacha.shared.ui.image.videoThumbnailRequestPriority
 import com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader
@@ -608,11 +614,17 @@ fun CompatibilityApp(
     onExitApplication: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
-    val effectiveImageLoader = imageLoader ?: remember(platformContext) {
+    val effectiveImageLoader = imageLoader ?: remember(platformContext, httpClient) {
         // CompatibilityApp is also used directly by host/instrumentation tests.
         // Keep that supported without requiring every caller to know about the
         // application-level image loader provider.
-        ImageLoader.Builder(platformContext).build()
+        ImageLoader.Builder(platformContext)
+            .serviceLoaderEnabled(false)
+            .components {
+                addPlatformImageComponents()
+                httpClient?.let { add(coil3.network.ktor3.KtorNetworkFetcherFactory(httpClient = it)) }
+            }
+            .build()
     }
     val relatedTap by remember(store) {
         store.preferences.map { it.compatPreferenceValue("control", "controlPostTapBehavior") == "related" }.distinctUntilChanged()
@@ -2425,7 +2437,14 @@ private fun CompatibilityAppContent(
                 }
             },
             onClose = { dispatch(CompatibilityEvent.CloseDrawer) },
-            onUndoClose = { dispatch(CompatibilityEvent.UndoClose) }
+            onUndoClose = { dispatch(CompatibilityEvent.UndoClose) },
+            leaveThreadLabel = (state.host as? CompatHost.ThreadWorkspace)?.let {
+                if (it.origin == CompatThreadOrigin.CATALOG) "カタログに戻る" else "板一覧に戻る"
+            },
+            onLeaveThread = {
+                closeDrawerForNavigation()
+                dispatch(CompatibilityEvent.Back)
+            }
         )
     }
 
@@ -2841,7 +2860,11 @@ private fun CompatibilityAppContent(
                                 dispatch(CompatibilityEvent.OpenHost(CompatHost.Post(tab.key, host.origin)))
                             }
                         },
-                        onOpenGallery = { dispatch(CompatibilityEvent.OpenHost(CompatHost.Gallery(tab.key, threadOrigin = host.origin))) },
+                        onOpenGallery = {
+                            // 18-20: the toolbar opens the gallery near the post being read.
+                            val reading = (latestThreadScrollAnchors[tab.key] ?: tab.scrollAnchor).postNo
+                            dispatch(CompatibilityEvent.OpenHost(CompatHost.Gallery(tab.key, threadOrigin = host.origin, readingPostNo = reading)))
+                        },
                             onOpenViewer = { index, postNo ->
                             dispatch(
                                 CompatibilityEvent.OpenHost(
@@ -3144,6 +3167,8 @@ private fun CompatibilityAppContent(
                         tab = galleryTab,
                         initialIndex = host.index,
                         initialPostNo = host.postNo,
+                        readingPostNo = host.readingPostNo,
+                        centerOnOpen = host.centerOnOpen,
                         gridState = mediaReturnState.galleryGridState,
                         restoreInitialPosition = !mediaReturnState.galleryInitialPositionApplied,
                         onInitialPositionRestored = { mediaReturnState.galleryInitialPositionApplied = true },
@@ -3247,7 +3272,19 @@ private fun CompatibilityAppContent(
                         onOpenHelp = {
                             dispatch(CompatibilityEvent.OpenHost(CompatHost.Help(host)))
                         },
-                        onBack = { dispatch(CompatibilityEvent.Back) }
+                        onBack = {
+                            // 18-20: the gallery comes back at the image the viewer last showed.
+                            val returnTo = compatViewerGalleryReturn(
+                                host = host,
+                                currentIndex = mediaReturnState.viewerPosition.index,
+                                currentIdentity = mediaReturnState.viewerPosition.mediaIdentity
+                            )
+                            if (returnTo != null && state.drawerPage == null && state.search == null) {
+                                dispatch(CompatibilityEvent.OpenHost(returnTo))
+                            } else {
+                                dispatch(CompatibilityEvent.Back)
+                            }
+                        }
                     )
                 }
             }
@@ -3931,6 +3968,14 @@ private fun CompatCatalogScreen(
     val catalogRuleIndex = remember(catalogRules, commonNgRules) {
         buildCompatCatalogRuleIndex(catalogRules + commonNgRules)
     }
+    LaunchedEffect(catalogRuleIndex) {
+        // The one-time probes of the regular expressions run here, not while a cell is drawn.
+        if (catalogRuleIndex.hiddenRegexes.isNotEmpty() || catalogRuleIndex.extractRegexes.isNotEmpty()) {
+            withContext(AppDispatchers.parsing) {
+                compatWarmNgRegexWords(catalogRuleIndex.hiddenRegexes + catalogRuleIndex.extractRegexes)
+            }
+        }
+    }
     val catalogPrivacyEnabled = preferences.compatPrivacyEnabled()
     val watchWords = remember(preferences, board.key) { compatWatchWordsForBoard(preferences, board.key) }
     val priorityThreshold = preferences
@@ -4241,7 +4286,7 @@ private fun CompatCatalogScreen(
             if (thread) {
                 val url = item.threadUrl.trim().ifBlank { item.id.trim() }
                 if (url.isNotBlank()) {
-                    add(Triple(url.normalizeCompatNgValue(), CompatNgKind.CATALOG_REFUSE, item.title.orEmpty().take(4)))
+                    add(Triple(url.normalizeCompatNgValue(), CompatNgKind.CATALOG_REFUSE, compatTakeCharacters(item.title, 4)))
                 }
             }
             if (word && item.title.orEmpty().isNotBlank()) {
@@ -4288,7 +4333,7 @@ private fun CompatCatalogScreen(
                     scopeKey = scopeKey,
                     normalizedValue = value,
                     memo = when (kind) {
-                        CompatNgKind.CATALOG_REFUSE -> item.title.orEmpty().take(4)
+                        CompatNgKind.CATALOG_REFUSE -> compatTakeCharacters(item.title, 4)
                         CompatNgKind.CATALOG_IGNORE,
                         CompatNgKind.CATALOG_EXTRACT -> raw.take(MAX_COMPAT_NG_MEMO_CHARS)
                         else -> ""
@@ -4802,6 +4847,14 @@ private fun CompatCatalogScreen(
                 store.deleteDroppedCatalogItems(board.key, CompatCatalogDroppedClass.DIE)
                 droppedDialogItems = store.loadDroppedCatalogItems(board.key)
                 droppedCatalogItems = droppedDialogItems.orEmpty()
+            },
+            onAddTab = onAddTab,
+            isTabOpen = { item ->
+                val key = canonicalizeThreadUrl(item.threadUrl)?.let { compatTabKey(it.canonicalUrl) }
+                key != null && tabs.any { it.key == key }
+            },
+            onSendDel = effectiveRepository?.let { activeRepository ->
+                { item -> activeRepository.requestDeletion(board.originalUrl, item.id, item.id, "110") }
             }
         )
         return
@@ -5105,7 +5158,7 @@ private fun CompatCatalogScreen(
             showNonPriority = preference.showNonPriority,
             canUndoClose = canUndoClose,
             cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
-            activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key },
+            activeToolbarKeys = compatToolbarKeysOutOfMenu(toolbarItems),
             commonNgEnabled = onOpenCommonNg != null
         )
         CompatHierarchicalOtherMenuDialog(
@@ -5250,11 +5303,12 @@ private fun CompatCatalogScreen(
                     store.deleteNgRules(deleteTargets.map(CompatNgRule::id))
                 }
             },
-            onEdit = { rule, value, allBoards, memo ->
-                val normalized = if (imageReferenceSource != null) {
-                    rule.normalizedValue
-                } else {
-                    value.normalizeCompatNgValue()
+            onEdit = { rule, value, allBoards, memo, isRegex ->
+                val normalized = when {
+                    imageReferenceSource != null -> rule.normalizedValue
+                    // A regular expression is kept as written (18-20 tells case and width apart).
+                    isRegex -> value.trim()
+                    else -> value.normalizeCompatNgValue()
                 }
                 if (normalized.isBlank()) {
                     transientMessage = "NGに登録する値を入力してください"
@@ -5265,12 +5319,14 @@ private fun CompatCatalogScreen(
                         // deleted first, and the threads it hid came back).
                         val replacement =
                             rule.copy(
-                                id = compatNgRuleId(rule.kind, scopeKey, normalized),
+                                id = compatNgRuleId(rule.kind, scopeKey, normalized, isRegex),
                                 scopeKey = scopeKey,
                                 normalizedValue = normalized,
-                                memo = when (kind) {
-                                    CompatNgKind.CATALOG_EXTRACT,
-                                    CompatNgKind.CATALOG_IGNORE -> value.trim().take(MAX_COMPAT_NG_MEMO_CHARS)
+                                isRegex = isRegex,
+                                memo = when {
+                                    isRegex -> ""
+                                    kind == CompatNgKind.CATALOG_EXTRACT ||
+                                        kind == CompatNgKind.CATALOG_IGNORE -> value.trim().take(MAX_COMPAT_NG_MEMO_CHARS)
                                     else -> memo
                                 },
                                 createdAtEpochMillis = if (imageReferenceSource != null) {
@@ -5286,12 +5342,13 @@ private fun CompatCatalogScreen(
             },
             addScopeLabel = "全板に適用",
             referenceKind = referenceKind,
+            offerRegex = referenceKind == CompatNgKind.CATALOG_EXTRACT || referenceKind == CompatNgKind.CATALOG_IGNORE,
             onAdd = if (
                 kind == CompatNgKind.CATALOG_REFUSE ||
                 kind == CompatNgKind.CATALOG_IMAGE ||
                 kind == CompatNgKind.CATALOG_IMAGE_PHASH
-            ) null else { value, allBoards ->
-                val normalized = value.normalizeCompatNgValue()
+            ) null else { value, allBoards, isRegex ->
+                val normalized = if (isRegex) value.trim() else value.normalizeCompatNgValue()
                 if (normalized.isBlank()) {
                     transientMessage = "NGに登録する値を入力してください"
                 } else {
@@ -5299,13 +5356,14 @@ private fun CompatCatalogScreen(
                         val scopeKey = if (allBoards) "*" else board.key
                         val added = store.upsertNgRule(
                             CompatNgRule(
-                                id = compatNgRuleId(kind, scopeKey, normalized),
+                                id = compatNgRuleId(kind, scopeKey, normalized, isRegex),
                                 kind = kind,
                                 scopeKey = scopeKey,
                                 normalizedValue = normalized,
+                                isRegex = isRegex,
                                 memo = if (
-                                    kind == CompatNgKind.CATALOG_EXTRACT ||
-                                    kind == CompatNgKind.CATALOG_IGNORE
+                                    !isRegex && (kind == CompatNgKind.CATALOG_EXTRACT ||
+                                        kind == CompatNgKind.CATALOG_IGNORE)
                                 ) value.trim().take(MAX_COMPAT_NG_MEMO_CHARS) else "",
                                 createdAtEpochMillis = Clock.System.now().toEpochMilliseconds()
                             )
@@ -5718,6 +5776,14 @@ private fun CompatThreadScreen(
     }
     val threadFontSize = preferences.compatPreferenceValue("thread", "threadFontSize", "フォントサイズ")
         ?.toIntOrNull()?.coerceIn(10, 30) ?: 14
+    val threadHeaderFontSize = preferences.compatPreferenceValue("thread", "threadHeaderFontSize", "レスの見出しの文字サイズ")
+        ?.toIntOrNull()?.coerceIn(8, 16)
+    val threadPostSpacing = preferences.compatPreferenceValue("thread", "threadPostSpacing", "レス間の余白")
+        ?.toIntOrNull()?.coerceIn(0, 20)
+    SideEffect {
+        CompatPostLayoutState.headerFontSp = threadHeaderFontSize
+        CompatPostLayoutState.extraSpacingDp = threadPostSpacing
+    }
     val threadThumbnailSize = preferences.compatPreferenceValue("thread", "threadThumbSize", "サムネイルサイズ")
         ?.toIntOrNull()?.coerceIn(150, 1200) ?: 250
     val threadUpsThumbnailSize = preferences.compatPreferenceValue(
@@ -5791,12 +5857,24 @@ private fun CompatThreadScreen(
         com.valoser.futacha.shared.compat.decodeManualPostMarks(preferences[com.valoser.futacha.shared.compat.MANUAL_POST_MARKS_KEY])
             .filter { it.threadUrl == com.valoser.futacha.shared.compat.manualMarkThreadUrl(tab.canonicalUrl) }.mapTo(mutableSetOf()) { it.postNo }
     }
-    val ownPostNos = remember(preferences, tab.key) {
+    val ownPostNosOfTab = remember(preferences, tab.key) {
         val prefix = compatOwnPostPreferencePrefix(tab.key)
         preferences.asSequence()
             .filter { (key, value) -> key.startsWith(prefix) && value == "1" }
             .map { (key, _) -> key.removePrefix(prefix) }
             .toSet()
+    }
+    // D-B8: the own posts the other modes recorded (AppState) count too, and this mode's go to AppState.
+    val sharedSelfBoards by (stateStore?.observedBoards ?: remember { kotlinx.coroutines.flow.flowOf(emptyList<com.valoser.futacha.shared.model.BoardSummary>()) }).collectAsState(emptyList())
+    val sharedSelfPosts by (stateStore?.observedSelfPostIdentifiersByThread ?: remember { kotlinx.coroutines.flow.flowOf(emptyMap<String, List<String>>()) }).collectAsState(emptyMap())
+    val sharedOwnPostNos = remember(sharedSelfBoards, sharedSelfPosts, tab.originalUrl, tab.threadNo) {
+        compatSharedSelfPostNos(sharedSelfBoards, sharedSelfPosts, BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl), tab.threadNo)
+    }
+    val ownPostNos = remember(ownPostNosOfTab, sharedOwnPostNos) { ownPostNosOfTab + sharedOwnPostNos }
+    LaunchedEffect(ownPostNosOfTab, sharedOwnPostNos, sharedSelfBoards, stateStore) {
+        val store = stateStore ?: return@LaunchedEffect
+        val board = compatSharedSelfPostBoard(sharedSelfBoards, BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl)) ?: return@LaunchedEffect
+        compatSelfPostNosToShare(ownPostNosOfTab, sharedOwnPostNos).forEach { store.addSelfPostIdentifier(tab.threadNo, it, board.id) }
     }
     val snapshotState = remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var snapshot by snapshotState
@@ -6069,7 +6147,7 @@ private fun CompatThreadScreen(
                     openSearchResult(resultUrl, "二次元画像類似検索")
                 }
                 .onFailure { failure ->
-                    error = failure.toCompatUserMessage("二次元画像検索に失敗しました")
+                    error = compatAscii2dFailureMessage(failure.toCompatUserMessage("二次元画像検索に失敗しました"), endpoint)
                 }
         }
     }
@@ -6344,7 +6422,7 @@ private fun CompatThreadScreen(
             val opFirstLine = posts.firstOrNull()
                 ?.messageHtml
                 ?.toCompatPlainText()
-                ?.let(::extractFirstUsableTitleLine)
+                ?.let { extractFirstUsableTitleLine(it, keepJoiners = true) }
             catalogTitle ?: opFirstLine ?: existingTitle
         }
         // Initial, activation and manual loads all own the indicator while
@@ -6931,7 +7009,10 @@ private fun CompatThreadScreen(
                     threadNgFilterCache.cache = result.cache
                     result.posts
                 }
-                if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT) {
+                // A regular-expression rule is probed and matched off the main thread: Android cannot stop a
+                // running match, so even a short thread must not wait on it there.
+                val hasRegexRule = ngRules.any(CompatNgRule::isRegex) || commonNgRules.any(CompatNgRule::isRegex)
+                if (posts.size <= COMPAT_MAIN_THREAD_ANALYSIS_POST_LIMIT && !hasRegexRule) {
                     calculateVisiblePosts()
                 } else {
                     withContext(AppDispatchers.parsing) { calculateVisiblePosts() }
@@ -7656,6 +7737,8 @@ private fun CompatThreadScreen(
         loadManually = { load(manual = true) },
         scrollToNewRepliesOrBottom = ::scrollToNewRepliesOrBottom,
         closeCurrentThread = ::closeCurrentThread,
+        canUndoClose = canUndoClose,
+        onUndoClose = onUndoClose,
         launchStore = ::launchThreadStoreSafely,
         snapshotState = snapshotState,
         undoRefreshSnapshotState = undoRefreshSnapshotState,
@@ -8419,6 +8502,8 @@ private fun CompatThreadScreen(
             deletePostState = deletePostState,
             deletePasswordState = deletePasswordState,
             deleteImageOnlyState = deleteImageOnlyState,
+            quoteStackState = quoteStackState,
+            replyPopupPostsState = replyPopupPostsState,
             markControls = {
                 com.valoser.futacha.shared.ui.board.ManualPostMarkActions(post.postNo,
                     com.valoser.futacha.shared.ui.board.PostMarkContext(store, tab.canonicalUrl,
@@ -8764,9 +8849,11 @@ private fun CompatThreadNgManagementDialog(
                 store.deleteNgRules(rulesToDelete.map(CompatNgRule::id))
             }
         },
-        onEdit = { rule, value, allThreads, memo ->
+        onEdit = { rule, value, allThreads, memo, isRegex ->
             val typedReference = threadReferenceKind != null && isCompatTypedThreadReference(rule.kind)
             val displayValue = when {
+                // A regular expression is kept as written (18-20 tells case and width apart).
+                isRegex -> value.trim()
                 typedReference -> value.trim()
                 threadReferenceKind != null -> cleanCompatThreadReferenceWord(value)
                 imageReferenceSource != null -> rule.normalizedValue
@@ -8774,6 +8861,8 @@ private fun CompatThreadNgManagementDialog(
             }
             val normalized = if (imageReferenceSource != null) {
                 rule.normalizedValue
+            } else if (isRegex) {
+                displayValue
             } else if (typedReference) {
                 compatTypedThreadReferenceEditValue(rule.kind, displayValue).orEmpty()
             } else {
@@ -8782,7 +8871,7 @@ private fun CompatThreadNgManagementDialog(
             if (normalized.isBlank()) {
                 error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
             } else if (
-                !typedReference && threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
+                !isRegex && !typedReference && threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
                 isCompatThreadRefuseForbidden(displayValue)
             ) {
                 error = "登録できない単語です"
@@ -8796,10 +8885,11 @@ private fun CompatThreadNgManagementDialog(
                     val updatedKind = rule.kind
                     val updated = store.replaceNgRule(rule.id,
                         rule.copy(
-                            id = compatNgRuleId(updatedKind, scopeKey, normalized),
+                            id = compatNgRuleId(updatedKind, scopeKey, normalized, isRegex),
                             kind = updatedKind,
                             scopeKey = scopeKey,
                             normalizedValue = normalized,
+                            isRegex = isRegex,
                             memo = if (threadReferenceKind != null && !typedReference) displayValue else memo,
                             createdAtEpochMillis = if (imageReferenceSource != null) {
                                 rule.createdAtEpochMillis
@@ -8817,15 +8907,17 @@ private fun CompatThreadNgManagementDialog(
             }
         },
         addScopeLabel = "全スレッドに適用",
-        onAdd = if (kinds.any { it == CompatNgKind.THREAD_IMAGE || it == CompatNgKind.THREAD_IMAGE_PHASH }) null else { value, allThreads ->
-            val displayValue = if (threadReferenceKind != null) {
-                cleanCompatThreadReferenceWord(value)
-            } else value
-            val normalized = displayValue.normalizeCompatNgValue()
+        onAdd = if (kinds.any { it == CompatNgKind.THREAD_IMAGE || it == CompatNgKind.THREAD_IMAGE_PHASH }) null else { value, allThreads, isRegex ->
+            val displayValue = when {
+                isRegex -> value.trim()
+                threadReferenceKind != null -> cleanCompatThreadReferenceWord(value)
+                else -> value
+            }
+            val normalized = if (isRegex) displayValue else displayValue.normalizeCompatNgValue()
             if (normalized.isBlank()) {
                 error = if (threadReferenceKind != null) "単語を入力して下さい" else "NGに登録する値を入力してください"
             } else if (
-                threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
+                !isRegex && threadReferenceKind == CompatNgKind.THREAD_REFUSE &&
                 isCompatThreadRefuseForbidden(displayValue)
             ) {
                 error = "登録できない単語です"
@@ -8837,11 +8929,12 @@ private fun CompatThreadNgManagementDialog(
                     (threadReferenceKind?.let(::setOf) ?: kinds).forEach { kind ->
                         added = store.upsertNgRule(
                             CompatNgRule(
-                                id = compatNgRuleId(kind, scopeKey, normalized),
+                                id = compatNgRuleId(kind, scopeKey, normalized, isRegex),
                                 kind = kind,
                                 scopeKey = scopeKey,
                                 normalizedValue = normalized,
                                 createdAtEpochMillis = now,
+                                isRegex = isRegex,
                                 memo = if (threadReferenceKind != null) displayValue else ""
                             )
                         ) || added
@@ -8851,6 +8944,7 @@ private fun CompatThreadNgManagementDialog(
             }
         },
         referenceKind = threadReferenceKind,
+        offerRegex = threadReferenceKind == CompatNgKind.THREAD_REFUSE || threadReferenceKind == CompatNgKind.THREAD_IGNORE,
         onDismiss = { managedNgKinds = null }
     )
 }
@@ -9052,6 +9146,8 @@ private fun CompatThreadPostContextDialog(
     deletePostState: MutableState<CompatPostSnapshot?>,
     deletePasswordState: MutableState<String>,
     deleteImageOnlyState: MutableState<Boolean>,
+    quoteStackState: MutableState<List<CompatQuoteFrame>>,
+    replyPopupPostsState: MutableState<List<CompatPostSnapshot>>,
     markControls: @Composable () -> Unit = {}
 ) {
     var error by errorState
@@ -9067,6 +9163,9 @@ private fun CompatThreadPostContextDialog(
     CompatPostContextDialog(
         post = post,
         markControls = markControls,
+        menuScalePercent = compatPostMenuScalePercent(
+            preferences.compatPreferenceValue("thread", COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY)
+        ),
         onDismiss = { contextPost = null },
         onWeb = {
             val terms = compatGoogleSearchTerms(post)
@@ -9112,14 +9211,19 @@ private fun CompatThreadPostContextDialog(
                         val nextCount = oldCount + 1
                         // Bump the revision: the visible list, extraction and
                         // viewer projections are keyed on it, not on the posts.
+                        val label = "そうだねx$nextCount"
                         snapshot = snapshot?.let { current ->
                             current.copy(
-                                posts = current.posts.map {
-                                    if (it.postNo == post.postNo) it.copy(saidaneLabel = "そうだねx$nextCount") else it
-                                },
+                                posts = compatPostsWithSaidane(current.posts, post.postNo, label),
                                 revision = current.revision + 1L
                             )
                         }
+                        // The open extraction and quote popups hold copies of the posts.
+                        quoteStackState.value = quoteStackState.value.map { frame ->
+                            frame.copy(posts = compatPostsWithSaidane(frame.posts, post.postNo, label))
+                        }
+                        replyPopupPostsState.value =
+                            compatPostsWithSaidane(replyPopupPostsState.value, post.postNo, label)
                         error = "そうだねx$nextCount"
                     }
                     .onFailure { error = it.toCompatUserMessage("そうだねを送信できませんでした") }
@@ -9291,6 +9395,8 @@ private fun compatThreadToolbarCommands(
     loadManually: suspend () -> Unit,
     scrollToNewRepliesOrBottom: suspend () -> Unit,
     closeCurrentThread: () -> Unit,
+    canUndoClose: Boolean,
+    onUndoClose: () -> Unit,
     launchStore: (String, String, suspend () -> Unit) -> Unit,
     snapshotState: MutableState<CompatThreadSnapshot?>,
     undoRefreshSnapshotState: MutableState<CompatThreadSnapshot?>,
@@ -9427,6 +9533,15 @@ private fun compatThreadToolbarCommands(
             selected = autoScrolling
         ) {
             autoScrolling = !autoScrolling
+        },
+        // FutabaViewer 18-20: dimmed while nothing can come back; a tap then says so.
+        CompatToolbarCommand(
+            COMPAT_THREAD_RESTORE_CLOSED_KEY,
+            compatToolbarArtwork(CompatToolbarSurface.THREAD, COMPAT_THREAD_RESTORE_CLOSED_KEY),
+            "閉じたスレを元に戻す",
+            dimmed = !canUndoClose
+        ) {
+            if (canUndoClose) onUndoClose() else error = "元に戻せるスレはありません"
         }
     )
 }
@@ -9503,7 +9618,7 @@ private fun CompatThreadOtherMenuDialog(
         ngCount = ngRules.count { it.scopeKey == tab.key || it.scopeKey == "*" } + aiHiddenPostNos.size,
         cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
         mhtEnabled = true,
-        activeToolbarKeys = toolbarItems.filter(CompatToolbarItem::active).mapTo(mutableSetOf()) { it.key },
+        activeToolbarKeys = compatToolbarKeysOutOfMenu(toolbarItems),
         commonNgEnabled = onOpenCommonNg != null
     )
     CompatHierarchicalOtherMenuDialog(
@@ -9679,7 +9794,7 @@ private fun CompatThreadOtherMenuDialog(
                     onCheckUpdates()
                 }
                 "close" -> closeCurrentThread()
-                "undo" -> onUndoClose()
+                COMPAT_THREAD_RESTORE_CLOSED_KEY -> onUndoClose()
             }
         }
     )
@@ -9966,6 +10081,8 @@ private data class CompatToolbarCommand(
     val label: String,
     val selected: Boolean = false,
     val showUpdateBadge: Boolean = false,
+    /** Drawn dimmed but still tappable, to say why nothing happens (18-20 restore-closed). */
+    val dimmed: Boolean = false,
     val onClick: (() -> Unit)? = null
 )
 
@@ -10047,7 +10164,7 @@ private fun CompatToolbarButton(
         } else {
             CompatToolbarArtworkIcon(artwork = command.icon, contentDescription = command.label,
                 tint = when {
-                    command.onClick == null -> Color.White.copy(alpha = 0.38f)
+                    command.onClick == null || command.dimmed -> Color.White.copy(alpha = 0.38f)
                     command.selected -> Color(0xFFFFEB3B)
                     else -> Color.White
                 }, modifier = Modifier.size(iconSize).testTag("compat-toolbar-icon-${command.key}"))
@@ -10062,8 +10179,7 @@ private fun CompatToolbarOverflowDialog(
     onDismiss: () -> Unit
 ) {
     val commandsByKey = commands.associateBy(CompatToolbarCommand::key)
-    val inactive = items.sortedBy(CompatToolbarItem::position)
-        .filterNot(CompatToolbarItem::active)
+    val inactive = compatToolbarMenuItems(items.sortedBy(CompatToolbarItem::position))
         .mapNotNull { commandsByKey[it.key] }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
@@ -10485,7 +10601,10 @@ private fun CompatNavigationDrawer(
     /** "全て削除する" also clears the history every mode shares, own-post records and auto-saved copies. */
     historyClearReachesEveryMode: Boolean = false,
     /** The rows of the shared history that "全て削除する" clears (L61); null when only this mode's are cleared. */
-    historyClearCount: (suspend () -> Int)? = null
+    historyClearCount: (suspend () -> Int)? = null,
+    /** Over a thread: leaves it for the list it was opened from (the left-edge swipe opens this drawer, so it is also the way back). */
+    leaveThreadLabel: String? = null,
+    onLeaveThread: () -> Unit = {}
 ) {
     var contextTab by remember { mutableStateOf<CompatTab?>(null) }
     var contextHistory by remember { mutableStateOf<CompatHistoryEntry?>(null) }
@@ -10540,6 +10659,11 @@ private fun CompatNavigationDrawer(
                         )
                     }
                     HorizontalDivider()
+                    if (leaveThreadLabel != null) {
+                        TextButton(onClick = onLeaveThread, modifier = Modifier.fillMaxWidth().testTag("compat-drawer-leave-thread")) {
+                            Text("← $leaveThreadLabel")
+                        }
+                    }
                     if (page == CompatDrawerPage.WATCHER) {
                         TextButton(onClick = onOpenExternalWatcherManager, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Filled.Settings, contentDescription = null)
@@ -10829,6 +10953,7 @@ private fun CompatExternalWatcherMetadataRow(
     ) {
         AsyncImage(
             model = entry.thumbnailUrl,
+            imageLoader = LocalFutachaImageLoader.current,
             contentDescription = null,
             fallback = noThumb,
             error = noThumb,

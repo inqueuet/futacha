@@ -138,7 +138,9 @@ internal fun VideoPreviewDialog(
             }
         }
         Box(modifier = Modifier.fillMaxSize()) {
-            PlatformVideoPlayer(
+            androidx.compose.runtime.CompositionLocalProvider(LocalVideoPageSwipe provides { forward ->
+                if (forward) onNavigateNext() else onNavigatePrevious()
+            }) { PlatformVideoPlayer(
                 videoUrl = entry.url,
                 modifier = videoContentModifier.align(Alignment.Center).privacyMediaFilter(),
                 onStateChanged = { state ->
@@ -156,7 +158,7 @@ internal fun VideoPreviewDialog(
                 volume = volume,
                 isMuted = isMuted,
                 onPlaybackError = { playbackError = it }
-            )
+            ) }
             // Show the already small thread thumbnail while the player prepares
             // metadata/network. Playback remains paused until the user taps the
             // native controls.

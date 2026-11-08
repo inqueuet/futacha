@@ -18,7 +18,7 @@ internal fun modeOperationGuide(profile: ExperienceProfile): List<ModeOperation>
         // The button names on screen (L34: ふたちゃ's is "返信", not "書き込み").
         ExperienceProfile.FUTACHA -> "スレッドの「返信」ボタンから投稿画面を開きます。スレ立てはカタログの「スレッド作成」からです。"
         ExperienceProfile.TOSHIAKI_COMPAT -> "スレッドの鉛筆の「書き込み」から投稿画面を開きます。"
-        ExperienceProfile.FUTABER -> "スレッド下部の「操作メニュー」→「書き込む」から開きます。"
+        ExperienceProfile.FUTABER -> "スレッド下部の「操作メニュー」→「書き込む」、または本文を左へスワイプして開きます。開くと本文に入力できます。"
         ExperienceProfile.FTUTTER -> "スレッド下部の鉛筆の「書き込み」、または「メニュー」→「書き込む」から開きます。"
     }
     val attach = when (profile) {
@@ -29,7 +29,7 @@ internal fun modeOperationGuide(profile: ExperienceProfile): List<ModeOperation>
     }
     val gestures = when (profile) {
         ExperienceProfile.FTUTTER -> "設定→「ジェスチャー」で軌跡と操作を確認できます。カタログ・スレッドの「メニュー」→「ジェスチャーの操作を選ぶ」なら線を描かずに実行できます。前へ・次へは、カタログではお気に入りの板、スレッドではタブの移動です。"
-        ExperienceProfile.FUTABER -> "設定→「ジェスチャー」でタップスクロールや画像を閉じる操作を確認できます。更新・戻る・画像一覧は画面のボタンからも操作できます。"
+        ExperienceProfile.FUTABER -> "スレッドは右へスワイプでカタログへ戻り、左端から右へで板一覧、左へで書き込み画面を開きます。カタログは右へで板一覧、左へでこの板で最後に見たスレッドです。設定→「ジェスチャー」でタップスクロールや画像を閉じる操作を確認できます。更新・戻る・画像一覧は画面のボタンからも操作できます。"
         ExperienceProfile.TOSHIAKI_COMPAT -> "ジェスチャーやツールバーの設定を変えると操作が変わります。戻る・更新などは画面のボタンでも操作できます。AndroidではOSの戻るも使えます。"
         ExperienceProfile.FUTACHA -> "画像の左右スワイプで前後へ移動します。スレッドの更新・戻るは画面のボタンからも操作できます。"
     }
@@ -56,7 +56,18 @@ internal fun modeOperationGuide(profile: ExperienceProfile): List<ModeOperation>
                 "このスレッドのこのレスだけが対象で、送信とNGの成否は別々に表示します。"
         }),
         ModeOperation("gesture", "ジェスチャーと代わりの操作", gestures)
-    )
+    ) + when (profile) {
+        ExperienceProfile.FUTABER -> listOf(
+            ModeOperation("kana", "本文を半角カナにする", "書き込み画面下部の「カナ」で、本文全体のひらがな・カタカナを半角カナにします。漢字・英数字や半角の形がない文字はそのままです。"),
+            ModeOperation("pasteboard", "定型文・画像をペーストボードに保存する", "書き込み画面下部の用紙アイコン「ペーストボード」から「本文を保存」「添付画像を保存」を選びます。行をタップすると本文の末尾へ改行して追加、または画像を添付します。「編集」で削除できます。設定のバックアップには含まれません。"),
+            ModeOperation("gallery", "画像一覧の続きから見る", "同じスレッドを開いている間は通常の画像一覧の位置を保ちます。ビューアの「画像一覧」で戻ると表示中の画像が見えます。選択保存用の一覧は位置合わせの対象外です。"),
+            ModeOperation("keyboard", "書き込み画面から戻る", "Androidでキーボードが出ている時のOSの戻るは、まずキーボードだけを閉じます。もう一度戻るか、閉じるボタンで書き込み画面を閉じます。")
+        )
+        ExperienceProfile.FTUTTER -> listOf(
+            ModeOperation("opening", "スレッドを開く位置を選ぶ", "初めてのスレッドは先頭、開いたことがあるスレッドは前回の読み位置から表示します。設定→「このアプリ」→「拡張機能」の「スレッドを先頭から開く」（初期状態OFF）をONにすると、カタログ・履歴・リンクからは先頭へ。タブの切り替えや設定から戻った時は見ていた位置を保ちます。")
+        )
+        else -> emptyList()
+    }
 }
 
 @Composable

@@ -9,6 +9,8 @@ internal const val COMPAT_VIEWER_RUBBER_BAND_RESISTANCE = 2f
 internal const val COMPAT_VIEWER_RESET_SPRING_STIFFNESS = 1500f
 internal const val COMPAT_VIEWER_MAX_ZOOM = 6f
 internal const val COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD = 1.05f
+/** The scale a double tap zooms to where the double-tap zoom is asked for (ふたばー風 only; the others cycle the display modes). */
+internal const val COMPAT_VIEWER_DOUBLE_TAP_ZOOM = 2f
 internal const val COMPAT_VIEWER_PAGE_SWIPE_FRACTION = 0.2f
 
 /**
@@ -95,4 +97,24 @@ internal fun clampCompatViewerZoomOffset(
     if (!proposedPx.isFinite() || !viewportExtentPx.isFinite() || viewportExtentPx <= 0f) return 0f
     val maximum = (viewportExtentPx * (scale.coerceAtLeast(1f) - 1f) / 2f).coerceAtLeast(0f)
     return proposedPx.coerceIn(-maximum, maximum)
+}
+
+/**
+ * A double tap as the zoom toggle: zoomed out it goes to [COMPAT_VIEWER_DOUBLE_TAP_ZOOM] around the tapped point, zoomed in it
+ * goes back to the whole picture. Returns the new scale and translation.
+ */
+internal fun compatViewerDoubleTapTransform(
+    currentScale: Float,
+    tapX: Float,
+    tapY: Float,
+    viewportWidthPx: Float,
+    viewportHeightPx: Float
+): Triple<Float, Float, Float> {
+    if (currentScale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD) return Triple(1f, 0f, 0f)
+    val target = COMPAT_VIEWER_DOUBLE_TAP_ZOOM
+    val translation = compatViewerZoomTranslation(
+        currentX = 0f, currentY = 0f, panX = 0f, panY = 0f, centroidX = tapX, centroidY = tapY,
+        viewportWidthPx = viewportWidthPx, viewportHeightPx = viewportHeightPx, oldScale = 1f, newScale = target
+    )
+    return Triple(target, translation.first, translation.second)
 }

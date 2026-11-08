@@ -703,7 +703,7 @@ internal fun CompatReplyPreviewPopup(
 }
 
 @Composable
-internal fun CompatPostContextDialog(
+fun CompatPostContextDialog(
     post: CompatPostSnapshot,
     onDismiss: () -> Unit,
     onWeb: () -> Unit,
@@ -715,9 +715,12 @@ internal fun CompatPostContextDialog(
     onQuick: () -> Unit,
     onReply: () -> Unit,
     onCopy: () -> Unit,
-    markControls: @Composable () -> Unit = {}
+    markControls: @Composable () -> Unit = {},
+    menuScalePercent: Int = 100
 ) {
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
+    val screenWidthDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp().value }
+    val size = compatPostMenuSize(menuScalePercent, screenWidthDp)
     val actions = listOf(onWeb, onExtract, onNg, onDel, onDelete, onSaidane, onQuick, onReply, onCopy)
     val labels = compatReferencePostContextLabels().flatten().toMutableList().apply {
         if (reviewComplianceEnabled) {
@@ -735,11 +738,12 @@ internal fun CompatPostContextDialog(
         properties = PopupProperties(focusable = true, dismissOnClickOutside = true, dismissOnBackPress = true)
     ) {
         Surface(
-            modifier = Modifier.width(300.dp),
+            modifier = Modifier.width(size.widthDp.dp).testTag("compat-post-menu"),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 8.dp
         ) {
-            Column {
+            // A large menu on a short screen scrolls instead of leaving it, like 18-20.
+            Column(if (menuScalePercent == 100) Modifier else Modifier.verticalScroll(rememberScrollState())) {
                 com.valoser.futacha.shared.ui.board.PostActionPreview(post.postNo, post.messageHtml)
                 markControls()
                 HorizontalDivider()
@@ -747,11 +751,11 @@ internal fun CompatPostContextDialog(
                     Row(Modifier.fillMaxWidth()) {
                         row.forEach { (label, action) ->
                             Box(
-                                modifier = Modifier.width(100.dp).height(50.dp)
+                                modifier = Modifier.width((size.widthDp / 3f).dp).height(size.cellHeightDp.dp)
                                     .clickable(onClick = action)
                                     .semantics { role = Role.Button },
                                 contentAlignment = Alignment.Center
-                            ) { Text(label, maxLines = 1, fontSize = 14.sp) }
+                            ) { Text(label, maxLines = 1, fontSize = (14f * size.fontScale).sp) }
                         }
                     }
                 }

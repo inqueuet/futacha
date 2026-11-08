@@ -30,9 +30,11 @@ import com.valoser.futacha.shared.compat.compatCatalogRulesForBoard
 import com.valoser.futacha.shared.compat.compatWatchWordsForBoard
 import com.valoser.futacha.shared.compat.projectCompatCatalogItems
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogFetchSettings
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.MAX_COMPAT_CATALOG_TITLE_LINES
 import com.valoser.futacha.shared.model.normalizeWatchWords
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -104,8 +106,23 @@ internal fun futaberCatalogWatchSource(
 }
 
 /**
+ * The letters of a catalog title ふたばー風 asks the server for (cl / cxyl): the whole title, as futaber shows it, with
+ * the cap としあき(仮) uses. Without it the app's layout asks for 16 letters, and the rows, the threads opened from them,
+ * the writing screen, the sheets, the search and the catalog NG words all had the title cut at 16 (L-B1, V26/F26).
+ */
+internal const val FUTABER_CATALOG_TITLE_CHARS = MAX_COMPAT_CATALOG_TITLE_LINES
+
+/**
+ * The layout of a ふたばー風 catalog fetch: the app's own (rows, columns, the visited mark: the same threads as before)
+ * with the whole title. Passed with each request, so ふたちゃ and としあき(仮) keep fetching with their own layouts.
+ */
+internal suspend fun futaberCatalogFetchSettings(repository: BoardRepository): CatalogFetchSettings =
+    repository.getCatalogFetchSettings().copy(titleLines = FUTABER_CATALOG_TITLE_CHARS)
+
+/**
  * One catalog fetch. Every sort but "監視" is the board's own catalog, as before; "監視" reads the new and the old
  * catalogs and keeps the threads whose titles hold one of [watchWords], best matches first (empty without words).
+ * Each is fetched with the whole title ([futaberCatalogFetchSettings]).
  */
 internal suspend fun futaberFetchCatalogPage(
     repository: BoardRepository,
@@ -113,10 +130,11 @@ internal suspend fun futaberFetchCatalogPage(
     mode: CatalogMode,
     watchWords: List<String>
 ): CatalogPageContent {
-    if (mode != CatalogMode.WatchWords) return repository.getCatalogPage(boardUrl, mode)
-    if (normalizeWatchWords(watchWords).isEmpty()) return CatalogPageContent(emptyList())
+    if (mode == CatalogMode.WatchWords && normalizeWatchWords(watchWords).isEmpty()) return CatalogPageContent(emptyList())
+    val settings = futaberCatalogFetchSettings(repository)
+    if (mode != CatalogMode.WatchWords) return repository.getCatalogPageWithSettings(boardUrl, mode, settings)
     val page = loadCatalogItemsForMode(boardUrl, CatalogMode.WatchWords, watchWords) { url, sourceMode ->
-        repository.getCatalogPage(url, sourceMode)
+        repository.getCatalogPageWithSettings(url, sourceMode, settings)
     }
     return page.copy(
         items = buildVisibleCatalogItems(
@@ -218,12 +236,12 @@ internal fun FutaberCatalogWatchBadge(label: String?, modifier: Modifier = Modif
     val colors = LocalFutaberColors.current
     Text(
         label,
-        color = colors.onAction,
+        color = colors.onIosBlue,
         fontSize = 10.sp,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier.padding(2.dp).clip(FutaberShapes.small).background(colors.action)
+        modifier = modifier.padding(2.dp).clip(FutaberShapes.button).background(colors.iosBlue)
             .padding(horizontal = 4.dp, vertical = 1.dp).testTag("futaber-catalog-watch-badge")
     )
 }

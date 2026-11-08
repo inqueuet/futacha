@@ -7,7 +7,7 @@
 | プラットフォーム | 対象 | アプリ |
 | --- | --- | --- |
 | Android | Android 8.0（API 26）以降 | ブラウザ本体 |
-| iOS / iPadOS | 18.2 以降 | ブラウザ本体 |
+| iOS / iPadOS | 15.1 以降 | ブラウザ本体 |
 | macOS | 13.0 以降・Apple Silicon（arm64） | Compose Desktop 版。詳しくは [Mac 版](docs/macos-port-2026-09-19.md) |
 | Windows | Windows 10 / 11・x64 | Compose Desktop 版。詳しくは [Windows 版](docs/windows-port-2026-09-20.md) |
 | Wear OS | Android API 26 以降の Wear OS 端末 | Android 版との連携アプリ |
@@ -23,7 +23,7 @@
 - グリッド / リスト表示、列数変更、カタログモードと並び順の切り替え
 - 検索、詳細 NG 条件、監視ワード、板ごとの設定
 - 更新、更新前への復帰、消えたスレッドの確認、スレッド作成、履歴への自動追加
-- 「ふたちゃモード」と「としあき（仮）モード」の表示プロファイル切り替え
+- 「ふたちゃ」「としあき（仮）」「ふたばー風」「ふたったー風」の4モード切り替え
 
 ### スレッド
 
@@ -31,10 +31,12 @@
 - 新着の先頭に「新着レス ○件」の帯を表示、新着位置への移動
 - 本文検索、検索結果移動、引用プレビュー、引用返信、絞り込み、並べ替え
 - レス投稿、画像・動画添付、手書き添付、あぷ小、音声入力などの投稿ツール
-- としあきモードの板別・スレッド別下書き保存（ふたちゃ側の永続保存・モード間共有は未接続）
+- 板別・スレッド別の下書き保存。ふたちゃは「下書きを端末に保存」をONにした場合に保存し、としあき（仮）と同じ板・スレッドの下書きを共有（初期状態OFF）
 - そうだね、削除依頼、本人削除
 - 本文読み上げ、自動スクロール、手動・自動巡回、更新通知
 - キャッシュ検索、落ちたスレッドの第三者アーカイブ取得・欠落補完
+
+本文読み上げは端末の日本語音声を使うほか、Android 10以降の64bit環境・iOS 16以降では任意に「ずんだもん」を選べます。設定から音声モデルと辞書を約83MB取得し、約167MBを保存します。データ取得後の合成は端末内で行い、本文を音声合成サーバーへ送りません。ふたったー風では先に拡張機能の「読み上げ」をONにします。
 
 ### メディア・保存
 
@@ -47,12 +49,12 @@
 - 動画の時間・範囲指定による編集、自動検出・追尾・輪郭、プレビュー、MP4 保存
 - 対応メディアの生成情報・プロンプト表示、コピー
 
-画像編集・動画編集・プロンプト表示は個別の設定で有効にする機能で、初期状態は OFF です。モデルを使う処理には、利用者によるモデルの取得・読み込みが必要です。プロンプト設定の入口はふたちゃモードにあります。iOS の WebM 再生は OS・端末の対応に依存し、編集入力としての WebM とは対応範囲が異なります。編集形式・解像度などの制限はアプリ内のメディア機能ヘルプと [移植範囲](docs/toshikari-media-port-remaining-plan-2026-09-18.md)、各デスクトップ版の説明を参照してください。
+画像編集・動画編集・プロンプト表示は設定のメディア関連項目から個別に有効にする機能で、初期状態は OFF です。入口はモードによって異なります。モデルを使う処理には、利用者によるモデルの取得・読み込みが必要です。iOS の WebM 再生は17.4以降が対象で、端末や動画内部の形式にも依存し、編集入力としての WebM とは対応範囲が異なります。編集形式・解像度などの制限はアプリ内のメディア機能ヘルプと [移植範囲](docs/toshikari-media-port-remaining-plan-2026-09-18.md)、各デスクトップ版の説明を参照してください。
 
 ### 設定・連携
 
 - テーマ、表示、操作、NG、Cookie、キャッシュ、保存先、通知などの設定と永続化
-- 両モードで共通化した設定を、表示・操作・カタログ・メディア機能・保存・通信・バックアップ等の既存分類へ統合
+- 共有する設定を、表示・操作・カタログ・メディア機能・保存・通信・バックアップ等の分類へ統合。モード独自の設定や、拡張機能をONにして使う機能もあります
 - テーマ・文字色・システムバーの配色はモードごとに管理。ふたちゃの追加設定画面やメニューも、ふたちゃで選択したテーマに合わせて表示
 - Android のディレクトリ選択と優先ファイラー、iOS の security-scoped bookmark、デスクトップのファイル・フォルダー選択
 - 履歴・設定の入出力、バックアップ・復元、旧版データの取り込み、外部アプリ連携
@@ -61,9 +63,23 @@
 - Wear OS への履歴・監視結果・読み上げ状態の同期、Tile、スマートフォン操作
 - watchOS への板・スレッド・未読情報の同期、iPhone 側の画面表示・更新・読み上げ操作
 
-機能の入口や対応範囲にはモード差・OS 差があります。通常の画像一覧・プレビューへの共通設定反映、下書き共有、巡回結果の詳細表示などの残件は [モード間の機能差](docs/futacha-remaining-feature-gaps-2026-09-21.md)、共通化済みの範囲は [機能・設定の共通化記録](docs/futacha-feature-parity-2026-09-20.md) を参照してください。外部にじろぐ連携は Android のみです。デスクトップ版の端末 AI による文章生成・モデレーションには未対応で、要約は本文からの抜粋を使用します。
+機能の入口や初期状態にはモード差・OS差があります。ふたばー風・ふたったー風の追加機能は「設定 → このアプリ → 拡張機能」で選び、ふたったー風は履歴の選択削除以外が初期状態OFFです。各モードの「操作ガイド」では、投稿・添付・削除キー・ジェスチャーの代わりの操作を確認できます。
+
+外部にじろぐ連携はAndroidのみです。AIのスレ要約は端末内AIを使い、Windowsは未対応、MacはApple Intelligenceを利用できる環境が対象です。OpenAIによる荒らし判定は、APIキーの登録と本文送信への同意後に利用できます。使い方はアプリ内の「ヘルプ」で検索できます。
 
 変更履歴はアプリ内の設定から確認できます。内容は [変更履歴データ](shared/src/commonMain/kotlin/ui/compat/CompatibilityReferenceInfoData.kt) で管理しています。
+
+### モードごとの操作
+
+| モード・画面 | 操作 |
+| --- | --- |
+| ふたばー風・スレッド | 本文を右へスワイプでカタログ、左端から右へで板一覧、左へで書き込み画面。操作メニューは下部中央のボタンから開きます。 |
+| ふたばー風・カタログ | 右スワイプで板一覧、左スワイプでこの板で最後に見たスレッド。 |
+| ふたばー風・書き込み | 「カナ」で本文を半角カナへ変換。用紙アイコンの「ペーストボード」で定型文・画像を保存し、行をタップして本文末尾へ追加・添付できます。「編集」で削除でき、設定のバックアップには含まれません。Androidでキーボード表示中の戻るは、まずキーボードだけを閉じます。 |
+| ふたばー風・画像一覧 | 同じスレッドを開いている間は通常の一覧の位置を保持。ビューアから「画像一覧」で戻ると、表示中の画像が見える位置になります。選択保存用の一覧は対象外です。 |
+| ふたったー風・スレッド | 初めて開く時は先頭、開き直す時は前回の読み位置から表示。拡張機能「スレッドを先頭から開く」（初期状態OFF）をONにすると、カタログ・履歴・リンクからは先頭へ。タブの切り替えや設定から戻った時は、見ていた位置を保ちます。 |
+
+ふたばー風の横スワイプはメニュー・引用・書き込み画面などの表示中、カタログの検索中には使えません。ボタンからも操作できます。詳しい使い方はHELPで「ペーストボード」「半角カナ」「スレッドを先頭から開く」などを検索してください。
 
 ## プロジェクト構成
 
@@ -96,7 +112,7 @@ Android の Release ビルドでは `baselineprofile/` を使い、専用の API
 
 ## 主な技術要素
 
-- Kotlin 2.4 / Kotlin Multiplatform
+- Kotlin 2.5.0-Beta2 / Kotlin Multiplatform
 - Compose Multiplatform
 - Ktor Client
 - kotlinx.coroutines / kotlinx.serialization
@@ -113,8 +129,8 @@ Android の Release ビルドでは `baselineprofile/` を使い、専用の API
 
 - 共通: Git、JDK 17、Python 3、初回の依存取得用ネットワーク接続
 - Gradle デーモン: JDK 21。[デーモン JVM 設定](gradle/gradle-daemon-jvm.properties) に取得先を指定しています。コンパイル・Windows アプリ実行用の JDK 17 とは別です。
-- Android / Wear OS: Android SDK 37。Android 本体のネイティブ処理には NDK `29.0.14206865` と SDK の CMake `3.22.1` を使用します。
-- iOS / watchOS: macOS、Xcode（iOS 18.2 以降の SDK）、CocoaPods、CMake 3.21 以降。共有 Framework は実機 arm64 と Apple Silicon の Simulator arm64 を対象にしています。
+- Android / Wear OS: Android SDK 37.2、Build Tools 37.0.0。Android 本体のネイティブ処理には NDK `30.0.16248370` と SDK の CMake `4.1.2` を使用します。
+- iOS / watchOS: macOS、Swift 6.2以上に対応するXcode、Ruby 3.2以上・CocoaPods 1.17.0、Swift Package Manager、CMake 3.21 以降。共有 Framework は実機 arm64 と Apple Silicon の Simulator arm64 を対象にしています。
 - macOS デスクトップ: Apple Silicon Mac、Xcode Command Line Tools、CMake 3.21 以降
 - Windows デスクトップ: x64 Windows、Python 3.11 以降。ネイティブ依存の準備に使う LLVM MinGW・CMake・Ninja はスクリプトで取得します。
 
@@ -178,10 +194,11 @@ Release AAB を署名するには、次の値を環境変数、ローカルの G
 
 ### 5. iOS / watchOS
 
-CocoaPods の依存関係を準備し、Xcode で `iosApp/iosApp.xcworkspace` を開きます。通常のビルドも Archive もこの workspace から実行してください。`iosApp.xcodeproj` を直接開くと Pods がビルド対象に入らず、Firebase などの `modulemap not found` エラーになります。共有 Framework は Xcode のビルド時に生成します。
+共有FrameworkとONNX RuntimeはCocoaPods、Firebase 13.1.1はSwift Package Managerで導入します。通常のビルドもArchiveも `iosApp/iosApp.xcworkspace` を使います。XcodeはGit管理された `Package.resolved` に従ってFirebaseなどを取得します。共有FrameworkはXcodeのビルド時に生成します。
 
 ```bash
-./gradlew :shared:podInstall
+./gradlew :shared:generateDummyFramework :shared:podspec
+(cd iosApp && bundle install && bundle exec pod install)
 open iosApp/iosApp.xcworkspace
 ```
 
@@ -273,7 +290,7 @@ GitHub Actions は使用せず、開発者環境で検査します。リリー�
 
 証跡ファイルは `matrix_id`、`build_sha`、`result`、`evidence` のタブ区切りです。対象の全セルが現在の Git SHA に対して PASS であり、作業ツリーがクリーンである必要があります。実機手順書・実行証跡は Git 管理外です。`qualityGate` や Release パッケージ生成の成功だけでは、この配布ゲートの合格を意味しません。
 
-直近の機能共通化では、既存のデスクトップ動画テストが VLC の停止処理で止まったため、全体の `qualityGate` は未完了です。完了済みの検査と制約は [検証記録](docs/futacha-feature-parity-2026-09-20.md) に記載しています。
+検証結果は実施日ごとの記録で確認してください。依存ライブラリの採用版・個別照合と今回の確認範囲は [2026年10月27日の依存更新記録](docs/dependency-update-2026-10-27.md) にまとめています。Macのキーチェーンや実機など、実行環境に依存する検査もあります。
 
 ## データとネットワークについて
 

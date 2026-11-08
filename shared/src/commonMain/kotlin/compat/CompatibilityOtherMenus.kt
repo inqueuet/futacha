@@ -11,6 +11,9 @@ enum class CompatOtherMenuRoute {
     THREAD_EXTRACT
 }
 
+/** FutabaViewer 18-20's thread toolbar key for 閉じたスレを元に戻す. */
+const val COMPAT_THREAD_RESTORE_CLOSED_KEY = "restoreclosed"
+
 data class CompatOtherMenuItem(
     val key: String,
     val label: String,
@@ -103,7 +106,9 @@ fun compatThreadOtherMenu(
         CompatOtherMenuItem("cache", "過去ログ検索"),
         CompatOtherMenuItem("check", "更新の確認"),
         CompatOtherMenuItem("close", "スレを閉じる"),
-        CompatOtherMenuItem("undo", "閉じたスレを元に戻す", enabled = canUndoClose)
+        // Keyed like the toolbar's own button (18-20 "restoreclosed"); the
+        // toolbar's "undo" is リロード前に戻す and must not hide this item.
+        CompatOtherMenuItem(COMPAT_THREAD_RESTORE_CLOSED_KEY, "閉じたスレを元に戻す", enabled = canUndoClose)
     )
 
     CompatOtherMenuRoute.THREAD_SAVE -> listOf(

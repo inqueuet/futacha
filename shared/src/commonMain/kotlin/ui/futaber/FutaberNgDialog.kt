@@ -53,11 +53,15 @@ internal fun FutaberNgDialog(
     onChangeHeaders: ((List<String>) -> List<String>) -> Unit,
     onDismiss: () -> Unit,
     /** Opens on the 名前・ID等 list with this text ready to add (the poster of a long-pressed post); blank = the word list. */
-    initialHeader: String = ""
+    initialHeader: String = "",
+    /** Opens on the word list with this text ready to add (the copy panel's 「NGに追加」, L-B5); used when [initialHeader] is blank. */
+    initialWord: String = ""
 ) {
     val colors = LocalFutaberColors.current
     var section by rememberSaveable { mutableStateOf(if (initialHeader.isNotBlank()) NgSection.Headers else NgSection.Words) }
-    var input by rememberSaveable { mutableStateOf(initialHeader.futaberTakeChars(FUTABER_NG_MAX_LENGTH)) }
+    var input by rememberSaveable {
+        mutableStateOf((if (initialHeader.isNotBlank()) initialHeader else initialWord).futaberTakeChars(FUTABER_NG_MAX_LENGTH))
+    }
     val current = if (section == NgSection.Words) words else headers
     val change = if (section == NgSection.Words) onChangeWords else onChangeHeaders
     val canAdd = futaberAddNgEntry(current, input) !== current

@@ -61,6 +61,7 @@ class FutaberParityB1bInstrumentedTest {
         "compat.futaber.catalog.sort",
         "compat.futaber.catalog.sortByBoard",
         "compat.futaber.lastBoardId",
+        "compat.futaber.manageCategory",
         "compat.futaber.tabs",
         "compat.futaber.seen"
     )
@@ -70,7 +71,7 @@ class FutaberParityB1bInstrumentedTest {
         originalProfile = app.experienceProfileStore.readActiveProfile()
         runBlocking {
             app.compatibilityStore.ensureInitialized()
-            app.compatibilityStore.savePreferences(keys.associateWith { null })
+            app.compatibilityStore.savePreferences(keys.associateWith { null } + FUTABER_EXTENSIONS_OFF)
             originalDeleteKey = app.appStateStore.lastUsedDeleteKey.first()
             originalNgWords = app.appStateStore.ngWords.first()
             app.appStateStore.setNgWords(emptyList())
@@ -173,8 +174,12 @@ class FutaberParityB1bInstrumentedTest {
             .getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.value?.invoke() ?: 0f
     }
 
-    private fun threadTitle(): String = rule.onNodeWithTag("futaber-thread-title").fetchSemanticsNode().config
-        .getOrNull(SemanticsProperties.Text)?.joinToString("").orEmpty()
+    /**
+     * Which tab's thread is on screen: the tab strip marks it selected. The title row cannot tell: since L-B1 it is the
+     * first post's first line once the page is read, the same for every tutorial thread.
+     */
+    private fun selectedTab(): Int = rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes()
+        .indexOfFirst { it.config.getOrNull(SemanticsProperties.Selected) == true }
 
     /** How many grid items fit across the picture list (its width over one item's). */
     private fun galleryColumns(): Int {
@@ -192,12 +197,16 @@ class FutaberParityB1bInstrumentedTest {
         waitForTag("futaber-action-copy-url")
         assertTrue(absent("futaber-action-image-ng"))
         closeSheet()
-        // The picture menu stays "画像検索 / 画像NGに登録".
+        // The picture menu has the original's items and 「画像検索」, not the extension's save / share. (L-B5: its other
+        // three items, URLをコピー / 外部で開く / ビューアで表示, are the original's 画像のURLをコピー / ブラウザで開く / 画像を表示.)
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         longPressFirstPicture()
-        for (id in listOf("image-save", "image-share", "image-copy-url", "image-external", "image-viewer")) {
+        for (id in listOf("image-save", "image-share")) {
             assertTrue(id, absent("futaber-action-$id"))
+        }
+        for (id in listOf("image-viewer", "image-external", "image-ascii2d", "image-url-scheme", "image-copy-url", "image-ng", "image-search")) {
+            waitForTag("futaber-action-$id")
         }
         closeSheet()
         // Deleting a post with a picture asks without "画像だけ消す".
@@ -236,7 +245,7 @@ class FutaberParityB1bInstrumentedTest {
             "ext-gallery-columns" to "compat.futaber.ext.galleryColumns"
         )
         for ((id, key) in switches) {
-            assertNull(preference(key))
+            assertTrue(preference(key) in listOf(null, "OFF"))
             rule.onNodeWithTag("futaber-settings-switch-$id").performScrollTo().performClick()
             rule.waitUntil(5_000) { preference(key) == "ON" }
         }
@@ -270,7 +279,6 @@ class FutaberParityB1bInstrumentedTest {
 
         // "タブのスレッドを切り替え": two tabs, the open thread first.
         val first = runBlocking { app.appStateStore.history.first().first() }
-        val firstTitle = threadTitle()
         runBlocking {
             app.appStateStore.updateHistory { list ->
                 list + first.copy(threadId = "999011", title = "となりのタブ", boardUrl = first.boardUrl.replace(first.threadId, "999011"))
@@ -283,14 +291,15 @@ class FutaberParityB1bInstrumentedTest {
             )
         }
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes().size == 2 }
+        rule.waitUntil(10_000) { selectedTab() == 0 }
         // Up at the first tab: nothing to go back to, the key is still taken.
         rule.runOnIdle { assertTrue(CompatVolumeKeyBus.dispatch(CompatVolumeKey.UP)) }
         rule.waitForIdle()
-        assertEquals(firstTitle, threadTitle())
+        assertEquals(0, selectedTab())
         rule.runOnIdle { assertTrue(CompatVolumeKeyBus.dispatch(CompatVolumeKey.DOWN)) }
-        rule.waitUntil(10_000) { threadTitle() == "となりのタブ" }
+        rule.waitUntil(10_000) { selectedTab() == 1 }
         rule.runOnIdle { assertTrue(CompatVolumeKeyBus.dispatch(CompatVolumeKey.UP)) }
-        rule.waitUntil(10_000) { threadTitle() == firstTitle }
+        rule.waitUntil(10_000) { selectedTab() == 0 }
     }
 
     /**
@@ -315,7 +324,7 @@ class FutaberParityB1bInstrumentedTest {
         }
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("futaber-tab").fetchSemanticsNodes().size == 2 }
         rule.onAllNodesWithTag("futaber-tab")[1].performClick()
-        rule.waitUntil(10_000) { threadTitle() == "となりのスレ" }
+        rule.waitUntil(10_000) { selectedTab() == 1 }
         waitForTag("futaber-post")
         rule.onNodeWithTag("futaber-thread-list").performScrollToIndex(0)
         val start = listScroll()

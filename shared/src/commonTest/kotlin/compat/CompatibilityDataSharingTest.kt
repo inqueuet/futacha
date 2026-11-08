@@ -195,7 +195,8 @@ class CompatibilityDataSharingTest {
         val merged = mergeCompatibilityHistory(listOf(modern), listOf(compat))
 
         assertEquals(1, merged.size)
-        assertEquals(12, merged.single().replyCount)
+        // D-B2 (D4): the compatibility 12 replies are 13 posts in the modern unit, which wins over the modern 8.
+        assertEquals(13, merged.single().replyCount)
         assertEquals(9, merged.single().lastReadItemIndex)
         assertEquals(17, merged.single().lastReadItemOffset)
     }
@@ -320,6 +321,20 @@ class CompatibilityDataSharingTest {
     )
 
     @Test
+    fun theCountUnitsRoundTripWithoutGrowingOrShrinking() {
+        // D-B2 (D4): the modern history counts posts (OP included), the compatibility one replies.
+        val modern = importModern(5, 100L, replies = 10)
+        val compat = assertNotNull(modern.toCompatHistoryEntry())
+        assertEquals(9, compat.replyCount)
+        assertEquals(10, assertNotNull(compat.toModernThreadHistoryEntry()).replyCount)
+        // An empty thread never goes below zero replies.
+        assertEquals(0, assertNotNull(importModern(6, 100L, replies = 0).toCompatHistoryEntry()).replyCount)
+        // Merging an entry back does not add one each round.
+        val merged = mergeCompatibilityHistory(listOf(modern), listOf(compat))
+        assertEquals(10, merged.single().replyCount)
+    }
+
+    @Test
     fun historyImportKeepsCompatibilityUpdateTimeSeparateFromViewTime() {
         val compat = assertNotNull(importModern(1, 100L).toCompatHistoryEntry()).copy(
             originalUrl = "http://may.2chan.net/b/res/1.htm",
@@ -331,7 +346,8 @@ class CompatibilityDataSharingTest {
         // The view time and metadata are shared, the update time is not (11.4).
         assertEquals(500L, written.lastVisitedEpochMillis)
         assertEquals(150L, written.contentUpdatedAtEpochMillis)
-        assertEquals(9, written.replyCount)
+        // The modern 9 posts are 8 replies in the compatibility unit.
+        assertEquals(8, written.replyCount)
         assertEquals(compat.originalUrl, written.originalUrl)
         assertEquals(compat.scrollAnchor, written.scrollAnchor)
         // Importing the same history again writes nothing.

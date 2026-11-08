@@ -161,6 +161,11 @@ class VideoPromptViewerInstrumentedTest {
     }
 
     private fun verify(compat: Boolean) {
+        // としあき(仮) hides the system bars with its toolbar (FutabaViewer 18-20). The first
+        // full-screen in a fresh emulator shows Android's "swipe to exit" notice, which takes the
+        // focus and so blocks reading the clipboard below; mark that notice as already seen.
+        InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("settings put secure immersive_mode_confirmations confirmed").close()
         if (compat) compatStore = runBlocking { AndroidCompatibilityStore(context, databaseName = database).also {
             it.initialize(); it.savePreference("compat.commonUsedVersion", "1.0")
             it.upsertBoard(CompatBoard(compatBoardKey(boardUrl), "動画生成情報確認", boardUrl, boardUrl, 0))

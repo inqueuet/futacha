@@ -151,14 +151,14 @@ internal fun FutachaNgManagementDialog(
                 features.store.savePreference(compatPreferenceStorageKey("thread", "threadImageNgPhashThreshold"), value.toString())
             } } else null,
             addScopeLabel = if (tabKey == null) "全ての板" else "全てのスレッド",
-            onAdd = if (image || selectedKind == CompatNgKind.CATALOG_REFUSE) null else { value, global -> perform {
+            onAdd = if (image || selectedKind == CompatNgKind.CATALOG_REFUSE) null else { value, global, _ -> perform {
                 val normalized = value.trim()
                 require(normalized.isNotEmpty()) { "入力してください" }
                 val targetScope = futachaNgRuleAddScope(global, image, boardKey, tabKey, textGlobalOnly)
                 check(features.store.upsertNgRule(CompatNgRule(compatNgRuleId(selectedKind, targetScope, normalized),
                     selectedKind, targetScope, normalized, Clock.System.now().toEpochMilliseconds()))) { "対象の板またはスレッドがありません" }
             } },
-            onEdit = { rule, value, global, memo -> perform {
+            onEdit = { rule, value, global, memo, _ -> perform {
                 // Preserve the stable identity while changing value/scope, as the shared store expects.
                 val editedScope = futachaNgRuleEditScope(rule.scopeKey, global, image, boardKey, tabKey, textGlobalOnly)
                 check(features.store.upsertNgRule(rule.copy(scopeKey = editedScope, normalizedValue = value,

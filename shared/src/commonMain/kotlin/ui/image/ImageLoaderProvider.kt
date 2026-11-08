@@ -12,6 +12,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.ComponentRegistry
 import coil3.Extras
 import coil3.ImageLoader
+import coil3.serviceLoaderEnabled
 import coil3.annotation.ExperimentalCoilApi
 import coil3.compose.LocalPlatformContext
 import coil3.disk.DiskCache
@@ -511,6 +512,10 @@ internal fun buildFutachaImageLoader(
     refreshInterceptor: ImageRefreshInterceptor = ImageRefreshInterceptor(),
     originalMediaStore: OriginalMediaSource? = null
 ): ImageLoader = ImageLoader.Builder(platformContext)
+    // All network fetchers and optional decoders are registered below. During
+    // startup imageHttpClient can be null: Coil's service-loaded Ktor factory
+    // would otherwise create a client without Android's safe response close.
+    .serviceLoaderEnabled(false)
     .components {
         add(refreshInterceptor)
         add(FutabaExtensionFallbackInterceptor())
@@ -526,9 +531,8 @@ internal fun buildFutachaImageLoader(
         // They only claim their own URLs (videos, local files, fixtures).
         add(TutorialImageFetcherFactory())
         addPlatformImageComponents()
-        // A manually registered factory takes precedence over Coil's service-loaded
-        // default. Reusing the app client also applies Android's main-thread-safe
-        // response cleanup to image requests cancelled by Compose.
+        // Use only the supplied app client, including Android's main-thread-safe
+        // response cleanup for image requests cancelled by Compose.
         imageHttpClient?.let {
             add(
                 NetworkFetcher.Factory(

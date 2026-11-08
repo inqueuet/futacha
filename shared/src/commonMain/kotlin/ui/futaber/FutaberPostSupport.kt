@@ -139,13 +139,16 @@ internal fun futaberPostCounts(lines: Int, bytes: Int) = FutaberPostCounts(lines
 internal data class FutaberPostSettings(
     val name: String = "",
     val email: String = "",
-    val confirmBeforeSend: Boolean = true
+    val confirmBeforeSend: Boolean = true,
+    /** L-B8 (C43): 書き込み設定「画像の品質」 (高品質 = as before, the default). */
+    val imageQuality: FutaberImageQuality = FutaberImageQuality.High
 ) {
     companion object {
         fun from(preferences: Map<String, String>) = FutaberPostSettings(
             name = preferences[FutaberPreferenceKeys.POST_NAME].orEmpty(),
             email = preferences[FutaberPreferenceKeys.POST_EMAIL].orEmpty(),
-            confirmBeforeSend = preferences[FutaberPreferenceKeys.POST_CONFIRM] != "OFF"
+            confirmBeforeSend = preferences[FutaberPreferenceKeys.POST_CONFIRM] != "OFF",
+            imageQuality = FutaberImageQuality.fromPersisted(preferences[FutaberPreferenceKeys.POST_IMAGE_QUALITY])
         )
     }
 }

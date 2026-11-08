@@ -43,6 +43,8 @@ class HttpRequestUrlGuardTest {
                 "https://may.2chan.net@evil.com/b/res/1.htm",
                 "https://user:pass@may.2chan.net/b/res/1.htm",
                 "https://may.2chan.net/\\evil.com/b/res/1.htm",
+                "https://may.2chan.net/%5Cevil.com/b/res/1.htm",
+                "https://may.2chan.net/%5cevil.com/b/res/1.htm",
                 "https://evil.com%5C%40may.2chan.net/b/res/1.htm",
                 "https://evil.com%40may.2chan.net/b/res/1.htm",
                 "https://evil.com\u0001.2chan.net/b/res/1.htm"

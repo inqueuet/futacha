@@ -15,6 +15,9 @@ import com.valoser.futacha.shared.compat.CompatNgRule
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.NgManagementSheet
+import com.valoser.futacha.shared.ui.ftutter.FtutterKeys
+import com.valoser.futacha.shared.ui.ftutter.FtutterNgType
+import com.valoser.futacha.shared.ui.ftutter.parseFtutterNgList
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +80,25 @@ internal fun compatCommonNgFilterRules(
         rules(CompatNgKind.CATALOG_IGNORE, catalogNgWords)
 }
 
+/**
+ * The plain NG words ふたったー風 keeps (`compat.ftutter.NGList`) as rules for every board and thread: NG words by the body,
+ * NG titles by the catalog title, NG ID / IP by the poster. Regular expressions and rules of one board are not
+ * reproduced here (these filters match plain text and have no board-address scope); ふたばー風 and ふたったー風 apply them.
+ */
+internal fun compatCommonNgFtutterRules(raw: String?): List<CompatNgRule> {
+    val kinds = mapOf(
+        FtutterNgType.WORD.stored to CompatNgKind.THREAD_IGNORE,
+        FtutterNgType.TITLE.stored to CompatNgKind.CATALOG_IGNORE,
+        FtutterNgType.ID.stored to CompatNgKind.THREAD_POSTER_ID
+    )
+    return parseFtutterNgList(raw).mapNotNull { rule ->
+        val kind = kinds[rule.type] ?: return@mapNotNull null
+        if (!rule.isActive || rule.isReg || rule.ita != null) return@mapNotNull null
+        val value = rule.text.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        CompatNgRule("$COMPAT_COMMON_NG_RULE_ID_PREFIX${kind.name}:ftutter:$value", kind, "*", value, 0L)
+    }.distinctBy { it.id }
+}
+
 /** [list] with [value] added at the end, unless it is blank or already there (case-insensitively, as ふたちゃ does). */
 internal fun compatCommonNgAdd(list: List<String>, value: String): List<String> {
     val trimmed = value.trim()
@@ -98,12 +120,14 @@ internal class CompatCommonNg(
         internal set
     var applyEnabled by mutableStateOf(false)
         internal set
+    /** `compat.ftutter.NGList`, the NG every mode reads. */
+    var ftutterNgRaw by mutableStateOf<String?>(null)
     /** Told when a change could not be stored (shown by the NG sheet; audit L35). */
     var failureNotice by mutableStateOf<String?>(null)
     var sheet by mutableStateOf<CompatCommonNgTarget?>(null)
 
     private val filterRulesState = derivedStateOf {
-        if (applyEnabled) compatCommonNgFilterRules(ngHeaders, ngWords, catalogNgWords) else emptyList()
+        if (applyEnabled) compatCommonNgFilterRules(ngHeaders, ngWords, catalogNgWords) + compatCommonNgFtutterRules(ftutterNgRaw) else emptyList()
     }
 
     /** What the filters add to this mode's own rules: empty while the switch is off. */
@@ -165,6 +189,8 @@ internal fun rememberCompatCommonNg(
     val commonNg = remember(stateStore, store, scope) { stateStore?.let { CompatCommonNg(it, store, scope) } }
     val applyEnabled = compatCommonNgApplyEnabled(preferences)
     LaunchedEffect(commonNg, applyEnabled) { commonNg?.applyEnabled = applyEnabled }
+    val ftutterNgRaw = preferences[FtutterKeys.NG_LIST]
+    LaunchedEffect(commonNg, ftutterNgRaw) { commonNg?.ftutterNgRaw = ftutterNgRaw }
     LaunchedEffect(commonNg) {
         val target = commonNg ?: return@LaunchedEffect
         launch { stateStore?.ngHeaders?.collect { target.ngHeaders = it } }

@@ -38,7 +38,12 @@ internal fun FutaberMhtSaveFlow(
     board: BoardSummary,
     ref: FutaberThreadRef,
     page: ThreadPage,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /**
+     * L-B6 (M15): the format already chosen in the alert over the operation menu (false: thumbnails only, true: the
+     * pictures too); the save starts at once. Null asks here first.
+     */
+    fullImages: Boolean? = null
 ) {
     val controller = rememberFutaberMhtSaveController(
         library,
@@ -48,6 +53,9 @@ internal fun FutaberMhtSaveFlow(
         )
     )
     val share = rememberCompatShareLauncher()
+    if (fullImages != null) androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (controller.step == MhtSaveStep.Choose) controller.start(fullImages)
+    }
 
     val current = controller.step
     // While the file is being written, leaving the dialog (the button or Back) stops the save: the file being written is
@@ -56,6 +64,8 @@ internal fun FutaberMhtSaveFlow(
         if (current is MhtSaveStep.Running) controller.cancel()
         onDismiss()
     }
+    // Chosen already: no window until the save has started (the next frame).
+    if (fullImages != null && current == MhtSaveStep.Choose) return
     FutachaAppLockAwareWindow {
         Dialog(
             onDismissRequest = leave,
@@ -117,7 +127,7 @@ private fun SheetCard(
 ) {
     val colors = LocalFutaberColors.current
     Surface(
-        shape = FutaberShapes.card,
+        shape = FutaberShapes.sheet,
         color = colors.bar,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).testTag("futaber-mht-dialog")
     ) {

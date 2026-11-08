@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.model.BoardSummary
+
 /**
  * 折れ線ジェスチャー（原作 Gesture.dart。docs/ftutter-mode-research-round6-2026-10-13.md §2）。
  *
@@ -127,10 +129,11 @@ internal class FtutterGestureTracker(private val kando: Float = FTUTTER_GESTURE_
 }
 
 /**
- * 入力中の表示に出す操作名。4区間以上は何も出さず、指を離しても実行しない。割り当てが「なし」の軌跡は「なし」と出る。
+ * 入力中の表示に出す操作名。4区間以上は何も出さず、指を離しても実行しない。割り当てが「なし」の軌跡は何も出さない（M70）。
  */
 internal fun ftutterGestureLabel(code: String, map: Map<String, FtutterGestureAction>): String? =
-    if (code.isEmpty() || code.length >= 4) null else map[code]?.label ?: ""
+    // M70：原作は割り当てのある軌跡だけ名前を出す（「なし」は出さない）。
+    if (code.isEmpty() || code.length >= 4) null else map[code]?.takeIf { it != FtutterGestureAction.NONE }?.label ?: ""
 
 /** 指を離した時に実行する操作（4区間以上・割り当てなしは null）。 */
 internal fun ftutterGestureActionFor(code: String, map: Map<String, FtutterGestureAction>): FtutterGestureAction? =
@@ -224,3 +227,31 @@ internal val FTUTTER_TABLET_PERCENT_RANGE = 20..80
 
 internal fun ftutterIsTwoPane(settings: FtutterTabletSettings, widthDp: Float): Boolean =
     settings.enabled && widthDp > settings.minWidth
+
+internal val FTUTTER_LEGACY_TWO_PANE_EMPTY_KEY: String get() = FtutterKeys.PREFIX + "legacyTwoPaneEmpty"
+internal const val FTUTTER_LEGACY_TWO_PANE_EMPTY_LABEL = "二画面でカタログを開いた時はスレッドの側を空にする"
+internal const val FTUTTER_LEGACY_TWO_PANE_EMPTY_NOTE =
+    "ONにすると、二画面でカタログを開いた時、スレッドの側は「スレッドを選んでください」のまま。OFFは原作と同じ、その板で最後に開いたスレッド（タブに残っている時）を出します"
+
+/**
+ * 二画面でカタログを開いた時にスレッドの側へ出すスレ番号（原作：最後に開いたスレッドを出す。板一覧へ戻っても、起動し直しても同じ）。
+ * 最後に開いたタブがまだタブにあり、この板のスレの時だけ。従来の動きのスイッチがONなら出さない。
+ */
+internal fun ftutterTwoPaneReopenId(opening: String, tabs: List<String>, board: BoardSummary, legacy: Boolean): String? {
+    if (legacy || opening.isEmpty() || opening !in tabs) return null
+    if (ftutterBoardForUrl(listOf(board), opening) == null) return null
+    return ftutterThreadIdFromUrl(opening)
+}
+
+/**
+ * Whether opening the catalog of [catalogBoardId] keeps the thread pane as it is (audit C8): two panes, the thread shown
+ * is of that board, and it is the one the catalog would open beside it at once ([reopenId], M21).
+ */
+internal fun ftutterTwoPaneKeepsThread(
+    twoPane: Boolean,
+    legacyEmpty: Boolean,
+    shownBoardId: String,
+    catalogBoardId: String,
+    reopenId: String?,
+    shownThreadId: String
+): Boolean = twoPane && !legacyEmpty && shownBoardId == catalogBoardId && reopenId != null && reopenId == shownThreadId

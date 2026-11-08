@@ -49,6 +49,9 @@ class FtutterPostDismissInstrumentedTest {
                     onDismiss = { dismisses++; visible = false })
             }
         }
+        // 窓が出きってから操作する（出る前の戻るは、Espressoが窓のフォーカスを待って時々時間切れになった）。
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("ftutter-post-dialog").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
         if (image != null) {
             rule.onNodeWithText("共有された画像を添付").performScrollTo().performClick()
             if (image.bytes.size <= maxBytes) {

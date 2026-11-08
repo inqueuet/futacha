@@ -127,6 +127,35 @@ class M57VideoSeekNavigationInstrumentedTest {
         assertSeekPosition(native, .05f, .35f)
     }
 
+    @Test fun compatibilitySwipeOnTheVideoPictureMovesToTheNextPage() {
+        val url = localVideo()
+        databaseName = "m57-${System.nanoTime()}.db"
+        val testStore = AndroidCompatibilityStore(rule.activity, databaseName = databaseName!!).also { store = it }
+        runBlocking { testStore.initialize() }
+        val tab = CompatTab(key = "m57", canonicalUrl = "https://may.2chan.net/b/res/57.htm",
+            originalUrl = "https://may.2chan.net/b/res/57.htm", boardKey = "may/b", boardName = "may/b", threadNo = "57",
+            title = "M57", insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1, snapshotRevision = 1)
+        val snapshot = CompatThreadSnapshot(tabKey = tab.key, revision = 1, fetchedAtEpochMillis = 1, posts = listOf(
+            CompatPostSnapshot(position = 0, postNo = "57", timestamp = "now", messageHtml = "video", imageUrl = url),
+            CompatPostSnapshot(position = 1, postNo = "58", timestamp = "now", messageHtml = "other", imageUrl = "file:///m57-unused.png")
+        ))
+        loader = ImageLoader.Builder(rule.activity).build()
+        rule.setContent { CompatibilityProfileTheme("mono") {
+            CompositionLocalProvider(LocalFutachaImageLoader provides loader!!) {
+                CompatViewerScreen(tab, 0, preparedSnapshot = snapshot, store = testStore,
+                    preferences = mapOf("compat.viewer.viewerPreloadMode" to "利用しない"), ngRules = emptyList(),
+                    httpClient = null, fileSystem = null, onToolbarEdit = {}, onShowSourcePost = {},
+                    onOpenGallery = { _, _ -> }, onOpenSettings = {}, onOpenCommonSettings = {}, onBack = {})
+            }
+        } }
+        rule.waitUntil(10000) { rule.onAllNodesWithText("1/2").fetchSemanticsNodes().isNotEmpty() }
+        val native = readyPlayer()
+        val area = screenBounds(native)
+        val y = area.top + area.height() * .4f
+        touch(area.left + area.width() * .85f, y, area.left + area.width() * .15f, y)
+        rule.waitUntil(5000) { rule.onAllNodesWithText("2/2").fetchSemanticsNodes().isNotEmpty() }
+    }
+
     @Test fun imageBackgroundSwipeAndEdgeTapStillNavigate() {
         rule.setContent { MaterialTheme {
             ThreadMediaPreviewDialogFrame("image", {}, { next.incrementAndGet() }, { previous.incrementAndGet() }) {

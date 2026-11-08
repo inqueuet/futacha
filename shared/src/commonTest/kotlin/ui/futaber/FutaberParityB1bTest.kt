@@ -22,8 +22,8 @@ class FutaberParityB1bTest {
 
     @Test fun theNewExtensionsAreOffByDefaultAndReadOnlyAnOn() {
         val defaults = FutaberDisplaySettings.from(emptyMap())
-        assertFalse(defaults.extSortByBoard); assertFalse(defaults.extCatalogLongPress); assertFalse(defaults.extPostDetailOps)
-        assertFalse(defaults.extGalleryColumns); assertFalse(defaults.extImageMenu)
+        assertFalse(defaults.extSortByBoard); assertTrue(defaults.extCatalogLongPress); assertTrue(defaults.extPostDetailOps)
+        assertTrue(defaults.extGalleryColumns); assertTrue(defaults.extImageMenu)
         assertEquals(FutaberVolumeKeyMode.Screen, defaults.volumeKeyMode)
         assertEquals(defaults, FutaberDisplaySettings())
         val keys = listOf(
@@ -33,7 +33,7 @@ class FutaberParityB1bTest {
         assertTrue(keys.all { it.startsWith("compat.futaber.ext.") })
         val on = FutaberDisplaySettings.from(keys.associateWith { "ON" })
         assertTrue(on.extSortByBoard && on.extCatalogLongPress && on.extPostDetailOps && on.extGalleryColumns && on.extImageMenu)
-        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_IMAGE_MENU to "on")).extImageMenu)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_IMAGE_MENU to "on")).extImageMenu)
     }
 
     // ---- T15 ----
@@ -211,28 +211,21 @@ class FutaberParityB1bTest {
 
     // ---- M05 ----
 
+    /**
+     * The extension adds save and share after the original's items. L-B5: its URLをコピー / 外部で開く / ビューアで表示 left it,
+     * since the original's 画像のURLをコピー / ブラウザで開く / 画像を表示 are always there (FutaberSheetOrderTest).
+     */
     @Test fun theImageMenuGetsItsEntriesOnlyWithTheExtension() {
-        assertTrue(futaberImageMenuExtraActions(false, "u", null, true, {}, {}, {}, {}).isEmpty())
-        val copied = mutableListOf<String>()
-        var viewer = 0
-        var dismissed = 0
-        val actions = futaberImageMenuExtraActions(
-            true, "https://may.2chan.net/b/src/1.jpg", null, true,
-            onCopyUrl = { copied += it }, onOpenExternal = { copied += "ext:$it" }, onOpenViewer = { viewer++ }, onDismiss = { dismissed++ }
-        )
-        assertEquals(listOf("image-save", "image-share", "image-copy-url", "image-external", "image-viewer"), actions.map { it.id })
-        assertEquals(listOf("保存", "共有", "URLをコピー", "外部で開く", "ビューアで表示"), actions.map { it.label })
+        assertTrue(futaberImageMenuExtraActions(false, "u", null).isEmpty())
+        val actions = futaberImageMenuExtraActions(true, "https://may.2chan.net/b/src/1.jpg", null)
+        assertEquals(listOf("image-save", "image-share"), actions.map { it.id })
+        assertEquals(listOf("保存", "共有"), actions.map { it.label })
         // Without the saver (no shared services) saving and sharing are disabled.
         assertFalse(actions[0].enabled); assertFalse(actions[1].enabled)
-        actions[2].onClick(); actions[3].onClick(); actions[4].onClick()
-        assertEquals(listOf("https://may.2chan.net/b/src/1.jpg", "ext:https://may.2chan.net/b/src/1.jpg"), copied)
-        assertEquals(1, viewer)
-        assertEquals(3, dismissed)
         val saver = FutaberMediaSaver()
-        assertTrue(futaberImageMenuExtraActions(true, "u", saver, true, {}, {}, {}, {}).take(2).all { it.enabled })
-        // No picture address: nothing can run; no viewer: the viewer entry is off.
-        assertTrue(futaberImageMenuExtraActions(true, null, saver, true, {}, {}, {}, {}).none { it.enabled })
-        assertFalse(futaberImageMenuExtraActions(true, "u", saver, false, {}, {}, {}, {}).last().enabled)
+        assertTrue(futaberImageMenuExtraActions(true, "u", saver).all { it.enabled })
+        // No picture address: nothing can run.
+        assertTrue(futaberImageMenuExtraActions(true, null, saver).none { it.enabled })
         assertEquals("保存中…", futaberMediaSaveStartedNotice(false))
         assertEquals("共有の準備中…", futaberMediaSaveStartedNotice(true))
     }

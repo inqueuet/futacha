@@ -63,6 +63,17 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
         private set
     private var job: Job? = null
 
+    /**
+     * 書き込み設定「画像の品質」 (L-B8 C43): with JPG圧縮 every picture is drawn again as JPEG (a GIF, PNG or WebP too, its
+     * transparency on white); 高品質 keeps the picture's own format as before. Set by the writing screen.
+     */
+    var quality: FutaberImageQuality = FutaberImageQuality.High
+
+    /** Puts back a picture that was already accepted (ふたったー風 keeps it across a failed send, T-B3). */
+    fun restore(accepted: ImageData?) {
+        image = accepted
+    }
+
     fun clear() {
         job?.cancel()
         job = null
@@ -93,8 +104,9 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
     /** The user agreed to compress [picked] to the board's limit. */
     fun compress(picked: ImageData, capabilities: BoardPostingCapabilities) {
         pendingCompression = null
+        val jpeg = futaberRedrawsAsJpeg(quality, picked.isHandwriting, picked.fileName.isVideoAttachmentName())
         process("圧縮できませんでした") {
-            compressCompatPostImage(picked, capabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            compressCompatPostImage(picked, capabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), forceJpeg = jpeg)
         }
     }
 
@@ -105,8 +117,9 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
             image = picked
             return
         }
-        process("画像の位置情報を削除できませんでした") {
-            compressCompatPostImage(picked, max(picked.bytes.size, 8 * 1024 * 1024))
+        val jpeg = futaberRedrawsAsJpeg(quality, picked.isHandwriting, isVideo = false)
+        process(if (jpeg) "JPEGに変換できませんでした" else "画像の位置情報を削除できませんでした") {
+            compressCompatPostImage(picked, max(picked.bytes.size, 8 * 1024 * 1024), forceJpeg = jpeg)
         }
     }
 
