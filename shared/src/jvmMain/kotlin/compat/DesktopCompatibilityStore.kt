@@ -59,6 +59,7 @@ internal class DesktopCompatibilityStore(
     private val workspaceState = MutableStateFlow(CompatWorkspaceRecord())
     private val preferencesState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val ngRulesState = MutableStateFlow<List<CompatNgRule>>(emptyList())
+    private val tabViewsState = MutableStateFlow<List<CompatSharedTabView>>(emptyList())
 
     override val boards: Flow<List<CompatBoard>> = boardsState
     override val tabs: Flow<List<CompatTab>> = tabsState
@@ -66,6 +67,11 @@ internal class DesktopCompatibilityStore(
     override val workspace: Flow<CompatWorkspaceRecord> = workspaceState
     override val preferences: Flow<Map<String, String>> = preferencesState
     override val ngRules: Flow<List<CompatNgRule>> = ngRulesState
+    private val migrationsSettledFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+    override val sharedMigrationsSettled: kotlinx.coroutines.flow.StateFlow<Boolean> get() = migrationsSettledFlow
+    override fun setSharedMigrationsSettled(settled: Boolean) { migrationsSettledFlow.value = settled }
+
+    override val tabViews: Flow<List<CompatSharedTabView>> = tabViewsState
 
     fun close() = database.close()
 
@@ -76,7 +82,7 @@ internal class DesktopCompatibilityStore(
             val repairedBoards = repairBoards(state.boards)
             val validBoardKeys = repairedBoards.mapTo(mutableSetOf(), CompatBoard::key)
             val validTabs = state.tabs.filter { it.boardKey in validBoardKeys }
-            val repairedTabs = if (validTabs.size > MAX_TABS) trimTabs(validTabs, state.workspace.activeTabKey) else validTabs
+            val repairedTabs = trimTabsIfOver(validTabs, state.workspace.activeTabKey, state.preferences, repairedBoards)
             val validHistory = state.history.filter { it.boardKey in validBoardKeys }
             val repairedHistory = if (validHistory.size > MAX_HISTORY) trimHistory(validHistory) else validHistory
             // Move image hashes stored as preferences by older versions into
@@ -102,16 +108,16 @@ internal class DesktopCompatibilityStore(
                 }
                 .take(MAX_COMPAT_NG_RULES)
                 .toList()
-            val pending = state.closedBatch
-                ?.takeIf { it.expiresAtEpochMillis > nowMillis() }
-                ?.let { batch ->
+            // Plan B6: the records kept 24 hours (a record before B6 had a 7-second expiry), at most 20.
+            val repairedClosed = compatKeptClosedBatches(state.closedBatches + listOfNotNull(state.closedBatch), nowMillis())
+                .mapNotNull { batch ->
                     val tabs = batch.tabs.asSequence()
                         .filter { closed ->
                             closed.tab.boardKey in validBoardKeys &&
                                 (closed.snapshot?.posts?.size ?: 0) <= MAX_COMPAT_THREAD_SNAPSHOT_POSTS
                         }
                         .distinctBy { closed -> closed.tab.key }
-                        .take(MAX_TABS)
+                        .take(COMPAT_MAX_STORED_TABS)
                         .toList()
                     batch.takeIf { tabs.isNotEmpty() }?.copy(
                         id = batch.id.take(MAX_COMPAT_BOARD_FIELD_CHARS),
@@ -121,11 +127,12 @@ internal class DesktopCompatibilityStore(
                         }
                     )
                 }
+            val repairedViews = state.tabViews.filter { view -> view.tabKey in validTabKeys }
             val repairedReplyDrafts = state.replyDrafts
                 .asSequence()
                 .filter { it.tabKey in validTabKeys }
                 .distinctBy(CompatReplyDraft::tabKey)
-                .take(MAX_TABS)
+                .take(COMPAT_MAX_STORED_TABS)
                 .toList()
             val repairedBuildDrafts = state.buildDrafts
                 .asSequence()
@@ -204,7 +211,7 @@ internal class DesktopCompatibilityStore(
             if (
                 repairedBoards != state.boards || revisedTabs != state.tabs || repairedHistory != state.history ||
                 repairedRules.size != state.ngRules.size ||
-                repairedPreferences.size != state.preferences.size || pending != state.closedBatch ||
+                repairedPreferences.size != state.preferences.size || repairedClosed != state.closedBatches || state.closedBatch != null || repairedViews != state.tabViews ||
                 repairedReplyDrafts != state.replyDrafts || repairedBuildDrafts != state.buildDrafts ||
                 repairedSnapshots != state.snapshots || repairedSnapshotAccess != state.snapshotAccess ||
                 repairedCatalogPreferences != state.catalogPreferences ||
@@ -226,7 +233,9 @@ internal class DesktopCompatibilityStore(
                     catalogSnapshots = repairedCatalogSnapshots,
                     droppedItems = repairedDroppedItems,
                     toolbars = repairedToolbars,
-                    closedBatch = pending,
+                    closedBatch = null,
+                    closedBatches = repairedClosed,
+                    tabViews = repairedViews,
                     historyTombstones = repairedTombstones,
                     archiveRows = repairedArchiveRows
                 )
@@ -245,10 +254,18 @@ internal class DesktopCompatibilityStore(
         true
     }
 
+    override suspend fun rememberModernBoardAliases(modernBoards: List<BoardSummary>) = mutate {
+        val aliases = updatedCompatBoardAliases(it.preferences[COMPAT_SHARED_BOARD_ALIASES], modernBoards)
+        if (aliases != it.preferences[COMPAT_SHARED_BOARD_ALIASES])
+            state = it.copy(preferences = it.preferences + (COMPAT_SHARED_BOARD_ALIASES to aliases))
+        Unit
+    }
+
     override suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int = mutate {
         val candidates = validatedModernBoards(modernBoards)
         val before = it.boards.mapTo(mutableSetOf(), CompatBoard::canonicalUrl)
-        state = it.copy(boards = mergeBoards(it.boards, candidates))
+        state = it.copy(boards = mergeBoards(it.boards, candidates),
+            preferences = it.preferences + (COMPAT_SHARED_BOARD_ALIASES to updatedCompatBoardAliases(it.preferences[COMPAT_SHARED_BOARD_ALIASES], modernBoards)))
         candidates.count { candidate -> candidate.canonicalUrl !in before }
     }
 
@@ -261,7 +278,7 @@ internal class DesktopCompatibilityStore(
             modernHistory = modernHistory,
             current = it.history,
             knownBoardKeys = it.boards.mapTo(mutableSetOf(), CompatBoard::key),
-            tombstoneAt = { url -> it.historyTombstones[url] },
+            tombstoneAt = { url -> compatHistoryDeletedAt(it.historyTombstones[url], it.historyTombstones[COMPAT_HISTORY_CLEARED_MARKER]) },
             historyLimit = HISTORY_LIMIT_TRIGGER,
             retain = { entries -> trimHistory(entries) }
         )
@@ -306,7 +323,7 @@ internal class DesktopCompatibilityStore(
         // The board's thread scopes (its tabs, closed tabs and history) go with it, like its board scope (L86).
         val boardThreadKeys = compatBoardThreadScopeKeys(
             boardKey,
-            it.tabs + it.closedBatch?.tabs.orEmpty().map(ClosedCompatTab::tab),
+            it.tabs + it.closedBatches.flatMap { batch -> batch.tabs.map(ClosedCompatTab::tab) },
             it.history
         )
         val remainingBoards = it.boards.filterNot { board -> board.key == boardKey }
@@ -334,7 +351,7 @@ internal class DesktopCompatibilityStore(
             preferences = compatCatalogExtraModePreferenceKey(boardKey).let { key ->
                 if (key in it.preferences) it.preferences - key else it.preferences
             },
-            closedBatch = it.closedBatch?.let { batch ->
+            closedBatches = it.closedBatches.mapNotNull { batch ->
                 val tabs = batch.tabs.filterNot { closed -> closed.tab.boardKey == boardKey }
                 if (tabs.isEmpty()) null else batch.copy(
                     tabs = tabs,
@@ -354,14 +371,48 @@ internal class DesktopCompatibilityStore(
             replaceHistory(it.history, mergeCompatHistoryEntry(entry, current, recordVisit = true))
         } ?: it.history
         state = it.copy(
-            tabs = trimTabs(nextTabs, tab.key),
+            tabs = trimTabs(nextTabs, tab.key, it),
             history = trimHistory(nextHistory),
             historyTombstones = historyEntry?.let { entry -> it.historyTombstones - entry.canonicalUrl } ?: it.historyTombstones,
             workspace = it.workspace.copy(activeTabKey = tab.key, generation = it.workspace.generation + 1)
         )
     }
 
-    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int = mutate {
+    override suspend fun openSharedTab(
+        tab: CompatTab,
+        profile: String?,
+        placement: CompatTabPlacement,
+        select: Boolean,
+        board: CompatBoard?
+    ): Boolean {
+        // G2: the board first (its own validated write), then the tab, its view and the selection as one change.
+        if (board != null && read { current -> current.boards.none { it.key == board.key } }) upsertBoard(board)
+        return mutate {
+            if (it.boards.none { current -> current.key == tab.boardKey }) return@mutate false
+            val existing = it.tabs.firstOrNull { current -> current.key == tab.key }
+            val nextTabs = when {
+                existing == null -> replaceTab(it.tabs, tab)
+                else -> mergeCompatReopenedTab(existing, tab).let { merged ->
+                    if (merged == existing) it.tabs else it.tabs.map { current -> if (current.key == tab.key) merged else current }
+                }
+            }
+            val trimmed = if (existing == null) trimTabs(nextTabs, if (select) tab.key else it.workspace.activeTabKey, it) else nextTabs
+            if (trimmed.none { current -> current.key == tab.key }) return@mutate false
+            val views = if (profile == null) it.tabViews else {
+                it.tabViews.filter { view -> view.profile != profile } +
+                    compatViewsWith(it.tabViews, profile, tab.key, placement, tab.insertedAtEpochMillis)
+            }
+            state = it.copy(
+                tabs = trimmed,
+                tabViews = views,
+                workspace = if (!select) it.workspace else it.workspace.copy(activeTabKey = tab.key, generation = it.workspace.generation + 1)
+            )
+            true
+        }
+    }
+
+    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>, expectedPreferences: Map<String, String?>): Int = mutate {
+        if (expectedPreferences.any { (key, value) -> it.preferences[key] != value }) return@mutate -1
         val have = it.tabs.mapTo(HashSet()) { tab -> tab.key }
         // The board keys are made once, not again for every tab (audit D7).
         val boardKeys = it.boards.mapTo(HashSet(), CompatBoard::key)
@@ -392,13 +443,16 @@ internal class DesktopCompatibilityStore(
     override suspend fun closeTabs(
         tabKeys: Set<String>,
         nowEpochMillis: Long,
-        finalScrollAnchors: Map<String, ScrollAnchor>
+        finalScrollAnchors: Map<String, ScrollAnchor>,
+        closedBy: String?
     ): ClosedTabBatch? = mutate {
         val anchored = it.tabs.map { tab ->
             finalScrollAnchors[tab.key]?.let { anchor -> tab.copy(scrollAnchor = anchor) } ?: tab
         }
         val closed = anchored.mapIndexedNotNull { index, tab ->
-            tab.takeIf { current -> current.key in tabKeys }?.let { ClosedCompatTab(it, index) }
+            tab.takeIf { current -> current.key in tabKeys }?.let { current ->
+                ClosedCompatTab(current, index, views = it.tabViews.filter { view -> view.tabKey == current.key })
+            }
         }
         if (closed.isEmpty()) return@mutate null
         val remaining = anchored.filterNot { tab -> tab.key in tabKeys }
@@ -406,12 +460,7 @@ internal class DesktopCompatibilityStore(
             anchored.firstOrNull { tab -> tab.canonicalUrl == history.canonicalUrl }
                 ?.let { tab -> history.copy(scrollAnchor = tab.scrollAnchor) } ?: history
         }
-        val batch = ClosedTabBatch(
-            id = "close-$nowEpochMillis-${closed.joinToString("-") { closedTab -> closedTab.tab.key }}",
-            tabs = closed,
-            selectedTabKey = it.workspace.activeTabKey,
-            expiresAtEpochMillis = saturatingEpochAdd(nowEpochMillis, UNDO_WINDOW_MILLIS)
-        )
+        val batch = newCompatClosedTabBatch(closed, it.workspace.activeTabKey, nowEpochMillis, closedBy)
         state = it.copy(
             tabs = remaining,
             replyDrafts = it.replyDrafts.filterNot { draft -> draft.tabKey in tabKeys },
@@ -421,38 +470,62 @@ internal class DesktopCompatibilityStore(
                     ?: remaining.firstOrNull()?.key,
                 generation = it.workspace.generation + 1
             ),
-            closedBatch = batch
+            closedBatches = compatKeptClosedBatches(listOf(batch) + it.closedBatches, nowEpochMillis)
         )
         batch
     }
 
     override suspend fun restoreClosedTabs(batch: ClosedTabBatch) = mutate {
-        val durable = it.closedBatch?.takeIf { current -> current.id == batch.id } ?: batch
-        val boardKeys = it.boards.mapTo(mutableSetOf(), CompatBoard::key)
-        val restored = durable.tabs.filter { closed -> closed.tab.boardKey in boardKeys }
-        val tabs = it.tabs.toMutableList()
-        restored.forEach { closed ->
-            tabs.removeAll { tab -> tab.key == closed.tab.key }
-            tabs.add(closed.originalIndex.coerceIn(0, tabs.size), closed.tab)
+        val durable = it.closedBatches.firstOrNull { current -> current.id == batch.id } ?: return@mutate
+        restoreClosedBatchLocked(durable)
+    }
+
+    override suspend fun popClosedTabBatch(profile: String, nowEpochMillis: Long): ClosedTabBatch? = mutate {
+        val batch = compatClosedBatchFor(it.closedBatches, profile, nowEpochMillis) ?: return@mutate null
+        restoreClosedBatchLocked(batch)
+        batch
+    }
+
+    override suspend fun countClosedTabBatches(profile: String, nowEpochMillis: Long): Int = read { current ->
+        compatKeptClosedBatches(current.closedBatches, nowEpochMillis).count { batch ->
+            batch.closedBy == profile || batch.tabs.any { closed -> closed.views.any { view -> view.profile == profile } }
         }
-        state = it.copy(
-            tabs = trimTabs(
-                tabs,
-                durable.selectedTabKey?.takeIf { key -> tabs.any { tab -> tab.key == key } } ?: it.workspace.activeTabKey
+    }
+
+    /** Brings [batch] back and removes its record. A tab open again meanwhile keeps its row ([compatRestoredTab]). */
+    private fun restoreClosedBatchLocked(batch: ClosedTabBatch) {
+        val current = state
+        val boardKeys = current.boards.mapTo(mutableSetOf(), CompatBoard::key)
+        val tabs = current.tabs.toMutableList()
+        val restoredKeys = mutableSetOf<String>()
+        batch.tabs.filter { closed -> closed.tab.boardKey in boardKeys }.forEach { closed ->
+            val index = tabs.indexOfFirst { tab -> tab.key == closed.tab.key }
+            val next = compatRestoredTab(closed, tabs.getOrNull(index), batch.closedBy)
+            when {
+                index < 0 && next != null -> tabs.add(closed.originalIndex.coerceIn(0, tabs.size), next)
+                next != null -> tabs[index] = next
+            }
+            restoredKeys += closed.tab.key
+        }
+        val selected = batch.selectedTabKey?.takeIf { key -> tabs.any { tab -> tab.key == key } } ?: current.workspace.activeTabKey
+        // What was just brought back stays, or the record would be spent on a tab trimmed at once (audit L4).
+        val trimmed = trimTabs(tabs, selected, current, restoredKeys)
+        val keptKeys = trimmed.mapTo(HashSet(), CompatTab::key)
+        state = current.copy(
+            tabs = trimmed,
+            tabViews = compatRestoredViews(current.tabViews, batch, restoredKeys).filter { view -> view.tabKey in keptKeys },
+            workspace = current.workspace.copy(
+                activeTabKey = selected?.takeIf { key -> key in keptKeys } ?: current.workspace.activeTabKey,
+                generation = current.workspace.generation + 1
             ),
-            workspace = it.workspace.copy(
-                activeTabKey = durable.selectedTabKey?.takeIf { key -> tabs.any { tab -> tab.key == key } }
-                    ?: it.workspace.activeTabKey,
-                generation = it.workspace.generation + 1
-            ),
-            closedBatch = null
+            closedBatches = current.closedBatches.filterNot { record -> record.id == batch.id }
         )
     }
 
     override suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch? = mutate {
-        val pending = it.closedBatch?.takeIf { batch -> batch.expiresAtEpochMillis > nowEpochMillis }
-        if (pending != it.closedBatch) state = it.copy(closedBatch = pending)
-        pending
+        val kept = compatKeptClosedBatches(it.closedBatches, nowEpochMillis)
+        if (kept != it.closedBatches) state = it.copy(closedBatches = kept)
+        compatPendingClosedBatch(kept, nowEpochMillis)
     }
 
     override suspend fun upsertHistory(entry: CompatHistoryEntry) = mutate {
@@ -538,11 +611,26 @@ internal class DesktopCompatibilityStore(
         }
     }
 
+    private val screenHeldTabs = CompatScreenHeldTabs()
+
+    override fun setScreenHeldTabs(profile: ExperienceProfile, keys: Set<String>) = screenHeldTabs.set(profile, keys)
+
+    override suspend fun forgetHistoryTombstones(canonicalUrls: Collection<String>) {
+        if (canonicalUrls.isEmpty()) return
+        val urls = canonicalUrls.mapTo(HashSet()) { url -> url.take(MAX_COMPAT_URL_CHARS) }
+        mutate {
+            val forgotten = urls + COMPAT_HISTORY_CLEARED_MARKER
+            if (it.historyTombstones.keys.none { url -> url in forgotten }) return@mutate
+            state = it.copy(historyTombstones = it.historyTombstones - forgotten)
+        }
+    }
+
     override suspend fun clearHistory() = mutate {
         val tombstones = it.historyTombstones.toMutableMap()
         (it.history.map(CompatHistoryEntry::canonicalUrl) + it.tabs.map(CompatTab::canonicalUrl)).forEach { url ->
             tombstones[url] = nowMillis()
         }
+        tombstones[COMPAT_HISTORY_CLEARED_MARKER] = nowMillis()
         state = it.copy(
             history = emptyList(),
             historyTombstones = trimHistoryTombstones(tombstones)
@@ -869,6 +957,7 @@ internal class DesktopCompatibilityStore(
                 exportedAtEpochMillis = nowMillis(),
                 boards = current.boards,
                 tabs = current.tabs.filter { tab -> tab.boardKey in boardKeys },
+                tabViews = compatBackupTabViews(current.tabViews, current.tabs.filter { tab -> tab.boardKey in boardKeys }),
                 history = current.history.filter { entry -> entry.boardKey in boardKeys },
                 catalogPreferences = current.catalogPreferences.filter { pref -> pref.boardKey in boardKeys },
                 preferences = compatBackupExportPreferences(current.preferences),
@@ -906,7 +995,13 @@ internal class DesktopCompatibilityStore(
                 catalogHostBoardKey = restored.catalogHostBoardKey?.takeIf { key -> boardKeys.contains(key) }
             )
         } ?: it.workspace
-        val trimmedTabs = trimCompatTabs(nextTabs, nextWorkspace.activeTabKey)
+        // The restored marks count before the trim, which takes the tabs only ふたったー風 lists first.
+        val nextViews = if (restoreUserSettings) compatMergedBackupTabViews(it.tabViews, backup.tabViews, untrimmedTabKeys) else it.tabViews
+        // The saved limit is not restored: raise it once so the tabs just restored are not closed (plan 1-7, audit M1).
+        val raisedTabLimit = if (restoreUserSettings && backup.tabs.any { tab -> tab.boardKey in boardKeys }) {
+            compatTabLimitAfterRestore(it.preferences, nextTabs)?.let { limit -> mapOf(COMPAT_SHARED_TAB_LIMIT_KEY to limit.toString()) }
+        } else null
+        val trimmedTabs = trimCompatTabs(nextTabs, nextWorkspace.activeTabKey, it.preferences + raisedTabLimit.orEmpty(), nextBoards, screenHeldTabs.keys(), nextViews)
         val tabKeys = trimmedTabs.mapTo(mutableSetOf(), CompatTab::key)
         val nextHistory = if (restoreUserSettings) backup.history.filter { entry -> entry.boardKey in boardKeys }
             .fold(it.history) { all, entry -> replaceHistory(all, entry) } else it.history
@@ -941,13 +1036,14 @@ internal class DesktopCompatibilityStore(
         state = it.copy(
             boards = nextBoards,
             tabs = trimmedTabs,
+            tabViews = nextViews,
             history = keptHistory,
-            preferences = boundCompatPreferences(nextPreferences),
+            preferences = boundCompatPreferences(nextPreferences + raisedTabLimit.orEmpty()),
             catalogPreferences = nextCatalogPrefs,
             ngRules = nextRules,
             toolbars = nextToolbars,
             workspace = nextWorkspace,
-            historyTombstones = if (restoreUserSettings) it.historyTombstones - backup.history.map { entry -> entry.canonicalUrl }.toSet() else it.historyTombstones
+            historyTombstones = if (restoreUserSettings) it.historyTombstones - backup.history.map { entry -> entry.canonicalUrl }.toSet() - COMPAT_HISTORY_CLEARED_MARKER else it.historyTombstones
         )
         enforceSnapshotQuotaLocked()
         CompatSettingsBackupImportReport(
@@ -1204,6 +1300,22 @@ internal class DesktopCompatibilityStore(
             ensureInitializedLocked()
             val previousState = state
             val result = block(state)
+            if (state.tabs != previousState.tabs) {
+                val removed = compatRemovedTabKeys(previousState.tabs, state.tabs)
+                if (removed.isNotEmpty()) {
+                    val remaining = state.tabs
+                    state = state.copy(
+                        replyDrafts = state.replyDrafts.filterNot { it.tabKey in removed },
+                        workspace = state.workspace.copy(activeTabKey = state.workspace.activeTabKey?.takeIf { key -> remaining.any { it.key == key } } ?: remaining.firstOrNull()?.key))
+                }
+            }
+            // A view goes with its tab, as Android's ON DELETE CASCADE does (plan B6).
+            if (state.tabs !== previousState.tabs && state.tabViews.isNotEmpty()) {
+                val keys = state.tabs.mapTo(HashSet(), CompatTab::key)
+                if (state.tabViews.any { view -> view.tabKey !in keys }) {
+                    state = state.copy(tabViews = state.tabViews.filter { view -> view.tabKey in keys })
+                }
+            }
             if (state != previousState) {
                 try {
                     require(state.boards.size <= MAX_BOARDS) { "登録できる板は${MAX_BOARDS}件までです" }
@@ -1344,7 +1456,7 @@ internal class DesktopCompatibilityStore(
         "catalog:${record.boardKey}:${record.sort}:${record.revision}"
 
     private fun cacheRecords(): Map<String, Any> = buildMap {
-        state.closedBatch?.let { put(CLOSED_BATCH_CACHE_KEY, it) }
+        state.closedBatches.forEach { put("$CLOSED_BATCH_CACHE_KEY:${it.id}", it) }
         state.snapshots.forEach { put(threadCacheKey(it), it) }
         state.catalogSnapshots.forEach { put(catalogCacheKey(it), it) }
     }
@@ -1361,7 +1473,8 @@ internal class DesktopCompatibilityStore(
         partitionedCaches = true,
         snapshots = emptyList(),
         catalogSnapshots = emptyList(),
-        closedBatch = null
+        closedBatch = null,
+        closedBatches = emptyList()
     )
 
     /**
@@ -1385,7 +1498,7 @@ internal class DesktopCompatibilityStore(
             }
         val snapshots = mutableListOf<CompatThreadSnapshot>()
         val catalogs = mutableListOf<CatalogSnapshotRecord>()
-        var closedBatch: ClosedTabBatch? = null
+        val closedBatches = mutableListOf<ClosedTabBatch>()
         val acceptedBytes = mutableMapOf<String, Long>()
         val rejectedKeys = read.rejectedKeys.toMutableList()
         read.records.forEach { (key, payload) ->
@@ -1399,9 +1512,11 @@ internal class DesktopCompatibilityStore(
                         json.decodeFromString(CatalogSnapshotRecord.serializer(), payload)
                             .takeIf { catalogCacheKey(it) == key }
                             ?.also(catalogs::add)
-                    key == CLOSED_BATCH_CACHE_KEY ->
+                    // "closedBatch" is the one record before plan B6; "closedBatch:<id>" are the records since.
+                    key == CLOSED_BATCH_CACHE_KEY || key.startsWith("$CLOSED_BATCH_CACHE_KEY:") ->
                         json.decodeFromString(ClosedTabBatch.serializer(), payload)
-                            .also { closedBatch = it }
+                            .takeIf { key == CLOSED_BATCH_CACHE_KEY || key == "$CLOSED_BATCH_CACHE_KEY:${it.id}" }
+                            ?.also(closedBatches::add)
                     // Rows of an unknown kind (e.g. written by a newer build) are left untouched.
                     else -> return@forEach
                 }
@@ -1415,7 +1530,7 @@ internal class DesktopCompatibilityStore(
                 Logger.e("DesktopCompatibilityStore", "Failed to delete invalid compatibility cache records", error)
             }
         }
-        state = state.copy(snapshots = snapshots, catalogSnapshots = catalogs, closedBatch = closedBatch)
+        state = state.copy(snapshots = snapshots, catalogSnapshots = catalogs, closedBatches = closedBatches, closedBatch = null)
         persistedCaches = cacheRecords()
         persistedCacheBytes = acceptedBytes
         cacheRowsInSync = true
@@ -1508,6 +1623,7 @@ internal class DesktopCompatibilityStore(
         workspaceState.value = state.workspace
         preferencesState.value = state.preferences
         ngRulesState.value = state.ngRules.sortedByDescending(CompatNgRule::createdAtEpochMillis)
+        tabViewsState.value = state.tabViews.sortedWith(compareBy(CompatSharedTabView::profile, CompatSharedTabView::ordinal))
     }
 
     private fun enforceSnapshotQuotaLocked(): Boolean {
@@ -1648,8 +1764,26 @@ internal class DesktopCompatibilityStore(
         items.filterNot { item -> key(item) == key(value) } + value
 
     // Same rule as Android: favourites and the active tab are never trimmed.
-    private fun trimTabs(items: List<CompatTab>, activeTabKey: String?): List<CompatTab> =
-        trimCompatTabs(items, activeTabKey)
+    // The shared rule of the four modes (plan B4): stars, the active tab, the modes' own rows and the held tabs stay.
+    private fun trimTabs(
+        items: List<CompatTab>,
+        activeTabKey: String?,
+        current: PersistedCompatibilityState,
+        extraExempt: Set<String> = emptySet()
+    ): List<CompatTab> =
+        trimCompatTabs(items, activeTabKey, current.preferences, current.boards, screenHeldTabs.keys() + extraExempt, current.tabViews)
+
+    /** At start-up: the stored order is kept unless something is trimmed. */
+    private fun trimTabsIfOver(
+        items: List<CompatTab>,
+        activeTabKey: String?,
+        preferences: Map<String, String>,
+        boards: List<CompatBoard>
+    ): List<CompatTab> {
+        val exempt = compatTabTrimExemptKeys(activeTabKey, preferences, boards, screenHeldTabs.keys())
+        val removed = planSharedTabTrim(items, exempt, compatSharedTabLimit(preferences), state.tabViews)
+        return if (removed.isEmpty()) items else items.filterNot { tab -> tab.key in removed }
+    }
 
     private fun trimHistory(items: List<CompatHistoryEntry>): List<CompatHistoryEntry> {
         val sorted = items.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
@@ -1668,11 +1802,8 @@ internal class DesktopCompatibilityStore(
         runCatching { enumValueOf<T>(value) }.getOrDefault(default)
 
     private companion object {
-        const val TAB_LIMIT_TRIGGER = 100
-        const val TAB_LIMIT_AFTER_TRIM = 90
         const val HISTORY_LIMIT_TRIGGER = 200
         const val HISTORY_LIMIT_AFTER_TRIM = 190
-        const val MAX_TABS = TAB_LIMIT_TRIGGER
         const val MAX_HISTORY = HISTORY_LIMIT_TRIGGER
         const val MAX_BOARDS = com.valoser.futacha.shared.model.MAX_REGISTERED_BOARDS
         const val MAX_THREAD_SNAPSHOTS = 512
@@ -1753,7 +1884,10 @@ private data class PersistedCompatibilityState(
     val catalogSnapshots: List<CatalogSnapshotRecord> = emptyList(),
     val droppedItems: List<DroppedCatalogRecord> = emptyList(),
     val toolbars: List<ToolbarRecord> = emptyList(),
+    /** The one closed-tab record before plan B6; read once, then moved to [closedBatches]. */
     val closedBatch: ClosedTabBatch? = null,
+    /** Plan B6: the closed-tab records (24 hours, at most [COMPAT_CLOSED_BATCH_MAX]); kept in the cache rows. */
+    val closedBatches: List<ClosedTabBatch> = emptyList(),
     val historyTombstones: Map<String, Long> = emptyMap(),
     val archiveRows: List<ArchiveRow> = emptyList(),
     /** The shared data layer's rows ([CompatibilityStore.loadSharedData]): not settings, not in the settings backup. */

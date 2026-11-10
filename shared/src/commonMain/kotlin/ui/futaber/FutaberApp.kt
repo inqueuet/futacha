@@ -36,6 +36,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -461,7 +462,8 @@ internal fun FutaberApp(
         val store = mediaServices?.store
         if (store == null) {
             transform(preferences[key])?.let { savePreference(key, it); afterSaved() }
-        } else scope.launch {
+        } else scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
             try {
                 preferenceMutex.withLock {
                     transform(store.loadPreference(key))?.let { store.savePreference(key, it); afterSaved() }
@@ -471,6 +473,7 @@ internal fun FutaberApp(
             } catch (error: Throwable) {
                 Logger.e(FUTABER_TAG, "Failed to change $key", error)
                 notify(FUTABER_STORE_FAILURE_NOTICE)
+            }
             }
         }
     }
@@ -782,39 +785,95 @@ internal fun FutaberApp(
         )
     }
 
-    val tabKeys = remember(preferences[FutaberPreferenceKeys.TABS], boards) {
-        futaberTabsFromStore(preferences[FutaberPreferenceKeys.TABS], boards)
-    }
-    val tabViews = remember(tabKeys, history, displaySettings.extTabStatus) { futaberTabViews(tabKeys, history, displaySettings.extTabStatus) }
-    // The tabs closed during this run, the latest first ("閉じたタブを元に戻す", an extension). Only a person's own
-    // closing is kept: the clean-up of tabs whose thread is gone does not remember anything.
-    var closedTabs by remember { mutableStateOf(emptyList<FutaberTabKey>()) }
-    // Changes the tabs by a function applied to the tabs stored at that moment. [recordClosed] is false for the clean-up.
-    val editTabs: (recordClosed: Boolean, transform: (List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { recordClosed, transform ->
-        editPreference(FutaberPreferenceKeys.TABS) { stored ->
-            val current = futaberTabsFromStore(stored, boards)
-            val next = transform(current)
-            val removed = current.filter { it !in next }
-            if (recordClosed && removed.isNotEmpty()) closedTabs = futaberRememberClosedTabs(closedTabs, removed, next)
-            if (next == current) null else futaberTabsToStore(next, boards)
+    // Plan B8a: the strip is a view of the shared tabs (this mode's order under its mark, then the tabs the other modes
+    // opened, Q1); the old row `compat.futaber.tabs` is only read for the threads with no shared place and the tabs the
+    // migration stage has not taken in yet.
+    val tabStore = mediaServices?.store
+    val sharedTabSource = remember(tabStore) { tabStore?.tabs ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
+    val sharedTabs by sharedTabSource.collectAsState(emptyList())
+    val tabViewSource = remember(tabStore) { tabStore?.tabViews ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
+    val allTabViews by tabViewSource.collectAsState(emptyList())
+    val migrationsSettled by (tabStore?.sharedMigrationsSettled ?: remember { kotlinx.coroutines.flow.MutableStateFlow(true) }).collectAsState()
+    var consumedTabs by remember(tabStore) { mutableStateOf<Set<String>?>(if (tabStore == null) emptySet() else null) }
+    LaunchedEffect(tabStore, migrationsSettled, preferences[FutaberPreferenceKeys.TABS]) {
+        val store = tabStore ?: return@LaunchedEffect
+        if (!migrationsSettled) return@LaunchedEffect
+        try {
+            consumedTabs = futaberConsumedTabs(store.loadSharedData())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Logger.e(FUTABER_TAG, "Failed to read the tab migration record", error)
         }
     }
-    val saveTabs: ((List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { transform -> editTabs(true, transform) }
-    val toggleTab: (FutaberTabKey) -> Unit = { key ->
-        editPreference(FutaberPreferenceKeys.TABS) { stored ->
-            val current = futaberTabsFromStore(stored, boards)
-            when (futaberTabToggleOutcome(current, key)) {
-                FutaberTabToggleOutcome.Full -> {
-                    // Tabs whose thread has no history row take places the person cannot see: let one go before refusing.
-                    val room = futaberTabsMakingRoomFor(current, key, history)
-                    if (room == null) notify(FUTABER_TAB_LIMIT_NOTICE)
-                    room?.let { futaberTabsToStore(it, boards) }
+    val tabSnapshot = remember(sharedTabs, allTabViews, preferences[FutaberPreferenceKeys.TABS], boards, consumedTabs) {
+        futaberTabSnapshot(sharedTabs, allTabViews, futaberTabsFromStore(preferences[FutaberPreferenceKeys.TABS], boards), consumedTabs, boards)
+    }
+    val tabKeys = tabSnapshot.keys
+    val tabViews = remember(tabSnapshot, history, displaySettings.extTabStatus) {
+        futaberTabViews(tabKeys, history, displaySettings.extTabStatus, tabSnapshot.shared)
+    }
+    val latestBoardsForTabs by rememberUpdatedState(boards)
+    val latestHistoryForTabs by rememberUpdatedState(history)
+    val latestConsumedTabs by rememberUpdatedState(consumedTabs)
+    val latestTabKeys by rememberUpdatedState(tabKeys)
+    val tabWriter = remember(tabStore) {
+        FutaberStoreTabWriter(
+            tabStore, { latestBoardsForTabs }, { latestHistoryForTabs },
+            editRow = { transform ->
+                editPreference(FutaberPreferenceKeys.TABS) { stored ->
+                    val current = futaberTabsFromStore(stored, latestBoardsForTabs)
+                    val next = transform(current)
+                    if (next == current) null else futaberTabsToStore(next, latestBoardsForTabs)
                 }
-                FutaberTabToggleOutcome.Added -> futaberTabsToStore(current + key, boards)
-                FutaberTabToggleOutcome.Removed -> {
-                    val next = current - key
-                    closedTabs = futaberRememberClosedTabs(closedTabs, listOf(key), next)
-                    futaberTabsToStore(next, boards)
+            },
+            notice = notify
+        )
+    }
+    val tabWriteMutex = remember { Mutex() }
+    // Changes the strip by a function applied to the strip the stores hold at that moment (two quick changes both count).
+    val saveTabs: ((List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { transform ->
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                try {
+                    tabWriteMutex.withLock {
+                        val current = tabStore?.let { futaberStoreTabSnapshot(it, latestBoardsForTabs, latestConsumedTabs).keys } ?: latestTabKeys
+                        tabWriter.apply(current, transform(current))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    Logger.e(FUTABER_TAG, "Failed to change the tabs", error)
+                    notify(FUTABER_STORE_FAILURE_NOTICE)
+                }
+            }
+        }
+    }
+    val toggleTab: (FutaberTabKey) -> Unit = { key -> saveTabs { current -> futaberToggleTab(current, key) } }
+    // "閉じたタブを元に戻す" (an extension): the shared record of the tabs this mode closed or showed (plan B6), and this
+    // run's closes of threads with no shared place.
+    var restorableTabCount by remember { mutableStateOf(0) }
+    LaunchedEffect(tabWriter, sharedTabs, preferences[FutaberPreferenceKeys.TABS]) {
+        restorableTabCount = try {
+            tabWriter.restorableCount()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Logger.e(FUTABER_TAG, "Failed to count the closed tabs", error)
+            0
+        }
+    }
+    val restoreTab: () -> Unit = {
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                try {
+                    tabWriteMutex.withLock { tabWriter.restore() }
+                    restorableTabCount = tabWriter.restorableCount()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    Logger.e(FUTABER_TAG, "Failed to bring back a tab", error)
+                    notify(FUTABER_STORE_FAILURE_NOTICE)
                 }
             }
         }
@@ -832,24 +891,15 @@ internal fun FutaberApp(
         val files = mediaServices?.fileSystem
         if (before != null && files != null) (before - now).forEach { futaberDeleteFavoriteImages(files, it.boardId, it.threadId) }
     }
-    // D-B4: this mode's strip and stars are shown to the other modes as shared tabs (their own tab and active tab stay).
-    val latestHistory by rememberUpdatedState(history)
-    var mirroredFavorites by remember { mutableStateOf(emptySet<String>()) }
-    LaunchedEffect(tabKeys, favorites, boards, mediaServices?.store) {
-        val store = mediaServices?.store ?: return@LaunchedEffect
-        delay(600)
-        try {
-            val plan = futaberSharedTabsPlan(tabKeys, favorites, boards, latestHistory, Clock.System.now().toEpochMilliseconds())
-            val previous = mirroredFavorites
-            // The stars this mode takes off are known as its own before the store tells the follower below; it read the
-            // write as another mode's and could take off a star put back meanwhile, with its pictures (audit A6).
-            mirroredFavorites = futaberMirroredBeforeApply(previous, plan.favoriteKeys)
-            mirroredFavorites = futaberApplySharedTabs(store, plan, boards.filter { futaberNgScopeKey(it) != null }, previous)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Logger.e(FUTABER_TAG, "Failed to share the tabs", error)
-        }
+    // B4: the thread open here is held from the shared tab trim while it is shown.
+    val heldThread = openThread
+    val heldTabKey = remember(heldThread, boards) {
+        heldThread?.let { ref -> boards.firstOrNull { it.id == ref.boardId }?.takeIf { futaberNgScopeKey(it) != null }?.let { futaberCompatTabKey(it, ref.threadId) } }
+    }
+    DisposableEffect(mediaServices?.store, heldTabKey) {
+        val store = mediaServices?.store
+        store?.setScreenHeldTabs(ExperienceProfile.FUTABER, setOfNotNull(heldTabKey))
+        onDispose { store?.setScreenHeldTabs(ExperienceProfile.FUTABER, emptySet()) }
     }
     // D-B6: the reply drafts too (the other modes' write screens show them; their own drafts are not overwritten).
     var mirroredDrafts by remember { mutableStateOf(emptySet<String>()) }
@@ -865,38 +915,25 @@ internal fun FutaberApp(
         }
     }
     // Closing several tabs at once keeps the starred threads' tabs with the extension on (they are not "closed" either).
+    // Plan B5 (Q7): a shared tab with a ★ is kept too, wherever the star was set.
+    val sharedStarredKeys by produceState(emptySet<String>(), mediaServices?.store) {
+        val store = mediaServices?.store ?: return@produceState
+        store.tabs.map(::futaberStarredTabKeys).distinctUntilChanged().collect { value = it }
+    }
     val closeTabsInBulk: ((List<FutaberTabKey>) -> List<FutaberTabKey>) -> Unit = { transform ->
-        saveTabs { current -> futaberKeepFavoriteTabs(current, transform(current), favorites, displaySettings.extTabsManage) }
+        val starred = sharedStarredKeys
+        saveTabs { current ->
+            futaberKeepFavoriteTabs(current, transform(current), favorites, displaySettings.extTabsManage) { key ->
+                boards.firstOrNull { it.id == key.boardId }?.takeIf { futaberNgScopeKey(it) != null }
+                    ?.let { futaberCompatTabKey(it, key.threadId) in starred } == true
+            }
+        }
     }
     val editFavorites: ((List<FutaberFavorite>) -> List<FutaberFavorite>) -> Unit = { transform ->
         editPreference(FutaberPreferenceKeys.FAVORITES) { stored ->
             val current = futaberFavoritesFromStore(stored, boards)
             val next = transform(current)
             if (next == current) null else futaberFavoritesToStore(next, boards)
-        }
-    }
-    // D-B4 (J2): a star another mode takes off the shared tab (or whose tab it closes) goes from the own favourites too.
-    val latestFavorites by rememberUpdatedState(favorites)
-    val latestBoards by rememberUpdatedState(boards)
-    LaunchedEffect(mediaServices?.store) {
-        val store = mediaServices?.store ?: return@LaunchedEffect
-        var seenStars = emptySet<String>()
-        try {
-            store.tabs.collect { tabs ->
-                // The state itself, not a copy taken at the last redraw: the write above is seen at once.
-                val changes = futaberSharedStarChanges(seenStars, tabs, mirroredFavorites)
-                seenStars = changes.seen
-                if (changes.unstarred.isEmpty()) return@collect
-                val gone = latestFavorites.filter { favorite ->
-                    val board = latestBoards.firstOrNull { it.id == favorite.boardId }
-                    board != null && futaberCompatTabKey(board, favorite.threadId) in changes.unstarred
-                }.mapTo(HashSet()) { it.key }
-                if (gone.isNotEmpty()) editFavorites { current -> current.filterNot { it.key in gone } }
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Logger.e(FUTABER_TAG, "Failed to follow the stars of the shared tabs", error)
         }
     }
     // Patrol results (keyword matches) are shared with the other modes; this mode only lists them.
@@ -938,14 +975,9 @@ internal fun FutaberApp(
             if (boardsExplicitlyEmpty && boards.isEmpty()) emptyList() else futaberPruneFavorites(it, boards)
         }
     }
-    // Removing a board cleans up the tabs of its threads. A thread missing from the history does not: the other modes
-    // empty or trim the history, and a restored backup brings the tabs before the history; such a tab is not shown
-    // until its row is back (and the tab limit lets go of such tabs when they are in the way).
+    // Plan B8a: a removed board's shared tabs go with the board in the shared store, and the strip shows only tabs of
+    // registered boards; the old row is left alone (taking a shared tab's key out of it would close the tab everywhere).
     val openKey = thread?.let { FutaberTabKey(it.boardId, it.threadId) }
-    LaunchedEffect(tabKeys, boards) {
-        val pruned = futaberPruneTabsOfRemovedBoards(tabKeys, boards)
-        if (pruned != tabKeys) editTabs(false) { futaberPruneTabsOfRemovedBoards(it, boards) }
-    }
     // Opening a screen (from the catalog, a tab or the history) is what writes the history.
     val viewedLastPostIds = remember { mutableMapOf<FutaberTabKey?, Pair<Int, String>>() }
     // L-B7 (S22・F03, FutaberOpenRefresh.kt): a catalog row loads its thread first; a tab's opening shows 「新着 N」.
@@ -963,6 +995,8 @@ internal fun FutaberApp(
         ).copy(seenLastPostId = futaberSeenBoundaryForBoard(preferences[FutaberPreferenceKeys.SEEN], target, ref.threadId)?.lastPostId)
         managePanelOpen = false
         writePreference(FutaberPreferenceKeys.LAST_BOARD_ID, target.id)
+        // Taken now: a deletion made before the write below lands wins over it (audit F8).
+        val openedAtTicket = stateStore.historyDeletionTicket()
         scope.launch {
             try {
                 // upsertHistoryEntry only updates a row that exists; opening must also add one.
@@ -972,7 +1006,8 @@ internal fun FutaberApp(
                         board = target,
                         ref = ref,
                         nowEpochMillis = Clock.System.now().toEpochMilliseconds()
-                    )
+                    ),
+                    openedAtTicket = openedAtTicket
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1619,9 +1654,6 @@ internal fun FutaberApp(
                             } else null,
                             otherModeTabs = if (displaySettings.extOtherFavorites) mediaServices?.store?.tabs else null,
                             onOpenOtherFavorite = { target, ref -> openRef(target, ref) },
-                            ownSharedTabKeys = remember(tabKeys, favorites, boards) {
-                                futaberSharedTabsPlan(tabKeys, favorites, boards, emptyList(), 0L).tabs.mapTo(HashSet()) { it.key }
-                            },
                             historyRowsMemo = manageHistoryRowsMemo,
                             historyTools = futaberHistoryTools(
                                 historyController,
@@ -1652,18 +1684,9 @@ internal fun FutaberApp(
                 tabSheet?.let { tab -> FutaberTabSheetHost(tab, tabViews, tabKeys, onClose = { tabSheet = null }, onRemoveTab = {
                     saveTabs { list -> futaberRemoveTab(list, tab.key) }
                 }, closeTabsInBulk = closeTabsInBulk, restore = if (displaySettings.extTabs) {
-                    val restorable = futaberRestorableTabs(closedTabs, tabKeys, history, boards)
                     FutaberPostAction(
-                        "tab-restore", "閉じたタブを元に戻す（${restorable.size}）", enabled = restorable.isNotEmpty()
-                    ) {
-                        editPreference(FutaberPreferenceKeys.TABS) { stored ->
-                            val result = futaberRestoreTabs(futaberTabsFromStore(stored, boards), restorable)
-                            // Only the tabs that were written leave the memory; the ones a full list had no room for stay in it.
-                            closedTabs = closedTabs.filter { it !in result.restored }
-                            if (result.restored.size < restorable.size) notify(FUTABER_TAB_LIMIT_NOTICE)
-                            if (result.restored.isEmpty()) null else futaberTabsToStore(result.tabs, boards)
-                        }
-                    }
+                        "tab-restore", "閉じたタブを元に戻す（${restorableTabCount}）", enabled = restorableTabCount > 0
+                    ) { restoreTab() }
                 } else null, checkAll = futaberTabCheckAction(displaySettings.extTabsCheck, tabChecker) {
                     tabChecker.check(futaberTabCheckTargets(tabKeys, history, boards), boards, onMessage = notify)
                 }, closeFallen = futaberTabCloseFallenAction(displaySettings.extTabsCloseFallen, tabChecker) {

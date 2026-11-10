@@ -150,6 +150,8 @@ internal fun FtutterExtrasSettingsPage(
             FtutterCheckSetting("板一覧を下寄せ", com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY,
                 false, preferences, save, note = com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_NOTE)
         }
+        // Plan B9: the 4 modes' one tab limit (ふたったー風 has no such setting in the original, so it is an own row).
+        if (compatStore != null) item(key = "tab-limit") { FtutterTabLimitSetting(compatStore, preferences, save) }
         FtutterExtension.entries.forEach { extension ->
             item(key = extension.stored) {
                 FtutterCheckSetting(extension.title, extension.key, extension.enabledByDefault, preferences, save, note = extension.description)
@@ -539,3 +541,28 @@ internal fun ftutterListedBefore(rows: List<FtutterRow>, firstVisibleRow: Int): 
 /** AIが画面の位置を追うための、一覧の鍵（`p<番号>`）→レスの番号。 */
 internal fun ftutterAiItemKeys(rows: List<FtutterRow>, posts: List<com.valoser.futacha.shared.model.Post>): Map<String, String> =
     rows.mapNotNull { row -> (row as? FtutterRow.PostRow)?.let { r -> posts.getOrNull(r.index)?.let { row.key to it.id } } }.toMap()
+
+
+/** Plan B9: the shared tab limit; lowering it says how many tabs would close and asks first. */
+@Composable
+private fun FtutterTabLimitSetting(store: CompatibilityStore, preferences: Map<String, String>, save: (String, String) -> Unit) {
+    val tabs by store.tabs.collectAsState(emptyList())
+    val boards by store.boards.collectAsState(emptyList())
+    val workspace by store.workspace.collectAsState(com.valoser.futacha.shared.compat.CompatWorkspaceRecord())
+    val views by store.tabViews.collectAsState(emptyList())
+    val current = com.valoser.futacha.shared.compat.compatSharedTabLimit(preferences)
+    val floor = com.valoser.futacha.shared.compat.compatTabLimitFloor(tabs)
+    FtutterSliderSetting(
+        "タブの上限（4モード共通）", com.valoser.futacha.shared.compat.COMPAT_SHARED_TAB_LIMIT_KEY,
+        minOf(floor, current).toDouble(), com.valoser.futacha.shared.compat.COMPAT_SHARED_TAB_LIMIT_MAX.toDouble(), 1.0,
+        maxOf(com.valoser.futacha.shared.compat.COMPAT_SHARED_TAB_LIMIT_DEFAULT, floor).toDouble(), preferences, save,
+        note = com.valoser.futacha.shared.compat.COMPAT_TAB_LIMIT_NOTE,
+        confirm = { value ->
+            val limit = value.toInt()
+            if (limit >= current) null
+            else com.valoser.futacha.shared.compat.compatTabLimitQuestion(limit,
+                com.valoser.futacha.shared.compat.compatTabLimitTrimCount(tabs, limit, workspace.activeTabKey, preferences, boards, views))
+        },
+        own = true
+    )
+}

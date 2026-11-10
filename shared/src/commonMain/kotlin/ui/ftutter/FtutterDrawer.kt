@@ -96,7 +96,7 @@ import kotlin.math.abs
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 
 /** タブ・ドロワーの行の長押しメニュー（原作 TabDialog）。 */
-internal enum class FtutterTabAction { PROTECT, REFRESH_ALL, CLOSE_FALLEN, CLOSE_AFTER, CLOSE_ALL }
+internal enum class FtutterTabAction { CLOSE, PROTECT, REFRESH_ALL, CLOSE_FALLEN, CLOSE_AFTER, CLOSE_ALL }
 
 /** 1行に要る値。 */
 internal data class FtutterTabView(
@@ -337,7 +337,7 @@ internal fun FtutterDrawerPanel(
     if (confirmSelected) {
         FtutterConfirmDialog(
             title = "履歴を削除しますか？",
-            message = "選んだ${chosen.size}件の履歴を削除します。タブも閉じます。",
+            message = "選んだ${chosen.size}件の履歴を削除します。",
             confirmLabel = "OK",
             onDismiss = { confirmSelected = false }
         ) {
@@ -351,7 +351,7 @@ internal fun FtutterDrawerPanel(
         FtutterConfirmDialog(
             title = "履歴をすべて削除しますか？",
             // 監査L13：ここに出ていない履歴（未登録の板・絞り込みで隠れた行）も消え、履歴は他のモードと共有であることを伝える。
-            message = "保護したスレッドの履歴は残します。削除した履歴のタブも閉じます。\n" +
+            message = "保護したスレッドの履歴は残します。\n" +
                 "ここに出ていない履歴（未登録の板のスレ、絞り込みで隠れているスレ）も消えます。履歴はふたちゃ・ふたばー風と共有なので、" +
                 "そちらの履歴からも消えます。",
             confirmLabel = "OK",
@@ -620,6 +620,7 @@ internal fun FtutterTabDialog(
                         Text(label, color = colors.text, fontSize = 17.sp)
                     }
                 }
+                item(FtutterTabAction.CLOSE, Icons.Rounded.DeleteForever, "このタブを閉じる")
                 item(FtutterTabAction.PROTECT, if (protected) Icons.Rounded.LockOpen else Icons.Rounded.Lock, if (protected) "タブの保護を解除" else "タブを保護")
                 item(FtutterTabAction.REFRESH_ALL, Icons.Rounded.Refresh, "タブを全て更新")
                 item(FtutterTabAction.CLOSE_FALLEN, Icons.Rounded.DeleteForever, "落ちたタブを全て閉じる")

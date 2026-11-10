@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.compat.*
+import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -192,9 +193,13 @@ internal fun FutachaCatalogFeatureHost(
     } }
     fun addTab(item: CatalogItem) { action {
         val now = Clock.System.now().toEpochMilliseconds()
-        features.store.openTab(CompatTab(compatTabKey(item.threadUrl), item.threadUrl, item.threadUrl,
+        val candidate = CompatTab(compatTabKey(item.threadUrl), item.threadUrl, item.threadUrl,
             boardKey, board.name, item.id, item.title.orEmpty(), thumbnailUrl = item.thumbnailUrl,
-            replyCount = item.replyCount, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now))
+            replyCount = item.replyCount, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now)
+        // Plan B9: the shared opening. A tab that is there already keeps its place, its star and the modes' marks, merged on
+        // the stored tab inside the store's lock (B4 1-3 read it first and could overwrite a change made in between).
+        features.store.importModernBoards(listOf(board))
+        check(features.store.openSharedTab(candidate, profile = null)) { "タブに追加できませんでした" }
         selected = null
     } }
     fun requestDeletion(item: CatalogItem) {
@@ -317,7 +322,7 @@ internal fun FutachaCatalogFeatureHost(
     val projected = resolveFutachaCatalogProjectedItems(projection, items)
     val strip: (@Composable () -> Unit)? = if (!stripVisible) null else ({
         CompatTabSelector(tabs, null, false, { tab -> onOpenHistoryThread(tab.toFutachaHistoryEntry()) },
-            { tab -> action { features.store.closeTabs(setOf(tab.key), Clock.System.now().toEpochMilliseconds())?.let(features.onTabsClosed) } },
+            { tab -> action { features.store.closeTabs(setOf(tab.key), Clock.System.now().toEpochMilliseconds(), closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA.persistedValue)?.let(features.onTabsClosed) } },
             onCheckUpdates = { action { refreshCompatTabsInBackground(features.store, repository, maxTabs = 100) } }, onReload = onRefresh,
             longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
     })

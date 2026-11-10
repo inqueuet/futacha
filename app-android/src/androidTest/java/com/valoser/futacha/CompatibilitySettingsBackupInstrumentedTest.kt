@@ -93,6 +93,31 @@ class CompatibilitySettingsBackupInstrumentedTest {
         assertEquals("同じ構図の広告", store.ngRules.first().single().memo)
     }
 
+    /** Plan B10: the marks come back into `compat_tab_view`, after the ones here now. */
+    @Test
+    fun aBackupBringsBackEachModesMarks() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val boardKey = compatBoardKey(boardUrl)
+        store.upsertBoard(CompatBoard(boardKey, "may", boardUrl, boardUrl, 0))
+        fun tab(no: Int): CompatTab {
+            val url = "${boardUrl}res/$no.htm"
+            return CompatTab(compatTabKey(url), url, url, boardKey, "may", "$no", "スレ$no",
+                insertedAtEpochMillis = no.toLong(), contentUpdatedAtEpochMillis = no.toLong())
+        }
+        store.openSharedTab(tab(1), "futaber")
+        store.openSharedTab(tab(2), "ftutter")
+        val payload = store.exportSettingsBackup()
+        assertEquals(2, decodeCompatSettingsBackup(payload).tabViews.size)
+        store.closeTabs(setOf(tab(1).key, tab(2).key), 10L, emptyMap(), null)
+        assertTrue(store.loadTabViews("futaber").isEmpty())
+        store.openSharedTab(tab(3), "futaber")
+
+        store.importSettingsBackup(payload, restoreUserSettings = true, restoreNgRules = false)
+
+        assertEquals(listOf(tab(3).key, tab(1).key), store.loadTabViews("futaber").map { it.tabKey })
+        assertEquals(listOf(tab(2).key), store.loadTabViews("ftutter").map { it.tabKey })
+    }
+
     @Test
     fun ngOnlyRestoreDoesNotOverwriteUserPreferences() = runBlocking {
         val boardUrl = "https://img.2chan.net/b/"

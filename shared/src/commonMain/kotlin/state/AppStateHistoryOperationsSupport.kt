@@ -2,10 +2,17 @@ package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.util.Logger
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.time.Clock
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+@OptIn(ExperimentalAtomicApi::class)
 internal class AppStateHistoryOperations(
     private val tag: String,
     private val historyCoordinator: AppStateHistoryCoordinator,
@@ -16,7 +23,9 @@ internal class AppStateHistoryOperations(
         onFailure: suspend () -> Unit,
         rethrowOnFailure: Boolean,
         block: suspend () -> Unit
-    ) -> Unit
+    ) -> Unit,
+    /** Where deletions are kept across restarts (null: memory only, as before 2026-11-09). */
+    private val tombstonePersistence: AppStateHistoryTombstonePersistence? = null
 ) {
     private val deletionGate = Mutex()
     private val deletedHistoryAtByKey = mutableMapOf<String, HistoryTombstone>()
@@ -27,17 +36,80 @@ internal class AppStateHistoryOperations(
     private var deletionSequence: Long = 0L
     private var lastClearSequence: Long = 0L
     private val activeImports = mutableSetOf<HistoryImportTicket>()
+    private var tombstonesLoaded = false
+    /** [deletionSequence] for callers that must take a ticket without suspending (a screen's open, audit F8). */
+    private val publishedDeletionSequence = AtomicLong(0L)
+
+    private val openedRows = MutableSharedFlow<List<ThreadHistoryEntry>>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /**
+     * Rows the person opened or chose to bring in (an open, an import, a restore), which forget their deletion here.
+     * The shared history copy (compat/shared/SharedHistory.kt) forgets it in としあき(仮)'s store too (plan 1-5, audit 3's
+     * 9), so the times do not have to decide it there.
+     */
+    val historyOpens: SharedFlow<List<ThreadHistoryEntry>> = openedRows.asSharedFlow()
+
+    private fun tellOpened(entries: Collection<ThreadHistoryEntry>) {
+        if (entries.isNotEmpty()) openedRows.tryEmit(entries.toList())
+    }
+
+    /** Forgets the deletions of [entries] (as for an open, without writing the rows): としあき(仮) opened them again. */
+    suspend fun forgetHistoryTombstones(entries: Collection<ThreadHistoryEntry>) {
+        if (entries.isEmpty()) return
+        deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
+            val removed = entries.mapTo(HashSet(), ::historyEntryIdentity).count { deletedHistoryAtByKey.remove(it) != null }
+            if (removed > 0) persistTombstonesLocked()
+        }
+    }
+
+    private fun nextDeletionSequence(): Long = (++deletionSequence).also { publishedDeletionSequence.store(it) }
+
+    /** The deletion counter now: a later [prependOrReplaceHistoryEntry] with it is refused if the row was deleted since. */
+    fun deletionTicket(): Long = publishedDeletionSequence.load()
+
+    /** Loads the kept deletions once, under [deletionGate]. */
+    private suspend fun ensureTombstonesLoadedLocked() {
+        if (tombstonesLoaded) return
+        tombstonesLoaded = true
+        val persistence = tombstonePersistence ?: return
+        try {
+            val (loaded, clearedAt) = loadHistoryTombstones(persistence.read(), Clock.System.now().toEpochMilliseconds())
+            loaded.forEach { (key, value) -> if (key !in deletedHistoryAtByKey) deletedHistoryAtByKey[key] = value }
+            lastClearAtMillis = maxOf(lastClearAtMillis, clearedAt)
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) { tombstonesLoaded = false; throw error }
+            Logger.w(tag, "Failed to load history tombstones: ${error.message}")
+        }
+    }
+
+    /** Writes the deletions to keep; before the rows are removed, so a crash in between cannot bring them back. */
+    private suspend fun persistTombstonesLocked() {
+        val persistence = tombstonePersistence ?: return
+        try {
+            persistence.write(
+                selectPersistedHistoryTombstones(deletedHistoryAtByKey, lastClearAtMillis, Clock.System.now().toEpochMilliseconds())
+            )
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Logger.w(tag, "Failed to save history tombstones: ${error.message}")
+        }
+    }
 
     // When each thread's scroll position was last written. The throttle cannot use
     // lastVisitedEpochMillis because scrolling no longer updates it.
     private val scrollPersistGate = Mutex()
     private val lastScrollPersistAtByKey = LinkedHashMap<String, Long>()
 
+    /** Tests only: replaces the whole history (no product path calls it; see the plan's 1-5). */
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         deletionGate.withLock {
-            history.mapTo(mutableSetOf(), ::historyEntryIdentity)
-                .filter(String::isNotBlank)
-                .forEach(deletedHistoryAtByKey::remove)
+            ensureTombstonesLoadedLocked()
+            val keys = history.mapTo(mutableSetOf(), ::historyEntryIdentity).filter(String::isNotBlank)
+            if (keys.any { deletedHistoryAtByKey.remove(it) != null }) persistTombstonesLocked()
             runStorageMutation(
                 "setHistory",
                 { "Failed to save history with ${history.size} entries" },
@@ -52,16 +124,21 @@ internal class AppStateHistoryOperations(
     suspend fun clearHistory() {
         scrollPersistenceCoordinator.cancelAllPending()
         deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
+            // The clear time is kept first (audit F3): a copy read before the clear must not come back after a restart.
+            val deletedAt = Clock.System.now().toEpochMilliseconds()
+            lastClearAtMillis = maxOf(lastClearAtMillis, deletedAt)
+            persistTombstonesLocked()
             runMutation(
                 missingSnapshotMessage = "Skipping history clear due to missing snapshot",
                 buildPlan = { currentHistory ->
-                    val deletedAt = Clock.System.now().toEpochMilliseconds()
-                    lastClearAtMillis = maxOf(lastClearAtMillis, deletedAt)
-                    val sequence = ++deletionSequence
+                    val sequence = nextDeletionSequence()
                     lastClearSequence = sequence
-                    currentHistory.map(::historyEntryIdentity)
-                        .filter(String::isNotBlank)
-                        .forEach { key -> deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, sequence) }
+                    currentHistory.forEach { entry ->
+                        historyEntryIdentity(entry).takeIf(String::isNotBlank)?.let { key ->
+                            deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, sequence, entry.lastVisitedEpochMillis)
+                        }
+                    }
                     trimDeletedHistoryTombstones()
                     AppStateHistoryMutationPlan(emptyList(), currentHistory.size)
                 }
@@ -73,6 +150,8 @@ internal class AppStateHistoryOperations(
         transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>
     ) {
         deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
+            var tombstoneLifted = false
             runMutation(
                 missingSnapshotMessage = "Skipping atomic history update due to missing snapshot",
                 buildPlan = { currentHistory ->
@@ -87,6 +166,7 @@ internal class AppStateHistoryOperations(
                             val deletedAt = deletedHistoryAtByKey[key]?.atMillis ?: return@filter true
                             if (candidate.lastVisitedEpochMillis > deletedAt) {
                                 deletedHistoryAtByKey.remove(key)
+                                tombstoneLifted = true
                                 true
                             } else {
                                 false
@@ -96,6 +176,41 @@ internal class AppStateHistoryOperations(
                         ?.let { AppStateHistoryMutationPlan(it, Unit) }
                 }
             ) { "Failed to update history atomically" }
+            if (tombstoneLifted) persistTombstonesLocked()
+        }
+    }
+
+    /**
+     * A restore the person chose (a settings backup, plan B3): like [updateHistory], but a row [transform] adds comes in
+     * whatever its time, and its deletion is forgotten. Without this, a row deleted (or cleared) earlier and restored now
+     * stayed out of the AppState modes while としあき(仮) showed it.
+     */
+    suspend fun restoreHistory(
+        transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>
+    ) {
+        deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
+            var tombstoneLifted = false
+            val added = mutableListOf<ThreadHistoryEntry>()
+            runMutation(
+                missingSnapshotMessage = "Skipping history restore due to missing snapshot",
+                buildPlan = { currentHistory ->
+                    val currentKeys = currentHistory.mapTo(mutableSetOf(), ::historyEntryIdentity)
+                    added.clear()
+                    transform(currentHistory)
+                        .onEach { candidate ->
+                            val key = historyEntryIdentity(candidate)
+                            if (key !in currentKeys) {
+                                added += candidate
+                                if (deletedHistoryAtByKey.remove(key) != null) tombstoneLifted = true
+                            }
+                        }
+                        .takeIf { it != currentHistory }
+                        ?.let { AppStateHistoryMutationPlan(it, Unit) }
+                }
+            ) { "Failed to restore history" }
+            if (tombstoneLifted) persistTombstonesLocked()
+            tellOpened(added)
         }
     }
 
@@ -110,9 +225,24 @@ internal class AppStateHistoryOperations(
         }
     }
 
-    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry) {
+    /**
+     * A screen's open: the row goes in whatever its time (a row the person deleted comes back when they open it
+     * again). With [openedAtTicket] ([deletionTicket] taken when the person opened it), a deletion made after that
+     * point wins, so a late write cannot bring back a row deleted just after opening (audit F8).
+     */
+    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry, openedAtTicket: Long? = null) {
         deletionGate.withLock {
-            deletedHistoryAtByKey.remove(historyEntryIdentity(entry))
+            ensureTombstonesLoadedLocked()
+            val key = historyEntryIdentity(entry)
+            if (openedAtTicket != null) {
+                val deletedSince = (deletedHistoryAtByKey[key]?.sequence ?: 0L) > openedAtTicket ||
+                    lastClearSequence > openedAtTicket
+                if (deletedSince) {
+                    Logger.i(tag, "Skipping a history open deleted since it started")
+                    return@withLock
+                }
+            }
+            if (deletedHistoryAtByKey.remove(key) != null) persistTombstonesLocked()
             runMutation(
                 missingSnapshotMessage = "Skipping history prepend due to missing snapshot",
                 buildPlan = { currentHistory ->
@@ -124,14 +254,17 @@ internal class AppStateHistoryOperations(
             ) { threadId ->
                 "Failed to prepend history entry $threadId"
             }
+            tellOpened(listOf(entry))
         }
     }
 
     suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) {
         if (entries.isEmpty()) return
         deletionGate.withLock {
-            entries.mapTo(mutableSetOf(), ::historyEntryIdentity)
-                .forEach(deletedHistoryAtByKey::remove)
+            ensureTombstonesLoadedLocked()
+            val removed = entries.mapTo(mutableSetOf(), ::historyEntryIdentity)
+                .count { deletedHistoryAtByKey.remove(it) != null }
+            if (removed > 0) persistTombstonesLocked()
             runMutation(
                 missingSnapshotMessage = "Skipping history prepend batch due to missing snapshot",
                 buildPlan = { currentHistory ->
@@ -140,6 +273,7 @@ internal class AppStateHistoryOperations(
             ) { dedupedSize ->
                 "Failed to prepend $dedupedSize history entries"
             }
+            tellOpened(entries)
         }
     }
 
@@ -172,12 +306,15 @@ internal class AppStateHistoryOperations(
             boardUrl = entry.boardUrl
         )
         deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
             historyEntryIdentity(entry).takeIf(String::isNotBlank)?.let { key ->
                 deletedHistoryAtByKey[key] = HistoryTombstone(
                     atMillis = Clock.System.now().toEpochMilliseconds(),
-                    sequence = ++deletionSequence
+                    sequence = nextDeletionSequence(),
+                    entryLastVisitedEpochMillis = entry.lastVisitedEpochMillis
                 )
                 trimDeletedHistoryTombstones()
+                persistTombstonesLocked()
             }
             runMutation(
                 missingSnapshotMessage = "Skipping history removal due to missing snapshot",
@@ -204,11 +341,17 @@ internal class AppStateHistoryOperations(
             )
         }
         deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
             val keys = entries.map(::historyEntryIdentity).filterTo(mutableSetOf(), String::isNotBlank)
             if (keys.isEmpty()) return@withLock
             val deletedAt = Clock.System.now().toEpochMilliseconds()
-            keys.forEach { key -> deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, ++deletionSequence) }
+            entries.forEach { entry ->
+                historyEntryIdentity(entry).takeIf(String::isNotBlank)?.let { key ->
+                    deletedHistoryAtByKey[key] = HistoryTombstone(deletedAt, nextDeletionSequence(), entry.lastVisitedEpochMillis)
+                }
+            }
             trimDeletedHistoryTombstones()
+            persistTombstonesLocked()
             runMutation(
                 missingSnapshotMessage = "Skipping history removal due to missing snapshot",
                 buildPlan = { currentHistory ->
@@ -340,6 +483,7 @@ internal class AppStateHistoryOperations(
      * deletions and clears made after this point win over the imported entries.
      */
     suspend fun beginHistoryImport(): HistoryImportTicket = deletionGate.withLock {
+        ensureTombstonesLoadedLocked()
         HistoryImportTicket(deletionSequence).also { activeImports += it }
     }
 
@@ -370,7 +514,9 @@ internal class AppStateHistoryOperations(
                     tombstone == null || tombstone.sequence <= ticket.sequence
                 }
             }
-            accepted.mapTo(HashSet(), ::historyEntryIdentity).forEach(deletedHistoryAtByKey::remove)
+            if (accepted.mapTo(HashSet(), ::historyEntryIdentity).count { deletedHistoryAtByKey.remove(it) != null } > 0) {
+                persistTombstonesLocked()
+            }
             var merge = resolveHistoryArchiveImportMergeEntries(emptyList(), emptyList())
             runMutation(
                 missingSnapshotMessage = "Skipping history import due to missing snapshot",
@@ -380,6 +526,7 @@ internal class AppStateHistoryOperations(
                         ?.let { AppStateHistoryMutationPlan(it, Unit) }
                 }
             ) { "Failed to merge ${accepted.size} imported history entries" }
+            tellOpened(accepted)
             merge.copy(skippedCount = merge.skippedCount + (imported.size - accepted.size))
         } finally {
             activeImports -= ticket
@@ -395,6 +542,11 @@ internal class AppStateHistoryOperations(
     }
 }
 
-internal data class HistoryTombstone(val atMillis: Long, val sequence: Long)
+internal data class HistoryTombstone(
+    val atMillis: Long,
+    val sequence: Long,
+    /** The deleted row's last visit (orders the kept tombstones that share [atMillis]). */
+    val entryLastVisitedEpochMillis: Long = 0L
+)
 
 class HistoryImportTicket internal constructor(internal val sequence: Long)

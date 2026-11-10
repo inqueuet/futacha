@@ -975,18 +975,6 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 initializationError = error.message ?: "互換モードの初期化に失敗しました"
             }
         }
-        LaunchedEffect(initializationComplete, stateStore, compatibilityStore) {
-            if (!initializationComplete) return@LaunchedEffect
-            // Like Android, copy the modern history in the background. The
-            // import is idempotent and serialized by the store; a mode switch
-            // to compatibility imports again before it commits, and the
-            // compat -> modern merge below converges with it in either order.
-            runSuspendCatchingPreservingCancellation {
-                compatibilityStore.importModernHistory(stateStore.readHistory())
-            }.onFailure { error ->
-                Logger.e("MainViewController", "Failed to import modern history into the compatibility store", error)
-            }
-        }
         // Background refreshes only check notification permission (G-10), so
         // ask here, while the app is visible, once a watch notification is on.
         val isAppForeground = rememberIosApplicationActive()

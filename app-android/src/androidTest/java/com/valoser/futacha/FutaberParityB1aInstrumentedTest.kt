@@ -389,7 +389,12 @@ class FutaberParityB1aInstrumentedTest {
             rule.onNodeWithTag("futaber-manage-category-Favorites").performClick()
             waitForTag("futaber-other-favorites-header")
             waitForTag("futaber-other-favorite-row")
-            rule.onNodeWithText("他のモードの星付き").assertIsDisplayed()
+            // Plan B8a (Q1): the other mode's tab shows in this mode's strip too; the panel row is the one checked here.
+            rule.onNode(
+                androidx.compose.ui.test.hasText("他のモードの星付き", substring = true) and
+                    androidx.compose.ui.test.hasTestTag("futaber-other-favorite-row")
+            ).assertIsDisplayed()
+            assertTrue(rule.onAllNodesWithText("他のモードの星付き").fetchSemanticsNodes().size >= 2)
             // (Not opened: that would read the real board.)
             // Read only: editing the own favourites gives the other mode's rows no delete button.
             rule.onNodeWithTag("futaber-manage-edit").performClick()

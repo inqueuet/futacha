@@ -188,6 +188,11 @@ internal fun FutachaThreadFeatureHost(
     // same text is then written once (re-audit L46).
     var latestWrittenToTab by remember(tabKey) { mutableStateOf(false) }
     val currentLoadGeneration by rememberUpdatedState(loadGeneration)
+    // Q9 (plan B9): a tab closed while this screen shows its thread is not opened again by the next page.
+    val closedTabMemory = remember(tabKey) { FutachaClosedTabMemory() }
+    LaunchedEffect(features.store, tabKey, closedTabMemory) {
+        features.store.tabs.collect { list -> closedTabMemory.observe(list.any { it.key == tabKey }) }
+    }
     LaunchedEffect(currentState, tabKey, isCachedPage) {
         val next = currentState as? ThreadUiState.Success ?: return@LaunchedEffect
         // Compared once, off the main thread; repeating it here deep-compared
@@ -247,7 +252,7 @@ internal fun FutachaThreadFeatureHost(
                 confirmedGone = next.confirmedGone,
                 confirmedStatus = if (!isCachedPage && !next.isArchived) parseCompatThreadStatusFlags(next.page.deletedNotice) else null,
                 nowEpochMillis = now
-            ))
+            ), closedTabMemory)
             latestWrittenToTab = true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
@@ -299,7 +304,7 @@ internal fun FutachaThreadFeatureHost(
             return
         }
         launchAction {
-            features.store.closeTabs(setOf(key), Clock.System.now().toEpochMilliseconds())?.let(features.onTabsClosed)
+            features.store.closeTabs(setOf(key), Clock.System.now().toEpochMilliseconds(), closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA.persistedValue)?.let(features.onTabsClosed)
             if (key == tabKey) {
                 val next = latestTabs.firstOrNull { it.key != key }
                 if (features.value("control", "controlThreadCloseBack") == "ON" || next == null) onClose()

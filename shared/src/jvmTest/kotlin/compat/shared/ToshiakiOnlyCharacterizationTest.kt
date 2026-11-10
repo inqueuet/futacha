@@ -1,6 +1,5 @@
 package com.valoser.futacha.shared.compat.shared
 
-import com.valoser.futacha.shared.compat.COMPAT_TAB_LIMIT_AFTER_TRIM
 import com.valoser.futacha.shared.compat.CompatBuildDraft
 import com.valoser.futacha.shared.compat.CompatCatalogReplyCountUpdate
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
@@ -38,14 +37,15 @@ class ToshiakiOnlyCharacterizationTest {
             replyCount = 3, contentUpdatedAtEpochMillis = visitedAt, lastVisitedEpochMillis = visitedAt)
     }
 
-    @Test fun toshiakiOnlyTabTrimStillKeepsNinety() = withStores { compat, _ ->
+    @Test fun toshiakiOnlyTabTrimKeepsTheSharedLimit() = withStores { compat, _ ->
         compat.openTab(tab(may, "1", insertedAt = 1, favorite = true))
-        (2..101).forEach { compat.openTab(tab(may, "$it", insertedAt = it.toLong())) }
+        (2..201).forEach { compat.openTab(tab(may, "$it", insertedAt = it.toLong())) }
         val kept = compat.tabs.first()
-        assertEquals(COMPAT_TAB_LIMIT_AFTER_TRIM, kept.size)
+        // B4 (decision Q3): the limit of the four modes is 200 (it was 100 -> 90).
+        assertEquals(180, kept.size)
         assertTrue(kept.any { it.threadNo == "1" }, "a favourite is never trimmed")
-        assertTrue(kept.any { it.threadNo == "101" }, "nor the active one")
-        assertEquals((101 downTo 13).map(Int::toString) + "1", kept.map { it.threadNo }, "the oldest without a star go")
+        assertTrue(kept.any { it.threadNo == "201" }, "nor the active one")
+        assertEquals((201 downTo 23).map(Int::toString) + "1", kept.map { it.threadNo }, "the oldest without a star go")
     }
 
     @Test fun toshiakiOnlyNewTabsComeFirstAndTheOpenedOneIsActive() = withStores { compat, _ ->

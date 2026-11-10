@@ -30,32 +30,18 @@ class FutaberTabsSupportTest {
 
     @Test
     fun duplicateStoredKeysAndAnOverlongListAreNormalised() {
-        val many = (1..FUTABER_MAX_TABS + 10).map { key("a", it.toString()) }
-        assertEquals(FUTABER_MAX_TABS, decodeFutaberTabs(encodeFutaberTabs(many)).size)
+        val many = (1..60).map { key("a", it.toString()) }
+        assertEquals(60, decodeFutaberTabs(encodeFutaberTabs(many)).size, "plan B8a: no 50-tab cap")
         assertEquals(listOf(key("a", "1")), decodeFutaberTabs(encodeFutaberTabs(listOf(key("a", "1"), key("a", "1")))))
     }
 
     @Test
-    fun toggleAddsAtTheEndRemovesAndRefusesPastTheLimit() {
+    fun toggleAddsAtTheEndAndRemoves() {
         val one = futaberToggleTab(emptyList(), key("a", "1"))
         assertEquals(listOf(key("a", "1")), one)
         assertEquals(listOf(key("a", "1"), key("a", "2")), futaberToggleTab(one, key("a", "2")))
         assertTrue(futaberToggleTab(one, key("a", "1")).isEmpty())
-        val full = (1..FUTABER_MAX_TABS).map { key("a", it.toString()) }
-        assertEquals(full, futaberToggleTab(full, key("a", "999")))
-        assertEquals(full.drop(1), futaberToggleTab(full, key("a", "1")))
         assertEquals(listOf(key("a", "2")), futaberRemoveTab(listOf(key("a", "1"), key("a", "2")), key("a", "1")))
-    }
-
-    @Test
-    fun pruningDropsDeletedThreadsAndBoardsButKeepsTheOneBeingOpened() {
-        val history = listOf(entry("a", "1"), entry("b", "2"), entry("gone", "3"))
-        val keys = listOf(key("a", "1"), key("a", "9"), key("b", "2"), key("gone", "3"))
-        assertEquals(listOf(key("a", "1"), key("b", "2")), futaberPruneTabs(keys, history, boards))
-        assertEquals(
-            listOf(key("a", "1"), key("a", "9"), key("b", "2")),
-            futaberPruneTabs(keys, history, boards, keep = key("a", "9"))
-        )
     }
 
     @Test

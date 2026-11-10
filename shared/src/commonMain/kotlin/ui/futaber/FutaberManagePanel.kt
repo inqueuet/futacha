@@ -143,8 +143,6 @@ internal fun FutaberManagePanel(
     /** The other modes' tabs (with the favourites extension): their starred threads are listed under the own ones. */
     otherModeTabs: kotlinx.coroutines.flow.Flow<List<com.valoser.futacha.shared.compat.CompatTab>>? = null,
     onOpenOtherFavorite: (BoardSummary, FutaberThreadRef) -> Unit = { _, _ -> },
-    /** The shared keys of this mode's own tabs and stars, so the tab category lists only the other modes' tabs (D-B4, J1). */
-    ownSharedTabKeys: Set<String> = emptySet(),
     /** The history band's "全件削除" and "アーカイブ" (the batch B4 extensions); the defaults add nothing. */
     historyTools: FutaberHistoryTools = FutaberHistoryTools(),
     /** The history rows with what they were made from, kept by the host so reopening the panel does not make them again. */
@@ -221,7 +219,7 @@ internal fun FutaberManagePanel(
                 FutaberManageCategory.History -> FutaberHistoryBody(
                     history, boards, editing, onOpenHistory, onDeleteHistory, onRefreshHistory, onAddBoardAndOpen, historyTools, historyRowsMemo
                 )
-                FutaberManageCategory.Tabs -> FutaberTabsBody(tabs, onOpenTab, onRemoveTab, boards, otherModeTabs, ownSharedTabKeys, onOpenOtherFavorite, onAddBoardAndOpen)
+                FutaberManageCategory.Tabs -> FutaberTabsBody(tabs, onOpenTab, onRemoveTab)
             }
         }
         HorizontalDivider(color = colors.barSeparator, thickness = 0.5.dp)
@@ -588,21 +586,16 @@ private fun FutaberHistoryBody(
     }
 }
 
-/** The tabs as before: a row's × closes it, and how a tab is added and removed under the list. */
+/**
+ * The tabs: a row's × closes it, and how a tab is added and removed under the list. The other modes' tabs are in the
+ * strip and in this list (plan B8a, Q1), so the separate 「他のモードのタブ」 list is gone (plan B8b).
+ */
 @Composable
 private fun FutaberTabsBody(
     tabs: List<FutaberTabView>,
     onOpenTab: (FutaberTabView) -> Unit,
-    onRemoveTab: (FutaberTabView) -> Unit,
-    boards: List<BoardSummary> = emptyList(),
-    otherModeTabs: kotlinx.coroutines.flow.Flow<List<com.valoser.futacha.shared.compat.CompatTab>>? = null,
-    ownSharedTabKeys: Set<String> = emptySet(),
-    onOpenOtherTab: (BoardSummary, FutaberThreadRef) -> Unit = { _, _ -> },
-    onAddBoardAndOpen: ((FutaberBoardAddRequest) -> Unit)? = null
+    onRemoveTab: (FutaberTabView) -> Unit
 ) {
-    val otherSource = remember(otherModeTabs) { otherModeTabs ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
-    val sharedTabs by otherSource.collectAsState(emptyList())
-    val others = remember(sharedTabs, boards, ownSharedTabKeys) { futaberOtherModeOpenTabs(sharedTabs, boards, ownSharedTabKeys) }
     val colors = LocalFutaberColors.current
     Column(Modifier.fillMaxSize()) {
         if (tabs.isNotEmpty()) {
@@ -622,32 +615,6 @@ private fun FutaberTabsBody(
                         removeAtEnd = true,
                         onOpen = { onOpenTab(tab) },
                         onDelete = { onRemoveTab(tab) }
-                    )
-                }
-            }
-        }
-        if (others.isNotEmpty()) {
-            MhtSectionTitle("他のモードのタブ（読み取り専用）", Modifier.testTag("futaber-other-tabs-header"))
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).testTag("futaber-other-tabs-list")) {
-                items(others, key = { "other-tab:" + it.tab.key }) { other ->
-                    val ref = other.ref
-                    val target = ref?.let { r -> boards.firstOrNull { it.id == r.boardId } }
-                    val addRequest = if (target != null || onAddBoardAndOpen == null) null else futaberBoardAddRequestForOtherFavorite(other)
-                    ManageRow(
-                        title = other.tab.title.ifBlank { "(無題)" },
-                        thumbnail = other.tab.thumbnailUrl.orEmpty(),
-                        subtitle = other.tab.boardName + if (target != null) "" else "（板が未登録）",
-                        trailing = null,
-                        count = other.tab.replyCount,
-                        editing = false,
-                        enabled = target != null || addRequest != null,
-                        deleteLabel = "",
-                        rowTag = "futaber-other-tab-row",
-                        onOpen = {
-                            if (target != null && ref != null) onOpenOtherTab(target, ref)
-                            else addRequest?.let { onAddBoardAndOpen?.invoke(it) }
-                        },
-                        onDelete = {}
                     )
                 }
             }

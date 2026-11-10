@@ -92,6 +92,19 @@ fun mergeImportedModernHistoryEntry(
 }
 
 /**
+ * The key, among the history tombstones, of the time everything was last cleared (audit L6): a copy read before a clear can
+ * hold a row no tombstone names, so a row visited before that time stays out. Opening or restoring a row lifts it.
+ */
+const val COMPAT_HISTORY_CLEARED_MARKER = "compat:history-cleared"
+
+/** When [canonicalUrl]'s row was deleted, by itself ([urlTombstone]) or by a clear of everything ([clearedAt]). */
+fun compatHistoryDeletedAt(urlTombstone: Long?, clearedAt: Long?): Long? = when {
+    urlTombstone == null -> clearedAt
+    clearedAt == null -> urlTombstone
+    else -> maxOf(urlTombstone, clearedAt)
+}
+
+/**
  * Plans importing the modern history into the compatibility history.
  *
  * Returns only the merged entries that differ from [current] and are still

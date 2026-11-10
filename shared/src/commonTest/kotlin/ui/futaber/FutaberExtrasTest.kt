@@ -154,22 +154,6 @@ class FutaberExtrasTest {
         assertEquals("保存済み", futaberHistoryMarks(entry("1", saved = true)))
     }
 
-    @Test fun closedTabsComeBackOldestFirstAndOnlyWhileTheirThreadAndBoardAreStillThere() {
-        val board = com.valoser.futacha.shared.model.BoardSummary("t", "板", "", "https://x/t/", "")
-        val history = listOf(entry("1"), entry("2"), entry("3"))
-        val closed = listOf(FutaberTabKey("t", "3"), FutaberTabKey("t", "2"), FutaberTabKey("t", "9"), FutaberTabKey("gone", "1"))
-        // The latest closed comes first in [closed]; "9" has no history row and "gone" has no board.
-        assertEquals(
-            listOf(FutaberTabKey("t", "2"), FutaberTabKey("t", "3")),
-            futaberRestorableTabs(closed, emptyList(), history, listOf(board))
-        )
-        // A tab that is open again is not restored twice.
-        assertEquals(
-            listOf(FutaberTabKey("t", "2")),
-            futaberRestorableTabs(closed, listOf(FutaberTabKey("t", "3")), history, listOf(board))
-        )
-    }
-
     @Test fun theTabExtensionIsOffByDefaultAndTheVideoViewerIsOnUntilTurnedOff() {
         assertTrue(FutaberDisplaySettings().extTabs)
         assertTrue(FutaberDisplaySettings().extVideo)

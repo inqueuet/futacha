@@ -38,7 +38,9 @@ data class CompatSettingsBackup(
      * tabs, active tab and selector state instead of resetting the workspace.
      */
     val workspace: CompatWorkspaceRecord? = CompatWorkspaceRecord(),
-    val toolbars: List<CompatToolbarBackup> = emptyList()
+    val toolbars: List<CompatToolbarBackup> = emptyList(),
+    /** Each mode's marks and order on the backed-up tabs (plan B10). Absent from older files, which restore without marks. */
+    val tabViews: List<CompatSharedTabView> = emptyList()
 )
 
 @Serializable
@@ -72,11 +74,12 @@ data class CompatWatchNgBackup(
 
 /**
  * The tab trim never removes favourites or the active tab, so a profile can
- * legitimately hold more than [COMPAT_TAB_LIMIT_TRIGGER] tabs (P4-3). A backup
+ * legitimately hold more than [COMPAT_SHARED_TAB_LIMIT_DEFAULT] tabs (P4-3). A backup
  * accepts as many as Android reads back (MAX_COMPAT_TAB_READ_ROWS); the byte
  * limit below still bounds the file.
  */
 const val MAX_COMPAT_BACKUP_TABS = 1_000
+const val MAX_COMPAT_BACKUP_TAB_VIEWS = MAX_COMPAT_BACKUP_TABS * 4
 const val CURRENT_COMPAT_SETTINGS_BACKUP_VERSION = 1
 const val MAX_COMPAT_SETTINGS_BACKUP_BYTES = 2 * 1024 * 1024
 const val COMPAT_SETTINGS_BACKUP_FILE_NAME = "futacha-compat-settings.json"
@@ -131,10 +134,28 @@ val COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS = setOf(
 fun compatBackupExportPreferences(preferences: Map<String, String>): Map<String, String> =
     preferences.filterKeys { it !in COMPAT_BACKUP_EXCLUDED_PREFERENCE_KEYS }
 
+/**
+ * ふたばー風's tab strip and ふたったー風's tab bar / protection / opening thread
+ * (FutaberPreferenceKeys.TABS, FtutterKeys.TABS / PROTECTED / OPENING). The
+ * tab-close reconciliation treats every thread that leaves these lists as
+ * closed in all modes, so restoring an older list would close the tabs the user
+ * has open now (audit M3, 2026-11-09). The shared tabs themselves are still
+ * restored from the backup's own tab list.
+ */
+val COMPAT_BACKUP_MODE_TAB_LIST_KEYS = setOf(
+    "compat.futaber.tabs",
+    "compat.ftutter.tabs",
+    "compat.ftutter.protected",
+    "compat.ftutter.opening"
+)
+
 /** Keys a restore must not apply even when an (older) backup file contains them. */
 private val COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS =
     COMPAT_BACKUP_DEVICE_PREFERENCE_KEYS + "compat.futaber.drafts" + "compat.appLock.attempts" +
-        COMPAT_BACKUP_FTUTTER_DELETE_KEY + COMPAT_BACKUP_FTUTTER_DRAFTS + COMPAT_BACKUP_FUTABER_PASTEBOARD
+        // Restoring a lower limit would trim tabs the person has open now without asking (plan Q3).
+        COMPAT_SHARED_TAB_LIMIT_KEY +
+        COMPAT_BACKUP_FTUTTER_DELETE_KEY + COMPAT_BACKUP_FTUTTER_DRAFTS + COMPAT_BACKUP_FUTABER_PASTEBOARD +
+        COMPAT_BACKUP_MODE_TAB_LIST_KEYS
 
 fun compatBackupRestorePreferences(preferences: Map<String, String>): Map<String, String> =
     preferences.filterKeys { it !in COMPAT_BACKUP_UNRESTORABLE_PREFERENCE_KEYS }
@@ -150,7 +171,10 @@ private val compatSettingsBackupJson = Json {
 fun encodeCompatSettingsBackup(backup: CompatSettingsBackup): String {
     validateCompatSettingsBackup(backup)
     val encoded = compatSettingsBackupJson.encodeToString(CompatSettingsBackup.serializer(), backup)
-    require(encoded.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES) {
+    val fits = encoded.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES
+    // The marks are the only part added by plan B10: they must never make a backup that used to fit fail.
+    if (!fits && backup.tabViews.isNotEmpty()) return encodeCompatSettingsBackup(backup.copy(tabViews = emptyList()))
+    require(fits) {
         "バックアップファイルが大きすぎます"
     }
     return encoded
@@ -280,6 +304,8 @@ fun validateCompatSettingsBackup(backup: CompatSettingsBackup) {
     require(backup.preferences.size <= 4096) { "設定項目が多すぎます" }
     require(backup.ngRules.size <= MAX_COMPAT_NG_RULES) { "NG項目が多すぎます" }
     require(backup.toolbars.size <= CompatToolbarSurface.entries.size) { "ツールバー項目が多すぎます" }
+    require(backup.tabViews.size <= MAX_COMPAT_BACKUP_TAB_VIEWS) { "タブの印が多すぎます" }
+    require(backup.tabViews.all { it.tabKey.length in 1..500 && it.profile.length in 1..32 }) { "タブの印が不正です" }
     require(backup.boards.map { it.key }.distinct().size == backup.boards.size) { "板キーが重複しています" }
     require(backup.boards.map { it.canonicalUrl }.distinct().size == backup.boards.size) { "板URLが重複しています" }
     require(backup.tabs.map { it.key }.distinct().size == backup.tabs.size) { "タブキーが重複しています" }
@@ -299,4 +325,37 @@ fun validateCompatSettingsBackup(backup: CompatSettingsBackup) {
         require(toolbar.items.size <= 64)
         require(toolbar.items.map { it.key }.distinct().size == toolbar.items.size)
     }
+}
+
+/** The marks a backup carries: only on the tabs it carries, each mode in its own order. */
+fun compatBackupTabViews(views: List<CompatSharedTabView>, tabs: List<CompatTab>): List<CompatSharedTabView> {
+    val keys = tabs.mapTo(HashSet(), CompatTab::key)
+    return views.filter { it.tabKey in keys }
+        .distinctBy { it.profile to it.tabKey }
+        .sortedWith(compareBy(CompatSharedTabView::profile, CompatSharedTabView::ordinal))
+}
+
+/**
+ * The marks after a restore (plan B10). The tabs of a restore are added to the ones open now, so the marks are too: what
+ * each mode has now stays where it is and the backup's marks follow in their own order. A mark is only a decoration of
+ * a tab, so one that cannot apply (no such tab, a mode this version does not know) is dropped and fails nothing.
+ */
+fun compatMergedBackupTabViews(
+    current: List<CompatSharedTabView>,
+    restored: List<CompatSharedTabView>,
+    tabKeys: Set<String>
+): List<CompatSharedTabView> {
+    val profiles = ExperienceProfile.entries.mapTo(HashSet(), ExperienceProfile::persistedValue)
+    val incoming = restored.filter { it.tabKey in tabKeys && it.profile in profiles }
+    if (incoming.isEmpty()) return current
+    val touched = incoming.mapTo(LinkedHashSet(), CompatSharedTabView::profile)
+    val rebuilt = touched.flatMap { profile ->
+        val mine = current.filter { it.profile == profile }.sortedBy(CompatSharedTabView::ordinal)
+        val present = mine.mapTo(HashSet(), CompatSharedTabView::tabKey)
+        val added = incoming.filter { it.profile == profile && it.tabKey !in present }
+            .sortedBy(CompatSharedTabView::ordinal)
+            .distinctBy(CompatSharedTabView::tabKey)
+        (mine + added).mapIndexed { index, view -> view.copy(ordinal = index) }
+    }
+    return current.filter { it.profile !in touched } + rebuilt
 }

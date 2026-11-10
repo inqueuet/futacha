@@ -40,13 +40,13 @@ class CompatSettingsBackupRestoreTrimTest {
             val backup = CompatSettingsBackup(
                 exportedAtEpochMillis = 1_000L,
                 boards = listOf(board),
-                tabs = (11..105).map(::tab),
+                tabs = (11..1_000).map(::tab),
                 workspace = CompatWorkspaceRecord(activeTabKey = "tab-2")
             )
             store.importSettingsBackup(encodeCompatSettingsBackup(backup), restoreUserSettings = true, restoreNgRules = false)
 
             val keys = store.tabs.first().map(CompatTab::key)
-            assertEquals(COMPAT_TAB_LIMIT_AFTER_TRIM, keys.size)
+            assertEquals(891, keys.size, "past the largest limit the restore still trims, keeping the star and the active tab")
             assertTrue("tab-1" in keys, "favourite tab must survive the trim")
             assertTrue("tab-2" in keys, "restored active tab must survive the trim")
             assertFalse("tab-3" in keys)

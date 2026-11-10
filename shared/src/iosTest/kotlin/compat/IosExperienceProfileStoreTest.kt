@@ -959,15 +959,16 @@ class IosExperienceProfileStoreTest {
                 )
             }
 
-            repeat(100) { open(it + 1) }
-            assertEquals(100, store.tabs.first().size)
-            assertEquals(100, store.history.first().size)
-            open(101)
-            assertEquals(90, store.tabs.first().size)
-            assertEquals(101, store.history.first().size)
-            repeat(100) { open(it + 102) }
-            assertEquals(91, store.tabs.first().size)
+            // The shared tab limit (plan B4): 200 by default, trimmed back to 180.
+            repeat(200) { open(it + 1) }
+            assertEquals(200, store.tabs.first().size)
+            assertEquals(200, store.history.first().size)
+            open(201)
+            assertEquals(180, store.tabs.first().size)
             assertEquals(190, store.history.first().size)
+            repeat(100) { open(it + 202) }
+            assertEquals(196, store.tabs.first().size)
+            assertEquals(191, store.history.first().size)
         } finally {
             fileSystem.deleteRecursively("compatibility").getOrThrow()
         }

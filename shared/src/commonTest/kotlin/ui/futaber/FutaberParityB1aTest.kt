@@ -89,6 +89,14 @@ class FutaberParityB1aTest {
         assertEquals(emptyList(), futaberKeepFavoriteTabs(tabs, emptyList(), emptyList(), enabled = true))
     }
 
+    /** Plan B5 (Q7): a shared tab with a ★ (set in any mode) is kept like a favourite. */
+    @Test fun aBulkCloseAlsoKeepsTheTabsWithASharedStar() {
+        val tabs = listOf(FutaberTabKey("a", "1"), FutaberTabKey("a", "2"), FutaberTabKey("a", "3"))
+        val kept = futaberKeepFavoriteTabs(tabs, emptyList(), listOf(fav("a", "1")), enabled = true) { it.threadId == "3" }
+        assertEquals(listOf(FutaberTabKey("a", "1"), FutaberTabKey("a", "3")), kept)
+        assertEquals(emptyList(), futaberKeepFavoriteTabs(tabs, emptyList(), listOf(fav("a", "1")), enabled = false) { true })
+    }
+
     private fun entry(boardId: String, url: String, thread: String = "123") = ThreadHistoryEntry(
         threadId = thread, boardId = boardId, title = "題", titleImageUrl = "", boardName = "may/b",
         boardUrl = url, lastVisitedEpochMillis = 1L, replyCount = 5

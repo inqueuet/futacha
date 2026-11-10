@@ -468,7 +468,7 @@ internal fun CompatSettingsScreen(
                 // Decoding/validating a backup of up to 2MB and the restore
                 // itself must not run on the UI thread. The board synchronization waits for the restore and the
                 // boards it brings (D-B1), so a restored board is not deleted again in between (D1).
-                val result = withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess }) {
+                val result = withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess }, historyStore = restoreBoardsInto ?: stateStore) {
                   withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val raw = selected.bytes.decodeToString()
                     if (backupKind == "ng") {
@@ -543,7 +543,8 @@ internal fun CompatSettingsScreen(
                 // boards, and the board synchronization waits for them (D-B1, see the file picker above).
                 val restoring = !kind.startsWith("save_")
                 val result = withSharedBoardsRestore(
-                    store, restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess }
+                    store, restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess },
+                    historyStore = restoreBoardsInto ?: stateStore
                 ) {
                   withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val payload = if (kind == "save_settings") {

@@ -29,42 +29,11 @@ class FutaberAuditFixesTest {
 
     // ---- the tab list: full, restore, closed memory ----
 
-    @Test fun aFullTabListSaysSoInsteadOfDoingNothing() {
-        val full = (1..FUTABER_MAX_TABS).map { key("a", it.toString()) }
-        assertEquals(FutaberTabToggleOutcome.Full, futaberTabToggleOutcome(full, key("a", "999")))
-        assertEquals(FutaberTabToggleOutcome.Removed, futaberTabToggleOutcome(full, key("a", "1")))
-        assertEquals(FutaberTabToggleOutcome.Added, futaberTabToggleOutcome(full.drop(1), key("a", "999")))
-        assertTrue(FUTABER_TAB_LIMIT_NOTICE.contains(FUTABER_MAX_TABS.toString()))
-    }
-
-    @Test fun restoringIntoAnAlmostFullListWritesAndForgetsOnlyWhatFit() {
-        val open = (1..FUTABER_MAX_TABS - 1).map { key("a", it.toString()) }
-        val closed = listOf(key("b", "1"), key("b", "2"), key("b", "3"))
-        val result = futaberRestoreTabs(open, closed)
-        assertEquals(FUTABER_MAX_TABS, result.tabs.size)
-        assertEquals(listOf(key("b", "1")), result.restored)
-        // The two that did not fit stay in the memory.
-        val memory = closed.filter { it !in result.restored }
-        assertEquals(listOf(key("b", "2"), key("b", "3")), memory)
-    }
-
-    @Test fun restoringIntoAFullListWritesNothing() {
-        val full = (1..FUTABER_MAX_TABS).map { key("a", it.toString()) }
-        val result = futaberRestoreTabs(full, listOf(key("b", "1")))
-        assertEquals(full, result.tabs)
-        assertTrue(result.restored.isEmpty())
-    }
-
-    @Test fun theClosedMemoryKeepsTheLatestFirstWithoutTheOpenOnesAndIsBounded() {
-        val removed = listOf(key("a", "1"), key("a", "2"))
-        assertEquals(
-            listOf(key("a", "2"), key("a", "1"), key("c", "9")),
-            futaberRememberClosedTabs(listOf(key("c", "9")), removed, next = emptyList())
-        )
-        // A tab that is open again is not "closed".
-        assertEquals(listOf(key("a", "2")), futaberRememberClosedTabs(emptyList(), removed, next = listOf(key("a", "1"))))
-        val many = (1..FUTABER_MAX_CLOSED_TABS + 5).map { key("a", it.toString()) }
-        assertEquals(FUTABER_MAX_CLOSED_TABS, futaberRememberClosedTabs(emptyList(), many, emptyList()).size)
+    /** Plan B8a (Q3b): this mode has no tab count of its own; the shared limit trims (CompatTabTrimming). */
+    @Test fun theStripHasNoFiftyTabCap() {
+        val many = (1..60).map { key("a", it.toString()) }
+        assertEquals(many + key("a", "999"), futaberToggleTab(many, key("a", "999")))
+        assertEquals(many.drop(1), futaberToggleTab(many, key("a", "1")))
     }
 
     @Test fun historyRowsOfOldDataWithoutABoardIdDoNotShareAKey() {

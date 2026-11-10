@@ -6,8 +6,6 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
-internal const val FUTABER_MAX_TABS = 50
-
 /**
  * A tab is only a registered (board, thread) key: the title, thumbnail and reply count shown
  * come from the shared history, so no thread data is copied. Tabs exist only when the user
@@ -32,29 +30,12 @@ internal fun decodeFutaberTabs(stored: String?): List<FutaberTabKey> {
         val parts = entry.split(KEY_SEPARATOR)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) null
         else FutaberTabKey(parts[0], parts[1])
-    }.distinct().take(FUTABER_MAX_TABS)
+    }.distinct()
 }
 
-/** Adds the tab at the end, or removes it when already registered. A full list refuses new tabs. */
+/** Adds the tab at the end, or removes it when already registered (plan B8a, Q3b: no count limit of this mode's own). */
 internal fun futaberToggleTab(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> =
-    when {
-        key in keys -> keys - key
-        keys.size >= FUTABER_MAX_TABS -> keys
-        else -> keys + key
-    }
-
-/** What a press of "タブに追加" / "タブから外す" does to [keys]; a full list is the one case that changes nothing. */
-internal enum class FutaberTabToggleOutcome { Added, Removed, Full }
-
-internal fun futaberTabToggleOutcome(keys: List<FutaberTabKey>, key: FutaberTabKey): FutaberTabToggleOutcome =
-    when {
-        key in keys -> FutaberTabToggleOutcome.Removed
-        keys.size >= FUTABER_MAX_TABS -> FutaberTabToggleOutcome.Full
-        else -> FutaberTabToggleOutcome.Added
-    }
-
-/** What the person is told when the tab list is full and "タブに追加" has nothing to add to. */
-internal const val FUTABER_TAB_LIMIT_NOTICE = "タブは${FUTABER_MAX_TABS}件までです。不要なタブを閉じてから追加してください"
+    if (key in keys) keys - key else keys + key
 
 internal fun futaberRemoveTab(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> = keys - key
 
@@ -73,23 +54,6 @@ internal fun futaberRemoveFallenTabs(keys: List<FutaberTabKey>, fallen: Set<Futa
     keys.filterNot { it in fallen }
 
 /**
- * Drops the keys whose thread is no longer in the shared history or whose board was removed.
- * [keep] is never dropped: the thread being opened may not have reached the history yet.
- * This is not the automatic clean-up of the tab list (that is [futaberPruneTabsOfRemovedBoards]): it tells which
- * closed tabs can come back ([futaberRestorableTabs]), and a tab comes back only with its history row.
- */
-internal fun futaberPruneTabs(
-    keys: List<FutaberTabKey>,
-    history: List<ThreadHistoryEntry>,
-    boards: List<BoardSummary>,
-    keep: FutaberTabKey? = null
-): List<FutaberTabKey> {
-    val boardIds = boards.mapTo(HashSet()) { it.id }
-    val historyKeys = history.mapTo(HashSet()) { FutaberTabKey(it.boardId, it.threadId) }
-    return keys.filter { key -> key == keep || (key.boardId in boardIds && key in historyKeys) }
-}
-
-/**
  * The clean-up that runs by itself: drops the tabs of a board that was removed from the board list, and nothing else.
  * A thread missing from the shared history does not lose its tab (the history is emptied or trimmed by the other
  * modes, and a restored backup brings the tabs before the history): such a tab is simply not shown until its row is
@@ -100,22 +64,6 @@ internal fun futaberPruneTabsOfRemovedBoards(keys: List<FutaberTabKey>, boards: 
     if (boards.isEmpty()) return keys
     val boardIds = boards.mapTo(HashSet()) { it.id }
     return keys.filter { it.boardId in boardIds }
-}
-
-/**
- * The tabs after adding [key] to a full list by letting go of the oldest tab that is not shown (its thread has no row
- * in the shared history, so it takes a place the person cannot see), or null when every tab is shown or [key] is
- * already a tab. Only one is dropped, the others may come back with their history.
- */
-internal fun futaberTabsMakingRoomFor(
-    keys: List<FutaberTabKey>,
-    key: FutaberTabKey,
-    history: List<ThreadHistoryEntry>
-): List<FutaberTabKey>? {
-    if (key in keys || keys.size < FUTABER_MAX_TABS) return null
-    val historyKeys = history.mapTo(HashSet()) { FutaberTabKey(it.boardId, it.threadId) }
-    val hidden = keys.firstOrNull { it !in historyKeys } ?: return null
-    return (keys - hidden) + key
 }
 
 /** What one tab shows. */
@@ -130,10 +78,23 @@ internal data class FutaberTabView(
     val status: com.valoser.futacha.shared.model.ThreadStatus? = null
 )
 
-internal fun futaberTabViews(keys: List<FutaberTabKey>, history: List<ThreadHistoryEntry>, showStatus: Boolean = false): List<FutaberTabView> {
+internal fun futaberTabViews(
+    keys: List<FutaberTabKey>,
+    history: List<ThreadHistoryEntry>,
+    showStatus: Boolean = false,
+    shared: Map<FutaberTabKey, com.valoser.futacha.shared.compat.CompatTab> = emptyMap()
+): List<FutaberTabView> {
     val byKey = futaberHistoryRowsFor(keys.toHashSet(), history)
     return keys.mapNotNull { key ->
-        val entry = byKey[key] ?: return@mapNotNull null
+        val entry = byKey[key]
+        if (entry == null) {
+            // Audit F1 (plan B8a): a shared tab whose thread has no history row is shown from the shared tab.
+            val tab = shared[key] ?: return@mapNotNull null
+            return@mapNotNull FutaberTabView(
+                key, tab.title.ifBlank { "(無題)" }, tab.thumbnailUrl.orEmpty(), tab.replyCount + 1, tab.boardName,
+                fallen = tab.isDead
+            )
+        }
         FutaberTabView(
             key, entry.title.ifBlank { "(無題)" }, entry.titleImageUrl, entry.replyCount, entry.boardName,
             fallen = entry.isAutoRefreshDisabled,
@@ -159,37 +120,6 @@ internal fun futaberRefForHistory(entry: ThreadHistoryEntry, boards: List<BoardS
 
 /** How many closed tabs "閉じたタブを元に戻す" remembers. */
 internal const val FUTABER_MAX_CLOSED_TABS = 20
-
-/**
- * The closed tabs that can come back: still not open, with their thread in the history and their board registered.
- * [closed] is the latest first; they return in the order they were opened (oldest first).
- */
-internal fun futaberRestorableTabs(
-    closed: List<FutaberTabKey>,
-    open: List<FutaberTabKey>,
-    history: List<ThreadHistoryEntry>,
-    boards: List<BoardSummary>
-): List<FutaberTabKey> =
-    futaberPruneTabs(closed.filter { it !in open }, history, boards).asReversed()
-
-/** The tabs after [restorable] were put back, and which of them were actually written (a full list takes only some). */
-internal data class FutaberTabRestore(val tabs: List<FutaberTabKey>, val restored: List<FutaberTabKey>)
-
-internal fun futaberRestoreTabs(open: List<FutaberTabKey>, restorable: List<FutaberTabKey>): FutaberTabRestore {
-    val tabs = (open + restorable.filter { it !in open }).distinct().take(FUTABER_MAX_TABS)
-    return FutaberTabRestore(tabs, restorable.filter { it in tabs && it !in open })
-}
-
-/**
- * The closed-tab memory after the tabs [removed] left the list, now [next] (the latest closed first, at most
- * [FUTABER_MAX_CLOSED_TABS]); a key that is open again is not "closed".
- */
-internal fun futaberRememberClosedTabs(
-    closed: List<FutaberTabKey>,
-    removed: List<FutaberTabKey>,
-    next: List<FutaberTabKey>
-): List<FutaberTabKey> =
-    (removed.asReversed() + closed).distinct().filter { it !in next }.take(FUTABER_MAX_CLOSED_TABS)
 
 /**
  * Key of one history row of the manage panel. An old row may have no board id, so the address is part of the key; the

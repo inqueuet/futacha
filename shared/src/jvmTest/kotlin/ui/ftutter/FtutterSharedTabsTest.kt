@@ -5,7 +5,6 @@ import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatTabKey
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.ui.futaber.futaberApplySharedTabs
 import com.valoser.futacha.shared.util.JvmFileSystem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -33,24 +32,5 @@ class FtutterSharedTabsTest {
         assertEquals(listOf(0, 1), plan.views.map { it.ordinal })
         assertEquals(setOf("ftutter"), plan.views.map { it.profile }.toSet())
         assertEquals(listOf(2, 5), plan.tabs.map { it.replyCount })
-        assertTrue(plan.favoriteKeys.isEmpty())
-    }
-
-    @Test
-    fun applyingMarksOnlyThisModesViewsAndDoesNotMoveTheSelection() = runBlocking {
-        val root = Files.createTempDirectory("ftutter-shared-tabs").toFile()
-        val store = DesktopCompatibilityStore(JvmFileSystem(root))
-        try {
-            store.initialize()
-            store.importModernBoards(listOf(may))
-            val plan = ftutterSharedTabsPlan(listOf("https://may.2chan.net/b/res/1.htm"), listOf(may), listOf(entry("1", 6)), 100L)
-            val before = store.workspace.first().activeTabKey
-            futaberApplySharedTabs(store, plan, listOf(may), emptySet(), FTUTTER_TAB_PROFILE)
-            assertEquals(1, store.loadTabViews("ftutter").size)
-            assertTrue(store.loadTabViews("futaber").isEmpty())
-            assertEquals(before, store.workspace.first().activeTabKey)
-            assertEquals(compatTabKey("https://may.2chan.net/b/res/1.htm"), store.tabs.first().single().key)
-            assertEquals(compatBoardKey("https://may.2chan.net/b/"), store.tabs.first().single().boardKey)
-        } finally { store.close(); root.deleteRecursively() }
     }
 }

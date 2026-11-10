@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 
 const val MAX_COMPAT_PREFERENCE_KEY_CHARS = 300
 const val MAX_COMPAT_PREFERENCE_VALUE_CHARS = 20_000
@@ -73,6 +74,7 @@ interface CompatibilityStore {
     val holdsBundledTutorialBoard: Boolean get() = true
 
     suspend fun bootstrapBoardsIfNeeded(modernBoards: List<BoardSummary>): Boolean
+    suspend fun rememberModernBoardAliases(modernBoards: List<BoardSummary>) {}
     suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int
     suspend fun importModernHistory(
         modernHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>
@@ -89,7 +91,7 @@ interface CompatibilityStore {
      * D-B4: adds the tabs not yet present, as one change, without selecting one, trimming or touching the history.
      * For a mode that keeps its own tab strip and shows those tabs to the others. Returns how many were added.
      */
-    suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int = 0
+    suspend fun addTabsIfAbsent(tabs: List<CompatTab>, expectedPreferences: Map<String, String?> = emptyMap()): Int = 0
 
     suspend fun updateTab(tab: CompatTab)
 
@@ -111,13 +113,61 @@ interface CompatibilityStore {
         return true
     }
     suspend fun selectTab(tabKey: String?)
+    /**
+     * Closes the tabs and adds one record to the closed-tab record (plan B6: at most [COMPAT_CLOSED_BATCH_MAX] records,
+     * kept 24 hours; the undo notice is [ClosedTabBatch.noticeDeadlineEpochMillis]). [closedBy] is the mode closing them.
+     */
     suspend fun closeTabs(
         tabKeys: Set<String>,
         nowEpochMillis: Long,
-        finalScrollAnchors: Map<String, ScrollAnchor> = emptyMap()
+        finalScrollAnchors: Map<String, ScrollAnchor> = emptyMap(),
+        closedBy: String? = null
     ): ClosedTabBatch?
+
+    /**
+     * Brings back the stored record with [batch]'s id and removes it, in one change. A record already brought back
+     * (or gone) does nothing: ふたちゃ's undo and another mode's restore may name the same record. A tab open again
+     * meanwhile is not overwritten ([compatRestoredTab]).
+     */
     suspend fun restoreClosedTabs(batch: ClosedTabBatch)
+
+    /** The newest record whose undo notice still shows; expired records are dropped. */
     suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch?
+
+    /**
+     * Plan B6 (§1-4): brings back the newest record [profile] closed or showed a tab of, and removes it, in one
+     * change. Null when there is none. Stores that do not keep the record return null.
+     */
+    suspend fun popClosedTabBatch(profile: String, nowEpochMillis: Long): ClosedTabBatch? = null
+
+    /** The number of records [profile] could bring back with [popClosedTabBatch]. */
+    suspend fun countClosedTabBatches(profile: String, nowEpochMillis: Long): Int = 0
+
+    /**
+     * Plan B6: opens [tab] as a shared tab in one change. An existing tab keeps its star, `insertedAt` and the
+     * modes' marks ([mergeCompatReopenedTab]); [profile]'s mark is added at [placement] when it has none; [board]
+     * is added when the store does not have it yet (G2: an official board reached other than by the mirror).
+     * Returns false when the tab could not be stored (no board).
+     */
+    suspend fun openSharedTab(
+        tab: CompatTab,
+        profile: String?,
+        placement: CompatTabPlacement = CompatTabPlacement.LAST,
+        select: Boolean = false,
+        board: CompatBoard? = null
+    ): Boolean {
+        if (board != null && boards.first().none { it.key == board.key }) upsertBoard(board)
+        if (boards.first().none { it.key == tab.boardKey }) return false
+        val existing = tabs.first().firstOrNull { it.key == tab.key }
+        if (existing == null) addTabsIfAbsent(listOf(tab), emptyMap())
+        else updateTabIfPresent(tab.key) { current -> mergeCompatReopenedTab(current, tab).takeIf { it != current } }
+        if (tabs.first().none { it.key == tab.key }) return false
+        if (profile != null) {
+            replaceTabViews(profile, compatViewsWith(loadTabViews(profile), profile, tab.key, placement, tab.insertedAtEpochMillis))
+        }
+        if (select) selectTab(tab.key)
+        return true
+    }
 
     suspend fun upsertHistory(entry: CompatHistoryEntry)
 
@@ -153,6 +203,18 @@ interface CompatibilityStore {
     suspend fun deleteHistories(canonicalUrls: Collection<String>) {
         canonicalUrls.forEach { deleteHistory(it) }
     }
+    /**
+     * Forgets the deletions of [canonicalUrls] (plan B3): a thread the person opened again, or history they chose to
+     * restore, comes back here whatever the times say (a clock set back left a newer tombstone than the visit). Other
+     * stores (test doubles) keep no tombstones.
+     */
+    suspend fun forgetHistoryTombstones(canonicalUrls: Collection<String>) {}
+
+    /**
+     * The shared tabs [profile]'s screen shows now (plan B4): the tab trim leaves them alone. Memory only; an empty set
+     * forgets the mode's. Test doubles that never trim ignore it.
+     */
+    fun setScreenHeldTabs(profile: ExperienceProfile, keys: Set<String>) {}
     suspend fun clearHistory()
 
     suspend fun saveDraft(draft: CompatReplyDraft)
@@ -226,8 +288,20 @@ interface CompatibilityStore {
      */
     suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = emptyList()
 
+    /** Plan B6: every mode's views of the tabs that exist, updated when the views or the tabs change. */
+    val tabViews: Flow<List<CompatSharedTabView>> get() = flowOf(emptyList())
+
     /** Replaces every view of [profile] with [views] (views of tabs that do not exist are dropped); one change. */
     suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) {}
+
+    /**
+     * Plan B7a: false while the shared data migration stages run (a screen waits before reading what a stage moves, so
+     * a tab is not shown twice or not at all meanwhile). Stores that do not run them are always settled.
+     */
+    val sharedMigrationsSettled: StateFlow<Boolean> get() = COMPAT_ALWAYS_SETTLED
+
+    /** Set by [com.valoser.futacha.shared.compat.shared.runSharedDataMigrations] around the stages. */
+    fun setSharedMigrationsSettled(settled: Boolean) {}
 
     suspend fun loadPreference(key: String): String?
     suspend fun savePreference(key: String, value: String)
@@ -338,3 +412,5 @@ internal fun List<CompatHistoryEntry>.withCompatHistoryScrollAnchor(
     if (none { it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor }) return this
     return map { if (it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor) it.copy(scrollAnchor = anchor) else it }
 }
+
+private val COMPAT_ALWAYS_SETTLED: StateFlow<Boolean> = MutableStateFlow(true)

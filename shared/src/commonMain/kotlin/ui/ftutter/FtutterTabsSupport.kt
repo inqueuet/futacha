@@ -1,7 +1,6 @@
 package com.valoser.futacha.shared.ui.ftutter
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.model.BoardSummary
@@ -25,46 +24,6 @@ internal fun parseFtutterTabs(p: Map<String, String>): FtutterTabs {
 /** 開いたスレッドは、まだ無ければ先頭へ入れ、あれば位置を変えない（原作の`pushAndOpen`）。 */
 internal fun ftutterPushTab(urls: List<String>, url: String): List<String> =
     if (url in urls) urls else listOf(url) + urls
-
-/**
- * 閉じたタブ（メモリだけ。件数の上限なし、再起動で消える）。[entry] は閉じた時の履歴の行で、戻す時に履歴に無ければ
- * その行を戻す（L17：以前は題名もサムネイルも無い行を作り、開くまで題名の無い行が残った）。
- */
-internal data class FtutterClosedTab(val url: String, val index: Int, val entry: ThreadHistoryEntry? = null)
-
-/** 戻したタブの履歴の行（原作どおり履歴にも戻す）。閉じた時の行があれば、その題名・サムネイルで今の時刻に戻す。 */
-internal fun ftutterRestoredHistoryEntry(closed: ThreadHistoryEntry?, board: BoardSummary, threadId: String, now: Long): ThreadHistoryEntry =
-    closed?.takeIf { it.threadId == threadId }?.copy(lastVisitedEpochMillis = now)
-        ?: com.valoser.futacha.shared.ui.futaber.buildFutaberOpenHistoryEntry(
-            null, board, com.valoser.futacha.shared.ui.futaber.FutaberThreadRef(board.id, threadId, "", "", 0), now)
-
-internal data class FtutterCloseResult(val urls: List<String>, val closed: List<FtutterClosedTab>)
-
-/** 1つ閉じる。閉じた位置を覚える。 */
-internal fun ftutterCloseTab(urls: List<String>, url: String): FtutterCloseResult {
-    val index = urls.indexOf(url)
-    if (index < 0) return FtutterCloseResult(urls, emptyList())
-    return FtutterCloseResult(urls - url, listOf(FtutterClosedTab(url, index)))
-}
-
-/**
- * 一括で閉じる（全て・これより下／右・落ちた）。保護したタブは確認なしで残す。閉じる順は並びの先頭から
- * （原作どおり。記録する位置は閉じた時点の位置なので、Undoを繰り返すと元の順に戻る）。
- */
-internal fun ftutterCloseMany(urls: List<String>, targets: List<String>, protected: Set<String>): FtutterCloseResult {
-    var current = urls
-    val closed = mutableListOf<FtutterClosedTab>()
-    targets.filter { it !in protected }.forEach { url ->
-        val result = ftutterCloseTab(current, url)
-        current = result.urls
-        closed += result.closed
-    }
-    return FtutterCloseResult(current, closed)
-}
-
-/** 最後に閉じたものから戻す。位置は min(元の位置, 今の件数)。既にあれば何もしない。 */
-internal fun ftutterRestoreTab(urls: List<String>, closed: FtutterClosedTab): List<String> =
-    if (closed.url in urls) urls else urls.toMutableList().apply { add(minOf(closed.index, size), closed.url) }
 
 /**
  * 「これより下（タブ帯からは右）をすべて閉じる」の対象。ドロワーで「タブ（更新順）」を見ている時は、その並びで後ろのもの。
@@ -347,153 +306,125 @@ internal fun ftutterNextOpening(before: List<String>, after: List<String>, close
     return after[minOf(at, after.lastIndex)]
 }
 
-internal class FtutterTabState(initial: FtutterTabs, initialProtected: Set<String>, private val save: (String, String) -> Unit) {
-    var urls by mutableStateOf(initial.urls)
+/**
+ * The tab bar (plan B7a): a view of the shared tabs ([FtutterTabSnapshot]) with this mode's history limit applied to what
+ * is shown. Changes show at once and go to the stores through [writer] ([launch] runs them to the end); while any is on
+ * its way the stores' snapshots are kept aside, and the newest is shown when they are all done (a snapshot arriving
+ * before the write's own would otherwise take the change back for a moment).
+ */
+internal class FtutterTabState(
+    initial: FtutterTabSnapshot,
+    initialOpening: String,
+    private val writer: FtutterTabWriter,
+    private val launch: (suspend () -> Unit) -> Unit
+) {
+    private var all: List<String> = initial.all
+    var protected by mutableStateOf(initial.protected)
         private set
-    var protected by mutableStateOf(initialProtected)
+    /** The tabs shown: the history limit (protected tabs and the open one not counted) applied to all of them. */
+    var urls by mutableStateOf(initial.all)
         private set
-    val closed = mutableStateListOf<FtutterClosedTab>()
 
     /** 履歴の並び（最後に開いた順のスレッドURL）と、設定「履歴の保存数」。画面の側が組み立てのたびに入れる。 */
     var historyOrder: List<String> = emptyList()
+        set(value) { if (value !== field) { field = value; reshow() } }
     var limit: Int = FTUTTER_HISTORY_LIMIT_DEFAULT
-    /** 閉じる時に、そのタブの履歴の行を覚える（L17）。画面の側が組み立てのたびに入れる。 */
-    var entryOf: (String) -> ThreadHistoryEntry? = { null }
+        set(value) { if (value != field) { field = value; reshow() } }
 
     /** 開いているタブ。上限で外さない。 */
-    private var openingUrl: String = initial.opening
+    private var openingUrl: String by mutableStateOf(initialOpening)
     /** 最後に開いたタブのURL（閉じていれば[urls]に無い）。 */
     val opening: String get() = openingUrl
 
-    // 保存は非同期で、通知は遅れて届く。自分が書いてまだ届いていない値をすべて覚えておき、それが届いた時は取り込まない
-    // （監査M1。以前は最後の値だけを覚えていたので、2回続けて変えると1回目の通知で手元が巻き戻った）。
-    private val writtenTabs = FtutterEchoGuard()
-    private val writtenProtected = FtutterEchoGuard()
+    private var pending = 0
+    private var latest: FtutterTabSnapshot? = null
+    /** Counts the moments every write is done: the screen shows [latest] a little later (its own snapshot may be late). */
+    var settledWrites by mutableStateOf(0)
+        private set
 
-    fun sync(p: Map<String, String>) {
-        // Only the value that changed is looked at (re-audit L25: a notice where only the protection changed checked the
-        // tabs' stored value again, an older one while this screen's latest write was on its way, and a tab just closed
-        // came back for a moment).
-        val tabsRaw = p[FtutterKeys.TABS]
-        if (tabsRaw != null && tabsRaw != seenTabsRaw) {
-            seenTabsRaw = tabsRaw
-            if (!writtenTabs.isOwnEcho(tabsRaw)) urls = parseFtutterTabs(p).urls
-        }
-        val protectedRaw = p[FtutterKeys.PROTECTED]
-        if (protectedRaw != null && protectedRaw != seenProtectedRaw) {
-            seenProtectedRaw = protectedRaw
-            if (!writtenProtected.isOwnEcho(protectedRaw)) protected = parseFtutterProtected(p)
-        }
-    }
-    private var seenTabsRaw: String? = null
-    private var seenProtectedRaw: String? = null
-
-    private fun limited(vararg keep: String, dropMissing: Boolean = false): List<String> =
-        ftutterLimitTabs(urls, historyOrder, protected, limit, (keep.toList() + openingUrl).filter { it.isNotEmpty() }.toSet(), dropMissing)
-
-    private fun persist(opening: String? = null) {
-        // 保存値の上限（2万字）に入らなければ、保護していない古いタブから外す。保護したタブだけで入らない時は、そのまま
-        // 保存を試み、保存の入口が「保存できませんでした」と知らせる（勝手に保護を外さない）。
-        ftutterFitTabs(urls, historyOrder, protected, setOfNotNull(opening, openingUrl.takeIf { it.isNotEmpty() }))?.let { urls = it }
-        val encoded = encodeFtutterList(urls)
-        writtenTabs.wrote(encoded)
-        save(FtutterKeys.TABS, encoded)
-        opening?.let { save(FtutterKeys.OPENING, it) }
+    private fun reshow() {
+        urls = ftutterLimitTabs(all, historyOrder, protected, limit, setOfNotNull(openingUrl.takeIf { it.isNotEmpty() }), dropMissing = false)
     }
 
-    private fun persistProtected() {
-        val encoded = encodeFtutterList(protected.toList())
-        writtenProtected.wrote(encoded)
-        save(FtutterKeys.PROTECTED, encoded)
+    private fun show(snapshot: FtutterTabSnapshot) {
+        all = snapshot.all
+        protected = snapshot.protected
+        reshow()
     }
 
-    /**
-     * 履歴の保存数に合わせる（原作どおり、保護したタブは数えない）。[dropMissing]は起動時：履歴に無いタブも捨てる。
-     * 外れたタブは「閉じたタブ」には入れない（原作でも戻せない）。
-     */
-    fun enforceLimit(dropMissing: Boolean) {
-        val next = limited(dropMissing = dropMissing)
-        if (next != urls) {
-            urls = next
-            persist()
+    /** The stores' newest snapshot. */
+    fun sync(snapshot: FtutterTabSnapshot) {
+        latest = snapshot
+        if (pending == 0) show(snapshot)
+    }
+
+    /** Shows the newest snapshot once nothing is on its way. */
+    fun showLatest() {
+        if (pending == 0) latest?.let(::show)
+    }
+
+    private fun write(block: suspend () -> Unit) {
+        pending++
+        launch {
+            try {
+                block()
+            } finally {
+                pending--
+                if (pending == 0) settledWrites++
+            }
         }
     }
 
-    fun open(url: String) {
+    fun open(url: String, seed: FtutterTabSeed? = null) {
         openingUrl = url
-        urls = ftutterPushTab(urls, url)
-        urls = limited(url)
-        persist(opening = url)
+        push(url, seed)
     }
 
     /** 裏でタブに足す（開かない）。 */
-    fun push(url: String) {
-        urls = ftutterPushTab(urls, url)
-        urls = limited(url)
-        persist()
+    fun push(url: String, seed: FtutterTabSeed? = null) {
+        if (url !in all) all = listOf(url) + all
+        reshow()
+        write { writer.open(url, seed) }
     }
 
-    /** 閉じる時は保護を外す（原作どおり。戻しても保護は戻らない）。 */
+    /** Closing takes the ★ / protection with the tab (the record keeps it for the other modes; 1-4). */
     fun close(targets: List<String>) {
         if (targets.isEmpty()) return
-        val result = ftutterCloseMany(urls, targets, emptySet())
-        urls = result.urls
-        closed += result.closed.map { it.copy(entry = entryOf(it.url)) }
-        if (targets.any { it in protected }) {
-            protected = protected - targets.toSet()
-            persistProtected()
+        val gone = targets.toSet()
+        all = all - gone
+        protected = protected - gone
+        reshow()
+        write { writer.close(targets) }
+    }
+
+    /** Brings back the newest closed tab this mode may; [onDone] gets it (null: nothing to bring back). */
+    fun restore(onDone: (FtutterRestoredTab?) -> Unit) {
+        write {
+            val restored = writer.restore()
+            if (restored != null) openingUrl = restored.url
+            onDone(restored)
         }
-        persist()
     }
 
-    fun restore(): String? = restoreTab()?.url
-
-    fun restoreTab(): FtutterClosedTab? {
-        val last = closed.removeLastOrNull() ?: return null
-        openingUrl = last.url
-        urls = ftutterRestoreTab(urls, last)
-        urls = limited(last.url)
-        persist(opening = last.url)
-        return last
-    }
+    /** See [FtutterTabWriter.legacyClosedCount]. */
+    val legacyClosedCount: Int get() = writer.legacyClosedCount
 
     fun move(from: Int, to: Int) {
         if (from !in urls.indices || to !in urls.indices || from == to) return
-        urls = urls.toMutableList().apply { add(to, removeAt(from)) }
-        persist()
+        val shown = urls.toMutableList().apply { add(to, removeAt(from)) }
+        val shownSet = shown.toHashSet()
+        all = shown + all.filter { it !in shownSet }
+        reshow()
+        write { writer.move(shown) }
     }
 
     fun toggleProtect(url: String) {
-        protected = if (url in protected) protected - url else protected + url
-        persistProtected()
+        val on = url !in protected
+        protected = if (on) protected + url else protected - url
+        reshow()
+        write { writer.protect(url, on) }
     }
 }
-
-/**
- * 自分が保存してまだ通知の届いていない値の列（古い順）。届いた値が列にあれば、それより前の分と一緒に外して「自分の書いた
- * 値」と答える。列に無い値は他から書かれた値なので、列を空にして取り込ませる。
- */
-internal class FtutterEchoGuard {
-    private val pending = ArrayDeque<String>()
-
-    fun wrote(value: String) {
-        pending.addLast(value)
-        // 届かなかった通知（同じ値が続いて通知が省かれた等）で列が伸び続けないようにする。
-        while (pending.size > FTUTTER_ECHO_PENDING_MAX) pending.removeFirst()
-    }
-
-    fun isOwnEcho(value: String): Boolean {
-        val index = pending.indexOf(value)
-        if (index < 0) {
-            pending.clear()
-            return false
-        }
-        repeat(index + 1) { pending.removeFirst() }
-        return true
-    }
-}
-
-private const val FTUTTER_ECHO_PENDING_MAX = 64
 
 /**
  * タブのドラッグを離した時の並べ替え（元の位置, 移す位置）。位置は離した時の並び[urls]から引く。タブの幅の3分の1より動かして
@@ -510,4 +441,25 @@ internal fun ftutterTabDragMove(urls: List<String>, url: String, dragOffset: Flo
 internal fun ftutterLimitedHistoryUrls(urls: List<String>, protected: Set<String>, limit: Int): List<String> {
     var ordinary = 0
     return urls.filter { it in protected || ordinary++ < limit.coerceAtLeast(0) }
+}
+
+/** Shared tabs count replies; this mode's history rows count the opening post too. */
+internal fun com.valoser.futacha.shared.compat.CompatTab.toFtutterHistoryEntry(): ThreadHistoryEntry =
+    ThreadHistoryEntry(threadId = threadNo, boardId = boardKey, title = title,
+        titleImageUrl = thumbnailUrl.orEmpty(), boardName = boardName, boardUrl = originalUrl,
+        lastVisitedEpochMillis = contentUpdatedAtEpochMillis,
+        replyCount = replyCount.coerceIn(0, Int.MAX_VALUE - 1) + 1, isAutoRefreshDisabled = isDead)
+
+internal fun ftutterSharedDrawerCloseTargets(
+    action: FtutterTabAction, sourceUrl: String, content: FtutterDrawerContent,
+    historyUrls: List<String>, ownUrls: List<String>, sharedUrls: List<String>,
+    entries: Map<String, ThreadHistoryEntry>
+): List<String> {
+    val urls = (ownUrls + sharedUrls).distinct()
+    return when (action) {
+        FtutterTabAction.CLOSE_FALLEN -> urls.filter { entries[it]?.isAutoRefreshDisabled == true }
+        FtutterTabAction.CLOSE_AFTER -> ftutterTabsAfter(ftutterDrawerUrls(content, historyUrls, urls), sourceUrl)
+        FtutterTabAction.CLOSE_ALL -> urls
+        else -> emptyList()
+    }
 }

@@ -11,10 +11,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.futaber.FUTABER_DRAFT_MAX_COMMENT_CHARS
 import com.valoser.futacha.shared.ui.futaber.FUTABER_DRAFT_MAX_COUNT
-import com.valoser.futacha.shared.ui.futaber.FUTABER_MAX_TABS
 import com.valoser.futacha.shared.ui.futaber.FutaberPostTarget
 import com.valoser.futacha.shared.ui.futaber.FutaberTabKey
-import com.valoser.futacha.shared.ui.futaber.FutaberTabToggleOutcome
 import com.valoser.futacha.shared.ui.futaber.FutaberThreadRef
 import com.valoser.futacha.shared.ui.futaber.buildFutaberOpenHistoryEntry
 import com.valoser.futacha.shared.ui.futaber.futaberCompatBoardKey
@@ -34,10 +32,8 @@ import com.valoser.futacha.shared.ui.futaber.futaberRefWithHistory
 import com.valoser.futacha.shared.ui.futaber.futaberResumeIndex
 import com.valoser.futacha.shared.ui.futaber.futaberSeenCountForBoard
 import com.valoser.futacha.shared.ui.futaber.futaberSeenCountsAfterForBoard
-import com.valoser.futacha.shared.ui.futaber.futaberTabToggleOutcome
 import com.valoser.futacha.shared.ui.futaber.futaberTabViews
 import com.valoser.futacha.shared.ui.futaber.futaberTabsFromStore
-import com.valoser.futacha.shared.ui.futaber.futaberTabsMakingRoomFor
 import com.valoser.futacha.shared.ui.futaber.futaberTabsToStore
 import com.valoser.futacha.shared.ui.futaber.futaberToggleFavorite
 import com.valoser.futacha.shared.ui.futaber.futaberToggleTab
@@ -88,15 +84,11 @@ class FutaberOnlyCharacterizationTest {
         assertEquals(tabs, futaberTabsFromStore(encodeFutaberTabs(tabs), boards), "an older value with the board ids reads the same")
     }
 
-    @Test fun futaberOnlyFullStripRefusesTheFiftyFirstUnlessAHiddenTabCanMakeRoom() = withStores { _, state ->
-        val history = opened(state, *(1..FUTABER_MAX_TABS).map { may to "$it" }.toTypedArray())
-        val full = (1..FUTABER_MAX_TABS).map { FutaberTabKey(may.id, "$it") }
+    /** Plan B8a (Q3b): the 50-tab cap is gone; the strip takes the 51st (the shared limit trims, not this mode). */
+    @Test fun futaberOnlyStripTakesTheFiftyFirstTab() {
+        val full = (1..50).map { FutaberTabKey(may.id, "$it") }
         val next = FutaberTabKey(may.id, "999")
-        assertEquals(FutaberTabToggleOutcome.Full, futaberTabToggleOutcome(full, next))
-        assertEquals(full, futaberToggleTab(full, next))
-        assertNull(futaberTabsMakingRoomFor(full, next, history), "every tab is shown: nothing gives way")
-        val withHidden = full.drop(1) + FutaberTabKey(may.id, "gone")
-        assertEquals(full.drop(1) + next, futaberTabsMakingRoomFor(withHidden, next, history), "the one not shown gives way")
+        assertEquals(full + next, futaberToggleTab(full, next))
     }
 
     @Test fun futaberOnlyFavoritesOutliveTheHistoryButGoWithTheirBoard() {

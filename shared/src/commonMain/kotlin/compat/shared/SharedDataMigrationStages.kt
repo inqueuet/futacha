@@ -4,6 +4,11 @@ import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.boardSettingKeys
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.ui.ftutter.FtutterKeys
+import com.valoser.futacha.shared.ui.ftutter.migrateFtutterLegacyTabs
+import com.valoser.futacha.shared.ui.futaber.FUTABER_TABS_STAGE_ID
+import com.valoser.futacha.shared.ui.futaber.FutaberPreferenceKeys
+import com.valoser.futacha.shared.ui.futaber.migrateFutaberLegacyTabs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
@@ -62,14 +67,53 @@ internal class BoardKeyedMapsStage(private val stateStore: AppStateStore) : Shar
 }
 
 /**
+ * `tabs-ftutter-v1` (plan B7a): ふたったー風's old tab rows (`compat.ftutter.tabs` / `protected`) go to the shared tabs
+ * with this mode's marks ([migrateFtutterLegacyTabs]). The rows stay (the screen keeps showing the threads with no
+ * shared place from them), and the record of what was taken in keeps a re-run from adding a tab closed since.
+ */
+internal class FtutterTabsStage(
+    private val stateStore: AppStateStore,
+    private val compat: CompatibilityStore
+) : SharedDataMigrationStage {
+    override val id: String = "tabs-ftutter-v1"
+
+    override suspend fun readLegacy(): String =
+        listOf(FtutterKeys.TABS, FtutterKeys.PROTECTED).map { compat.loadPreference(it).orEmpty() }.joinToString("\n")
+            .takeIf { it.isNotBlank() }.orEmpty()
+
+    override suspend fun migrate(legacy: String) {
+        migrateFtutterLegacyTabs(compat, stateStore.boards.first(), stateStore.history.first(), Clock.System.now().toEpochMilliseconds())
+    }
+}
+
+/**
+ * `tabs-futaber-v1` (plan B8a): ふたばー風's old tab row (`compat.futaber.tabs`) goes to the shared tabs with this mode's
+ * marks ([migrateFutaberLegacyTabs]). The row stays (the strip keeps showing the threads with no shared place from it,
+ * and the reconcile reads it until B8b), and the record of what was taken in keeps a re-run from adding a tab closed since.
+ */
+internal class FutaberTabsStage(
+    private val stateStore: AppStateStore,
+    private val compat: CompatibilityStore
+) : SharedDataMigrationStage {
+    override val id: String = FUTABER_TABS_STAGE_ID
+
+    override suspend fun readLegacy(): String = compat.loadPreference(FutaberPreferenceKeys.TABS).orEmpty()
+
+    override suspend fun migrate(legacy: String) {
+        migrateFutaberLegacyTabs(compat, stateStore.boards.first(), stateStore.history.first(), Clock.System.now().toEpochMilliseconds())
+    }
+}
+
+/**
  * Runs the registered migration stages once both stores are loaded (each host calls it at start, before or beside the
  * first screen; the screens read the legacy places too until a stage ran). A failure is logged and the stage runs again
  * at the next start.
  */
 suspend fun runSharedDataMigrations(stateStore: AppStateStore, compat: CompatibilityStore): SharedMigrationRun? = try {
+    compat.setSharedMigrationsSettled(false)
     awaitCompatibilityLoaded(compat)
     SharedDataMigrationRunner(CompatSharedMigrationMarkStore(compat)) { Clock.System.now().toEpochMilliseconds() }
-        .run(SharedDataMigrations.stagesFor(stateStore))
+        .run(SharedDataMigrations.stagesFor(stateStore, compat))
         .also { run ->
             run.failure?.let { error -> Logger.e("SharedDataMigrations", "Stage ${run.failedStage} failed", error) }
         }
@@ -78,4 +122,6 @@ suspend fun runSharedDataMigrations(stateStore: AppStateStore, compat: Compatibi
 } catch (error: Exception) {
     Logger.e("SharedDataMigrations", "Failed to run the migration stages", error)
     null
+} finally {
+    compat.setSharedMigrationsSettled(true)
 }

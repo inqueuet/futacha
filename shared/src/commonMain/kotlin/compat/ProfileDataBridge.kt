@@ -2,10 +2,9 @@ package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.compat.shared.SharedBoardSide
 import com.valoser.futacha.shared.compat.shared.synchronizeSharedBoards
+import com.valoser.futacha.shared.compat.shared.synchronizeSharedHistory
 import com.valoser.futacha.shared.state.AppStateStore
-import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -24,9 +23,6 @@ suspend fun bridgeProfileBoardsAndHistory(
     usesAppStateData: Boolean,
     onFailure: (operation: String, failure: Throwable) -> Unit
 ): Unit = coroutineScope {
-    suspend fun bridge(operation: String, update: suspend () -> Unit) {
-        runSuspendCatchingPreservingCancellation { update() }.onFailure { failure -> onFailure(operation, failure) }
-    }
     launch {
         // The boards of the two stores as one list (D-B1): joined, and only a deletion in the mode's own list takes a
         // board away (compat/shared/SharedBoards.kt). A board only the other store has is no longer deleted (D1).
@@ -38,13 +34,7 @@ suspend fun bridgeProfileBoardsAndHistory(
         ) { failure -> onFailure("boards", failure) }
     }
     launch {
-        compatibilityStore.history.collect { compatHistory ->
-            bridge("history") {
-                val boards = stateStore.boards.first()
-                stateStore.updateHistory { current ->
-                    mergeCompatibilityHistory(current, compatHistory, boards)
-                }
-            }
-        }
+        // The history of the four modes as one list, both ways (plan B3, compat/shared/SharedHistory.kt).
+        synchronizeSharedHistory(stateStore, compatibilityStore, appStateHistory = stateStore.observedHistory, onFailure = onFailure)
     }
 }

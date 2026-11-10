@@ -345,7 +345,7 @@ internal fun ftutterBackupPlan(
     }
     if (protected.isNotEmpty()) out[FtutterKeys.PROTECTED] = encodeFtutterList(protected.toList())
     // タブ：今のタブの前に、原作のタブを（重複を除いて）入れる。取り込んだ履歴は今の履歴より上に並ぶので、履歴の保存数の
-    // 上限は今のタブから閉じる。後で黙って閉じず、ここで上限に合わせ、閉じる数を確認の文に出す（L132）。
+    // 上限は今のタブから隠れる（共有タブは閉じない、計画B7a）。後で黙って隠さず、ここで上限に合わせ、隠れる数を確認の文に出す（L132）。
     var tabCounts: FtutterImportTabCounts? = null
     texts("tabs")?.map(::ftutterCanonicalThreadUrl)?.takeIf { it.isNotEmpty() }?.let { tabs ->
         val current = parseFtutterTabs(existingPreferences).urls
@@ -395,14 +395,14 @@ internal fun ftutterBackupPlan(
         limitations.toList(), (prefs["cookie"] as? FtutterPrefValue.Text)?.value, importedDrafts, draftImport, tabCounts)
 }
 
-/** 取り込むタブの内訳（L132）。[closed] は履歴の保存数 [limit] を超えて閉じる数（保護したタブは数えない）。 */
+/** 取り込むタブの内訳（L132）。[closed] は履歴の保存数 [limit] を超えてこのモードに出なくなる数（保護したタブは数えない）。 */
 internal data class FtutterImportTabCounts(val imported: Int, val current: Int, val merged: Int, val closed: Int, val limit: Int) {
     val summary: String
         get() = buildString {
             append("タブ：取り込み ${imported}件")
             val details = listOfNotNull(
                 "今のタブ ${current}件と合わせて ${merged}件".takeIf { current > 0 },
-                "履歴の保存数 ${limit} を超える古いタブ ${closed}件は閉じます".takeIf { closed > 0 }
+                "履歴の保存数 ${limit} を超える古いタブ ${closed}件はこのモードに表示されません".takeIf { closed > 0 }
             )
             if (details.isNotEmpty()) append("（${details.joinToString("。")}）")
         }

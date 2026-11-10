@@ -209,17 +209,20 @@ internal fun mergeCompatCatalogTab(
     )
 }
 
+/** The title of a tab made before anything could name its thread (audit round 5, N1): a real title replaces it. */
+const val COMPAT_UNTITLED_TAB_TITLE = "(無題)"
+
 /**
  * Reopen a thread from history, the watcher or a link without discarding the
  * state of a tab that is already open: favourite, read baseline, dead/old/
  * deleted badges, snapshot revision, insertion time and scroll anchor all stay.
  * The candidate only fills in what the existing tab lacks.
  */
-internal fun mergeCompatReopenedTab(existing: CompatTab?, candidate: CompatTab): CompatTab {
+fun mergeCompatReopenedTab(existing: CompatTab?, candidate: CompatTab): CompatTab {
     if (existing == null) return candidate
     val existingTitle = existing.title.trim()
     val keepExistingTitle = existingTitle.isNotEmpty() &&
-        (existingTitle != "No.${existing.threadNo}" || candidate.title.isBlank())
+        ((existingTitle != "No.${existing.threadNo}" && existingTitle != COMPAT_UNTITLED_TAB_TITLE) || candidate.title.isBlank())
     return existing.copy(
         originalUrl = existing.originalUrl.ifBlank { candidate.originalUrl },
         boardName = existing.boardName.ifBlank { candidate.boardName },

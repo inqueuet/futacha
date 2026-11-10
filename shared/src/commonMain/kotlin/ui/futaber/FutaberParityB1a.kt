@@ -71,19 +71,21 @@ private const val PARITY_TAG = "FutaberParity"
 // ---- H11: closing several tabs at once keeps the starred threads ----
 
 /**
- * The tabs after a bulk close turned [before] into [after]: with [enabled], the tabs of starred threads that the close
- * took away are put back where they were (the order of [before] is kept). A key that was not a tab before is never added.
+ * The tabs after a bulk close turned [before] into [after]: with [enabled], the tabs of this mode's favourites and of
+ * shared tabs with a ★ ([isStarred], plan B5 / Q7) that the close took away are put back where they were (the order of
+ * [before] is kept). A key that was not a tab before is never added.
  */
 internal fun futaberKeepFavoriteTabs(
     before: List<FutaberTabKey>,
     after: List<FutaberTabKey>,
     favorites: List<FutaberFavorite>,
-    enabled: Boolean
+    enabled: Boolean,
+    isStarred: (FutaberTabKey) -> Boolean = { false }
 ): List<FutaberTabKey> {
     if (!enabled) return after
     val kept = after.toHashSet()
-    val starred = favorites.mapTo(HashSet()) { it.key }
-    return before.filter { it in kept || it in starred }
+    val favoriteKeys = favorites.mapTo(HashSet()) { it.key }
+    return before.filter { it in kept || it in favoriteKeys || isStarred(it) }
 }
 
 // ---- H12: a row of a board that is not registered offers to add it, then opens it ----
@@ -357,22 +359,6 @@ internal data class FutaberOtherFavorite(val tab: CompatTab, val ref: FutaberThr
 internal fun futaberOtherModeFavorites(tabs: List<CompatTab>, boards: List<BoardSummary>): List<FutaberOtherFavorite> {
     val byKey = boards.associateBy { futaberCompatBoardKey(it) }
     return tabs.filter { it.favorite && it.threadNo.isNotBlank() }.distinctBy { it.key }.map { tab ->
-        val board = byKey[tab.boardKey]
-        FutaberOtherFavorite(
-            tab,
-            board?.let { FutaberThreadRef(it.id, tab.threadNo, tab.title.ifBlank { "(無題)" }, tab.thumbnailUrl.orEmpty(), tab.replyCount) }
-        )
-    }
-}
-
-/**
- * D-B4 (J1): the tabs the other modes have open, to list read only in the manage panel's tab category. [ownKeys] are the
- * shared keys this mode's own strip and stars were written under (they are not "other"); closed-on-purpose tabs are not
- * in the shared tabs at all. The favourites are listed on their own page, so a starred tab is left out here.
- */
-internal fun futaberOtherModeOpenTabs(tabs: List<CompatTab>, boards: List<BoardSummary>, ownKeys: Set<String>): List<FutaberOtherFavorite> {
-    val byKey = boards.associateBy { futaberCompatBoardKey(it) }
-    return tabs.filter { !it.favorite && it.threadNo.isNotBlank() && it.key !in ownKeys }.distinctBy { it.key }.map { tab ->
         val board = byKey[tab.boardKey]
         FutaberOtherFavorite(
             tab,

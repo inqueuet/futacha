@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.compat.shared
 
+import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.state.AppStateStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -85,8 +86,8 @@ object SharedDataMigrations {
     )
 
     /** The registered stages, in the order of [PLANNED_STAGE_IDS]. */
-    fun stagesFor(stateStore: AppStateStore): List<SharedDataMigrationStage> =
-        listOf(BoardKeyedMapsStage(stateStore))
+    fun stagesFor(stateStore: AppStateStore, compat: CompatibilityStore? = null): List<SharedDataMigrationStage> =
+        listOfNotNull(BoardKeyedMapsStage(stateStore), compat?.let { FtutterTabsStage(stateStore, it) }, compat?.let { FutaberTabsStage(stateStore, it) })
 
     fun markKey(stageId: String): String = MARK_KEY_PREFIX + stageId
 

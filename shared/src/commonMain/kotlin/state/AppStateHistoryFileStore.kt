@@ -57,6 +57,9 @@ internal class AppStateHistoryFileStore(
     val maxEntries: Int = APP_STATE_HISTORY_MAX_ENTRIES
 ) {
     private val mutex = Mutex()
+
+    /** The deletions kept across restarts, in their own file beside this store (not in its folder or manifest). */
+    fun tombstonePersistence(): AppStateHistoryTombstonePersistence = AppStateHistoryTombstoneFile(fileSystem, json, tag)
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes
     private val cachedEntryContentHashes = mutableMapOf<String, String>()

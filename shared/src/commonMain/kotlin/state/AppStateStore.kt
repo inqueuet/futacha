@@ -76,7 +76,9 @@ class AppStateStore internal constructor(
     },
     scrollDebounceDelayMillis: Long = SCROLL_DEBOUNCE_DELAY_MS,
     /** Cleans up storage of entries the history size limit dropped; runs off the history write. */
-    private val onHistoryEntriesTrimmed: (suspend (List<ThreadHistoryEntry>) -> Unit)? = null
+    private val onHistoryEntriesTrimmed: (suspend (List<ThreadHistoryEntry>) -> Unit)? = null,
+    /** Keeps history deletions across restarts; beside the split history store when there is one. */
+    historyTombstonePersistence: AppStateHistoryTombstonePersistence? = historyFileStore?.tombstonePersistence()
 ) {
     private val observationScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
     private fun <T> Flow<T>.shared(): Flow<T> =
@@ -183,7 +185,8 @@ class AppStateStore internal constructor(
         tag = TAG,
         historyCoordinator = historyCoordinator,
         scrollPersistenceCoordinator = scrollPersistenceCoordinator,
-        runStorageMutation = ::runStorageMutation
+        runStorageMutation = ::runStorageMutation,
+        tombstonePersistence = historyTombstonePersistence
     )
 
     suspend fun setScrollDebounceScope(scope: CoroutineScope) = setScrollDebounceScopeInternal(scope)
@@ -700,10 +703,35 @@ class AppStateStore internal constructor(
      */
     suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.upsertHistoryEntry(entry)
 
-    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry) =
-        historyOperations.prependOrReplaceHistoryEntry(entry)
+    /**
+     * A screen's open. Pass [openedAtTicket] ([historyDeletionTicket] taken when the person opened the thread) when
+     * the write may land later than the open: a deletion made in between then wins (audit F8).
+     */
+    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry, openedAtTicket: Long? = null) =
+        historyOperations.prependOrReplaceHistoryEntry(entry, openedAtTicket)
+
+    /** The history deletion counter now, without suspending (for [prependOrReplaceHistoryEntry]'s ticket). */
+    fun historyDeletionTicket(): Long = historyOperations.deletionTicket()
 
     suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) =
+        historyOperations.prependOrReplaceHistoryEntries(entries)
+
+    /**
+     * Rows the person chose to import (ふたったー風's `.ftt`): they go in even when deleted before, as an open would.
+     * Automatic paths must not call it (they would undo deletions); the source contract test pins its callers.
+     */
+    /** Rows opened or brought in on purpose; the shared history copy forgets their deletion in としあき(仮)'s store. */
+    val historyOpens: kotlinx.coroutines.flow.SharedFlow<List<ThreadHistoryEntry>> get() = historyOperations.historyOpens
+
+    /** Forgets the deletions of [entries]: としあき(仮) opened them again (plan B3). */
+    suspend fun forgetHistoryTombstones(entries: Collection<ThreadHistoryEntry>) =
+        historyOperations.forgetHistoryTombstones(entries)
+
+    /** A restore the person chose: rows [transform] adds come in whatever their deletion (plan B3). */
+    suspend fun restoreHistory(transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>) =
+        historyOperations.restoreHistory(transform)
+
+    suspend fun importHistoryEntries(entries: List<ThreadHistoryEntry>) =
         historyOperations.prependOrReplaceHistoryEntries(entries)
 
     suspend fun mergeHistoryEntries(entries: Collection<ThreadHistoryEntry>) =

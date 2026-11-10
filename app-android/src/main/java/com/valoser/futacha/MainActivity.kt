@@ -204,12 +204,10 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.LaunchedEffect(activeProfile, app, stateStore) {
                 val compatStore = app?.compatibilityStore ?: return@LaunchedEffect
                 if (activeProfile.usesAppStateData) return@LaunchedEffect
-                kotlinx.coroutines.flow.combine(stateStore.observedBoards, stateStore.observedHistory) { boards, history ->
-                    boards to history
-                }.collect { (boards, history) ->
+                // The history is copied by the bridge below in every mode (plan B3); only the boards' first copy is here.
+                stateStore.observedBoards.collect { boards ->
                     try {
                         if (boards.isNotEmpty()) compatStore.bootstrapBoardsIfNeeded(boards)
-                        compatStore.importModernHistory(history)
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Throwable) {
                         // Same as before the shared-flow change: log and keep the

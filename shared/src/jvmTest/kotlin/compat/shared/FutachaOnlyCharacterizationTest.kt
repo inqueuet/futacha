@@ -1,6 +1,5 @@
 package com.valoser.futacha.shared.compat.shared
 
-import com.valoser.futacha.shared.compat.COMPAT_TAB_LIMIT_AFTER_TRIM
 import com.valoser.futacha.shared.compat.CompatThreadStatusFlags
 import com.valoser.futacha.shared.compat.bridgeProfileBoardsAndHistory
 import com.valoser.futacha.shared.compat.catalogReplyCountsByUrl
@@ -86,9 +85,10 @@ class FutachaOnlyCharacterizationTest {
     @Test fun futachaOnlyStarProtectsATabFromTheTrimAndGoesWithTheTab() = withStores { compat, _ ->
         compat.openTab(SingleMode.tab(may, "1", insertedAt = 1))
         assertTrue(toggleFutachaTabFavorite(compat, SingleMode.tab(may, "1", 1).key))
-        (2..101).forEach { compat.openTab(SingleMode.tab(may, "$it", insertedAt = it.toLong())) }
+        (2..201).forEach { compat.openTab(SingleMode.tab(may, "$it", insertedAt = it.toLong())) }
         val kept = compat.tabs.first()
-        assertEquals(COMPAT_TAB_LIMIT_AFTER_TRIM, kept.size, "100 -> 90 after the 101st")
+        // B4 (decision Q3): the shared limit is 200; the star and the active tab stay, the 199 others go back to 178.
+        assertEquals(180, kept.size, "200 -> 180 after the 201st")
         assertTrue(kept.any { it.threadNo == "1" && it.favorite }, "the starred oldest tab stays")
         assertTrue(kept.none { it.threadNo == "2" }, "the oldest one without a star goes")
         compat.closeTabs(setOf(SingleMode.tab(may, "1", 1).key), 200)

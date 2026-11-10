@@ -2346,6 +2346,9 @@ final class IosAppUITests: XCTestCase {
     /// L-B6 (M20): this app's items follow the original's eleven inside the menu's grid, which shows three rows; the grid
     /// is moved up from its third row until [target] can be pressed.
     func futaberRevealInMenu(_ app: XCUIApplication, _ target: XCUIElement) {
+        // F-B2: this app's items are the second step behind 「その他の機能」, the 12th cell.
+        let more = app.descendants(matching: .any).matching(identifier: "futaber-menu-more").firstMatch
+        if more.waitForExistence(timeout: 5) { more.tap() }
         let row3 = app.descendants(matching: .any).matching(identifier: "futaber-menu-ng-toggle").firstMatch
         _ = target.waitForExistence(timeout: 10)
         for _ in 0..<6 where !(target.exists && target.isHittable) {

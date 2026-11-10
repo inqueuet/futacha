@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.compat.shared.SharedBoardSide
 import com.valoser.futacha.shared.compat.shared.reconcileSharedBoards
+import com.valoser.futacha.shared.compat.shared.synchronizeSharedHistory
 import com.valoser.futacha.shared.media.source.*
 import com.valoser.futacha.shared.network.*
 import com.valoser.futacha.shared.model.CatalogFetchSettings
@@ -285,9 +286,9 @@ fun DesktopFutachaApp(graph: DesktopAppGraph, onExit: () -> Unit) {
         }
     }
     LaunchedEffect(graph) {
-        graph.compatibility.history.distinctUntilChangedBy(::compatibilityHistorySharedMetadata).collect { history ->
-            val boards = graph.stateStore.boards.first()
-            graph.stateStore.updateHistory { mergeCompatibilityHistory(it, history, boards) }
+        // The history of the four modes as one list, both ways (plan B3), as on Android and iOS.
+        synchronizeSharedHistory(graph.stateStore, graph.compatibility) { operation, failure ->
+            Logger.e("DesktopApp", "Failed to synchronize the $operation", failure)
         }
     }
     LaunchedEffect(graph.profile, graph.generation, graph.switching) {

@@ -20,7 +20,6 @@ import com.valoser.futacha.shared.state.launchHistoryScrollPersistence
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -320,6 +319,18 @@ internal suspend fun findModernHistoryEntryFor(
     history.firstOrNull { it.toCompatHistoryEntry()?.canonicalUrl == canonicalUrl }
 }
 
+/**
+ * Every AppState history row whose shared-history address is [canonicalUrl] (audit F7): the AppState history can hold one
+ * thread under two board ids (a row imported with the address-derived key and the board's own id), and deleting only
+ * the first one left the other in the AppState modes. Searched off the caller's thread, as [findModernHistoryEntryFor].
+ */
+internal suspend fun findModernHistoryEntriesFor(
+    history: List<ThreadHistoryEntry>,
+    canonicalUrl: String
+): List<ThreadHistoryEntry> = withContext(AppDispatchers.parsing) {
+    history.filter { it.toCompatHistoryEntry()?.canonicalUrl == canonicalUrl }
+}
+
 internal suspend fun dismissHistoryEntry(
     stateStore: AppStateStore,
     autoSavedThreadRepository: SavedThreadRepository?,
@@ -327,14 +338,18 @@ internal suspend fun dismissHistoryEntry(
     compatibilityStore: CompatibilityStore? = null,
     entry: ThreadHistoryEntry,
     onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
-) {
+) = withContext(NonCancellable) {
+    // Once started it goes to the end (audit F2, 2026-11-09): cancelled after the shared store's delete, the row stayed
+    // in AppState while the shared store's tombstone kept it from coming back there.
     val resolvedBoardId = resolveHistoryEntryBoardId(entry)
-    entry.toCompatHistoryEntry()?.let { compatibilityEntry ->
-        compatibilityStore?.deleteHistory(compatibilityEntry.canonicalUrl)
-    }
+    // AppState (the history's source) first: its tombstone is kept across restarts, so no copy can bring the row back
+    // even if the shared store's step does not happen (plan 1-5, B2).
     // removeHistoryEntry cancels the matching delayed scroll write before the
     // durable mutation, so a disposed/current screen cannot recreate it.
     stateStore.removeHistoryEntry(entry)
+    entry.toCompatHistoryEntry()?.let { compatibilityEntry ->
+        compatibilityStore?.deleteHistory(compatibilityEntry.canonicalUrl)
+    }
     stateStore.removeSelfPostIdentifiersForThread(
         threadId = entry.threadId,
         boardId = resolvedBoardId
@@ -366,15 +381,13 @@ internal suspend fun dismissHistoryEntries(
     // Once started it goes to the end (re-audit M27: cancelled half way, the other modes' rows were gone and this
     // mode's stayed), and each store is written once, not once per row.
     withContext(NonCancellable) {
-        if (compatibilityStore != null) {
-            val wanted = entries.mapNotNullTo(LinkedHashSet()) { it.toCompatHistoryEntry()?.canonicalUrl }
-            if (wanted.isNotEmpty()) {
-                val stored = compatibilityStore.history.first().mapTo(HashSet()) { it.canonicalUrl }
-                val present = wanted.filter { it in stored }
-                if (present.isNotEmpty()) compatibilityStore.deleteHistories(present)
-            }
-        }
         stateStore.removeHistoryEntries(entries)
+        if (compatibilityStore != null) {
+            // Every row asked for, not only those the shared store holds now (audit F3): a copy read before this
+            // deletion must not bring the others back there.
+            val wanted = entries.mapNotNullTo(LinkedHashSet()) { it.toCompatHistoryEntry()?.canonicalUrl }
+            if (wanted.isNotEmpty()) compatibilityStore.deleteHistories(wanted)
+        }
         val threads = entries.map { it.threadId to resolveHistoryEntryBoardId(it) }.distinct()
         stateStore.removeSelfPostIdentifiersForThreads(threads)
         listOfNotNull(autoSavedThreadRepository, importedHistoryRepository)
@@ -410,13 +423,16 @@ internal suspend fun clearHistory(
     compatibilityStore: CompatibilityStore? = null,
     onSkippedThreadsCleared: () -> Unit,
     onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
-) {
+) = withContext(NonCancellable) {
+    // Once started it goes to the end (audit B1, 2026-11-09): the callers' scopes (ふたばー風's "すべて削除", the AI,
+    // としあき(仮)'s store tasks) can be cancelled by a mode switch after the shared store was cleared.
     stateStore.cancelAllPendingHistoryScrollUpdates()
-    compatibilityStore?.clearHistory()
     // Logical deletion is committed before potentially slow recursive I/O.
     // Background refresh metadata merges are existing-only and therefore
     // cannot repopulate the list while payload cleanup is running.
+    // AppState first: its clear time is kept across restarts (plan 1-5, B2).
     stateStore.clearHistory()
+    compatibilityStore?.clearHistory()
     stateStore.clearSelfPostIdentifiers()
     onSkippedThreadsCleared()
     listOfNotNull(autoSavedThreadRepository, importedHistoryRepository)

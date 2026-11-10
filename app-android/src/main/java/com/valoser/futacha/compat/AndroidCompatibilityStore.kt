@@ -8,6 +8,16 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 import com.valoser.futacha.shared.compat.CompatSharedTabView
+import com.valoser.futacha.shared.compat.COMPAT_CLOSED_BATCH_MAX
+import com.valoser.futacha.shared.compat.CompatTabPlacement
+import com.valoser.futacha.shared.compat.compatClosedBatchFor
+import com.valoser.futacha.shared.compat.compatKeptClosedBatches
+import com.valoser.futacha.shared.compat.compatPendingClosedBatch
+import com.valoser.futacha.shared.compat.compatRestoredTab
+import com.valoser.futacha.shared.compat.compatRestoredViews
+import com.valoser.futacha.shared.compat.compatViewsWith
+import com.valoser.futacha.shared.compat.mergeCompatReopenedTab
+import com.valoser.futacha.shared.compat.newCompatClosedTabBatch
 import com.valoser.futacha.shared.compat.isValidCompatImagePhash
 import com.valoser.futacha.shared.compat.isCompatImagePhashCacheKey
 import com.valoser.futacha.shared.compat.pinnedTo
@@ -111,8 +121,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
 
-private enum class CompatObservableState { BOARDS, TABS, HISTORY, WORKSPACE, PREFERENCES, NG_RULES }
+private enum class CompatObservableState { BOARDS, TABS, HISTORY, WORKSPACE, PREFERENCES, NG_RULES, TAB_VIEWS }
 private val ALL_COMPAT_OBSERVABLE_STATES = CompatObservableState.entries.toSet()
+// "Everything" as before plan B6: TAB_VIEWS follows TABS (a view goes with its tab), so a write naming the six
+// states still counts as a whole-store write (the reconciliation and the first load).
+private val CORE_COMPAT_OBSERVABLE_STATES = ALL_COMPAT_OBSERVABLE_STATES - CompatObservableState.TAB_VIEWS
 private val NO_COMPAT_OBSERVABLE_STATES = emptySet<CompatObservableState>()
 
 // The NG rules read and applied: the newest valid rows, up to MAX_COMPAT_NG_RULES (rowid decides a tie) (L91).
@@ -163,6 +176,7 @@ class AndroidCompatibilityStore(
     private val workspaceState = MutableStateFlow(CompatWorkspaceRecord())
     private val preferencesState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val ngRulesState = MutableStateFlow<List<CompatNgRule>>(emptyList())
+    private val tabViewsState = MutableStateFlow<List<CompatSharedTabView>>(emptyList())
 
     private val loadedState = MutableStateFlow(false)
 
@@ -183,6 +197,11 @@ class AndroidCompatibilityStore(
     override val workspace: Flow<CompatWorkspaceRecord> = workspaceState.afterLoaded()
     override val preferences: Flow<Map<String, String>> = preferencesState.afterLoaded()
     override val ngRules: Flow<List<CompatNgRule>> = ngRulesState.afterLoaded()
+    private val migrationsSettledFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+    override val sharedMigrationsSettled: kotlinx.coroutines.flow.StateFlow<Boolean> get() = migrationsSettledFlow
+    override fun setSharedMigrationsSettled(settled: Boolean) { migrationsSettledFlow.value = settled }
+
+    override val tabViews: Flow<List<CompatSharedTabView>> = tabViewsState.afterLoaded()
 
     private fun <T> StateFlow<T>.afterLoaded(): Flow<T> {
         val source = this
@@ -249,12 +268,14 @@ class AndroidCompatibilityStore(
             expired.forEach { batch ->
                 db.delete("compat_closed_batch", "batch_id=?", arrayOf(batch.id))
             }
-            val pending = db.readClosedBatches { it.expiresAtEpochMillis > currentTimeMillis() }
-                .maxByOrNull { it.expiresAtEpochMillis }
+            // Plan B6: records live 24 hours; only the newest one still within its 7-second notice is offered again.
+            val pending = compatPendingClosedBatch(db.readClosedBatches(), currentTimeMillis())
             observation = nextClosedBatchObservation()
+            // As on iOS and desktop: a limit lowered earlier closes the extra tabs at the next start (audit L3).
+            val trimmedAttachments = db.trimTabs()
             AttachmentCleanupMutation(
                 value = pending,
-                candidates = expired.attachmentLocators() + repairDiscardedAttachments,
+                candidates = expired.attachmentLocators() + repairDiscardedAttachments + trimmedAttachments,
                 retained = db.readRetainedAttachmentLocators()
             )
         }
@@ -309,11 +330,25 @@ class AndroidCompatibilityStore(
         true
     }
 
+    override suspend fun rememberModernBoardAliases(modernBoards: List<BoardSummary>) = mutate(
+        refresh = setOf(CompatObservableState.PREFERENCES)
+    ) { db ->
+        val key = com.valoser.futacha.shared.compat.COMPAT_SHARED_BOARD_ALIASES
+        val aliases = com.valoser.futacha.shared.compat.updatedCompatBoardAliases(db.readPreferenceValue(key), modernBoards)
+        if (db.readPreferenceValue(key) != aliases) db.insertWithOnConflict("compat_preference", null,
+            ContentValues().apply { put("key", key); put("value_json", aliases) }, SQLiteDatabase.CONFLICT_REPLACE)
+        Unit
+    }
+
     override suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int = mutate(
-        refresh = setOf(CompatObservableState.BOARDS)
+        refresh = setOf(CompatObservableState.BOARDS, CompatObservableState.PREFERENCES)
     ) { db ->
         val added = validatedModernBoards(modernBoards).count { board -> db.insertBoardIfMissing(board) }
         db.requireBoardCapacity()
+        val aliasKey = com.valoser.futacha.shared.compat.COMPAT_SHARED_BOARD_ALIASES
+        val aliases = com.valoser.futacha.shared.compat.updatedCompatBoardAliases(db.readPreferenceValue(aliasKey), modernBoards)
+        if (db.readPreferenceValue(aliasKey) != aliases) db.insertWithOnConflict("compat_preference", null,
+            ContentValues().apply { put("key", aliasKey); put("value_json", aliases) }, SQLiteDatabase.CONFLICT_REPLACE)
         added
     }
 
@@ -326,7 +361,12 @@ class AndroidCompatibilityStore(
             modernHistory = modernHistory,
             current = db.readHistory(limit = null),
             knownBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key },
-            tombstoneAt = { url -> db.historyTombstoneAt(url) },
+            tombstoneAt = { url ->
+                com.valoser.futacha.shared.compat.compatHistoryDeletedAt(
+                    db.historyTombstoneAt(url),
+                    db.historyTombstoneAt(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
+                )
+            },
             historyLimit = HISTORY_LIMIT_TRIGGER,
             retain = { entries -> retainedAfterHistoryTrim(entries) }
         )
@@ -480,9 +520,10 @@ class AndroidCompatibilityStore(
         }
     }
 
-    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>): Int {
+    override suspend fun addTabsIfAbsent(tabs: List<CompatTab>, expectedPreferences: Map<String, String?>): Int {
         var added = 0
         mutate(refresh = setOf(CompatObservableState.TABS)) { db ->
+            if (expectedPreferences.any { (key, value) -> db.readPreferenceValue(key) != value }) { added = -1; return@mutate }
             // The boards are read once for the whole batch (audit D6: they were read again for every tab).
             val boardKeys = db.readBoards().mapTo(HashSet()) { it.key }
             tabs.distinctBy { it.key }.forEach { tab ->
@@ -529,11 +570,13 @@ class AndroidCompatibilityStore(
     override suspend fun closeTabs(
         tabKeys: Set<String>,
         nowEpochMillis: Long,
-        finalScrollAnchors: Map<String, ScrollAnchor>
+        finalScrollAnchors: Map<String, ScrollAnchor>,
+        closedBy: String?
     ): ClosedTabBatch? {
         var observation = 0L
         val cleanup = mutateThenCleanup(
             afterCommit = { committed -> if (observation != 0L) scheduleClosedBatchExpiry(committed.value, observation) },
+            reconcileSharedTabs = true,
             refresh = setOf(
                 CompatObservableState.TABS,
                 CompatObservableState.HISTORY,
@@ -552,14 +595,15 @@ class AndroidCompatibilityStore(
                 }
             }
             val currentTabs = db.readTabs()
+            val views = db.readAllTabViews().groupBy(CompatSharedTabView::tabKey)
             val closed = currentTabs.mapIndexedNotNull { index, tab ->
-                if (tab.key !in tabKeys) null else ClosedCompatTab(tab = tab, originalIndex = index)
+                if (tab.key !in tabKeys) null else ClosedCompatTab(tab = tab, originalIndex = index, views = views[tab.key].orEmpty())
             }
             if (closed.isEmpty()) {
                 return@mutateThenCleanup AttachmentCleanupMutation<ClosedTabBatch?>(null)
             }
             observation = nextClosedBatchObservation()
-            val supersededAttachments = db.readClosedBatches().attachmentLocators()
+            val previousBatches = db.readClosedBatches()
             val closedDraftAttachments = closed.mapNotNullTo(mutableSetOf()) { db.readDraft(it.tab.key)?.attachmentUri }
             closed.forEach { db.deleteTabAndRetainSnapshot(it.tab.key) }
             val workspace = db.readWorkspace()
@@ -567,14 +611,14 @@ class AndroidCompatibilityStore(
             val selected = workspace.activeTabKey?.takeIf { key -> remaining.any { it.key == key } }
                 ?: remaining.firstOrNull()?.key
             db.updateWorkspace(workspace.copy(activeTabKey = selected, generation = workspace.generation + 1))
-            val batch = ClosedTabBatch(
-                id = "close-$nowEpochMillis-${closed.joinToString("-") { it.tab.key }}",
-                tabs = closed,
-                selectedTabKey = workspace.activeTabKey,
-                expiresAtEpochMillis = saturatingEpochAdd(nowEpochMillis, UNDO_WINDOW_MILLIS)
-            )
-            db.delete("compat_closed_batch", null, null)
+            val batch = newCompatClosedTabBatch(closed, workspace.activeTabKey, nowEpochMillis, closedBy)
+            // Plan B6: the record keeps 20 batches for 24 hours (before, a close dropped every earlier batch).
+            val kept = compatKeptClosedBatches(listOf(batch) + previousBatches, nowEpochMillis)
+            val dropped = previousBatches.filter { previous -> kept.none { it.id == previous.id } }
+            dropped.forEach { db.delete("compat_closed_batch", "batch_id=?", arrayOf(it.id)) }
+            db.delete("compat_closed_batch", "batch_id=?", arrayOf(batch.id))
             db.insertClosedBatch(batch)
+            val supersededAttachments = dropped.attachmentLocators()
             AttachmentCleanupMutation(batch, supersededAttachments + closedDraftAttachments, db.readRetainedAttachmentLocators())
         }
         return cleanup.value
@@ -583,29 +627,75 @@ class AndroidCompatibilityStore(
     override suspend fun restoreClosedTabs(batch: ClosedTabBatch) {
         var observation = 0L
         mutateThenCleanup(
-            afterCommit = { scheduleClosedBatchExpiry(null, observation) },
-            refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE)
+            afterCommit = { if (observation != 0L) scheduleClosedBatchExpiry(null, observation) },
+            refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE, CompatObservableState.TAB_VIEWS)
         ) { db ->
-            // Match the reference APK: Undo restores the closed thread row only.
-            // The thread body remains in the independent cache, while the tab
-            // draft was removed when the tab row was closed.
-            val durableBatch = db.readClosedBatches().firstOrNull { it.id == batch.id } ?: batch
-            val boardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
-            val restorable = durableBatch.tabs.filter { it.tab.boardKey in boardKeys }
-            restorable.forEach { closed ->
-                db.upsertTab(closed.tab)
-            }
-            val current = db.readWorkspace()
-            val selected = durableBatch.selectedTabKey?.takeIf { db.readTab(it) != null } ?: current.activeTabKey
-            db.updateWorkspace(current.copy(activeTabKey = selected, generation = current.generation + 1))
-            db.delete("compat_closed_batch", "batch_id=?", arrayOf(durableBatch.id))
+            // Match the reference APK: Undo restores the closed thread row only. A record already brought back (by
+            // another mode, plan B6) does nothing.
+            val durableBatch = db.readClosedBatches().firstOrNull { it.id == batch.id }
+                ?: return@mutateThenCleanup AttachmentCleanupMutation(Unit)
+            val trimmedAttachments = db.restoreClosedBatch(durableBatch)
             observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 Unit,
-                durableBatch.tabs.mapNotNullTo(mutableSetOf()) { it.draft?.attachmentUri },
+                durableBatch.tabs.mapNotNullTo(mutableSetOf()) { it.draft?.attachmentUri } + trimmedAttachments,
                 db.readRetainedAttachmentLocators()
             )
         }
+    }
+
+    override suspend fun popClosedTabBatch(profile: String, nowEpochMillis: Long): ClosedTabBatch? {
+        var observation = 0L
+        val cleanup = mutateThenCleanup(
+            afterCommit = { if (observation != 0L) scheduleClosedBatchExpiry(null, observation) },
+            refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE, CompatObservableState.TAB_VIEWS)
+        ) { db ->
+            val batch = compatClosedBatchFor(db.readClosedBatches(), profile, nowEpochMillis)
+                ?: return@mutateThenCleanup AttachmentCleanupMutation<ClosedTabBatch?>(null)
+            val trimmedAttachments = db.restoreClosedBatch(batch)
+            observation = nextClosedBatchObservation()
+            AttachmentCleanupMutation(
+                batch,
+                batch.tabs.mapNotNullTo(mutableSetOf()) { it.draft?.attachmentUri } + trimmedAttachments,
+                db.readRetainedAttachmentLocators()
+            )
+        }
+        return cleanup.value
+    }
+
+    override suspend fun countClosedTabBatches(profile: String, nowEpochMillis: Long): Int = read { db ->
+        compatKeptClosedBatches(db.readClosedBatches(), nowEpochMillis).count { batch ->
+            batch.closedBy == profile || batch.tabs.any { closed -> closed.views.any { it.profile == profile } }
+        }
+    }
+
+    override suspend fun openSharedTab(
+        tab: CompatTab,
+        profile: String?,
+        placement: CompatTabPlacement,
+        select: Boolean,
+        board: CompatBoard?
+    ): Boolean {
+        // G2: the board first (its own validated write), then the tab, its view and the selection as one change.
+        if (board != null && read { db -> db.readBoards().none { it.key == board.key } }) upsertBoard(board)
+        var opened = false
+        mutateThenCleanup(
+            refresh = setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE, CompatObservableState.TAB_VIEWS)
+        ) { db ->
+            if (db.readBoards().none { it.key == tab.boardKey }) return@mutateThenCleanup AttachmentCleanupMutation(Unit)
+            val existing = db.readTab(tab.key)
+            val next = mergeCompatReopenedTab(existing, tab)
+            if (next != existing) db.upsertTab(next)
+            if (profile != null) {
+                val views = db.readAllTabViews()
+                db.replaceAllTabViews(setOf(profile), compatViewsWith(views, profile, tab.key, placement, tab.insertedAtEpochMillis))
+            }
+            if (select) db.updateWorkspace(db.readWorkspace().let { it.copy(activeTabKey = tab.key, generation = it.generation + 1) })
+            val trimmedAttachments = if (existing == null) db.trimTabs() else emptySet()
+            opened = db.readTab(tab.key) != null
+            AttachmentCleanupMutation(Unit, trimmedAttachments, db.readRetainedAttachmentLocators())
+        }
+        return opened
     }
 
     override suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch? {
@@ -618,8 +708,7 @@ class AndroidCompatibilityStore(
             expired.forEach { batch ->
                 db.delete("compat_closed_batch", "batch_id=?", arrayOf(batch.id))
             }
-            val pending = db.readClosedBatches { it.expiresAtEpochMillis > nowEpochMillis }
-                .maxByOrNull { it.expiresAtEpochMillis }
+            val pending = compatPendingClosedBatch(db.readClosedBatches(), nowEpochMillis)
             observation = nextClosedBatchObservation()
             AttachmentCleanupMutation(
                 pending,
@@ -711,12 +800,26 @@ class AndroidCompatibilityStore(
         }
     }
 
+    private val screenHeldTabs = com.valoser.futacha.shared.compat.CompatScreenHeldTabs()
+
+    override fun setScreenHeldTabs(profile: com.valoser.futacha.shared.compat.ExperienceProfile, keys: Set<String>) =
+        screenHeldTabs.set(profile, keys)
+
+    override suspend fun forgetHistoryTombstones(canonicalUrls: Collection<String>) {
+        if (canonicalUrls.isEmpty()) return
+        mutate(refresh = NO_COMPAT_OBSERVABLE_STATES) { db ->
+            canonicalUrls.distinct().forEach { canonicalUrl -> db.deleteHistoryTombstone(canonicalUrl) }
+            db.deleteHistoryTombstone(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
+        }
+    }
+
     override suspend fun clearHistory() = mutate(
         refresh = setOf(CompatObservableState.HISTORY)
     ) { db ->
         (db.readHistory().map { it.canonicalUrl } + db.readTabs().map { it.canonicalUrl })
             .distinct()
             .forEach { canonicalUrl -> db.putHistoryTombstone(canonicalUrl) }
+        db.putHistoryTombstone(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
         db.delete("compat_history", null, null)
         db.trimHistoryTombstones()
     }
@@ -1289,7 +1392,9 @@ class AndroidCompatibilityStore(
 
     override suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = read { db ->
         db.query(
-            "compat_tab_view", arrayOf("tab_key", "ordinal", "added_at"), "profile=?", arrayOf(profile),
+            "compat_tab_view", arrayOf("tab_key", "ordinal", "added_at"),
+            // Only views of tabs that exist, as on iOS and desktop (plan B6).
+            "profile=? AND EXISTS(SELECT 1 FROM compat_tab WHERE compat_tab.tab_key=compat_tab_view.tab_key)", arrayOf(profile),
             null, null, "ordinal ASC"
         ).use { cursor ->
             buildList { while (cursor.moveToNext()) add(CompatSharedTabView(cursor.getString(0), profile, cursor.getInt(1), cursor.getLong(2))) }
@@ -1297,8 +1402,8 @@ class AndroidCompatibilityStore(
     }
 
     override suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) {
-        // The mode's own marks are not something the screens observe.
-        mutate(refresh = emptySet()) { db ->
+        // Plan B6: the screens observe the marks ([tabViews]).
+        mutate(refresh = setOf(CompatObservableState.TAB_VIEWS)) { db ->
             db.delete("compat_tab_view", "profile=?", arrayOf(profile))
             views.filter { it.profile == profile }.distinctBy { it.tabKey }.forEach { view ->
                 // A tab that does not exist has no view (the foreign key would refuse it).
@@ -1426,6 +1531,10 @@ class AndroidCompatibilityStore(
                 exportedAtEpochMillis = currentTimeMillis(),
                 boards = boards,
                 tabs = tabs.filter { it.boardKey in boardKeys },
+                tabViews = com.valoser.futacha.shared.compat.compatBackupTabViews(
+                    db.readAllTabViews(),
+                    tabs.filter { it.boardKey in boardKeys }
+                ),
                 history = db.readHistory().filter { it.boardKey in boardKeys },
                 catalogPreferences = catalogPreferences,
                 preferences = com.valoser.futacha.shared.compat.compatBackupExportPreferences(
@@ -1469,7 +1578,17 @@ class AndroidCompatibilityStore(
                     tabs.forEach { tab -> db.upsertTab(tab) }
                 }.map { it.key }
             } else emptyList()
+            if (restoreUserSettings && backup.tabViews.isNotEmpty()) {
+                // Before the trim below, which takes the tabs only ふたったー風 lists first (plan B10).
+                val merged = com.valoser.futacha.shared.compat.compatMergedBackupTabViews(
+                    db.readAllTabViews(),
+                    backup.tabViews,
+                    db.readTabs().mapTo(mutableSetOf()) { it.key }
+                )
+                db.replaceAllTabViews(merged.mapTo(mutableSetOf()) { it.profile }, merged)
+            }
             val restoredHistoryUrls = if (restoreUserSettings) {
+                db.deleteHistoryTombstone(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
                 backup.history.filter { it.boardKey in validBoardKeys }.also { entries ->
                     entries.forEach { entry ->
                         db.deleteHistoryTombstone(entry.canonicalUrl)
@@ -1520,6 +1639,20 @@ class AndroidCompatibilityStore(
             // Apply the normal tab/history limits now (after the workspace so
             // its active tab is protected); otherwise the next tab open drops
             // up to 110 restored tabs at once.
+            if (restoreUserSettings && restoredTabKeys.isNotEmpty()) {
+                // The saved limit is not restored: raise it once so the tabs just restored are not closed (plan 1-7, audit M1).
+                com.valoser.futacha.shared.compat.compatTabLimitAfterRestore(db.readPreferences(), db.readTabs())?.let { limit ->
+                    db.insertWithOnConflict(
+                        "compat_preference",
+                        null,
+                        ContentValues().apply {
+                            put("key", com.valoser.futacha.shared.compat.COMPAT_SHARED_TAB_LIMIT_KEY)
+                            put("value_json", limit.toString())
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
+            }
             val trimmedAttachments = if (restoreUserSettings) {
                 db.trimTabs().also { db.trimHistory() }
             } else emptySet()
@@ -2016,8 +2149,9 @@ class AndroidCompatibilityStore(
 
     private suspend fun <T> mutate(
         refresh: Set<CompatObservableState> = ALL_COMPAT_OBSERVABLE_STATES,
+        reconcileSharedTabs: Boolean = false,
         block: (SQLiteDatabase) -> T
-    ): T = withContext(Dispatchers.IO) { transaction(refresh, block) }
+    ): T = withContext(Dispatchers.IO) { transaction(refresh, block, reconcileSharedTabs) }
 
     /**
      * [mutate] whose attachments are cleaned once it has committed, even when the caller is cancelled meanwhile (a
@@ -2027,9 +2161,10 @@ class AndroidCompatibilityStore(
     private suspend fun <T> mutateThenCleanup(
         refresh: Set<CompatObservableState> = ALL_COMPAT_OBSERVABLE_STATES,
         afterCommit: (AttachmentCleanupMutation<T>) -> Unit = {},
+        reconcileSharedTabs: Boolean = false,
         block: (SQLiteDatabase) -> AttachmentCleanupMutation<T>
     ): AttachmentCleanupMutation<T> = withContext(Dispatchers.IO) {
-        val committed = transaction(refresh, block)
+        val committed = transaction(refresh, block, reconcileSharedTabs)
         withContext(NonCancellable) {
             cleanupAttachments(committed)
             afterCommit(committed)
@@ -2040,8 +2175,9 @@ class AndroidCompatibilityStore(
     /** Test seam: runs inside each write's transaction, after its changes and before the commit. */
     internal var beforeCommitForTest: ((SQLiteDatabase) -> Unit)? = null
 
-    private suspend fun <T> transaction(refresh: Set<CompatObservableState>, block: (SQLiteDatabase) -> T): T =
-        mutex.withLock {
+    private suspend fun <T> transaction(refresh: Set<CompatObservableState>, block: (SQLiteDatabase) -> T, reconcileSharedTabs: Boolean = false): T {
+        var pendingCleanup = AttachmentCleanupMutation(Unit)
+        val committed = mutex.withLock {
             // Compose/test teardown can cancel the lifecycle while a UI
             // callback is still queued on its own scope. Treat a late write
             // as normal coroutine cancellation instead of throwing an
@@ -2052,12 +2188,27 @@ class AndroidCompatibilityStore(
             val refreshed: RefreshedStates
             db.beginTransaction()
             try {
+                val reconcileTabs = reconcileSharedTabs || refresh.containsAll(CORE_COMPAT_OBSERVABLE_STATES)
+                val beforeTabs = if (reconcileTabs) db.readTabs() else emptyList()
                 result = block(db)
+                var effectiveRefresh = refresh
+                if (reconcileTabs) {
+                    val removed = com.valoser.futacha.shared.compat.compatRemovedTabKeys(beforeTabs, db.readTabs())
+                    if (removed.isNotEmpty()) {
+                        val attachmentCandidates = removed.mapNotNullTo(mutableSetOf()) { db.readDraft(it)?.attachmentUri }
+                        removed.forEach { db.deleteTabAndRetainSnapshot(it) }
+                        pendingCleanup = AttachmentCleanupMutation(Unit, attachmentCandidates, db.readRetainedAttachmentLocators())
+                        val workspace = db.readWorkspace()
+                        val remaining = db.readTabs()
+                        db.updateWorkspace(workspace.copy(activeTabKey = workspace.activeTabKey?.takeIf { key -> remaining.any { it.key == key } } ?: remaining.firstOrNull()?.key))
+                        effectiveRefresh = refresh + setOf(CompatObservableState.TABS, CompatObservableState.WORKSPACE)
+                    }
+                }
                 beforeCommitForTest?.invoke(db)
                 // Read inside the transaction (what is about to be committed) but published only once the commit
                 // succeeded: a failed commit (a full disk) rolls the write back, and the screens must not show it
                 // (L92). A failed read here fails the write instead of committing it behind the caller's error.
-                refreshed = readStates(db, refresh)
+                refreshed = readStates(db, effectiveRefresh)
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
@@ -2065,6 +2216,9 @@ class AndroidCompatibilityStore(
             publishStates(refreshed)
             result
         }
+        withContext(NonCancellable) { cleanupAttachments(pendingCleanup) }
+        return committed
+    }
 
     private class RefreshedStates(
         val boards: List<CompatBoard>?,
@@ -2073,6 +2227,7 @@ class AndroidCompatibilityStore(
         val workspace: CompatWorkspaceRecord?,
         val preferences: Map<String, String>?,
         val ngRules: List<CompatNgRule>?,
+        val tabViews: List<CompatSharedTabView>?,
         val all: Boolean
     )
 
@@ -2083,7 +2238,9 @@ class AndroidCompatibilityStore(
         workspace = if (CompatObservableState.WORKSPACE in refresh) db.readWorkspace() else null,
         preferences = if (CompatObservableState.PREFERENCES in refresh) db.readPreferences() else null,
         ngRules = if (CompatObservableState.NG_RULES in refresh) db.readNgRules() else null,
-        all = refresh.containsAll(ALL_COMPAT_OBSERVABLE_STATES)
+        // Plan B6: the views follow the tabs (the foreign key's cascade and every tab write), so TABS reads them too.
+        tabViews = if (CompatObservableState.TAB_VIEWS in refresh || CompatObservableState.TABS in refresh) db.readAllTabViews() else null,
+        all = refresh.containsAll(CORE_COMPAT_OBSERVABLE_STATES)
     )
 
     private fun publishStates(states: RefreshedStates) {
@@ -2093,6 +2250,7 @@ class AndroidCompatibilityStore(
         states.workspace?.let { workspaceState.value = it }
         states.preferences?.let { preferencesState.value = it }
         states.ngRules?.let { ngRulesState.value = it }
+        states.tabViews?.let { tabViewsState.value = it }
         if (states.all) loadedState.value = true
     }
 
@@ -2475,6 +2633,45 @@ class AndroidCompatibilityStore(
             }
         }
 
+    private fun SQLiteDatabase.readAllTabViews(): List<CompatSharedTabView> = query(
+        "compat_tab_view", arrayOf("tab_key", "profile", "ordinal", "added_at"),
+        "EXISTS(SELECT 1 FROM compat_tab WHERE compat_tab.tab_key=compat_tab_view.tab_key)", null,
+        null, null, "profile ASC, ordinal ASC"
+    ).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(CompatSharedTabView(cursor.getString(0), cursor.getString(1), cursor.getInt(2), cursor.getLong(3))) }
+    }
+
+    private fun SQLiteDatabase.replaceAllTabViews(profiles: Set<String>, views: List<CompatSharedTabView>) {
+        profiles.forEach { profile -> delete("compat_tab_view", "profile=?", arrayOf(profile)) }
+        views.filter { it.profile in profiles }.distinctBy { it.profile to it.tabKey }.forEach { view ->
+            execSQL(
+                "INSERT INTO compat_tab_view(tab_key, profile, ordinal, added_at) " +
+                    "SELECT ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM compat_tab WHERE tab_key=?)",
+                arrayOf<Any?>(view.tabKey, view.profile, view.ordinal, view.addedAtEpochMillis, view.tabKey)
+            )
+        }
+    }
+
+    /** Brings [batch] back and removes its record (plan B6). A tab open again meanwhile keeps its row. */
+    /** Brings [batch] back and removes its record; returns the attachments of the tabs the limit then trimmed. */
+    private fun SQLiteDatabase.restoreClosedBatch(batch: ClosedTabBatch): Set<String> {
+        val boardKeys = readBoards().mapTo(mutableSetOf()) { it.key }
+        val restoredKeys = mutableSetOf<String>()
+        batch.tabs.filter { it.tab.boardKey in boardKeys }.forEach { closed ->
+            compatRestoredTab(closed, readTab(closed.tab.key), batch.closedBy)?.let { upsertTab(it) }
+            restoredKeys += closed.tab.key
+        }
+        val views = compatRestoredViews(readAllTabViews(), batch, restoredKeys)
+        val profiles = batch.tabs.filter { it.tab.key in restoredKeys }.flatMapTo(mutableSetOf()) { closed -> closed.views.map { it.profile } }
+        if (profiles.isNotEmpty()) replaceAllTabViews(profiles, views)
+        val current = readWorkspace()
+        val selected = batch.selectedTabKey?.takeIf { readTab(it) != null } ?: current.activeTabKey
+        updateWorkspace(current.copy(activeTabKey = selected, generation = current.generation + 1))
+        delete("compat_closed_batch", "batch_id=?", arrayOf(batch.id))
+        // What was just brought back stays, or the record would be spent on a tab trimmed at once (audit L4, as iOS and desktop).
+        return trimTabs(extraExempt = restoredKeys)
+    }
+
     private fun SQLiteDatabase.readClosedBatches(
         predicate: (ClosedTabBatch) -> Boolean = { true }
     ): List<ClosedTabBatch> = query(
@@ -2485,7 +2682,7 @@ class AndroidCompatibilityStore(
         null,
         null,
         "expires_at DESC",
-        MAX_COMPAT_CLOSED_BATCH_ROWS.toString()
+        COMPAT_CLOSED_BATCH_MAX.toString()
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
@@ -2952,18 +3149,19 @@ class AndroidCompatibilityStore(
         refreshOnActivation = getInt(20) != 0
     )
 
-    private fun SQLiteDatabase.trimTabs(): Set<String> {
+    private fun SQLiteDatabase.trimTabs(extraExempt: Set<String> = emptySet()): Set<String> {
         val tabs = readTabs()
-        // ThreadTabCleanService in both APKs runs only after the 100th tab is
-        // exceeded, then drops the oldest range back to 90.
-        if (tabs.size <= TAB_LIMIT_TRIGGER) return emptySet()
-        val active = readWorkspace().activeTabKey
-        val removable = tabs.asReversed().filter { !it.favorite && it.key != active }
-        val trimmed = removable.take((tabs.size - TAB_LIMIT_AFTER_TRIM).coerceAtLeast(0))
-        val attachmentLocators = trimmed.mapNotNullTo(mutableSetOf()) { readDraft(it.key)?.attachmentUri }
-        trimmed.forEach {
-            deleteTabAndRetainSnapshot(it.key)
-        }
+        // The shared rule of the four modes (plan B4, same as iOS and desktop): stars, the active tab, the modes' own
+        // rows and the tabs a screen holds stay, and only the others decide. The trimmed tabs are not a close: no
+        // closed-tab record, and the reconciliation finds nothing of them in the modes' rows.
+        val preferences = readPreferences()
+        val exempt = com.valoser.futacha.shared.compat.compatTabTrimExemptKeys(
+            readWorkspace().activeTabKey, preferences, readBoards(), screenHeldTabs.keys() + extraExempt)
+        val trimmed = com.valoser.futacha.shared.compat.planSharedTabTrim(
+            tabs, exempt, com.valoser.futacha.shared.compat.compatSharedTabLimit(preferences), readAllTabViews())
+        if (trimmed.isEmpty()) return emptySet()
+        val attachmentLocators = trimmed.mapNotNullTo(mutableSetOf()) { readDraft(it)?.attachmentUri }
+        trimmed.forEach { deleteTabAndRetainSnapshot(it) }
         return attachmentLocators
     }
 
@@ -3242,8 +3440,6 @@ class AndroidCompatibilityStore(
     private companion object {
         const val METADATA_BOARD_BOOTSTRAP_VERSION = "board_bootstrap_version"
         const val BOARD_BOOTSTRAP_VERSION = 1
-        const val TAB_LIMIT_TRIGGER = 100
-        const val TAB_LIMIT_AFTER_TRIM = 90
         const val HISTORY_LIMIT_TRIGGER = 200
         const val HISTORY_LIMIT_AFTER_TRIM = 190
         const val MAX_HISTORY_TOMBSTONES = 1_000
@@ -3262,7 +3458,6 @@ class AndroidCompatibilityStore(
         const val MAX_COMPAT_CATALOG_ITEM_JSON_CHARS = 64 * 1024
         const val MAX_COMPAT_POST_JSON_CHARS = 2 * 1024 * 1024
         const val MAX_COMPAT_CLOSED_BATCH_JSON_CHARS = 4 * 1024 * 1024
-        const val MAX_COMPAT_CLOSED_BATCH_ROWS = 8
         const val UNDO_WINDOW_MILLIS = 7_000L
         const val CLOSED_BATCH_DEADLINE_RECHECK_MILLIS = 1_000L
         const val THREAD_SNAPSHOT_ACCESS_PREFIX = "thread_snapshot_access:"

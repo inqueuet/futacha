@@ -1697,7 +1697,7 @@ class FtutterModeInstrumentedTest {
         rule.onNodeWithTag("ftutter-confirm-ok").performClick()
         rule.waitUntil(10_000) { historyUrls() == listOf(tutorialUrl, fakeTab2) }
         rule.waitUntil(5_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 2 }
-        // タブでもある行も、タブのメニューではなく同じメニュー。削除するとタブも閉じる。
+        // タブでもある行も、タブのメニューではなく同じメニュー。履歴の削除ではタブを残す（2026-11-09の指示）。
         rule.allTagged("ftutter-drawer-row")[1].performTouchInput { longClick() }
         waitForTag("ftutter-thumb-dialog")
         assertEquals(0, rule.allTagged("ftutter-tab-dialog").fetchSemanticsNodes().size)
@@ -1705,7 +1705,8 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-confirm-ok")
         rule.onNodeWithTag("ftutter-confirm-ok").performClick()
         rule.waitUntil(10_000) { historyUrls() == listOf(tutorialUrl) }
-        rule.waitUntil(10_000) { tabs().isEmpty() }
+        rule.waitForIdle()
+        assertEquals(listOf(fakeTab2), tabs())
     }
 
     @Test fun theCatalogDeleteFromHistoryAsksFirst() {
@@ -1748,7 +1749,8 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-confirm-ok")
         rule.onNodeWithTag("ftutter-confirm-ok").performClick()
         rule.waitUntil(10_000) { historyUrls() == listOf(fakeTab2, fakeTab4) }
-        rule.waitUntil(10_000) { tabs() == listOf(fakeTab2) }
+        rule.waitForIdle()
+        assertEquals("deleting history keeps the tabs", listOf(tutorialUrl, fakeTab2), tabs())
         // すべて削除：保護したスレッド（fakeTab2）は残す。
         rule.onNodeWithTag("ftutter-drawer-history-select").performClick()
         waitForTag("ftutter-drawer-history-delete-all")
@@ -1757,23 +1759,28 @@ class FtutterModeInstrumentedTest {
         saveShot("39-history-delete-all-confirm")
         rule.onNodeWithTag("ftutter-confirm-ok").performClick()
         rule.waitUntil(10_000) { historyUrls() == listOf(fakeTab2) }
-        assertEquals(listOf(fakeTab2), tabs())
+        assertEquals(listOf(tutorialUrl, fakeTab2), tabs())
     }
 
     // ---- 2026-10-14の監査（docs/code-audit-2026-10-14.md）A1・A2・A3・A8・A9 ----
 
-    @Test fun startingTheModeClosesTabsMissingFromHistoryAndKeepsTheHistoryLimit() {
-        // 原作：起動時に履歴に無いタブを閉じ、保護していないスレッドは「履歴の保存数」まで。保護したタブは数えない。
+    /**
+     * 計画B7a：「履歴の保存数」は保護していないタブを古い順に隠すだけで、何も閉じない（タブは共有）。履歴に無いタブも閉じない。
+     * 保護したタブと開いているタブは数えない。
+     */
+    @Test fun startingTheModeHidesTabsOverTheHistoryLimitAndClosesNothing() {
         seedHistory(fakeTab2, fakeTab3, tutorialUrl)
+        val stored = listOf(fakeTab4, fakeTab3, fakeTab2, tutorialUrl)
         runBlocking {
-            app.compatibilityStore.savePreference("compat.ftutter.tabs", listOf(fakeTab4, fakeTab3, fakeTab2, tutorialUrl).joinToString("\n"))
+            app.compatibilityStore.savePreference("compat.ftutter.tabs", stored.joinToString("\n"))
             app.compatibilityStore.savePreference("compat.ftutter.opening", fakeTab2)
             app.compatibilityStore.savePreference("compat.ftutter.protected", tutorialUrl)
             app.compatibilityStore.savePreference("compat.ftutter.rirekiLimit", "1")
         }
         openTutorialCatalog()
-        runCatching { rule.waitUntil(10_000) { tabs() == listOf(fakeTab2, tutorialUrl) } }
-        assertEquals(listOf(fakeTab2, tutorialUrl), tabs())
+        openDrawerOnTabs()
+        rule.waitUntil(10_000) { rule.allTagged("ftutter-drawer-row").fetchSemanticsNodes().size == 2 }
+        assertEquals(stored, tabs())
     }
 
     @Test fun switchingToAnotherTabSavesThePositionOfTheThreadLeft() {

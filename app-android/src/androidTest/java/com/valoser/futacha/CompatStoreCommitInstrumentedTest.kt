@@ -74,4 +74,47 @@ class CompatStoreCommitInstrumentedTest {
         assertTrue("The deletion committed", store.boards.first().none { it.key == boardKey })
         assertTrue("Its draft's attachment is gone with it", fileSystem.readBytes(locator).isFailure)
     }
+    @Test fun closingModeTabCleansReplyAttachmentAfterCommit() = runBlocking {
+        val url = "${boardUrl}res/123.htm"
+        val tabKey = com.valoser.futacha.shared.compat.compatTabKey(url)
+        store.upsertBoard(board)
+        store.openTab(com.valoser.futacha.shared.compat.CompatTab(tabKey, url, url, boardKey, "may", "123", "題", insertedAtEpochMillis=1, contentUpdatedAtEpochMillis=1))
+        val locator = persistCompatPostAttachment(fileSystem, tabKey, ImageData(byteArrayOf(1,2,3), "reply.png")).getOrThrow()
+        store.saveDraft(com.valoser.futacha.shared.compat.CompatReplyDraft(tabKey, attachmentUri=locator, updatedAtEpochMillis=1))
+        store.closeTabs(setOf(tabKey), 100, closedBy = "futaber")
+        assertTrue(store.tabs.first().isEmpty())
+        assertTrue(store.loadDraft(tabKey) == null)
+        assertTrue("Closed reply attachment is cleaned", fileSystem.readBytes(locator).isFailure)
+    }
+
+    @Test fun failedModeTabDeletionKeepsReplyAttachmentAndTab() = runBlocking {
+        val url = "${boardUrl}res/123.htm"
+        val tabKey = com.valoser.futacha.shared.compat.compatTabKey(url)
+        store.upsertBoard(board)
+        store.openTab(com.valoser.futacha.shared.compat.CompatTab(tabKey, url, url, boardKey, "may", "123", "題", insertedAtEpochMillis=1, contentUpdatedAtEpochMillis=1))
+        val locator = persistCompatPostAttachment(fileSystem, tabKey, ImageData(byteArrayOf(1,2,3), "reply.png")).getOrThrow()
+        store.saveDraft(com.valoser.futacha.shared.compat.CompatReplyDraft(tabKey, attachmentUri=locator, updatedAtEpochMillis=1))
+        store.beforeCommitForTest = { throw SQLiteException("audit rollback") }
+        val failure = runCatching { store.closeTabs(setOf(tabKey), 100, closedBy = "futaber") }.exceptionOrNull()
+        store.beforeCommitForTest = null
+        assertTrue(failure is SQLiteException)
+        assertTrue(store.tabs.first().any { it.key == tabKey })
+        assertTrue(fileSystem.readBytes(locator).isSuccess)
+        store.closeTabs(setOf(tabKey), 100)
+        Unit
+    }
+
+    /** Plan B8b: ふたばー風's old strip row is not reconciled any more; writing it closes nothing. */
+    @Test fun writingTheOldFutaberRowClosesNoSharedTab() = runBlocking {
+        val url = "${boardUrl}res/123.htm"
+        val tabKey = com.valoser.futacha.shared.compat.compatTabKey(url)
+        store.importModernBoards(listOf(com.valoser.futacha.shared.model.BoardSummary("may-b", "may", "", boardUrl, "")))
+        store.openTab(com.valoser.futacha.shared.compat.CompatTab(tabKey, url, url, boardKey, "may", "123", "題", insertedAtEpochMillis=1, contentUpdatedAtEpochMillis=1))
+        store.savePreference("compat.futaber.tabs", com.valoser.futacha.shared.ui.futaber.encodeFutaberTabs(listOf(com.valoser.futacha.shared.ui.futaber.FutaberTabKey("may-b", "123"))))
+        store.savePreference("compat.futaber.tabs", com.valoser.futacha.shared.ui.futaber.encodeFutaberTabs(emptyList()))
+        assertTrue(store.tabs.first().any { it.key == tabKey })
+        store.closeTabs(setOf(tabKey), 100)
+        Unit
+    }
+
 }

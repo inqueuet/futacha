@@ -121,7 +121,7 @@ internal fun FutachaTabsDialog(
                     TextButton(enabled = !busy, onClick = { perform {
                         val keys = compatDrawerTabCloseKeys(features.store.tabs.first(), tab.key, action, protect)
                         // Undone with this list's own "元に戻す"; the host's snackbar is not asked to offer it again.
-                        undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds())
+                        undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds(), closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA.persistedValue)
                         selected = null
                     } }) { Text(label) }
                     if (action == CompatDrawerTabCloseAction.DEAD && repository != null) {
@@ -133,7 +133,7 @@ internal fun FutachaTabsDialog(
                                 if (keys.isEmpty()) {
                                     message = "落ちたスレは見つかりませんでした"
                                 } else {
-                                    undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds())
+                                    undo = features.store.closeTabs(keys, Clock.System.now().toEpochMilliseconds(), closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA.persistedValue)
                                     message = "落ちたスレを${keys.size}件閉じました"
                                 }
                                 selected = null

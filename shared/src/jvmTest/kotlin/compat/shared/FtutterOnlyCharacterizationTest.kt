@@ -13,8 +13,10 @@ import com.valoser.futacha.shared.ui.ftutter.FtutterNgMatcher
 import com.valoser.futacha.shared.ui.ftutter.FtutterNgRule
 import com.valoser.futacha.shared.ui.ftutter.FtutterNgType
 import com.valoser.futacha.shared.ui.ftutter.FtutterPostTarget
-import com.valoser.futacha.shared.ui.ftutter.FtutterTabState
-import com.valoser.futacha.shared.ui.ftutter.FtutterTabs
+import com.valoser.futacha.shared.compat.DesktopCompatibilityStore
+import com.valoser.futacha.shared.ui.ftutter.FTUTTER_TAB_PROFILE
+import com.valoser.futacha.shared.ui.ftutter.FtutterSyncTabBar
+import kotlinx.coroutines.flow.first
 import com.valoser.futacha.shared.ui.ftutter.decodeFtutterList
 import com.valoser.futacha.shared.ui.ftutter.ftutterDraftKey
 import com.valoser.futacha.shared.ui.ftutter.ftutterDraftsUpdate
@@ -41,53 +43,62 @@ import kotlin.test.assertTrue
 class FtutterOnlyCharacterizationTest {
     private fun url(threadId: String) = SharedKeys.thread(may, threadId).ftutterThreadUrl
 
-    /** A tab state saving into [saved] as the screen saves into the settings rows. */
-    private fun tabState(saved: MutableMap<String, String>, urls: List<String> = emptyList(), protected: Set<String> = emptySet()) =
-        FtutterTabState(FtutterTabs(urls, urls.firstOrNull().orEmpty()), protected) { key, value -> saved[key] = value }
+    /** The tab bar on the stores (plan B7a: a view of the shared tabs; the old rows are only read). */
+    private suspend fun tabBar(compat: DesktopCompatibilityStore) = FtutterSyncTabBar(compat, SingleMode.boards).start()
 
-    @Test fun ftutterOnlyNewTabGoesFirst() {
-        val saved = mutableMapOf<String, String>()
-        val tabs = tabState(saved)
-        tabs.open(url("1"))
-        tabs.open(url("2"))
-        tabs.open(url("3"))
-        assertEquals(listOf(url("3"), url("2"), url("1")), tabs.urls)
-        tabs.open(url("1"))
-        assertEquals(listOf(url("3"), url("2"), url("1")), tabs.urls, "a tab opened again keeps its place")
-        assertEquals(tabs.urls, decodeFtutterList(saved[FtutterKeys.TABS]))
-        assertEquals(url("1"), saved[FtutterKeys.OPENING])
+    @Test fun ftutterOnlyNewTabGoesFirst() = SingleMode.withStores { compat, _ ->
+        val bar = tabBar(compat)
+        listOf("1", "2", "3").forEach { bar.state.open(url(it)); bar.settle() }
+        assertEquals(listOf(url("3"), url("2"), url("1")), bar.state.urls)
+        bar.state.open(url("1"))
+        bar.settle()
+        assertEquals(listOf(url("3"), url("2"), url("1")), bar.state.urls, "a tab opened again keeps its place")
+        assertEquals(bar.state.urls, compat.loadTabViews(FTUTTER_TAB_PROFILE).map { view ->
+            compat.tabs.first().single { it.key == view.tabKey }.canonicalUrl
+        }, "the order is this mode's marks on the shared tabs")
+        assertNull(bar.rows[FtutterKeys.TABS], "the old row is not written any more")
+        assertEquals(url("1"), bar.state.opening)
         assertEquals("https://may.2chan.net/b/res/1.htm", url("1"), "kept by the thread's address")
     }
 
-    @Test fun ftutterOnlyHistoryLimitCountsUnprotectedTabsOnly() {
-        val saved = mutableMapOf<String, String>()
-        val tabs = tabState(saved, protected = setOf(url("1")))
-        tabs.limit = 2
-        tabs.historyOrder = listOf(url("4"), url("3"), url("2"), url("1"))
-        listOf("1", "2", "3", "4").forEach { tabs.open(url(it)) }
-        assertEquals(listOf(url("4"), url("3"), url("1")), tabs.urls, "the protected tab is not counted; the oldest others go")
+    @Test fun ftutterOnlyHistoryLimitOnlyHidesUnprotectedTabs() = SingleMode.withStores { compat, _ ->
+        val bar = tabBar(compat)
+        bar.state.open(url("1"))
+        bar.settle()
+        bar.state.toggleProtect(url("1"))
+        bar.settle()
+        bar.state.limit = 2
+        bar.state.historyOrder = listOf(url("4"), url("3"), url("2"), url("1"))
+        listOf("2", "3", "4").forEach { bar.state.open(url(it)); bar.settle() }
+        assertEquals(listOf(url("4"), url("3"), url("1")), bar.state.urls, "the protected tab is not counted; the oldest others are hidden")
+        assertEquals(4, compat.tabs.first().size, "the limit hides, it closes nothing (the shared tab limit trims)")
     }
 
-    @Test fun ftutterOnlyStartupClosesTabsWithoutHistoryButKeepsProtectedOnes() {
-        val saved = mutableMapOf<String, String>()
-        val tabs = tabState(saved, urls = listOf(url("1"), url("2"), url("3")), protected = setOf(url("3")))
-        tabs.historyOrder = listOf(url("1"))
-        tabs.enforceLimit(dropMissing = true)
-        assertEquals(listOf(url("1"), url("3")), tabs.urls)
-        assertTrue(tabs.closed.isEmpty(), "what the limit takes cannot be brought back")
+    @Test fun ftutterOnlyTabsWithoutHistoryStayOpen() = SingleMode.withStores { compat, _ ->
+        val bar = tabBar(compat)
+        listOf("3", "2", "1").forEach { bar.state.open(url(it)); bar.settle() }
+        bar.state.historyOrder = listOf(url("1"))
+        bar.settle()
+        assertEquals(listOf(url("1"), url("2"), url("3")), bar.state.urls, "a tab is not closed because its history row went")
+        assertEquals(0, compat.countClosedTabBatches(FTUTTER_TAB_PROFILE, bar.nowMillis))
     }
 
-    @Test fun ftutterOnlyClosingATabTakesItsProtectionAndUndoPutsItBackInPlace() {
-        val saved = mutableMapOf<String, String>()
-        val tabs = tabState(saved, urls = listOf(url("1"), url("2"), url("3")))
-        tabs.toggleProtect(url("2"))
-        assertEquals(listOf(url("2")), decodeFtutterList(saved[FtutterKeys.PROTECTED]))
-        tabs.close(listOf(url("2")))
-        assertEquals(listOf(url("1"), url("3")), tabs.urls)
-        assertFalse(url("2") in tabs.protected)
-        assertEquals(url("2"), tabs.restore())
-        assertEquals(listOf(url("1"), url("2"), url("3")), tabs.urls)
-        assertFalse(url("2") in tabs.protected, "the protection does not come back")
+    @Test fun ftutterOnlyClosingATabTakesItsProtectionAndUndoPutsItBackInPlace() = SingleMode.withStores { compat, _ ->
+        val bar = tabBar(compat)
+        listOf("3", "2", "1").forEach { bar.state.open(url(it)); bar.settle() }
+        bar.state.toggleProtect(url("2"))
+        bar.settle()
+        assertTrue(compat.tabs.first().single { it.canonicalUrl == url("2") }.favorite, "the protection is the shared ★")
+        bar.state.close(listOf(url("2")))
+        assertEquals(listOf(url("1"), url("3")), bar.state.urls)
+        bar.settle()
+        assertFalse(url("2") in bar.state.protected)
+        var restored: String? = null
+        bar.state.restore { restored = it?.url }
+        bar.settle()
+        assertEquals(url("2"), restored)
+        assertEquals(listOf(url("1"), url("2"), url("3")), bar.state.urls)
+        assertFalse(url("2") in bar.state.protected, "the protection does not come back")
     }
 
     @Test fun ftutterOnlyReadCountOnlyGrowsAndCountsRepliesWithoutTheOp() {

@@ -156,7 +156,7 @@ class CompatibilityStoreRepairInstrumentedTest {
         }
         val source = openStore(newDatabaseName())
         source.upsertBoard(board)
-        (1..100).forEach { index -> source.openTab(tab(1_000 + index, 10_000L + index)) }
+        (1..200).forEach { index -> source.openTab(tab(1_000 + index, 10_000L + index)) }
         val payload = source.exportSettingsBackup()
 
         val target = openStore(newDatabaseName())
@@ -165,9 +165,9 @@ class CompatibilityStoreRepairInstrumentedTest {
         target.importSettingsBackup(payload, restoreUserSettings = true, restoreNgRules = false)
 
         val tabs = target.tabs.first()
-        assertTrue("restored ${tabs.size} tabs", tabs.size <= 100)
+        assertTrue("restored ${tabs.size} tabs", tabs.size <= 201) // the shared limit of 200 (plan B4), and the active tab
         // The newer restored tabs are kept, the oldest local ones trimmed.
-        assertTrue(tabs.map { it.threadNo }.containsAll((1_011..1_100).map(Int::toString)))
+        assertTrue(tabs.map { it.threadNo }.containsAll((1_031..1_200).map(Int::toString)))
     }
 
     @Test

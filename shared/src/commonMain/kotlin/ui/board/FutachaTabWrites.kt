@@ -68,13 +68,44 @@ internal fun newFutachaThreadTab(write: FutachaThreadTabWrite): CompatTab = Comp
 /**
  * Writes the accepted page into the thread's tab, opening the tab when the list has none. An existing tab is changed on
  * its stored value inside the store's lock (D-B0): the copy read before the write brought the tab back when it was closed
- * meanwhile, and rolled back a ★ or a scroll position written meanwhile.
+ * meanwhile, and rolled back a ★ or a scroll position written meanwhile. With [closedMemory], a tab closed while the
+ * screen showed it is not opened again (Q9); returns false then.
  */
-internal suspend fun writeFutachaThreadTab(store: CompatibilityStore, write: FutachaThreadTabWrite) {
+internal suspend fun writeFutachaThreadTab(
+    store: CompatibilityStore,
+    write: FutachaThreadTabWrite,
+    closedMemory: FutachaClosedTabMemory? = null
+): Boolean {
     val existing = store.tabs.first().firstOrNull { it.key == write.tabKey }
+    closedMemory?.observe(existing != null)
     if (existing == null) {
+        // Q9: the tab was closed while this screen showed its thread; the next page does not open it again.
+        if (closedMemory?.closedWhileShown == true) return false
         store.openTab(newFutachaThreadTab(write).withFutachaThreadPage(write, existing = null))
+        closedMemory?.observe(true)
     } else {
         store.updateTabIfPresent(write.tabKey) { current -> current.withFutachaThreadPage(write, current).takeIf { it != current } }
+    }
+    return true
+}
+
+/**
+ * Plan B9, Q9 (audit L3): what one thread screen remembers of its tab. Once the screen saw its tab and the tab went
+ * (closed in the tab list, in another mode, or trimmed), the pages that arrive later do not open it again while the
+ * screen is there; the tab showing again (opened again anywhere) ends that. Nothing is kept past the screen.
+ */
+internal class FutachaClosedTabMemory {
+    private var seen = false
+    var closedWhileShown = false
+        private set
+
+    /** Told whether the tab is in the shared tabs now. */
+    fun observe(present: Boolean) {
+        if (present) {
+            seen = true
+            closedWhileShown = false
+        } else if (seen) {
+            closedWhileShown = true
+        }
     }
 }

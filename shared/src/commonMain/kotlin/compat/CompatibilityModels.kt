@@ -160,7 +160,9 @@ data class ClosedCompatTab(
     val tab: CompatTab,
     val originalIndex: Int,
     val draft: CompatReplyDraft? = null,
-    val snapshot: CompatThreadSnapshot? = null
+    val snapshot: CompatThreadSnapshot? = null,
+    /** Plan B6: each mode's mark and order on the tab when it closed, put back by a restore. */
+    val views: List<CompatSharedTabView> = emptyList()
 )
 
 @Serializable
@@ -168,7 +170,12 @@ data class ClosedTabBatch(
     val id: String,
     val tabs: List<ClosedCompatTab>,
     val selectedTabKey: String?,
-    val expiresAtEpochMillis: Long
+    /** Plan B6: the record is kept until then (24 hours). Before B6 this was the 7-second undo deadline. */
+    val expiresAtEpochMillis: Long,
+    /** Plan B6: the mode that closed the tabs ([ExperienceProfile.persistedValue]), null when not known. */
+    val closedBy: String? = null,
+    /** Plan B6: the undo notice shows until then (7 seconds); 0 in a record written before B6 ([noticeDeadlineEpochMillis]). */
+    val noticeUntilEpochMillis: Long = 0L
 )
 
 enum class SelectorPresentation { ABOVE, OVER }

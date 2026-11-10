@@ -141,7 +141,7 @@ class FtutterBackupImportTest {
         val existing = mapOf(FtutterKeys.TABS to encodeFtutterList(current), FtutterKeys.HISTORY_LIMIT to "4")
         val plan = ftutterBackupPlan(mapOf("tabs" to FtutterPrefValue.Texts(imported)), emptyList(), emptyList(), existing, 0,
             existingHistoryOrder = listOf(url(13), url(12), url(11)))
-        assertTrue(plan.summary.contains("タブ：取り込み 3件（今のタブ 3件と合わせて 6件。履歴の保存数 4 を超える古いタブ 2件は閉じます）"), plan.summary)
+        assertTrue(plan.summary.contains("タブ：取り込み 3件（今のタブ 3件と合わせて 6件。履歴の保存数 4 を超える古いタブ 2件はこのモードに表示されません）"), plan.summary)
         val kept = decodeFtutterList(plan.preferences[FtutterKeys.TABS]).orEmpty()
         assertEquals(imported + url(13), kept, "The imported tabs and the newest current tab stay")
         val roomy = ftutterBackupPlan(mapOf("tabs" to FtutterPrefValue.Texts(imported)), emptyList(), emptyList(),

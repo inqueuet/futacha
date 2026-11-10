@@ -255,6 +255,8 @@ private suspend fun reconcileSharedBoardsLocked(
     nowEpochMillis: () -> Long
 ) {
     val appState = appStateBoards ?: stateStore.boards.first()
+    // Existing boards need their legacy ids recorded too, even when nothing has to be imported.
+    compat.rememberModernBoardAliases(appState)
     val compatList = compatBoards ?: compat.boards.first()
     val stored = compat.loadSharedData()[SHARED_BOARDS_RECORD_KEY]
     val record = decodeSharedBoardsRecord(stored)
@@ -344,12 +346,14 @@ suspend fun synchronizeSharedBoards(
  * is taken as restored: a tombstone of it is lifted (a board deleted earlier and restored now stays, with what was
  * restored under it), and in the AppState modes [appStateStore] gets the boards at once
  * ([mergeRestoredBoardsIntoAppState], M2). No pass can run between the restore and that, so the restored board is
- * never deleted again in between.
+ * never deleted again in between. [historyStore] (every mode's AppState store, the AppState modes' by default) gets the
+ * restored history at once ([mergeRestoredHistoryIntoAppState], plan B3).
  */
 suspend fun <T> withSharedBoardsRestore(
     compat: CompatibilityStore,
     appStateStore: AppStateStore?,
     keep: (T) -> Boolean,
+    historyStore: AppStateStore? = appStateStore,
     block: suspend () -> T
 ): T = SharedBoardsSync.lock.withLock {
     val result = block()
@@ -364,6 +368,12 @@ suspend fun <T> withSharedBoardsRestore(
             }
         }.onFailure { error -> Logger.e("SharedBoards", "Failed to lift the tombstones of the restored boards", error) }
         com.valoser.futacha.shared.ui.compat.mergeRestoredBoardsIntoAppState(compat, appStateStore)
+        // The restored history in every mode at once, a row deleted earlier included (plan B3). In としあき(仮) the boards
+        // are not merged here ([appStateStore] is null) but the history still is ([historyStore]).
+        if (historyStore != null) {
+            runSuspendCatchingPreservingCancellation { mergeRestoredHistoryIntoAppState(compat, historyStore) }
+                .onFailure { error -> Logger.e("SharedBoards", "Failed to merge the restored history", error) }
+        }
     }
     result
 }

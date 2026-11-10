@@ -7,11 +7,13 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.noticeDeadlineEpochMillis
 import com.valoser.futacha.shared.compat.isCompatTypedThreadReference
 import com.valoser.futacha.shared.compat.compatTypedThreadReferenceEditValue
 
 import com.valoser.futacha.shared.compat.toThreadPage
 import com.valoser.futacha.shared.compat.COMPAT_THREAD_RESTORE_CLOSED_KEY
+import com.valoser.futacha.shared.compat.COMPAT_UNTITLED_TAB_TITLE
 import com.valoser.futacha.shared.compat.replaceNgRuleMerging
 
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
@@ -368,8 +370,9 @@ import com.valoser.futacha.shared.compat.toModernThreadHistoryEntry
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.buildImportedHistoryRepository
 import com.valoser.futacha.shared.ui.clearHistory
+import com.valoser.futacha.shared.ui.dismissHistoryEntries
 import com.valoser.futacha.shared.ui.dismissHistoryEntry
-import com.valoser.futacha.shared.ui.findModernHistoryEntryFor
+import com.valoser.futacha.shared.ui.findModernHistoryEntriesFor
 import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
 import com.valoser.futacha.shared.compat.compatPostActionCandidates
 import com.valoser.futacha.shared.compat.compatReferencePostContextLabels
@@ -1052,7 +1055,8 @@ private fun CompatibilityAppContent(
                         val persisted = store.closeTabs(
                             effect.tabKeys,
                             effect.nowEpochMillis,
-                            effect.finalScrollAnchors
+                            effect.finalScrollAnchors,
+                            closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.TOSHIAKI_COMPAT.persistedValue
                         )
                         if (persisted == null) return@launchStoreSafely
                         if (provisionalCloseId != null && undoneCloseBatchIds.remove(provisionalCloseId)) {
@@ -1313,8 +1317,9 @@ private fun CompatibilityAppContent(
     LaunchedEffect(state.pendingClose?.id) {
         val batch = state.pendingClose ?: return@LaunchedEffect
         while (true) {
+            // Plan B6: the notice's own deadline; the record itself is kept 24 hours.
             val remaining = remainingCompatDeadlineMillis(
-                batch.expiresAtEpochMillis,
+                batch.noticeDeadlineEpochMillis,
                 Clock.System.now().toEpochMilliseconds()
             )
             if (remaining <= 0L) break
@@ -1811,16 +1816,17 @@ private fun CompatibilityAppContent(
                     }
                     val modernStore = stateStore
                     // Searched off the main thread (L44).
-                    val modernEntry = modernStore?.history?.first()
-                        ?.let { history -> findModernHistoryEntryFor(history, compatibilityEntry.canonicalUrl) }
-                        ?: compatibilityEntry.toModernThreadHistoryEntry()
-                    if (modernStore != null && modernEntry != null) {
-                        dismissHistoryEntry(
+                    // Every AppState row of that thread (audit F7): the AppState history can hold it under two board ids.
+                    val modernEntries = modernStore?.history?.first()
+                        ?.let { history -> findModernHistoryEntriesFor(history, compatibilityEntry.canonicalUrl) }
+                        .orEmpty().ifEmpty { listOfNotNull(compatibilityEntry.toModernThreadHistoryEntry()) }
+                    if (modernStore != null && modernEntries.isNotEmpty()) {
+                        dismissHistoryEntries(
                             stateStore = modernStore,
                             autoSavedThreadRepository = historyAutoSavedThreadRepository,
                             importedHistoryRepository = importedHistoryRepository,
                             compatibilityStore = store,
-                            entry = modernEntry,
+                            entries = modernEntries,
                             onAutoSavedThreadDeleteFailure = { failure ->
                                 Logger.e("CompatibilityApp", "AI history payload deletion failed", failure)
                             }
@@ -2372,16 +2378,17 @@ private fun CompatibilityAppContent(
                 launchStoreSafely("history deletion", "履歴を削除できませんでした") {
                     val modernStore = stateStore
                     // Searched off the main thread (L44).
-                    val modernEntry = modernStore?.history?.first()
-                        ?.let { history -> findModernHistoryEntryFor(history, entry.canonicalUrl) }
-                        ?: entry.toModernThreadHistoryEntry()
-                    if (modernStore != null && modernEntry != null) {
-                        dismissHistoryEntry(
+                    // Every AppState row of that thread (audit F7): the AppState history can hold it under two board ids.
+                    val modernEntries = modernStore?.history?.first()
+                        ?.let { history -> findModernHistoryEntriesFor(history, entry.canonicalUrl) }
+                        .orEmpty().ifEmpty { listOfNotNull(entry.toModernThreadHistoryEntry()) }
+                    if (modernStore != null && modernEntries.isNotEmpty()) {
+                        dismissHistoryEntries(
                             stateStore = modernStore,
                             autoSavedThreadRepository = historyAutoSavedThreadRepository,
                             importedHistoryRepository = importedHistoryRepository,
                             compatibilityStore = store,
-                            entry = modernEntry,
+                            entries = modernEntries,
                             onAutoSavedThreadDeleteFailure = { failure ->
                                 Logger.e("CompatibilityApp", "History payload deletion failed", failure)
                             }
@@ -2732,6 +2739,15 @@ private fun CompatibilityAppContent(
                     tab?.let { visibleTab ->
                         val visit = visibleTab.toVisitedHistoryEntry(Clock.System.now().toEpochMilliseconds())
                         persistStoreSafely("history visit") {
+                            // Opened again here: the AppState modes forget its deletion as well (plan 1-5), whatever
+                            // the times. First: the shared history copy takes the row there as soon as it is written
+                            // below, and refused it while the tombstone was still there.
+                            stateStore?.let { modern ->
+                                val modernRows = com.valoser.futacha.shared.compat.mergeCompatibilityHistory(
+                                    emptyList(), listOf(visit), modern.boards.first()
+                                ) + listOfNotNull(visit.toModernThreadHistoryEntry())
+                                modern.forgetHistoryTombstones(modernRows)
+                            }
                             store.recordHistoryVisit(visit)
                         }
                     }
@@ -6400,7 +6416,7 @@ private fun CompatThreadScreen(
     ) = loadMutex.withLock {
         fun isCatalogTitlePlaceholder(value: String, posts: List<CompatPostSnapshot>): Boolean {
             val normalized = value.trim()
-            if (normalized.isBlank() || normalized.matches(compatAppDefaultPostLabelRegex)) {
+            if (isCompatPlaceholderTabTitle(normalized)) {
                 return true
             }
             val numeric = normalized.toIntOrNull() ?: return false
@@ -10248,6 +10264,12 @@ private fun CompatHierarchicalOtherMenuDialog(
 }
 private val compatAppPostNumberRegex = Regex("[0-9]+")
 private val compatAppDefaultPostLabelRegex = Regex("No\\.\\d+", RegexOption.IGNORE_CASE)
+
+/** A title that only stands in for the thread's own (blank, `No.N`, or a tab another mode made before it had one). */
+internal fun isCompatPlaceholderTabTitle(title: String): Boolean {
+    val normalized = title.trim()
+    return normalized.isBlank() || normalized == COMPAT_UNTITLED_TAB_TITLE || normalized.matches(compatAppDefaultPostLabelRegex)
+}
 private val compatAppTrailingCountRegex = Regex("(\\d+)\\s*$")
 
 private data class CompatQuoteFrame(

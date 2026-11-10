@@ -591,17 +591,18 @@ class CompatibilitySnapshotCacheInstrumentedTest {
     @Test
     fun threadTabAndHistoryCleanServicesUseReferenceTriggerAndTrimBoundaries() = runBlocking {
         val store = newStore(quotaProvider = { null })
-        repeat(100) { index -> createBoardAndTab(store, 20_000 + index) }
-        assertEquals(100, store.tabs.first().size)
-        assertEquals(100, store.history.first().size)
+        // The shared tab limit (plan B4): 200 by default, trimmed back to 180; the history keeps 200 → 190.
+        repeat(200) { index -> createBoardAndTab(store, 20_000 + index) }
+        assertEquals(200, store.tabs.first().size)
+        assertEquals(200, store.history.first().size)
 
-        createBoardAndTab(store, 20_100)
-        assertEquals(90, store.tabs.first().size)
-        assertEquals(101, store.history.first().size)
-
-        repeat(100) { index -> createBoardAndTab(store, 20_101 + index) }
-        assertEquals(91, store.tabs.first().size)
+        createBoardAndTab(store, 20_200)
+        assertEquals(180, store.tabs.first().size)
         assertEquals(190, store.history.first().size)
+
+        repeat(100) { index -> createBoardAndTab(store, 20_201 + index) }
+        assertEquals(196, store.tabs.first().size)
+        assertEquals(191, store.history.first().size)
     }
 
     @Test

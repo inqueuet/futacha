@@ -275,6 +275,14 @@ internal fun GlobalSettingsScaffold(
                     onCatalogFetchRowsChanged = bindings.behavior.onCatalogFetchRowsChanged
                 )
             }
+            item(key = "tabs") {
+                LocalFutachaSharedFeatures.current?.let { features ->
+                    SettingsSection(
+                        title = "タブ", icon = Icons.Rounded.History,
+                        description = "4つのモードで共通のタブの上限。"
+                    ) { FutachaTabLimitSetting(features) }
+                }
+            }
             item {
                 GlobalSettingsCatalogMenuSection(
                     localCatalogNavEntries = bindings.catalogMenu.localCatalogNavEntries,

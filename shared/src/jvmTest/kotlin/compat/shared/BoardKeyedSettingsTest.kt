@@ -23,6 +23,8 @@ import com.valoser.futacha.shared.util.JvmFileSystem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
+import com.valoser.futacha.shared.ui.ftutter.FTUTTER_TABS_STAGE_ID
+import com.valoser.futacha.shared.ui.futaber.FUTABER_TABS_STAGE_ID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -115,7 +117,8 @@ class BoardKeyedSettingsTest {
             state.setBoards(listOf(may))
             state.setCatalogMode("b", CatalogMode.New)
             val run = assertNotNull(runSharedDataMigrations(state, compat))
-            assertEquals(listOf("boardkeyed-maps-v1"), run.ran)
+            // B7a: ふたったー風's tab stage runs with the board-keyed one.
+            assertEquals(listOf("boardkeyed-maps-v1", FTUTTER_TABS_STAGE_ID, FUTABER_TABS_STAGE_ID), run.ran)
             assertTrue(compat.loadSharedData().keys.any { it == SharedDataMigrations.markKey("boardkeyed-maps-v1") })
             assertTrue(compat.preferences.first().keys.none { it.startsWith(COMPAT_SHARED_DATA_KEY_PREFIX) })
             assertFalse(COMPAT_SHARED_DATA_KEY_PREFIX in compat.exportSettingsBackup())
@@ -123,7 +126,7 @@ class BoardKeyedSettingsTest {
             // Kept across a restart.
             val reopened = DesktopCompatibilityStore(JvmFileSystem(root))
             reopened.initialize()
-            assertEquals(listOf("boardkeyed-maps-v1"), assertNotNull(runSharedDataMigrations(state, reopened)).skipped)
+            assertEquals(listOf("boardkeyed-maps-v1", FTUTTER_TABS_STAGE_ID, FUTABER_TABS_STAGE_ID), assertNotNull(runSharedDataMigrations(state, reopened)).skipped)
             reopened.close()
         } finally {
             state.close()

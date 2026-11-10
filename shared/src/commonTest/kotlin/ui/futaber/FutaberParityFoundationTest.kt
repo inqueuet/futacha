@@ -185,31 +185,10 @@ class FutaberParityFoundationTest {
     }
 
     @Test
-    fun aFullTabListLetsGoOfOneTabThatIsNotShownBeforeRefusing() {
-        val full = (1..FUTABER_MAX_TABS).map { key("a", it.toString()) }
-        val newKey = key("a", "999")
-        // Every tab has its history row: nothing to let go of.
-        assertNull(futaberTabsMakingRoomFor(full, newKey, full.map { entry(it.boardId, it.threadId) }))
-        // Tab 3 has no row (the history was cleared in another mode): it goes, the new tab comes in at the end.
-        val history = full.filter { it.threadId != "3" }.map { entry(it.boardId, it.threadId) }
-        val room = futaberTabsMakingRoomFor(full, newKey, history)!!
-        assertEquals(FUTABER_MAX_TABS, room.size)
-        assertTrue(key("a", "3") !in room)
-        assertEquals(newKey, room.last())
-        // Only the oldest hidden tab goes; the other hidden one stays for when its history is back.
-        val twoHidden = full.filter { it.threadId != "3" && it.threadId != "4" }.map { entry(it.boardId, it.threadId) }
-        val oneLeft = futaberTabsMakingRoomFor(full, newKey, twoHidden)!!
-        assertTrue(key("a", "3") !in oneLeft && key("a", "4") in oneLeft)
-        // A list with room, or a key that is already a tab, is not this case.
-        assertNull(futaberTabsMakingRoomFor(full.drop(1), newKey, emptyList()))
-        assertNull(futaberTabsMakingRoomFor(full, full.first(), emptyList()))
-    }
-
-    @Test
     fun aTabWithoutHistoryIsNotShownButIsKept() {
         val keys = listOf(key("a", "1"), key("a", "2"))
         val views = futaberTabViews(keys, listOf(entry("a", "1")))
-        assertEquals(listOf(key("a", "1")), views.map { it.key })
+        assertEquals(listOf(key("a", "1")), views.map { it.key }, "no history row and no shared tab: not shown")
         assertEquals(keys, futaberPruneTabsOfRemovedBoards(keys, boards))
     }
 }

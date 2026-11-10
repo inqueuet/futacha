@@ -70,7 +70,14 @@ class CompatSettingsBackupTabLimitTest {
     @Test
     fun theReportCountsOnlyRestoredTabsKeptByTheLimit() = withStore { store ->
         // The device's own tabs are newer than every restored one.
-        (1..95).forEach { no -> store.openTab(tab(no, insertedAt = 10_000L + no)) }
+        // 990 of them: with the restored ten the largest limit is passed, so raising it (audit M1) cannot keep them all.
+        store.importSettingsBackup(
+            encodeCompatSettingsBackup(
+                CompatSettingsBackup(exportedAtEpochMillis = 1L, boards = listOf(board), tabs = (1..990).map { tab(it, insertedAt = 10_000L + it) })
+            ),
+            restoreUserSettings = true,
+            restoreNgRules = false
+        )
         val backup = CompatSettingsBackup(
             exportedAtEpochMillis = 1L,
             boards = listOf(board),
@@ -83,7 +90,7 @@ class CompatSettingsBackupTabLimitTest {
         )
         val keys = store.tabs.first().map(CompatTab::key).toSet()
         val keptRestored = backup.tabs.count { it.key in keys }
-        // Only the favourite survives: the 15 trimmed tabs were the oldest restored ones.
+        // Only the favourite survives: the 109 trimmed tabs include the nine other restored ones (the oldest).
         assertEquals(1, keptRestored)
         assertTrue("tab-1001" in keys)
         assertEquals(keptRestored, report.tabsImported)
