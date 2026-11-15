@@ -67,6 +67,8 @@ internal object FutaberSettingKeys {
     const val EXT_OPEN_SUMMARY = "compat.futaber.ext.openSummary"
     const val EXT_TAB_STATUS = "compat.futaber.ext.tabStatus"
     const val EXT_REPORT_NG = "compat.futaber.ext.reportNg"
+    /** 本文のあぷ・あぷ小のファイル名を、レスの中にサムネイルとして並べる（ユーザー指示2026-11-12、既定ON）。 */
+    const val EXT_APU_PREVIEW = "compat.futaber.ext.apuPreview"
     const val EXT_ARCHIVE_MENU = "compat.futaber.ext.archiveMenu"
     const val EXT_SAVED_DETAIL = "compat.futaber.ext.savedDetail"
     const val EXT_OTHER_FAVORITES = "compat.futaber.ext.otherFavorites"
@@ -337,7 +339,8 @@ internal data class FutaberDisplaySettings(
     val replyPriorityThreshold: Int = 0,
     val extOpenSummary: Boolean = true,
     val extTabStatus: Boolean = true,
-    val extReportNg: Boolean = true
+    val extReportNg: Boolean = true,
+    val extApuPreview: Boolean = true
 ) {
     /** [base] is a size at the default font size; the result follows the chosen one. */
     fun sp(base: Float): TextUnit = (base * fontSize / FUTABER_FONT_SIZE_DEFAULT).sp
@@ -426,6 +429,7 @@ internal data class FutaberDisplaySettings(
             extOpenSummary = preferences[FutaberSettingKeys.EXT_OPEN_SUMMARY] != "OFF",
             extTabStatus = preferences[FutaberSettingKeys.EXT_TAB_STATUS] != "OFF",
             extReportNg = preferences[FutaberSettingKeys.EXT_REPORT_NG] != "OFF",
+            extApuPreview = preferences[FutaberSettingKeys.EXT_APU_PREVIEW] != "OFF",
             extCatalogModes = preferences[FutaberSettingKeys.EXT_CATALOG_MODES] != "OFF",
             extCatalogWatchHighlight = preferences[FutaberSettingKeys.EXT_CATALOG_WATCH_HIGHLIGHT] != "OFF",
             extReplyPriority = preferences[FutaberSettingKeys.EXT_REPLY_PRIORITY] != "OFF",

@@ -154,7 +154,7 @@ class CompatHistoryToolsTest {
         // ふたちゃ's presentation never gets the two switches; its only addition is its own draft switch (batch 4).
         assertEquals(
             compatSettingsGroups("control", true).map { (group, entries) ->
-                group to if (group == "ふたちゃ拡張") entries + futachaDraftPersistEntry() else entries
+                group to if (group == "ふたちゃ拡張") entries + futachaDraftPersistEntry() + futachaFlatMediaSaveEntry() + futachaSwipeToCatalogEntry() else entries
             },
             compatSettingsGroups("control", true, includeAppStateEntries = true)
         )
@@ -163,10 +163,10 @@ class CompatHistoryToolsTest {
         assertEquals(compatSettingsGroups("control", false).map { it.first }, groups.map { it.first })
         val extension = groups.first { it.first == "ふたちゃ拡張" }.second
         assertEquals(
-            listOf("controlHistoryTools", "controlCommonNgApply"),
-            extension.takeLast(2).map { it.preferenceKey }
+            listOf("controlHistoryTools", "controlTabCloseDeletesHistory", "controlHistoryDeleteClosesTab", "controlCommonNgApply"),
+            extension.takeLast(4).map { it.preferenceKey }
         )
-        extension.takeLast(2).forEach { entry ->
+        extension.takeLast(4).forEach { entry ->
             assertEquals(if (entry.preferenceKey == "controlCommonNgApply") "ON" else "OFF", entry.summary)
             assertTrue(compatIsBooleanPreference("control", entry))
             assertTrue(compatBooleanPreferenceSummary(entry.preferenceKey).isNotEmpty())

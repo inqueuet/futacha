@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.desktop
 
+import com.valoser.futacha.shared.network.aimoge.createAimogeHttpClient
+import com.valoser.futacha.shared.repo.withAimogeRouting
 import androidx.compose.runtime.*
 import androidx.compose.material3.*
 import androidx.compose.foundation.layout.*
@@ -61,9 +63,12 @@ class DesktopAppGraph(val environment: DesktopEnvironment) {
     val originals = createOriginalMediaSession(httpClient).also { httpClient.bindOriginalMediaSource(it) }
     internal val compatibility = DesktopCompatibilityStore(fileSystem)
     val autoSaved = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
-    val repository = DefaultBoardRepository(HttpBoardApi(httpClient), createHtmlParser(),
-        cookieRepository = cookieRepository, diagnosticFileSystem = fileSystem,
-        catalogFetchSettingsProvider = { CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized() })
+    // あいもげ gets its own client without cookies or redirects, made on its first request (AM-B4).
+    val repository = withAimogeRouting(
+        DefaultBoardRepository(HttpBoardApi(httpClient), createHtmlParser(),
+            cookieRepository = cookieRepository, diagnosticFileSystem = fileSystem,
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized() })
+    ) { createAimogeHttpClient(System.getProperty("futacha.desktop.version", "14.0")) }
     val refresher = HistoryRefresher(stateStore, repository, Dispatchers.IO, autoSaved, httpClient, fileSystem)
     private val watchRefresher = CatalogWatchAlertRefresher(stateStore, repository, Dispatchers.IO, diagnosticsStore = compatibility)
     private val watchNotifications = DesktopWatchNotifications(File(environment.dataDirectory, "watch-notifications.tsv"))

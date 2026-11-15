@@ -1436,6 +1436,13 @@ class ThreadScreenSaveActionLogicTest {
     }
 
     @Test
+    fun ownWordsQuoteSelectionSkipsTheQuotedLines() {
+        val post = Post(id = "12", author = null, subject = null, timestamp = "", messageHtml = "&gt;No.9<br>相手<br>&gt;引用<br>言葉", imageUrl = null, thumbnailUrl = null)
+        val items = buildQuoteSelectionItems(post)
+        assertEquals(listOf("相手", "言葉"), items.filter { it.id in ownWordsQuoteSelectionIds(items) }.map { it.preview })
+    }
+
+    @Test
     fun quoteSelectionHelpers_buildDefaultsAndAppendQuotedLines() {
         val post = Post(
             id = "12",

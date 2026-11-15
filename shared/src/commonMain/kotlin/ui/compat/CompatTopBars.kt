@@ -84,6 +84,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
@@ -500,7 +501,9 @@ internal fun CompatTopBar(
     onToolbarEdit: (() -> Unit)? = null,
     onSettings: (() -> Unit)? = null,
     onOpenHelp: (() -> Unit)? = null,
-    titleAppearance: com.valoser.futacha.shared.ui.privacy.PrivateTitle = com.valoser.futacha.shared.ui.privacy.PrivateTitle.NORMAL
+    titleAppearance: com.valoser.futacha.shared.ui.privacy.PrivateTitle = com.valoser.futacha.shared.ui.privacy.PrivateTitle.NORMAL,
+    /** 設定「スレッドのタイトルの文字サイズ」。null は標準の20sp。 */
+    titleFontSp: Int? = null
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
     val topBarHeight = compatTopBarHeightDp(LocalDensity.current.fontScale).dp
@@ -551,7 +554,7 @@ internal fun CompatTopBar(
             ) {
                 val hidden = titleAppearance == com.valoser.futacha.shared.ui.privacy.PrivateTitle.HIDDEN
                 Text(if (hidden) "スレッド" else title, maxLines = 1,
-                    style = com.valoser.futacha.shared.ui.privacy.privateTitleStyle(androidx.compose.ui.text.TextStyle(fontSize = 20.sp), titleAppearance),
+                    style = com.valoser.futacha.shared.ui.privacy.privateTitleStyle(androidx.compose.ui.text.TextStyle(fontSize = (titleFontSp ?: 20).sp), titleAppearance),
                     modifier = Modifier.alpha(if (hidden) 1f else com.valoser.futacha.shared.ui.privacy.privateTitleAlpha(titleAppearance)),
                     color = Color.White, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, fontSize = 12.sp, color = Color.White, maxLines = 1)
@@ -644,7 +647,15 @@ internal fun CompatSearchTopBar(
                 keyboardActions = KeyboardActions(onSearch = { onNext() }),
                 placeholder = { Text("検索文字", fontSize = 20.sp) },
                 trailingIcon = {
-                    Text(if (matchCount == 0) "" else "${matchIndex + 1}/${matchCount}件", fontSize = 14.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (matchCount == 0) "" else "${matchIndex + 1}/${matchCount}件", fontSize = 14.sp)
+                        if (query.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onQueryChanged("") },
+                                modifier = Modifier.testTag("compat-thread-search-clear")
+                            ) { Icon(Icons.Filled.Close, contentDescription = "入力を消去") }
+                        }
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()

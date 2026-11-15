@@ -44,6 +44,7 @@ private fun seedBenchmarkFixture(device: UiDevice, profile: FutachaProfile) {
         "am broadcast -W " +
             "-a com.valoser.futacha.action.SEED_BENCHMARK_FIXTURE " +
             "--es profile ${profile.name} " +
+            (if (profile == FutachaProfile.FUTABER) "--ez withMixBoards true " else "") +
             "-n $TARGET_PACKAGE/.BenchmarkFixtureReceiver"
     )
     check("result=-1" in output) { "Failed to seed benchmark fixture: $output" }
@@ -107,6 +108,11 @@ private fun MacrobenchmarkScope.runFutaberNavigation() {
     // The title exposes return as an accessibility action, not a separate button.
     device.pressBack()
     waitFor(device, By.desc("カタログを更新"), "ふたばー風カタログへの復帰")
+    normalizeToBoardRoot(device, FutachaProfile.FUTABER)
+    // まとめカタログ: open it from the drawer so its screen is in the profile, then leave.
+    click(device, By.text("まとめカタログ"), "ふたばー風まとめカタログの入口")
+    waitFor(device, By.text("切替"), "ふたばー風まとめカタログ")
+    device.pressBack()
     normalizeToBoardRoot(device, FutachaProfile.FUTABER)
 }
 

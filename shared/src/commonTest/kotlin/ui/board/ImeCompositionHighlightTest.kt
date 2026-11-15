@@ -33,4 +33,20 @@ class ImeCompositionHighlightTest {
         assertTrue(ImeCompositionHighlight(TextRange(1, 50), Color.Yellow).filter(AnnotatedString("")).text.spanStyles.isEmpty())
         assertEquals(2, ImeCompositionHighlight(TextRange(1, 50), Color.Yellow).filter(AnnotatedString("入力")).text.spanStyles.single().end)
     }
+    @Test fun theActiveClauseIsTheSelectionInsideTheComposition() {
+        assertEquals(TextRange(2, 5), imeActiveClause(TextRange(0, 5), TextRange(2, 5)))
+        assertEquals(TextRange(3, 5), imeActiveClause(TextRange(3, 8), TextRange(0, 5)))
+        assertNull(imeActiveClause(TextRange(0, 5), TextRange(5)))
+        assertNull(imeActiveClause(null, TextRange(1, 3)))
+        assertNull(imeActiveClause(TextRange(0, 2), TextRange(4, 6)))
+    }
+    @Test fun theClauseColorsAreReadableOnEveryPalette() {
+        listOf("default", "mono", "futaba", "blue", "pink", "black").forEach { theme ->
+            val c = imeCompositionColors(com.valoser.futacha.shared.ui.compat.compatibilityPaletteFor(theme).background)
+            val hi = maxOf(c.clauseBackground.luminance(), c.clauseForeground.luminance())
+            val lo = minOf(c.clauseBackground.luminance(), c.clauseForeground.luminance())
+            assertTrue((hi + .05f) / (lo + .05f) >= 4.5f, theme)
+            assertNotEquals(c.background, c.clauseBackground, theme)
+        }
+    }
 }

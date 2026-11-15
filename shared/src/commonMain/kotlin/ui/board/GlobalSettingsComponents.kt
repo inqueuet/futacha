@@ -250,6 +250,18 @@ internal fun GlobalSettingsScaffold(
                     SharedSettingsLink("image_search", "画像検索", "メニューに表示する検索先")
                 }
             }
+            // AM-B8: the あいもげ page (approval, delete key), only while あいもげ is on.
+            if (com.valoser.futacha.shared.ui.aimoge.aimogeSettingsVisible()) {
+                // 他の項目と同じく見出しのある節にまとめる（スレの指摘：あいもげの行だけ節の外に浮いていた）。
+                item(key = "aimoge") {
+                    SettingsSection(
+                        title = "あいもげ", icon = Icons.Rounded.History,
+                        description = "あいもげの承認・削除キー。ふたばの設定とは別に保存します。"
+                    ) {
+                        SharedSettingsLink("aimoge", "あいもげ", "承認・削除キー")
+                    }
+                }
+            }
             item {
                 GlobalSettingsThreadInteractionSection(
                     threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,

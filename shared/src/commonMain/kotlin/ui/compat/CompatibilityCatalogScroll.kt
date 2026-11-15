@@ -649,6 +649,8 @@ internal fun BoxScope.CompatFastScrollbar(
     val scope = rememberCoroutineScope()
     val latestOnScrollToItem by rememberUpdatedState(onScrollToItem)
     val latestFirstVisibleItemIndex by rememberUpdatedState(firstVisibleItemIndex)
+    val latestTotalItems by rememberUpdatedState(totalItems)
+    val latestVisibleItemCount by rememberUpdatedState(visibleItemCount)
     val touchSlopPx = LocalViewConfiguration.current.touchSlop
     var trackHeightPx by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf(false) }
@@ -671,12 +673,12 @@ internal fun BoxScope.CompatFastScrollbar(
         }
     }
 
-    fun scrollForDrag(startIndex: Int, dragDeltaY: Float) {
+    fun scrollForDrag(startIndex: Int, startTotal: Int, startVisibleCount: Int, startHeight: Int, dragDeltaY: Float) {
         val target = compatFastScrollbarDragTarget(
             firstVisibleItemIndex = startIndex,
-            totalItems = totalItems,
-            visibleItemCount = visibleItemCount,
-            trackHeightPx = trackHeightPx,
+            totalItems = startTotal,
+            visibleItemCount = startVisibleCount,
+            trackHeightPx = startHeight,
             dragDeltaY = dragDeltaY
         )
         scrollJob?.cancel()
@@ -691,32 +693,38 @@ internal fun BoxScope.CompatFastScrollbar(
     // hit strip intercepts ordinary reading swipes made near the right edge
     // and turns them into absolute seeks. Drag relative to the position at
     // pointer-down so grabbing the thumb never causes an initial jump.
-    val thumbGestureModifier = Modifier.pointerInput(totalItems, visibleItemCount, touchSlopPx) {
+    // Visible rows change while dragging past differently sized posts. Keep the gesture alive and
+    // use the metrics at pointer-down. Accumulate movement rather than comparing with a local
+    // down position: the thumb itself moves under the finger as the list scrolls.
+    val thumbGestureModifier = Modifier.pointerInput(touchSlopPx) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             val startIndex = latestFirstVisibleItemIndex
+            val startTotal = latestTotalItems
+            val startVisibleCount = latestVisibleItemCount
+            val startHeight = trackHeightPx
+            var distance = 0f
             var isDragging = false
-            while (true) {
+            dragging = true
+            try { while (true) {
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 val moved = change.position != change.previousPosition
                 if (moved) {
-                    val distance = change.position.y - down.position.y
+                    distance += change.position.y - change.previousPosition.y
                     if (!isDragging && abs(distance) >= touchSlopPx) {
                         isDragging = true
-                        dragging = true
                     }
                     if (isDragging) {
                         change.consume()
-                        scrollForDrag(startIndex, distance)
+                        scrollForDrag(startIndex, startTotal, startVisibleCount, startHeight, distance)
                     }
                 }
                 if (!change.pressed) {
                     dragging = false
                     break
                 }
-            }
-            dragging = false
+            } } finally { dragging = false }
         }
     }
     Box(

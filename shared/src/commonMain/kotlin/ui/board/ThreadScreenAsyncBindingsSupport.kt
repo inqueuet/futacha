@@ -54,6 +54,7 @@ internal data class ThreadScreenAsyncBindingsInputs(
     val repository: BoardRepository,
     val history: List<ThreadHistoryEntry>,
     val currentHistory: () -> List<ThreadHistoryEntry> = { history },
+    val flatSingleMediaSave: () -> Boolean = { false },
     val threadId: String,
     val threadTitle: String?,
     val board: BoardSummary,
@@ -328,7 +329,8 @@ internal fun buildThreadScreenAsyncBindingsBundle(
         loadStateBindings = inputs.runtimeBindings.loadStateBindings,
         loadUiCallbacks = inputs.runtimeBindings.loadUiCallbacks,
         onWarning = inputs.onWarning,
-        onInfo = inputs.onInfo
+        onInfo = inputs.onInfo,
+        flatSingleMediaSave = inputs.flatSingleMediaSave
     )
 }
 
@@ -367,9 +369,11 @@ internal fun buildThreadScreenAsyncBindingsBundle(
     loadStateBindings: ThreadScreenLoadStateBindings,
     loadUiCallbacks: ThreadScreenLoadUiCallbacks,
     onWarning: (String) -> Unit = {},
-    onInfo: (String) -> Unit = {}
+    onInfo: (String) -> Unit = {},
+    flatSingleMediaSave: () -> Boolean = { false }
 ): ThreadScreenAsyncBindingsBundle {
     val runnerBindings = buildThreadScreenRunnerBindings(
+        flatSingleMediaSave = flatSingleMediaSave,
         repository = repository,
         httpClient = httpClient,
         fileSystem = fileSystem,
@@ -473,6 +477,9 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
     isAndroidPlatform: Boolean
 ): ThreadScreenAsyncBindingsBundle {
     val latestHistory = rememberUpdatedState(history)
+    val flatSave = rememberUpdatedState(
+        LocalFutachaSharedFeatures.current?.value("control", com.valoser.futacha.shared.ui.compat.FUTACHA_FLAT_MEDIA_SAVE_PREFERENCE_KEY) != "OFF"
+    )
     return remember(
         activeRepository,
         manualSaveCoroutineScope,
@@ -495,6 +502,7 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
     ) {
         buildThreadScreenAsyncBindingsBundle(
             ThreadScreenAsyncBindingsInputs(
+                flatSingleMediaSave = { flatSave.value },
                 coroutineScope = coroutineScope,
                 manualSaveCoroutineScope = manualSaveCoroutineScope,
                 repository = activeRepository,

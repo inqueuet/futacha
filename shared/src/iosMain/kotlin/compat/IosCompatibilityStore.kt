@@ -316,13 +316,13 @@ internal class IosCompatibilityStore(
     }
 
     override suspend fun upsertBoard(board: CompatBoard) = mutate {
-        require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) { "Invalid Futaba board URL" }
+        require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) { "Invalid Futaba board URL" }
         state = it.copy(boards = replaceBoard(it.boards, board))
     }
 
     override suspend fun upsertBoards(boards: List<CompatBoard>) = mutate {
         boards.forEach { board ->
-            require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) {
+            require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) {
                 "Invalid Futaba board URL"
             }
         }
@@ -1008,7 +1008,7 @@ internal class IosCompatibilityStore(
     ): CompatSettingsBackupImportReport = mutate {
         val backup = decodeCompatSettingsBackup(payload)
         val nextBoards = if (restoreUserSettings) backup.boards.fold(it.boards) { all, board ->
-            require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) { "バックアップの板URLが不正です" }
+            require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) { "バックアップの板URLが不正です" }
             replaceBoard(all, board)
         } else it.boards
         val boardKeys = nextBoards.mapTo(mutableSetOf(), CompatBoard::key)
@@ -2115,7 +2115,7 @@ internal class IosCompatibilityStore(
     }
 
     private fun resolvedCompatCanonicalBoardUrl(originalUrl: String): String? {
-        return canonicalizeBoardUrl(originalUrl)
+        return storeCanonicalBoardUrlOf(originalUrl)
             ?: originalUrl
                 .takeIf { it.contains("example.com", ignoreCase = true) }
                 ?.replace(Regex("^https?://[^/]+", RegexOption.IGNORE_CASE), "https://img.2chan.net")

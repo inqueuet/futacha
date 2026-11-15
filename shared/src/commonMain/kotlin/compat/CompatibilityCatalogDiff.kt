@@ -88,7 +88,7 @@ fun buildCompatCatalogReplyDeltas(
 }
 
 fun CatalogItem.compatCatalogReplyDeltaKey(): String =
-    compatCatalogThreadKey()?.toString() ?: canonicalizeThreadUrl(threadUrl)?.canonicalUrl ?: threadUrl
+    compatCatalogThreadKey()?.toString() ?: com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(threadUrl)?.canonicalUrl ?: threadUrl
 
 fun diffCompatCatalogGenerations(
     current: List<CatalogItem>,

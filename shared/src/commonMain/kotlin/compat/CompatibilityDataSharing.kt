@@ -32,7 +32,7 @@ fun compatibilityHistorySharedMetadata(
 
 /** Shared identity/conversion rules for the modern and compatibility stores. */
 fun CompatHistoryEntry.toModernThreadHistoryEntry(): ThreadHistoryEntry? {
-    val parsed = canonicalizeThreadUrl(canonicalUrl) ?: return null
+    val parsed = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(canonicalUrl) ?: return null
     return ThreadHistoryEntry(
         threadId = parsed.threadNo,
         boardId = boardKey,
@@ -49,13 +49,13 @@ fun CompatHistoryEntry.toModernThreadHistoryEntry(): ThreadHistoryEntry? {
 }
 
 fun ThreadHistoryEntry.toCompatHistoryEntry(): CompatHistoryEntry? {
-    if (!threadId.matches(SHARED_HISTORY_THREAD_NUMBER)) return null
-    val parsedThreadUrl = canonicalizeThreadUrl(boardUrl)
+    val parsedThreadUrl = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(boardUrl)
     val normalizedBoardUrl = parsedThreadUrl?.canonicalBoardUrl
-        ?: canonicalizeBoardUrl(boardUrl)
-        ?: return null
+        ?: com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(boardUrl)
+    if (!isSiteThreadId(normalizedBoardUrl, threadId)) return null
+    normalizedBoardUrl ?: return null
     val normalizedThreadId = parsedThreadUrl?.threadNo ?: threadId
-    val canonicalUrl = "${normalizedBoardUrl}res/$normalizedThreadId.htm"
+    val canonicalUrl = siteThreadUrlOnBoard(normalizedBoardUrl, normalizedThreadId)
     return CompatHistoryEntry(
         canonicalUrl = canonicalUrl,
         originalUrl = canonicalUrl,
@@ -166,7 +166,7 @@ fun mergeCompatibilityBoards(
 fun modernBoardsToCompatibility(modernBoards: List<BoardSummary>): List<CompatBoard> {
     val seen = mutableSetOf<String>()
     return modernBoards.mapIndexedNotNull { index, board ->
-        val canonical = canonicalizeBoardUrl(board.url) ?: return@mapIndexedNotNull null
+        val canonical = com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url) ?: return@mapIndexedNotNull null
         if (!seen.add(canonical)) return@mapIndexedNotNull null
         CompatBoard(
             key = compatBoardKey(canonical),
@@ -228,7 +228,7 @@ fun synchronizeModernBoardsFromCompatibility(
     // the AppState's own copy as well added one more copy at every synchronization (2026-10-13 全体検証 7.6).
     val synchronizedNonOfficial = buildMap {
         synchronized.forEach { board ->
-            if (canonicalizeBoardUrl(board.url) == null) {
+            if (com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url) == null) {
                 val key = boardIdentity(board.url)
                 if (key !in this) put(key, board)
             }
@@ -248,7 +248,7 @@ fun synchronizeModernBoardsFromCompatibility(
         val identity = boardIdentity(board.url)
         when {
             isBundledTutorialBoardUrl(board.url) && compatibilityHoldsTutorial -> Unit
-            canonicalizeBoardUrl(board.url) != null -> nextSynchronized()?.let(result::add)
+            com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url) != null -> nextSynchronized()?.let(result::add)
             else -> {
                 val fromStore = synchronizedNonOfficial[identity]
                 if (placed.add(identity)) result += fromStore ?: existingByIdentity[identity] ?: board
@@ -356,20 +356,19 @@ fun mergeCompatibilityHistory(
 }
 
 private fun historyIdentity(entry: ThreadHistoryEntry): String {
-    val parsedThreadUrl = canonicalizeThreadUrl(entry.boardUrl)
-    val board = parsedThreadUrl?.canonicalBoardUrl ?: canonicalizeBoardUrl(entry.boardUrl)
+    val parsedThreadUrl = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(entry.boardUrl)
+    val board = parsedThreadUrl?.canonicalBoardUrl ?: com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(entry.boardUrl)
     val threadId = parsedThreadUrl?.threadNo ?: entry.threadId
-    return if (board != null && threadId.matches(SHARED_HISTORY_THREAD_NUMBER)) {
-        "${board}res/$threadId"
+    return if (board != null && isSiteThreadId(board, threadId)) {
+        siteThreadUrlOnBoard(board, threadId).removeSuffix(".htm")
     } else {
         "${entry.boardId}::${entry.threadId}"
     }
 }
 
 private fun boardIdentity(url: String): String =
-    canonicalizeBoardUrl(url)
+    com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(url)
         ?: if (isBundledTutorialBoardUrl(url)) BUNDLED_TUTORIAL_IDENTITY else url.trim().trimEnd('/').lowercase()
 
 private const val BUNDLED_TUTORIAL_IDENTITY = "bundled-tutorial:www.example.com/t/"
 
-private val SHARED_HISTORY_THREAD_NUMBER = Regex("[0-9]+")

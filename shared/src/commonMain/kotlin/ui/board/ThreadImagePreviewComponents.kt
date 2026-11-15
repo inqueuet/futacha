@@ -140,11 +140,13 @@ internal fun ImagePreviewDialog(
         }
         val image = rememberViewerImagePainter(
             request = previewRequest,
-            imageLoader = imageLoader
+            imageLoader = imageLoader,
+            animate = !wantsOriginalResolution
         )
         val original = rememberViewerImagePainter(
             request = originalRequest,
-            imageLoader = imageLoader
+            imageLoader = imageLoader,
+            animate = wantsOriginalResolution
         )
         val thumbnail = rememberViewerImagePainter(
             request = thumbnailRequest,

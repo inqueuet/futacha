@@ -109,7 +109,7 @@ internal fun buildThreadLoadRunnerCallbacks(
         val store = compatibilityStore ?: return null
         val rawUrl = currentThreadUrlOverride()
             ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
-        val parsed = canonicalizeThreadUrl(rawUrl) ?: return null
+        val parsed = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rawUrl) ?: return null
         return runSuspendCatchingPreservingCancellation {
             store.loadThreadSnapshotByCanonicalUrl(parsed.canonicalUrl)
                 ?.let { snapshot ->

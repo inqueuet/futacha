@@ -116,8 +116,8 @@ internal fun futaberBoardAddRequest(
     thumbnailUrl: String = "",
     replyCount: Int = 0
 ): FutaberBoardAddRequest? {
-    val thread = canonicalizeThreadUrl(rawUrl)
-    val canonicalBoard = thread?.canonicalBoardUrl ?: canonicalizeBoardUrl(rawUrl) ?: return null
+    val thread = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rawUrl)
+    val canonicalBoard = thread?.canonicalBoardUrl ?: com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(rawUrl) ?: return null
     val thread0 = thread?.threadNo ?: threadId?.takeIf { it.isNotBlank() }
     val name = boardName.trim().ifEmpty { futaberDefaultBoardName(canonicalBoard + "futaba.php") }
     return FutaberBoardAddRequest(
@@ -147,7 +147,7 @@ internal fun futaberBoardAddRequestForWatchResult(result: CompatWatchResult): Fu
 
 /** The registered board with the same canonical address, if any (it may have been registered under another id). */
 internal fun futaberBoardByCanonicalUrl(boards: List<BoardSummary>, canonicalBoardUrl: String): BoardSummary? =
-    boards.firstOrNull { canonicalizeBoardUrl(it.url) == canonicalBoardUrl }
+    boards.firstOrNull { com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(it.url) == canonicalBoardUrl }
 
 internal fun futaberBoardAddQuestion(request: FutaberBoardAddRequest): String =
     "「${request.name}」を板一覧に追加して開きますか？"

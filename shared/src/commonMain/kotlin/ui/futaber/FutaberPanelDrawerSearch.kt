@@ -151,7 +151,10 @@ internal enum class FutaberDrawerEditExtra(val label: String, val tag: String) {
 }
 
 /** The footer's additions: the bulk add (when the official list can be fetched) and the rename (when there is a board). */
-internal fun futaberBoardDrawerEditExtras(bulkAvailable: Boolean, hasBoards: Boolean): List<FutaberDrawerEditExtra> = buildList {
+internal fun futaberBoardDrawerEditExtras(
+    bulkAvailable: Boolean,
+    hasBoards: Boolean
+): List<FutaberDrawerEditExtra> = buildList {
     if (bulkAvailable) add(FutaberDrawerEditExtra.BulkAdd)
     if (hasBoards) add(FutaberDrawerEditExtra.Rename)
 }
@@ -166,6 +169,16 @@ internal const val FUTABER_ADD_BOARD_PREFILL = "https://"
 internal fun futaberAddBoardAlertReason(input: String, existing: List<BoardSummary>): String? {
     val trimmed = input.trim()
     if (trimmed.isEmpty() || trimmed == "https://" || trimmed == "http://") return "板のアドレスを入力してください"
+    when (val aimoge = com.valoser.futacha.shared.ui.aimoge.classifyAimogeBoardUrlInput(trimmed)) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.NotAimoge -> Unit
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards -> return null
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Refused ->
+            return aimoge.message
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board ->
+            return if (existing.any { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) == aimoge.url }) {
+                "同じURLの板が既に登録されています"
+            } else null
+    }
     val state = futaberAddBoardState("", trimmed, existing)
     return if (state.canSubmit) null else state.helperText ?: "この板は追加できません"
 }

@@ -309,9 +309,13 @@ fun reduceCompatibilityWorkspace(
             }
         )
     }
-    is CompatibilityEvent.OpenDrawer -> CompatibilityReduction(
-        state.copy(drawerPage = event.page, lastDrawerPage = event.page)
-    )
+    // The drawing screen has no way to close the drawer (its gestures are off), so a late open — an edge swipe
+    // still settling when 手描き was pressed, or an AI command — must not reach it.
+    is CompatibilityEvent.OpenDrawer -> if (state.host is CompatHost.PostDrawing) {
+        CompatibilityReduction(state)
+    } else {
+        CompatibilityReduction(state.copy(drawerPage = event.page, lastDrawerPage = event.page))
+    }
     CompatibilityEvent.CloseDrawer -> CompatibilityReduction(state.copy(drawerPage = null))
     is CompatibilityEvent.SetSelector -> CompatibilityReduction(
         state.copy(selectorOpen = event.open, selectorPresentation = event.presentation)

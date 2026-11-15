@@ -506,11 +506,17 @@ internal fun CompatMainScreen(
     pinnedBoardKeys: Set<String> = emptySet(),
     /** Null where the pin cannot be saved (no state store): the long-press menu then has no pin entry. */
     onBoardPinToggle: ((CompatBoard) -> Unit)? = null,
-    boardsFromBottom: Boolean = false
+    boardsFromBottom: Boolean = false,
+    /** Non-null only where まとめカタログ is available; adds a menu entry after the reference list. */
+    onOpenMix: (() -> Unit)? = null
 ) {
     var overflowOpen by remember { mutableStateOf(false) }
     var reorderMode by remember { mutableStateOf(false) }
     var deleteMode by remember { mutableStateOf(false) }
+    // 1447424087：削除モードで行を押して選び、まとめて削除する。
+    var selectedForDelete by remember { mutableStateOf(emptySet<String>()) }
+    var deletingSelected by remember { mutableStateOf(false) }
+    LaunchedEffect(deleteMode) { if (!deleteMode) selectedForDelete = emptySet() }
     var addDialog by remember { mutableStateOf(false) }
     var editingBoard by remember { mutableStateOf<CompatBoard?>(null) }
     var deletingBoard by remember { mutableStateOf<CompatBoard?>(null) }
@@ -524,6 +530,41 @@ internal fun CompatMainScreen(
     var dragWorkingBoards by remember { mutableStateOf<List<CompatBoard>>(emptyList()) }
     val latestLocalBoards by rememberUpdatedState(localBoards)
     val latestBoardsReordered by rememberUpdatedState(onBoardsReordered)
+    fun dragStart(board: CompatBoard) {
+        dragStartBoards = latestLocalBoards
+        dragWorkingBoards = latestLocalBoards
+        draggedBoardKey = board.key
+        draggedBoardOffset = 0f
+    }
+    fun dragBy(board: CompatBoard, dy: Float, rowHeight: Float) {
+        if (draggedBoardKey != board.key) return
+        // Snapshot state is updated synchronously, while rememberUpdatedState needs a
+        // recomposition: use the gesture's working list so one frame can cross two rows.
+        val (order, left) = compatBoardDragSteps(
+            dragWorkingBoards.ifEmpty { latestLocalBoards }, board.key, draggedBoardOffset + dy, rowHeight
+        )
+        if (order != dragWorkingBoards) {
+            localBoards = order
+            dragWorkingBoards = order
+        }
+        draggedBoardOffset = left
+    }
+    fun dragEnd() {
+        if (dragWorkingBoards.isNotEmpty() && dragWorkingBoards != dragStartBoards) {
+            latestBoardsReordered(dragWorkingBoards)
+        }
+        dragStartBoards = emptyList()
+        dragWorkingBoards = emptyList()
+        draggedBoardKey = null
+        draggedBoardOffset = 0f
+    }
+    fun dragCancel() {
+        if (dragStartBoards.isNotEmpty()) localBoards = dragStartBoards
+        dragStartBoards = emptyList()
+        dragWorkingBoards = emptyList()
+        draggedBoardKey = null
+        draggedBoardOffset = 0f
+    }
 
     PlatformBackHandler(
         enabled = reorderMode || deleteMode,
@@ -543,6 +584,23 @@ internal fun CompatMainScreen(
             // below the content instead of the reference 63px navigation bar.
             contentWindowInsets = WindowInsets(),
             containerColor = CompatFutabaBackground,
+            bottomBar = {
+                if (deleteMode) {
+                    androidx.compose.foundation.layout.Row(
+                        Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(onClick = {
+                            selectedForDelete = if (selectedForDelete.size == localBoards.size) emptySet() else localBoards.map { it.key }.toSet()
+                        }) { Text(if (selectedForDelete.size == localBoards.size && localBoards.isNotEmpty()) "すべて解除" else "すべて選択") }
+                        androidx.compose.material3.Button(
+                            enabled = selectedForDelete.isNotEmpty(),
+                            onClick = { deletingSelected = true },
+                            modifier = Modifier.testTag("compat-board-delete-selected")
+                        ) { Text("選んだ${selectedForDelete.size}件を削除") }
+                    }
+                }
+            },
             snackbarHost = {
                 boardOperationNotice?.let { message ->
                     Snackbar(
@@ -571,6 +629,7 @@ internal fun CompatMainScreen(
                             }
                             if (overflowOpen) {
                                 CompatMainOverflowPopup(
+                                    onOpenMix = onOpenMix?.let { open -> { overflowOpen = false; open() } },
                                     onDismiss = { overflowOpen = false },
                                     onItem = { label ->
                                         overflowOpen = false
@@ -615,13 +674,26 @@ internal fun CompatMainScreen(
                                 if (draggedBoardKey == board.key) {
                                     translationY = draggedBoardOffset
                                     shadowElevation = 12.dp.toPx()
-                                    alpha = 0.1f
+                                    alpha = 0.6f
                                 }
                             }
-                            .combinedClickable(
-                                onClick = { if (!reorderMode && !deleteMode) onBoardSelected(board) },
-                                onLongClick = { if (!reorderMode && !deleteMode) contextBoard = board }
-                            )
+                            .zIndex(if (draggedBoardKey == board.key) 1f else 0f)
+                            .background(if (draggedBoardKey == board.key) Color(0x33808080) else Color.Transparent)
+                            // In the reorder mode a long press anywhere on the row picks it up, as
+                            // well as the handle (808SH: long-pressing the name did nothing).
+                            .then(if (reorderMode) Modifier.pointerInput(board.key, "row-drag") {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { dragStart(board) },
+                                    onDrag = { change, amount -> change.consume(); dragBy(board, amount.y, size.height.toFloat()) },
+                                    onDragEnd = { dragEnd() },
+                                    onDragCancel = { dragCancel() }
+                                )
+                            } else Modifier)
+                            // Off in the reorder mode: its long press would take the gesture first.
+                            .then(if (reorderMode) Modifier else Modifier.combinedClickable(
+                                onClick = { if (deleteMode) selectedForDelete = compatToggleSelection(selectedForDelete, board.key) else onBoardSelected(board) },
+                                onLongClick = { if (!deleteMode) contextBoard = board }
+                            ))
                             .semantics(mergeDescendants = true) { role = Role.Button },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -629,11 +701,13 @@ internal fun CompatMainScreen(
                             modifier = Modifier.size(60.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Image(
-                                painter = painterResource(Res.drawable.board_listview_ico_default),
-                                contentDescription = "アイコン",
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            if (!com.valoser.futacha.shared.ui.aimoge.AimogeBoardIcon(board.canonicalUrl, 48.dp)) {
+                                Image(
+                                    painter = painterResource(Res.drawable.board_listview_ico_default),
+                                    contentDescription = "アイコン",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             if (board.key in pinnedBoardKeys) {
@@ -649,55 +723,10 @@ internal fun CompatMainScreen(
                                     .size(60.dp)
                                     .pointerInput(board.key, reorderMode) {
                                         detectDragGestures(
-                                            onDragStart = {
-                                                dragStartBoards = latestLocalBoards
-                                                dragWorkingBoards = latestLocalBoards
-                                                draggedBoardKey = board.key
-                                                draggedBoardOffset = 0f
-                                            },
-                                            onDrag = { change, amount ->
-                                                change.consume()
-                                                if (draggedBoardKey != board.key) return@detectDragGestures
-                                                draggedBoardOffset += amount.y
-                                                // Snapshot state is updated synchronously, while
-                                                // rememberUpdatedState needs a recomposition. Use
-                                                // the gesture's working list so two move events in
-                                                // the same frame can still cross two rows.
-                                                val currentBoards = dragWorkingBoards.ifEmpty { latestLocalBoards }
-                                                val currentIndex = currentBoards.indexOfFirst { it.key == board.key }
-                                                if (currentIndex < 0) return@detectDragGestures
-                                                val rowHeightPx = size.height.toFloat().coerceAtLeast(1f)
-                                                val targetIndex = when {
-                                                    draggedBoardOffset > rowHeightPx / 2f -> currentIndex + 1
-                                                    draggedBoardOffset < -rowHeightPx / 2f -> currentIndex - 1
-                                                    else -> currentIndex
-                                                }
-                                                if (targetIndex !in currentBoards.indices || targetIndex == currentIndex) {
-                                                    return@detectDragGestures
-                                                }
-                                                localBoards = currentBoards.toMutableList().also {
-                                                    val moved = it.removeAt(currentIndex)
-                                                    it.add(targetIndex, moved)
-                                                }.also { dragWorkingBoards = it }
-                                                draggedBoardOffset +=
-                                                    if (targetIndex > currentIndex) -rowHeightPx else rowHeightPx
-                                            },
-                                            onDragEnd = {
-                                                if (dragWorkingBoards.isNotEmpty() && dragWorkingBoards != dragStartBoards) {
-                                                    latestBoardsReordered(dragWorkingBoards)
-                                                }
-                                                dragStartBoards = emptyList()
-                                                dragWorkingBoards = emptyList()
-                                                draggedBoardKey = null
-                                                draggedBoardOffset = 0f
-                                            },
-                                            onDragCancel = {
-                                                if (dragStartBoards.isNotEmpty()) localBoards = dragStartBoards
-                                                dragStartBoards = emptyList()
-                                                dragWorkingBoards = emptyList()
-                                                draggedBoardKey = null
-                                                draggedBoardOffset = 0f
-                                            }
+                                            onDragStart = { dragStart(board) },
+                                            onDrag = { change, amount -> change.consume(); dragBy(board, amount.y, size.height.toFloat()) },
+                                            onDragEnd = { dragEnd() },
+                                            onDragCancel = { dragCancel() }
                                         )
                                     },
                                 contentAlignment = Alignment.Center
@@ -710,6 +739,11 @@ internal fun CompatMainScreen(
                             }
                         }
                         if (deleteMode) {
+                            androidx.compose.material3.Checkbox(
+                                checked = board.key in selectedForDelete,
+                                onCheckedChange = { selectedForDelete = compatToggleSelection(selectedForDelete, board.key) },
+                                modifier = Modifier.testTag("compat-board-delete-select-${board.name}")
+                            )
                             IconButton(onClick = { deletingBoard = board }) {
                                 Image(
                                     painter = painterResource(Res.drawable.cmn_listview_delete),
@@ -735,6 +769,13 @@ internal fun CompatMainScreen(
             urlEditable = true,
             existingBoards = localBoards,
             onDismiss = { addDialog = false },
+            onConfirmBoards = { selected ->
+                selected.forEachIndexed { index, board ->
+                    onBoardUpsert(CompatBoard(compatBoardKey(board.url), board.name, board.url, board.url, localBoards.size + index))
+                }
+                boardOperationNotice = "${selected.size}件の板を追加しました\n"
+                addDialog = false
+            },
             onConfirm = { name, canonical, original ->
                 boardOperationNotice = "${name}を追加しました\n"
                 onBoardUpsert(
@@ -771,7 +812,7 @@ internal fun CompatMainScreen(
             // nothing happened (audit L36).
             choices = compatBoardContextChoices(
                 board.key in pinnedBoardKeys,
-                onBoardPinToggle != null && com.valoser.futacha.shared.compat.canonicalizeBoardUrl(board.originalUrl) != null
+                onBoardPinToggle != null && com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.originalUrl) != null
             ),
             onChoice = { choice ->
                 contextBoard = null
@@ -782,6 +823,23 @@ internal fun CompatMainScreen(
                 }
             }
         )
+    }
+    if (deletingSelected) {
+        val targets = localBoards.filter { it.key in selectedForDelete }
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { deletingSelected = false },
+            title = { Text("板の削除") },
+            text = { Text("${targets.size}件の板を削除します。本当によろしいですか？\n" + targets.joinToString("、") { it.name }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    boardOperationNotice = "${targets.size}件の板を削除しました\n"
+                    targets.forEach(onBoardDelete)
+                    selectedForDelete = emptySet()
+                    deletingSelected = false
+                }, modifier = Modifier.testTag("compat-board-delete-selected-confirm")) { Text("削除する", color = Color.Red) }
+            },
+            dismissButton = { TextButton(onClick = { deletingSelected = false }) { Text("キャンセル") } }
+        ) }
     }
     deletingBoard?.let { board ->
         FutachaAppLockAwareWindow { AlertDialog(
@@ -804,6 +862,7 @@ internal fun CompatMainScreen(
 
 @Composable
 private fun CompatMainOverflowPopup(
+    onOpenMix: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onItem: (String) -> Unit
 ) {
@@ -831,7 +890,7 @@ private fun CompatMainOverflowPopup(
             com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(onDismiss)
             // board_menu.xml in sample/1.apk labels the update action simply
             // "板一覧"; the action itself still refreshes the board list.
-            listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ").forEach { label ->
+            compatMainOverflowLabels().forEach { label ->
                 TextButton(
                     onClick = { onItem(label) },
                     modifier = Modifier.fillMaxWidth().height(48.dp)
@@ -841,6 +900,11 @@ private fun CompatMainOverflowPopup(
                         modifier = Modifier.fillMaxWidth(),
                         color = compatibilityPopupContent(palette)
                     )
+                }
+            }
+            onOpenMix?.let { open ->
+                TextButton(onClick = open, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("まとめカタログ", modifier = Modifier.fillMaxWidth(), color = compatibilityPopupContent(palette))
                 }
             }
             }
@@ -884,3 +948,29 @@ private fun CompatModeDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
     ) }
 }
+
+/** The top-right menu of the board list (あいもげ boards are added through 「新規追加」's URL). */
+internal fun compatMainOverflowLabels(): List<String> =
+    listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ")
+
+
+/** Moves [key] one row per [step] of [offset] and returns the new order and the rest of the offset. */
+internal fun compatBoardDragSteps(order: List<CompatBoard>, key: String, offset: Float, step: Float): Pair<List<CompatBoard>, Float> {
+    if (step <= 0f) return order to offset
+    var list = order
+    var left = offset
+    while (true) {
+        val index = list.indexOfFirst { it.key == key }
+        if (index < 0) return list to left
+        val target = when {
+            left > step / 2f && index < list.lastIndex -> index + 1
+            left < -step / 2f && index > 0 -> index - 1
+            else -> return list to left
+        }
+        list = list.toMutableList().also { it.add(target, it.removeAt(index)) }
+        left += if (target > index) -step else step
+    }
+}
+
+internal fun compatToggleSelection(selected: Set<String>, key: String): Set<String> =
+    if (key in selected) selected - key else selected + key

@@ -10,7 +10,7 @@ import kotlinx.coroutines.*
 
 @Composable
 actual fun rememberAttachmentPickerLauncher(preference: AttachmentPickerPreference, mimeType: String, maxBytes: Long,
-    onImageSelected: (ImageData) -> Unit, preferredFileManagerPackage: String?, onSelectionError: (String) -> Unit): () -> Unit {
+    onImageSelected: (ImageData) -> Unit, preferredFileManagerPackage: String?, onSelectionError: (String) -> Unit, onPasteImage: (() -> Unit)?): () -> Unit {
     val scope = rememberCoroutineScope()
     val selected by rememberUpdatedState(onImageSelected)
     val failed by rememberUpdatedState(onSelectionError)
@@ -42,3 +42,7 @@ actual fun rememberDirectoryPickerLauncher(onDirectorySelected: (SaveLocation) -
     val selected by rememberUpdatedState(onDirectorySelected)
     return { scope.launch { pickDirectorySaveLocation()?.let(selected) } }
 }
+
+@Composable
+actual fun rememberMultipleImagePickerLauncher(maxCount: Int, maxBytes: Long,
+    onImagesSelected: (List<ImageData>) -> Unit, onSelectionError: (String) -> Unit): (() -> Unit)? = null

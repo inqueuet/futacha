@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.compat.shownSiteTabs
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -170,7 +171,7 @@ internal fun FtutterApp(
     // mode's old rows (`compat.ftutter.tabs` / `protected`) are only read for the threads with no shared place and the
     // tabs the migration stage has not taken in yet.
     val tabStore = mediaServices?.store
-    val sharedTabSource = remember(tabStore) { tabStore?.tabs ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
+    val sharedTabSource = remember(tabStore) { tabStore?.tabs?.shownSiteTabs() ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
     val sharedTabs by sharedTabSource.collectAsState(emptyList())
     val tabViewSource = remember(tabStore) { tabStore?.tabViews ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
     val allTabViews by tabViewSource.collectAsState(emptyList())
@@ -273,10 +274,15 @@ internal fun FtutterApp(
     val editBoards: ((List<BoardSummary>) -> List<BoardSummary>) -> Unit = { transform ->
         scope.launch { stateStore.updateBoards(transform) }
     }
+    var mixId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(com.valoser.futacha.shared.compat.MixAvailability.enabled) {
+        if (!com.valoser.futacha.shared.compat.MixAvailability.enabled) mixId = null
+    }
     var lastCatalogBoardId by remember { mutableStateOf(preferences[FtutterKeys.LAST_BOARD].orEmpty()) }
     // Whether the screen is drawn in two panes now (set by the layout; audit C8).
     var twoPaneNow by remember { mutableStateOf(false) }
     fun openCatalog(board: BoardSummary, tabMove: Boolean = false) {
+        mixId = null
         catalogHolder.openBoard(board.id, tabMove,
             preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_CATALOG, false))
         savePreference(FtutterKeys.LAST_BOARD, board.id)
@@ -300,6 +306,7 @@ internal fun FtutterApp(
     // [startAtTop]: an opening from the catalog, the history or a link (the extension 「スレッドを先頭から開く」 then shows the
     // first post); moving between tabs passes false and keeps the place.
     fun openThread(board: BoardSummary, ref: FtutterThreadRef, back: FtutterScreen, refreshOnOpen: Boolean = true, startAtTop: Boolean = true) {
+        if (back != FtutterScreen.Boards) mixId = null
         val openingUrl = ftutterCanonicalThreadUrl(ftutterThreadUrl(board, ref.threadId))
         val baseline = parseFtutterReadCounts(preferences[FtutterKeys.READ_COUNTS])[openingUrl]?.let(::ftutterPostsReadFromStored)
         val viewed = com.valoser.futacha.shared.ui.futaber.findFutaberHistoryEntry(history, board, ref.threadId)?.lastViewedSnapshot
@@ -334,6 +341,25 @@ internal fun FtutterApp(
                 com.valoser.futacha.shared.util.Logger.e("Ftutter", "Failed to record history", error)
             }
         }
+    }
+    var aimogeCalendarOpen by remember { mutableStateOf(false) }
+    // The MIX stays chosen while a thread opened from it is read: Back returns to the board list, which shows it again.
+    val mixStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val confirmMixMembers = com.valoser.futacha.shared.ui.board.rememberMixR18Confirmation(mediaServices?.store)
+    if (aimogeCalendarOpen) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeEventCalendarDialog(
+            onOpenThread = { row ->
+                val target = com.valoser.futacha.shared.ui.aimoge.aimogeCalendarBoardIn(boards, row)
+                val threadId = row.threadId
+                if (target == null || threadId == null) {
+                    notice = "この板（/${row.slug}/）は登録していません。板追加から登録してください"
+                } else {
+                    aimogeCalendarOpen = false
+                    openThread(target, FtutterThreadRef(target.id, threadId, title = row.title), FtutterScreen.Boards)
+                }
+            },
+            onDismiss = { aimogeCalendarOpen = false }
+        )
     }
     // アプリ内で開くスレッドURL（本文のリンク、URLから開く）。登録していない板は開けない。
     fun openThreadUrl(url: String, back: FtutterScreen) {
@@ -614,7 +640,7 @@ internal fun FtutterApp(
         val current = screen as? FtutterScreen.Thread
         if (current?.boardId == board.id && current.ref.threadId == threadId &&
             preferences.ftutterBool(FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false)) threadRefreshSignal++
-        openThread(board, FtutterThreadRef(board.id, threadId, entry?.title.orEmpty(), entry?.titleImageUrl.orEmpty()), FtutterScreen.Catalog(board.id),
+        openThread(board, FtutterThreadRef(board.id, threadId, entry?.title.orEmpty(), entry?.titleImageUrl.orEmpty()), ftutterTabBack(screen, mixId, board.id),
             refreshOnOpen = preferences.ftutterBool(
                 FtutterKeys.REFRESH_ON_TAB_MOVE_THREAD, false), startAtTop = startAtTop)
     }
@@ -627,7 +653,7 @@ internal fun FtutterApp(
         val next = ftutterNextOpening(before, tabState.urls, url)
         when {
             next != null -> openTabUrl(next)
-            tabSettings.backWhenNoTab -> screen = FtutterScreen.Catalog(board.id)
+            tabSettings.backWhenNoTab -> screen = ftutterTabBack(current, mixId, board.id)
         }
     }
     fun closeTabNow(url: String) {
@@ -780,7 +806,7 @@ internal fun FtutterApp(
     // 戻るの順（ftutterBackStep）：ドロワー → 二画面のカタログ側の検索 → 画面を戻る。どの受け手もこの順で決めるので、
     // 受け手を登録した順（後から置いたものが先に受ける）に左右されない。
     fun handleBack(twoPane: Boolean, leave: () -> Unit) {
-        when (ftutterBackStep(drawerShowing, twoPane && catalogHolder.paneBack != null)) {
+        when (ftutterBackStep(drawerShowing, twoPane && mixId == null && catalogHolder.paneBack != null)) {
             FtutterBackStep.CLOSE_DRAWER -> scope.launch { drawerState.close() }
             FtutterBackStep.CATALOG_PANE -> catalogHolder.paneBack?.invoke()
             FtutterBackStep.LEAVE -> leave()
@@ -810,6 +836,8 @@ internal fun FtutterApp(
                 design = design,
                 onOpen = ::openTabUrl,
                 onLongPress = { url -> tabDialog = url to false },
+                onSwipeUp = { url -> tabState.toggleProtect(url) },
+                onSwipeDown = { url -> closeTab(url) },
                 onMove = if (preferences.ftutterBool(FtutterKeys.DISABLE_TAB_DRAG, false)) null else { from, to -> tabState.move(from, to) }
             )
         }
@@ -848,6 +876,9 @@ internal fun FtutterApp(
             FtutterGestureAction.REOPEN_TAB -> restoreClosed()?.let { notice = it } ?: return unavailable
             FtutterGestureAction.MOST_LEFT -> tabState.urls.firstOrNull()?.let(::openTabUrl) ?: return unavailable
             FtutterGestureAction.MOST_RIGHT -> tabState.urls.lastOrNull()?.let(::openTabUrl) ?: return unavailable
+            // 左隣・右隣のタブ（追加）：先頭・末尾ではカタログへ戻らず、何もしない。
+            FtutterGestureAction.LEFT_TAB, FtutterGestureAction.RIGHT_TAB ->
+                ftutterAdjacentTab(tabState.urls, url, forward = action == FtutterGestureAction.RIGHT_TAB)?.let(::openTabUrl) ?: return unavailable
             FtutterGestureAction.REFRESH_ALL_TABS -> refreshAllTabs()
             FtutterGestureAction.OPEN_DRAWER -> if (drawerUsable) openDrawer() else return unavailable
             else -> Unit
@@ -874,6 +905,10 @@ internal fun FtutterApp(
             FtutterGestureAction.REOPEN_TAB -> restoreClosed()?.let { notice = it } ?: return unavailable
             FtutterGestureAction.MOST_LEFT -> tabState.urls.firstOrNull()?.let(::openTabUrl) ?: return unavailable
             FtutterGestureAction.MOST_RIGHT -> tabState.urls.lastOrNull()?.let(::openTabUrl) ?: return unavailable
+            // カタログでは、最後に開いたスレッドのタブの隣（そのタブが無ければ何もしない）。
+            FtutterGestureAction.LEFT_TAB, FtutterGestureAction.RIGHT_TAB ->
+                ftutterAdjacentTab(tabState.urls, preferences[FtutterKeys.OPENING]?.let(::ftutterCanonicalThreadUrl), forward = action == FtutterGestureAction.RIGHT_TAB)
+                    ?.let(::openTabUrl) ?: return unavailable
             FtutterGestureAction.REFRESH_ALL_TABS -> refreshAllTabs()
             FtutterGestureAction.OPEN_DRAWER -> if (drawerUsable) openDrawer() else return unavailable
             else -> Unit
@@ -1117,13 +1152,64 @@ internal fun FtutterApp(
                 )
             }
         ) {
+            @Composable
+            fun MixPane() {
+                if (com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null && mediaServices != null) {
+                    val hidden = remember(preferences[FtutterKeys.HIDDEN_THREADS]) {
+                        parseFtutterHiddenThreads(preferences[FtutterKeys.HIDDEN_THREADS]).toSet()
+                    }
+                    val words = if (commonNgOn) sharedCatalogNgWords else emptyList()
+                    val projection: suspend (List<com.valoser.futacha.shared.mix.MixEntry>) -> List<com.valoser.futacha.shared.mix.MixEntry> = remember(ngRules, hidden, words) {
+                        { entries ->
+                            val job = kotlinx.coroutines.currentCoroutineContext()
+                            ftutterMixEntries(entries, ngRules, hidden, words) { job.ensureActive() }
+                        }
+                    }
+                    com.valoser.futacha.shared.ui.board.MixScreenHost(
+                        mixId = mixId ?: "",
+                        store = mediaServices.store,
+                        repository = repository,
+                        boards = boards,
+                        stateStore = stateStore,
+                        httpClient = mediaServices.httpClient,
+                        onExit = { mixId = null; screen = FtutterScreen.Boards },
+                        onSwitch = { mixId = it },
+                        stateHolder = mixStateHolder,
+                        fileSystem = mediaServices.fileSystem,
+                        modePolicy = com.valoser.futacha.shared.ui.board.MixModePolicy.FTUTTER,
+                        projectEntries = projection,
+                        catalogWordNgEnabled = commonNgOn,
+                        onOpen = { entry ->
+                            openThread(entry.board, FtutterThreadRef(entry.board.id, entry.item.id,
+                                title = entry.item.title.orEmpty(), thumbnailUrl = entry.item.thumbnailUrl.orEmpty(),
+                                catalogReplyCount = entry.replyCountOrNull ?: 0), FtutterScreen.Boards)
+                        }
+                    )
+                }
+            }
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().testTag("ftutter-root")) {
             val twoPane = ftutterIsTwoPane(tablet, maxWidth.value)
             androidx.compose.runtime.SideEffect { twoPaneNow = twoPane }
             // 二画面の列数は、ペインではなく画面全体の向きで縦・横を選ぶ（原作）。
             val tabletColumns = if (maxWidth > maxHeight) tablet.columnsLandscape else tablet.columnsPortrait
-            when (val current = screen) {
-                FtutterScreen.Boards -> FtutterBoardListScreen(
+            if (com.valoser.futacha.shared.compat.MixAvailability.enabled && twoPane && ftutterShowsMixPane(screen, mixId) && mediaServices != null) {
+                val thread = screen as? FtutterScreen.Thread
+                val threadBoard = thread?.let { current -> boards.firstOrNull { it.id == current.boardId } }
+                FtutterTwoPane(tablet,
+                    catalog = { MixPane() },
+                    thread = if (thread != null && threadBoard != null) { strip -> ThreadPane(threadBoard, thread, strip, true) } else null,
+                    tabStrip = tabStrip)
+            } else when (val current = screen) {
+                FtutterScreen.Boards -> if (com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null && mediaServices != null) MixPane() else FtutterBoardListScreen(
+                    onOpenMix = if (com.valoser.futacha.shared.compat.MixAvailability.enabled && mediaServices != null && com.valoser.futacha.shared.ui.board.mixOfferable(boards.map { it.url }, preferences[com.valoser.futacha.shared.mix.MIX_DEFINITIONS_KEY])) {
+                        {
+                            scope.launch {
+                                mixId = com.valoser.futacha.shared.ui.board.firstMixIdOrCreate(
+                                    mediaServices.store, boards.map { it.url }, kotlin.time.Clock.System.now().toEpochMilliseconds(), confirmMixMembers
+                                ).idOrReport { notice = it }
+                            }
+                        }
+                    } else null,
                     legacy = ftutterLegacyBoards(preferences),
                     boardsFromBottom = com.valoser.futacha.shared.ui.board.boardsFromBottom(preferences),
                     boards = boards,
@@ -1133,7 +1219,10 @@ internal fun FtutterApp(
                     onEditBoards = editBoards,
                     onBulkAdd = bulkAddBoards,
                     onOpenUrl = openUrl,
-                    onNotice = { notice = it }
+                    onNotice = { notice = it },
+                    onOpenAimogeCalendar = if (com.valoser.futacha.shared.ui.aimoge.aimogeEventCalendarAvailable()) {
+                        { aimogeCalendarOpen = true }
+                    } else null
                 )
                 is FtutterScreen.Catalog, is FtutterScreen.Thread -> {
                     val boardId = if (current is FtutterScreen.Catalog) current.boardId else (current as FtutterScreen.Thread).boardId
@@ -1215,19 +1304,24 @@ internal fun FtutterApp(
                     contentColor = colors.text
                 ) { Text("タブを更新しています $done/$total") }
             }
-            val newCountCapsule = notice?.takeIf { ftutterIsNewCountNotice(it) && !ftutterLegacyThreadLook(preferences) }
-            if (newCountCapsule != null) {
-                // M7：原作の新着の知らせは、画面の中央やや下の濃い青のカプセル。
+            val centred = !ftutterLegacyThreadLook(preferences)
+            notice?.takeIf { centred }?.let { text ->
+                // M7：原作の新着の知らせは、画面の中央やや下の濃い青のカプセル。may 1447424787：ほかの知らせも同じ所・同じ形に
+                // まとめる（下に出るのと真ん中に出るのとがばらばらだった）。新着だけ青、ほかはポップアップの色。
+                val newCount = ftutterIsNewCountNotice(text)
                 Text(
-                    newCountCapsule,
-                    color = androidx.compose.ui.graphics.Color.White,
+                    text,
+                    color = if (newCount) androidx.compose.ui.graphics.Color.White else colors.text,
                     fontSize = 14.sp,
-                    modifier = Modifier.align(Alignment.Center).padding(top = 240.dp)
-                        .background(androidx.compose.ui.graphics.Color(0xFF1A3A8F), androidx.compose.foundation.shape.RoundedCornerShape(50))
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center).padding(top = 240.dp, start = 24.dp, end = 24.dp)
+                        .background(if (newCount) androidx.compose.ui.graphics.Color(0xFF1A3A8F) else colors.popUp,
+                            androidx.compose.foundation.shape.RoundedCornerShape(50))
                         .padding(horizontal = 20.dp, vertical = 8.dp).testTag("ftutter-notice")
                 )
-            } else notice?.let { text ->
-                // 原作のトーストと同じく下寄せだが、下部のツールバー（最大80dp）を覆って押せなくしないよう、その上に出す。
+            }
+            notice?.takeIf { !centred }?.let { text ->
+                // 従来の見た目：原作のトーストと同じく下寄せだが、下部のツールバー（最大80dp）を覆って押せなくしないよう、その上に出す。
                 Snackbar(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
                         .padding(start = 16.dp, end = 16.dp, bottom = 96.dp).testTag("ftutter-notice"),

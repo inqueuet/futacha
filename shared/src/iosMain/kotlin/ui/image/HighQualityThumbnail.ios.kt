@@ -33,7 +33,7 @@ import platform.CoreGraphics.CGImageGetWidth
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.kCGColorSpaceSRGB
 
-// iOS registers only Skia's still-image decoder.
+// Animated GIFs render their poster unless the viewer enables its playback painter.
 internal actual fun ImageRequest.Builder.staticImageDecoding(): ImageRequest.Builder = this
 
 /** Skia decodes the full-resolution original before scaling; ImageIO subsamples. */
@@ -50,7 +50,12 @@ internal class IosBoundedImageDecoder(
     private val options: Options
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
-        val bytes = source.source().use { it.readByteArray() }
+        val input = source.source()
+        val peek = input.peek()
+        if (peek.request(6) && peek.readUtf8(6) in setOf("GIF87a", "GIF89a")) {
+            return decodeIosGif(input.use { it.readBoundedCompatAnimatedImageBytes() })
+        }
+        val bytes = input.use { it.readByteArray() }
         val maximumSide = maxOf(options.size.width.pxOrElse { 0 }, options.size.height.pxOrElse { 0 })
         decodeBounded(bytes, maximumSide)?.let { return it }
         return SkiaImageDecoder(ImageSource(Buffer().write(bytes), options.fileSystem), options).decode()

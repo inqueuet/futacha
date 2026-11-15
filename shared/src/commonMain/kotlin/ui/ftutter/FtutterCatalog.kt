@@ -131,6 +131,34 @@ internal fun rememberFtutterVisibleCatalog(items: List<CatalogItem>, maxCount: I
         com.valoser.futacha.shared.ui.board.catalogWithViewedThreadFirst(items.take(maxCount), viewedFirstId)
     }
 
+/**
+ * ピックアップが効く並びで、ピックアップのルールがある時だけ、多順のカタログも取って沈んだピックアップのスレを足す。
+ * 多順の取得に失敗しても、今の並びの一覧はそのまま出す。
+ */
+internal suspend fun ftutterCatalogItemsWithPickups(
+    main: List<CatalogItem>,
+    order: FtutterOrder,
+    boardUrl: String,
+    ngRules: List<FtutterNgRule>,
+    preferences: Map<String, String>,
+    fetch: suspend (mode: com.valoser.futacha.shared.model.CatalogMode) -> List<CatalogItem>
+): List<CatalogItem> {
+    if (order == FtutterOrder.MANY || order !in parseFtutterPickupOrders(preferences[FtutterKeys.PICKUP_ORDER_MODES])) return main
+    val matcher = FtutterNgMatcher(ngRules, boardUrl)
+    if (!matcher.hasPickups) return main
+    val many = try {
+        fetch(FtutterOrder.MANY.mode)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        return main
+    }
+    return kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+        val job = kotlinx.coroutines.currentCoroutineContext()
+        ftutterWithMissingPickups(main, many, matcher) { job.ensureActive() }
+    }
+}
+
 internal fun ftutterCatalogLoadAfterCancel(current: FtutterCatalogLoad?, started: FtutterCatalogLoad,
     before: FtutterCatalogLoad): FtutterCatalogLoad? = if (current === started) before else current
 
@@ -313,12 +341,16 @@ internal fun FtutterCatalogScreen(
     PlatformBackHandler(enabled = searching) { searching = false; query = "" }
 
     LaunchedEffect(board.id) {
-        if (holder.scrolledBoardId != null && holder.scrolledBoardId != board.id) {
-            holder.forgetScroll()
-            holder.gridState.scrollToItem(0)
-            holder.staggeredState.scrollToItem(0)
-        }
+        val previous = holder.scrolledBoardId
+        // Mark the board first and do not suspend: scrollToItem on the list that is not shown (the grid kind not in use)
+        // waits for a first layout that never comes, so the mark stayed on the previous board and the next return from a
+        // thread "switched board" again and went to the top (report 2026-11-12: the second board lost its place).
         holder.scrolledBoardId = board.id
+        if (previous != null && previous != board.id) {
+            holder.forgetScroll()
+            holder.gridState.requestScrollToItem(0)
+            holder.staggeredState.requestScrollToItem(0)
+        }
     }
 
     LaunchedEffect(key, holder.refreshTick) {
@@ -332,14 +364,17 @@ internal fun FtutterCatalogScreen(
         holder.load = started
         try {
             val page = repository.getCatalogPage(board.url, order.mode)
-            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = page.items,
+            val items = ftutterCatalogItemsWithPickups(page.items, order, board.url, ngRules, preferences) { mode ->
+                repository.getCatalogPage(board.url, mode).items
+            }
+            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = items,
                 viewedFirstId = if (holder.manualRefreshKey == key && preferences[com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url)] == "ON")
                     history.filter { it.boardId == board.id }.maxByOrNull { it.lastVisitedEpochMillis }?.threadId
                 else current?.takeIf { it.key == key }?.viewedFirstId)
             holder.manualRefreshKey = null
             // 落ちたスレの非表示の記録を消す。取得を始めた時の一覧でなく保存されている一覧から除く（監査M4：取得中に「非表示」に
             // したスレが、古い一覧で上書きされて戻っていた）。
-            editPreference(FtutterKeys.HIDDEN_THREADS) { stored -> ftutterPrunedHiddenValue(stored, board.url, page.items) }
+            editPreference(FtutterKeys.HIDDEN_THREADS) { stored -> ftutterPrunedHiddenValue(stored, board.url, items) }
             if (refreshFromBottom) {
                 // 原作：下に引っ張った更新の後は先頭へ戻る。
                 holder.forgetScroll()
@@ -356,7 +391,8 @@ internal fun FtutterCatalogScreen(
             holder.load = retained.copy(tick = tick, loading = false, error = message)
             // The inline error is only shown for an empty list. Notify refresh failures too,
             // just as the thread screen does, while keeping the catalog and scroll position.
-            onNotice(message)
+            // may 1447424787：一覧が空の時は画面の真ん中に同じ文が出るので、知らせを重ねない。
+            if (ftutterCatalogFailureNeedsNotice(retained.items)) onNotice(message)
             holder.manualRefreshKey = null
             refreshFromBottom = false
         } finally {
@@ -910,6 +946,7 @@ private fun FtutterCatalogGrid(
         }
         val blur = if (zoomedActive) Modifier.blur(10.dp) else Modifier
         if (settings.sameHeight) {
+            com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, grid = holder.gridState)
             val binding = rememberEdgeSwipeRefreshBinding(holder.gridState, isRefreshing, "ftutterCatalogGrid")
             LazyVerticalGrid(
                 state = holder.gridState,
@@ -921,6 +958,7 @@ private fun FtutterCatalogGrid(
             }
             FtutterScrollbar(settings.scrollbar, holder.gridState)
         } else {
+            com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, staggered = holder.staggeredState)
             val binding = rememberStaggeredRefreshBinding(holder.staggeredState, isRefreshing)
             LazyVerticalStaggeredGrid(
                 state = holder.staggeredState,
@@ -1238,3 +1276,6 @@ internal fun FtutterHiddenAndNgScreen(
         }
     }
 }
+
+/** カタログの取得の失敗を知らせに出すか：一覧が空なら画面の真ん中の文だけにする（同じ文を重ねない）。 */
+internal fun ftutterCatalogFailureNeedsNotice(shownItems: List<CatalogItem>): Boolean = shownItems.isNotEmpty()

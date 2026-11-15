@@ -1800,6 +1800,82 @@ final class IosAppUITests: XCTestCase {
         element("futaber-settings-done").tap()
     }
 
+    /// まとめカタログ：ふたばー風の板一覧から入口を押すと、まとめの画面（切替）が開く。
+    func testFutaberDrawerOpensTheMixCatalog() throws {
+        let app = makeApplication()
+        let boards = [
+            ["id": "mixmay", "name": "may", "category": "二次元", "url": "https://may.2chan.net/b/futaba.php", "description": ""],
+            ["id": "miximg", "name": "img", "category": "二次元", "url": "https://img.2chan.net/b/futaba.php", "description": ""]
+        ]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", "futaber",
+            "-experience.profile_generation", "1301",
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let opener = app.descendants(matching: .any).matching(identifier: "futaber-open-drawer").firstMatch
+        if opener.waitForExistence(timeout: 20) { opener.tap() }
+        let entry = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'まとめカタログ'")).firstMatch
+        if !entry.waitForExistence(timeout: 20) { print("MIXDBG " + app.debugDescription) }
+        XCTAssertTrue(entry.exists, "まとめカタログの入口が板一覧に出ない")
+        entry.tap()
+        let switchButton = app.descendants(matching: .any).matching(NSPredicate(format: "label == '切替'")).firstMatch
+        XCTAssertTrue(switchButton.waitForExistence(timeout: 20), "まとめカタログの画面が開かない")
+    }
+
+    private func launchWithTwoRealBoards(profile: String, generation: String) throws -> XCUIApplication {
+        let app = makeApplication()
+        let boards = [
+            ["id": "mixmay", "name": "may", "category": "二次元", "url": "https://may.2chan.net/b/futaba.php", "description": ""],
+            ["id": "miximg", "name": "img", "category": "二次元", "url": "https://img.2chan.net/b/futaba.php", "description": ""]
+        ]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += [
+            "-experience.active_profile", profile,
+            "-experience.profile_generation", generation,
+            "-update_check_enabled", "false",
+            "-boards_json", boardArgument
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        return app
+    }
+
+    private func tapMixEntryAndExpectMix(_ app: XCUIApplication) {
+        let entry = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'まとめカタログ'")).firstMatch
+        if !entry.waitForExistence(timeout: 20) { print("MIXDBG " + app.debugDescription) }
+        XCTAssertTrue(entry.exists, "まとめカタログの入口が出ない")
+        entry.tap()
+        let switchButton = app.descendants(matching: .any).matching(NSPredicate(format: "label == '切替'")).firstMatch
+        XCTAssertTrue(switchButton.waitForExistence(timeout: 20), "まとめカタログの画面が開かない")
+    }
+
+    func testFtutterBoardListOpensTheMixCatalog() throws {
+        let app = try launchWithTwoRealBoards(profile: "ftutter", generation: "1302")
+        tapMixEntryAndExpectMix(app)
+    }
+
+    func testFutachaMenuOpensTheMixCatalog() throws {
+        let app = try launchWithTwoRealBoards(profile: "futacha", generation: "1303")
+        let menu = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'メニュー'")).firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        menu.tap()
+        tapMixEntryAndExpectMix(app)
+    }
+
+    func testToshiakiMainMenuOpensTheMixCatalog() throws {
+        let app = try launchWithTwoRealBoards(profile: "toshiaki_compat", generation: "1304")
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'その他'")).firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20))
+        more.tap()
+        tapMixEntryAndExpectMix(app)
+    }
+
     func testFutaberPreviewModeReachesCatalogThreadAndTabs() throws {
         let app = makeApplication()
         // 板の一覧は既存の試験と同じく起動引数で固定し、端末に残った状態に左右されないようにする。
@@ -3687,6 +3763,8 @@ final class IosAppUITests: XCTestCase {
         )
         XCTAssertTrue(app.buttons["フォトライブラリ"].exists)
         XCTAssertTrue(app.buttons["ファイル"].exists)
+        // may 1447450917: the paste is offered here too, not only under その他.
+        XCTAssertTrue(app.buttons["画像を貼り付け"].exists)
         app.buttons["フォトライブラリ"].tap()
 
         XCTAssertTrue(app.staticTexts["メディアを選択"].waitForExistence(timeout: 5))
@@ -3808,6 +3886,89 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(leave.waitForExistence(timeout: 10), app.debugDescription)
         leave.tap()
         XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 15), app.debugDescription)
+    }
+
+    /// 14.1 check: aimoge help section, aimoge settings entry, the tab/history link switches, and the catalog search ×.
+    func testToshiakiAimogeHelpSettingsLinkSwitchesAndSearchClear() throws {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1411",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        func anyLabel(_ text: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        }
+        // Help: the あいもげ section is found by search.
+        app.buttons["その他"].firstMatch.tap()
+        app.buttons["ヘルプ"].firstMatch.tap()
+        let search = app.descendants(matching: .any).matching(identifier: "help-search-field").firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
+        search.tap(); search.typeText("あいもげ")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "help-search-count").firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(anyLabel("承認する").waitForExistence(timeout: 10), app.debugDescription)
+        let helpShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); helpShot.name = "v141-help-aimoge"; helpShot.lifetime = .keepAlways; add(helpShot)
+        // Back to the board list.
+        for _ in 0..<3 where !board.exists { app.buttons["戻る"].firstMatch.exists ? app.buttons["戻る"].firstMatch.tap() : app.swipeRight() }
+        let boardAgain = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(boardAgain.waitForExistence(timeout: 15), app.debugDescription)
+        // Settings: あいもげ entry leads to the approval page (nothing is sent).
+        app.buttons["その他"].firstMatch.tap()
+        app.buttons["設定"].firstMatch.tap()
+        let aimoge = app.staticTexts["あいもげ"].firstMatch
+        var tries = 0
+        while !aimoge.isHittable && tries < 20 { app.swipeUp(); tries += 1 }
+        XCTAssertTrue(aimoge.exists, app.debugDescription)
+        aimoge.tap()
+        XCTAssertTrue(anyLabel("承認").waitForExistence(timeout: 10), app.debugDescription)
+        let aimogeShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); aimogeShot.name = "v141-aimoge-settings"; aimogeShot.lifetime = .keepAlways; add(aimogeShot)
+    }
+
+    func testToshiakiLinkSwitchesAndCatalogSearchClear() throws {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1412",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        let board = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(board.waitForExistence(timeout: 15), app.debugDescription)
+        app.buttons["その他"].firstMatch.tap()
+        app.buttons["設定"].firstMatch.tap()
+        let control = app.staticTexts["コントロール"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 10), app.debugDescription)
+        control.tap()
+        let list = app.otherElements["compat-settings-list-control"]
+        for label in ["タブを閉じたら履歴も消す", "履歴を消したらタブも閉じる"] {
+            let row = app.staticTexts[label].firstMatch
+            var tries = 0
+            while !(row.exists && row.isHittable) && tries < 25 { list.swipeUp(); tries += 1 }
+            XCTAssertTrue(row.exists, "\(label) missing: \(app.debugDescription)")
+        }
+        let switchShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); switchShot.name = "v141-link-switches"; switchShot.lifetime = .keepAlways; add(switchShot)
+        app.terminate()
+        // Catalog search ×.
+        app.launch()
+        let card = compatibilityBoardCardAfterUnwinding(in: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 15), app.debugDescription)
+        card.tap()
+        XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 15), app.debugDescription)
+        app.buttons["スレッド検索"].firstMatch.tap()
+        // The Compose field is not a UIKit text field in the tree; it focuses itself, and its placeholder shows when empty.
+        let placeholder = app.staticTexts["検索文字"].firstMatch
+        XCTAssertTrue(placeholder.waitForExistence(timeout: 10), app.debugDescription)
+        sleep(1)
+        app.typeText("チュート")
+        XCTAssertTrue(placeholder.waitForNonExistence(timeout: 5), app.debugDescription)
+        let clear = app.buttons["入力を消去"].firstMatch
+        XCTAssertTrue(clear.waitForExistence(timeout: 10), app.debugDescription)
+        clear.tap()
+        XCTAssertTrue(clear.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(placeholder.waitForExistence(timeout: 5), "the query was not cleared: \(app.debugDescription)")
     }
 
     func testToshiakiCommonNgSwitchReadsAsItWorks() {

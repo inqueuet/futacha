@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.PostAttachment
+import com.valoser.futacha.shared.model.SavedAttachment
 import com.valoser.futacha.shared.model.SavedPost
 
 internal data class ThreadSaveResolvedPostMedia(
@@ -40,7 +42,8 @@ internal fun resolveThreadSavePostMedia(
 internal fun buildThreadSaveSavedPost(
     post: Post,
     resolvedMedia: ThreadSaveResolvedPostMedia,
-    urlToPathMap: Map<String, String>
+    urlToPathMap: Map<String, String>,
+    mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo> = emptyMap()
 ): SavedPost {
     return SavedPost(
         id = post.id,
@@ -59,6 +62,23 @@ internal fun buildThreadSaveSavedPost(
             originalImageUrl = post.imageUrl,
             localImagePath = resolvedMedia.localImagePath,
             localVideoPath = resolvedMedia.localVideoPath
-        )
+        ),
+        extraAttachments = threadSaveExtraAttachments(post).map { attachment ->
+            SavedAttachment(
+                originalUrl = attachment.url,
+                localPath = mediaKeyToFileInfoMap[buildThreadSaveMediaDownloadKey(attachment.url, ThreadSaveMediaRequestType.FULL_IMAGE)]?.relativePath,
+                originalThumbnailUrl = attachment.thumbnailUrl,
+                localThumbnailPath = attachment.thumbnailUrl?.let {
+                    mediaKeyToFileInfoMap[buildThreadSaveMediaDownloadKey(it, ThreadSaveMediaRequestType.THUMBNAIL)]?.relativePath
+                }
+            )
+        }
     )
+}
+
+/** The 2nd and 3rd files of an あいもげ post (empty for Futaba, whose posts carry no [Post.attachments]). */
+internal fun threadSaveExtraAttachments(post: Post): List<PostAttachment> {
+    if (post.attachments.size < 2) return emptyList()
+    val primary = setOfNotNull(post.imageUrl, post.thumbnailUrl)
+    return post.attachments.drop(1).filter { it.url.isNotBlank() && it.url !in primary }
 }

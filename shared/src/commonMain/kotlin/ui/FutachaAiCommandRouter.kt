@@ -64,6 +64,8 @@ internal data class FutachaAiRouterInputs(
     val appLock: FutachaAppLockHolder? = null
 )
 
+internal const val MIX_AI_REFUSED_MESSAGE = "まとめカタログ表示中はAIコマンドを実行できません。板一覧を開いてください"
+
 @OptIn(ExperimentalTime::class)
 internal suspend fun executeFutachaAiCommand(
     command: FutachaAiCommand,
@@ -75,6 +77,12 @@ internal suspend fun executeFutachaAiCommand(
     }
     if (!inputs.isAiCommandEnabled && !command.isAllowedWhenAiCommandsDisabled()) {
         return FutachaAiCommandOutcome.Failed(AI_COMMANDS_DISABLED_MESSAGE)
+    }
+
+    if (inputs.navigationState.selectedMixId != null && inputs.navigationState.selectedBoardId == null &&
+        command.action != FutachaAiAction.OpenBoardList
+    ) {
+        return FutachaAiCommandOutcome.Failed(MIX_AI_REFUSED_MESSAGE)
     }
 
     if (command.requiresConfirmation() && !confirmed) {

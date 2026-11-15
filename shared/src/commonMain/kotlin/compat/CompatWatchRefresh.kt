@@ -46,7 +46,8 @@ fun collectCompatWatchMatches(
             normalizedWords.any { normalizedTitle.contains(it) }
         }
         .mapNotNull { item ->
-            val parsed = canonicalizeThreadUrl(item.threadUrl) ?: return@mapNotNull null
+            // An あいもげ thread (UUID) too while あいもげ is on; a Futaba thread exactly as before.
+            val parsed = canonicalizeSiteThreadUrlAsLegacy(item.threadUrl) ?: return@mapNotNull null
             if (!seen.add(parsed.canonicalUrl)) return@mapNotNull null
             val previous = existingByUrl[parsed.canonicalUrl]
             CompatWatchMatch(
@@ -70,3 +71,14 @@ fun collectCompatWatchMatches(
         }
         .toList()
 }
+
+/**
+ * The board address a watch notification keeps for a matched thread's address: the part before `/res/` for Futaba
+ * (as before), the canonical board for an あいもげ thread.
+ */
+fun watchMatchBoardUrlOf(threadUrl: String): String =
+    canonicalizeSiteThreadUrl(threadUrl)?.takeIf { it.site == BoardSite.AIMOGE }?.canonicalBoardUrl
+        ?: threadUrl.substringBefore("/res/")
+
+/** The あいもげ thread a watch notification opens; null for a Futaba board (its own path builds the link). */
+fun aimogeWatchThreadUrlOf(boardUrl: String, threadId: String): String? = siteThreadUrlOf(boardUrl, threadId)

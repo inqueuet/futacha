@@ -26,7 +26,10 @@ internal enum class FtutterGestureAction(val stored: Int, val label: String) {
     SEARCH(15, "検索窓を開く"),
     TREE(16, "ツリー表示切り替え"),
     POPULAR(17, "人気レス抽出"),
-    IMAGES(18, "画像抽出");
+    IMAGES(18, "画像抽出"),
+    // ここから下はこのアプリの追加（原作に無い。保存の番号は原作の後ろ）。
+    LEFT_TAB(19, "左隣のタブ"),
+    RIGHT_TAB(20, "右隣のタブ");
 
     companion object {
         fun fromStored(value: Int?): FtutterGestureAction? = entries.firstOrNull { it.stored == value }
@@ -186,6 +189,8 @@ internal fun ftutterGestureUnavailableReason(action: FtutterGestureAction, isThr
         }
         FtutterGestureAction.REOPEN_TAB -> "閉じたタブはありません"
         FtutterGestureAction.MOST_LEFT, FtutterGestureAction.MOST_RIGHT -> "タブがありません"
+        FtutterGestureAction.LEFT_TAB -> "左隣のタブがありません"
+        FtutterGestureAction.RIGHT_TAB -> "右隣のタブがありません"
         FtutterGestureAction.CLOSE_TAB, FtutterGestureAction.CLOSE_TAB_AND_BACK -> "閉じるタブがありません"
         FtutterGestureAction.OPEN_DRAWER -> FTUTTER_DRAWER_DISABLED_NOTICE
         else -> "この画面では使えません"

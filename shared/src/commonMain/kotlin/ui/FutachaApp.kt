@@ -379,9 +379,9 @@ fun FutachaApp(
             platformAiCommand = platformAiCommand,
             onPlatformAiCommandConsumed = onPlatformAiCommandConsumed,
             consumeAiCommandBridge = consumeAiCommandBridge,
-            platformThreadDeepLink = platformThreadDeepLink,
+            platformThreadDeepLinkFromHost = platformThreadDeepLink,
             platformThreadDeepLinkPreapprovedBoardRegistration = platformThreadDeepLinkPreapprovedBoardRegistration,
-            onPlatformThreadDeepLinkConsumed = onPlatformThreadDeepLinkConsumed,
+            onPlatformThreadDeepLinkConsumedFromHost = onPlatformThreadDeepLinkConsumed,
             platformBoardDeepLink = platformBoardDeepLink,
             onPlatformBoardDeepLinkConsumed = onPlatformBoardDeepLinkConsumed,
             onWatchAlertSettingChangeRequested = onWatchAlertSettingChangeRequested,
@@ -443,9 +443,9 @@ private fun FutachaAppContent(
     platformAiCommand: FutachaAiCommand?,
     onPlatformAiCommandConsumed: (FutachaAiCommand) -> Unit,
     consumeAiCommandBridge: Boolean,
-    platformThreadDeepLink: String?,
+    platformThreadDeepLinkFromHost: String?,
     platformThreadDeepLinkPreapprovedBoardRegistration: Boolean,
-    onPlatformThreadDeepLinkConsumed: (String) -> Unit,
+    onPlatformThreadDeepLinkConsumedFromHost: (String) -> Unit,
     platformBoardDeepLink: String?,
     onPlatformBoardDeepLinkConsumed: (String) -> Unit,
     onWatchAlertSettingChangeRequested: ((Boolean) -> Unit)?,
@@ -460,6 +460,13 @@ private fun FutachaAppContent(
     resolvedStartupTheme: FutachaStartupTheme
 ) {
     val isAppUnlocked = LocalFutachaAppUnlocked.current
+    // may 1447453911: a thread URL typed in the app goes the way of a link handed in by the OS.
+    val inAppThreadLink by InAppThreadLinks.pending.collectAsState()
+    val platformThreadDeepLink = platformThreadDeepLinkFromHost ?: inAppThreadLink
+    val onPlatformThreadDeepLinkConsumed: (String) -> Unit = { consumed ->
+        if (platformThreadDeepLinkFromHost == null && consumed == inAppThreadLink) InAppThreadLinks.consume(consumed)
+        else onPlatformThreadDeepLinkConsumedFromHost(consumed)
+    }
     val appLock = LocalFutachaAppLockHolder.current ?: remember {
         FutachaAppLockHolder().apply {
             openSessionWithoutLock()
@@ -970,6 +977,8 @@ private fun FutachaAppContent(
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
                 val coroutineScope = rememberCoroutineScope()
                 val saveableStateHolder = rememberSaveableStateHolder()
+                val mixStateHolder = rememberSaveableStateHolder()
+                val confirmMixMembers = com.valoser.futacha.shared.ui.board.rememberMixR18Confirmation(compatibilityStore)
 
                 LaunchedEffect(Unit) {
                     stateStore.setScrollDebounceScope(coroutineScope)
@@ -1031,6 +1040,7 @@ private fun FutachaAppContent(
                 var pendingCompatThreadDeepLink by remember { mutableStateOf<String?>(null) }
                 // Links, notifications and AI commands wait for a post being sent (L30).
                 val postingInFlight = LocalPostingInFlight.current
+                var mixOpenError by remember { mutableStateOf<String?>(null) }
                 var threadDeepLinkError by remember { mutableStateOf<String?>(null) }
                 var unregisteredBoardRequest by remember { mutableStateOf<FutachaUnregisteredBoardRequest?>(null) }
                 var pendingOpenAfterBoardAdd by remember { mutableStateOf<ThreadHistoryEntry?>(null) }
@@ -1120,6 +1130,11 @@ private fun FutachaAppContent(
                     pendingOpenAfterBoardAdd = null
                     navigationState = applyFutachaThreadSelection(navigationState, selection)
                 }
+                mixOpenError?.takeIf { isAppUnlocked }?.let { message ->
+                    AlertDialog(onDismissRequest = { mixOpenError = null },
+                        title = { Text("まとめカタログを開けませんでした") }, text = { Text(message) },
+                        confirmButton = { TextButton(onClick = { mixOpenError = null }) { Text("OK") } })
+                }
                 threadDeepLinkError?.takeIf { isAppUnlocked }?.let { message ->
                     AlertDialog(
                         onDismissRequest = { threadDeepLinkError = null },
@@ -1137,8 +1152,21 @@ private fun FutachaAppContent(
                     }
                 }
                 val updateNavigationState: (FutachaNavigationState) -> Unit = { navigationState = it }
-                val destination = remember(navigationState, persistedBoards) {
-                    resolveFutachaDestination(navigationState, persistedBoards)
+                val mixDefinitions by produceState<List<com.valoser.futacha.shared.mix.MixDefinition>?>(null, compatibilityStore) {
+                    val store = compatibilityStore
+                    if (store == null) { value = emptyList(); return@produceState }
+                    kotlinx.coroutines.flow.combine(store.isLoaded, store.preferences) { loaded, prefs ->
+                        if (!loaded) null else when (val r = com.valoser.futacha.shared.mix.decodeMixDefinitions(prefs[com.valoser.futacha.shared.mix.MIX_DEFINITIONS_KEY])) {
+                            is com.valoser.futacha.shared.mix.MixLoadResult.Ok -> r.mixes
+                            is com.valoser.futacha.shared.mix.MixLoadResult.ReadOnly -> r.mixes
+                        }
+                    }.collect { value = it }
+                }
+                LaunchedEffect(navigationState.selectedMixId, mixDefinitions, com.valoser.futacha.shared.compat.MixAvailability.enabled) {
+                    navigationState = reconcileFutachaMixSelection(navigationState, mixDefinitions)
+                }
+                val destination = remember(navigationState, persistedBoards, mixDefinitions, com.valoser.futacha.shared.compat.MixAvailability.enabled) {
+                    resolveFutachaDestination(navigationState, persistedBoards, mixDefinitions)
                 }
                 LaunchedEffect(destination, persistedBoards.size, persistedHistory.size, shouldUseLightweightMode, arePersistedListsLoaded) {
                     if (!arePersistedListsLoaded) return@LaunchedEffect
@@ -1470,13 +1498,55 @@ private fun FutachaAppContent(
                     }
 
                     is FutachaResolvedDestinationContent.BoardManagement -> {
-                        FutachaBoardManagementDestination(
-                            props = content.props,
-                            aiCommand = releasedAiScreenCommand,
-                            onAiCommandConsumed = onAiScreenCommandConsumed
-                        )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            com.valoser.futacha.shared.ui.board.LocalHasExistingMix provides !mixDefinitions.isNullOrEmpty()
+                        ) {
+                            FutachaBoardManagementDestination(
+                                props = content.props.copy(onMenuAction = { action ->
+                                    if (action == com.valoser.futacha.shared.ui.board.BoardManagementMenuAction.MIX) {
+                                        val store = compatibilityStore
+                                        if (store != null) coroutineScope.launch {
+                                            val id = com.valoser.futacha.shared.ui.board.firstMixIdOrCreate(
+                                                store, persistedBoards.map { it.url }, kotlin.time.Clock.System.now().toEpochMilliseconds(), confirmMixMembers).idOrReport { mixOpenError = it }
+                                            if (id != null) navigationState = selectFutachaMix(navigationState, id)
+                                        }
+                                    } else content.props.onMenuAction(action)
+                                }),
+                                aiCommand = releasedAiScreenCommand,
+                                onAiCommandConsumed = onAiScreenCommandConsumed
+                            )
+                        }
                     }
 
+                    is FutachaResolvedDestinationContent.MixCatalog -> {
+                        val mixRepository = sharedRepository
+                        if (mixRepository != null && compatibilityStore != null) {
+                            mixStateHolder.SaveableStateProvider(content.mix.definition.id) {
+                                com.valoser.futacha.shared.ui.board.FutachaMixScreen(
+                                    mix = content.mix,
+                                    repository = mixRepository,
+                                    store = compatibilityStore,
+                                    registeredBoards = persistedBoards,
+                                    stateStore = stateStore,
+                                    fileSystem = fileSystem,
+                                    httpClient = httpClient,
+                                    onSwitch = { id -> navigationState = selectFutachaMix(navigationState, id) },
+                                    onBack = { navigationState = exitFutachaMix(navigationState) },
+                                    onOpen = { entry ->
+                                        navigationState = selectCatalogThread(
+                                            navigationState,
+                                            FutachaThreadSelection(
+                                                boardId = entry.board.id, boardName = entry.board.name, threadId = entry.item.id,
+                                                threadTitle = entry.item.title, threadReplies = entry.replyCountOrNull ?: 0,
+                                                threadThumbnailUrl = entry.item.thumbnailUrl, threadUrl = entry.item.threadUrl
+                                            )
+                                        )
+                                    }
+                                )
+                            }
+                        } else Box(modifier = Modifier.fillMaxSize())
+                    }
+                    is FutachaResolvedDestinationContent.MissingMix -> Box(modifier = Modifier.fillMaxSize())
                     is FutachaResolvedDestinationContent.MissingBoard -> {
                         FutachaMissingBoardDestination(
                             missingBoardId = content.missingBoardId,
@@ -1632,6 +1702,13 @@ private fun recordFutachaDestinationScreenView(
         FutachaDestination.BoardManagement -> "board_management"
         FutachaDestination.SavedThreads -> "saved_threads"
         is FutachaDestination.MissingBoard -> "missing_board"
+        is FutachaDestination.MixCatalog -> {
+            // Only a bucket and a flag: no board, MIX name or thread identity is sent.
+            params["board_count_bucket"] = analyticsCountBucket(destination.mix.boards.size)
+            params["aimoge_included"] = analyticsEnabledValue(destination.mix.boards.any { com.valoser.futacha.shared.compat.aimogeBoardShapeOf(it.url) != null })
+            "mix_catalog"
+        }
+        is FutachaDestination.MissingMix -> "missing_mix"
         is FutachaDestination.Catalog -> {
             params["board_kind"] = analyticsBoardKind(destination.board.url)
             params["board_context"] = analyticsSessionContextId(

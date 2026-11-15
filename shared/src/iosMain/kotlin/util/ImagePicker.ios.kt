@@ -1296,3 +1296,88 @@ private fun decodeBase64ToNSData(base64: String): NSData? {
         NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
     }
 }
+
+/**
+ * Several pictures from the photo library (PHPicker, [maxCount] at most). The sheet is shown once; each chosen
+ * picture is then read in turn with the single picker's limits and timeout. Null when cancelled; a picture that
+ * cannot be read is left out (the caller tells how many came back).
+ */
+internal suspend fun pickIosImages(maxCount: Int, maxBytes: Long = MAX_PICKED_IMAGE_BYTES): List<ImageData>? {
+    require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "Invalid picker byte limit" }
+    val providers = choosePhotoProviders(maxCount) ?: return null
+    return providers.mapNotNull { provider -> loadPhotoProvider(provider, maxBytes) }
+}
+
+private suspend fun choosePhotoProviders(maxCount: Int): List<platform.Foundation.NSItemProvider>? =
+    suspendCancellableCoroutine { continuation ->
+        if (getRootViewController() == null) {
+            continuation.resumeWithException(IllegalStateException("Cannot present photo picker"))
+            return@suspendCancellableCoroutine
+        }
+        val gate = ResumeGate()
+        var delegateRef: NSObject? = null
+        fun complete(value: List<platform.Foundation.NSItemProvider>?, failed: Boolean = false) {
+            if (!gate.tryOpen()) return
+            releasePickerDelegate(delegateRef)
+            if (failed) continuation.resumeWithException(IllegalStateException("Could not present the photo picker"))
+            else continuation.resume(value)
+        }
+        val config = PHPickerConfiguration().apply {
+            selectionLimit = maxCount.coerceAtLeast(1).toLong()
+            filter = PHPickerFilter.imagesFilter
+        }
+        val picker = PHPickerViewController(configuration = config)
+        val delegate = object : NSObject(), PHPickerViewControllerDelegateProtocol, UIAdaptivePresentationControllerDelegateProtocol {
+            override fun presentationControllerDidDismiss(presentationController: UIPresentationController) = complete(null)
+            override fun picker(picker: PHPickerViewController, didFinishPicking: List<*>) {
+                picker.dismissViewControllerAnimated(true, null)
+                val results = didFinishPicking.filterIsInstance<PHPickerResult>().map { it.itemProvider }
+                complete(results.takeIf { it.isNotEmpty() })
+            }
+        }
+        delegateRef = delegate
+        retainPickerDelegate(delegate)
+        continuation.invokeOnCancellation {
+            if (gate.tryOpen()) dispatch_async(dispatch_get_main_queue()) {
+                dismissPresentedPicker(picker) { releasePickerDelegate(delegateRef) }
+            }
+        }
+        picker.delegate = delegate
+        presentPicker(picker, logLabel = "photo images picker", onPresented = {
+            picker.presentationController?.delegate = delegate
+        }) { complete(null, failed = true) }
+    }
+
+private suspend fun loadPhotoProvider(itemProvider: platform.Foundation.NSItemProvider, maxBytes: Long): ImageData? =
+    suspendCancellableCoroutine { continuation ->
+        val gate = ResumeGate()
+        var timeout: PickedMediaLoadTimeout? = null
+        fun complete(value: ImageData?) {
+            if (!gate.tryOpen()) return
+            timeout?.cancel()
+            timeout = null
+            continuation.resume(value)
+        }
+        val requestedType = itemProvider.registeredTypeIdentifiers.filterIsInstance<String>()
+            .firstOrNull { UTType.typeWithIdentifier(it)?.conformsToType(UTTypeImage) == true } ?: "public.image"
+        val dataFileName = UTType.typeWithIdentifier(requestedType)?.preferredFilenameExtension
+            ?.let { "image.$it" } ?: DEFAULT_PICKED_IMAGE_FILE_NAME
+        dispatch_async(dispatch_get_main_queue()) {
+            timeout = schedulePickedMediaLoadTimeout(logLabel = "image", complete = { complete(null) })
+        }
+        continuation.invokeOnCancellation { dispatch_async(dispatch_get_main_queue()) { timeout?.cancel() } }
+        itemProvider.loadFileRepresentationForTypeIdentifier(requestedType) { url, _ ->
+            if (url != null) {
+                val selected = loadPickedMediaFromUrl(url = url, isVideo = false, fallbackFileName = DEFAULT_PICKED_IMAGE_FILE_NAME, maxBytes = maxBytes)
+                dispatch_async(dispatch_get_main_queue()) { complete(selected) }
+                return@loadFileRepresentationForTypeIdentifier
+            }
+            itemProvider.loadDataRepresentationForTypeIdentifier(requestedType) { data, _ ->
+                val selected = data?.let { copyPickedProviderData(it, "image", dataFileName, maxBytes) }
+                dispatch_async(dispatch_get_main_queue()) {
+                    releasePickedProviderData()
+                    complete(selected)
+                }
+            }
+        }
+    }

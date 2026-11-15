@@ -176,6 +176,9 @@ internal fun resolveThreadScreenEffectiveBoardUrl(threadUrlOverride: String?, bo
  */
 fun resolveEffectiveBoardUrl(threadUrlOverride: String?, fallbackBoardUrl: String): String {
     if (threadUrlOverride.isNullOrBlank()) return fallbackBoardUrl
+    if (com.valoser.futacha.shared.compat.boardSiteOf(threadUrlOverride) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE) {
+        return com.valoser.futacha.shared.compat.aimogeBoardShapeOf(threadUrlOverride)!!
+    }
     return runCatching {
         val url = Url(threadUrlOverride)
         val segments = url.encodedPath.split('/').filter { it.isNotBlank() }

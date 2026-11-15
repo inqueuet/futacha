@@ -307,7 +307,7 @@ internal fun futaberReadThreadIds(
     history: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>,
     board: com.valoser.futacha.shared.model.BoardSummary
 ): Set<String> {
-    val boardUrl = com.valoser.futacha.shared.compat.canonicalizeBoardUrl(board.url)
+    val boardUrl = com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url)
     // "may.2chan.net/27/": a row of another board cannot contain it.
     val needle = boardUrl?.substringAfter("://")
     val read = HashSet<String>()
@@ -322,5 +322,5 @@ internal fun futaberReadThreadIds(
 
 /** The board a history row's address belongs to (it holds the thread's own address, or the board's), or null. */
 private fun futaberHistoryBoardUrl(url: String): String? =
-    com.valoser.futacha.shared.compat.canonicalizeThreadUrl(url)?.canonicalBoardUrl
-        ?: com.valoser.futacha.shared.compat.canonicalizeBoardUrl(url)
+    com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(url)?.canonicalBoardUrl
+        ?: com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(url)

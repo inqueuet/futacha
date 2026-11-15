@@ -1,6 +1,6 @@
 package com.valoser.futacha.shared.network
 
-class NetworkException(
+open class NetworkException(
     message: String,
     val statusCode: Int? = null,
     cause: Throwable? = null,

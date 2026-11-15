@@ -71,7 +71,25 @@ expect fun rememberAttachmentPickerLauncher(
     maxBytes: Long = MAX_PICKED_IMAGE_BYTES,
     onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit,
     preferredFileManagerPackage: String? = null,
-    onSelectionError: (String) -> Unit = {}
+    onSelectionError: (String) -> Unit = {},
+    /**
+     * Offered as a third choice where the platform asks where to pick from (iOS 「添付ファイルを選択」, may 1447450917:
+     * the paste was only under その他). Ignored where no such question is asked.
+     */
+    onPasteImage: (() -> Unit)? = null
 ): () -> Unit
+
+/**
+ * Picks several pictures at once (Android: the system's multiple GET_CONTENT; iOS: PHPicker with a limit of
+ * [maxCount]). Null where the platform has no such picker, so the entry is not shown. Each picture is read with the
+ * single picker's limits; the ones that cannot be read are dropped and told through [onSelectionError].
+ */
+@Composable
+expect fun rememberMultipleImagePickerLauncher(
+    maxCount: Int,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES,
+    onImagesSelected: (List<com.valoser.futacha.shared.util.ImageData>) -> Unit,
+    onSelectionError: (String) -> Unit = {}
+): (() -> Unit)?
 
 internal const val ATTACHMENT_LOAD_FAILURE_MESSAGE = "添付ファイルが読み込めません"

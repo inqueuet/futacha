@@ -137,7 +137,8 @@ internal suspend fun buildMediaPreviewCollection(posts: List<Post>): MediaPrevie
             coroutineContext.ensureActive()
             yield()
         }
-        buildMediaPreviewEntry(post)?.let(entries::add)
+        // あいもげ: every file of the post gets its own page (a Futaba post stays one page).
+        postsForEachAttachment(post).forEach { item -> buildMediaPreviewEntry(item)?.let(entries::add) }
     }
     return MediaPreviewCollection(
         entries = entries,

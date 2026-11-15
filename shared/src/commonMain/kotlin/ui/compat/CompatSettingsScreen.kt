@@ -303,11 +303,17 @@ internal fun CompatSettingsScreen(
      */
     lastingScope: kotlinx.coroutines.CoroutineScope? = null,
     /** The app's notice: a result that comes after this screen is left is told there (L58). */
-    onLastingNotice: (String) -> Unit = {}
+    onLastingNotice: (String) -> Unit = {},
+    /** Opens あいもげのイベントカレンダー (a row of ふたちゃ拡張); null = the row does nothing. */
+    onOpenAimogeCalendar: (() -> Unit)? = null
 ) {
     com.valoser.futacha.shared.ui.privacy.PrivacySettingsExemption()
     if (path == "speech") {
         CompatSpeechSettingsScreen(store, preferences, onBack)
+        return
+    }
+    if (path == "aimoge") {
+        com.valoser.futacha.shared.ui.aimoge.AimogeSettingsDialog(store, onDismiss = onBack)
         return
     }
     val profileController = LocalExperienceProfileUiController.current
@@ -319,7 +325,10 @@ internal fun CompatSettingsScreen(
             listOf("バックアップ" to (compatRootSettingsGroups(appVersion).first { it.first == "バックアップ" }.second +
                 CompatSettingEntry("旧版設定・NGの復元", "keyword.cfg / setting.cfg を読み込む")))
         } else if (path == "ptmt" && modernPresentation) {
-            listOf("Cookie" to listOf(CompatSettingEntry("ptmtクッキーの編集", "", preferenceKey = "ptmtEditor")))
+            listOf("Cookie" to listOf(
+                CompatSettingEntry("ptmtクッキーの編集", "", preferenceKey = "ptmtEditor"),
+                CompatSettingEntry("クッキーの再取得", "", preferenceKey = COMPAT_COOKIE_REACQUIRE_KEY)
+            ))
         } else if (path == "root") {
             compatRootSettingsGroups(appVersion, includeAppStateEntries = stateStore != null && !modernPresentation)
         } else compatSettingsGroups(path, modernPresentation, includeAppStateEntries = stateStore != null && !modernPresentation)
@@ -421,6 +430,7 @@ internal fun CompatSettingsScreen(
         )
     }
     var ptmtDialogOpen by remember(path) { mutableStateOf(false) }
+    var cookieReacquireConfirm by remember(path) { mutableStateOf(false) }
     var ptmtValue by remember(path) { mutableStateOf("") }
     var ptmtCheck by remember(path) { mutableStateOf("") }
     var ptmtMessage by remember(path) { mutableStateOf<String?>(null) }
@@ -777,6 +787,8 @@ internal fun CompatSettingsScreen(
             }
             if (path == "ai") item(key = "ai-settings") { CompatAiSettingsControls(stateStore) }
             if (path == "media") item(key = "media-settings") {
+                com.valoser.futacha.shared.ui.image.PromptSettingsSection()
+                HorizontalDivider()
                 com.valoser.futacha.shared.ui.media.DeviceImageEditorSettings()
                 HorizontalDivider()
                 com.valoser.futacha.shared.ui.media.DeviceVideoEditorSettings()
@@ -859,6 +871,8 @@ internal fun CompatSettingsScreen(
                     }
                     val isLegacyRestore = path in setOf("root", "backup") && entry.title == "旧版設定・NGの復元"
                     val isPtmtEditor = path in setOf("root", "backup", "ptmt") && entry.preferenceKey == "ptmtEditor"
+                    val isCookieReacquire = entry.preferenceKey == COMPAT_COOKIE_REACQUIRE_KEY
+                    val isAimogeCalendar = entry.preferenceKey == COMPAT_AIMOGE_CALENDAR_KEY && onOpenAimogeCalendar != null
                     val isCustomFont = path == "design" && entry.preferenceKey == "dummyCustomFont"
                     val dependencyEnabled = !(
                         path == "catalog" && entry.preferenceKey == "catalogAppendDropped" &&
@@ -945,7 +959,7 @@ internal fun CompatSettingsScreen(
                             isCacheToggle || isCacheEndpoint || isCacheStatus || isCustomImageSearch ||
                             ((isSettingsRestore || isSettingsSave || isNgRestore || isNgSave || isLegacyRestore) && fileSystem != null) ||
                             infoAction ||
-                            (isPtmtEditor && cookieRepository != null) || isCustomFont
+                            ((isPtmtEditor || isCookieReacquire) && cookieRepository != null) || isCustomFont || isAimogeCalendar
                         )
                     CompatPreferenceRow(
                         modifier = Modifier.testTag("compat-setting-${entry.preferenceKey}"),
@@ -1052,6 +1066,8 @@ internal fun CompatSettingsScreen(
                                     if (ptmtDialogOpen && ptmtValue.isEmpty()) ptmtValue = loadedValue
                                 }
                             }
+                            else if (isCookieReacquire) cookieReacquireConfirm = true
+                            else if (isAimogeCalendar) onOpenAimogeCalendar?.invoke()
                             else if (isCustomFont) customFontDialogOpen = true
                             else if (entry.route != null) onNavigate(entry.route)
                             else if (isThreadCacheClear) confirmThreadCacheClear = true
@@ -1660,6 +1676,27 @@ internal fun CompatSettingsScreen(
                     ) { Text("キャンセル") }
                 }
             }
+        ) }
+    }
+    if (cookieReacquireConfirm) {
+        val repository = cookieRepository
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { cookieReacquireConfirm = false },
+            title = { Text("クッキーの再取得") },
+            text = { Text(COMPAT_COOKIE_REACQUIRE_TEXT) },
+            confirmButton = {
+                TextButton(
+                    modifier = Modifier.testTag("compat-cookie-reacquire-ok"),
+                    onClick = {
+                        cookieReacquireConfirm = false
+                        if (repository != null) launchSettingsSafely {
+                            val removed = runSuspendCatchingPreservingCancellation { compatReacquireFutabaCookies(repository) }.getOrNull()
+                            tell(if (removed == null) "クッキーを再取得できませんでした" else "再取得しました") { transientNotice = it }
+                        }
+                    }
+                ) { Text("再取得") }
+            },
+            dismissButton = { TextButton(onClick = { cookieReacquireConfirm = false }) { Text("キャンセル") } }
         ) }
     }
     if (customFontDialogOpen) {

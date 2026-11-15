@@ -10,14 +10,17 @@ import com.valoser.futacha.shared.model.CatalogItem
  */
 internal fun buildCatalogItemLazyKeys(
     boardIdentity: String,
-    items: List<CatalogItem>
+    items: List<CatalogItem>,
+    /** MIX rows come from several boards: the board of the row at a position. Null keeps the one-board behaviour. */
+    boardIdentityAt: ((Int) -> String)? = null
 ): List<String> {
     val stableBoardIdentity = boardIdentity.trim().ifEmpty { "unknown-board" }
-    val baseKeys = items.map { item ->
+    val baseKeys = items.mapIndexed { index, item ->
+        val rowBoard = boardIdentityAt?.invoke(index)?.trim()?.ifEmpty { null } ?: stableBoardIdentity
         val threadIdentity = item.id.trim().ifEmpty {
             item.threadUrl.trim().ifEmpty { "unknown-thread" }
         }
-        "catalog-item:$stableBoardIdentity:$threadIdentity"
+        "catalog-item:$rowBoard:$threadIdentity"
     }
     val baseCounts = baseKeys.groupingBy { it }.eachCount()
     val urlFallbackKeys = items.indices.map { index ->

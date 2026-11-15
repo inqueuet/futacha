@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
@@ -524,8 +525,10 @@ internal fun FutaberForegroundPatrol(
             try {
                 // The patrol reads the boards of the shared store; this mode's boards are added there first.
                 store.importModernBoards(latestBoards)
-                refreshSharedFeatures(store, repository, isCompatWifiConnected(context),
-                    onNewMatches = { latestNotify(futaberPatrolMatchNotice(it.size)) })
+                withAimogeAutomaticFetch {
+                    refreshSharedFeatures(store, repository, isCompatWifiConnected(context),
+                        onNewMatches = { latestNotify(futaberPatrolMatchNotice(it.size)) })
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -545,7 +548,7 @@ internal fun futaberPatrolMatchNotice(count: Int): String = "巡回で${count}�
  * anything else is left out. The keyword is the one にじろぐ found (blank when it has none).
  */
 internal fun futaberWatchResultFromExternal(entry: CompatExternalWatcherEntry): CompatWatchResult? {
-    val parsed = canonicalizeThreadUrl(entry.threadUrl) ?: return null
+    val parsed = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(entry.threadUrl) ?: return null
     val updated = entry.updatedAtEpochMillis.takeIf { it > 0 } ?: entry.insertedAtEpochMillis
     return CompatWatchResult(
         history = CompatHistoryEntry(

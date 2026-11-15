@@ -66,7 +66,7 @@ class FutaberParityB23Test {
     @Test fun theCameraMenuOffersTheOtherToolsOnlyWithTheExtensionAfterTheOriginalsItems() {
         val all = futaberCameraMenu(filesRefused = false, toolsEnabled = true, canUpload = false)
         assertEquals(
-            listOf("recent", "file", "library", "tool-drawing", "tool-ups", "tool-voice", "tool-network-info", "tool-device-info"),
+            listOf("recent", "file", "library", "tool-drawing", "tool-ups", "tool-voice", "tool-network-info", "tool-device-info", "tool-multi"),
             all.map { it.id }
         )
         assertTrue(all.drop(3).all { it.extra } && all.take(3).none { it.extra })

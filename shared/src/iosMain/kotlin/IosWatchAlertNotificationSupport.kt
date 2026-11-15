@@ -82,6 +82,7 @@ internal const val IOS_WATCH_ALERT_THREAD_URL_KEY = "threadUrl"
  */
 internal fun iosWatchAlertThreadUrl(match: CatalogWatchAlertMatch): String? {
     val threadId = match.threadId.trim()
+    com.valoser.futacha.shared.compat.aimogeWatchThreadUrlOf(match.boardUrl, threadId)?.let { return it }
     if (threadId.isEmpty() || !threadId.all { it in '0'..'9' }) return null
     return runCatching { BoardUrlResolver.resolveThreadUrl(match.boardUrl, threadId) }.getOrNull()
         ?.let { url -> canonicalizeThreadUrl(url)?.canonicalUrl }

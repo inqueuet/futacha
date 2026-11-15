@@ -45,7 +45,8 @@ internal data class ThreadSingleMediaSaveRunnerCallbacks(
 
 internal fun buildThreadSingleMediaSaveRunnerCallbacks(
     httpClient: HttpClient,
-    fileSystem: FileSystem
+    fileSystem: FileSystem,
+    flatSave: () -> Boolean = { false }
 ): ThreadSingleMediaSaveRunnerCallbacks {
     return ThreadSingleMediaSaveRunnerCallbacks(
         saveMedia = { config ->
@@ -57,7 +58,9 @@ internal fun buildThreadSingleMediaSaveRunnerCallbacks(
                 boardId = config.boardId,
                 threadId = config.threadId,
                 baseSaveLocation = config.baseSaveLocation,
-                baseDirectory = config.baseDirectory
+                baseDirectory = config.baseDirectory,
+                storageDirectoryOverride = if (flatSave()) "" else null,
+                useTypeSubdirectory = !flatSave()
             )
         }
     )

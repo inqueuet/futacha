@@ -39,11 +39,18 @@ internal class FutachaSharedBoardRepository(
     override suspend fun getCatalogFetchSettings(): CatalogFetchSettings =
         compatCatalogFetchSettingsFromPreferences(store.preferences.first()) ?: delegate.getCatalogFetchSettings()
 
+    /**
+     * あいもげ boards go straight to [delegate]: no cache server, supplement, Futaba address or cxyl (AM-B4). The
+     * Futaba paths below are left exactly as they were.
+     */
+    private fun isAimoge(url: String): Boolean = boardSiteOf(url) == BoardSite.AIMOGE
+
     private val catalogMutex = Mutex()
     private val openedCatalogs = mutableSetOf<String>()
     override suspend fun getThread(board: String, threadId: String): ThreadPage = getThreadContent(board, threadId).page
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage = getThreadContentByUrl(threadUrl).page
     override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
+        if (isAimoge(board)) return delegate.getCatalogPage(board, mode)
         val preferences = store.preferences.first()
         val cacheKey = "$board|$mode"
         val firstOpen = catalogMutex.withLock { openedCatalogs.add(cacheKey) }
@@ -68,20 +75,27 @@ internal class FutachaSharedBoardRepository(
         return page
     }
 
+    /** MIX fetch: the same three branches as [getCatalogPage], but no first-open cache, disk snapshot or cache write (C-L11). */
+    suspend fun fetchCatalogPageForMix(board: String, mode: CatalogMode): CatalogPageContent =
+        fetchMixCatalogPageWith(delegate, store, board, mode)
+
     // getCatalog (watcher, update checks) must use the same layout as the
     // catalog screen, or each call switches the board's catalog setup.
     override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> {
+        if (isAimoge(board)) return delegate.getCatalog(board, mode)
         val settings = compatCatalogFetchSettingsFromPreferences(store.preferences.first())
         if (settings == null || canonicalizeBoardUrl(board) == null) return delegate.getCatalog(board, mode)
         return delegate.getCatalogWithSettings(board, mode, settings)
     }
 
     override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
+        if (isAimoge(board)) return delegate.getThreadContent(board, threadId)
         val canonicalBoard = canonicalizeBoardUrl(board) ?: return delegate.getThreadContent(board, threadId)
         return load("${canonicalBoard}res/$threadId.htm") { delegate.getThreadContent(board, threadId) }
     }
 
     override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent {
+        if (isAimoge(threadUrl)) return delegate.getThreadContentByUrl(threadUrl)
         if (canonicalizeThreadUrl(threadUrl) == null || !threadUrl.contains(".2chan.net/")) return delegate.getThreadContentByUrl(threadUrl)
         return load(threadUrl) { delegate.getThreadContentByUrl(threadUrl) }
     }
@@ -104,6 +118,8 @@ internal class FutachaSharedBoardRepository(
     suspend fun supplement(source: String, content: ThreadPageContent): ThreadPageContent {
         // A read-only copy (an opened MHT file) is shown as it was saved: it never goes to the network.
         if (delegate is FutachaStaticThreadRepository) return content
+        // あいもげ leaves removed posts out on purpose: never "fill" them from the Futaba archives (AM-B4).
+        if (isAimoge(source)) return content
         val expected = store.tabs.first().firstOrNull { it.key == compatTabKey(source) }?.replyCount
         val needsSupplement = content.page.isTruncated || expected?.let { content.page.posts.size < it + 1 } == true
         val client = httpClient
@@ -161,3 +177,19 @@ internal class FutachaCatalogMemoryCache {
         while (entries.size > 4) entries.remove(entries.keys.first())
     }
 }
+
+private suspend fun fetchMixCatalogPageWith(
+    repository: BoardRepository, store: CompatibilityStore, board: String, mode: CatalogMode
+): CatalogPageContent {
+    if (boardSiteOf(board) == BoardSite.AIMOGE) return repository.getCatalogPage(board, mode)
+    val settings = compatCatalogFetchSettingsFromPreferences(store.preferences.first())
+    return if (settings == null || canonicalizeBoardUrl(board) == null) repository.getCatalogPage(board, mode)
+    else repository.getCatalogPageWithSettings(board, mode, settings)
+}
+
+/** The MIX fetch for any repository: the wrapper's own entry when present, otherwise the same branches. */
+internal suspend fun fetchMixCatalogPage(
+    repository: BoardRepository, store: CompatibilityStore, board: String, mode: CatalogMode
+): CatalogPageContent =
+    (repository as? FutachaSharedBoardRepository)?.fetchCatalogPageForMix(board, mode)
+        ?: fetchMixCatalogPageWith(repository, store, board, mode)

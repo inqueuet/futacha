@@ -15,7 +15,7 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
     return html
-        .replace("<label for=\"catalog\"", currentModeHelpHtmlSection() + futaberOperationHelpHtmlSection() + ftutterOpeningHelpHtmlSection() + "<label for=\"catalog\"")
+        .replace("<label for=\"catalog\"", currentModeHelpHtmlSection() + aimogeHelpHtmlSection() + futaberOperationHelpHtmlSection() + ftutterOpeningHelpHtmlSection() + "<label for=\"catalog\"")
         .replace("<label for=\"post\"", postingAndSavingHelpHtmlSection() + speechHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"post\"", aiHelpHtmlSection() + "<label for=\"post\"")
         .replace("<label for=\"drawer\"", com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection() + "<label for=\"drawer\"")
@@ -152,7 +152,10 @@ hr { width: 100%; height: 1px; border: none; background-color: #eeeeee; }
 		<p class="explain">ふたばちゃんねるのアドレスを指定して一括登録が行えます<br />または二次裏の心得である○○○でも可能です</p>
 
 		<p class="title">新規追加</p>
-		<p class="explain">新しい板を追加する事ができます<br />ブラウザーからURLを受け取ることも可能です</p>
+		<p class="explain">新しい板を追加する事ができます<br />ブラウザーからURLを受け取ることも可能です<br />あいもげの板のURL（https://nijiurachan.net/b/板/）も入れられます。表示名は空でもよく、あいもげの板一覧から取ります。R18の板は追加の前に確認します（あいもげを使えない版では追加しません）</p>
+
+		<p class="title">まとめカタログ</p>
+		<p class="explain">登録した板（10個まで）のスレッドを1つのカタログにまとめて見られます。メニューの「まとめカタログ」から開き、「編集」で名前と板を変えます。並び順は交互・新しい順・古い順・レスの多い順・少ない順・勢い順・そうだね順から選べます。更新は10秒以上あけてください</p>
 
 		<p class="title">並び替え</p>
 		<p class="explain">つまみをドラッグして並び替えることができます</p>

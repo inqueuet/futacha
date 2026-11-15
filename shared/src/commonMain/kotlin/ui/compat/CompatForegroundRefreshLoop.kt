@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_WATCH_TIME_PREFERENCE
@@ -14,7 +15,8 @@ import com.valoser.futacha.shared.compat.CompatWatchMatch
 import com.valoser.futacha.shared.compat.CompatWatcherRepository
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.CompatCatalogReplyCountUpdate
-import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
+import com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy
+import com.valoser.futacha.shared.compat.siteThreadUrlOnBoard
 import com.valoser.futacha.shared.compat.collectCompatWatchMatches
 import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
 import com.valoser.futacha.shared.compat.compatWatchAllowed
@@ -116,7 +118,8 @@ internal suspend fun runCompatForegroundRefreshLoop(
     histories: () -> List<CompatHistoryEntry>,
     persist: suspend (operation: String, block: suspend () -> Unit) -> Unit,
     progress: CompatForegroundPassProgress = CompatForegroundPassProgress()
-) {
+) = withAimogeAutomaticFetch {
+    // Every request of the patrol is an automatic re-read (the あいもげ repository holds them back; Futaba ignores it).
     var firstTick = true
     while (true) {
         // The reference TimerTask is scheduled with delay=0 and then every
@@ -182,7 +185,7 @@ internal suspend fun runCompatForegroundRefreshLoop(
                     runSuspendCatchingPreservingCancellation { fetchCatalog(board, CatalogMode.Catalog) }
                         .onSuccess { catalog ->
                             val byCanonicalUrl = catalog.mapNotNull { item ->
-                                canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl?.let { it to item }
+                                canonicalizeSiteThreadUrlAsLegacy(item.threadUrl)?.canonicalUrl?.let { it to item }
                             }.toMap()
                             val byThreadId = catalog.associateBy(CatalogItem::id)
                             val replyCountUpdates = boardTabs.mapNotNull { checkedTab ->

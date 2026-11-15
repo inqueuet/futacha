@@ -34,6 +34,7 @@ internal enum class FutaberSettingsRow(val id: String, val label: String) {
     Background("background", "バックグラウンド"),
     Backup("backup", "バックアップ・復元"),
     Cookies("cookies", "Cookie管理"),
+    Aimoge("aimoge", "あいもげ"),
     Notifications("notifications", "キーワード通知・巡回"),
     ImageSearch("image-search", "画像検索"),
     Media("media", "メディア機能"),
@@ -109,7 +110,8 @@ internal fun futaberSettingsTopExtras(available: FutaberSettingsAvailability): L
                 "data", "データ・通信",
                 listOfNotNull(
                     FutaberSettingsRow.Storage, FutaberSettingsRow.Network, FutaberSettingsRow.Background, FutaberSettingsRow.Backup,
-                    FutaberSettingsRow.Cookies.takeIf { available.cookies }
+                    FutaberSettingsRow.Cookies.takeIf { available.cookies },
+                    FutaberSettingsRow.Aimoge.takeIf { com.valoser.futacha.shared.ui.aimoge.aimogeSettingsVisible() }
                 ),
                 extra = true
             )
@@ -388,7 +390,7 @@ internal fun futaberNgThreadTarget(input: String, boards: List<com.valoser.futac
         trimmed.startsWith("//") -> "https:$trimmed"
         else -> "https://$trimmed"
     }
-    val thread = com.valoser.futacha.shared.compat.canonicalizeThreadUrl(withScheme) ?: return null
+    val thread = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(withScheme) ?: return null
     val key = com.valoser.futacha.shared.compat.compatBoardKey(thread.canonicalBoardUrl)
     if (boards.none { futaberNgScopeKey(it) == key }) return null
     return FutaberNgThreadTarget(key, thread.canonicalUrl)
@@ -408,7 +410,7 @@ internal val FUTABER_EULA_SECTIONS: List<Pair<String, String>> = listOf(
     "不適切なコンテンツ・迷惑行為を一切容認しません" to
         "違法な内容、わいせつ・暴力的な内容、差別、嫌がらせ、脅迫、個人情報の暴露、その他他者を害する投稿や行為は禁止します。利用者はこれらを投稿せず、他の利用者を攻撃・虐待しないことに同意します。",
     "通報とブロック" to
-        "投稿内の「通報・ブロック」（または投稿の長押し）から操作できます。不適切な投稿は「不適切な投稿を通報」で掲示板管理者へ報告できます。迷惑な利用者は「この利用者をブロック」からID・IP・名前などを端末内のNGへ登録し、その投稿を非表示にできます。",
+        "投稿の右上のメニューボタン「通報・ブロック」（または投稿の長押し）から操作できます。不適切な投稿は「不適切な投稿を通報」で掲示板管理者へ報告できます。迷惑な利用者は「この利用者をブロック」からID・IP・名前などを端末内のNGへ登録し、その投稿を非表示にできます。",
     "違反時の対応" to
         "違反コンテンツは掲示板管理者により削除され、悪質な利用者はサービス側で利用を制限されることがあります。本アプリでもNGフィルターを利用して表示を制限できます。",
     "お問い合わせ" to

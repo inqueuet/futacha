@@ -875,6 +875,18 @@ class FtutterModeInstrumentedTest {
         assertTrue(rule.onAllNodesWithText("ふたったー風").fetchSemanticsNodes().isEmpty())
     }
 
+    /** 11-12の指示：プロンプト・AIラベルの切り替えを4モードどこからでも。ふたったー風は共有の「メディア機能」の頁へ。 */
+    @Test fun theSharedMediaPageOffersThePromptSwitch() {
+        openSettingsRoot()
+        val list = rule.onNodeWithTag("ftutter-settings-list")
+        list.performScrollToNode(androidx.compose.ui.test.hasTestTag("ftutter-shared-media"))
+        rule.onNodeWithTag("ftutter-shared-media").performClick()
+        waitForTag("prompt-settings-toggle")
+        rule.onNodeWithTag("prompt-settings-toggle").assertIsDisplayed()
+        assertTrue(rule.allTagged("image-editor-settings-toggle").fetchSemanticsNodes().isNotEmpty())
+        saveShot("shared-media-page")
+    }
+
     @Test fun aQuoteReplyKeepsItsDraftAndSendingOnTheTutorialBoardClearsIt() {
         runBlocking { app.appStateStore.setHasShownPostingNotice(true) }
         openTutorialThread()

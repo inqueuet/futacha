@@ -30,6 +30,7 @@ internal fun buildThreadScreenRunnerBindings(
     currentThreadUrlOverride: () -> String?,
     onWarning: (String) -> Unit = {},
     onInfo: (String) -> Unit = {},
+    flatSingleMediaSave: () -> Boolean = { false },
     compatibilityStore: CompatibilityStore? = null
 ): ThreadScreenRunnerBindings {
     return ThreadScreenRunnerBindings(
@@ -58,6 +59,7 @@ internal fun buildThreadScreenRunnerBindings(
             offlineFallbackTimeoutMillis = OFFLINE_FALLBACK_TIMEOUT_MS
         ),
         singleMediaSaveRunnerCallbacks = buildOptionalThreadSingleMediaSaveRunnerCallbacks(
+            flatSave = flatSingleMediaSave,
             httpClient = httpClient,
             fileSystem = fileSystem
         ),

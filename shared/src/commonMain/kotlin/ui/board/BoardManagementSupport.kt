@@ -170,6 +170,15 @@ internal fun resolveBoardManagementMenuActionState(
             shouldShowGlobalSettings = false,
             shouldHandleInternally = false
         )
+        BoardManagementMenuAction.MIX -> BoardManagementMenuActionState(
+            editModeState = BoardManagementEditModeState(
+                isDeleteMode = isDeleteMode,
+                isReorderMode = isReorderMode
+            ),
+            shouldShowAddDialog = false,
+            shouldShowGlobalSettings = false,
+            shouldHandleInternally = false
+        )
         BoardManagementMenuAction.SETTINGS -> BoardManagementMenuActionState(
             editModeState = BoardManagementEditModeState(
                 isDeleteMode = isDeleteMode,
@@ -189,7 +198,11 @@ internal fun createCustomBoardSummary(
 ): BoardSummary {
     val trimmedName = name.trim().ifBlank { "新しい板" }
     val normalizedUrl = url.trim()
-    val boardId = generateBoardId(normalizedUrl, trimmedName, existingBoards)
+    val aimogeId = com.valoser.futacha.shared.compat.aimogeBoardOnlyShapeOf(normalizedUrl)
+        ?.takeIf { it == normalizedUrl }
+        ?.let { com.valoser.futacha.shared.compat.shared.aimogeBoardIdForCanonical(it) }
+        ?.takeIf { id -> existingBoards.none { it.id == id } }
+    val boardId = aimogeId ?: generateBoardId(normalizedUrl, trimmedName, existingBoards)
     return BoardSummary(
         id = boardId,
         name = trimmedName,
@@ -238,6 +251,7 @@ private fun generateBoardId(
     existingBoards: List<BoardSummary>
 ): String {
     val candidates = buildList {
+        com.valoser.futacha.shared.compat.aimogeBoardIdOf(url)?.let { add(it) }
         extractPathSegment(url)?.let { add(it) }
         extractSubdomain(url)?.let { add(it) }
         val nameSlug = slugify(fallbackName)
@@ -288,4 +302,36 @@ private fun slugify(value: String): String {
         }
     }
     return builder.toString()
+}
+
+/**
+ * An あいもげ board URL in ふたちゃ's 「板を追加」: the name may be left empty (it is read from `/boards`), the URL is
+ * kept in its canonical form, a board already registered is refused like a Futaba one, and while あいもげ is off the
+ * reason is shown and nothing is added.
+ */
+internal fun AddBoardValidationState.withAimoge(
+    input: com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput,
+    existingBoards: List<BoardSummary>
+): AddBoardValidationState = when (input) {
+    com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.NotAimoge -> this
+    com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards -> copy(
+        hasScheme = true, isValidUrl = true, isDuplicateUrl = false,
+        canSubmit = true, helperText = "追加する板を選択します"
+    )
+    is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Refused -> copy(
+        isValidUrl = false,
+        canSubmit = false,
+        helperText = input.message
+    )
+    is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board -> {
+        val duplicate = existingBoards.any { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) == input.url }
+        copy(
+            normalizedInputUrl = input.url,
+            hasScheme = true,
+            isValidUrl = true,
+            isDuplicateUrl = duplicate,
+            canSubmit = !duplicate && trimmedName.length <= BOARD_MANAGEMENT_NAME_MAX_CHARS,
+            helperText = if (duplicate) "同じURLの板が既に登録されています" else null
+        )
+    }
 }

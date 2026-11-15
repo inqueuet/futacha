@@ -31,6 +31,22 @@ class FtutterNgSupportTest {
     private fun post(id: String, body: String = "本文", posterId: String? = null) = Post(
         id = id, author = null, subject = null, timestamp = "", posterId = posterId, messageHtml = body, imageUrl = null, thumbnailUrl = null
     )
+    @Test fun aSunkPickupThreadFromTheManyOrderIsAddedAndGoesFirst() = kotlinx.coroutines.test.runTest {
+        val rules = listOf(FtutterNgRule("ウマ", FtutterNgType.PICKUP.stored), FtutterNgRule("NG", 0))
+        val main = listOf(item("1", "雑談"), item("2", "ウマ娘 その2"))
+        val many = listOf(item("9", "ウマ娘 1000レス"), item("8", "NG ウマ"), item("1", "雑談"), item("7", "他"))
+        val fetched = mutableListOf<com.valoser.futacha.shared.model.CatalogMode>()
+        val items = ftutterCatalogItemsWithPickups(main, FtutterOrder.CATALOG, may, rules, emptyMap()) { fetched += it; many }
+        assertEquals(listOf(com.valoser.futacha.shared.model.CatalogMode.Many), fetched)
+        assertEquals(listOf("1", "2", "9"), items.map { it.id })
+        val shown = ftutterApplyCatalogNg(items, FtutterNgMatcher(rules, may), FtutterOrder.CATALOG, FtutterOrder.entries.toSet())
+        assertEquals(listOf("2", "9", "1"), shown.items.map { it.id })
+        // No pickup rule, the many order itself, or a failed second fetch: nothing extra is fetched or added.
+        assertEquals(main, ftutterCatalogItemsWithPickups(main, FtutterOrder.CATALOG, may, listOf(FtutterNgRule("NG", 0)), emptyMap()) { error("no fetch") })
+        assertEquals(main, ftutterCatalogItemsWithPickups(main, FtutterOrder.MANY, may, rules, emptyMap()) { error("no fetch") })
+        assertEquals(main, ftutterCatalogItemsWithPickups(main, FtutterOrder.CATALOG, may, rules, emptyMap()) { throw RuntimeException("down") })
+    }
+
     private fun item(id: String, title: String) = CatalogItem(
         id = id, threadUrl = "https://may.2chan.net/b/res/$id.htm", title = title, thumbnailUrl = null, fullImageUrl = null, replyCount = 0
     )

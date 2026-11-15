@@ -767,6 +767,18 @@ class MainActivity : ComponentActivity() {
         val raw = dataString.boundedPlatformDeepLinkOrNull() ?: return null
         val uri = data ?: return null
         if (uri.scheme !in setOf("http", "https")) return null
+        // AM-B6: an あいもげ thread link (the debug manifest's filter only) opens while あいもげ is on; with it off the
+        // app says so instead of opening a board it cannot read.
+        when (com.valoser.futacha.shared.compat.aimogeIncomingLinkOf(raw)) {
+            com.valoser.futacha.shared.compat.AimogeIncomingLink.OPEN -> return raw
+            com.valoser.futacha.shared.compat.AimogeIncomingLink.UNAVAILABLE -> {
+                android.widget.Toast.makeText(
+                    this@MainActivity, com.valoser.futacha.shared.compat.AIMOGE_UNAVAILABLE_MESSAGE, android.widget.Toast.LENGTH_LONG
+                ).show()
+                return null
+            }
+            com.valoser.futacha.shared.compat.AimogeIncomingLink.NOT_AIMOGE -> Unit
+        }
         if (!isTrustedFutabaDeepLinkHost(uri.host)) return null
         if (!Regex("/.+/res/[0-9]+\\.htm/?", RegexOption.IGNORE_CASE).matches(uri.path.orEmpty())) return null
         return raw

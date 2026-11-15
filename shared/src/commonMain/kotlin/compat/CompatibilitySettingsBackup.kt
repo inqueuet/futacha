@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.compat
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -40,8 +42,66 @@ data class CompatSettingsBackup(
     val workspace: CompatWorkspaceRecord? = CompatWorkspaceRecord(),
     val toolbars: List<CompatToolbarBackup> = emptyList(),
     /** Each mode's marks and order on the backed-up tabs (plan B10). Absent from older files, which restore without marks. */
-    val tabViews: List<CompatSharedTabView> = emptyList()
+    val tabViews: List<CompatSharedTabView> = emptyList(),
+    /**
+     * The あいもげ boards and what hangs on them (AM-B5), kept apart so an older version skips them and restores the Futaba
+     * part as before. Never written when empty, so a Futaba-only file is byte for byte what it was. In memory the lists
+     * above hold everything: [encodeCompatSettingsBackup] splits, [decodeCompatSettingsBackup] joins.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val siteBoards: CompatSiteBoardsBackup? = null
 )
+
+/** See [CompatSettingsBackup.siteBoards]. */
+@Serializable
+data class CompatSiteBoardsBackup(
+    val boards: List<CompatBoard> = emptyList(),
+    val tabs: List<CompatTab> = emptyList(),
+    val history: List<CompatHistoryEntry> = emptyList(),
+    val tabViews: List<CompatSharedTabView> = emptyList(),
+    val ngRules: List<CompatNgRule> = emptyList()
+)
+
+/** [this] with the あいもげ boards, their tabs, history, tab marks and board / thread NG rules moved to [CompatSettingsBackup.siteBoards]. */
+internal fun CompatSettingsBackup.withSiteBoardsSplit(): CompatSettingsBackup {
+    val joined = withSiteBoardsJoined()
+    val siteBoardKeys = joined.boards.filter { aimogeBoardOnlyShapeOf(it.canonicalUrl) != null }.mapTo(HashSet(), CompatBoard::key)
+    if (siteBoardKeys.isEmpty()) return joined
+    val siteTabs = joined.tabs.filter { it.boardKey in siteBoardKeys }
+    val siteHistory = joined.history.filter { it.boardKey in siteBoardKeys }
+    val siteTabKeys = siteTabs.mapTo(HashSet(), CompatTab::key)
+    val siteScopes = siteBoardKeys + siteTabKeys + (siteTabs.map { it.canonicalUrl } + siteHistory.map { it.canonicalUrl })
+        .mapNotNull { runCatching { compatTabKey(it) }.getOrNull() }
+    fun isSiteRule(rule: CompatNgRule) = rule.scopeKey in siteScopes
+    return joined.copy(
+        boards = joined.boards.filter { it.key !in siteBoardKeys },
+        tabs = joined.tabs.filter { it.key !in siteTabKeys },
+        history = joined.history.filter { it.boardKey !in siteBoardKeys },
+        tabViews = joined.tabViews.filter { it.tabKey !in siteTabKeys },
+        ngRules = joined.ngRules.filterNot(::isSiteRule),
+        siteBoards = CompatSiteBoardsBackup(
+            boards = joined.boards.filter { it.key in siteBoardKeys },
+            tabs = siteTabs,
+            history = siteHistory,
+            tabViews = joined.tabViews.filter { it.tabKey in siteTabKeys },
+            ngRules = joined.ngRules.filter(::isSiteRule)
+        )
+    )
+}
+
+/** [this] with [CompatSettingsBackup.siteBoards] put back into the lists (the shape the stores restore from). */
+internal fun CompatSettingsBackup.withSiteBoardsJoined(): CompatSettingsBackup {
+    val site = siteBoards ?: return this
+    return copy(
+        boards = boards + site.boards,
+        tabs = tabs + site.tabs,
+        history = history + site.history,
+        tabViews = tabViews + site.tabViews,
+        ngRules = ngRules + site.ngRules,
+        siteBoards = null
+    )
+}
 
 @Serializable
 data class CompatSettingsBackupImportReport(
@@ -169,11 +229,13 @@ private val compatSettingsBackupJson = Json {
 }
 
 fun encodeCompatSettingsBackup(backup: CompatSettingsBackup): String {
-    validateCompatSettingsBackup(backup)
-    val encoded = compatSettingsBackupJson.encodeToString(CompatSettingsBackup.serializer(), backup)
+    // The limits and the duplicate checks see the Futaba part and the あいもげ part together (AM-B5).
+    val joined = backup.withSiteBoardsJoined()
+    validateCompatSettingsBackup(joined)
+    val encoded = compatSettingsBackupJson.encodeToString(CompatSettingsBackup.serializer(), joined.withSiteBoardsSplit())
     val fits = encoded.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES
     // The marks are the only part added by plan B10: they must never make a backup that used to fit fail.
-    if (!fits && backup.tabViews.isNotEmpty()) return encodeCompatSettingsBackup(backup.copy(tabViews = emptyList()))
+    if (!fits && joined.tabViews.isNotEmpty()) return encodeCompatSettingsBackup(joined.copy(tabViews = emptyList()))
     require(fits) {
         "バックアップファイルが大きすぎます"
     }
@@ -191,6 +253,7 @@ fun decodeCompatSettingsBackup(raw: String): CompatSettingsBackup {
     // preferences, often thousands of them; drop it before the size check so
     // such files can still be restored.
     val decoded = compatSettingsBackupJson.decodeFromString(CompatSettingsBackup.serializer(), raw)
+        .withSiteBoardsJoined()
         .let { backup ->
             backup.copy(
                 preferences = compatBackupRestorePreferences(backup.preferences)

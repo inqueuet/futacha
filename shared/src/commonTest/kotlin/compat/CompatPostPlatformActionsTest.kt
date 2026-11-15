@@ -126,6 +126,25 @@ class CompatPostPlatformActionsTest {
                 setOf("gif", "jpg", "jpeg", "png")
             )
         )
+        // img/b takes GIF, JPG and PNG only: a WebP was refused there; now it is drawn again as JPEG.
+        val imgCapabilities = com.valoser.futacha.shared.network.defaultBoardPostingCapabilities("https://img.2chan.net/b/")
+        assertEquals(
+            CompatPostAttachmentDecision.ConvertToJpeg,
+            decideCompatPostAttachment(ImageData(byteArrayOf(1), "photo.webp"), 3_072_000, imgCapabilities.supportedExtensions)
+        )
+        assertEquals(
+            CompatPostAttachmentDecision.ConvertToJpeg,
+            decideCompatPostAttachment(ImageData(ByteArray(4_000_000), "big.WEBP"), 3_072_000, setOf("gif", "jpg", "jpeg", "png"))
+        )
+        assertEquals(
+            "この板はWEBPを添付できないため、JPEGに変換して添付します",
+            compatPostAttachmentDecisionMessage(CompatPostAttachmentDecision.ConvertToJpeg, "photo.webp", 3_072_000)
+        )
+        // A board that takes no JPEG keeps refusing; a non-picture is never converted.
+        assertEquals(
+            CompatPostAttachmentDecision.UnsupportedExtension,
+            decideCompatPostAttachment(ImageData(byteArrayOf(1), "photo.webp"), 3_072_000, setOf("png"))
+        )
         assertEquals(
             "ファイルサイズが0です",
             compatPostAttachmentDecisionMessage(CompatPostAttachmentDecision.EmptyPayload, "empty.png", limit)

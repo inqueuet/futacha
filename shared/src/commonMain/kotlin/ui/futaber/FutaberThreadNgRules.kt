@@ -54,8 +54,10 @@ internal fun futaberThreadNgScopeTitles(
     val threadUrlPrefix = HashMap<String, String?>()
     for (entry in history) {
         val board = boardsById[entry.boardId] ?: continue
-        val prefix = threadUrlPrefix.getOrPut(board.id) { canonicalizeBoardUrl(board.url)?.let { "${it}res/" } }
-        val threadUrl = prefix?.let { "$it${entry.threadId}.htm" } ?: futaberHistoryThreadUrl(board, entry.threadId)
+        val prefix = threadUrlPrefix.getOrPut(board.id) { com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url) }
+        val threadUrl = prefix?.takeIf { com.valoser.futacha.shared.compat.isSiteThreadId(it, entry.threadId) }
+            ?.let { com.valoser.futacha.shared.compat.siteThreadUrlOnBoard(it, entry.threadId) }
+            ?: futaberHistoryThreadUrl(board, entry.threadId)
         // Rows that key to the same thread carry the same title; the first one is used.
         val threadKey = com.valoser.futacha.shared.compat.compatTabKey(threadUrl)
         if (threadKey !in titles) {
@@ -69,7 +71,7 @@ internal fun futaberThreadNgScopeTitles(
 /** Where a rule applies: every thread, the thread or board [scopeTitles] knows by its key, or "スレ別" for a thread it does not know. */
 internal fun futaberThreadDetailNgScopeLabel(rule: CompatNgRule, scopeTitles: Map<String, String>): String = when {
     rule.scopeKey == "*" -> "全スレッド"
-    else -> (scopeTitles[rule.scopeKey] ?: com.valoser.futacha.shared.compat.canonicalizeThreadUrl(rule.scopeKey)?.let {
+    else -> (scopeTitles[rule.scopeKey] ?: com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rule.scopeKey)?.let {
         scopeTitles[com.valoser.futacha.shared.compat.compatTabKey(it.canonicalUrl)] ?: it.canonicalUrl
     })?.takeIf { it.isNotBlank() } ?: "スレ別"
 }

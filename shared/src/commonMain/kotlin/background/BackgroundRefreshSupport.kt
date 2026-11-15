@@ -138,7 +138,9 @@ internal data class IosBackgroundRefreshPlan(
     val compatRefreshBudgetMillis: Long? = null,
     val compatUpdateBudgetMillis: Long? = null,
     val compatExistenceBudgetMillis: Long = com.valoser.futacha.shared.compat.COMPAT_EXISTENCE_BUDGET_MILLIS,
-    val compatWatchCheckBudgetMillis: Long = com.valoser.futacha.shared.compat.COMPAT_EXISTENCE_BUDGET_MILLIS
+    val compatWatchCheckBudgetMillis: Long = com.valoser.futacha.shared.compat.COMPAT_EXISTENCE_BUDGET_MILLIS,
+    /** あいもげ `summary` requests of the history stage. */
+    val aimogeSummaryRequestLimit: Int = com.valoser.futacha.shared.service.AIMOGE_SUMMARY_REQUESTS_LONG
 ) {
     /** Sum of the stage limits of a short plan; must fit in [totalTimeoutMillis]. */
     internal fun futachaStageLimitsMillis(): Long? {
@@ -197,7 +199,8 @@ internal val IOS_BG_APP_REFRESH_PLAN = IosBackgroundRefreshPlan(
     compatRefreshBudgetMillis = 19_000L,
     compatUpdateBudgetMillis = 6_000L,
     compatExistenceBudgetMillis = 4_000L,
-    compatWatchCheckBudgetMillis = 3_000L
+    compatWatchCheckBudgetMillis = 3_000L,
+    aimogeSummaryRequestLimit = com.valoser.futacha.shared.service.AIMOGE_SUMMARY_REQUESTS_SHORT
 )
 
 /**
@@ -219,7 +222,8 @@ internal val IOS_WATCH_REFRESH_PLAN = IosBackgroundRefreshPlan(
     compatRefreshBudgetMillis = 15_000L,
     compatUpdateBudgetMillis = 5_000L,
     compatExistenceBudgetMillis = 3_000L,
-    compatWatchCheckBudgetMillis = 2_000L
+    compatWatchCheckBudgetMillis = 2_000L,
+    aimogeSummaryRequestLimit = com.valoser.futacha.shared.service.AIMOGE_SUMMARY_REQUESTS_SHORT
 )
 
 internal fun iosBackgroundRefreshPlanFor(kind: BackgroundRefreshTaskKind): IosBackgroundRefreshPlan = when (kind) {

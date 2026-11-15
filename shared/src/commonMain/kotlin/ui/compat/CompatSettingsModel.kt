@@ -328,9 +328,15 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
             preferenceKey = "commonAppVersion"
         )
     ),
-    "ふたちゃ拡張" to listOf(
+    "ふたちゃ拡張" to listOfNotNull(
         CompatSettingEntry("読み上げ", "音声・速さ・試聴", "speech"),
+        // AM-B8: only while あいもげ is on and the approval store exists.
+        CompatSettingEntry("あいもげ", "承認・削除キー", "aimoge")
+            .takeIf { com.valoser.futacha.shared.ui.aimoge.aimogeSettingsVisible() },
         CompatSettingEntry("プライバシー表示", "文字・画像の画面フィルター、タイトル表示", "privacy"),
+        CompatSettingEntry("クッキーの再取得", "書き込めない時に（ptmtは残す）", preferenceKey = COMPAT_COOKIE_REACQUIRE_KEY),
+        CompatSettingEntry("あいもげのイベントカレンダー", "全板の予定・開催スレ", preferenceKey = COMPAT_AIMOGE_CALENDAR_KEY)
+            .takeIf { com.valoser.futacha.shared.ui.aimoge.aimogeEventCalendarAvailable() },
         CompatSettingEntry("AI・補助機能", "スレ要約・荒らし非表示", "ai"),
         CompatSettingEntry("モード", "現在の表示モード", preferenceKey = "mode"),
         CompatSettingEntry(
@@ -339,7 +345,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
             preferenceKey = "updateCheckEnabled"
         ),
         CompatSettingEntry("保存済みスレッド", "保存したスレッドを一覧表示"),
-        CompatSettingEntry("メディア機能", "画像編集、動画編集", "media"),
+        CompatSettingEntry("メディア機能", "プロンプト・AIラベル、画像編集、動画編集", "media"),
         CompatSettingEntry("旧版設定・NGの復元", "旧としあき(仮)の keyword.cfg / setting.cfg を読み込む"),
         CompatSettingEntry("@create_app_null", "Futacha作者の情報"),
         CompatSettingEntry("開発情報", "Futachaの正規情報へ移動"),
@@ -393,6 +399,7 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
             listOf("1本(1枚ずつ)", "2本", "3本", "4本", "5本", "6本(既定)", "8本")
         key == "delayFewReplies" -> listOf("0（ソートしない）") + (1..30).map(Int::toString)
         key == "commonPrivacyAlpha" -> (90 downTo 10 step 10).map { "$it%" }
+        key == COMPAT_PRIVACY_BLUR_KEY -> CompatPrivacyBlur.entries.map(CompatPrivacyBlur::label)
         key in setOf("catalogGridViewTitleLength", "catalogListViewTitleLength") ->
             (0..30).map(Int::toString)
         key in setOf("catalogGridViewTitleFontSize", "catalogListViewTitleFontSize") ->
@@ -411,6 +418,7 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
             listOf("通常", "通常(右寄せ)", "シンプル", "シンプル(右寄せ)", "非表示")
         key == "threadFontSize" -> (10..30).map(Int::toString)
         key == "threadHeaderFontSize" -> listOf("標準") + (8..16).map(Int::toString)
+        key == "threadTitleFontSize" -> listOf("標準") + (12..20).map(Int::toString)
         key == "threadPostSpacing" -> listOf("標準") + listOf(0, 2, 4, 6, 8, 12, 16, 20).map(Int::toString)
         key in setOf("threadThumbSize", "threadUpsThumbSize") ->
             listOf("150", "200", "250", "300", "360", "410", "480", "640", "720", "800", "1000", "1200")
@@ -759,7 +767,7 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
         "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize",
         "catalogGridViewPortraitClmNum", "catalogGridViewLandscapeClmNum",
         "catalogListViewLineNum", "autoScrollPixel", "autoScrollSpeed",
-        "threadFontSize", "threadThumbSize", "threadUpsThumbSize", "threadHeaderFontSize", "threadPostSpacing",
+        "threadFontSize", "threadThumbSize", "threadUpsThumbSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing",
         "threadExtractSoudaneNum", "threadExtractQuoteNum", "threadImageNgPhashThreshold",
         "galleryGridViewPortraitClmNum", "galleryGridViewLandscapeClmNum" ->
             storedValue.filter(Char::isDigit).ifBlank { storedValue }
@@ -800,7 +808,7 @@ internal fun compatPreferenceSummaryValue(preferenceKey: String, storedValue: St
         "commonPrivacyAlpha" -> numeric.takeIf(String::isNotEmpty)?.let { "$it%" } ?: displayed
         "catalogGridViewTitleLength", "catalogListViewTitleLength", "catalogTitleLength" ->
             numeric.takeIf(String::isNotEmpty)?.let { "${it}文字" } ?: displayed
-        "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize", "threadFontSize", "threadHeaderFontSize" ->
+        "catalogGridViewTitleFontSize", "catalogListViewTitleFontSize", "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize" ->
             numeric.takeIf(String::isNotEmpty)?.let { "${it}sp" } ?: displayed
         "threadPostSpacing" -> numeric.takeIf(String::isNotEmpty)?.let { "${it}dp" } ?: displayed
         "catalogGridViewPortraitClmNum", "catalogGridViewLandscapeClmNum",
@@ -898,7 +906,9 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("タブ一覧のロングタップ", "選択メニュー", preferenceKey = "controlTabSelectorLongTap"),
         CompatSettingEntry("送信時の確認", "ON", preferenceKey = "controlPostConfirm"),
         CompatSettingEntry("板名の誤投稿確認", "OFF", preferenceKey = "controlPostDestinationConfirm"),
-        CompatSettingEntry("下にスワイプして閉じる", "ON", preferenceKey = "controlViewerSwipeClose")
+        CompatSettingEntry("下にスワイプして閉じる", "ON", preferenceKey = "controlViewerSwipeClose"),
+        CompatSettingEntry("左端からのスワイプで戻る", "OFF", preferenceKey = COMPAT_THREAD_EDGE_SWIPE_BACK_KEY),
+        CompatSettingEntry("画像ビューアのダブルタップで拡大", "OFF", preferenceKey = COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY)
     )
     "storage" -> listOf(
         CompatSettingEntry("保存ファイル", if (com.valoser.futacha.shared.util.isDesktop()) "未設定時：アプリのデータ保存先" else if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha", preferenceKey = "dummyDownloadDir"),
@@ -1002,9 +1012,12 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("そうだねの表示方法", "通常", preferenceKey = "threadHeaderSoudaneDisplay"),
         CompatSettingEntry("削除されたレスを表示", "OFF", preferenceKey = "threadAdminDeleteShow"),
         CompatSettingEntry("プライバシー透明度", "20%", preferenceKey = "commonPrivacyAlpha"),
+        CompatSettingEntry("プライバシーのぼかし", CompatPrivacyBlur.FOLLOW.label, preferenceKey = COMPAT_PRIVACY_BLUR_KEY),
         CompatSettingEntry("フォントサイズ", "14sp", preferenceKey = "threadFontSize"),
         CompatSettingEntry("レスの見出しの文字サイズ", "標準", preferenceKey = "threadHeaderFontSize"),
+        CompatSettingEntry("スレッドのタイトルの文字サイズ", "標準", preferenceKey = "threadTitleFontSize"),
         CompatSettingEntry("レス間の余白", "標準", preferenceKey = "threadPostSpacing"),
+        CompatSettingEntry("レスを押した時に色を付ける", "ON", preferenceKey = COMPAT_THREAD_PRESS_HIGHLIGHT_KEY),
         CompatSettingEntry("サムネイルサイズ", "250dp", preferenceKey = "threadThumbSize"),
         CompatSettingEntry("あぷ小のサムネイルサイズ", "250dp", preferenceKey = "threadUpsThumbSize"),
         CompatSettingEntry(
@@ -1063,7 +1076,8 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             "書き込み画面" to entries.compatKeys("controlPostConfirm"),
             "画面ビューア" to entries.compatKeys("controlViewerSwipeClose"),
             "ふたちゃ拡張" to entries.compatKeys(
-                "controlCloseToastDuration", "controlPostDestinationConfirm"
+                "controlCloseToastDuration", "controlPostDestinationConfirm",
+                COMPAT_THREAD_EDGE_SWIPE_BACK_KEY, COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY
             )
         ).filter { it.second.isNotEmpty() }
         "storage" -> listOf(
@@ -1108,7 +1122,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             ),
             "画面表示" to entries.compatKeys(
                 COMPAT_THREAD_DISPLAY_MODE_KEY, "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadHeaderFontSize", "threadPostSpacing", "threadThumbSize",
+                "threadAdminDeleteShow", "commonPrivacyAlpha", COMPAT_PRIVACY_BLUR_KEY, "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", COMPAT_THREAD_PRESS_HIGHLIGHT_KEY, "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod", COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY
             ),
             "抽出する閾値" to entries.compatKeys("threadExtractSoudaneNum", "threadExtractQuoteNum")
@@ -1130,6 +1144,7 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "designNavigationBar", "designTabSelectorOpened",
         "controlTouchScroll", "controlTouchOpenDrawer", "controlThreadCloseBack",
         "controlPostConfirm", "controlViewerSwipeClose", "controlPostDestinationConfirm",
+        COMPAT_THREAD_EDGE_SWIPE_BACK_KEY, COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY,
         "catalogPullToRefresh", "catalogFastScroll", "catalogThumbCrop", "catalogEco",
         "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", "catalogThreadOpenWithReload",
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
@@ -1165,3 +1180,26 @@ internal fun compatSettingsSavedValues(
         value?.let { put(entry.preferenceKey, it) }
     }
 }
+
+
+internal const val COMPAT_COOKIE_REACQUIRE_KEY = "cookieReacquire"
+internal const val COMPAT_COOKIE_REACQUIRE_TEXT =
+    "ふたばのCookie（posttime・cxylなど）を消し、次の通信で取り直します。書き込めない時などに使います。\n\n" +
+        "手入力したptmtは残します。\n※再取得すると、一定時間の書き込み制限がかかる場合があります"
+
+/**
+ * としあき(仮)の「クッキーの再取得」：ふたば（2chan.net とその下）のCookieを、手入力のptmtを除いて消す。
+ * 次の板・スレ・フォームの取得でサーバーから取り直す。他のサイトのCookieは消さない。返り値は消した数。
+ */
+internal suspend fun compatReacquireFutabaCookies(repository: CookieRepository): Int {
+    val targets = repository.listCookies().filter { cookie ->
+        val host = cookie.domain.trim().trimStart('.').lowercase()
+        (host == "2chan.net" || host.endsWith(".2chan.net")) && cookie.name != "ptmt"
+    }
+    repository.commitEvenOnFailure {
+        targets.forEach { repository.deleteCookie(it.domain, it.path, it.name) }
+    }
+    return targets.size
+}
+
+internal const val COMPAT_AIMOGE_CALENDAR_KEY = "aimogeEventCalendar"

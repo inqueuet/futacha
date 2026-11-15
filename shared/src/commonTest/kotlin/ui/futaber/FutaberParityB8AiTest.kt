@@ -44,6 +44,16 @@ class FutaberParityB8AiTest {
         FutachaAiCommand(action, parameters.toMap(), source)
     private fun post(id: String) = Post(id = id, author = null, subject = null, timestamp = "", messageHtml = "本文$id", imageUrl = null, thumbnailUrl = null)
 
+    @Test
+    fun mixRejectsCommandsBeforeTheyCanTouchTheHiddenBoard() {
+        val shown = context(board = may).copy(mixVisible = true)
+        for (action in listOf(FutachaAiAction.SearchCatalog, FutachaAiAction.ScrollCatalogToTop,
+            FutachaAiAction.RefreshCatalog, FutachaAiAction.OpenBoard)) {
+            val plan = assertIs<FutaberAiPlan.Fail>(futaberAiPlan(command(action), shown, enabled = true))
+            assertEquals(com.valoser.futacha.shared.mix.MIX_AI_REFUSED, plan.message)
+        }
+    }
+
     // ---- A06 / A07 ----
 
     @Test

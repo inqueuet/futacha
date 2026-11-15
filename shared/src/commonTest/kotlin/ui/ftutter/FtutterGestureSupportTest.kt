@@ -24,7 +24,7 @@ class FtutterGestureSupportTest {
         assertEquals(FtutterGestureAction.OPEN_DRAWER, FTUTTER_GESTURE_DEFAULTS["10"])
         assertEquals(FtutterGestureAction.REFRESH, FTUTTER_GESTURE_DEFAULTS["201"])
         assertEquals("←↑→", ftutterGestureArrows("201"))
-        assertEquals(19, FtutterGestureAction.entries.size)
+        assertEquals(19, FtutterGestureAction.entries.count { it.stored <= 18 }) // 原作の19操作（このアプリの追加は19番から）
     }
 
     @Test

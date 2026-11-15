@@ -31,10 +31,16 @@ class FtutterRefreshFailureInstrumentedTest {
     private val entry = ThreadHistoryEntry("100", board.id, "Failure thread", "", board.name, board.url, 1, 2)
     @Volatile private var failure: Throwable? = null
     @Volatile private var fetches = 0
+    @Volatile private var archive: ThreadPage? = null
+    @Volatile private var archiveAsks = 0
     private val notices = CopyOnWriteArrayList<String>()
     private val repo = object : BoardRepository by FakeBoardRepository() {
         override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
             fetches++; failure?.let { throw it }; return ThreadPageContent(page)
+        }
+        override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent {
+            archiveAsks++
+            return archive?.let { ThreadPageContent(it) } ?: throw NetworkException("no archive", statusCode = 404)
         }
     }
     private lateinit var loader: ImageLoader
@@ -143,5 +149,21 @@ class FtutterRefreshFailureInstrumentedTest {
         rule.onNodeWithText("再読み込み").assertIsDisplayed()
         rule.onAllNodesWithTag("ftutter-thread-fallen").assertCountEquals(0)
         rule.waitUntil(5_000) { notices.contains("スレッドは落ちています") }
+    }
+    /** User request 2026-11-12: like the other modes, a fallen thread fetches its archive by itself (the original needs the button). */
+    @Test fun aFallenThreadFetchesItsArchiveWithoutTheButton() {
+        failure = NetworkException("gone fixture", statusCode = 404)
+        archive = ThreadPage("100", null, null, null, listOf(post("100").copy(messageHtml = "archived-body-100")))
+        openNeverLoaded(emptyMap())
+        rule.waitUntil(15_000) { rule.onAllNodesWithText("archived-body-100").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(archiveAsks >= 1)
+        assertTrue("見つかった時は知らせない: $notices", notices.none { "見つかりません" in it })
+    }
+    @Test fun anAutomaticArchiveLookupThatFindsNothingStaysQuiet() {
+        failure = NetworkException("gone fixture", statusCode = 404)
+        openNeverLoaded(emptyMap())
+        rule.waitUntil(15_000) { archiveAsks >= 1 }
+        repeat(3) { rule.waitForIdle(); Thread.sleep(300) }
+        assertTrue("自動の時は知らせない: $notices", notices.isEmpty())
     }
 }

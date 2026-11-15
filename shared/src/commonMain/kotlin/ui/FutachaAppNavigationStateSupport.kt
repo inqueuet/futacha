@@ -7,6 +7,9 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
 import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
+import com.valoser.futacha.shared.mix.MixDefinition
+import com.valoser.futacha.shared.mix.ResolvedMix
+import com.valoser.futacha.shared.mix.resolveMixMembers
 
 internal data class FutachaThreadSelection(
     val boardId: String,
@@ -27,7 +30,9 @@ internal data class FutachaNavigationState(
     val selectedThreadReplies: Int? = null,
     val selectedThreadThumbnailUrl: String? = null,
     val selectedThreadUrl: String? = null,
-    val isSavedThreadsVisible: Boolean = false
+    val isSavedThreadsVisible: Boolean = false,
+    /** The MIX (まとめカタログ) being shown while no board is selected. */
+    val selectedMixId: String? = null
 ) {
     companion object {
         val Saver: Saver<FutachaNavigationState, Any> = listSaver(
@@ -40,7 +45,8 @@ internal data class FutachaNavigationState(
                     state.selectedThreadThumbnailUrl,
                     state.selectedThreadUrl,
                     state.isSavedThreadsVisible,
-                    state.selectedBoardName
+                    state.selectedBoardName,
+                    state.selectedMixId
                 )
             },
             restore = { restored ->
@@ -52,7 +58,8 @@ internal data class FutachaNavigationState(
                     selectedThreadThumbnailUrl = restored.getOrNull(4) as String?,
                     selectedThreadUrl = restored.getOrNull(5) as String?,
                     isSavedThreadsVisible = restored.getOrNull(6) as? Boolean ?: false,
-                    selectedBoardName = restored.getOrNull(7) as String?
+                    selectedBoardName = restored.getOrNull(7) as String?,
+                    selectedMixId = restored.getOrNull(8) as? String
                 )
             }
         )
@@ -97,6 +104,9 @@ internal sealed interface FutachaDestination {
     data class MissingBoard(val missingBoardId: String) : FutachaDestination
     data class Catalog(val board: BoardSummary) : FutachaDestination
     data class Thread(val board: BoardSummary, val threadId: String) : FutachaDestination
+    data class MixCatalog(val mix: ResolvedMix) : FutachaDestination
+    /** The MIX is still being read, or was not found: the id is kept while loading (C-M13). */
+    data class MissingMix(val mixId: String) : FutachaDestination
 }
 
 internal fun clearFutachaThreadSelection(
@@ -122,11 +132,25 @@ internal fun selectFutachaBoard(
         state = state.copy(
             selectedBoardId = boardId,
             selectedBoardName = null,
-            isSavedThreadsVisible = false
+            isSavedThreadsVisible = false,
+            selectedMixId = null
         ),
         clearBoardSelection = false
     )
 }
+
+internal fun selectFutachaMix(state: FutachaNavigationState, mixId: String) = FutachaNavigationState(selectedMixId = mixId)
+
+/** Keep the selection while loading; discard it once a missing definition is confirmed. */
+internal fun reconcileFutachaMixSelection(state: FutachaNavigationState,
+    definitions: List<MixDefinition>?,
+    mixEnabled: Boolean = com.valoser.futacha.shared.compat.MixAvailability.enabled): FutachaNavigationState {
+    val id = state.selectedMixId ?: return state
+    if (!mixEnabled) return state.copy(selectedMixId = null)
+    return if (definitions != null && definitions.none { it.id == id }) state.copy(selectedMixId = null) else state
+}
+
+internal fun exitFutachaMix(state: FutachaNavigationState) = state.copy(selectedMixId = null)
 
 internal fun applyFutachaThreadSelection(
     state: FutachaNavigationState,
@@ -227,9 +251,21 @@ internal fun buildSavedThreadFallbackBoard(
 
 internal fun resolveFutachaDestination(
     navigationState: FutachaNavigationState,
-    boards: List<BoardSummary>
+    boards: List<BoardSummary>,
+    /** Null while the definitions are being read. */
+    mixes: List<MixDefinition>? = emptyList(),
+    resolveMix: (MixDefinition, List<BoardSummary>) -> ResolvedMix = { def, all ->
+        resolveMixMembers(def, all, com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled, { com.valoser.futacha.shared.service.SiteRefreshPause.sitePausedNow() },
+            { url -> com.valoser.futacha.shared.service.SiteRefreshPause.boardPausedNow(com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(url) ?: url) })
+    }
 ): FutachaDestination {
     if (navigationState.selectedBoardId == null) {
+        if (!navigationState.isSavedThreadsVisible) navigationState.selectedMixId?.let { id ->
+            if (!com.valoser.futacha.shared.compat.MixAvailability.enabled) return FutachaDestination.BoardManagement
+            if (mixes == null) return FutachaDestination.MissingMix(id)
+            val mix = mixes.find { it.id == id } ?: return FutachaDestination.BoardManagement
+            return FutachaDestination.MixCatalog(resolveMix(mix, boards))
+        }
         return if (navigationState.isSavedThreadsVisible) {
             FutachaDestination.SavedThreads
         } else {

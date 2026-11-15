@@ -102,6 +102,41 @@ internal fun compatUpsShiftJisCommentBytes(comment: String): ByteArray =
 internal fun isCompatUpsUploadSizeAllowed(size: Int): Boolean = size in 1..COMPAT_UPS_MAX_BYTES
 
 /**
+ * あぷ小 picker read limit (review 2026-11-11).  The pickers used the platform default (8,192,000 bytes), so a
+ * phone photo over 8MB was refused while reading and the user saw only 「添付ファイルが読み込めません」 — on img
+ * replies あぷ小 is the only way to attach.  Read as much as the normal posting picker, then shrink.
+ */
+internal const val COMPAT_UPS_PICKER_MAX_BYTES: Long = COMPAT_POST_PICKER_MAX_BYTES
+
+private val COMPAT_UPS_SHRINKABLE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "bmp")
+
+/** Result of [prepareCompatUpsUpload]: the image to upload, and whether it was shrunk to fit 3000KB. */
+internal data class CompatUpsPrepared(val image: ImageData, val shrunk: Boolean)
+
+/**
+ * Picture over the あぷ小 limit: shrink it (the normal posting compression, which also drops location metadata)
+ * instead of refusing.  GIF, video and anything that still does not fit fail, and the caller shows its own
+ * mode's size message.
+ */
+internal suspend fun prepareCompatUpsUpload(picked: ImageData): Result<CompatUpsPrepared> {
+    if (isCompatUpsUploadSizeAllowed(picked.bytes.size)) return Result.success(CompatUpsPrepared(picked, shrunk = false))
+    val extension = picked.fileName.substringAfterLast('.', "").lowercase()
+    if (picked.bytes.isEmpty() || extension !in COMPAT_UPS_SHRINKABLE_EXTENSIONS) {
+        return Result.failure(IllegalArgumentException("too large"))
+    }
+    // compressCompatPostImage keeps cancellation; the size check is plain (no runCatching that would swallow it).
+    return compressCompatPostImage(picked, COMPAT_UPS_MAX_BYTES).fold(
+        onSuccess = { shrunk ->
+            if (isCompatUpsUploadSizeAllowed(shrunk.bytes.size)) Result.success(CompatUpsPrepared(shrunk, shrunk = true))
+            else Result.failure(IllegalArgumentException("still too large"))
+        },
+        onFailure = { error -> if (error is kotlin.coroutines.cancellation.CancellationException) throw error else Result.failure(error) }
+    )
+}
+
+internal const val COMPAT_UPS_SHRUNK_NOTICE = "あぷ小の3000KBに収まるよう画像を縮小しました"
+
+/**
  * Finds the generated filename from the same table row as the stable upload
  * token.  The token is in the comment column, after the filename column; a
  * plain substringAfter(token) scan therefore returned the next row's file

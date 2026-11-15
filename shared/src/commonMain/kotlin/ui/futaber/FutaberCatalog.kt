@@ -697,6 +697,7 @@ private fun FutaberCatalogList(
         LaunchedEffect(scrollToTopTick) {
             if (scrollToTopTick > view.scrollToTopHandled) { view.scrollToTopHandled = scrollToTopTick; state.scrollToItem(0) }
         }
+        com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, grid = state)
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = state,
@@ -713,6 +714,7 @@ private fun FutaberCatalogList(
         LaunchedEffect(scrollToTopTick) {
             if (scrollToTopTick > view.scrollToTopHandled) { view.scrollToTopHandled = scrollToTopTick; state.scrollToItem(0) }
         }
+        com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, list = state)
         LazyColumn(Modifier.fillMaxSize().then(rememberFutaberScrollIndicator(state)).testTag("futaber-catalog-list"), state = state) {
             items(items, key = { it.id }) { item ->
                 FutaberRowCell(item, style.titleLines, onOpenThread, onLongPress, badges[item.id], item.id in readIds, item.id == openingId)

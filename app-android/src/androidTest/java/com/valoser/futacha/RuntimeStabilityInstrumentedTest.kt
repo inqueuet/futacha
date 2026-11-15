@@ -56,6 +56,7 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import okio.Buffer
 import okio.FileSystem
 import okio.Source
@@ -198,9 +199,11 @@ class RuntimeStabilityInstrumentedTest {
     private fun checkScrollComposition(enabled: Boolean, readTotalInScrollbar: Boolean = false) {
         val compositions = AtomicInteger()
         lateinit var state: LazyListState
+        lateinit var scope: kotlinx.coroutines.CoroutineScope
         rule.setContent {
             MaterialTheme {
                 state = rememberLazyListState()
+                scope = androidx.compose.runtime.rememberCoroutineScope()
                 Box(Modifier.fillMaxSize()) {
                     SideEffect { compositions.incrementAndGet() }
                     LazyColumn(state = state, modifier = Modifier.testTag("list")) {
@@ -214,7 +217,9 @@ class RuntimeStabilityInstrumentedTest {
         rule.waitForIdle()
         val before = compositions.get()
         repeat(12) { index ->
-            runBlocking { state.scrollToItem(index + 1, 3) }
+            // Scroll on the UI thread: from the test thread it races the frame being drawn
+            // ("performMeasureAndLayout called during measure layout").
+            rule.runOnUiThread { scope.launch { state.scrollToItem(index + 1, 3) } }
             rule.waitForIdle()
         }
         assertEquals(12, state.firstVisibleItemIndex)

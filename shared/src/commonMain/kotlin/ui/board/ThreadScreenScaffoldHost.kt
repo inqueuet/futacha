@@ -70,10 +70,23 @@ internal fun ThreadScreenScaffoldHost(
         enabled = !bindings.isDrawerOpen() && !bindings.isSearchActive,
         onOpenDrawer = bindings.topBarCallbacks.onOpenHistory
     )
+    // Thread 01a1cd5d #47: a right swipe from the middle goes back to the catalog,
+    // as in ふたばー風. The left edge still opens the history. Default ON.
+    val swipeToCatalog = LocalFutachaSharedFeatures.current
+        ?.value("control", com.valoser.futacha.shared.ui.compat.FUTACHA_SWIPE_TO_CATALOG_PREFERENCE_KEY) != "OFF"
+    val swipeModifier = com.valoser.futacha.shared.ui.futaber.rememberFutaberSwipeModifier(
+        enabled = swipeToCatalog && !bindings.isDrawerOpen() && !bindings.isSearchActive
+    ) { swipe ->
+        when (swipe) {
+            com.valoser.futacha.shared.ui.futaber.FutaberSwipe.EdgeRight -> bindings.topBarCallbacks.onOpenHistory()
+            com.valoser.futacha.shared.ui.futaber.FutaberSwipe.Right -> bindings.topBarCallbacks.onBack()
+            com.valoser.futacha.shared.ui.futaber.FutaberSwipe.Left -> Unit
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = bindings.drawerState,
-            gesturesEnabled = !bindings.isSearchActive || bindings.isDrawerOpen(),
+            gesturesEnabled = if (swipeToCatalog) bindings.isDrawerOpen() else !bindings.isSearchActive || bindings.isDrawerOpen(),
             drawerContent = {
                 HistoryDrawerContent(
                     history = bindings.history,
@@ -96,7 +109,7 @@ internal fun ThreadScreenScaffoldHost(
             }
         ) {
             Scaffold(
-                modifier = bindings.modifier,
+                modifier = bindings.modifier.then(swipeModifier),
                 snackbarHost = { SnackbarHost(bindings.snackbarHostState) },
                 topBar = {
                     MaterialTheme(

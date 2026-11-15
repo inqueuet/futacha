@@ -528,6 +528,25 @@ internal fun validateCompatBoardInput(
     )
 }
 
+/** An あいもげ board URL in としあき(仮)'s 「新しい板の追加」: added (the name may be empty) or refused with the reason. */
+internal sealed interface CompatAimogeBoardInput {
+    data object SelectBoards : CompatAimogeBoardInput
+    data class Add(val url: String) : CompatAimogeBoardInput
+    data class Refused(val message: String) : CompatAimogeBoardInput
+}
+
+/** null for an address that is not あいもげ's (the Futaba checks decide). */
+internal fun compatAimogeBoardInput(rawUrl: String, existingBoards: List<CompatBoard>): CompatAimogeBoardInput? =
+    when (val input = com.valoser.futacha.shared.ui.aimoge.classifyAimogeBoardUrlInput(rawUrl.replace(" ", ""))) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.NotAimoge -> null
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards -> CompatAimogeBoardInput.SelectBoards
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Refused ->
+            CompatAimogeBoardInput.Refused(input.message)
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board ->
+            if (existingBoards.any { it.canonicalUrl == input.url }) CompatAimogeBoardInput.Refused("既に登録されています")
+            else CompatAimogeBoardInput.Add(input.url)
+    }
+
 @Composable
 internal fun CompatBoardEditDialog(
     title: String,
@@ -536,7 +555,9 @@ internal fun CompatBoardEditDialog(
     urlEditable: Boolean,
     existingBoards: List<CompatBoard>,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, canonicalUrl: String, originalUrl: String) -> Unit
+    onConfirm: (name: String, canonicalUrl: String, originalUrl: String) -> Unit,
+    onConfirmBoards: ((List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>) -> Unit)? = null,
+    loadAimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var url by remember(initialUrl, urlEditable) {
@@ -546,6 +567,12 @@ internal fun CompatBoardEditDialog(
         mutableStateOf(initialUrl)
     }
     var error by remember { mutableStateOf<String?>(null) }
+    val aimogeAdder = com.valoser.futacha.shared.ui.aimoge.rememberAimogeBoardUrlAdder(
+        onAdd = { boardName, boardUrl -> onConfirm(boardName, boardUrl, boardUrl) },
+        registeredUrls = existingBoards.map { it.canonicalUrl }.toSet(),
+        onAddBoards = onConfirmBoards,
+        loadBoards = loadAimogeBoards
+    )
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(355.dp),
@@ -573,7 +600,24 @@ internal fun CompatBoardEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            TextButton(enabled = !aimogeAdder.busy, onClick = {
+                if (urlEditable) {
+                    when (val aimoge = compatAimogeBoardInput(url, existingBoards)) {
+                        null -> Unit
+                        CompatAimogeBoardInput.SelectBoards -> {
+                            error = null
+                            aimogeAdder.selectBoards()
+                            return@TextButton
+                        }
+                        is CompatAimogeBoardInput.Refused -> { error = aimoge.message; return@TextButton }
+                        is CompatAimogeBoardInput.Add -> {
+                            error = null
+                            url = aimoge.url
+                            aimogeAdder.start(aimoge.url, name.replace(" ", "").replace("　", ""))
+                            return@TextButton
+                        }
+                    }
+                }
                 val validation = validateCompatBoardInput(
                     rawName = name,
                     rawUrl = url,
@@ -596,6 +640,16 @@ internal fun CompatBoardEditDialog(
                 }
             }) { Text(if (urlEditable) "追加する" else "更新する") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
+        dismissButton = {
+            androidx.compose.foundation.layout.Row {
+                if (urlEditable && com.valoser.futacha.shared.ui.InAppThreadLinks.normalized(url) != null) {
+                    TextButton(
+                        modifier = Modifier.testTag("compat-board-open-thread"),
+                        onClick = { com.valoser.futacha.shared.ui.InAppThreadLinks.open(url); onDismiss() }
+                    ) { Text("このスレを開く") }
+                }
+                TextButton(onClick = onDismiss) { Text("キャンセル") }
+            }
+        }
     ) }
 }

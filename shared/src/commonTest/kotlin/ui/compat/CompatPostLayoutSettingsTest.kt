@@ -24,4 +24,20 @@ class CompatPostLayoutSettingsTest {
         assertEquals("本文\n二行目", compatViewerInfoComment("本文<br>二行目"))
         assertEquals("", compatViewerInfoComment("  "))
     }
+
+    @Test fun theThreadTitleSizeIsAFontSettingFrom12To20() {
+        val entry = CompatSettingEntry("スレッドのタイトルの文字サイズ", "標準", preferenceKey = "threadTitleFontSize")
+        assertEquals(listOf("標準") + (12..20).map(Int::toString), compatPreferenceOptions("thread", entry))
+        assertEquals("16sp", compatPreferenceSummaryValue("threadTitleFontSize", "16"))
+        assertEquals("標準", compatPreferenceSummaryValue("threadTitleFontSize", "標準"))
+    }
+
+    @Test fun thePrivacyBlurIsChosenApartFromTheDarkness() {
+        assertEquals(0f, compatPrivacyBlurRadiusDp(0.2f, CompatPrivacyBlur.OFF))
+        assertEquals(12f, compatPrivacyBlurRadiusDp(1f, CompatPrivacyBlur.ON))
+        assertEquals(0f, compatPrivacyBlurRadiusDp(1f, CompatPrivacyBlur.FOLLOW))
+        assertEquals(14.4f, compatPrivacyBlurRadiusDp(0.2f, CompatPrivacyBlur.FOLLOW), 0.01f)
+        assertEquals(CompatPrivacyBlur.OFF, CompatPrivacyBlur.of("入れない"))
+        assertEquals(CompatPrivacyBlur.FOLLOW, CompatPrivacyBlur.of(null))
+    }
 }

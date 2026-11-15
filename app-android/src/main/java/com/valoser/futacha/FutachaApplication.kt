@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import com.valoser.futacha.shared.network.aimoge.createAimogeHttpClient
+import com.valoser.futacha.shared.repo.withAimogeRouting
 import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
 import android.app.Application
 import android.app.ActivityManager
@@ -221,6 +223,17 @@ class FutachaApplication : Application() {
         com.valoser.futacha.shared.compat.ExperienceProfileAvailability.previewModesEnabled =
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         com.valoser.futacha.shared.compat.ExperienceProfileAvailability.mobileModesEnabled = true
+        // あいもげ boards are offered on every Android build. User decisions (2026-11-11): attachments, new threads, del,
+        // polls and reports are offered on the release build too.
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+    com.valoser.futacha.shared.compat.MixAvailability.enabled = true
+        com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedPostingEnabled = true
+        com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedDelEnabled = true
+        // あいもげ approval (AM-B8): secrets in the Keystore-encrypted file; the waiting approval survives a stopped process.
+        com.valoser.futacha.shared.network.aimoge.installAndroidAimogeAuth(
+            applicationContext,
+            runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
+        )
         initializeAndroidPersistentLogging(applicationContext)
         initializeAndroidThreadSavePlatformProtection(this)
         initializeCompatPostPlatformContext(applicationContext)
@@ -236,6 +249,9 @@ class FutachaApplication : Application() {
         // it before the first Compose frame makes every startup read pay the
         // debug-policy bookkeeping cost.  Install the same diagnostics after
         // the startup window so it cannot turn a cold start into a frame stall.
+        applicationScope.launch {
+            runCatching { com.valoser.futacha.shared.network.aimoge.AimogeAuthRegistry.auth?.discardExpired() }
+        }
         applicationScope.launch {
             delay(STARTUP_STRICT_MODE_DELAY_MILLIS)
             withContext(Dispatchers.Main.immediate) {
@@ -480,7 +496,7 @@ class FutachaApplication : Application() {
                         com.valoser.futacha.shared.util.detectDevicePerformanceProfile(applicationContext).isLowSpec
                 )
                 client.bindOriginalMediaSource(images.originalMediaSession)
-                val repository = DefaultBoardRepository(
+                val repository = withAimogeRouting(DefaultBoardRepository(
                     api = HttpBoardApi(client),
                     parser = createHtmlParser(),
                     cookieRepository = cookieRepository,
@@ -510,7 +526,10 @@ class FutachaApplication : Application() {
                             modernSettings
                         }
                     }
-                )
+                )) {
+                    // あいもげ gets its own client without cookies or redirects, made on its first request (AM-B4).
+                    createAimogeHttpClient(runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty())
+                }
                 val history = HistoryRefresher(
                     stateStore = appStateStore,
                     repository = repository,

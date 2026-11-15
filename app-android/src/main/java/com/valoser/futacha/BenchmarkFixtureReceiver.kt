@@ -38,7 +38,10 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
                 }
                 val app = context.applicationContext as FutachaApplication
                 runBlocking(Dispatchers.IO) {
-                    app.appStateStore.setBoards(listOf(TUTORIAL_BOARD))
+                    app.appStateStore.setBoards(
+                        if (intent.getBooleanExtra(EXTRA_WITH_MIX_BOARDS, false)) listOf(TUTORIAL_BOARD) + MIX_BOARDS
+                        else listOf(TUTORIAL_BOARD)
+                    )
                     app.modeSwitchCoordinator.switchTo(
                         target = targetProfile,
                         preferredFutachaIcon = AppIconVariant.Current
@@ -81,6 +84,7 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
         const val ACTION_SEED_BENCHMARK_FIXTURE =
             "com.valoser.futacha.action.SEED_BENCHMARK_FIXTURE"
         const val EXTRA_PROFILE = "profile"
+        const val EXTRA_WITH_MIX_BOARDS = "withMixBoards"
         const val EXTRA_RESTORE_LAUNCHER_DEFAULTS = "restoreLauncherDefaults"
 
         val LAUNCHER_ALIASES = listOf(
@@ -97,6 +101,12 @@ class BenchmarkFixtureReceiver : BroadcastReceiver() {
             url = "https://www.example.com/t/futaba.php",
             description = "チュートリアル",
             pinned = false
+        )
+
+        /** Two real boards so the まとめカタログ entry is offered; only read, never written. */
+        val MIX_BOARDS = listOf(
+            BoardSummary("bench-may", "may", "", "https://may.2chan.net/b/", ""),
+            BoardSummary("bench-img", "img", "", "https://img.2chan.net/b/", "")
         )
 
         val TUTORIAL_COMPAT_BOARD = CompatBoard(

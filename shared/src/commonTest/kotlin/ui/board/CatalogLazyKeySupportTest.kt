@@ -95,3 +95,13 @@ class CatalogLazyKeySupportTest {
         replyCount = id.toIntOrNull() ?: 0
     )
 }
+
+class CatalogLazyKeyMixTest {
+    @Test fun sameNumberOnTwoBoardsGivesTwoKeysAndOneBoardIsUnchanged() {
+        val a = CatalogItem("1", "https://may.2chan.net/b/res/1.htm", "t", null, null, replyCount = 1)
+        val b = a.copy(threadUrl = "https://img.2chan.net/b/res/1.htm")
+        val keys = buildCatalogItemLazyKeys("mix", listOf(a, b), boardIdentityAt = { if (it == 0) "may" else "img" })
+        assertNotEquals(keys[0], keys[1])
+        assertEquals(buildCatalogItemLazyKeys("may", listOf(a)), buildCatalogItemLazyKeys("may", listOf(a), null))
+    }
+}

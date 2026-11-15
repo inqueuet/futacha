@@ -7,6 +7,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.compositeOver
 import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
 import com.valoser.futacha.shared.ui.image.PromptAiBadge
 import com.valoser.futacha.shared.ui.image.InlinePrompt
@@ -501,6 +503,8 @@ internal fun CompatCatalogGridItem(
     showReplyCount: Boolean,
     privacyAlpha: Float = 1f,
     matchedWatchWords: List<String> = emptyList(),
+    /** may 1447457420: the thread of the tab open now is tinted so it can be found again in the catalog. */
+    isOpen: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -570,6 +574,8 @@ internal fun CompatCatalogGridItem(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("compat-catalog-item-${item.id}")
+            .then(if (isOpen) Modifier.drawWithContent { drawContent(); drawRect(COMPAT_CATALOG_OPEN_THREAD_TINT) } else Modifier)
+            .compatCatalogOpenMark(isOpen)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             // The legacy GridView starts the image at the card edge and leaves
             // a 5dp (about 13px on the reference device) top spacer.  A 1dp
@@ -701,6 +707,8 @@ internal fun CompatCatalogListItem(
     thumbnailSize: Dp,
     privacyAlpha: Float = 1f,
     matchedWatchWords: List<String> = emptyList(),
+    /** may 1447457420: the thread of the tab open now is tinted so it can be found again in the catalog. */
+    isOpen: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -765,7 +773,8 @@ internal fun CompatCatalogListItem(
     Row(
         modifier = Modifier.fillMaxWidth().height(rowHeight)
             .testTag("compat-catalog-item-${item.id}")
-            .background(if (matchedWatchWords.isNotEmpty()) palette.searchResultBackground else palette.background)
+            .background(if (isOpen) COMPAT_CATALOG_OPEN_THREAD_TINT.compositeOver(palette.background) else if (matchedWatchWords.isNotEmpty()) palette.searchResultBackground else palette.background)
+            .compatCatalogOpenMark(isOpen)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -887,12 +896,53 @@ private fun rememberCompatCatalogHighQualityPainter(
     )
 }
 
+internal val COMPAT_NEW_REPLIES_BADGE_COLOR = Color(0xFF9C2020)
+
 @Composable
 internal fun CompatNewRepliesBadge(count: Int, label: Boolean = false) {
     if (count <= 0) return
     Text(if (label) "新着 $count" else "+$count",
         color = Color.White, fontSize = 12.sp, maxLines = 1,
-        modifier = Modifier.background(Color(0xFF9C2020), androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+        modifier = Modifier.background(COMPAT_NEW_REPLIES_BADGE_COLOR, androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
             .padding(horizontal = 3.dp, vertical = 1.dp)
             .semantics { contentDescription = "新着レス${count}件" })
+}
+
+/** A light blue over the cell; the text keeps its colour on it in both light and black themes. */
+internal val COMPAT_CATALOG_OPEN_THREAD_TINT = androidx.compose.ui.graphics.Color(0x403C8CFF)
+
+/** The thread number of the open tab when it belongs to [boardKey]; null otherwise. */
+internal fun compatCatalogOpenThreadNo(tabs: List<CompatTab>, activeTabKey: String?, boardKey: String): String? =
+    tabs.firstOrNull { it.key == activeTabKey }?.takeIf { it.boardKey == boardKey }?.threadNo
+
+private fun Modifier.compatCatalogOpenMark(isOpen: Boolean): Modifier =
+    if (isOpen) semantics { stateDescription = COMPAT_CATALOG_OPEN_THREAD_STATE } else this
+
+internal const val COMPAT_CATALOG_OPEN_THREAD_STATE = "開いているスレ"
+
+/**
+ * The state a thread is known to be in: the tab's own flags first (from the thread page), then what the catalog
+ * found when the thread left it. Null for a thread with nothing known.
+ */
+internal fun compatThreadCatalogStatus(tab: CompatTab, dropped: List<CompatDroppedCatalogItem>): CompatCatalogDroppedClass? =
+    when {
+        tab.isIsolated -> CompatCatalogDroppedClass.ISOLATED
+        tab.isDeleted || tab.isExploded -> CompatCatalogDroppedClass.DELETED
+        tab.isDead -> CompatCatalogDroppedClass.DIE
+        else -> dropped.firstOrNull { it.item.id == tab.threadNo }?.classification
+    }
+
+/** A 4dp band in the catalog's colour for the state, with its word at the right so the colour is not the only sign. */
+@Composable
+internal fun CompatThreadStatusBand(status: CompatCatalogDroppedClass, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().testTag("compat-thread-status-band")) {
+        Box(Modifier.fillMaxWidth().height(4.dp).background(status.compatCatalogDroppedColor))
+        Text(
+            status.compatCatalogDroppedLabel,
+            color = Color.White, fontSize = 10.sp, lineHeight = 12.sp,
+            modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp)
+                .background(status.compatCatalogDroppedColor, androidx.compose.foundation.shape.RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp))
+                .padding(horizontal = 4.dp)
+        )
+    }
 }

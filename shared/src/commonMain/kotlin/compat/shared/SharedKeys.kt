@@ -71,7 +71,7 @@ object SharedKeys {
     const val FUTABER_TAB_SEPARATOR: Char = '\n'
 
     fun board(board: BoardSummary): SharedBoardKeys {
-        val canonical = canonicalizeBoardUrl(board.url)
+        val canonical = com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url)
         val compatKey = canonical?.let(::compatBoardKey)
         return SharedBoardKeys(
             boardId = board.id,
@@ -86,7 +86,7 @@ object SharedKeys {
     fun thread(board: BoardSummary, threadId: String): SharedThreadKeys {
         val boardKeys = board(board)
         val threadUrl = runCatching { BoardUrlResolver.resolveThreadUrl(board.url, threadId) }.getOrDefault(board.url)
-        val canonicalThreadUrl = boardKeys.canonicalBoardUrl?.let { "${it}res/$threadId.htm" }
+        val canonicalThreadUrl = boardKeys.canonicalBoardUrl?.let { com.valoser.futacha.shared.compat.siteThreadUrlOnBoard(it, threadId) }
         return SharedThreadKeys(
             board = boardKeys,
             threadId = threadId,
@@ -156,7 +156,7 @@ object SharedKeys {
      * matched by its canonical address; another one by ふたったー風's `host/path/` form.
      */
     fun threadOfUrl(url: String, boards: List<BoardSummary>): SharedThreadKeys? {
-        val canonical = canonicalizeThreadUrl(url)
+        val canonical = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(url)
         if (canonical != null) {
             val board = boards.firstOrNull { board(it).canonicalBoardUrl == canonical.canonicalBoardUrl } ?: return null
             return thread(board, canonical.threadNo)
@@ -169,7 +169,7 @@ object SharedKeys {
     }
 
     /** The canonical thread address of [url] (any of the modes' forms), or null when it is not an official board's thread. */
-    fun canonicalThreadUrlOf(url: String): String? = canonicalizeThreadUrl(url)?.canonicalUrl
+    fun canonicalThreadUrlOf(url: String): String? = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(url)?.canonicalUrl
 
     // ---- The forms themselves ----
 

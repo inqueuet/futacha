@@ -28,7 +28,7 @@ internal data class FutachaUnregisteredBoardRequest(
 /** Only official Futaba boards (thread URL or board URL) can be added; tutorial / unofficial URLs give null. */
 internal fun resolveFutachaAddableBoardUrl(entry: ThreadHistoryEntry): String? {
     val raw = entry.boardUrl.trim().takeIf(String::isNotEmpty) ?: return null
-    return canonicalizeThreadUrl(raw)?.canonicalBoardUrl ?: canonicalizeBoardUrl(raw)
+    return com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(raw)?.canonicalBoardUrl ?: com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(raw)
 }
 
 /** Board name for the added board: the name kept in the history, else `host/path` of the URL. */

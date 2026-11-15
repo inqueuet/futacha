@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.compat.siteArchivedThreadContent
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrl
 import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
@@ -51,6 +52,10 @@ internal suspend fun performThreadArchiveFallback(
     onSearchFailure: (String) -> Unit = {},
     onSuccessLog: (String) -> Unit = {}
 ): ArchiveFallbackOutcome {
+    // The site's own archive first (あいもげ `snapshot.json`); Futaba repositories answer null and nothing changes.
+    siteArchivedThreadContent(repository, boardUrl, threadId)?.let { content ->
+        return ArchiveFallbackOutcome.Success(content.page, threadUrl = null, embeddedHtml = content.embeddedHtml)
+    }
     if (httpClient == null) return ArchiveFallbackOutcome.NoMatch
     val plan = buildThreadArchiveFallbackPlan(
         threadId = threadId,

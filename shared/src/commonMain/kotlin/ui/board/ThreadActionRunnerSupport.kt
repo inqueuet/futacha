@@ -111,6 +111,7 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
     failurePrefix: String,
     analyticsContext: Map<String, String> = emptyMap(),
     callbacks: ThreadActionRuntimeCallbacks<T>,
+    successMessageOf: (T) -> String = { successMessage },
     block: suspend () -> ThreadActionRunResult<T>
 ): ThreadActionLaunchResult {
     val launchState = resolveThreadActionLaunchState(
@@ -178,7 +179,7 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
                     )
                     callbacks.onInfoLog(buildThreadActionSuccessLogMessage(successMessage))
                     callbacks.onSuccess(result.value)
-                    callbacks.onShowMessage(successMessage)
+                    callbacks.onShowMessage(successMessageOf(result.value))
                 }
                 is ThreadActionRunResult.Failure -> {
                     AnalyticsTracker.event(

@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
 import com.valoser.futacha.shared.compat.COMPAT_THREAD_CACHE_PREFERENCE_KEY
 import com.valoser.futacha.shared.model.SaveLocation
 import androidx.compose.ui.Modifier
@@ -129,9 +132,35 @@ internal fun compatPrivacyOverlayAlpha(enabled: Boolean, transparency: Float): F
 @androidx.compose.runtime.Composable
 internal fun Modifier.compatPrivacyImageEffect(contentAlpha: Float): Modifier {
     val alpha = com.valoser.futacha.shared.ui.privacy.privacyImageContentAlpha(contentAlpha).coerceIn(0f, 1f)
-    if (alpha >= 0.999f) return this
-    val blurRadius = ((1f - alpha) * 18f).coerceIn(2f, 18f)
-    return blur(blurRadius.dp).graphicsLayer { this.alpha = alpha }
+    val radius = compatPrivacyBlurRadiusDp(alpha, CompatPrivacyBlurState.mode)
+    if (alpha >= 0.999f && radius == 0f) return this
+    val blurred = if (radius > 0f) blur(radius.dp) else this
+    return if (alpha >= 0.999f) blurred else blurred.graphicsLayer { this.alpha = alpha }
+}
+
+/** 設定「プライバシーのぼかし」（スレッド設定の画面表示）。暗さとぼかしを別々に選べる。 */
+internal const val COMPAT_PRIVACY_BLUR_KEY = "commonPrivacyBlur"
+
+/** 操作設定のふたちゃ拡張（既定OFF）。 */
+internal const val COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY = "controlViewerDoubleTapZoom"
+internal const val COMPAT_THREAD_EDGE_SWIPE_BACK_KEY = "controlThreadEdgeSwipeBack"
+
+internal enum class CompatPrivacyBlur(val label: String) {
+    FOLLOW("暗さに合わせる"), OFF("入れない"), ON("入れる");
+    companion object {
+        fun of(value: String?): CompatPrivacyBlur = entries.firstOrNull { it.label == value || it.name == value } ?: FOLLOW
+    }
+}
+
+internal object CompatPrivacyBlurState {
+    var mode by androidx.compose.runtime.mutableStateOf(CompatPrivacyBlur.FOLLOW)
+}
+
+/** 0 = ぼかさない。FOLLOW は今までどおり暗い分だけ（暗くしない時はぼかさない）。 */
+internal fun compatPrivacyBlurRadiusDp(alpha: Float, mode: CompatPrivacyBlur): Float = when (mode) {
+    CompatPrivacyBlur.OFF -> 0f
+    CompatPrivacyBlur.ON -> 12f
+    CompatPrivacyBlur.FOLLOW -> if (alpha >= 0.999f) 0f else ((1f - alpha) * 18f).coerceIn(2f, 18f)
 }
 
 internal fun parseCompatSaveLocation(value: String?): SaveLocation? {

@@ -677,7 +677,9 @@ internal fun CompatTabSelector(
     onCheckUpdates: () -> Unit = {},
     onReload: () -> Unit = {},
     longTapAction: String = "選択メニュー",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** プライバシーモードの画像の見え方（カタログ・スレッドの画像と同じ）。1 = そのまま。 */
+    privacyAlpha: Float = 1f
 ) {
     // State can briefly contain a tab restored by Undo while a concurrent
     // history/catalog open is being committed. LazyRow keys must still be
@@ -821,7 +823,7 @@ internal fun CompatTabSelector(
                     .clickable(enabled = !closing) { onSelect(tab) }
                     .testTag("compat-selector-tab-${tab.key}")
             ) {
-                CompatTabSelectorCell(tab, tab.key == currentTabKey, threadContext)
+                CompatTabSelectorCell(tab, tab.key == currentTabKey, threadContext, privacyAlpha)
             }
         }
     }
@@ -862,7 +864,7 @@ internal fun CompatTabSelector(
                         IntOffset(previewOffset.x, previewOffset.y)
                     }.size(60.dp, 40.dp).testTag("compat-selector-drag-preview")
                 ) {
-                    CompatTabSelectorCell(drag.tab, drag.tab.key == currentTabKey, threadContext)
+                    CompatTabSelectorCell(drag.tab, drag.tab.key == currentTabKey, threadContext, privacyAlpha)
                 }
             }
         } }
@@ -895,7 +897,7 @@ private val CompatAccelerateDecelerateEasing = Easing { fraction ->
 }
 
 @Composable
-private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext: Boolean) {
+private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext: Boolean, privacyAlpha: Float = 1f) {
     val palette = LocalCompatibilityPalette.current
     val status = com.valoser.futacha.shared.ui.board.threadStatusText(
         com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded))
@@ -908,7 +910,9 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.align(Alignment.Center).width(58.dp).height(40.dp)
+                .compatPrivacyImageEffect(privacyAlpha)
                 .graphicsLayer { alpha = if (tab.isDead) 0.5f else 1f }
+                .testTag("compat-tab-image-${tab.key}")
         )
         Box(
             Modifier.fillMaxWidth().height(16.dp).align(Alignment.BottomCenter)
@@ -941,13 +945,10 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
                 .testTag("compat-tab-status-${tab.key}")
         )
         if (tab.unreadCount > 0) {
-            Text(
-                "+${tab.unreadCount}",
-                color = Color.Red,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.TopEnd).padding(horizontal = 2.dp)
-            )
+            // may 1447461140: red text straight on the picture was hard to read; the catalog's white-on-red badge is used.
+            Box(Modifier.align(Alignment.TopEnd).padding(1.dp).testTag("compat-tab-unread-${tab.key}")) {
+                CompatNewRepliesBadge(tab.unreadCount)
+            }
         }
     }
 }

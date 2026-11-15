@@ -171,8 +171,39 @@ class HandwritingModesInstrumentedTest {
         ftutterPost(handwriting = false)
         rule.onNodeWithTag("ftutter-post-menu").performClick()
         rule.onNodeWithTag("ftutter-post-handwriting").assertDoesNotExist()
-        // 拡張がOFFなら「その他の機能」も出ない。
-        rule.onNodeWithTag("ftutter-post-menu-more").assertDoesNotExist()
+        // 「その他の機能」には画像の貼り付けがいつもある（may 1447450917）。手書きは拡張がOFFなら無い。
+        rule.onNodeWithTag("ftutter-post-menu-more").performClick()
+        rule.onNodeWithTag("ftutter-post-paste-image").assertExists()
+        rule.onNodeWithTag("ftutter-post-handwriting").assertDoesNotExist()
+    }
+
+    /** may 1447450917: ふたったー風でもコピーした画像を添付できる。 */
+    @Test fun ftutterPastesACopiedPictureAsTheAttachment() {
+        val app = rule.activity.applicationContext
+        val clipboard = app.getSystemService(android.content.ClipboardManager::class.java)
+        var oldClip: android.content.ClipData? = null
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync { oldClip = clipboard.primaryClip }
+        val file = File(app.cacheDir, "compat_post_preview/ftutter-paste.png")
+        try {
+            file.parentFile!!.mkdirs()
+            val bitmap = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(android.graphics.Color.BLUE)
+            file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            val uri = androidx.core.content.FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                clipboard.setPrimaryClip(android.content.ClipData.newUri(app.contentResolver, "test image", uri))
+            }
+            ftutterPost(handwriting = false)
+            rule.onNodeWithTag("ftutter-post-menu").performClick()
+            rule.onNodeWithTag("ftutter-post-menu-more").performClick()
+            rule.onNodeWithTag("ftutter-post-paste-image").performClick()
+            rule.waitUntil(10_000) { rule.onAllNodesWithText(".png", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        } finally {
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                oldClip?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip()
+            }
+            file.delete()
+        }
     }
 
     @Test fun ftutterDrawingCanBeAttachedToAnImgReplyAndSentThroughTheExistingPath() {

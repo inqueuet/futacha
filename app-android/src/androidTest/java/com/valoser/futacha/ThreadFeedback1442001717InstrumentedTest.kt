@@ -154,6 +154,45 @@ class ThreadFeedback1442001717InstrumentedTest {
         File(out, "composition-observations.txt").writeText(rows.joinToString("\n"))
     }
 
+    /** 1447428313: only the clause being converted stands out, from the IME's spans or its selected range. */
+    @Test fun onlyTheClauseBeingConvertedIsHighlighted() {
+        rule.setContent { CompatibilityProfileTheme("black") {
+            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+                CompatPostScreen(tab = tab, board = board, repository = null, store = store,
+                    preferences = emptyMap(), appVersion = "13.0", fileSystem = null, onToolbarEdit = {}, onBack = {})
+            }
+        } }
+        val field = rule.onNodeWithTag("compat-post-comment-field")
+        field.performClick(); rule.waitForIdle()
+        val imeClause = android.graphics.Color.rgb(0x22, 0x88, 0x44)
+        rule.runOnUiThread {
+            val view = requireNotNull(rule.activity.currentFocus)
+            val connection = requireNotNull(view.onCreateInputConnection(EditorInfo()))
+            val text = android.text.SpannableString("あいうえお")
+            text.setSpan(android.text.style.BackgroundColorSpan(imeClause), 0, 2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            assertTrue(connection.setComposingText(text, 1))
+        }
+        rule.waitUntil(5_000) { field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text == "あいうえお" }
+        rule.waitUntil(5_000) {
+            layout("compat-post-comment-field").layoutInput.text.spanStyles.any {
+                it.item.background == Color(imeClause) && it.start == 0 && it.end == 2
+            }
+        }
+        capture("composition-ime-clause")
+        // The IME names the clause by its selection (iOS selectedRange takes this path too).
+        rule.runOnUiThread {
+            val connection = requireNotNull(rule.activity.currentFocus!!.onCreateInputConnection(EditorInfo()))
+            assertTrue(connection.setComposingText("あいうえお", 1))
+            assertTrue(connection.setSelection(2, 5))
+        }
+        rule.waitUntil(5_000) {
+            val styles = layout("compat-post-comment-field").layoutInput.text.spanStyles
+            styles.any { it.start == 2 && it.end == 5 && it.item.background != Color.Unspecified } &&
+                styles.none { it.start == 0 && it.end == 5 && it.item.background != Color.Unspecified }
+        }
+        capture("composition-selected-clause")
+    }
+
     @Test fun imageOnlyPrivacyLeavesTextReadableAndCompatTitleCanShrink() {
         val appState = AppStateStore(BaseInMemoryPlatformStateStorage())
         try {

@@ -413,7 +413,7 @@ class HistoryRefreshWorker(
             threadId = history.threadNo.take(WATCH_ALERT_THREAD_ID_MAX_CHARS),
             boardId = history.boardKey.take(WATCH_ALERT_BOARD_ID_MAX_CHARS),
             boardName = history.boardName.take(WATCH_ALERT_BOARD_NAME_MAX_CHARS),
-            boardUrl = history.originalUrl.substringBefore("/res/").take(WATCH_ALERT_URL_MAX_CHARS),
+            boardUrl = com.valoser.futacha.shared.compat.watchMatchBoardUrlOf(history.originalUrl).take(WATCH_ALERT_URL_MAX_CHARS),
             title = history.title.take(WATCH_ALERT_TITLE_MAX_CHARS),
             titleImageUrl = history.thumbnailUrl.orEmpty().take(WATCH_ALERT_URL_MAX_CHARS),
             replyCount = history.replyCount,

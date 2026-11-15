@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -171,11 +172,22 @@ internal fun ThreadTopBar(
                                 unfocusedTextColor = chromeColors.onBar
                             ),
                             trailingIcon = {
-                                IconButton(onClick = {
-                                    AnalyticsTracker.uiControl("thread_search", "スレッド内検索を閉じる")
-                                    onSearchClose()
-                                }) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "検索を閉じる")
+                                IconButton(
+                                    onClick = {
+                                        if (searchInputState.value.text.isNotEmpty()) {
+                                            AnalyticsTracker.uiControl("thread_search_clear", "スレッド内検索語をクリア")
+                                            searchInputState.onValueChange(TextFieldValue(""))
+                                        } else {
+                                            AnalyticsTracker.uiControl("thread_search", "スレッド内検索を閉じる")
+                                            onSearchClose()
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("thread-search-clear-or-close")
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Close,
+                                        contentDescription = if (searchInputState.value.text.isNotEmpty()) "入力を消去" else "検索を閉じる"
+                                    )
                                 }
                             }
                         )

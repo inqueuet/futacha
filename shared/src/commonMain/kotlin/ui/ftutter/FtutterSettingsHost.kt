@@ -134,7 +134,10 @@ internal fun FtutterSettingsHost(
                 item { FtutterNavRow("ネットワーク", "ftutter-shared-network") { sharedPath = "network" } }
                 item { FtutterNavRow("画像検索", "ftutter-shared-image-search") { sharedPath = "image_search" } }
                 item { FtutterNavRow("プライバシー表示", "ftutter-shared-privacy") { sharedPath = "privacy" } }
+                // 4モードどこからでも切り替えられるように（プロンプト・AIラベル、画像編集、動画編集。値は全モード共通）。
+                item { FtutterNavRow("メディア機能", "ftutter-shared-media", detail = "プロンプト・AIラベル、画像編集、動画編集") { sharedPath = "media" } }
                 if (services.cookieRepository != null) item { FtutterNavRow("Cookie管理", "ftutter-shared-cookies") { sharedPath = "cookies" } }
+                if (com.valoser.futacha.shared.ui.aimoge.aimogeSettingsVisible()) item { FtutterNavRow("あいもげ", "ftutter-shared-aimoge") { sharedPath = "aimoge" } }
                 ftutterSection("情報")
                 item { FtutterNavRow("ヘルプ", "ftutter-shared-help") { sharedPath = "help" } }
                 item { FtutterNavRow("更新情報", "ftutter-shared-changelog") { sharedPath = "changelog" } }
@@ -248,6 +251,7 @@ private fun FtutterSharedSettingsHost(
                     "license" -> CompatLicenseScreen(onBack = back)
                     "cookies" -> services.cookieRepository?.let { CookieManagementScreen(onBack = back, repository = it) }
                         ?: CompatHelpScreen(appVersion = appVersion, onBack = back)
+                    "aimoge" -> com.valoser.futacha.shared.ui.aimoge.AimogeSettingsDialog(services.store, onDismiss = back)
                     else -> CompatSettingsScreen(
                         path = path,
                         store = services.store,

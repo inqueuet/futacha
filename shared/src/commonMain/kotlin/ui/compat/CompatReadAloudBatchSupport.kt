@@ -37,6 +37,9 @@ private val compatReadAloudIgnoredPrefixes = listOf(
  * after speaking every one (cursor == [postCount]): it must keep waiting there. Without it a
  * completed cursor restarts from the first reply on the next invocation.
  */
+/** The cursor after the user's 「停止」: none, so the next start reads from the reply on screen. */
+internal fun compatReadAloudCursorAfterStop(): Int = -1
+
 internal fun resolveCompatReadAloudStartIndex(
     requestedIndex: Int,
     postCount: Int,
@@ -100,7 +103,7 @@ internal fun buildCompatReadAloudBatch(
 }
 
 internal fun compatReadAloudText(post: CompatPostSnapshot): String =
-    post.messageHtml.toCompatPlainText()
+    com.valoser.futacha.shared.ui.board.aimogeHtmlForSpeech(post.messageHtml).toCompatPlainText()
         .lineSequence()
         .map(String::trim)
         .filter { line ->

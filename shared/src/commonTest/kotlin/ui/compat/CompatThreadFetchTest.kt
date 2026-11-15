@@ -68,6 +68,22 @@ class CompatThreadFetchTest {
     }
 
     @Test
+    fun aStaleCacheCopyBehindTheCatalogCountUsesTheLiveBoard() = runBlocking {
+        fun post(n: Int) = com.valoser.futacha.shared.model.Post(id = "$n", author = null, subject = null,
+            timestamp = "", messageHtml = "", imageUrl = null, thumbnailUrl = null)
+        val stale = page.copy(posts = (1..3).map(::post))
+        val live = page.copy(posts = (1..6).map(::post))
+        val requests = mutableListOf<String>()
+        val result = loadCompatThreadWithFallback(source, true, cache, expectedReplyCount = 5) { url ->
+            requests += url
+            if (url.startsWith(cache)) stale else live
+        }
+        assertEquals(CompatThreadFetchSource.PRIMARY, result.getOrThrow().source)
+        assertEquals(6, result.getOrThrow().page.posts.size)
+        assertEquals(listOf("https://cache.example/b/res/123.htm", source), requests)
+    }
+
+    @Test
     fun onlyConfirmedLiveResponsesClearAnExistingDeadState() {
         listOf(CompatThreadFetchSource.CACHE, CompatThreadFetchSource.MERGED, CompatThreadFetchSource.ARCHIVE)
             .forEach { source ->

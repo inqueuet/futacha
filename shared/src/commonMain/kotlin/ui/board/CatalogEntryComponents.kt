@@ -51,7 +51,10 @@ internal fun CatalogCard(
     resolveHeadMetadata: Boolean,
     matchedWatchWords: List<String>,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** MIX only: the short board name and age, and the count shown instead of the reply count (そうだねN). */
+    cellLabel: String? = null,
+    countOverride: String? = null
 ) {
     val features = LocalFutachaSharedFeatures.current
     val titleLength = features?.intValue("catalog", "catalogGridViewTitleLength", 0..30)
@@ -115,7 +118,7 @@ internal fun CatalogCard(
                 LocalFutachaCatalogReplyIndicators.current[item.threadUrl]?.let {
                     CatalogNewRepliesBadge(it.count, compact = true, modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp))
                 }
-                if (countOnImage) CatalogReplyCountBadge(
+                if (countOnImage && countOverride == null) CatalogReplyCountBadge(
                     replyCount = item.replyCount,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -127,7 +130,9 @@ internal fun CatalogCard(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 4.dp)
             ) {
-                if (!countOnImage) Text("${item.replyCount}レス", style = MaterialTheme.typography.labelSmall)
+                if (cellLabel != null) Text(cellLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (countOverride != null) Text(countOverride, style = MaterialTheme.typography.labelSmall)
+                else if (!countOnImage) Text("${item.replyCount}レス", style = MaterialTheme.typography.labelSmall)
                 Text(
                     text = titleLength?.let(displayTitle::take) ?: displayTitle,
                     style = titleSize?.let { MaterialTheme.typography.bodySmall.copy(fontSize = it.sp) } ?: MaterialTheme.typography.bodySmall,
@@ -161,7 +166,10 @@ internal fun CatalogListItem(
     resolveHeadMetadata: Boolean,
     matchedWatchWords: List<String>,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** MIX only: the short board name and age, and the count shown instead of the reply count (そうだねN). */
+    cellLabel: String? = null,
+    countOverride: String? = null
 ) {
     val features = LocalFutachaSharedFeatures.current
     val titleLength = features?.intValue("catalog", "catalogListViewTitleLength", 0..30)
@@ -242,6 +250,7 @@ internal fun CatalogListItem(
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
+                if (cellLabel != null) Text(cellLabel, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     text = "No.${item.id}",
                     style = MaterialTheme.typography.bodySmall,
@@ -254,7 +263,7 @@ internal fun CatalogListItem(
                     CatalogNewRepliesBadge(it.count)
                 }
                 Text(
-                    text = "${item.replyCount}レス",
+                    text = countOverride ?: "${item.replyCount}レス",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold

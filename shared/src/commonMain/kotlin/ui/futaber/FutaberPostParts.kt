@@ -108,7 +108,7 @@ internal fun futaberPostHeaderParts(
     val (date, ip) = futaberTimestampAndIp(post.timestamp)
     val (subject, name) = futaberPostSubjectAndName(post.subject, post.author, alwaysShowTitleAndName)
     return buildList {
-        add(FutaberHeaderPart(FutaberHeaderPartKind.Ordinal, ordinal.toString()))
+        add(FutaberHeaderPart(FutaberHeaderPartKind.Ordinal, (post.displayNumber ?: ordinal).toString()))
         subject?.let { add(FutaberHeaderPart(FutaberHeaderPartKind.Subject, it)) }
         name?.let { add(FutaberHeaderPart(FutaberHeaderPartKind.Name, it)) }
         post.mail?.trim()?.takeIf { it.isNotEmpty() }?.let { add(FutaberHeaderPart(FutaberHeaderPartKind.Mail, "[$it]")) }

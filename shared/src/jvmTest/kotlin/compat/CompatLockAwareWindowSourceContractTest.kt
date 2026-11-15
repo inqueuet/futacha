@@ -20,13 +20,17 @@ class CompatLockAwareWindowSourceContractTest {
         val unwrapped = mutableListOf<String>()
         var windows = 0
         root.walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { file ->
-            file.readLines().forEachIndexed { index, line ->
+            val lines = file.readLines()
+            lines.forEachIndexed { index, line ->
                 val trimmed = line.trimStart()
                 if (trimmed.startsWith("//") || trimmed.startsWith("*")) return@forEachIndexed
                 windowCall.findAll(line).forEach { match ->
                     if (line.substring(0, match.range.first).trimEnd().endsWith("fun")) return@forEach
                     windows += 1
-                    if (!line.substring(0, match.range.first).endsWith(wrapper)) {
+                    val before = line.substring(0, match.range.first)
+                    val wrapped = before.endsWith(wrapper) ||
+                        (before.isBlank() && lines.getOrNull(index - 1)?.trimEnd()?.endsWith(wrapper.trimEnd()) == true)
+                    if (!wrapped) {
                         unwrapped += "${file.name}:${index + 1}"
                     }
                 }

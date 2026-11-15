@@ -4,6 +4,8 @@ package com.valoser.futacha
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import coil3.ImageLoader
@@ -15,6 +17,7 @@ import com.valoser.futacha.shared.ui.image.*
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import com.valoser.futacha.shared.network.NetworkException
 import org.junit.*
 import org.junit.Assert.*
 
@@ -27,9 +30,13 @@ class FtutterThreadMemoryInstrumentedTest {
     private val fresh = old.copy(posts = old.posts + post("101"))
     private val entry = ThreadHistoryEntry("100", board.id, "Memory thread", "", board.name, board.url, 1, 1)
     private var fetches = 0
+    @Volatile private var archiveAsks = 0
     private val repo = object : BoardRepository by FakeBoardRepository() {
         override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
             fetches++; return ThreadPageContent(fresh)
+        }
+        override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent {
+            archiveAsks++; throw NetworkException("no archive", statusCode = 404)
         }
     }
     private lateinit var loader: ImageLoader
@@ -62,13 +69,14 @@ class FtutterThreadMemoryInstrumentedTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithText("memory-body-101").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(1, fetches)
     }
-    @Test fun reopeningAKnownFallenThreadRetainsPostsAndOffersArchiveRetrieval() {
+    @Test fun reopeningAKnownFallenThreadRetainsPostsWithoutAnArchiveButton() {
         val memory = FtutterThreadMemory().apply { put(url, old) }
         rule.setContent { Screen(memory, entry.copy(isAutoRefreshDisabled = true, threadStatus = ThreadStatus(isDead = true))) }
         rule.waitUntil(10_000) { rule.onAllNodesWithText("memory-body-100").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("過去ログを取得").assertIsDisplayed()
+        rule.onAllNodesWithText("過去ログを取得").assertCountEquals(0)
         rule.onNode(hasText("スレッドは落ちています") and hasAnyAncestor(hasTestTag("ftutter-end-band")))
             .assertIsDisplayed()
         assertEquals(0, fetches)
+        rule.waitUntil(10_000) { archiveAsks >= 1 }
     }
 }

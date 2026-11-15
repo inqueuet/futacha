@@ -102,7 +102,7 @@ internal fun futachaThreadRuleApplies(rule: CompatNgRule, tabKey: String, boardK
     CompatNgKind.THREAD_IMAGE, CompatNgKind.THREAD_IMAGE_PHASH -> rule.appliesToThreadImage(boardKey, tabKey)
     // ふたばー風・ふたったー風's "del＋レスNG" is scoped to the thread's address, not a tab key (L38), as としあき(仮) reads it.
     CompatNgKind.THREAD_POST_NO -> rule.scopeKey == "*" || rule.scopeKey == tabKey ||
-        canonicalizeThreadUrl(rule.scopeKey)?.let { compatTabKey(it.canonicalUrl) == tabKey } == true
+        com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rule.scopeKey)?.let { compatTabKey(it.canonicalUrl) == tabKey } == true
     CompatNgKind.THREAD_POSTER_ID, CompatNgKind.THREAD_WORD,
     CompatNgKind.THREAD_IGNORE, CompatNgKind.THREAD_REFUSE -> rule.scopeKey == "*" || rule.scopeKey == tabKey
     else -> false

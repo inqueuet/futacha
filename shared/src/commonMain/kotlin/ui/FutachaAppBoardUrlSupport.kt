@@ -36,6 +36,9 @@ private fun stripBoardUrlDocument(url: String): String {
 
 internal fun normalizeBoardUrl(raw: String): String {
     val trimmed = raw.trim()
+    if (com.valoser.futacha.shared.compat.boardSiteOf(trimmed) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE) {
+        return com.valoser.futacha.shared.compat.aimogeBoardShapeOf(trimmed)!!
+    }
     val withScheme = stripBoardUrlDocument(when {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {

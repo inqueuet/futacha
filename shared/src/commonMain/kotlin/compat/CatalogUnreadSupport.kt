@@ -5,7 +5,7 @@ import com.valoser.futacha.shared.model.CatalogItem
 /** Catalog probes update known totals, never the read position or the open-tab set. */
 fun catalogReplyCountsByUrl(items: List<CatalogItem>): Map<String, Int> = buildMap {
     items.forEach { item ->
-        val url = canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl ?: return@forEach
+        val url = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(item.threadUrl)?.canonicalUrl ?: return@forEach
         if (item.replyCount >= 0) put(url, maxOf(get(url) ?: 0, item.replyCount))
     }
 }
@@ -26,7 +26,7 @@ fun buildCatalogReplyIndicators(
     val byUrl = tabs.associateBy { it.canonicalUrl }
     return buildMap {
         items.forEach { item ->
-            val tab = canonicalizeThreadUrl(item.threadUrl)?.canonicalUrl?.let(byUrl::get)
+            val tab = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(item.threadUrl)?.canonicalUrl?.let(byUrl::get)
             resolveCompatCatalogReplyIndicator(item.replyCount, tab?.checkedReplyCount,
                 deltas[item.compatCatalogReplyDeltaKey()])?.let { put(item.threadUrl, it) }
         }

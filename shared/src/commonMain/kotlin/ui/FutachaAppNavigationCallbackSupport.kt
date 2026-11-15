@@ -128,7 +128,7 @@ internal fun buildFutachaNavigationCallbacks(
             setNavigationState(
                 clearFutachaThreadSelection(
                     state = state,
-                    clearBoardSelection = state.isSavedThreadsVisible
+                    clearBoardSelection = state.isSavedThreadsVisible || state.selectedMixId != null
                 )
             )
         },

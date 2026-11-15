@@ -389,7 +389,8 @@ internal fun FutaberPostScreen(
             onPickFile = pickImage,
             onAttach = { attachment.offer(it, capabilities, isReply) },
             boardUrl = boardUrl,
-            onPickPhoto = pickPhoto
+            onPickPhoto = pickPhoto,
+            currentAttachment = attachedImage
         )
         restoreAnchor?.let { opened ->
             val anchor = clearAnchor ?: opened

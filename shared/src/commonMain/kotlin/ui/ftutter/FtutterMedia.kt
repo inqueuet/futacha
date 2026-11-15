@@ -374,6 +374,9 @@ internal fun FtutterViewerScreen(
     val currentUrl = current?.let(::resolveCompatViewerMediaUrl)
     var loop by remember(currentUrl) { mutableStateOf(settings.videoLoop) }
     val isVideo = currentUrl?.let(::isCompatVideoMediaUrl) == true
+    // 画像をタップすると下のバーを隠す・出す（このアプリの追加。原作はタップに何も割り当てていない）。動画のページでは
+    // 動画の操作と重ならないよう、バーはいつも出す。
+    var barsHidden by remember { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).testTag("ftutter-viewer")) {
         val heightPx = constraints.maxHeight.toFloat()
         Column(Modifier.fillMaxSize()) {
@@ -447,15 +450,15 @@ internal fun FtutterViewerScreen(
                                     if (target != page) scope.launch { pager.animateScrollToPage(target) }
                                 },
                                 onDimensionsKnown = { _, _ -> },
-                                // 原作は画像のタップ・長押しに何も割り当てていない（バーは常に出ている）。
-                                onClick = {},
+                                // 原作は画像のタップに何も割り当てていない。ここではバーを隠す・出す（全画面表示）。
+                                onClick = { barsHidden = !barsHidden },
                                 onLongClick = {}
                             )
                         }
                     }
                 }
             }
-            Column(Modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding()) {
+            if (ftutterViewerShowsBars(barsHidden, isVideo)) Column(Modifier.fillMaxWidth().background(colors.toolBar).navigationBarsPadding()) {
                 if (settings.showStrip) {
                     // M61：原作の帯は少ない時は中央に寄る。
                     LazyRow(state = stripState,
@@ -614,3 +617,6 @@ internal fun ftutterDestinationLabel(location: SaveLocation?): String = when (lo
     is SaveLocation.TreeUri -> location.uri.substringAfterLast("%3A").substringAfterLast("%2F").ifBlank { "選択したフォルダ" }
     is SaveLocation.Bookmark -> "選択したフォルダ"
 }
+
+/** ビューアの下のバーを出すか：タップで隠した間は出さない。動画のページはいつも出す。 */
+internal fun ftutterViewerShowsBars(hiddenByTap: Boolean, isVideo: Boolean): Boolean = !hiddenByTap || isVideo

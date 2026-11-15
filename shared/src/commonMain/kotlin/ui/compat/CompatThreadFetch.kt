@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.isFallenSitePage
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
@@ -88,6 +89,8 @@ internal suspend fun loadCompatThreadWithFallback(
     cacheBaseUrl: String?,
     expectedReplyCount: Int? = null,
     archiveLoader: (suspend (String) -> ThreadPage)? = null,
+    /** The site's own archived copy (あいもげ `snapshot.json`), tried first when the live thread is gone; null = none. */
+    siteArchiveLoader: (suspend () -> ThreadPage?)? = null,
     loader: suspend (String) -> ThreadPage
 ): Result<CompatThreadFetchResult> {
     suspend fun attempt(url: String): Result<ThreadPage> = try {
@@ -107,6 +110,15 @@ internal suspend fun loadCompatThreadWithFallback(
         ?.takeIf { it != sourceUrl }
         ?.let { url -> attempt(url) }
     val cachedPage = cacheResult?.getOrNull()
+    // A cache copy behind the count the catalog shows is stale: ask the live board as well and keep the
+    // longer one. Before, the stale copy was used every time and the thread never got its new replies
+    // although the catalog's count went up (ふたばスレ 1447418590 No.1447421274).
+    val livePageForStaleCache = if (cachedPage != null && expectedReplyCount != null &&
+        cachedPage.posts.size < expectedReplyCount + 1
+    ) attempt(sourceUrl).getOrNull()?.takeIf { !it.isFallenSitePage() && it.posts.size > cachedPage.posts.size } else null
+    if (livePageForStaleCache != null) {
+        return Result.success(CompatThreadFetchResult(livePageForStaleCache, CompatThreadFetchSource.PRIMARY))
+    }
     if (cachedPage != null) {
         val expectedPostCount = expectedReplyCount?.plus(1)
         val needsArchiveSupplement = archiveLoader != null && (
@@ -130,6 +142,12 @@ internal suspend fun loadCompatThreadWithFallback(
     val primaryResult = attempt(sourceUrl)
     if (primaryResult.isSuccess) {
         val primaryPage = primaryResult.getOrThrow()
+        // あいもげ answers a fallen thread with its posts: kept, but the thread is treated as gone (replies closed).
+        if (primaryPage.isFallenSitePage()) {
+            return Result.success(CompatThreadFetchResult(
+                primaryPage, CompatThreadFetchSource.PRIMARY, primaryThreadGone = true, primaryThreadConfirmedAlive = false
+            ))
+        }
         val expectedPostCount = expectedReplyCount?.plus(1)
         val needsArchiveSupplement = archiveLoader != null && (
             primaryPage.isTruncated ||
@@ -149,6 +167,19 @@ internal suspend fun loadCompatThreadWithFallback(
             }
         }
         return Result.success(CompatThreadFetchResult(primaryPage, CompatThreadFetchSource.PRIMARY))
+    }
+
+    if (siteArchiveLoader != null && isCompatThreadGoneFailure(primaryResult.exceptionOrNull())) {
+        val sitePage = try {
+            siteArchiveLoader()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            null
+        }
+        if (sitePage != null) {
+            return Result.success(CompatThreadFetchResult(sitePage, CompatThreadFetchSource.ARCHIVE, primaryThreadGone = true))
+        }
     }
 
     // The archive provider is a separate fallback tier. A custom cache endpoint must not

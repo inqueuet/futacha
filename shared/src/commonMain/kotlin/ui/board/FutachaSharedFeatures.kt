@@ -259,8 +259,10 @@ internal fun ProvideFutachaSharedFeatures(
         if (!foreground || !refreshEnabled || activeRepository == null) return@LaunchedEffect
         while (isActive) {
             try {
-                com.valoser.futacha.shared.compat.refreshSharedFeatures(store, activeRepository, isCompatWifiConnected(context),
-                    onNewMatches = { notifications.add("巡回で${it.size}件のスレッドが見つかりました") })
+                com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch {
+                    com.valoser.futacha.shared.compat.refreshSharedFeatures(store, activeRepository, isCompatWifiConnected(context),
+                        onNewMatches = { notifications.add("巡回で${it.size}件のスレッドが見つかりました") })
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { com.valoser.futacha.shared.util.Logger.e("FutachaSharedFeatures", "Shared refresh failed", failure) }
             delay(com.valoser.futacha.shared.compat.COMPAT_FOREGROUND_TICK_MILLIS)

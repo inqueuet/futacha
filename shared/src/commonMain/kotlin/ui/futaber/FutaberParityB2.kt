@@ -48,7 +48,6 @@ import com.valoser.futacha.shared.ui.compat.appendCompatPostText
 import com.valoser.futacha.shared.ui.compat.compatPostDeviceInfo
 import com.valoser.futacha.shared.ui.compat.compatPreferenceValue
 import com.valoser.futacha.shared.ui.compat.fetchCompatPostNetworkInfo
-import com.valoser.futacha.shared.ui.compat.isCompatUpsUploadSizeAllowed
 import com.valoser.futacha.shared.ui.compat.normalizeCompatSpeechResult
 import com.valoser.futacha.shared.ui.compat.parseCompatSaveLocation
 import com.valoser.futacha.shared.ui.compat.launchCompatDrawingCopy
@@ -167,7 +166,9 @@ internal fun FutaberPostToolsHost(
     /** The board's address, for the Cookie guidance (whether this board's posting Cookies are kept). */
     boardUrl: String = "",
     /** The camera menu's 最近の画像・ライブラリ (the OS photo picker, L-B8 M37). */
-    onPickPhoto: () -> Unit = onPickFile
+    onPickPhoto: () -> Unit = onPickFile,
+    /** The writing's attachment now, for a multiple pick. */
+    currentAttachment: ImageData? = null
 ) {
     val colors = LocalFutaberColors.current
     val scope = rememberCoroutineScope()
@@ -195,14 +196,37 @@ internal fun FutaberPostToolsHost(
     )
     val pickUps = rememberAttachmentPickerLauncher(
         preference = tools.pickerPreference,
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
         preferredFileManagerPackage = tools.preferredFileManagerPackage,
         onSelectionError = { state.message = it },
-        onImageSelected = {
-            if (!isCompatUpsUploadSizeAllowed(it.bytes.size)) state.message = "あぷ小は3000KBまでです"
-            else {
-                state.upsComment = ""
-                state.upsDeleteKey = deleteKey
-                state.upsImage = it
+        onImageSelected = { picked ->
+            scope.launch {
+                val prepared = com.valoser.futacha.shared.ui.compat.prepareCompatUpsUpload(picked).getOrNull()
+                if (prepared == null) state.message = "あぷ小は3000KBまでです"
+                else {
+                    if (prepared.shrunk) state.message = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_SHRUNK_NOTICE
+                    state.upsComment = ""
+                    state.upsDeleteKey = deleteKey
+                    state.upsImage = prepared.image
+                }
+            }
+        }
+    )
+    val isAimogeBoard = remember(boardUrl) { com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE }
+    val latestAttachment by rememberUpdatedState(currentAttachment)
+    val pickMany = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
+        maxCount = com.valoser.futacha.shared.ui.compat.compatMultiPickMax(isAimogeBoard),
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
+        onSelectionError = { state.message = it },
+        onImagesSelected = { picked ->
+            perform {
+                val client = tools.httpClient
+                state.message = com.valoser.futacha.shared.ui.compat.applyCompatPickedPictures(
+                    picked, latestAttachment, !handwritingOnly, isAimogeBoard, boardUrl,
+                    setAttachment = onAttach,
+                    upload = client?.let { c -> { image -> uploadCompatUps(c, image, "", deleteKey, tools.appVersion).getOrThrow() } },
+                    appendName = { latestOnCommentChange(appendCompatPostText(latestComment, it)) }
+                )
             }
         }
     )
@@ -213,6 +237,7 @@ internal fun FutaberPostToolsHost(
             "file" -> onPickFile()
             "tool-drawing" -> state.drawing = true
             "tool-ups" -> pickUps()
+            "tool-multi" -> pickMany?.invoke() ?: run { state.message = "この端末では複数の画像を選べません" }
             "tool-voice" -> speech()
             "tool-network-info" -> perform {
                 val info = fetchCompatPostNetworkInfo(tools.httpClient, futaberNetworkInfoUserAgent(tools.appVersion))

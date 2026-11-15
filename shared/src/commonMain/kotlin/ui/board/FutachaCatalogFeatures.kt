@@ -43,6 +43,37 @@ internal fun CatalogMode.sharedCatalogSort(): CompatCatalogSort? = when (this) {
 }
 
 /** The thread's page address for "copy URL" / "open in browser": the board's own resolution, else what the catalog gave. */
+internal enum class FutachaCatalogLongPress { NONE, NG, ADD_TAB, DEL, MENU }
+
+internal fun futachaCatalogLongPressAction(setting: String?): FutachaCatalogLongPress = when (setting ?: "menu") {
+    "none", "何もしない" -> FutachaCatalogLongPress.NONE
+    "ng", "NGスレッドに登録" -> FutachaCatalogLongPress.NG
+    "add", "タブに追加する" -> FutachaCatalogLongPress.ADD_TAB
+    "del", "delを送信する" -> FutachaCatalogLongPress.DEL
+    else -> FutachaCatalogLongPress.MENU
+}
+
+internal suspend fun registerFutachaCatalogNgThread(store: CompatibilityStore, boardKey: String, item: CatalogItem) {
+    val value = item.threadUrl
+    check(store.upsertNgRule(CompatNgRule(compatNgRuleId(CompatNgKind.CATALOG_REFUSE, boardKey, value),
+        CompatNgKind.CATALOG_REFUSE, boardKey, value, Clock.System.now().toEpochMilliseconds(), memo = item.title.orEmpty().take(300))))
+}
+
+internal suspend fun addFutachaCatalogTab(store: CompatibilityStore, board: BoardSummary, boardKey: String, item: CatalogItem,
+    replyCount: Int? = item.replyCount) {
+    val now = Clock.System.now().toEpochMilliseconds()
+    val candidate = CompatTab(compatTabKey(item.threadUrl), item.threadUrl, item.threadUrl,
+        boardKey, board.name, item.id, item.title.orEmpty(), thumbnailUrl = item.thumbnailUrl,
+        replyCount = replyCount ?: 0, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now)
+    // Plan B9: the shared opening keeps an existing tab's place, star and marks (merged inside the store's lock).
+    store.importModernBoards(listOf(board))
+    check(store.openSharedTab(candidate, profile = null)) { "タブに追加できませんでした" }
+}
+
+internal suspend fun requestFutachaCatalogDeletion(repository: BoardRepository, boardUrl: String, item: CatalogItem) {
+    repository.requestDeletion(boardUrl, item.id, item.id, "110")
+}
+
 internal fun futachaCatalogThreadUrl(boardUrl: String, item: CatalogItem): String =
     runCatching { BoardUrlResolver.resolveThreadUrl(boardUrl, item.id) }.getOrNull()
         ?.takeIf { it.isNotBlank() } ?: item.threadUrl
@@ -186,20 +217,11 @@ internal fun FutachaCatalogFeatureHost(
         features.store.saveCatalogPreference(next); preference = next
     } }
     fun register(item: CatalogItem) { action {
-        val value = item.threadUrl
-        check(features.store.upsertNgRule(CompatNgRule(compatNgRuleId(CompatNgKind.CATALOG_REFUSE, boardKey, value),
-            CompatNgKind.CATALOG_REFUSE, boardKey, value, Clock.System.now().toEpochMilliseconds(), memo = item.title.orEmpty().take(300))))
+        registerFutachaCatalogNgThread(features.store, boardKey, item)
         selected = null
     } }
     fun addTab(item: CatalogItem) { action {
-        val now = Clock.System.now().toEpochMilliseconds()
-        val candidate = CompatTab(compatTabKey(item.threadUrl), item.threadUrl, item.threadUrl,
-            boardKey, board.name, item.id, item.title.orEmpty(), thumbnailUrl = item.thumbnailUrl,
-            replyCount = item.replyCount, insertedAtEpochMillis = now, contentUpdatedAtEpochMillis = now)
-        // Plan B9: the shared opening. A tab that is there already keeps its place, its star and the modes' marks, merged on
-        // the stored tab inside the store's lock (B4 1-3 read it first and could overwrite a change made in between).
-        features.store.importModernBoards(listOf(board))
-        check(features.store.openSharedTab(candidate, profile = null)) { "タブに追加できませんでした" }
+        addFutachaCatalogTab(features.store, board, boardKey, item)
         selected = null
     } }
     fun requestDeletion(item: CatalogItem) {
@@ -210,7 +232,7 @@ internal fun FutachaCatalogFeatureHost(
         pendingReport = null
         action {
             try {
-                repository.requestDeletion(boardUrl, item.id, item.id, "110")
+                requestFutachaCatalogDeletion(repository, boardUrl, item)
                 message = if (reviewComplianceEnabled) "通報しました" else "DEL依頼を送信しました"
             } finally {
                 reporting = false
@@ -327,12 +349,12 @@ internal fun FutachaCatalogFeatureHost(
             longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
     })
     val longPressHandler: (CatalogItem) -> Unit = { item ->
-            when (features.value("control", "controlCatalogLongTap") ?: "menu") {
-                "none", "何もしない" -> Unit
-                "ng", "NGスレッドに登録" -> register(item)
-                "add", "タブに追加する" -> addTab(item)
-                "del", "delを送信する" -> requestDeletion(item)
-                else -> selected = item
+            when (futachaCatalogLongPressAction(features.value("control", "controlCatalogLongTap"))) {
+                FutachaCatalogLongPress.NONE -> Unit
+                FutachaCatalogLongPress.NG -> register(item)
+                FutachaCatalogLongPress.ADD_TAB -> addTab(item)
+                FutachaCatalogLongPress.DEL -> requestDeletion(item)
+                FutachaCatalogLongPress.MENU -> selected = item
             }
     }
     val currentLongPress = rememberUpdatedState(longPressHandler)

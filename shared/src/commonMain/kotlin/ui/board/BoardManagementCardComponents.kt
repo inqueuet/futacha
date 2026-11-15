@@ -268,6 +268,7 @@ private fun BoardSummaryCardContent(
 
 @Composable
 private fun BoardSummaryLeadingIcon(board: BoardSummary) {
+    if (!board.pinned && com.valoser.futacha.shared.ui.aimoge.AimogeBoardIcon(board.url, 40.dp)) return
     Surface(
         modifier = Modifier.size(40.dp),
         shape = CircleShape,

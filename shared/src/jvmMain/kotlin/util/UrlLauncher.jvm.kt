@@ -8,7 +8,7 @@ import javax.swing.JOptionPane
 @Composable
 actual fun rememberUrlLauncher(customTabs: Boolean, allowAnyScheme: Boolean): (String) -> Unit {
     val scope = rememberCoroutineScope()
-    return remember(scope) { { value: String -> scope.launch {
+    return remember(scope) { { value: String -> if (!com.valoser.futacha.shared.network.aimoge.handleAimogeInternalLink(value)) scope.launch {
         try { withContext(Dispatchers.IO) { openDesktopUrl(value) } }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {

@@ -15,7 +15,9 @@ enum class EmbeddedHtmlPlacement {
 data class CatalogPageContent(
     val items: List<CatalogItem>,
     val embeddedHtml: List<EmbeddedHtmlContent> = emptyList(),
-    val parseWarning: PageParseWarning = PageParseWarning()
+    val parseWarning: PageParseWarning = PageParseWarning(),
+    /** CatalogItem.id -> created time (epoch ms) for sites that report it (あいもげ). Empty for Futaba. */
+    val threadCreatedAtEpochMillis: Map<String, Long> = emptyMap()
 )
 
 data class ThreadPageContent(

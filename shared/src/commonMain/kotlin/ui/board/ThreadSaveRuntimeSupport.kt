@@ -48,14 +48,16 @@ internal fun buildThreadSaveRuntime(
 
 internal fun buildOptionalThreadSingleMediaSaveRunnerCallbacks(
     httpClient: HttpClient?,
-    fileSystem: FileSystem?
+    fileSystem: FileSystem?,
+    flatSave: () -> Boolean = { false }
 ): ThreadSingleMediaSaveRunnerCallbacks? {
     if (httpClient == null || fileSystem == null) {
         return null
     }
     return buildThreadSingleMediaSaveRunnerCallbacks(
         httpClient = httpClient,
-        fileSystem = fileSystem
+        fileSystem = fileSystem,
+        flatSave = flatSave
     )
 }
 

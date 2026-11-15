@@ -37,14 +37,19 @@ internal fun CatalogGrid(
     gridState: LazyGridState,
     resolvedHeadTitles: Map<String, String>,
     resolveHeadMetadata: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** MIX only: one entry per item, same order. Rows then take their own board, key, label and watch words. */
+    mixEntries: List<com.valoser.futacha.shared.mix.MixEntry>? = null,
+    mixNowMillis: Long = 0L,
+    mixWatchWordsOf: (com.valoser.futacha.shared.mix.MixEntry) -> List<String> = { watchWords }
 ) {
     val currentSelection = androidx.compose.runtime.rememberUpdatedState(onThreadSelected)
     val stableSelection = remember { { item: CatalogItem -> currentSelection.value(item) } }
-    val lazyItemKeys = remember(board?.id, board?.url, items) {
+    val lazyItemKeys = remember(board?.id, board?.url, items, mixEntries) {
         buildCatalogItemLazyKeys(
             boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
-            items = items
+            items = items,
+            boardIdentityAt = mixEntries?.let { rows -> { index: Int -> rows.getOrNull(index)?.board?.id.orEmpty() } }
         )
     }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -52,6 +57,7 @@ internal fun CatalogGrid(
         isRefreshing = isRefreshing,
         animationLabel = "catalogGridOverscroll"
     )
+    com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, grid = gridState)
     LazyVerticalGrid(
         state = gridState,
         modifier = modifier
@@ -84,14 +90,18 @@ internal fun CatalogGrid(
                 )
             }
         }
-        gridItemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { _, catalogItem ->
+        gridItemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { index, catalogItem ->
+            val mixEntry = mixEntries?.getOrNull(index)
+            val rowWords = if (mixEntry != null) mixWatchWordsOf(mixEntry) else watchWords
             CatalogCard(
                 item = catalogItem,
-                boardUrl = board?.url,
-                resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
+                boardUrl = mixEntry?.board?.url ?: board?.url,
+                resolvedDisplayTitle = resolvedHeadTitles[mixEntry?.key?.asString() ?: catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
-                matchedWatchWords = remember(catalogItem.title, watchWords) { catalogItem.matchedWatchWords(watchWords) },
-                onClick = { stableSelection(catalogItem) }
+                matchedWatchWords = remember(catalogItem.title, rowWords) { catalogItem.matchedWatchWords(rowWords) },
+                onClick = { stableSelection(catalogItem) },
+                cellLabel = mixEntry?.let { com.valoser.futacha.shared.mix.mixCellLabel(it, mixNowMillis) },
+                countOverride = mixEntry?.let { com.valoser.futacha.shared.mix.mixCountOverride(it) }
             )
         }
         if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
@@ -122,14 +132,19 @@ internal fun CatalogList(
     listState: LazyListState,
     resolvedHeadTitles: Map<String, String>,
     resolveHeadMetadata: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** MIX only: one entry per item, same order. Rows then take their own board, key, label and watch words. */
+    mixEntries: List<com.valoser.futacha.shared.mix.MixEntry>? = null,
+    mixNowMillis: Long = 0L,
+    mixWatchWordsOf: (com.valoser.futacha.shared.mix.MixEntry) -> List<String> = { watchWords }
 ) {
     val currentSelection = androidx.compose.runtime.rememberUpdatedState(onThreadSelected)
     val stableSelection = remember { { item: CatalogItem -> currentSelection.value(item) } }
-    val lazyItemKeys = remember(board?.id, board?.url, items) {
+    val lazyItemKeys = remember(board?.id, board?.url, items, mixEntries) {
         buildCatalogItemLazyKeys(
             boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
-            items = items
+            items = items,
+            boardIdentityAt = mixEntries?.let { rows -> { index: Int -> rows.getOrNull(index)?.board?.id.orEmpty() } }
         )
     }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -137,6 +152,7 @@ internal fun CatalogList(
         isRefreshing = isRefreshing,
         animationLabel = "catalogListOverscroll"
     )
+    com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, list = listState)
     LazyColumn(
         state = listState,
         modifier = modifier
@@ -163,14 +179,18 @@ internal fun CatalogList(
                 )
             }
         }
-        itemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { _, catalogItem ->
+        itemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { index, catalogItem ->
+            val mixEntry = mixEntries?.getOrNull(index)
+            val rowWords = if (mixEntry != null) mixWatchWordsOf(mixEntry) else watchWords
             CatalogListItem(
                 item = catalogItem,
-                boardUrl = board?.url,
-                resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
+                boardUrl = mixEntry?.board?.url ?: board?.url,
+                resolvedDisplayTitle = resolvedHeadTitles[mixEntry?.key?.asString() ?: catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
-                matchedWatchWords = remember(catalogItem.title, watchWords) { catalogItem.matchedWatchWords(watchWords) },
-                onClick = { stableSelection(catalogItem) }
+                matchedWatchWords = remember(catalogItem.title, rowWords) { catalogItem.matchedWatchWords(rowWords) },
+                onClick = { stableSelection(catalogItem) },
+                cellLabel = mixEntry?.let { com.valoser.futacha.shared.mix.mixCellLabel(it, mixNowMillis) },
+                countOverride = mixEntry?.let { com.valoser.futacha.shared.mix.mixCountOverride(it) }
             )
         }
         if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {

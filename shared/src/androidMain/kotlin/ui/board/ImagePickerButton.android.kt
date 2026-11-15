@@ -84,15 +84,51 @@ private fun <I> launchPickerOrNotify(
 }
 
 @Composable
+actual fun rememberMultipleImagePickerLauncher(
+    maxCount: Int,
+    maxBytes: Long,
+    onImagesSelected: (List<ImageData>) -> Unit,
+    onSelectionError: (String) -> Unit
+): (() -> Unit)? {
+    val context = pickerHostContext(LocalContext.current)
+    val coroutineScope = rememberCoroutineScope()
+    val profileController by rememberUpdatedState(LocalExperienceProfileUiController.current)
+    val selected by rememberUpdatedState(onImagesSelected)
+    val failed by rememberUpdatedState(onSelectionError)
+    if (context !is Activity) return null
+    val launcher = rememberExperienceProfileActivityResultLauncher(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris, session ->
+        if (uris.isEmpty() || isActivityUnavailable(context)) return@rememberExperienceProfileActivityResultLauncher
+        coroutineScope.launch {
+            val picked = uris.take(maxCount).mapNotNull { uri ->
+                val data = withContext(Dispatchers.IO) { readImageDataFromUri(context, uri, maxBytes) } ?: return@mapNotNull null
+                if (data.fileName.substringAfterLast('.', "").lowercase() in setOf("heic", "heif")) {
+                    compressCompatPostImage(data, maxBytes.toInt()).getOrNull()
+                } else data
+            }
+            if (!isExperienceProfileSessionCurrent(session, profileController)) return@launch
+            if (picked.size < minOf(uris.size, maxCount)) failed(ATTACHMENT_LOAD_FAILURE_MESSAGE)
+            if (uris.size > maxCount) failed("選べるのは${maxCount}枚までです。先の${maxCount}枚を使います")
+            if (picked.isNotEmpty()) selected(picked)
+        }
+    }
+    return {
+        launchPickerOrNotify(context, launcher, "image/*", "multiple GET_CONTENT picker", "ファイル選択に対応したアプリがありません")
+    }
+}
+
+@Composable
 actual fun rememberAttachmentPickerLauncher(
     preference: AttachmentPickerPreference,
     mimeType: String,
     maxBytes: Long,
     onImageSelected: (ImageData) -> Unit,
     preferredFileManagerPackage: String?,
-    onSelectionError: (String) -> Unit
+    onSelectionError: (String) -> Unit,
+    onPasteImage: (() -> Unit)?
 ): () -> Unit {
-    val context = LocalContext.current
+    val context = pickerHostContext(LocalContext.current)
     val coroutineScope = rememberCoroutineScope()
     val profileController by rememberUpdatedState(LocalExperienceProfileUiController.current)
     val currentOnSelectionError by rememberUpdatedState(onSelectionError)
@@ -352,7 +388,7 @@ actual fun rememberDirectoryPickerLauncher(
     onDirectorySelected: (SaveLocation) -> Unit,
     preferredFileManagerPackage: String?
 ): () -> Unit {
-    val context = LocalContext.current
+    val context = pickerHostContext(LocalContext.current)
     val coroutineScope = rememberCoroutineScope()
     val profileController by rememberUpdatedState(LocalExperienceProfileUiController.current)
     if (context !is Activity) {
@@ -546,6 +582,20 @@ actual fun rememberDirectoryPickerLauncher(
             )
         }
     }
+}
+
+/**
+ * Inside a dialog (the あいもげ write prompt, the あぷ小 sheet, ...) LocalContext is a
+ * wrapper around the Activity, not the Activity itself. The pickers used to refuse to
+ * start there with "この画面では添付ピッカーを起動できません" (thread 01a1cd5d #52-#55).
+ */
+internal tailrec fun pickerHostContext(context: Context): Context = when (context) {
+    is Activity -> context
+    is android.content.ContextWrapper -> {
+        val base = context.baseContext
+        if (base == null || base === context) context else pickerHostContext(base)
+    }
+    else -> context
 }
 
 private fun isActivityUnavailable(activity: Activity): Boolean {

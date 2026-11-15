@@ -59,6 +59,8 @@ internal fun FutaberMediaOverlay(
     hiddenPostNos: Set<String> = emptySet(),
     /** The post whose picture the viewer opens on at once ("ビューアで表示" of the image menu); null opens the picture list. */
     initialPostNo: String? = null,
+    /** あいもげ: the file tapped in the post (its 2nd or 3rd), so the viewer opens on that one, not on the first. */
+    initialMediaUrl: String? = null,
     /**
      * The picture list's scroll position, kept by the thread while it is open: closing the list and opening it again
      * comes back where it was (the original went back to the top, docs/thread-feedback-1444136530-2026-10-27.md).
@@ -119,7 +121,10 @@ internal fun FutaberMediaOverlay(
     androidx.compose.runtime.LaunchedEffect(snapshot, mediaPosts, initialPostNo) {
         if (initialApplied || initialPostNo == null || snapshot == null) return@LaunchedEffect
         initialApplied = true
-        val index = mediaPosts.indexOfFirst { it.postNo == initialPostNo }
+        val index = initialMediaUrl
+            ?.let { url -> mediaPosts.indexOfFirst { it.postNo == initialPostNo && it.imageUrl == url } }
+            ?.takeIf { it >= 0 }
+            ?: mediaPosts.indexOfFirst { it.postNo == initialPostNo }
         if (index >= 0) {
             viewerIndex = index
             viewerPostNo = com.valoser.futacha.shared.ui.compat.compatMediaIdentity(mediaPosts[index])

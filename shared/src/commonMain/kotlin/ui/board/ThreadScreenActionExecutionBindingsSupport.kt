@@ -37,6 +37,7 @@ internal class ThreadScreenActionBindings(
         failurePrefix: String,
         onSuccess: (T) -> Unit = {},
         onFailure: (suspend (Throwable) -> Unit)? = null,
+        successMessageOf: (T) -> String = { successMessage },
         block: suspend () -> ThreadActionRunResult<T>
     ): Job? {
         val launchResult = coroutineScope.launchManagedThreadAction(
@@ -56,6 +57,7 @@ internal class ThreadScreenActionBindings(
                 onInfoLog = dependencies.onInfoLog,
                 onErrorLog = dependencies.onErrorLog
             ),
+            successMessageOf = successMessageOf,
             block = block
         )
         stateBindings.setLastBusyNoticeAtMillis(launchResult.nextLastBusyNoticeAtMillis)

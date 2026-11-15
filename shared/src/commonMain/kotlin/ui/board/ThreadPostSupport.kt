@@ -10,6 +10,11 @@ internal data class QuoteSelectionItem(
     val isDefault: Boolean = false
 )
 
+/** 「レス相手選択」：相手が自分で書いた本文の行（引用の行でないもの）だけ。 */
+internal fun ownWordsQuoteSelectionIds(items: List<QuoteSelectionItem>): Set<String> =
+    items.filter { it.id.startsWith("line-") && !com.valoser.futacha.shared.compat.isCompatQuotedLine(it.preview) }
+        .map { it.id }.toSet()
+
 internal fun buildQuoteSelectionItems(post: Post): List<QuoteSelectionItem> {
     val items = mutableListOf<QuoteSelectionItem>()
     items += QuoteSelectionItem(

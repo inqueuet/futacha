@@ -93,14 +93,14 @@ private val anyHostRegex = Regex("^https?://[^/]+", RegexOption.IGNORE_CASE)
  * boards only, so there the tutorial stays in the AppState alone.
  */
 fun sharedBoardKey(url: String, compatHoldsNonOfficial: Boolean): String? = runCatching {
-    canonicalizeBoardUrl(url)?.let { return@runCatching compatBoardKey(it) }
+    com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(url)?.let { return@runCatching compatBoardKey(it) }
     if (!compatHoldsNonOfficial || !url.contains("example.com", ignoreCase = true)) return@runCatching null
     canonicalizeBoardUrl(url.trim().replace(anyHostRegex, "https://img.2chan.net"))?.let(::compatBoardKey)
 }.getOrNull()
 
 /** [board] as the compatibility store keeps it after `importModernBoards` (see [sharedBoardKey]). */
 private fun sharedCompatBoardOf(board: BoardSummary, compatHoldsNonOfficial: Boolean, sortOrder: Int): CompatBoard? {
-    val canonical = canonicalizeBoardUrl(board.url)
+    val canonical = com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url)
         ?: board.url.takeIf { compatHoldsNonOfficial && it.contains("example.com", ignoreCase = true) }
             ?.let { canonicalizeBoardUrl(it.trim().replace(anyHostRegex, "https://img.2chan.net")) }
         ?: return null
@@ -146,6 +146,26 @@ internal fun planSharedBoards(
     compatHoldsNonOfficial: Boolean,
     nowEpochMillis: Long
 ): SharedBoardsPlan {
+    // While あいもげ is off, an あいもげ board in the compatibility store (restored, or kept from a build with it on) is
+    // hidden: left out of the pass entirely, so it is never taken as deleted.
+    val hiddenKeys: Set<String> = if (com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled) emptySet() else
+        compat.filter { com.valoser.futacha.shared.compat.aimogeBoardOnlyShapeOf(it.canonicalUrl) != null }
+            .mapTo(LinkedHashSet(), CompatBoard::key)
+    if (hiddenKeys.isNotEmpty()) {
+        val plan = planSharedBoards(
+            side, appState, compat.filter { it.key !in hiddenKeys },
+            record.copy(seen = record.seen.filter { it !in hiddenKeys }, tombstones = record.tombstones - hiddenKeys),
+            compatHoldsNonOfficial, nowEpochMillis
+        )
+        // Left out of `seen` (so turning あいもげ on again finds the board "only in the store" and adds it to the list, never
+        // "gone from the list" and deleted); a tombstone it had is kept.
+        val keptTombstones = record.tombstones.filterKeys { it in hiddenKeys }
+        fun SharedBoardsRecord.withHidden() = copy(tombstones = tombstones + keptTombstones)
+        return plan.copy(
+            eventsRecord = plan.eventsRecord.withHidden(),
+            finalRecord = plan.finalRecord.withHidden()
+        )
+    }
     fun keyOf(board: BoardSummary) = sharedBoardKey(board.url, compatHoldsNonOfficial)
     val appStateKeys = appState.mapNotNullTo(LinkedHashSet(), ::keyOf)
     val compatKeys = compat.mapTo(LinkedHashSet(), CompatBoard::key)
@@ -182,7 +202,7 @@ internal fun planSharedBoards(
             )
             val compatImports = if (compatHoldsNonOfficial) {
                 finalAppState.filter { board ->
-                    canonicalizeBoardUrl(board.url) == null && keyOf(board).let { it != null && it !in compatKeys }
+                    com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url) == null && keyOf(board).let { it != null && it !in compatKeys }
                 }
             } else emptyList()
             SharedBoardsPlan(
@@ -373,6 +393,15 @@ suspend fun <T> withSharedBoardsRestore(
         if (historyStore != null) {
             runSuspendCatchingPreservingCancellation { mergeRestoredHistoryIntoAppState(compat, historyStore) }
                 .onFailure { error -> Logger.e("SharedBoards", "Failed to merge the restored history", error) }
+        }
+        // AM-B5: an earlier-form あいもげ board brought back by the restore is moved now, not at the next start.
+        val stageStore = appStateStore ?: historyStore
+        if (stageStore != null && com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled) {
+            runSuspendCatchingPreservingCancellation {
+                SharedDataMigrationRunner(CompatSharedMigrationMarkStore(compat)) {
+                    kotlin.time.Clock.System.now().toEpochMilliseconds()
+                }.run(listOf(AimogeBoardsStage(stageStore)))
+            }.onFailure { error -> Logger.e("SharedBoards", "Failed to move the restored あいもげ boards", error) }
         }
     }
     result

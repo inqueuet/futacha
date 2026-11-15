@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.compat
 
+import com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch
+import com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount
 import kotlinx.coroutines.delay
 
 internal const val DEFAULT_COMPAT_CLOSE_TOAST_DURATION_MILLIS = 7_000L
@@ -44,7 +46,7 @@ internal suspend fun runCompatAutoScroll(
             CompatAutoScrollAction.WAIT_FOR_RELOAD -> {
                 delay(reloadWaitMillis)
                 awaitForeground()
-                if (isAutoScrolling() && !canScrollForward()) reload()
+                if (isAutoScrolling() && !canScrollForward()) withAimogeAutomaticFetch { reload() }
             }
             CompatAutoScrollAction.STOP_DEAD -> stopDead()
         }
@@ -94,7 +96,8 @@ data class CompatThreadStatusFlags(
  * every non-200 result into the dead flag.
  */
 fun parseCompatThreadStatusFlags(deletedNotice: String?): CompatThreadStatusFlags {
-    val notice = deletedNotice.orEmpty().replace(" ", "")
+    // ddel also contains the count of deleted replies. It says nothing about the thread's status.
+    val notice = threadNoticeWithoutDeletionCount(deletedNotice).orEmpty().replace(" ", "")
     if (notice.isBlank()) return CompatThreadStatusFlags()
     val isolated = notice.contains("隔離")
     val adminDeleted = notice.contains("管理者") && notice.contains("削除")

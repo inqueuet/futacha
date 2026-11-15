@@ -106,8 +106,13 @@ class CompatPostNetworkSelectionRegressionTest {
         rule.onNodeWithContentDescription("回線情報").performClick()
         rule.waitUntil(5_000) { requestStarted.isCompleted }
         field.performClick()
-        // Restore cursor to the end with a real keyboard key, then type normally.
-        instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_MOVE_END)
+        // Restore cursor to the end of the text with a real keyboard key (Ctrl+End: the
+        // TextFieldState field's plain End stops before a line's trailing space), then type normally.
+        val now = android.os.SystemClock.uptimeMillis()
+        for (action in listOf(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.ACTION_UP)) {
+            instrumentation.sendKeySync(android.view.KeyEvent(now, now, action,
+                android.view.KeyEvent.KEYCODE_MOVE_END, 0, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON))
+        }
         instrumentation.sendStringSync("alpha beta ".repeat(8) + "gamma")
         rule.waitForIdle()
         assertEquals(body, currentText())

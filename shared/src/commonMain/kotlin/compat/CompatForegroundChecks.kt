@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.sitePostCount
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.ui.compat.normalizeCompatPostMedia
 import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
@@ -120,11 +121,13 @@ fun Post.toCompatPostSnapshot(position: Int): CompatPostSnapshot =
         thumbnailHeight = thumbnailHeight,
         imageFileSizeBytes = imageFileSizeBytes,
         quoteReferences = quoteReferences,
-        quoteReferencesParsed = quoteReferencesParsed
+        quoteReferencesParsed = quoteReferencesParsed,
+        attachments = attachments,
+        displayNumber = displayNumber
     ))
 
 /** Futaba catalog reply counts do not include the opening post. */
-fun ThreadPage.compatReplyCount(): Int = (posts.size - 1).coerceAtLeast(0)
+fun ThreadPage.compatReplyCount(): Int = (sitePostCount() - 1).coerceAtLeast(0)
 
 /** Convert the shared compatibility cache back into the modern thread model. */
 fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage(
@@ -156,7 +159,9 @@ fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage
             mail = cached.mail,
             thumbnailWidth = cached.thumbnailWidth,
             thumbnailHeight = cached.thumbnailHeight,
-            imageFileSizeBytes = cached.imageFileSizeBytes
+            imageFileSizeBytes = cached.imageFileSizeBytes,
+            attachments = cached.attachments,
+            displayNumber = cached.displayNumber
         )
     }
 )

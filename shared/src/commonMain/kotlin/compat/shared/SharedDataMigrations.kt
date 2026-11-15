@@ -82,12 +82,17 @@ object SharedDataMigrations {
         "tabs-ftutter-v1",
         "drafts-v1",
         "deletekey-v1",
-        "ownpost-v1"
+        "ownpost-v1",
+        AIMOGE_BOARDS_STAGE_ID
     )
 
     /** The registered stages, in the order of [PLANNED_STAGE_IDS]. */
     fun stagesFor(stateStore: AppStateStore, compat: CompatibilityStore? = null): List<SharedDataMigrationStage> =
-        listOfNotNull(BoardKeyedMapsStage(stateStore), compat?.let { FtutterTabsStage(stateStore, it) }, compat?.let { FutaberTabsStage(stateStore, it) })
+        listOfNotNull(
+            BoardKeyedMapsStage(stateStore), compat?.let { FtutterTabsStage(stateStore, it) }, compat?.let { FutaberTabsStage(stateStore, it) },
+            // AM-B5: only while あいもげ is on; off, the earlier-form あいもげ boards are kept as they are.
+            AimogeBoardsStage(stateStore).takeIf { com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled }
+        )
 
     fun markKey(stageId: String): String = MARK_KEY_PREFIX + stageId
 

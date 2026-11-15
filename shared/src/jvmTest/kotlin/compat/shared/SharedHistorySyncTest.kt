@@ -207,7 +207,9 @@ class SharedHistorySyncTest {
         assertTrue(state.history.first().isEmpty(), "both rows go")
         val root = generateSequence(File("").absoluteFile) { it.parentFile }.first { File(it, "shared/src").isDirectory }
         val app = File(root, "shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt").readText()
-        assertEquals(2, Regex("findModernHistoryEntriesFor\\(").findAll(app).count(), "both of としあき(仮)'s deletions of one row")
+        // One deletion uses the helper; the other (audit 2026-11-11 P2-M1) groups every AppState row of each thread in one pass.
+        assertEquals(1, Regex("findModernHistoryEntriesFor\\(").findAll(app).count(), "the single-row deletion of としあき(仮)")
+        assertTrue(".groupBy({ it.first }, { it.second })" in app && "found[entry.canonicalUrl].orEmpty()" in app, "the batch keeps every row of the thread")
         assertTrue("findModernHistoryEntryFor(" !in app)
     }
 }

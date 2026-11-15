@@ -40,6 +40,9 @@ internal class FutaberOfflineRepository(
 
     override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent =
         if (threadId == this.threadId) ThreadPageContent(page = page) else delegate.getThreadContent(board, threadId)
+
+    override suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent? =
+        if (threadId == this.threadId) ThreadPageContent(page = page) else delegate.getArchivedThreadContent(board, threadId)
 }
 
 /**

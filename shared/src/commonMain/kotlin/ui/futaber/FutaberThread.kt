@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.compat.isFallenSitePage
+import com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
 import com.valoser.futacha.shared.compat.toCompatPlainText
@@ -137,6 +139,9 @@ import com.valoser.futacha.shared.ui.board.requireWritableThreadBoard
 import com.valoser.futacha.shared.ui.board.performThreadAction
 import com.valoser.futacha.shared.ui.board.buildPosterIdLabels
 import com.valoser.futacha.shared.ui.board.messageHtmlToLines
+import com.valoser.futacha.shared.ui.board.aimogeSpoilerAt
+import com.valoser.futacha.shared.ui.board.toggleAimogeSpoiler
+import com.valoser.futacha.shared.ui.board.withAimogeDecorations
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.ui.util.ThreadDrawerBackGestureHandler
 import kotlinx.coroutines.CancellationException
@@ -232,6 +237,8 @@ internal fun FutaberThreadScreen(
     var liveConfirmed by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var confirmedGone by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var refreshTick by remember(board.id, ref.threadId) { mutableIntStateOf(0) }
+    // Set by the automatic re-reads (auto-scroll) so the あいもげ repository can hold them back; Futaba ignores it.
+    val nextReloadAutomatic = remember(board.id, ref.threadId) { booleanArrayOf(false) }
     // One list state per thread: switching threads (tabs, history) must not carry the previous thread's scroll position over.
     val listState = key(board.id, ref.threadId) { rememberLazyListState() }
     // The picture list keeps its place while this thread is open (closing and reopening it no longer goes to the top).
@@ -269,7 +276,12 @@ internal fun FutaberThreadScreen(
         load = load.copy(isLoading = true, errorMessage = null)
         try {
             val handed = prefetched[0].also { prefetched[0] = null }
-            val fetched = handed?.getOrThrow() ?: repository.getThreadContent(board.url, ref.threadId)
+            val automatic = nextReloadAutomatic[0].also { nextReloadAutomatic[0] = false }
+            val fetched = handed?.getOrThrow() ?: if (automatic) {
+                withAimogeAutomaticFetch { repository.getThreadContent(board.url, ref.threadId) }
+            } else {
+                repository.getThreadContent(board.url, ref.threadId)
+            }
             // A page the parser cut short, or one with fewer posts than the tabs of the other modes expect, is filled in
             // from the archives (only the shared repository does; others return it as it is).
             val content = (repository as? FutachaSharedBoardRepository)?.let { shared ->
@@ -281,9 +293,11 @@ internal fun FutaberThreadScreen(
                     fetched
                 }
             } ?: fetched
-            liveConfirmed = true
-            confirmedGone = false
-            archiveNotice = null
+            // あいもげ answers a fallen thread with its posts (ThreadPage.archived): shown as fallen, replies closed.
+            val siteFallen = content.page.isFallenSitePage()
+            liveConfirmed = !siteFallen
+            confirmedGone = siteFallen
+            archiveNotice = if (siteFallen) "スレッドは落ちました" else null
             offlineCopyNotice = null
             val shown = load.page
             // Only a reload that changed the posts leaves something to go back to.
@@ -291,8 +305,13 @@ internal fun FutaberThreadScreen(
             load = FutaberThreadLoad(page = content.page, isLoading = false)
             newCount.onLivePage(content.page.posts.size)
             onPageLoaded(content.page.posts)
-            onLivePageConfirmed()
-            autoSaver.onLivePage(content.page)
+            if (siteFallen) {
+                newCount.disarm()
+                onConfirmedGone()
+            } else {
+                onLivePageConfirmed()
+                autoSaver.onLivePage(content.page)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -442,7 +461,7 @@ internal fun FutaberThreadScreen(
         intervalMillis = LocalFutaberDisplaySettings.current.autoScrollSpeedMillis.toLong(),
         isDead = archiveNotice != null,
         listState = listState,
-        onReload = { refreshTick += 1 },
+        onReload = { nextReloadAutomatic[0] = true; refreshTick += 1 },
         onStop = { autoScrolling = false }
     )
     var ngDisabled by remember(board.id, ref.threadId) { mutableStateOf(false) }
@@ -450,6 +469,7 @@ internal fun FutaberThreadScreen(
     var mediaOpen by remember(board.id, ref.threadId) { mutableStateOf(false) }
     // The picture "ビューアで表示" (the image menu extension) opens the viewer on; null opens the picture list.
     var mediaInitialPostNo by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
+    var mediaInitialUrl by remember(board.id, ref.threadId) { mutableStateOf<String?>(null) }
     var saveOpen by remember(board.id, ref.threadId) { mutableStateOf(false) }
     // M15: the MHT format chosen in the alert over the menu (false: thumbnails only, true: the pictures too); null = none.
     var mhtSaveFull by remember(board.id, ref.threadId) { mutableStateOf<Boolean?>(null) }
@@ -774,7 +794,10 @@ internal fun FutaberThreadScreen(
                             smallImages = smallImages,
                             depth = row.depth,
                             onImageTap = if (mediaServices != null && futaberImageUrlOf(post) != null) {
-                                { mediaInitialPostNo = post.id; mediaOpen = true }
+                                { mediaInitialPostNo = post.id; mediaInitialUrl = null; mediaOpen = true }
+                            } else null,
+                            onExtraImageTap = if (mediaServices != null) {
+                                { url -> mediaInitialPostNo = post.id; mediaInitialUrl = url; mediaOpen = true }
                             } else null,
                             onImageLongPress = if (futaberImageUrlOf(post) != null) {
                                 { longPressHaptic(); imagePost = post }
@@ -905,6 +928,7 @@ internal fun FutaberThreadScreen(
                     // Posts hidden by NG (words, IDs, rules and look-alike pictures) leave the gallery and the viewer too.
                     hiddenPostNos = activeHidden,
                     initialPostNo = mediaInitialPostNo,
+                    initialMediaUrl = mediaInitialUrl,
                     onShowPost = { postId ->
                         // The post's own number, which stays valid when NG or a search narrows the list.
                         // S11: the post comes back as a bubble over the thread (the viewer closes), not as a scroll.
@@ -912,7 +936,7 @@ internal fun FutaberThreadScreen(
                             quoteStack = quoteStack + futaberMenuBubble(FutaberQuoteKind.FromViewer, listOf(post))
                         }
                     },
-                    onClose = { mediaOpen = false; mediaInitialPostNo = null }
+                    onClose = { mediaOpen = false; mediaInitialPostNo = null; mediaInitialUrl = null }
                 )
             }
             if (ngDialogOpen) {
@@ -1481,6 +1505,7 @@ internal fun FutaberPostRow(
     onQuoteLine: (line: String) -> Unit = {},
     /** Opens this post's picture in the thread's existing media viewer. */
     onImageTap: (() -> Unit)? = null,
+    onExtraImageTap: ((String) -> Unit)? = null,
     /** "n/N" when this post's IP posts more than once in the thread ([futaberIpCountLabels]); null otherwise. */
     ipCount: String? = null
 ) {
@@ -1525,17 +1550,23 @@ internal fun FutaberPostRow(
             ordinal, post, idLabel, ipCount, replyCount, onRepliesTap, onIdTap, onSaidaneTap, onNgTap, onLongPress,
             onIpLongPress = onIpLongPress, onTap = onTap
         )
+        // あいもげ: dice results in bold, hidden text covered until tapped (null for a Futaba body).
+        val decorations = remember(post.messageHtml) { com.valoser.futacha.shared.ui.board.aimogeLineDecorations(post.messageHtml) }
+        val firstSpoilers = remember(decorations) { decorations?.let { com.valoser.futacha.shared.ui.board.aimogeFirstSpoilerIndexes(it) } }
+        var revealedSpoilers by remember(post.messageHtml) { mutableStateOf(emptySet<Int>()) }
         Column(Modifier.padding(top = FUTABER_POST_HEADER_GAP_DP.dp)) {
-            lines.forEach { line ->
+            lines.forEachIndexed { lineIndex, line ->
                 val links = remember(line) { FutaberBodyLineCache.links(line) }
-                val annotatedLine = remember(line, links, colors.link) { androidx.compose.ui.text.buildAnnotatedString {
+                val lineDecorations = decorations?.getOrNull(lineIndex).orEmpty()
+                val hasSpoiler = lineDecorations.any { it.kind == com.valoser.futacha.shared.ui.board.AimogeDecorationKind.SPOILER }
+                val annotatedLine = remember(line, links, colors.link, lineDecorations, revealedSpoilers) { androidx.compose.ui.text.buildAnnotatedString {
                     append(line)
                     links.forEach { link ->
                         addStringAnnotation("body-url", link.url, link.start, link.endExclusive)
                         addStyle(androidx.compose.ui.text.SpanStyle(color = colors.link,
                             textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline), link.start, link.endExclusive)
                     }
-                } }
+                }.withAimogeDecorations(lineDecorations, revealedSpoilers, colors.body, firstSpoilers?.getOrNull(lineIndex) ?: 0) }
                 var lineLayout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
                 val isQuote = isFutaberQuoteLine(line)
                 val canOpen = isQuote && !post.isDeleted && futaberQuoteTargetIds(post, line).isNotEmpty()
@@ -1563,9 +1594,13 @@ internal fun FutaberPostRow(
                                 }
                             }
                             .testTag("futaber-quote-line")
-                    } else if (links.isNotEmpty()) Modifier.pointerInput(annotatedLine, bodyUrlLauncher) {
+                    } else if (links.isNotEmpty() || hasSpoiler) Modifier.pointerInput(annotatedLine, bodyUrlLauncher) {
                         detectTapGestures(
                             onTap = { position -> lineLayout?.getOffsetForPosition(position)?.let { offset ->
+                                annotatedLine.aimogeSpoilerAt(offset)?.let { index ->
+                                    revealedSpoilers = toggleAimogeSpoiler(revealedSpoilers, index)
+                                    return@let
+                                }
                                 annotatedLine.getStringAnnotations("body-url", offset, offset).firstOrNull()?.item?.let(bodyUrlLauncher)
                             } },
                             onLongPress = { position ->
@@ -1580,7 +1615,38 @@ internal fun FutaberPostRow(
             }
         }
         FutaberPostAttachment(post, smallImages, onImageTap, onImageLongPress, onLongPress)
+        // 本文のあぷ・あぷ小（fu123.jpg 等）：他モードと同じく、レスの中にサムネイルを並べ、押すとビューアのその頁（2026-11-12）。
+        if (display.extApuPreview) {
+            val apuUrls = remember(post.messageHtml, post.imageUrl, post.thumbnailUrl) { futaberInlineApuUrls(post) }
+            if (apuUrls.isNotEmpty()) {
+                Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 6.dp).testTag("futaber-apu-previews")) {
+                    com.valoser.futacha.shared.ui.compat.CompatInlineApuSmallPreviews(apuUrls,
+                        if (smallImages) 60 else 120, 1f) { url -> onExtraImageTap?.invoke(url) }
+                }
+            }
+        }
+        // あいもげ: the post's 2nd and 3rd files, each opening its own page of the viewer.
+        val extraAttachments = remember(post) { com.valoser.futacha.shared.service.threadSaveExtraAttachments(post) }
+        if (extraAttachments.isNotEmpty()) {
+            com.valoser.futacha.shared.ui.image.PostExtraAttachments(
+                attachments = extraAttachments,
+                postKey = post.id,
+                size = if (smallImages) 48.dp else 96.dp,
+                onClick = { url, _ -> onExtraImageTap?.invoke(url) },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 8.dp, end = 8.dp, bottom = 6.dp)
+            )
+        }
     }
+}
+
+/** 本文のあぷ・あぷ小のうち、レスの添付そのものでない物（引用行の分は除く）。 */
+internal fun futaberInlineApuUrls(post: Post): List<String> {
+    val main = setOfNotNull(
+        com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(post.imageUrl),
+        com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(post.thumbnailUrl)
+    )
+    return com.valoser.futacha.shared.ui.compat.compatInlineApuSmallMediaUrls(post.messageHtml)
+        .filterNot { com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(it) in main }
 }
 
 /** Width over height of a post thumbnail; unknown or degenerate sizes fall back to a square. */

@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.audio.voicevox
 
 import com.valoser.futacha.shared.audio.*
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.updateAndGet
@@ -86,25 +88,25 @@ internal class VoicevoxSpeechEngine(
                                 }
                             }
                             val native = requireNotNull(resources).native.session
-                            for (chunk in voicevoxTextChunks(text)) {
+                            suspend fun synthesizeChunk(chunk: String): ByteArray? = nativeExecution.withLock {
                                 ensureActive()
-                                if (!voicevoxHasSpokenText(chunk)) continue
-                                val wav = nativeExecution.withLock {
-                                    ensureActive()
-                                    val analyzed = try { native.query(chunk) }
-                                    catch (_: VoiceTextAnalysisException) { return@withLock null }
-                                    val original = Json.parseToJsonElement(analyzed).jsonObject
-                                    val query = JsonObject(original + mapOf(
-                                        "speedScale" to JsonPrimitive(configuration.rate.coerceIn(0.5f, 2f)),
-                                        "pitchScale" to JsonPrimitive(configuration.voicevoxPitch.coerceIn(-0.15f, 0.15f)),
-                                        "outputSamplingRate" to JsonPrimitive(24000),
-                                        "outputStereo" to JsonPrimitive(false)
-                                    )).toString()
-                                    ensureActive()
-                                    val result = native.synthesize(query)
-                                    ensureActive()
-                                    result
-                                }
+                                val analyzed = try { native.query(chunk) }
+                                catch (_: VoiceTextAnalysisException) { return@withLock null }
+                                val original = Json.parseToJsonElement(analyzed).jsonObject
+                                val query = JsonObject(original + voicevoxQueryOverrides(configuration)).toString()
+                                ensureActive()
+                                val result = native.synthesize(query)
+                                ensureActive()
+                                result
+                            }
+                            // may 1447418590: the next chunk is made while this one plays, so the voice does not
+                            // stop for the whole synthesis time between sentences and posts.
+                            val chunks = voicevoxTextChunks(text).filter(::voicevoxHasSpokenText)
+                            var next: Deferred<ByteArray?>? = chunks.firstOrNull()?.let { first -> async { synthesizeChunk(first) } }
+                            for (index in chunks.indices) {
+                                ensureActive()
+                                val wav = requireNotNull(next).await()
+                                next = chunks.getOrNull(index + 1)?.let { following -> async { synthesizeChunk(following) } }
                                 ensureActive() // A stopped call never emits its late result.
                                 if (wav == null) continue
                                 require(wav.size in 44..16 * 1024 * 1024) { "音声データの長さが不正です" }
@@ -211,3 +213,15 @@ internal fun voicevoxHasSpokenText(text: String): Boolean {
     }
     return false
 }
+
+/** The query settings put over the analysed sentence; the pauses around a sentence are shorter than VOICEVOX's 0.1 s. */
+internal fun voicevoxQueryOverrides(configuration: SpeechSettings): Map<String, JsonPrimitive> = mapOf(
+    "speedScale" to JsonPrimitive(configuration.rate.coerceIn(0.5f, 2f)),
+    "pitchScale" to JsonPrimitive(configuration.voicevoxPitch.coerceIn(-0.15f, 0.15f)),
+    "prePhonemeLength" to JsonPrimitive(VOICEVOX_EDGE_PAUSE_SECONDS),
+    "postPhonemeLength" to JsonPrimitive(VOICEVOX_EDGE_PAUSE_SECONDS),
+    "outputSamplingRate" to JsonPrimitive(24000),
+    "outputStereo" to JsonPrimitive(false)
+)
+
+internal const val VOICEVOX_EDGE_PAUSE_SECONDS = 0.04f

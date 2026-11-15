@@ -5,6 +5,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -28,7 +30,7 @@ import com.valoser.futacha.shared.compat.trimCompatInlineUrlEnd
 import kotlinx.coroutines.sync.Mutex
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
-private const val URL_ANNOTATION_TAG = "url"
+internal const val URL_ANNOTATION_TAG = "url"
 private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES = 512
 private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_BYTES = 2 * 1024 * 1024
 private const val THREAD_MESSAGE_URL_ANNOTATION_MAX_MATCHES = 64
@@ -38,7 +40,8 @@ private const val THREAD_MESSAGE_QUOTE_TARGET_MAX_COUNT = 256
 // ASCII URL characters only: a full-width space, 。, full-width brackets or following Japanese text
 // end the URL. Closing parentheses and sentence punctuation are trimmed like the としあき(仮) links.
 private val URL_REGEX = Regex("https?://$COMPAT_URL_BODY_CHAR_CLASS+", RegexOption.IGNORE_CASE)
-private val SCHEMELESS_URL_REGEX = Regex("ttps?://$COMPAT_URL_BODY_CHAR_CLASS+", RegexOption.IGNORE_CASE)
+// The lookbehind keeps the "ttps://" inside a normal "https://" from being linked a second time.
+private val SCHEMELESS_URL_REGEX = Regex("(?<![A-Za-z0-9])ttps?://$COMPAT_URL_BODY_CHAR_CLASS+", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
 
 private data class UrlMatch(
@@ -166,12 +169,16 @@ internal fun ThreadMessageText(
                 quoteColor = threadColors.quote, linkColor = threadColors.link)
         }
     }
-    val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle) {
-        val withNotices = if (isDeleted) AnnotatedString.Builder(baseAnnotated).apply {
-            com.valoser.futacha.shared.model.postDeletionNoticeRanges(baseAnnotated.text).forEach { range ->
+    var revealedSpoilers by remember(messageHtml) { mutableStateOf(emptySet<Int>()) }
+    val aimogeDecorations = remember(messageHtml) { aimogeTextDecorations(messageHtml) }
+    val spoilerCover = MaterialTheme.colorScheme.onSurfaceVariant
+    val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle, aimogeDecorations, revealedSpoilers, spoilerCover) {
+        val decorated = baseAnnotated.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover)
+        val withNotices = if (isDeleted) AnnotatedString.Builder(decorated).apply {
+            com.valoser.futacha.shared.model.postDeletionNoticeRanges(decorated.text).forEach { range ->
                 addStyle(SpanStyle(color = Color.Red), range.first, range.last + 1)
             }
-        }.toAnnotatedString() else baseAnnotated
+        }.toAnnotatedString() else decorated
         applyHighlightsToAnnotatedMessage(withNotices, highlightRanges, highlightStyle)
     }
 
@@ -229,6 +236,10 @@ internal fun ThreadMessageText(
                         return@detectTapGestures
                     }
                     val offset = layout.getOffsetForPosition(position)
+                    annotated.aimogeSpoilerAt(offset)?.let { index ->
+                        revealedSpoilers = toggleAimogeSpoiler(revealedSpoilers, index)
+                        return@detectTapGestures
+                    }
                     val url = annotated
                         .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
                         .firstOrNull()
@@ -382,7 +393,7 @@ internal fun assignThreadMessageQuoteReferences(
     return result
 }
 
-private fun buildAnnotatedMessageBase(
+internal fun buildAnnotatedMessageBase(
     html: String,
     quoteReferences: List<QuoteReference>,
     quoteColor: Color,
@@ -425,6 +436,16 @@ private fun buildAnnotatedMessageBase(
             ?: return@addThreadMessageUrlMatches null
         val normalized = if (target.startsWith("http")) target else "https://$target"
         UrlMatch(url = normalized, range = match.range)
+    }
+    // Bare あぷ / あぷ小 names (`fu1234567.txt`, `f123456.zip`, `fu1234567.jpg`): tappable, opening the file itself.
+    // ふたちゃ linked only full URLs, so a non-image file named in a post could not be opened at all.
+    com.valoser.futacha.shared.compat.compatBareApuFileLinks(builtText).forEach { link ->
+        if (urlMatches.none { it.range.first <= link.endExclusive - 1 && link.start <= it.range.last }) {
+            urlMatches += UrlMatch(url = link.url, range = link.start until link.endExclusive)
+        }
+    }
+    com.valoser.futacha.shared.network.aimoge.aimogePollOptionLinks(html, builtText).forEach { (range, url) ->
+        if (urlMatches.none { it.range.first <= range.last && range.first <= it.range.last }) urlMatches += UrlMatch(url = url, range = range)
     }
     val distinct = urlMatches
         .sortedBy { it.range.first }

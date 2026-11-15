@@ -152,8 +152,7 @@ class FutachaDraftPersistenceTest {
         fun keys(modern: Boolean, appState: Boolean) = compatSettingsGroups("control", modern, appState)
             .single { it.first == "ふたちゃ拡張" }.second.map { it.preferenceKey }
         val futacha = keys(modern = true, appState = false)
-        assertEquals(FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY, futacha.last())
-        assertEquals(listOf("controlCloseToastDuration", "controlPostDestinationConfirm", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY), futacha)
+        assertEquals(listOf("controlCloseToastDuration", "controlPostDestinationConfirm", "controlThreadEdgeSwipeBack", "controlViewerDoubleTapZoom", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY, "controlFutachaFlatMediaSave", "controlFutachaSwipeToCatalog"), futacha)
         assertFalse(FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY in keys(modern = false, appState = true))
         assertFalse(FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY in keys(modern = false, appState = false))
         val entry = compatSettingsGroups("control", true, false).flatMap { it.second }.single { it.preferenceKey == FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY }

@@ -18,7 +18,8 @@ import com.valoser.futacha.shared.compat.CompatReplyDraft
 import com.valoser.futacha.shared.compat.CompatTab
 import com.valoser.futacha.shared.compat.CompatibilityWorkspaceState
 import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
-import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
+import com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy
+import com.valoser.futacha.shared.compat.siteThreadUrlOnBoard
 import com.valoser.futacha.shared.compat.compatBoardKey
 import com.valoser.futacha.shared.compat.compatTabKey
 import com.valoser.futacha.shared.compat.CompatibilityStore
@@ -65,7 +66,7 @@ internal fun resolvePlatformAiThread(
             "${board.canonicalUrl.trimEnd('/')}/res/$number.htm"
         }
         ?: return null
-    val parsed = canonicalizeThreadUrl(targetUrl) ?: return null
+    val parsed = canonicalizeSiteThreadUrlAsLegacy(targetUrl) ?: return null
     val board = boards.firstOrNull { it.canonicalUrl.equals(parsed.canonicalBoardUrl, ignoreCase = true) }
         ?: CompatBoard(
             key = compatBoardKey(parsed.canonicalBoardUrl),

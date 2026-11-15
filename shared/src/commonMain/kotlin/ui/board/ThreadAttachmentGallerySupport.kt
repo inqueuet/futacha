@@ -27,7 +27,27 @@ internal data class AttachmentGalleryBadge(
 )
 
 internal fun buildThreadAttachmentGalleryItems(posts: List<Post>): List<ThreadAttachmentGalleryItem> {
-    return posts.mapNotNull(::buildThreadAttachmentGalleryItem)
+    return posts.flatMap(::postsForEachAttachment).mapNotNull(::buildThreadAttachmentGalleryItem)
+}
+
+/**
+ * The post itself, then one copy per 2nd/3rd あいもげ file whose image is that file, so a tap opens that file.
+ * A Futaba post has no [Post.attachments] and stays a single item.
+ */
+internal fun postsForEachAttachment(post: Post): List<Post> {
+    val extras = com.valoser.futacha.shared.service.threadSaveExtraAttachments(post)
+    val inline = threadInlineApuCopies(post, extras.map { it.url })
+    if (extras.isEmpty() && inline.isEmpty()) return listOf(post)
+    return listOf(post) + inline.takeIf { extras.isEmpty() }.orEmpty() + extras.map { attachment ->
+        post.copy(
+            imageUrl = attachment.url,
+            thumbnailUrl = attachment.thumbnailUrl,
+            thumbnailWidth = attachment.thumbnailWidth,
+            thumbnailHeight = attachment.thumbnailHeight,
+            imageFileSizeBytes = attachment.sizeBytes,
+            attachments = emptyList()
+        )
+    }
 }
 
 internal fun buildThreadAttachmentPreviewRequest(
@@ -77,4 +97,28 @@ private object StaticGifThumbnailTransformation : Transformation() {
     override val cacheKey: String = "static-gif-thumbnail"
 
     override suspend fun transform(input: Bitmap, size: Size): Bitmap = input
+}
+
+/**
+ * The 2nd and later あぷ/あぷ小 files written in the body: one copy per file whose image is that file, so the gallery
+ * and the viewer can open each of them (aimg 01a1d21b post-1: only the first of several loaded in ふたちゃ mode,
+ * because the viewer had a page only for the post's first file and a tap on another one found nothing).
+ */
+internal fun threadInlineApuCopies(post: Post, alsoShown: List<String> = emptyList()): List<Post> {
+    if (post.messageHtml.isBlank()) return emptyList()
+    val shown = (listOfNotNull(post.imageUrl, post.thumbnailUrl) + alsoShown)
+        .mapNotNull { com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(it) }.toSet()
+    return com.valoser.futacha.shared.ui.compat.compatInlineApuSmallMediaUrls(post.messageHtml)
+        .filterNot { com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(it) in shown }
+        .map { url ->
+            post.copy(
+                imageUrl = url,
+                thumbnailUrl = com.valoser.futacha.shared.ui.compat.compatApuSmallThumbnailUrl(url)
+                    .takeIf { determineMediaType(url) == MediaType.Video },
+                thumbnailWidth = null,
+                thumbnailHeight = null,
+                imageFileSizeBytes = null,
+                attachments = emptyList()
+            )
+        }
 }

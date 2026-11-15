@@ -58,6 +58,8 @@ import com.valoser.futacha.shared.ui.compat.CompatibilityApp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.click
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Before
@@ -897,6 +899,39 @@ class CompatViewerGestureInstrumentedTest {
         image.performTouchInput { swipeLeft() }
         rule.onNodeWithText("1/2").assertIsDisplayed()
         image.performTouchInput { swipeUp() }
+        rule.onNodeWithText("1/2").assertIsDisplayed()
+    }
+
+    @Test
+    fun theDoubleTapZoomSettingZoomsWithOneFingerAndBack() {
+        // 1447421636 / 1447426180 / 1447426705: off by default (the display mode cycle stays).
+        runBlocking { store.savePreference("compat.control.controlViewerDoubleTapZoom", "ON") }
+        rule.setContent {
+            MaterialTheme {
+                CompatibilityApp(store = store, repository = null, initialThreadDeepLink = threadUrl, onExitApplication = {})
+            }
+        }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithContentDescription("No.1の画像").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("No.1の画像").performClick()
+        waitForViewerCounter("1/2")
+        val image = rule.onNodeWithContentDescription("No.1の画像")
+        image.assert(hasStateDescription("拡大率 100% 位置 0,0"))
+        image.performTouchInput { doubleClick(center) }
+        rule.waitForIdle()
+        check(!image.fetchSemanticsNode().config[SemanticsProperties.StateDescription].startsWith("拡大率 100%")) { "double tap did not zoom" }
+        image.performTouchInput { doubleClick(center) }
+        rule.waitForIdle()
+        image.assert(hasStateDescription("拡大率 100% 位置 0,0"))
+        // Tap, then touch again and slide up: one-finger zoom in.
+        image.performTouchInput {
+            click(center); advanceEventTime(80)
+            down(center); for (i in 1..20) moveBy(Offset(0f, -15f)); up()
+        }
+        rule.waitForIdle()
+        val zoomed = image.fetchSemanticsNode().config[SemanticsProperties.StateDescription]
+        check(zoomed.startsWith("拡大率") && !zoomed.startsWith("拡大率 100%")) { "one-finger zoom did not zoom: $zoomed" }
         rule.onNodeWithText("1/2").assertIsDisplayed()
     }
 

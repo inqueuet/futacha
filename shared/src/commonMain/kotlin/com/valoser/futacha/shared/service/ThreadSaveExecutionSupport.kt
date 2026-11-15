@@ -100,7 +100,9 @@ internal fun buildThreadSaveMediaDownloadPlan(
     val scheduledKeys = linkedSetOf<String>()
     val scheduledItems = buildList {
         posts.forEach { post ->
-            post.thumbnailUrl?.let { thumbnailUrl ->
+            val extras = threadSaveExtraAttachments(post)
+            (listOf(post.thumbnailUrl to post.imageUrl) + extras.map { it.thumbnailUrl to it.url }).forEach { (thumbnailUrl, imageUrl) ->
+            thumbnailUrl?.let { thumbnailUrl ->
                 val key = buildThreadSaveMediaDownloadKey(thumbnailUrl, ThreadSaveMediaRequestType.THUMBNAIL)
                 if (scheduledKeys.add(key) && size < maxMediaItems) {
                     add(
@@ -112,7 +114,7 @@ internal fun buildThreadSaveMediaDownloadPlan(
                     )
                 }
             }
-            post.imageUrl?.let { imageUrl ->
+            imageUrl?.let { imageUrl ->
                 val key = buildThreadSaveMediaDownloadKey(imageUrl, ThreadSaveMediaRequestType.FULL_IMAGE)
                 if (scheduledKeys.add(key) && size < maxMediaItems) {
                     add(
@@ -123,6 +125,7 @@ internal fun buildThreadSaveMediaDownloadPlan(
                         )
                     )
                 }
+            }
             }
         }
     }
@@ -228,7 +231,8 @@ internal suspend fun buildThreadSaveSavedPosts(
                 post = post,
                 mediaKeyToFileInfoMap = mediaKeyToFileInfoMap
             ),
-            urlToPathMap = urlToPathMap
+            urlToPathMap = urlToPathMap,
+            mediaKeyToFileInfoMap = mediaKeyToFileInfoMap
         )
     }
     return savedPosts

@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.compat.BoardSite
+import com.valoser.futacha.shared.compat.aimogeBoardShapeOf
+import com.valoser.futacha.shared.compat.boardSiteOf
+import com.valoser.futacha.shared.compat.siteThreadUrlOf
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.describeFailureForLog
@@ -62,6 +66,10 @@ internal object BoardUrlResolver {
         if (threadId.isBlank()) {
             throw IllegalArgumentException("Thread ID cannot be blank")
         }
+        siteThreadUrlOf(boardUrl, threadId)?.let { return it }
+        if (boardSiteOf(boardUrl) == BoardSite.AIMOGE) {
+            throw IllegalArgumentException("Invalid あいもげ thread ID")
+        }
 
         // Validate threadId to prevent path traversal attacks
         val sanitizedThreadId = sanitizeNumericId(threadId)
@@ -102,6 +110,9 @@ internal object BoardUrlResolver {
     fun resolveBoardBaseUrl(boardUrl: String): String {
         if (boardUrl.isBlank()) {
             throw IllegalArgumentException("Board URL cannot be blank")
+        }
+        if (boardSiteOf(boardUrl) == BoardSite.AIMOGE) {
+            return aimogeBoardShapeOf(boardUrl)!!.removeSuffix("/")
         }
 
         // Auto-fix missing scheme

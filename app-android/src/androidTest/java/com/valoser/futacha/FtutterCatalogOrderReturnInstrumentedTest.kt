@@ -33,10 +33,12 @@ class FtutterCatalogOrderReturnInstrumentedTest {
     private var commonWords by mutableStateOf<List<String>>(emptyList())
     private val calls = CopyOnWriteArrayList<Pair<String, CatalogMode>>()
     private lateinit var loader: ImageLoader
+    @Volatile private var sinkAfterFirst = false
     private val repository = object : BoardRepository by FakeBoardRepository() {
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
             calls += board to mode
-            return CatalogPageContent((1..100).map { n -> CatalogItem(id = "$n", threadUrl = "${board}res/$n.htm",
+            val order = if (sinkAfterFirst && calls.size > 1) (1..100).filter { it !in 25..40 } + (25..40) else (1..100).toList()
+            return CatalogPageContent(order.map { n -> CatalogItem(id = "$n", threadUrl = "${board}res/$n.htm",
                 title = "M69 item $n", thumbnailUrl = null, fullImageUrl = null, replyCount = n) })
         }
     }
@@ -134,6 +136,20 @@ class FtutterCatalogOrderReturnInstrumentedTest {
         repeat(5) { rule.waitForIdle(); Thread.sleep(300) }
         assertEquals(position, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
     }
+    // 1447450829: on may the threads at the top of the screen sink to the end of the next catalog; the keyed grid followed
+    // them down to the isolated threads at the bottom. The place is kept by position, as in the original app.
+    @Test fun aNewCatalogWhereTheShownThreadsSankKeepsThePlaceInsteadOfFollowingThem() {
+        sinkAfterFirst = true
+        start()
+        rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+        rule.waitForIdle()
+        val position = holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset
+        assertTrue(position.first in 25..40)
+        rule.runOnUiThread { holder.refreshTick++ }
+        awaitLoaded(2)
+        repeat(3) { rule.waitForIdle(); Thread.sleep(200) }
+        assertEquals(position.first, holder.gridState.firstVisibleItemIndex)
+    }
     @Test fun theStaggeredGridKeepsItsPlaceAcrossAThreadToo() {
         preferences = preferences + (FtutterKeys.SAME_HEIGHT_GRID to "false")
         start()
@@ -185,5 +201,28 @@ class FtutterCatalogOrderReturnInstrumentedTest {
         rule.onNodeWithTag("ftutter-catalog-grid").performTouchInput { swipeDown(startY = height * .3f, endY = height * .7f, durationMillis = 40) }
         rule.waitForIdle(); Thread.sleep(1_500); rule.waitForIdle()
         assertEquals(0 to 0, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
+    }
+    /** Report 2026-11-12: img → thread → back kept the place, but then may → thread → back went to the top. */
+    @Test fun theSecondBoardAlsoKeepsItsPlaceAfterAThread() {
+        start()
+        for ((index, target) in listOf(a, b).withIndex()) {
+            if (index > 0) {
+                // Leave for the board list and open the other board, as the app does.
+                rule.runOnUiThread { child = "boards" }; rule.waitForIdle()
+                rule.runOnUiThread { board = target; holder.openBoard(target.id); child = null }
+                rule.waitUntil(10_000) { holder.load?.key?.startsWith(target.id) == true && holder.load?.loading == false }
+                rule.waitForIdle()
+                assertEquals("another board starts at the top", 0, holder.gridState.firstVisibleItemIndex)
+            }
+            rule.onNodeWithTag("ftutter-catalog-grid").performScrollToIndex(30)
+            rule.waitForIdle()
+            val position = holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset
+            assertTrue(position.first > 0)
+            rule.onNodeWithText("M69 item 31").performTouchInput { click(center) }
+            rule.onNodeWithText("M69 thread").assertExists()
+            returnFromChild()
+            repeat(5) { rule.waitForIdle(); Thread.sleep(300) }
+            assertEquals(target.name, position, holder.gridState.firstVisibleItemIndex to holder.gridState.firstVisibleItemScrollOffset)
+        }
     }
 }

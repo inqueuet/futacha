@@ -9,6 +9,10 @@ import kotlinx.coroutines.launch
 import platform.Foundation.NSURL
 import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIModalPresentationFullScreen
+import platform.UIKit.popoverPresentationController
+import platform.UIKit.UIViewController
+import platform.CoreGraphics.CGRectMake
+import kotlinx.cinterop.useContents
 import com.valoser.futacha.shared.util.currentIosPresentationController
 
 @Composable
@@ -27,11 +31,9 @@ actual fun rememberCompatShareLauncher(): (
                 val startedAccess = scopedUrl?.startAccessingSecurityScopedResource() == true
                 val item: Any = absoluteFilePath?.let { NSURL.fileURLWithPath(it) } ?: text
                 val controller = UIActivityViewController(listOf(item), null).apply {
-                    // A UIActivityViewController presented from Compose has no stable
-                    // UIKit source rect.  Full-screen presentation is the iPad-safe
-                    // adaptive substitute and avoids the popover-anchor crash.
                     modalPresentationStyle = UIModalPresentationFullScreen
                 }
+                anchorCompatShare(controller, presenter)
                 controller.completionWithItemsHandler = { _, _, _, _ ->
                     if (startedAccess) scopedUrl?.stopAccessingSecurityScopedResource()
                 }
@@ -45,5 +47,17 @@ actual fun rememberCompatShareLauncher(): (
                 )
             }
         }
+    }
+}
+
+/** UIKit still requires an anchor on iPad when the activity controller is marked full screen. */
+internal fun anchorCompatShare(controller: UIActivityViewController, presenter: UIViewController) {
+    controller.popoverPresentationController?.let { popover ->
+        val view = presenter.view
+        popover.sourceView = view
+        popover.sourceRect = view.bounds.useContents {
+            CGRectMake(origin.x + size.width / 2, origin.y + size.height / 2, 1.0, 1.0)
+        }
+        popover.permittedArrowDirections = 0uL
     }
 }

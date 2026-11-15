@@ -174,6 +174,19 @@ class CompactThreadHeaderInstrumentedTest {
         assertSingleLineTitle()
     }
 
+    /** Review 2026-11-11: the × first clears typed words, then a second tap closes the search. */
+    @Test fun threadSearchCrossClearsTheWordsBeforeClosing() {
+        open(fontScale = 1f)
+        rule.onNodeWithContentDescription("スレ内検索").performClick()
+        val field = rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("futacha-thread-top-bar")))
+        field.performTextInput("abc")
+        rule.onNodeWithContentDescription("入力を消去").assertIsDisplayed().performClick()
+        rule.waitForIdle()
+        assertEquals("", field.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text)
+        rule.onNodeWithContentDescription("検索を閉じる").assertIsDisplayed().performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("thread-search-clear-or-close").fetchSemanticsNodes().isEmpty() }
+    }
+
     @Test fun flatQuotePreviewUsesCompactPostHeader() = verifyQuote(false)
     @Test fun treeQuotePreviewUsesCompactPostHeader() = verifyQuote(true)
 

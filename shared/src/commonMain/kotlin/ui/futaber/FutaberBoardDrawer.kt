@@ -87,7 +87,11 @@ internal fun FutaberBoardDrawer(
      * Stores the order a drag left (the ids of the boards as shown) in one write; null moves the board one step at a
      * time as before (one write per row passed; audit B4).
      */
-    onReorderBoards: ((List<String>) -> Unit)? = null
+    onReorderBoards: ((List<String>) -> Unit)? = null,
+    /** Opens あいもげのイベントカレンダー (a row under the boards); null = not offered. */
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    /** Opens まとめカタログ (a row under the boards); null = not offered. */
+    onOpenMix: (() -> Unit)? = null
 ) {
     val colors = LocalFutaberColors.current
     var editing by rememberSaveable { mutableStateOf(false) }
@@ -118,7 +122,7 @@ internal fun FutaberBoardDrawer(
             )
             FutaberDrawerBoardList(
                 shownBoards, selectedBoardId, editing, boardsFromBottom, onSelect, onMoveBoard, askDelete, onTogglePin,
-                Modifier.weight(1f).fillMaxWidth(), onReorderBoards
+                Modifier.weight(1f).fillMaxWidth(), onReorderBoards, onOpenAimogeCalendar, onOpenMix
             )
             FutaberDrawerFooter(
                 editing = editing,
@@ -191,8 +195,11 @@ private fun FutaberDrawerBoardList(
     onAskDelete: (BoardSummary) -> Unit,
     onTogglePin: ((BoardSummary) -> Unit)?,
     modifier: Modifier,
-    onReorderBoards: ((List<String>) -> Unit)? = null
+    onReorderBoards: ((List<String>) -> Unit)? = null,
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    onOpenMix: (() -> Unit)? = null
 ) {
+    val colors = LocalFutaberColors.current
     // The order while a board is dragged (the stored list changes when the finger is lifted).
     var order by remember(shownBoards) { mutableStateOf(shownBoards) }
     var dragId by remember { mutableStateOf<String?>(null) }
@@ -247,6 +254,26 @@ private fun FutaberDrawerBoardList(
                 },
                 onDragEnd = ::finishDrag
             )
+        }
+        if (onOpenMix != null && !editing) {
+            item(key = "mix-catalog") {
+                androidx.compose.material3.Text(
+                    "まとめカタログ",
+                    color = colors.drawerText,
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenMix)
+                        .padding(horizontal = 16.dp, vertical = 14.dp).testTag("futaber-mix-catalog")
+                )
+            }
+        }
+        if (onOpenAimogeCalendar != null && !editing) {
+            item(key = "aimoge-calendar") {
+                androidx.compose.material3.Text(
+                    "あいもげのイベントカレンダー",
+                    color = colors.drawerText,
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenAimogeCalendar)
+                        .padding(horizontal = 16.dp, vertical = 14.dp).testTag("futaber-aimoge-calendar")
+                )
+            }
         }
     }
 }
@@ -403,9 +430,15 @@ private fun FutaberDrawerFooter(
 
 /** S05: futaber's 「板の追加」 alert, one field holding 「https://」; OK with no address says why and adds nothing. */
 @Composable
-private fun FutaberAddBoardAlert(existing: List<BoardSummary>, onAddBoard: (name: String, url: String) -> Unit, onDismiss: () -> Unit) {
+internal fun FutaberAddBoardAlert(existing: List<BoardSummary>, onAddBoard: (name: String, url: String) -> Unit, onDismiss: () -> Unit,
+    loadAimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null) {
     var url by rememberSaveable { mutableStateOf(FUTABER_ADD_BOARD_PREFILL) }
     var reason by remember { mutableStateOf<String?>(null) }
+    val aimogeAdder = com.valoser.futacha.shared.ui.aimoge.rememberAimogeBoardUrlAdder(
+        onAdd = { name, boardUrl -> onDismiss(); onAddBoard(name, boardUrl) },
+        registeredUrls = existing.mapNotNull { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) }.toSet(),
+        loadBoards = loadAimogeBoards
+    )
     FutaberAlert(
         title = "板の追加",
         message = reason,
@@ -414,7 +447,11 @@ private fun FutaberAddBoardAlert(existing: List<BoardSummary>, onAddBoard: (name
             FutaberAlertButton("add-board-cancel", "キャンセル", FutaberAlertStyle.Cancel, tag = "futaber-add-board-cancel") { onDismiss() },
             FutaberAlertButton("add-board-ok", "OK", tag = "futaber-add-board-submit") {
                 val why = futaberAddBoardAlertReason(url, existing)
-                if (why != null) reason = why else {
+                val aimoge = com.valoser.futacha.shared.ui.aimoge.classifyAimogeBoardUrlInput(url)
+                if (why != null) reason = why
+                else if (aimoge == com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards) aimogeAdder.selectBoards()
+                else if (aimoge is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board) aimogeAdder.start(aimoge.url)
+                else {
                     onDismiss()
                     // The name is made from the address, as an add without a name always did (no request is sent to name it).
                     onAddBoard("", url)

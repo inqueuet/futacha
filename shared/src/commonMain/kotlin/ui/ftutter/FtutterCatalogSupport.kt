@@ -163,6 +163,14 @@ internal fun ftutterBoardForUrl(boards: List<BoardSummary>, url: String): BoardS
         val base = if (u.contains("/res/")) u.substringBefore("/res/") + "/" else ftutterBoardBaseUrl(u)
         return base.substringAfter("://").lowercase()
     }
+    // あいもげのスレ・カタログのURL（/b/{slug}/thread/{uuid}）は、正規の板URLで照らし合わせる。
+    val trimmed = url.trim()
+    val aimogeSite = com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+    (com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl(trimmed)?.takeIf { it.site == aimogeSite }?.canonicalBoardUrl
+        ?: com.valoser.futacha.shared.compat.canonicalizeSiteBoardUrl(trimmed)?.takeIf { it.site == aimogeSite }?.canonicalUrl)
+        ?.let { aimoge ->
+            return boards.firstOrNull { com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(it.url) == aimoge }
+        }
     val wanted = key(url.trim())
     return boards.firstOrNull { key(it.url) == wanted }
 }

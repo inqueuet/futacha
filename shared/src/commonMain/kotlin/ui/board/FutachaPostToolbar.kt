@@ -38,7 +38,11 @@ internal fun FutachaPostToolbar(
     // False while the form is still stripping/compressing the previous attachment (U-4).
     attachmentEnabled: Boolean = true,
     attachmentPickerPreference: com.valoser.futacha.shared.util.AttachmentPickerPreference,
-    preferredFileManagerPackage: String?
+    preferredFileManagerPackage: String?,
+    /** The form's attachment now, so a multiple pick knows whether its first picture becomes it. */
+    currentAttachment: ImageData? = null,
+    /** False on a reply that takes no normal attachment (img): every picked picture then goes to あぷ小. */
+    attachmentAllowed: Boolean = true
 ) {
     val scope = rememberCoroutineScope()
     val latestComment by rememberUpdatedState(comment)
@@ -80,14 +84,38 @@ internal fun FutachaPostToolbar(
     )
     val pickUps = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
         preferredFileManagerPackage = preferredFileManagerPackage,
         onSelectionError = { message = it },
-        onImageSelected = {
-            if (!isCompatUpsUploadSizeAllowed(it.bytes.size)) message = "あぷ小は3000KBまでです"
-            else {
-                upsComment = ""
-                upsDeleteKey = features.preferences.compatStoredPostDeleteKey().ifBlank { password }
-                upsAttachment = it
+        onImageSelected = { picked ->
+            scope.launch {
+                val prepared = com.valoser.futacha.shared.ui.compat.prepareCompatUpsUpload(picked).getOrNull()
+                if (prepared == null) message = "あぷ小は3000KBまでです"
+                else {
+                    if (prepared.shrunk) message = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_SHRUNK_NOTICE
+                    upsComment = ""
+                    upsDeleteKey = features.preferences.compatStoredPostDeleteKey().ifBlank { password }
+                    upsAttachment = prepared.image
+                }
+            }
+        }
+    )
+    val isAimogeBoard = remember(boardUrl) { com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE }
+    val latestAttachment by rememberUpdatedState(currentAttachment)
+    val pickMany = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
+        maxCount = com.valoser.futacha.shared.ui.compat.compatMultiPickMax(isAimogeBoard),
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
+        onSelectionError = { message = it },
+        onImagesSelected = { picked ->
+            perform {
+                val client = features.httpClient
+                val key = features.preferences.compatStoredPostDeleteKey().ifBlank { password }
+                message = com.valoser.futacha.shared.ui.compat.applyCompatPickedPictures(
+                    picked, latestAttachment, attachmentAllowed, isAimogeBoard, boardUrl,
+                    setAttachment = onImageSelected,
+                    upload = client?.let { c -> { image -> uploadCompatUps(c, image, "", key, features.appVersion).getOrThrow() } },
+                    appendName = { onCommentChange(appendCompatPostText(latestComment, it)) }
+                )
             }
         }
     )
@@ -146,6 +174,10 @@ internal fun FutachaPostToolbar(
                 DropdownMenuItem(text = { Text("画像を選択") }, onClick = { attachmentMenu = false; onChooseImage() })
                 DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = attachmentEnabled, onClick = { attachmentMenu = false; onPasteImage() })
                 DropdownMenuItem(text = { Text("動画を選択") }, onClick = { attachmentMenu = false; onChooseVideo() })
+                pickMany?.let { launch ->
+                    DropdownMenuItem(text = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_MULTI_PICK_LABEL) },
+                        onClick = { attachmentMenu = false; launch() })
+                }
             }
         }
     }

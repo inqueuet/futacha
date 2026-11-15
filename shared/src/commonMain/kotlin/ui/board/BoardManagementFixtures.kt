@@ -12,6 +12,7 @@ enum class BoardManagementMenuAction(val label: String) {
     REORDER("並び替え"),
     DELETE("削除"),
     SAVED_THREADS("保存済み"),
+    MIX("まとめカタログ"),
     SETTINGS("設定"),
 }
 

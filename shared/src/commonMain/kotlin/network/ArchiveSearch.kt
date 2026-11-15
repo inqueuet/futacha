@@ -129,6 +129,8 @@ fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
 
 fun extractArchiveSearchScope(boardUrl: String?): ArchiveSearchScope? {
     if (boardUrl.isNullOrBlank()) return null
+    // あいもげ boards are never sent to the Futaba archive search services.
+    if (com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl) != null) return null
     return runCatching {
         if (!boardUrl.contains("://")) return null
         val normalizedUrl = resolveBaseUrlFromThreadUrl(boardUrl) ?: boardUrl

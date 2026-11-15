@@ -22,7 +22,8 @@ internal data class ViewerImagePainter(
 @Composable
 internal fun rememberViewerImagePainter(
     request: ImageRequest?,
-    imageLoader: ImageLoader
+    imageLoader: ImageLoader,
+    animate: Boolean = false
 ): ViewerImagePainter = key(request, imageLoader) {
     if (request == null) {
         // A null Coil model is an error, not a request that waits for layout/data.
@@ -32,6 +33,9 @@ internal fun rememberViewerImagePainter(
         // Keying only the painter would still let collectAsState retain the old
         // request's Error for the first composition after switching flows.
         val state by painter.state.collectAsState()
-        ViewerImagePainter(painter, state)
+        ViewerImagePainter(platformAnimatedViewerPainter(state, painter, animate), state)
     }
 }
+
+@Composable
+internal expect fun platformAnimatedViewerPainter(state: AsyncImagePainter.State, fallback: Painter, animate: Boolean): Painter

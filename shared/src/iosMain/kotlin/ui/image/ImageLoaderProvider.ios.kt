@@ -12,6 +12,7 @@ import platform.Foundation.NSUserDomainMask
 
 actual fun ComponentRegistry.Builder.addPlatformImageComponents() {
     add(IosLowMemoryImageInterceptor())
+    add(IosGifDecoderFactory())
     add(IosAdmittedDecoderFactory(SkiaImageDecoder.Factory()))
     add(IosVideoFrameFetcher.Factory())
 }

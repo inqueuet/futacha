@@ -122,6 +122,8 @@ internal fun PrivacyModeHost(
         Box(Modifier.fillMaxSize().then(if (draw) Modifier.privacyFilter(options) else Modifier)) {
             content()
         }
+        // あいもげ writes ask at the tap (AM-B10), the same in all 4 modes.
+        com.valoser.futacha.shared.ui.aimoge.AimogeWritePromptHost(store)
     }
 }
 

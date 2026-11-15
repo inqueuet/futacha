@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.aimogeBoardShapeOf
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
@@ -49,6 +50,8 @@ internal fun normalizeCompatArchiveApuViewLabels(page: ThreadPage): ThreadPage =
  * incomplete or unavailable.
  */
 internal fun buildCompatArchiveThreadCandidates(sourceUrl: String): List<String> = buildList {
+    // The external archives are Futaba's: an あいもげ thread is never looked up there (AM-B4).
+    if (aimogeBoardShapeOf(sourceUrl) != null) return@buildList
     buildInqueuetArchiveThreadUrlFromUrl(sourceUrl)?.let(::add)
     add(buildCompatFtbucketUrl(sourceUrl))
     buildCompatForestUrl(sourceUrl)?.let(::add)

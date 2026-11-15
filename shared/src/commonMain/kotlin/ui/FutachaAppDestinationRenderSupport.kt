@@ -29,6 +29,10 @@ internal sealed interface FutachaResolvedDestinationContent {
     data class Thread(
         val props: FutachaThreadDestinationProps
     ) : FutachaResolvedDestinationContent
+
+    data class MixCatalog(val mix: com.valoser.futacha.shared.mix.ResolvedMix) : FutachaResolvedDestinationContent
+
+    data class MissingMix(val mixId: String) : FutachaResolvedDestinationContent
 }
 
 internal fun buildFutachaResolvedDestinationContent(
@@ -102,6 +106,9 @@ internal fun buildFutachaResolvedDestinationContent(
                 )
             )
         }
+
+        is FutachaDestination.MixCatalog -> FutachaResolvedDestinationContent.MixCatalog(destination.mix)
+        is FutachaDestination.MissingMix -> FutachaResolvedDestinationContent.MissingMix(destination.mixId)
 
         is FutachaDestination.Thread -> {
             val historyContext = buildFutachaThreadHistoryContext(

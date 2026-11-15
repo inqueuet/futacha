@@ -474,8 +474,21 @@ private fun expandCompatInlineApuMedia(post: CompatPostSnapshot): List<CompatPos
     )
     val inlineUrls = compatInlineApuSmallMediaUrls(normalized.messageHtml)
         .filterNot { compatMediaFileIdentity(it) in primaryMediaIdentities }
+    val extraAttachments = compatExtraAttachments(normalized)
     return buildList {
         add(normalized)
+        extraAttachments.forEachIndexed { index, attachment ->
+            add(
+                normalized.copy(
+                    imageUrl = attachment.url,
+                    thumbnailUrl = attachment.thumbnailUrl,
+                    thumbnailWidth = attachment.thumbnailWidth,
+                    thumbnailHeight = attachment.thumbnailHeight,
+                    imageFileSizeBytes = attachment.sizeBytes,
+                    mediaKey = "${normalized.postNo}::att::${index + 1}"
+                )
+            )
+        }
         inlineUrls.forEachIndexed { index, url ->
             add(
                 normalized.copy(
@@ -489,6 +502,16 @@ private fun expandCompatInlineApuMedia(post: CompatPostSnapshot): List<CompatPos
             )
         }
     }
+}
+
+/**
+ * The 2nd and 3rd files of an あいもげ post (the first is the post's own [CompatPostSnapshot.imageUrl]). Empty for a
+ * Futaba post, which never carries [CompatPostSnapshot.attachments].
+ */
+internal fun compatExtraAttachments(post: CompatPostSnapshot): List<com.valoser.futacha.shared.model.PostAttachment> {
+    if (post.attachments.size < 2) return emptyList()
+    val primary = setOfNotNull(post.imageUrl, post.thumbnailUrl).map(::compatCanonicalMediaUrl).toSet()
+    return post.attachments.drop(1).filter { it.url.isNotBlank() && compatCanonicalMediaUrl(it.url) !in primary }
 }
 
 internal fun compatMediaPostsWithInlineApu(posts: List<CompatPostSnapshot>): List<CompatPostSnapshot> =

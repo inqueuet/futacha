@@ -299,6 +299,11 @@ internal sealed interface CompatPostAttachmentDecision {
     data object UnsupportedExtension : CompatPostAttachmentDecision
     data object OversizedVideo : CompatPostAttachmentDecision
     data object AskImageCompression : CompatPostAttachmentDecision
+    /**
+     * A still picture in a format the board does not take (img/b: WebP) where JPEG is taken: it is drawn again as
+     * JPEG (transparency on white, an animation keeps its first frame) instead of being refused.
+     */
+    data object ConvertToJpeg : CompatPostAttachmentDecision
 }
 
 internal fun compatPostAttachmentDecisionMessage(
@@ -311,6 +316,8 @@ internal fun compatPostAttachmentDecisionMessage(
     CompatPostAttachmentDecision.MissingFileName -> "ファイル名が不明です"
     CompatPostAttachmentDecision.UnsupportedExtension ->
         "対応しないフォーマットです\n${compatPostAttachmentExtension(fileName)}"
+    CompatPostAttachmentDecision.ConvertToJpeg ->
+        "この板は${compatPostAttachmentExtension(fileName).uppercase()}を添付できないため、JPEGに変換して添付します"
     CompatPostAttachmentDecision.OversizedVideo,
     CompatPostAttachmentDecision.AskImageCompression ->
         "ファイルサイズ超過です\n${compatPostAttachmentLimitLabel(maxBytes)}まで"
@@ -365,6 +372,10 @@ internal fun decideCompatPostAttachment(
 ): CompatPostAttachmentDecision = when {
     attachment.bytes.isEmpty() -> CompatPostAttachmentDecision.EmptyPayload
     attachment.fileName.isBlank() -> CompatPostAttachmentDecision.MissingFileName
+    compatPostAttachmentExtension(attachment.fileName) !in supportedExtensions.map(String::lowercase) &&
+        compatPostAttachmentKind(attachment.fileName) == CompatPostAttachmentKind.IMAGE &&
+        supportedExtensions.any { it.equals("jpg", ignoreCase = true) } ->
+        CompatPostAttachmentDecision.ConvertToJpeg
     compatPostAttachmentExtension(attachment.fileName) !in supportedExtensions.map(String::lowercase) ->
         CompatPostAttachmentDecision.UnsupportedExtension
     compatPostAttachmentKind(attachment.fileName) == CompatPostAttachmentKind.UNSUPPORTED ->

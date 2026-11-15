@@ -28,10 +28,11 @@ internal data class ThreadScreenPostActionInputs(
         successMessage: String,
         failurePrefix: String,
         onSuccess: () -> Unit,
-        block: suspend () -> Unit
+        /** Returns the server's own reply when there is one (may 1447424708: show Futaba's words). */
+        block: suspend () -> Any?
     ) -> Unit,
-    val voteSaidane: suspend (Post) -> Unit,
-    val requestDeletion: suspend (Post) -> Unit
+    val voteSaidane: suspend (Post) -> Any?,
+    val requestDeletion: suspend (Post) -> Any?
 )
 
 internal fun buildThreadScreenPostActionHandlers(
@@ -55,16 +56,18 @@ internal fun buildThreadScreenPostActionHandlers(
                     "post_has_media" to analyticsPresentValue(post.imageUrl)
                 )
             )
+            var serverReply: Any? = null
             inputs.launchUnitAction(
                 actionState.successMessage,
                 actionState.failurePrefix,
                 {
-                    actionState.updatedLabel?.let { updatedLabel ->
+                    val count = (serverReply as? String)?.trim()?.toLongOrNull()?.takeIf { it >= 0 }
+                    (count?.let { "そうだねx$it" } ?: actionState.updatedLabel)?.let { updatedLabel ->
                         inputs.onSaidaneLabelUpdated(post, updatedLabel)
                     }
                 }
             ) {
-                inputs.voteSaidane(post)
+                inputs.voteSaidane(post).also { serverReply = it }
             }
         },
         onDelRequest = { post ->
@@ -383,3 +386,16 @@ internal fun buildThreadScreenMediaPreviewDialogCallbacks(
         onSave = onSave
     )
 }
+
+/**
+ * The notice after そうだね / del: our words, then Futaba's own reply as it came (may 1447424708: the app's message was not
+ * what Futaba said). Tags are taken out and a long reply is cut; an empty reply (a repository that does not report it) adds nothing.
+ */
+internal fun futachaRemoteResultMessage(successMessage: String, reply: String?): String {
+    val text = reply.orEmpty().replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
+    if (text.isEmpty()) return successMessage
+    val shown = if (text.length > FUTACHA_REMOTE_REPLY_MAX_CHARS) text.take(FUTACHA_REMOTE_REPLY_MAX_CHARS) + "…" else text
+    return "$successMessage（ふたばの返事：$shown）"
+}
+
+internal const val FUTACHA_REMOTE_REPLY_MAX_CHARS = 80

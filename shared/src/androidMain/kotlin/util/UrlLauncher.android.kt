@@ -13,7 +13,8 @@ import androidx.compose.ui.platform.LocalContext
 actual fun rememberUrlLauncher(customTabs: Boolean, allowAnyScheme: Boolean): (String) -> Unit {
     val context = LocalContext.current
     return remember(context, customTabs, allowAnyScheme) {
-        { url: String ->
+        launch@{ url: String ->
+            if (com.valoser.futacha.shared.network.aimoge.handleAimogeInternalLink(url)) return@launch
             try {
                 val request = resolveUrlLaunchRequest(url, allowAnyScheme)
                 if (request == null) {

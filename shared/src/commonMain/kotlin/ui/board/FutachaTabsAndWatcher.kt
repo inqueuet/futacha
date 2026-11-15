@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.runtime.remember
+import com.valoser.futacha.shared.compat.shownSiteTabs
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,7 +45,7 @@ internal fun FutachaTabsDialog(
     onOpenThread: (ThreadHistoryEntry) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val tabs by features.store.tabs.collectAsState(emptyList())
+    val tabs by remember(features.store) { features.store.tabs.shownSiteTabs() }.collectAsState(emptyList())
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<CompatTab?>(null) }
     var protect by remember { mutableStateOf(true) }
@@ -201,7 +203,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
                             watcher.delete(entry.key).onFailure { message = it.message }; refresh++
                         } }) { Text("削除") } },
                         modifier = Modifier.clickable {
-                            val parsed = canonicalizeThreadUrl(entry.threadUrl)
+                            val parsed = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(entry.threadUrl)
                             if (parsed != null) {
                                 onDismiss()
                                 onOpenThread(ThreadHistoryEntry(parsed.threadNo, compatBoardKey(parsed.canonicalBoardUrl),

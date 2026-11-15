@@ -29,6 +29,8 @@ internal sealed interface FutaberAttachmentVerdict {
     data object AskCompression : FutaberAttachmentVerdict
 
     data class Reject(val message: String) : FutaberAttachmentVerdict
+    /** A still picture in a format the board does not take (img: WebP): drawn again as JPEG. */
+    data object ConvertToJpeg : FutaberAttachmentVerdict
 }
 
 internal fun futaberAttachmentVerdict(
@@ -43,6 +45,7 @@ internal fun futaberAttachmentVerdict(
     return when (val decision = decideCompatPostAttachment(image, limit, capabilities.supportedExtensions)) {
         CompatPostAttachmentDecision.Accept -> FutaberAttachmentVerdict.Accept
         CompatPostAttachmentDecision.AskImageCompression -> FutaberAttachmentVerdict.AskCompression
+        CompatPostAttachmentDecision.ConvertToJpeg -> FutaberAttachmentVerdict.ConvertToJpeg
         else -> FutaberAttachmentVerdict.Reject(compatPostAttachmentDecisionMessage(decision, image.fileName, limit) ?: "このファイルは添付できません")
     }
 }
@@ -98,6 +101,9 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
             FutaberAttachmentVerdict.Accept -> finish(picked)
             FutaberAttachmentVerdict.AskCompression -> pendingCompression = picked
             is FutaberAttachmentVerdict.Reject -> error = verdict.message
+            FutaberAttachmentVerdict.ConvertToJpeg -> process("JPEGに変換できませんでした") {
+                compressCompatPostImage(picked, capabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), forceJpeg = true)
+            }
         }
     }
 

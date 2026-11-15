@@ -44,6 +44,16 @@ sealed interface ConditionalThreadFetchResult {
     data object NotModified : ConditionalThreadFetchResult
 }
 
+/** One thread's answer of [BoardRepository.getThreadSummaries]. */
+data class SiteThreadSummary(
+    val threadId: String,
+    val state: SiteThreadState,
+    /** The posts counting the OP; null unless [state] is [SiteThreadState.ALIVE]. */
+    val postCount: Int? = null
+)
+
+enum class SiteThreadState { ALIVE, GONE, UNKNOWN }
+
 interface BoardRepository {
     /** The application's catalog layout, also used for shared patrols and update checks. */
     suspend fun getCatalogFetchSettings(): CatalogFetchSettings = CatalogFetchSettings()
@@ -99,8 +109,23 @@ interface BoardRepository {
     suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent = ThreadPageContent(
         page = getThreadByUrl(threadUrl)
     )
+    /**
+     * The site's own archived copy of a thread that is gone, or null to use the existing fallback (the external
+     * archives for Futaba). Only あいもげ boards answer it (`snapshot.json`).
+     */
+    suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent? = null
     suspend fun probeThreadExists(threadUrl: String): Boolean = false
     suspend fun probeThreadGone(threadUrl: String): Boolean = false
+    /**
+     * The alive state and post count of up to 20 threads of one [board] in one request (あいもげ `summary`); null on a
+     * site without such a request (Futaba). Threads the answer leaves out are checked once with `/thread`.
+     */
+    suspend fun getThreadSummaries(board: String, threadIds: List<String>): List<SiteThreadSummary>? = null
+    /**
+     * Only the posts after the copy at hand (あいもげ `/state?after`), as a whole page; null on a site without it
+     * (Futaba) or when the thread was not read here.
+     */
+    suspend fun getThreadDelta(board: String, threadId: String): ThreadPage? = null
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     /** See [com.valoser.futacha.shared.network.BoardApi.voteSaidaneResponse]. */
     suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String {

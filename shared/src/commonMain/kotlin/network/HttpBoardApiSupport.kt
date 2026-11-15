@@ -79,6 +79,8 @@ private val POSTING_TEMPORARY_RESTRICTION_KEYWORDS = listOf(
     "too fast",
     "slow down"
 )
+private val POSTING_THREAD_REFUSED_KEYWORDS = listOf("このスレッドには書けません", "このスレには書けません")
+
 private val POSTING_IP_RESTRICTION_KEYWORDS = listOf(
     "規制中",
     "アクセス規制",
@@ -422,6 +424,11 @@ internal fun classifyHttpBoardApiPostingFailure(detail: String): HttpBoardApiPos
         }
     }
 
+    // 「このスレッドには書けません」 is the server refusing this one thread, not the line: no IP-regulation guess
+    // and no 1-hour wait are added, the server's words are shown as they are (ふたちゃスレ 01a1d21b, 2026-11-13).
+    if (POSTING_THREAD_REFUSED_KEYWORDS.any { normalized.contains(it) }) {
+        return HttpBoardApiPostingFailureKind.UNKNOWN
+    }
     val hasTemporaryRestrictionKeyword =
         POSTING_TEMPORARY_RESTRICTION_KEYWORDS.any { normalized.contains(it) }
     val hasIpRestrictionKeyword =

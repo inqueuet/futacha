@@ -868,7 +868,8 @@ class ThreadSaveService(
     private fun collectThreadSaveMediaPaths(posts: List<SavedPost>): Set<String> {
         val result = linkedSetOf<String>()
         posts.forEach { post ->
-            listOf(post.localThumbnailPath, post.localImagePath, post.localVideoPath)
+            (listOf(post.localThumbnailPath, post.localImagePath, post.localVideoPath) +
+                post.extraAttachments.flatMap { listOf(it.localPath, it.localThumbnailPath) })
                 .forEach { path ->
                     path?.trim()
                         ?.takeIf(::isReusableThreadSaveRelativePath)

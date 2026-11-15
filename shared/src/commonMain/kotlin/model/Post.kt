@@ -27,7 +27,13 @@ data class Post(
     /** Original file size advertised by the thumbnail tag (`alt="12345 B"`), when available. */
     val imageFileSizeBytes: Long? = null,
     /** Distinguishes current unresolved quotes from legacy caches without parsed mappings. */
-    val quoteReferencesParsed: Boolean = false
+    val quoteReferencesParsed: Boolean = false,
+    /** Every file of the post (あいもげ: up to 3, the first equals [imageUrl]). Empty for Futaba. */
+    val attachments: List<PostAttachment> = emptyList(),
+    /** The あいもげ post UUID (where a reply or a vote is sent); null for Futaba. */
+    val siteUuid: String? = null,
+    /** The number shown in the header for あいもげ (its `seq`, the OP 0, like the other modes' ordinal); null for Futaba. */
+    val displayNumber: Int? = null
 )
 
 @Serializable

@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -138,12 +140,15 @@ internal fun ThreadPostCard(
         modifier
     }
 
+    val safetyMenu = if (reviewComplianceEnabled) onLongPress else null
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
     Column(
         modifier = cardModifier
             .fillMaxWidth()
             .background(backgroundColor)
             .then(if (LocalJumpHighlightedPostId.current == post.id) Modifier.border(2.dp, MaterialTheme.colorScheme.primary) else Modifier)
             .postPressFeedback(post.id, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .then(if (safetyMenu != null) Modifier.padding(end = ThreadPostSafetyMenuSize - 4.dp) else Modifier)
             .padding(
                 horizontal = if (compactHeader) 8.dp else 12.dp,
                 vertical = LocalFutachaSharedFeatures.current?.intValue("thread", "threadPostSpacing", 0..20)?.dp
@@ -169,16 +174,6 @@ internal fun ThreadPostCard(
             bodyTextSize = bodyTextSize,
             compactHeader = compactHeader
         )
-        if (reviewComplianceEnabled && onLongPress != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onLongPress) {
-                    Text("通報・ブロック")
-                }
-            }
-        }
         onAiHideAgain?.let { hideAgain ->
             AiHiddenPostRestoreAction(onClick = hideAgain)
         }
@@ -332,6 +327,18 @@ internal fun ThreadPostCard(
                 bodyTextSize = bodyTextSize
             )
         } else {
+            // あいもげ: the 2nd and 3rd files of the post. Each opens its own page of the viewer.
+            val extraAttachments = remember(post) { com.valoser.futacha.shared.service.threadSaveExtraAttachments(post) }
+            com.valoser.futacha.shared.ui.image.PostExtraAttachments(
+                attachments = extraAttachments,
+                postKey = post.id,
+                size = 96.dp,
+                onClick = { url, _ ->
+                    if (onMediaClick != null) onMediaClick(url, determineMediaType(url)) else onUrlClick(url)
+                },
+                imageModifier = Modifier.privacyMediaFilter(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 4.dp)
+            )
             if (features != null) {
                 val method = features.value("thread", "threadUpsThumbMethod") ?: com.valoser.futacha.shared.ui.compat.COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
                 val wifi = !com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, false) &&
@@ -373,7 +380,27 @@ internal fun ThreadPostCard(
             Text(text = summary, color = Color.Red)
         }
     }
+    // The iOS report/block entry used to take a whole row under every post
+    // (thread 01a1cd5d #50). It is now a small menu button in the corner
+    // that opens the same action sheet, so it adds no height.
+    safetyMenu?.let { openMenu ->
+        androidx.compose.material3.IconButton(
+            onClick = openMenu,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(ThreadPostSafetyMenuSize)
+        ) {
+            androidx.compose.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Rounded.MoreVert,
+                contentDescription = "通報・ブロック",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    }
 }
+
+internal val ThreadPostSafetyMenuSize = 36.dp
 
 internal fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
     return when (size) {
@@ -553,7 +580,11 @@ internal fun ThreadPostMetadata(
                 subjectStyle = subjectStyle,
                 authorStyle = authorStyle,
                 secondaryStyle = secondaryStyle,
-                labelStyle = labelStyle
+                labelStyle = labelStyle,
+                saidaneLabel = saidaneLabel,
+                onSaidaneClick = onSaidaneClick,
+                canSendSaidane = !isSelfPost,
+                bodyTextSize = bodyTextSize
             )
             return@Column
         }
@@ -636,8 +667,8 @@ internal fun ThreadPostMetadata(
                         }
                     )
                 }
-                if (saidaneLabel != null && onSaidaneClick != null) {
-                    val canSendSaidane = !isSelfPost
+                if (saidaneLabel != null) {
+                    val canSendSaidane = !isSelfPost && onSaidaneClick != null
                     SaidaneLink(
                         label = saidaneLabel,
                         enabled = canSendSaidane,
@@ -647,7 +678,7 @@ internal fun ThreadPostMetadata(
                                 "投稿のそうだねを選択",
                                 mapOf("post_context" to analyticsSessionContextId("post", post.id))
                             )
-                            onSaidaneClick()
+                            onSaidaneClick?.invoke()
                         },
                         bodyTextSize = bodyTextSize
                     )
@@ -769,7 +800,11 @@ private fun ThreadPostCompactMetadata(
     subjectStyle: androidx.compose.ui.text.TextStyle,
     authorStyle: androidx.compose.ui.text.TextStyle,
     secondaryStyle: androidx.compose.ui.text.TextStyle,
-    labelStyle: androidx.compose.ui.text.TextStyle
+    labelStyle: androidx.compose.ui.text.TextStyle,
+    saidaneLabel: String?,
+    onSaidaneClick: (() -> Unit)?,
+    canSendSaidane: Boolean,
+    bodyTextSize: ThreadBodyTextSize
 ) {
     val threadColors = LocalFutabaThreadColors.current
     FlowRow(
@@ -777,6 +812,14 @@ private fun ThreadPostCompactMetadata(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
+        if (saidaneLabel != null) {
+            SaidaneLink(
+                label = saidaneLabel,
+                enabled = canSendSaidane && onSaidaneClick != null,
+                onClick = { onSaidaneClick?.invoke() },
+                bodyTextSize = bodyTextSize
+            )
+        }
         Text(
             text = order.toString(),
             style = orderStyle,

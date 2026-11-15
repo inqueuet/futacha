@@ -118,3 +118,7 @@ internal fun compatViewerDoubleTapTransform(
     )
     return Triple(target, translation.first, translation.second)
 }
+
+/** One-finger zoom (double tap, hold and slide): 300px up doubles-ish (×e), down shrinks; kept within 1..max. */
+internal fun compatViewerQuickScale(startScale: Float, dragY: Float): Float =
+    (startScale * kotlin.math.exp(-dragY / 300f)).coerceIn(1f, COMPAT_VIEWER_MAX_ZOOM)

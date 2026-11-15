@@ -79,6 +79,39 @@ internal fun presentIosAlert(
 }
 
 /** Keeps source selection, cancellation and the following picker in one coroutine. */
+/** An alert with [labels] in order and a cancel button; the index of the one pressed, or null for cancel. */
+internal suspend fun awaitIosOptionChoice(
+    title: String,
+    message: String,
+    labels: List<String>,
+    cancelLabel: String = "キャンセル"
+): Int? = suspendCancellableCoroutine { continuation ->
+    val completed = AtomicInt(0)
+    val alert = UIAlertController.alertControllerWithTitle(title, message, UIAlertControllerStyleAlert)
+    fun finish(value: Int?) {
+        if (!completed.compareAndSet(0, 1)) return
+        alert.dismissViewControllerAnimated(true) { continuation.resume(value) }
+    }
+    labels.forEachIndexed { index, label ->
+        alert.addAction(UIAlertAction.actionWithTitle(label, UIAlertActionStyleDefault) { finish(index) })
+    }
+    alert.addAction(UIAlertAction.actionWithTitle(cancelLabel, UIAlertActionStyleCancel) { finish(null) })
+    continuation.invokeOnCancellation {
+        completed.compareAndSet(0, 1)
+        dispatch_async(dispatch_get_main_queue()) {
+            if (alert.presentingViewController != null) alert.dismissViewControllerAnimated(true, null)
+        }
+    }
+    dispatch_async(dispatch_get_main_queue()) {
+        if (!continuation.isActive) return@dispatch_async
+        presentPicker(alert, "attachment source chooser") {
+            if (completed.compareAndSet(0, 1)) {
+                continuation.resumeWithException(IllegalStateException("Cannot present attachment source chooser"))
+            }
+        }
+    }
+}
+
 internal suspend fun awaitIosTwoOptionChoice(
     title: String,
     message: String,

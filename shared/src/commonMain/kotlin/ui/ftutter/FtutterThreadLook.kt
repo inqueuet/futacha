@@ -69,7 +69,14 @@ internal fun ftutterAnchorTargets(html: String): Set<String> =
     FTUTTER_ANCHOR_HREF.findAll(html)
         .map { HtmlEntityDecoder.decode(it.groupValues[1]) }.toSet()
 
-/** リンクを出すか（M8）。従来の動きは本文のURLを全部、原作の形は`<a>`の行き先に当たる物だけ。 */
+/**
+ * リンクを出すか（M8）。従来の動きは本文のURLを全部、原作の形は`<a>`の行き先に当たる物だけ。
+ * あいもげのレスは本文が文字だけで`<a>`が無いので、呼ぶ側が[legacy]をtrueにして全部を出す（スレ01a1cd5dの指摘）。
+ */
+/** 本文のURLを全部リンクにするか：従来の見た目か、`<a>`を持たないあいもげのレス。 */
+internal fun ftutterLinksEveryUrl(post: com.valoser.futacha.shared.model.Post, legacy: Boolean): Boolean =
+    legacy || post.siteUuid != null
+
 internal fun ftutterKeepsLink(url: String, anchors: Set<String>, legacy: Boolean): Boolean =
     legacy || anchors.any { it == url || it.endsWith(url.substringAfter("://")) || url.endsWith(it.substringAfter("://")) }
 

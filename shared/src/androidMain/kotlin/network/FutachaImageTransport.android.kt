@@ -16,6 +16,7 @@ fun createAndroidImageTransport(cookieStorage: CookiesStorage): FutachaImageTran
         // general clients (S4-1): an image URL from a page or a saved thread
         // must not reach a host other than the one it appears to name.
         installAmbiguousRequestUrlGuard()
+        installFutabaBrowserIdentity()
         configureImageRequests()
         install(HttpCookies) { storage = cookieStorage }
         engine { config {

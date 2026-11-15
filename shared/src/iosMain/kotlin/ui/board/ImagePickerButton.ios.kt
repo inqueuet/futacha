@@ -37,11 +37,13 @@ actual fun rememberAttachmentPickerLauncher(
     maxBytes: Long,
     onImageSelected: (ImageData) -> Unit,
     preferredFileManagerPackage: String?,
-    onSelectionError: (String) -> Unit
+    onSelectionError: (String) -> Unit,
+    onPasteImage: (() -> Unit)?
 ): () -> Unit {
     val scope = rememberCoroutineScope()
     val currentOnSelectionError by rememberUpdatedState(onSelectionError)
     val currentOnImageSelected by rememberUpdatedState(onImageSelected)
+    val currentOnPasteImage by rememberUpdatedState(onPasteImage)
     val isVideo = mimeType.startsWith("video/", ignoreCase = true)
     val allowsAnyMedia = mimeType == "*/*" || mimeType.equals("application/octet-stream", ignoreCase = true)
 
@@ -68,17 +70,42 @@ actual fun rememberAttachmentPickerLauncher(
                     AttachmentPickerPreference.LEGACY_GET_CONTENT -> pickDocumentMedia()
                     AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
                     AttachmentPickerPreference.ALWAYS_ASK -> {
-                        when (awaitIosTwoOptionChoice(
-                            title = "添付ファイルを選択", message = "選択元を選んでください。",
-                            primaryLabel = "フォトライブラリ", secondaryLabel = "ファイル"
+                        val paste = currentOnPasteImage
+                        val labels = listOfNotNull("フォトライブラリ", "ファイル", "画像を貼り付け".takeIf { paste != null })
+                        when (com.valoser.futacha.shared.util.awaitIosOptionChoice(
+                            title = "添付ファイルを選択", message = "選択元を選んでください。", labels = labels
                         )) {
-                            true -> pickLibraryMedia()
-                            false -> pickDocumentMedia()
-                            null -> null
+                            0 -> pickLibraryMedia()
+                            1 -> pickDocumentMedia()
+                            2 -> { paste?.invoke(); null }
+                            else -> null
                         }
                     }
                 }
                 selected?.let { currentOnImageSelected(normalizeIosPostingAttachment(it, maxBytes)) }
+            }
+        }.invokeOnCompletion { activeAttachmentPicker.compareAndSet(session, null) }
+    }
+}
+
+@Composable
+actual fun rememberMultipleImagePickerLauncher(
+    maxCount: Int,
+    maxBytes: Long,
+    onImagesSelected: (List<ImageData>) -> Unit,
+    onSelectionError: (String) -> Unit
+): (() -> Unit)? {
+    val scope = rememberCoroutineScope()
+    val selected by rememberUpdatedState(onImagesSelected)
+    val failed by rememberUpdatedState(onSelectionError)
+    return launch@{
+        val session = Any()
+        if (!activeAttachmentPicker.compareAndSet(null, session)) return@launch
+        scope.launch {
+            runIosAttachmentPickerCatching(failed) {
+                val picked = com.valoser.futacha.shared.util.pickIosImages(maxCount, maxBytes) ?: return@runIosAttachmentPickerCatching
+                if (picked.isEmpty()) { failed(ATTACHMENT_LOAD_FAILURE_MESSAGE); return@runIosAttachmentPickerCatching }
+                selected(picked.map { normalizeIosPostingAttachment(it, maxBytes) })
             }
         }.invokeOnCompletion { activeAttachmentPicker.compareAndSet(session, null) }
     }

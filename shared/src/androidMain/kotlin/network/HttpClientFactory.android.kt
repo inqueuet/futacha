@@ -49,6 +49,7 @@ actual fun createHttpClient(
         // Installed first so the read retry inside it can never resend the POST.
         installPostRedirectFollowingAndReadRetry()
         installAmbiguousRequestUrlGuard()
+        installFutabaBrowserIdentity()
 
         install(HttpTimeout) {
             requestTimeoutMillis = REQUEST_TIMEOUT_MS
@@ -84,7 +85,9 @@ actual fun createHttpClient(
         }
     }.also { client ->
         (platformContext as? android.content.Context)?.applicationContext?.let {
-            client.attributes.put(PostingBrowserKey, AndroidPostingBrowser(it))
+            val browser = AndroidPostingBrowser(it)
+            client.attributes.put(PostingBrowserKey, browser)
+            FutabaBrowserIdentity.register(browser)
         }
     }
 }

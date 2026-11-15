@@ -153,6 +153,8 @@ class HistoryRefresher(
          * by [maxThreadsPerRun]; unlimited otherwise.
          */
         runBudgetMillis: Long? = null,
+        /** あいもげ `summary` requests of this run ([AIMOGE_SUMMARY_REQUESTS_LONG] / [AIMOGE_SUMMARY_REQUESTS_SHORT]). */
+        aimogeSummaryRequestLimit: Int = AIMOGE_SUMMARY_REQUESTS_LONG,
         historyCommitGate: suspend (commit: suspend () -> Unit) -> Boolean = { commit ->
             commit()
             true
@@ -222,16 +224,21 @@ class HistoryRefresher(
                         (refreshStartedAt - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
                 }
             }
-            loadHistoryRefreshCursorIfNeeded(fullHistory)
+            // あいもげ rows go on their own flow (summary); the Futaba window, its cursor and its order count the
+            // Futaba rows only, exactly as without あいもげ rows.
+            val aimogeTargets = aimogeHistoryTargets(fullHistory)
+            val futabaHistory = if (aimogeTargets.isEmpty() && fullHistory.none { isAimogeHistoryRow(it) }) fullHistory
+                else fullHistory.filterNot { isAimogeHistoryRow(it) }
+            loadHistoryRefreshCursorIfNeeded(futabaHistory)
             val history = selectHistoryWindow(
-                history = fullHistory,
+                history = futabaHistory,
                 maxThreadsPerRun = maxThreadsPerRun,
                 boardById = boardById,
                 boardByBaseUrl = boardByBaseUrl,
                 nowMillis = refreshStartedAt
             )
             totalThreadsInRun = history.size
-            if (history.isEmpty()) return@withContext
+            if (history.isEmpty() && aimogeTargets.isEmpty()) return@withContext
 
             val effectiveMaxConcurrency = maxConcurrency.coerceAtLeast(1)
             val semaphore = Semaphore(effectiveMaxConcurrency)
@@ -282,7 +289,7 @@ class HistoryRefresher(
                     }
                 }
                 if (unfinished.isNotEmpty()) {
-                    rewindHistoryRefreshCursor(fullHistory, unfinished)
+                    rewindHistoryRefreshCursor(futabaHistory, unfinished)
                 }
             }
             val stats = HistoryRefreshRunStats()
@@ -341,6 +348,17 @@ class HistoryRefresher(
             )
 
             supervisorScope {
+                // Started with the stage, outside the Futaba semaphore: the first あいもげ summary goes out however
+                // many Futaba rows there are.
+                val aimogeJob = if (aimogeTargets.isEmpty()) null else async {
+                    refreshAimogeRows(
+                        targets = aimogeTargets,
+                        requestLimit = aimogeSummaryRequestLimit,
+                        requestTimeoutMillis = runThreadFetchTimeoutMillis,
+                        fetchStartDeadline = fetchStartDeadline,
+                        historyCommitGate = historyCommitGate
+                    )
+                }
                 var batchStart = 0
                 while (batchStart < history.size) {
                     val batchEndExclusive = minOf(batchStart + batchSize, history.size)
@@ -373,6 +391,7 @@ class HistoryRefresher(
                     batchStart = batchEndExclusive
                     yield()
                 }
+                aimogeJob?.await()
             }
 
             val deferred = deferredMutex.withLock { deferredForBudget.toList() }
@@ -381,7 +400,7 @@ class HistoryRefresher(
                     HISTORY_REFRESH_TAG,
                     "Run budget reached; leaving ${deferred.size} thread(s) for the next refresh"
                 )
-                rewindHistoryRefreshCursor(fullHistory, deferred)
+                rewindHistoryRefreshCursor(futabaHistory, deferred)
             }
 
             val autoSaveChildren = scopedAutoSaveJob.children.toList()
@@ -515,6 +534,45 @@ class HistoryRefresher(
             }
         }
     }
+
+    private fun isAimogeHistoryRow(entry: ThreadHistoryEntry): Boolean =
+        com.valoser.futacha.shared.compat.boardSiteOf(entry.boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+
+    /**
+     * The あいもげ rows of this run: `summary` per board ([SiteRefreshRouter]), starting at the saved あいもげ cursor.
+     * Each batch's changes are written as it arrives; the cursor is written after them. Failures never fail the run.
+     */
+    private suspend fun refreshAimogeRows(
+        targets: List<Pair<ThreadHistoryEntry, SiteRefreshTarget>>,
+        requestLimit: Int,
+        requestTimeoutMillis: Long,
+        fetchStartDeadline: Long?,
+        historyCommitGate: suspend (commit: suspend () -> Unit) -> Boolean
+    ) {
+        try {
+            SiteRefreshPause.load(fileSystem)
+            val cursor = AimogeRefreshCursor.read(fileSystem, aimogeCursorPath)
+            val ordered = rotateFrom(targets, cursor) { it.second.threadId }
+            val entryById = ordered.associate { it.second.threadId to it.first }
+            var committed = true
+            val outcome = SiteRefreshRouter(repository, requestLimit, requestTimeoutMillis, fetchStartDeadline).run(
+                ordered.map { it.second }
+            ) { answers ->
+                val now = Clock.System.now().toEpochMilliseconds()
+                val changed = answers.mapNotNull { answer -> entryById[answer.threadId]?.let { aimogeHistoryUpdate(it, answer, now) } }
+                if (changed.isNotEmpty() && !historyCommitGate { stateStore.mergeHistoryEntries(changed) }) committed = false
+            }
+            // Written only after the generation took the changes (a switched profile keeps the old cursor).
+            if (committed) AimogeRefreshCursor.write(fileSystem, aimogeCursorPath, outcome.notVisited.firstOrNull()?.threadId)
+            SiteRefreshPause.persist(fileSystem)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.w(HISTORY_REFRESH_TAG, "あいもげ history refresh failed: ${e::class.simpleName}")
+        }
+    }
+
+    private val aimogeCursorPath = cursorNamespace?.let { "private/aimoge_refresh_cursor_$it.json" } ?: AIMOGE_REFRESH_CURSOR_PATH
 
     fun close() {
         // Auto-save jobs are scoped to refresh() and cancel with the caller.

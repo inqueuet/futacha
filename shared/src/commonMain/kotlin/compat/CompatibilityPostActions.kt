@@ -48,6 +48,16 @@ private fun isCompatSystemPostLine(line: String): Boolean {
         value.startsWith("消えます")
 }
 
+/** 引用の行（「>」「＞」で始まる）。 */
+fun isCompatQuotedLine(line: String): Boolean = line.trimStart().let { it.startsWith(">") || it.startsWith("＞") }
+
+/**
+ * 「レス相手選択」：本文のうち、相手が自分で書いた行（引用の行でないもの）だけを選ぶ（may 1447448981：
+ * 長い引用を含むレスに返す時、全選択・全解除のどちらからでも手間だった）。
+ */
+fun compatOwnWordsSelection(candidates: List<CompatPostActionCandidate>): Set<Int> =
+    candidates.indices.filter { candidates[it].label == "本文" && !isCompatQuotedLine(candidates[it].value) }.toSet()
+
 fun compatQuoteSelection(candidates: List<CompatPostActionCandidate>, selectedIndices: Set<Int>): String {
     val quoted = candidates.mapIndexedNotNull { index, candidate -> candidate.value.takeIf { index in selectedIndices } }
         .joinToString("\n") { line -> line.lineSequence().joinToString("\n") { ">$it" } }

@@ -44,7 +44,7 @@ internal suspend fun buildReadAloudSegments(
             yield()
         }
         if (post.isDeleted || post.id in skippedPostIds) return@forEachIndexed
-        val lines = (textCache?.get(post)?.lines ?: messageHtmlToLines(post.messageHtml))
+        val lines = (if (post.messageHtml.contains(com.valoser.futacha.shared.network.aimoge.AIMOGE_SPOILER_CLASS)) messageHtmlToLines(aimogeHtmlForSpeech(post.messageHtml)) else textCache?.get(post)?.lines ?: messageHtmlToLines(post.messageHtml))
             .map { stripUrlsForReadAloud(it).trim() }
             .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
         if (lines.isEmpty()) return@forEachIndexed

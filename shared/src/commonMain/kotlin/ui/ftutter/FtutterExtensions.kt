@@ -105,6 +105,12 @@ internal enum class FtutterExtension(val stored: String, val title: String, val 
         "ドロワーの「履歴」の上に選択のボタンを出します。選んだ履歴をまとめて消すことと、すべて消すこと（保護したスレッドは残します）ができます",
         enabledByDefault = true
     ),
+    // may 1447424787：自分へのレスは原作だと左の細い線だけで気づきにくい。行全体に淡い色を敷く（要望なので最初からON）。
+    REPLY_TO_SELF_TINT(
+        "replyToSelfTint", "自分へのレスに色を付ける",
+        "自分の書き込みへの返信の行に、返信の線と同じ色を淡く敷きます。OFFにすると原作どおり左の線だけです",
+        enabledByDefault = true
+    ),
     ARCHIVE_SEARCH("archiveSearch", "過去ログ検索", "カタログの検索に語を入れた時、その語で過去ログを探すボタンを出します"),
     APP_LOCK("appLock", "起動ロック・アプリアイコン", "他のモードと共有の起動ロック（パスワード）とアプリアイコンの選択を、この画面から設定できるようにします");
 

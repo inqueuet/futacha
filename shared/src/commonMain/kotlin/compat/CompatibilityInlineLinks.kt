@@ -30,7 +30,7 @@ fun resolveCompatInlineUrlRoute(
     rawUrl: String,
     registeredBoardsByCanonicalUrl: Map<String, String>
 ): CompatInlineUrlRoute {
-    val thread = canonicalizeThreadUrl(rawUrl) ?: return CompatInlineUrlRoute.External
+    val thread = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rawUrl) ?: return CompatInlineUrlRoute.External
     val boardKey = registeredBoardsByCanonicalUrl[thread.canonicalBoardUrl]
         ?: return CompatInlineUrlRoute.UnregisteredThread(thread)
     return CompatInlineUrlRoute.RegisteredThread(thread, boardKey)
@@ -59,6 +59,26 @@ private val compatBareApuSmallFileRegex = Regex(
     "(?:^|[^A-Za-z0-9])((?:fu\\d+|f\\d+)\\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))(?![A-Za-z0-9])",
     RegexOption.IGNORE_CASE
 )
+// あぷ・あぷ小 also hold text, archives, music and documents (`fu1234567.txt`, `f123456.zip`): their bare names open the
+// file itself (in the browser), as the media names do. A file number of 4+ digits and an extension starting with a
+// letter keep ordinary text such as "f2.50" out.
+private val compatBareApuFileRegex = Regex(
+    "(?:^|[^A-Za-z0-9])((?:fu\\d{4,}|f\\d{4,})\\.[a-z][0-9a-z]{1,4})(?![A-Za-z0-9])",
+    RegexOption.IGNORE_CASE
+)
+
+/** Bare あぷ / あぷ小 file names in [plainText] (any file type), with the file's URL. */
+fun compatBareApuFileLinks(plainText: String): List<CompatInlineLink> =
+    compatBareApuFileRegex.findAll(plainText).take(COMPAT_INLINE_LINK_MAX_MATCHES_PER_PATTERN).mapNotNull { match ->
+        val fileName = match.groupValues.getOrNull(1) ?: return@mapNotNull null
+        val start = match.range.first + match.value.indexOf(fileName)
+        CompatInlineLink(
+            start = start,
+            endExclusive = start + fileName.length,
+            url = "https://dec.2chan.net/${if (fileName.startsWith("fu", ignoreCase = true)) "up2" else "up"}/src/$fileName"
+        )
+    }.toList()
+
 private val compatBareSioFileRegex = Regex(
     "(?:^|[^A-Za-z0-9])(s[apusqz]\\d{5,10}(?:\\.[0-9a-z]{2,4})?)(?![A-Za-z0-9])",
     RegexOption.IGNORE_CASE
@@ -108,6 +128,9 @@ fun compatInlineLinks(messageHtml: String): List<CompatInlineLink> {
         )
     }
 
+    // Any other file of the uploaders (txt, zip, mp3, pdf…): the media names above already took theirs.
+    links += compatBareApuFileLinks(plainText)
+
     compatBareSioFileRegex.findAll(plainText).take(COMPAT_INLINE_LINK_MAX_MATCHES_PER_PATTERN).forEach { match ->
         val fileName = match.groupValues.getOrNull(1) ?: return@forEach
         val start = match.range.first + match.value.indexOf(fileName)
@@ -130,12 +153,18 @@ fun compatInlineLinks(messageHtml: String): List<CompatInlineLink> {
     var labelSearchStart = 0
     compatAnchorRegex.findAll(messageHtml).take(COMPAT_INLINE_LINK_MAX_MATCHES_PER_PATTERN).forEach { match ->
         val url = normalizeCompatInlineUrl(match.groupValues[2]) ?: return@forEach
+        // あいもげ's poll options are found on their own lines below (a same word earlier in the body is not one).
+        if (url.startsWith(com.valoser.futacha.shared.network.aimoge.AIMOGE_POLL_LINK_PREFIX)) return@forEach
         val label = match.groupValues[3].toCompatPlainText().trim()
         if (label.isBlank()) return@forEach
         val labelStart = plainText.indexOf(label, labelSearchStart)
         if (labelStart < 0) return@forEach
         labelSearchStart = labelStart + label.length
         links += CompatInlineLink(labelStart, labelStart + label.length, url)
+    }
+
+    com.valoser.futacha.shared.network.aimoge.aimogePollOptionLinks(messageHtml, plainText).forEach { (range, url) ->
+        links += CompatInlineLink(range.first, range.last + 1, url)
     }
 
     val sorted = links

@@ -15,6 +15,15 @@ class OriginalMediaEligibilityTest {
         assertTrue(isSharedOriginalImageUrl("https://may.2chan.net/b/src/1.png"))
         assertFalse(isSharedOriginalVideoUrl("https://may.2chan.net/b/src/1.png"))
     }
+    @Test fun aimogeAttachmentOriginalsJoinButThumbnailsAndOtherHostsDoNot() {
+        assertTrue(isSharedOriginalImageUrl("https://storage.nijiurachan.net/aimg/attachments/2026/11/00077338ad8.webp"))
+        assertTrue(isSharedOriginalVideoUrl("https://storage.nijiurachan.net/aimg/attachments/2026/11/a.mp4"))
+        for (url in listOf("https://storage.nijiurachan.net/aimg/thumbnails/2026/11/a.webp",
+            "http://storage.nijiurachan.net/aimg/attachments/a.png", "https://storage.nijiurachan.net.evil.com/attachments/a.png",
+            "https://nijiurachan.net/aimg/attachments/a.png", "https://storage.nijiurachan.net:8443/attachments/a.png")) {
+            assertFalse(isSharedOriginalMediaUrl(url), url)
+        }
+    }
     @Test fun playbackReloadChangesRevisionWithoutChangingSignedQuery() {
         val url = "https://may.2chan.net/b/src/1.mp4?token=a%2Bb&x=1&x=2"
         val request = originalVideoRequest("$url#compat-reload=123")

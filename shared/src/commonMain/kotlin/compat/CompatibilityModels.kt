@@ -1,8 +1,13 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.PostAttachment
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -137,7 +142,13 @@ data class CompatPostSnapshot(
     val mediaKey: String? = null,
     /** Retained for modern-mode quote navigation when a compatibility cache is reused. */
     val quoteReferences: List<QuoteReference> = emptyList(),
-    val quoteReferencesParsed: Boolean = false
+    val quoteReferencesParsed: Boolean = false,
+    /** あいもげ: every file of the post. Never written when empty, so a Futaba copy keeps its bytes. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val attachments: List<PostAttachment> = emptyList(),
+    /** あいもげ: the header number ([com.valoser.futacha.shared.model.Post.displayNumber]); never written when null. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val displayNumber: Int? = null
 )
 
 @Serializable

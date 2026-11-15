@@ -471,13 +471,11 @@ internal fun CompatPostScreen(
     var name by remember(ownerKey) { mutableStateOf("") }
     var email by remember(ownerKey) { mutableStateOf("") }
     var subject by remember(ownerKey) { mutableStateOf("") }
-    // Keep the complete TextFieldValue here.  Rebuilding it from only text and
-    // selection drops the IME composition range, which prevents Japanese
-    // keyboards from converting an unfinished kana/romaji sequence.
-    var commentValue by remember(ownerKey) {
-        mutableStateOf(TextFieldValue(text = "", selection = TextRange.Zero))
-    }
-    val comment = commentValue.text
+    // The comment lives in a TextFieldState: it keeps the IME composition and, unlike the
+    // TextFieldValue field, hears which clause the IME is converting (iOS selectedRange,
+    // Android composing spans), so only that clause is highlighted.
+    val commentState = remember(ownerKey) { androidx.compose.foundation.text.input.TextFieldState() }
+    val comment = commentState.text.toString()
 
     fun replaceComment(
         text: String,
@@ -485,17 +483,14 @@ internal fun CompatPostScreen(
         restoringDraft: Boolean = false
     ) {
         if (!restoringDraft) editedDraftFields.add(CompatPostDraftField.COMMENT)
-        // Programmatic edits must clear any stale composition belonging to the
-        // previous value. User edits below retain it by assigning the complete
-        // TextFieldValue supplied by Compose.
         val limitedText = text.take(COMPAT_POST_COMMENT_MAX_CHARS)
-        commentValue = TextFieldValue(
-            text = limitedText,
-            selection = TextRange(
+        commentState.edit {
+            replace(0, length, limitedText)
+            this.selection = TextRange(
                 selection.start.coerceIn(0, limitedText.length),
                 selection.end.coerceIn(0, limitedText.length)
             )
-        )
+        }
     }
     var deleteKey by remember(ownerKey) { mutableStateOf("") }
     var attachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
@@ -539,10 +534,10 @@ internal fun CompatPostScreen(
     val attachmentLimitBytes = postingCapabilities.maxFileSizeBytes.toInt()
     val storedDeleteKey = preferences.compatStoredPostDeleteKey()
 
-    // These read the form's state (commentValue, not the composed comment): the writer run as the screen closes
+    // These read the form's state (commentState, not the composed comment): the writer run as the screen closes
     // was made in an earlier composition (L52).
     fun hasDraft(): Boolean = name.isNotEmpty() || email.isNotEmpty() || subject.isNotEmpty() ||
-        commentValue.text.isNotEmpty() || deleteKey.isNotEmpty() || attachment != null
+        commentState.text.isNotEmpty() || deleteKey.isNotEmpty() || attachment != null
 
     suspend fun persistCurrentDraftOrDelete() {
         if (hasDraft()) {
@@ -554,7 +549,7 @@ internal fun CompatPostScreen(
                         name = name,
                         email = email,
                         subject = subject,
-                        comment = commentValue.text,
+                        comment = commentState.text.toString(),
                         attachmentUri = attachmentLocator,
                         attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
@@ -568,7 +563,7 @@ internal fun CompatPostScreen(
                         name = name,
                         email = email,
                         subject = subject,
-                        comment = commentValue.text,
+                        comment = commentState.text.toString(),
                         attachmentUri = attachmentLocator,
                         attachmentIsHandwriting = attachment?.isHandwriting == true,
                         deleteKey = deleteKey,
@@ -782,10 +777,15 @@ internal fun CompatPostScreen(
 
     // The あぷ小 pick has pickers of its own: a pick left without a choice left an "あぷ小 mode" behind, which then
     // took the next attachment, a shared image too, as an upload (L49).
-    fun acceptUpsAttachment(selected: ImageData) {
-        if (!isCompatUpsUploadSizeAllowed(selected.bytes.size)) {
-            message = "ファイルサイズ超過です\n3000KBまで"
-        } else {
+    fun acceptUpsAttachment(picked: ImageData) {
+        scope.launch {
+            val prepared = prepareCompatUpsUpload(picked).getOrNull()
+            if (prepared == null) {
+                message = "ファイルサイズ超過です\n3000KBまで"
+                return@launch
+            }
+            if (prepared.shrunk) message = COMPAT_UPS_SHRUNK_NOTICE
+            val selected = prepared.image
             upsAttachment = selected
             // The reference dialog starts with an empty upload comment and
             // the globally remembered deletion key, not the post body or a
@@ -813,6 +813,22 @@ internal fun CompatPostScreen(
                 message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
                 pendingCompression = selected
             }
+            CompatPostAttachmentDecision.ConvertToJpeg -> {
+                message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
+                savingAttachment = true
+                launchScreenAction {
+                    var handedOff = false
+                    try {
+                        compressCompatPostImage(selected, attachmentLimitBytes, forceJpeg = true)
+                            .onSuccess {
+                                handedOff = fileSystem != null
+                                persistAcceptedAttachment(it)
+                            }.onFailure { message = "JPEGに変換できませんでした: ${it.message.orEmpty()}" }
+                    } finally {
+                        if (!handedOff) savingAttachment = false
+                    }
+                }
+            }
             else -> message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
         }
     }
@@ -827,6 +843,33 @@ internal fun CompatPostScreen(
         } else clipboardPaste.paste()
     }
 
+    val isAimogeBoard = remember(board.originalUrl) {
+        com.valoser.futacha.shared.compat.boardSiteOf(board.originalUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+    }
+    val launchMultiplePicker = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
+        maxCount = compatMultiPickMax(isAimogeBoard),
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onSelectionError = { message = it },
+        onImagesSelected = { picked ->
+            if (!upsUploadInProgress) {
+                upsUploadInProgress = true
+                launchScreenAction {
+                    try {
+                        val client = httpClient
+                        message = applyCompatPickedPictures(
+                            picked, attachment, isBuild || postingCapabilities.replyAttachmentsAllowed, isAimogeBoard, board.originalUrl,
+                            setAttachment = ::acceptAttachment,
+                            upload = client?.let { c -> { image -> uploadCompatUps(c, image, "", storedDeleteKey, appVersion).getOrThrow() } },
+                            appendName = { replaceComment(appendCompatPostText(commentState.text.toString(), it)) }
+                        )
+                    } finally {
+                        upsUploadInProgress = false
+                    }
+                }
+            }
+        }
+    )
+
     val launchAttachmentPicker = rememberAttachmentPickerLauncher(
         // 1.apk uses ACTION_GET_CONTENT + CATEGORY_OPENABLE in both posting
         // modes and reuses the component selected by a toolbar long press.
@@ -834,26 +877,28 @@ internal fun CompatPostScreen(
         mimeType = "*/*",
         maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
         onImageSelected = ::acceptAttachment,
-        onSelectionError = { message = it }
+        onSelectionError = { message = it },
+        onPasteImage = ::pasteImage
     )
     val launchAttachmentChooser = rememberAttachmentPickerLauncher(
         preference = AttachmentPickerPreference.ALWAYS_ASK,
         mimeType = "*/*",
         maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
         onImageSelected = ::acceptAttachment,
-        onSelectionError = { message = it }
+        onSelectionError = { message = it },
+        onPasteImage = ::pasteImage
     )
     val launchUpsPicker = rememberAttachmentPickerLauncher(
         preference = AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
         mimeType = "*/*",
-        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        maxBytes = COMPAT_UPS_PICKER_MAX_BYTES,
         onImageSelected = ::acceptUpsAttachment,
         onSelectionError = { message = it }
     )
     val launchUpsChooser = rememberAttachmentPickerLauncher(
         preference = AttachmentPickerPreference.ALWAYS_ASK,
         mimeType = "*/*",
-        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        maxBytes = COMPAT_UPS_PICKER_MAX_BYTES,
         onImageSelected = ::acceptUpsAttachment,
         onSelectionError = { message = it }
     )
@@ -1045,10 +1090,10 @@ internal fun CompatPostScreen(
             launchScreenAction {
                 val info = fetchCompatPostNetworkInfo(httpClient, "Futacha/$appVersion")
                 // Read the actual state after the suspension, not this composition's String.
-                replaceComment(appendCompatPostText(commentValue.text, info))
+                replaceComment(appendCompatPostText(commentState.text.toString(), info))
             }
         },
-        "model_info" to { replaceComment(appendCompatPostText(comment, compatPostDeviceInfo(appVersion))) },
+        "model_info" to { replaceComment(appendCompatPostText(commentState.text.toString(), compatPostDeviceInfo(appVersion))) },
         "reset" to {
             editedDraftFields.addAll(CompatPostDraftField.entries)
             val resetFields = compatPostResetFields(isBuild, deleteKey, initialDraft)
@@ -1097,7 +1142,7 @@ internal fun CompatPostScreen(
         "discard" to { if (hasDraft()) discardConfirm = true else leave() }
     )
     val launchSpeechRecognizer = rememberCompatSpeechRecognizer(
-        onResult = { recognized -> replaceComment(appendCompatPostText(comment, normalizeCompatSpeechResult(recognized))) },
+        onResult = { recognized -> replaceComment(appendCompatPostText(commentState.text.toString(), normalizeCompatSpeechResult(recognized))) },
         onError = { message = it }
     )
     val launchVideoPreview = rememberCompatVideoAttachmentPreviewLauncher { message = it }
@@ -1131,7 +1176,10 @@ internal fun CompatPostScreen(
             topBar = {
                 TopAppBar(
                     expandedHeight = 56.dp,
-                    title = { Text(if (isBuild) "スレ立て" else tab.title.ifBlank { "No.${tab.threadNo}" }, maxLines = 1, modifier = Modifier.padding(start = 16.dp)) },
+                    title = { Text(if (isBuild) "スレ立て" else tab.title.ifBlank { "No.${tab.threadNo}" },
+                        fontSize = (preferences.compatPreferenceValue("thread", "threadTitleFontSize", "スレッドのタイトルの文字サイズ")
+                            ?.toIntOrNull()?.coerceIn(12, 20) ?: 20).sp,
+                        maxLines = 1, modifier = Modifier.padding(start = 16.dp).testTag("compat-post-thread-title")) },
                     navigationIcon = {
                         IconButton(onClick = ::leave) { Icon(Icons.Filled.ArrowBack, contentDescription = "戻る") }
                     },
@@ -1149,6 +1197,10 @@ internal fun CompatPostScreen(
                                 shadowElevation = 8.dp
                             ) {
                                 DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; pasteImage() })
+                                launchMultiplePicker?.let { launch ->
+                                    DropdownMenuItem(text = { Text(COMPAT_MULTI_PICK_LABEL) }, enabled = !sending && !savingAttachment && !upsUploadInProgress,
+                                        colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; launch() })
+                                }
                                 DropdownMenuItem(text = { Text("ツールバー編集") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onToolbarEdit() })
                                 DropdownMenuItem(text = { Text("ヘルプ") },
                                     enabled = (draftLoaded || draftLoadFailed) && !sending && !savingAttachment && !upsUploadInProgress &&
@@ -1183,24 +1235,18 @@ internal fun CompatPostScreen(
             // place these in a modern create/reply order and showed a large empty
             // comment box, which was visibly different on the reference APK.
             TextField(
-                value = commentValue,
-                visualTransformation = com.valoser.futacha.shared.ui.board.imeCompositionHighlight(commentValue.composition),
-                onValueChange = {
-                    if (it.text != commentValue.text) editedDraftFields.add(CompatPostDraftField.COMMENT)
-                    // Preserve IME composition while the user is converting
-                    // Japanese text. This is intentionally not reconstructed
-                    // from it.text/it.selection.
-                    commentValue = if (it.text.length <= COMPAT_POST_COMMENT_MAX_CHARS) {
-                        it
-                    } else {
-                        val limited = it.text.take(COMPAT_POST_COMMENT_MAX_CHARS)
-                        TextFieldValue(limited, TextRange(limited.length))
+                state = commentState,
+                outputTransformation = com.valoser.futacha.shared.ui.board.rememberImeClauseHighlight(commentState),
+                inputTransformation = remember(commentState) {
+                    androidx.compose.foundation.text.input.InputTransformation {
+                        if (changes.changeCount > 0) editedDraftFields.add(CompatPostDraftField.COMMENT)
+                        if (length > COMPAT_POST_COMMENT_MAX_CHARS) {
+                            replace(COMPAT_POST_COMMENT_MAX_CHARS, length, "")
+                        }
                     }
                 },
                 label = { Text("コメント", modifier = Modifier.offset(x = (-12).dp)) },
-                singleLine = false,
-                minLines = 1,
-                maxLines = 8,
+                lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(1, Int.MAX_VALUE),
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)
@@ -1458,22 +1504,11 @@ internal fun CompatPostScreen(
         if (previewAttachment == null || compatPostAttachmentKind(previewAttachment.fileName) != CompatPostAttachmentKind.IMAGE) {
             attachmentPreviewOpen = false
         } else {
-            FutachaAppLockAwareWindow { Dialog(
-                onDismissRequest = { attachmentPreviewOpen = false },
-                properties = DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    AsyncImage(
-                        model = previewAttachment.bytes,
-                        imageLoader = LocalFutachaImageLoader.current,
-                        contentDescription = "添付画像プレビューを閉じる",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.8f)
-                            .background(Color.Black)
-                            .clickable { attachmentPreviewOpen = false }
-                    )
-                }
-            } }
+            com.valoser.futacha.shared.ui.board.ZoomableAttachmentPreviewDialog(
+                bytes = previewAttachment.bytes,
+                contentDescription = "添付画像プレビュー",
+                onClose = { attachmentPreviewOpen = false }
+            )
         }
     }
 
@@ -1505,7 +1540,7 @@ internal fun CompatPostScreen(
                                     deleteKey = upsDeleteKey,
                                     appVersion = appVersion
                                 ).onSuccess { fileName ->
-                                    replaceComment(appendCompatPostText(commentValue.text, fileName))
+                                    replaceComment(appendCompatPostText(commentState.text.toString(), fileName))
                                     message = "${fileName}を追記しました"
                                 }.onFailure { error ->
                                     message = error.message ?: "あぷ小へのアップロードに失敗しました"

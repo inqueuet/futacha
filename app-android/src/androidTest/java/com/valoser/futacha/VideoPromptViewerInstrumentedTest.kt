@@ -1,5 +1,7 @@
 package com.valoser.futacha
 
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
@@ -209,6 +211,26 @@ class VideoPromptViewerInstrumentedTest {
                 if (advanced) player.pause()
             }
             advanced
+        }
+        if (compat) {
+            // may 1447447697 / 1447425813: the toshiaki viewer mutes the video and zooms it.
+            fun volume(): Float { var v = -1f
+                onView(withClassName(equalTo("androidx.media3.ui.PlayerView"))).check { view, _ -> v = (view.javaClass.getMethod("getPlayer").invoke(view) as Player).volume }
+                return v }
+            rule.onNodeWithTag("compat-video-mute", useUnmergedTree = true).performClick()
+            rule.waitUntil(5_000) { volume() == 0f }
+            rule.onNodeWithTag("compat-video-mute", useUnmergedTree = true).performClick()
+            rule.waitUntil(5_000) { volume() > 0f }
+            rule.onNodeWithTag("compat-video-mute", useUnmergedTree = true).performClick()
+            rule.onAllNodesWithTag("compat-video-zoom-pan").assertCountEquals(0)
+            rule.onNodeWithTag("compat-video-zoom", useUnmergedTree = true).performClick()
+            rule.onNodeWithTag("compat-video-zoom").assertContentDescriptionEquals("動画を拡大（2倍）")
+            rule.onNodeWithTag("compat-video-zoom-pan").assertExists()
+            rule.onNodeWithTag("compat-video-zoom", useUnmergedTree = true).performClick()
+            rule.onNodeWithTag("compat-video-zoom", useUnmergedTree = true).performClick()
+            rule.onAllNodesWithTag("compat-video-zoom-pan").assertCountEquals(0)
+            rule.onNodeWithTag("compat-video-mute", useUnmergedTree = true).performClick()
+            rule.waitUntil(5_000) { volume() > 0f }
         }
         rule.runOnIdle { settings.value = MediaFeatureSettings(promptDisplayEnabled = true); gate.update(settings.value) }
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("viewer-prompt-toggle", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }

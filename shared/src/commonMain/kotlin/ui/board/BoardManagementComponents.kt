@@ -56,9 +56,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.runtime.mutableFloatStateOf
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
@@ -83,7 +87,8 @@ internal fun AddBoardDialog(
     httpClient: HttpClient? = null,
     onDismiss: () -> Unit,
     onSubmit: (String, String) -> Unit,
-    onBulkSubmit: (List<Pair<String, String>>) -> Unit
+    onBulkSubmit: (List<Pair<String, String>>) -> Unit,
+    loadAimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var name by rememberSaveable { mutableStateOf("") }
@@ -91,6 +96,12 @@ internal fun AddBoardDialog(
     var bulkMode by rememberSaveable { mutableStateOf(false) }
     var bulkLoading by remember { mutableStateOf(false) }
     var bulkError by remember { mutableStateOf<String?>(null) }
+    val aimogeAdder = com.valoser.futacha.shared.ui.aimoge.rememberAimogeBoardUrlAdder(
+        onAdd = { boardName, boardUrl -> onSubmit(boardName, boardUrl); name = ""; url = "" },
+        registeredUrls = existingBoards.mapNotNull { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) }.toSet(),
+        loadBoards = loadAimogeBoards,
+        onAddBoards = { boards -> onBulkSubmit(boards.map { it.name to it.url }); name = ""; url = "" }
+    )
     val nameInputState = rememberStableTextInputState(
         text = name,
         onTextChange = { name = it.take(BOARD_MANAGEMENT_NAME_MAX_CHARS) },
@@ -101,12 +112,13 @@ internal fun AddBoardDialog(
         onTextChange = { url = it.take(BOARD_MANAGEMENT_URL_MAX_CHARS) },
         analyticsFieldLabel = "板のURL"
     )
-    val validationState = remember(name, url, existingBoards) {
+    val aimogeInput = remember(url) { com.valoser.futacha.shared.ui.aimoge.classifyAimogeBoardUrlInput(url) }
+    val validationState = remember(name, url, existingBoards, aimogeInput) {
         buildAddBoardValidationState(
             name = name,
             url = url,
             existingBoards = existingBoards
-        )
+        ).withAimoge(aimogeInput, existingBoards)
     }
     val focusedFieldColor = if (LocalFutachaThemePalette.current == ThemePalette.FutabaClassic) {
         MaterialTheme.colorScheme.onSurface
@@ -184,6 +196,13 @@ internal fun AddBoardDialog(
                     )
                 }
                 }
+                if (!bulkMode && com.valoser.futacha.shared.ui.InAppThreadLinks.normalized(url) != null) {
+                    TextButton(
+                        onClick = { com.valoser.futacha.shared.ui.InAppThreadLinks.open(url); onDismiss() },
+                        colors = futachaDialogTextButtonColors(),
+                        modifier = Modifier.testTag("board-add-open-thread")
+                    ) { Text("このスレを開く") }
+                }
                 if (httpClient != null) {
                     TextButton(
                         onClick = { bulkMode = !bulkMode; bulkError = null },
@@ -197,7 +216,7 @@ internal fun AddBoardDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = if (bulkMode) !bulkLoading else validationState.canSubmit,
+                enabled = if (bulkMode) !bulkLoading else validationState.canSubmit && !aimogeAdder.busy,
                 colors = futachaDialogTextButtonColors(),
                 onClick = {
                     if (bulkMode) {
@@ -227,6 +246,14 @@ internal fun AddBoardDialog(
                         return@TextButton
                     }
                     AnalyticsTracker.uiControl("board_add_confirm", "板を追加")
+                    if (aimogeInput == com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards) {
+                        aimogeAdder.selectBoards()
+                        return@TextButton
+                    }
+                    (aimogeInput as? com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board)?.let { board ->
+                        aimogeAdder.start(board.url, validationState.trimmedName)
+                        return@TextButton
+                    }
                     onSubmit(validationState.trimmedName, validationState.normalizedInputUrl)
                     name = ""
                     url = ""
@@ -254,7 +281,9 @@ internal fun AddBoardDialog(
 internal fun BoardManagementTopBar(
     chromeState: BoardManagementChromeState,
     isMenuExpanded: Boolean,
-    topBarCallbacks: BoardManagementTopBarCallbacks
+    topBarCallbacks: BoardManagementTopBarCallbacks,
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    mixOffered: Boolean = true
 ) {
     val chromeColors = LocalFutachaChromeColors.current
     CenterAlignedTopAppBar(
@@ -303,7 +332,17 @@ internal fun BoardManagementTopBar(
             ) {
                 com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem(topBarCallbacks.onDismissMenu)
                 com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(topBarCallbacks.onDismissMenu)
-                BoardManagementMenuAction.entries.forEach { action ->
+                if (onOpenAimogeCalendar != null) {
+                    DropdownMenuItem(
+                        text = { Text("あいもげのイベントカレンダー") },
+                        onClick = {
+                            topBarCallbacks.onDismissMenu()
+                            onOpenAimogeCalendar()
+                        },
+                        modifier = Modifier.testTag("futacha-aimoge-calendar")
+                    )
+                }
+                BoardManagementMenuAction.entries.filter { it != BoardManagementMenuAction.MIX || (mixOffered && com.valoser.futacha.shared.compat.MixAvailability.enabled) }.forEach { action ->
                     DropdownMenuItem(
                         text = { Text(action.label) },
                         onClick = {
@@ -351,6 +390,7 @@ internal fun BoardManagementBoardList(
     // persisted and computed from the not-yet-updated list, dropping steps.
     // Kept after the drop until the persisted list arrives, so it doesn't flash back.
     var dragOrder by remember { mutableStateOf<List<BoardSummary>?>(null) }
+    var draggedBoardOffset by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(boards, isReorderMode) {
         if (draggedBoardId == null) dragOrder = null
     }
@@ -379,18 +419,21 @@ internal fun BoardManagementBoardList(
         ) { index, board ->
             val reorderDragModifier = if (isReorderMode) {
                 Modifier.pointerInput(isReorderMode, board.id) {
-                    var accumulatedDrag = 0f
+                    val spacingPx = 8.dp.toPx()
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
                             draggedBoardId = board.id
+                            draggedBoardOffset = 0f
                             dragOrder = dragOrder ?: currentBoards.value
                         },
                         onDragCancel = {
                             draggedBoardId = null
+                            draggedBoardOffset = 0f
                             dragOrder = null
                         },
                         onDragEnd = {
                             draggedBoardId = null
+                            draggedBoardOffset = 0f
                             val finalOrder = dragOrder
                             if (finalOrder == null || finalOrder == currentBoards.value) {
                                 dragOrder = null
@@ -401,26 +444,25 @@ internal fun BoardManagementBoardList(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             if (draggedBoardId != board.id) return@detectDragGesturesAfterLongPress
-                            accumulatedDrag += dragAmount.y
-                            val draggedItem = listState.layoutInfo.visibleItemsInfo.firstOrNull {
-                                it.key == board.id
-                            } ?: return@detectDragGesturesAfterLongPress
-                            val center = draggedItem.offset + draggedItem.size / 2 + accumulatedDrag
-                            val targetItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-                                item.key != board.id &&
-                                    center >= item.offset && center <= item.offset + item.size
-                            } ?: return@detectDragGesturesAfterLongPress
-                            val latestBoards = dragOrder ?: currentBoards.value
-                            val currentIndex = latestBoards.indexOfFirst { it.id == board.id }
-                            val targetIndex = latestBoards.indexOfFirst { it.id == targetItem.key }
-                            if (currentIndex < 0 || targetIndex < 0 || currentIndex == targetIndex) {
-                                return@detectDragGesturesAfterLongPress
-                            }
-                            dragOrder = moveBoardSummary(latestBoards, currentIndex, moveUp = targetIndex < currentIndex)
-                            accumulatedDrag = 0f
+                            // The row's own height, not the list's layout: the layout is a frame
+                            // late after a swap, which used to undo or drop the next steps.
+                            val step = size.height + spacingPx
+                            val result = boardDragSteps(
+                                order = dragOrder ?: currentBoards.value,
+                                boardId = board.id,
+                                offset = draggedBoardOffset + dragAmount.y,
+                                step = step
+                            )
+                            dragOrder = result.first
+                            draggedBoardOffset = result.second
                         }
                     )
-                }
+                }.graphicsLayer {
+                    if (draggedBoardId == board.id) {
+                        translationY = draggedBoardOffset
+                        shadowElevation = 8.dp.toPx()
+                    }
+                }.zIndex(if (draggedBoardId == board.id) 1f else 0f)
             } else {
                 Modifier
             }
@@ -482,6 +524,43 @@ internal fun BoardManagementScaffold(
     bindings: BoardManagementScaffoldBindings,
     modifier: Modifier = Modifier
 ) {
+    var aimogeCalendarOpen by remember { mutableStateOf(false) }
+    var aimogeCalendarNotice by remember { mutableStateOf<String?>(null) }
+    if (aimogeCalendarOpen) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeEventCalendarDialog(
+            onOpenThread = { row ->
+                val threadId = row.threadId
+                val board = bindings.boards.firstOrNull {
+                    com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(it.url) == row.boardUrl
+                }
+                if (threadId == null || board == null) {
+                    aimogeCalendarNotice = "この板（/${row.slug}/）は登録されていません。板一覧の「新規追加」から追加してください"
+                } else {
+                    aimogeCalendarOpen = false
+                    bindings.historyDrawerCallbacks.onHistoryEntrySelected(
+                        ThreadHistoryEntry(
+                            threadId = threadId,
+                            boardId = board.id,
+                            title = row.title,
+                            titleImageUrl = row.thumbnailUrl.orEmpty(),
+                            boardName = board.name,
+                            boardUrl = row.threadUrl ?: board.url,
+                            lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                            replyCount = 0
+                        )
+                    )
+                }
+            },
+            onDismiss = { aimogeCalendarOpen = false }
+        )
+    }
+    aimogeCalendarNotice?.let { notice ->
+        com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { aimogeCalendarNotice = null },
+            text = { Text(notice) },
+            confirmButton = { TextButton(onClick = { aimogeCalendarNotice = null }) { Text("OK") } }
+        ) }
+    }
     ModalNavigationDrawer(
         drawerState = bindings.drawerState,
         gesturesEnabled = true,
@@ -512,7 +591,10 @@ internal fun BoardManagementScaffold(
                 BoardManagementTopBar(
                     chromeState = bindings.chromeState,
                     isMenuExpanded = bindings.isMenuExpanded,
-                    topBarCallbacks = bindings.topBarCallbacks
+                    topBarCallbacks = bindings.topBarCallbacks,
+                    onOpenAimogeCalendar = { aimogeCalendarOpen = true }
+                        .takeIf { com.valoser.futacha.shared.ui.aimoge.aimogeEventCalendarAvailable() },
+                    mixOffered = LocalHasExistingMix.current || mixOfferable(bindings.boards.map { it.url })
                 )
             }
         ) { innerPadding ->
@@ -571,5 +653,24 @@ internal fun BoardManagementOverlayHost(
             onBack = bindings.onCookieManagementBack,
             repository = bindings.cookieRepository
         )
+    }
+}
+
+/**
+ * Moves [boardId] one row per [step] of [offset] (a drag can cross several rows at once)
+ * and returns the new order and what is left of the offset.
+ */
+internal fun boardDragSteps(order: List<BoardSummary>, boardId: String, offset: Float, step: Float): Pair<List<BoardSummary>, Float> {
+    if (step <= 0f) return order to offset
+    var list = order
+    var left = offset
+    while (true) {
+        val index = list.indexOfFirst { it.id == boardId }
+        if (index < 0) return list to left
+        val down = left > step / 2f && index < list.lastIndex
+        val up = left < -step / 2f && index > 0
+        if (!down && !up) return list to left
+        list = moveBoardSummary(list, index, moveUp = up)
+        left += if (down) -step else step
     }
 }

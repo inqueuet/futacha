@@ -197,6 +197,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import com.valoser.futacha.shared.ui.board.aimogeSpoilerAt
+import com.valoser.futacha.shared.ui.board.toggleAimogeSpoiler
+import com.valoser.futacha.shared.ui.board.withAimogeDecorations
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
@@ -517,11 +520,59 @@ internal fun compatPostQuotesOwnPost(
     }
 }
 
+/** A-071: the red of the reference app's 「返信あり」 notice and of the "+N" on the own post. */
+internal val COMPAT_OWN_REPLY_NOTICE_COLOR = Color(0xFFD32F2F)
+
+/** The own posts [post] replies to (its explicit `>>No.` / `>No.` targets among [ownPostNos]). */
+internal fun compatOwnPostsRepliedBy(post: CompatPostSnapshot, ownPostNos: Set<String>): Set<String> {
+    if (ownPostNos.isEmpty() || post.postNo in ownPostNos) return emptySet()
+    if (post.quoteReferences.isNotEmpty()) {
+        return post.quoteReferences.flatMapTo(mutableSetOf()) { reference ->
+            reference.replyTargetPostIds.filter(ownPostNos::contains)
+        }
+    }
+    return post.messageHtml.toCompatPlainTextCached().lineSequence().mapNotNullTo(mutableSetOf()) { line ->
+        val query = compatQuoteQueryForLine(line.trimStart()) ?: return@mapNotNullTo null
+        compatQuoteQueryPostNo(query)?.takeIf { it in ownPostNos }
+    }
+}
+
+/** One own post that gained replies in a refresh (A-071). */
+internal data class CompatOwnReplyIncrease(val postNo: String, val count: Int, val excerpt: String)
+
+/**
+ * A-071: the own posts that gained replies between [previous] and [fetched] (posts new in [fetched] that reply to them),
+ * in thread order. Nothing for a first load: the opening summary tells about that.
+ */
+internal fun compatOwnReplyIncreases(
+    previous: List<CompatPostSnapshot>?,
+    fetched: List<CompatPostSnapshot>,
+    ownPostNos: Set<String>
+): List<CompatOwnReplyIncrease> {
+    if (previous == null || ownPostNos.isEmpty()) return emptyList()
+    val known = previous.mapTo(HashSet()) { it.postNo }
+    val counts = LinkedHashMap<String, Int>()
+    fetched.asSequence().filter { it.postNo !in known }.forEach { post ->
+        compatOwnPostsRepliedBy(post, ownPostNos).forEach { target -> counts[target] = (counts[target] ?: 0) + 1 }
+    }
+    if (counts.isEmpty()) return emptyList()
+    return fetched.filter { it.postNo in counts }.map { own ->
+        val excerpt = own.messageHtml.toCompatPlainTextCached().lineSequence()
+            .map(String::trim).firstOrNull { it.isNotEmpty() && !it.startsWith(">") }
+            .orEmpty().let { if (it.length > 40) it.take(40) + "…" else it }
+        CompatOwnReplyIncrease(own.postNo, counts.getValue(own.postNo), excerpt)
+    }
+}
+
 /** The reader's own header size and gap between posts (「画面表示」); null keeps the reference app's. */
 internal object CompatPostLayoutState {
     var headerFontSp by androidx.compose.runtime.mutableStateOf<Int?>(null)
     var extraSpacingDp by androidx.compose.runtime.mutableStateOf<Int?>(null)
+    /** 「レスを押した時に色を付ける」（既定ON）。OFFで、押している間の灰色と波紋を出さない（may 1447434176：目がチカチカする）。 */
+    var pressHighlight by androidx.compose.runtime.mutableStateOf(true)
 }
+
+internal const val COMPAT_THREAD_PRESS_HIGHLIGHT_KEY = "threadPressHighlight"
 
 /** Every post ends with this blank (the body's own bottom padding). */
 private const val COMPAT_POST_BOTTOM_DP = 8
@@ -553,6 +604,8 @@ internal fun CompatPostRow(
     searchHit: Boolean = false,
     searchRanges: List<CompatSearchTextRange> = emptyList(),
     newReplyCount: Int? = null,
+    /** A-071: replies this own post gained in the last refresh, shown as a coloured "+N" in its header. */
+    ownReplyIncrease: Int? = null,
     onClick: () -> Unit = {},
     onQuoteClick: (String) -> Unit = {},
     onUrlClick: (String) -> Unit = {},
@@ -662,7 +715,7 @@ internal fun CompatPostRow(
                     },
                     fontWeight = if (isOwnPost || quotesOwnPost) FontWeight.Bold else null
                 )
-            ) { append(post.position.toString()) }
+            ) { append((post.displayNumber ?: post.position).toString()) }
             append(" ")
             subject?.let {
                 withStyle(SpanStyle(color = palette.headerSubject, fontWeight = FontWeight.Bold)) {
@@ -749,14 +802,23 @@ internal fun CompatPostRow(
             )
             .fillMaxWidth()
             .testTag("compat-thread-post-${post.postNo}")
-            .combinedClickable(
-                onClick = {
-                    if (relatedTap) relatedClick() else firstQuoteQuery?.let(onQuoteClick) ?: onClick()
-                },
-                onLongClick = onLongClick
+            .then(
+                if (CompatPostLayoutState.pressHighlight) Modifier.combinedClickable(
+                    onClick = {
+                        if (relatedTap) relatedClick() else firstQuoteQuery?.let(onQuoteClick) ?: onClick()
+                    },
+                    onLongClick = onLongClick
+                ) else Modifier.combinedClickable(
+                    interactionSource = null,
+                    indication = null,
+                    onClick = {
+                        if (relatedTap) relatedClick() else firstQuoteQuery?.let(onQuoteClick) ?: onClick()
+                    },
+                    onLongClick = onLongClick
+                )
             )
             .background(if (searchHit) palette.searchResultBackground else Color.Transparent)
-            .postPressFeedback(post.postNo, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .then(if (CompatPostLayoutState.pressHighlight) Modifier.postPressFeedback(post.postNo, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
     ) {
         newReplyCount?.takeIf { it > 0 }?.let { count ->
             CompatNewRepliesDivider(count, Modifier.testTag("compat-new-replies-divider"))
@@ -764,6 +826,8 @@ internal fun CompatPostRow(
         if (manuallyMarked) Text("★ マーク", color = MaterialTheme.colorScheme.onSurface, fontSize = fontSize.sp)
         Row(
             modifier = Modifier.fillMaxWidth().combinedClickable(
+                interactionSource = null,
+                indication = if (CompatPostLayoutState.pressHighlight) androidx.compose.foundation.LocalIndication.current else null,
                 onClick = if (relatedTap) relatedClick else onHeaderClick,
                 onLongClick = if (relatedTap) onLongClick else onHeaderLongClick
             ),
@@ -783,6 +847,17 @@ internal fun CompatPostRow(
                     else -> palette.text
                 }
             )
+            ownReplyIncrease?.takeIf { it > 0 }?.let { increase ->
+                Text(
+                    "+$increase",
+                    modifier = Modifier
+                        .padding(end = 10.dp, top = 2.dp)
+                        .testTag("compat-own-reply-increase-${post.postNo}"),
+                    color = COMPAT_OWN_REPLY_NOTICE_COLOR,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    fontSize = (CompatPostLayoutState.headerFontSp?.toFloat() ?: 11.2f).sp
+                )
+            }
             if (rightAlignedSaidane) {
                 Text(
                     buildAnnotatedString {
@@ -1059,6 +1134,16 @@ internal fun CompatPostRow(
         // The reference client places generated あぷ小 previews above the
         // body.  The body itself must stay byte-for-byte represented as text;
         // no uploader filename is injected into it.
+        // あいもげ: the 2nd and 3rd files of the post, each opening its own page of the viewer.
+        val extraAttachments = remember(post) { compatExtraAttachments(post) }
+        com.valoser.futacha.shared.ui.image.PostExtraAttachments(
+            attachments = extraAttachments,
+            postKey = post.postNo,
+            size = upsThumbnailSize.dp,
+            onClick = { url, _ -> onMediaUrlClick(url) },
+            imageModifier = Modifier.compatPrivacyImageEffect(privacyAlpha),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 10.dp, end = 10.dp, bottom = 5.dp)
+        )
         CompatInlineApuSmallPreviews(
             urls = inlineApuSmallMediaUrls,
             thumbnailSize = upsThumbnailSize,
@@ -1168,7 +1253,19 @@ private fun CompatMessageText(
     val deletedNoticeRanges = remember(post, message) {
         compatDeletedNoticeRanges(post, message)
     }
+    var revealedSpoilers by remember(post.messageHtml) { mutableStateOf(emptySet<Int>()) }
+    val aimogeDecorations = remember(post.messageHtml) {
+        com.valoser.futacha.shared.ui.board.aimogeTextDecorations(
+            post.messageHtml,
+            toLines = { it.toCompatPlainText().split('\n') },
+            lineLength = { _, line -> line.length }
+        )
+    }
+    val spoilerCover = palette.uiSecondaryText
     val annotated = remember(
+        revealedSpoilers,
+        aimogeDecorations,
+        spoilerCover,
         post.quoteReferences,
         message,
         inlineLinks,
@@ -1241,7 +1338,7 @@ private fun CompatMessageText(
                     addStyle(SpanStyle(background = searchTextHighlight), start, end)
                 }
             }
-        }
+        }.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover)
     }
     var textLayoutResult by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
     val latestClick by rememberUpdatedState(onClick)
@@ -1290,6 +1387,10 @@ private fun CompatMessageText(
                 },
                 onTap = { position ->
                     val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
+                    annotated.aimogeSpoilerAt(offset)?.let { index ->
+                        revealedSpoilers = toggleAimogeSpoiler(revealedSpoilers, index)
+                        return@detectTapGestures
+                    }
                     annotated.getStringAnnotations("compat_quote", offset, offset)
                         .firstOrNull()
                         ?.let { latestQuoteClick(it.item) }

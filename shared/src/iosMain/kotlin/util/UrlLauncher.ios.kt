@@ -10,7 +10,8 @@ import platform.UIKit.UIViewController
 @Composable
 actual fun rememberUrlLauncher(customTabs: Boolean, allowAnyScheme: Boolean): (String) -> Unit {
     return remember(customTabs, allowAnyScheme) {
-        { url: String ->
+        launch@{ url: String ->
+            if (com.valoser.futacha.shared.network.aimoge.handleAimogeInternalLink(url)) return@launch
             try {
                 val request = resolveUrlLaunchRequest(url, allowAnyScheme)
                 if (request == null) {

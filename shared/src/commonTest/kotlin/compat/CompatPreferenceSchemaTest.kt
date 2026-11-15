@@ -197,12 +197,12 @@ class CompatPreferenceSchemaTest {
         val expectedCounts = mapOf(
             "background" to 2,
             "catalog" to 22,
-            "control" to 12,
+            "control" to 14, // + the edge swipe back and the viewer double tap zoom
             "design" to 7,
             // Includes the high-quality thumbnail extension and its note.
             "network" to 7,
             "storage" to 10,
-            "thread" to 20, // + the header size and the gap between posts (this app's own), + 18-20's reply menu size
+            "thread" to 23, // + the privacy blur, the title size, the header size and the gap between posts (this app's own), + 18-20's reply menu size, + the press highlight switch
             "viewer" to 6 // + 18-20's tap toolbar, video panel auto hide and video autoplay
         )
         val entries = expectedCounts.flatMap { (path, count) ->
@@ -210,9 +210,9 @@ class CompatPreferenceSchemaTest {
                 .map { path to it }
         }
 
-        assertEquals(86, entries.size) // + four FutabaViewer 18-20 settings
+        assertEquals(91, entries.size) // + four FutabaViewer 18-20 settings, + the thread title size, + the press highlight switch
         assertEquals(
-            85,
+            90,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )
@@ -322,7 +322,7 @@ class CompatPreferenceSchemaTest {
         assertEquals(
             listOf(
                 "threadDisplayMode", "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", "threadFontSize", "threadHeaderFontSize", "threadPostSpacing", "threadThumbSize",
+                "threadAdminDeleteShow", "commonPrivacyAlpha", "commonPrivacyBlur", "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", "threadPressHighlight", "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod", "threadContextMenuScale"
             ),
             groups[1].second.map(CompatSettingEntry::preferenceKey)
@@ -361,7 +361,7 @@ class CompatPreferenceSchemaTest {
         )
         assertEquals("ふたちゃ拡張", groups.single { it.first == "ふたちゃ拡張" }.first)
         assertEquals(
-            listOf("controlCloseToastDuration", "controlPostDestinationConfirm"),
+            listOf("controlCloseToastDuration", "controlPostDestinationConfirm", "controlThreadEdgeSwipeBack", "controlViewerDoubleTapZoom"),
             groups.single { it.first == "ふたちゃ拡張" }.second.map(CompatSettingEntry::preferenceKey)
         )
 

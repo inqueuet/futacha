@@ -130,14 +130,15 @@ internal fun buildThreadScreenControllerBindingsBundle(
                     actionExecutionBindings.actionBindings.launch(
                         successMessage = successMessage,
                         failurePrefix = failurePrefix,
-                        onSuccess = { _: Unit -> onSuccess() }
+                        onSuccess = { _: Any? -> onSuccess() },
+                        successMessageOf = { reply -> futachaRemoteResultMessage(successMessage, reply as? String) }
                     ) {
                         performThreadAction(block)
                     }
                 },
                 voteSaidane = { post ->
                     requireWritableThreadBoard(interactionInputs.effectiveBoardUrl)
-                    interactionInputs.repository.voteSaidane(
+                    interactionInputs.repository.voteSaidaneResponse(
                         interactionInputs.effectiveBoardUrl,
                         interactionInputs.threadId,
                         post.id
@@ -145,7 +146,7 @@ internal fun buildThreadScreenControllerBindingsBundle(
                 },
                 requestDeletion = { post ->
                     requireWritableThreadBoard(interactionInputs.effectiveBoardUrl)
-                    interactionInputs.repository.requestDeletion(
+                    interactionInputs.repository.requestDeletionResponse(
                         interactionInputs.effectiveBoardUrl,
                         interactionInputs.threadId,
                         post.id,

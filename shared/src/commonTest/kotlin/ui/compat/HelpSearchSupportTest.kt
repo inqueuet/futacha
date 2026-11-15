@@ -25,6 +25,19 @@ class HelpSearchSupportTest {
         assertTrue(searchedHelpHtml(html, "ずんだもん").contains("<input checked type=\"checkbox\" id=\"speech-help\""))
     }
 
+    @Test fun helpReview20261111CoversAimogeAndTheReviewFixes() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "あいもげ").any { "承認" in it.body })
+        assertTrue(searchHelp(sections, "あいもげの削除キー").any { "ふたばの削除キーとは別" in it.body })
+        assertTrue(searchHelp(sections, "自動で送り直しません").isNotEmpty())
+        assertTrue(searchHelp(sections, "あぷ小").any { "3000KB" in it.body && "縮小" in it.body })
+        assertTrue(searchHelp(sections, "タブを閉じたら履歴も消す").any { "最初はOFF" in it.body })
+        assertTrue(searchHelp(sections, "検索欄の入力を消す").any { "×" in it.body })
+        assertTrue(searchedHelpHtml(html, "あいもげの削除キー").contains("<input checked type=\"checkbox\" id=\"aimoge-help\""))
+        assertFalse("上部の戻るボタンも使えます" in html)
+    }
+
     @Test fun aiHelpExplainsSharedSettingsProviderPrivacyAndNgRestoration() {
         val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
         val sections = helpSearchSections(html)

@@ -15,6 +15,7 @@
             android:exported="false"
             android:process=":profile_switch_crash_test" />
 
+
         <activity
             android:name=".ProfileActivityResultGateTestActivity"
             android:enabled="true"

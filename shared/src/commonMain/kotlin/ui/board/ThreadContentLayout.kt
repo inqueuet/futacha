@@ -305,8 +305,7 @@ internal fun ThreadContent(
 
             if (LocalFutachaSharedFeatures.current?.value("thread", "threadFastScroll") == "ON") {
                 CompatFastScrollbar(true, listState)
-            }
-            ThreadScrollbar(
+            } else ThreadScrollbar(
                 listState = listState,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)

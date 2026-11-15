@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -202,7 +203,7 @@ internal class FutaberReadAloud(
                 // One failed fetch (a moment without connection) no longer ends the run: it waits and asks again
                 // (audit A2). A thread that has fallen off ends it as before.
                 val posts = try {
-                    loader() ?: run { message = "スレッドが落ちています"; return }
+                    withAimogeAutomaticFetch { loader() } ?: run { message = "スレッドが落ちています"; return }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Throwable) {

@@ -30,7 +30,7 @@ internal fun futaberReadAloudSegments(posts: List<Post>, skippedPostIds: Set<Str
     val segments = ArrayList<ReadAloudSegment>()
     posts.forEachIndexed { index, post ->
         if (post.isDeleted || post.id in skippedPostIds) return@forEachIndexed
-        val raw = messageHtmlToLines(post.messageHtml).map { stripUrlsForReadAloud(it).trim() }.filter { it.isNotBlank() }
+        val raw = messageHtmlToLines(com.valoser.futacha.shared.ui.board.aimogeHtmlForSpeech(post.messageHtml)).map { stripUrlsForReadAloud(it).trim() }.filter { it.isNotBlank() }
         if (raw.isEmpty() || containsDeletionNotice(raw)) return@forEachIndexed
         val lines = raw.mapNotNull { line ->
             if (line.startsWith(">") || line.startsWith("＞")) futaberQuoteLineToSpeak(line).takeIf { it.isNotEmpty() }?.let { "$FUTABER_QUOTE_MARK$it" }

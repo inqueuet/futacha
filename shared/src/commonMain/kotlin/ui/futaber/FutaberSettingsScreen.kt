@@ -394,6 +394,7 @@ private fun ColumnScope.FutaberSettingsRootPage(
             FutaberSettingsRow.Background -> onShared("background")
             FutaberSettingsRow.Backup -> onShared("backup")
             FutaberSettingsRow.Cookies -> onShared("cookies")
+            FutaberSettingsRow.Aimoge -> onShared("aimoge")
             FutaberSettingsRow.Notifications -> onOpenNotifications()
             FutaberSettingsRow.ImageSearch -> onShared("image_search")
             FutaberSettingsRow.Media -> onRoute(FutaberSettingsRoute.Media)
@@ -658,6 +659,9 @@ private fun FutaberSettingsExtrasPage(
         }
         SwitchRow(FUTABER_REPORT_NG_SWITCH, "ext-report-ng", settings.extReportNg) {
             onSettingChange(FutaberSettingKeys.EXT_REPORT_NG, if (it) "ON" else "OFF")
+        }
+        SwitchRow(FUTABER_APU_PREVIEW_SWITCH, "ext-apu-preview", settings.extApuPreview) {
+            onSettingChange(FutaberSettingKeys.EXT_APU_PREVIEW, if (it) "ON" else "OFF")
         }
         SwitchRow("検索結果の前後移動（▲▼。検索ワードで絞り込む時）", "ext-search-nav", settings.extSearchNav) {
             onSettingChange(FutaberSettingKeys.EXT_SEARCH_NAV, if (it) "ON" else "OFF")
@@ -1242,6 +1246,7 @@ internal const val FUTABER_LEGACY_MANY_REPLIES_SWITCH = "「返信が多いレ�
 internal const val FUTABER_LEGACY_SUBJECT_SWITCH = "スレッド作成で題名の欄を出す"
 
 /** The extension's switch, also named by the operation guide (L26). */
+internal const val FUTABER_APU_PREVIEW_SWITCH = "本文のあぷ・あぷ小の画像をレスの中に表示"
 internal const val FUTABER_REPORT_NG_SWITCH = "delの確認でこのレスをNGにも登録"
 
 
@@ -1335,6 +1340,7 @@ internal fun FutaberSharedSettingsHost(
                         "license" -> CompatLicenseScreen(onBack = back)
                         "cookies" -> services.cookieRepository?.let { CookieManagementScreen(onBack = back, repository = it) }
                             ?: CompatHelpScreen(appVersion = appVersion, onBack = back)
+                        "aimoge" -> com.valoser.futacha.shared.ui.aimoge.AimogeSettingsDialog(services.store, onDismiss = back)
                         // L-B11 (M34・C04): futaber's 「画像ビューア」 page; its last row opens the shared columns / preloading page.
                         "viewer" -> FutaberViewerSettingsStorePage(
                             services.store, onDone = back, onOpenShared = { paths = paths + FUTABER_VIEWER_SHARED_PATH }

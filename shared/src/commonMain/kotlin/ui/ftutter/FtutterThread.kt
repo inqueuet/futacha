@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.compat.isFallenSitePage
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -70,6 +71,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -91,6 +93,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import com.valoser.futacha.shared.ui.board.aimogeSpoilerAt
+import com.valoser.futacha.shared.ui.board.toggleAimogeSpoiler
+import com.valoser.futacha.shared.ui.board.withAimogeDecorations
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -132,10 +137,13 @@ internal data class FtutterThreadRef(
 /** スレッドURLから番号を取る（`…/res/123.htm`）。 */
 internal fun ftutterThreadIdFromUrl(url: String): String? =
     Regex("/res/([0-9]+)\\.htm").find(url)?.groupValues?.get(1)
+        ?: com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl(url)
+            ?.takeIf { it.site == com.valoser.futacha.shared.compat.BoardSite.AIMOGE }?.threadId
 
 /** 原作どおり、2chan のスレッドURLならアプリ内で開く。 */
 internal fun ftutterIsThreadUrl(url: String): Boolean =
-    url.startsWith("http") && url.contains(".2chan.net/") && url.contains("/res/") && url.substringBefore('?').endsWith(".htm")
+    url.startsWith("http") && url.contains(".2chan.net/") && url.contains("/res/") && url.substringBefore('?').endsWith(".htm") ||
+        com.valoser.futacha.shared.compat.aimogeLinkTargetOf(url) is com.valoser.futacha.shared.compat.AimogeLinkTarget.Thread
 
 /**
  * メール欄のタップ：http で始まればそのURL、`fu1234567.jpg` のような あぷ・あぷ小 のファイル名なら、その画像のURL。
@@ -178,7 +186,9 @@ private class FtutterThreadContext(
     /** 「従来の動き」：スレッドの見た目を前の形にする（T-B4）。 */
     val legacyLook: Boolean = false,
     /** M14：このスレで送ったそうだねの数（応答の新しい数）。見出しに出し、もう押せなくする。 */
-    val soudaneSent: Map<String, Int> = emptyMap()
+    val soudaneSent: Map<String, Int> = emptyMap(),
+    /** 自分へのレスの行に淡い色を敷く（拡張機能、may 1447424787）。 */
+    val replyToSelfTint: Boolean = false
 )
 
 /** レスに対する操作（本体とポップアップで共通）。 */
@@ -225,12 +235,23 @@ internal class FtutterThreadActions(val scope: kotlinx.coroutines.CoroutineScope
 
     fun archived(thread: String): ThreadPage? = archivedPages[thread]
 
+    private val missingArchives = androidx.compose.runtime.mutableStateSetOf<String>()
+
+    /** 過去ログを探したが見つからなかったスレッド（帯でそのことを伝える）。 */
+    fun archiveMissing(thread: String): Boolean = thread in missingArchives
+
+    fun markArchiveMissing(thread: String) {
+        if (missingArchives.size >= 64) missingArchives.clear()
+        missingArchives.add(thread)
+    }
+
     fun putArchived(thread: String, page: ThreadPage) {
         archivedPages.remove(thread)
         archiveOrder.remove(thread)
         while (archiveOrder.size >= FTUTTER_HELD_ARCHIVES) archivedPages.remove(archiveOrder.removeFirst())
         archivedPages[thread] = page
         archiveOrder.addLast(thread)
+        missingArchives.remove(thread)
     }
 }
 
@@ -347,6 +368,8 @@ internal fun FtutterThreadScreen(
     var archived by remember(board.id, ref.threadId) { mutableStateOf(false) }
     val archiveBusy = remoteActions.isBusy("$actionKey:archive")
     var refreshTick by remember(board.id, ref.threadId) { mutableIntStateOf(0) }
+    // Set by the auto-scroll's reload so the あいもげ repository can hold it back; Futaba ignores it.
+    val nextReloadAutomatic = remember(board.id, ref.threadId) { booleanArrayOf(false) }
     var filter by remember(board.id, ref.threadId) { mutableStateOf(FtutterThreadFilter()) }
     var searching by remember(board.id, ref.threadId) { mutableStateOf(false) }
     // 「ここまで読んだ」の件数。開いた時の記録で決め、保存する時（更新・戻る）だけ動かす（スクロール中は動かさない）。
@@ -458,7 +481,8 @@ internal fun FtutterThreadScreen(
     val legacyFallen = preferences.ftutterBool(FTUTTER_LEGACY_FALLEN_KEY, false)
     val soudaneSent = remember(ref.threadId) { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
     val soudaneSnapshot = soudaneSent.toMap()
-    val context = remember(posts, replyIndex, idCounts, markedIds, settings, design, appliedQuery, hidden, legacyLook, soudaneSnapshot) {
+    val replyTint = FtutterExtension.REPLY_TO_SELF_TINT in extensions
+    val context = remember(posts, replyIndex, idCounts, markedIds, settings, design, appliedQuery, hidden, legacyLook, soudaneSnapshot, replyTint) {
         FtutterThreadContext(
             posts = posts,
             replies = replyIndex,
@@ -469,23 +493,24 @@ internal fun FtutterThreadScreen(
             query = appliedQuery,
             hidden = hidden,
             legacyLook = legacyLook,
-            soudaneSent = soudaneSnapshot
+            soudaneSent = soudaneSnapshot,
+            replyToSelfTint = replyTint
         )
     }
 
     // 読み位置と既読を保存する（原作の storeKKE：更新・戻る・タブの切替の時だけ）。
     val currentRows by rememberUpdatedState(rows)
     val currentPosts by rememberUpdatedState(posts)
+    val currentFilter by rememberUpdatedState(appliedFilter)
     fun lastSeenPostIndex(): Int? {
         val info = listState.layoutInfo
         val bottom = info.viewportEndOffset
         val rowsSeen = ftutterLastSeenRow(
             info.visibleItemsInfo.map { Triple(it.index, it.offset, it.size) }, bottom, legacyLook
         )
-        return rowsSeen.mapNotNull { index ->
-            (currentRows.getOrNull(index) as? FtutterRow.PostRow)?.index
-                ?: (currentRows.getOrNull(index) as? FtutterRow.HiddenRow)?.index
-        }.maxOrNull()
+        // 抽出（人気・画像・検索）で絞っている時は、末尾まで見ても全部を読んだことにしない。
+        val unfiltered = currentFilter == FtutterThreadFilter()
+        return ftutterLastSeenPostIndex(currentRows, rowsSeen, if (unfiltered) currentPosts.size else 0)
     }
     fun saveViewport() {
         val all = currentPosts
@@ -540,7 +565,12 @@ internal fun FtutterThreadScreen(
         val openingFetch = !visitTracker.isCompleted && FtutterExtension.OPEN_SUMMARY in extensions &&
             storedReadCount != null && storedReadCount > 0
         try {
-            val fetched = repository.getThreadContent(board.url, ref.threadId)
+            val automatic = nextReloadAutomatic[0].also { nextReloadAutomatic[0] = false }
+            val fetched = if (automatic) {
+                com.valoser.futacha.shared.repo.aimoge.withAimogeAutomaticFetch { repository.getThreadContent(board.url, ref.threadId) }
+            } else {
+                repository.getThreadContent(board.url, ref.threadId)
+            }
             val content = (repository as? FutachaSharedBoardRepository)?.let { shared ->
                 try {
                     shared.supplement(futaberCompatThreadUrl(board, ref.threadId), fetched)
@@ -552,14 +582,16 @@ internal fun FtutterThreadScreen(
             } ?: fetched
             val linked = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { content.page.ftutterRelinked(checkCancelled = { ensureActive() }) }
             if (!archived) {
-                liveConfirmed = true
-                fallen = false
+                // あいもげ answers a fallen thread with its posts (ThreadPage.archived): shown, but as fallen (no replies).
+                val siteFallen = linked.isFallenSitePage()
+                liveConfirmed = !siteFallen
+                fallen = siteFallen
                 page = linked
                 onPageSnapshot(linked)
                 errorText = null
                 failedBlank = null
                 onPageLoaded(linked.posts)
-                onLivePageConfirmed()
+                if (siteFallen) onFallen() else onLivePageConfirmed()
                 if (before.isNotEmpty() && !openingFetch) {
                     ftutterRefreshNotice(before, linked.posts, selfIds, settings)?.let(onNotice)
                 }
@@ -570,7 +602,7 @@ internal fun FtutterThreadScreen(
             liveConfirmed = false
             val status = error.statusCodeOrNull()
             if (status == 404 || status == 410) {
-                // 落ち：手元のデータは残し、末尾の帯と「過去ログを取得」で知らせる（原作は404だけ、ふたちゃどおり410も）。
+                // 落ち：手元のデータは残し、末尾の帯で知らせ、過去ログは自動で取る（原作は404だけ、ふたちゃどおり410も）。
                 fallen = true
                 onFallen()
                 // M23：1度も読めていない時、原作は帯だけで知らせを出さない。
@@ -846,17 +878,29 @@ internal fun FtutterThreadScreen(
         else ftutterThreadTitle(history?.title?.takeIf { it.isNotBlank() } ?: ref.title, posts.firstOrNull())
     }
     val subtitle = if (legacyLook) null else ftutterThreadSubtitle(board.name, posts.size)
-    val endBand = ftutterEndBand(page?.expiresAtLabel, fallen, archived, legacyFallen)
+    val endBand = ftutterEndBand(page?.expiresAtLabel, fallen, archived, legacyFallen,
+        archiveMissing = remoteActions.archiveMissing(actionKey) && !remoteActions.isBusy("$actionKey:archive"))
     val canFetchArchive = fallen && !archived && httpClient != null
     // 過去ログは画面より長く取り続け、取れたものはスレッドごとに残す（再監査M3）。開いている画面（戻ってきた画面を含む）が拾う。
-    fun fetchArchive() {
+    fun fetchArchive(quiet: Boolean = false) {
         val client = httpClient ?: return
         remoteActions.run("$actionKey:archive") {
             val got = futaberArchivedThread(client, repository, ref.threadId, board.url, ftutterArchiveJson)
-            if (got != null) remoteActions.putArchived(actionKey, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { got.ftutterRelinked(checkCancelled = { ensureActive() }) }) else onNotice("過去ログが見つかりませんでした")
+            if (got != null) remoteActions.putArchived(actionKey, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { got.ftutterRelinked(checkCancelled = { ensureActive() }) }) else {
+                remoteActions.markArchiveMissing(actionKey)
+                if (!quiet) onNotice("過去ログが見つかりませんでした")
+            }
         }
     }
     val heldArchive = remoteActions.archived(actionKey)
+    // ユーザー指示（2026-11-12）：他モードと同じく、落ちたと分かったら過去ログを自動で1回取りに行く（原作はボタンだけ。ボタンは外した）。
+    var autoArchiveTried by remember(board.id, ref.threadId) { mutableStateOf(false) }
+    LaunchedEffect(canFetchArchive, heldArchive) {
+        if (canFetchArchive && heldArchive == null && !autoArchiveTried) {
+            autoArchiveTried = true
+            fetchArchive(quiet = true)
+        }
+    }
     LaunchedEffect(heldArchive) {
         if (heldArchive != null && page !== heldArchive) {
             page = heldArchive
@@ -881,7 +925,7 @@ internal fun FtutterThreadScreen(
         intervalMillis = autoScrollInterval,
         isDead = fallen || archived,
         listState = listState,
-        onReload = { refreshTick++ },
+        onReload = { nextReloadAutomatic[0] = true; refreshTick++ },
         onStop = { autoScrolling = false }
     )
 
@@ -932,7 +976,7 @@ internal fun FtutterThreadScreen(
                             Text(it, color = colors.text, modifier = Modifier.padding(16.dp).testTag("ftutter-thread-error"))
                             TextButton(onClick = { refreshTick++ }) { Text("再読み込み") }
                         }
-                        if (canFetchArchive) FtutterArchiveButton(archiveBusy, ::fetchArchive)
+                        if (archiveBusy && !loading) CircularProgressIndicator(color = colors.indicator)
                     }
                 } else {
                     val binding = rememberEdgeSwipeRefreshBinding(listState, loading, "ftutterThread")
@@ -959,14 +1003,9 @@ internal fun FtutterThreadScreen(
                                     index = row.index, depth = row.depth, context = context, actions = actions,
                                     highlighted = highlight == row.index, inPopup = false
                                 )
-                                is FtutterRow.HiddenRow -> FtutterHiddenRowView(row.index, row.depth, design, row.isNg) { anchor ->
+                                is FtutterRow.HiddenRow -> FtutterHiddenRowView(row.index, row.depth, design, row.isNg, shownNumber = posts.getOrNull(row.index)?.displayNumber ?: row.index) { anchor ->
                                     actions.onHiddenTap(row.index, anchor)
                                 }
-                            }
-                        }
-                        if (canFetchArchive) item(key = "archive") {
-                            Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
-                                FtutterArchiveButton(archiveBusy, ::fetchArchive)
                             }
                         }
                         item(key = "end") {
@@ -1341,7 +1380,7 @@ private val FTUTTER_INERT_ACTIONS = FtutterPostActions(
 )
 
 /** メニューの上のレスは、検索語の強調をしない。 */
-private fun FtutterThreadContext.copyForMenu() = FtutterThreadContext(posts, replies, idCounts, selfIds, settings, design, "", hidden, legacyLook, soudaneSent)
+private fun FtutterThreadContext.copyForMenu() = FtutterThreadContext(posts, replies, idCounts, selfIds, settings, design, "", hidden, legacyLook, soudaneSent, replyToSelfTint)
 
 private val ftutterArchiveJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
@@ -1350,13 +1389,6 @@ internal fun ftutterThreadUrl(board: BoardSummary, threadId: String): String =
 
 /** 原作の落ちた帯の字の色（M23、画面で測った値）。 */
 private val FTUTTER_FALLEN_TEXT = Color(0xFFF44336)
-
-@Composable
-private fun FtutterArchiveButton(busy: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = !busy, modifier = Modifier.testTag("ftutter-archive")) {
-        Text(if (busy) "取得中…" else "過去ログを取得")
-    }
-}
 
 /** 「ここまで読んだ」・末尾の帯（原作 KokomadeCard：上下の区切り線と高さ25の帯）。 */
 @Composable
@@ -1374,7 +1406,7 @@ private fun FtutterBandCard(text: String, background: Color, content: Color, mod
 
 /** 隠したレスの置換行「N  削除」「N  NG」。タップでそのレスだけを隠さずに出す。 */
 @Composable
-private fun FtutterHiddenRowView(index: Int, depth: Int, design: FtutterDesignSettings, isNg: Boolean = false, onTap: (Float) -> Unit) {
+private fun FtutterHiddenRowView(index: Int, depth: Int, design: FtutterDesignSettings, isNg: Boolean = false, shownNumber: Int = index, onTap: (Float) -> Unit) {
     val colors = LocalFtutterColors.current
     var top by remember { mutableStateOf(0f) }
     Column(
@@ -1385,7 +1417,7 @@ private fun FtutterHiddenRowView(index: Int, depth: Int, design: FtutterDesignSe
             .testTag("ftutter-hidden-post")
     ) {
         HorizontalDivider(color = colors.outline)
-        Text(if (isNg) "$index  NG" else "$index  削除", color = colors.headerText, fontSize = design.resuHeaderFontSize.sp, modifier = Modifier.padding(5.dp))
+        Text(if (isNg) "$shownNumber  NG" else "$shownNumber  削除", color = colors.headerText, fontSize = design.resuHeaderFontSize.sp, modifier = Modifier.padding(5.dp))
         HorizontalDivider(color = colors.outline)
     }
 }
@@ -1419,7 +1451,7 @@ private fun FtutterPostView(
         Modifier.fillMaxWidth()
             .padding(start = ftutterIndentDp(depth).dp)
             .onGloballyPositioned { coords[0] = it }
-            .background(if (highlighted) colors.highlight.copy(alpha = 0.2f) else Color.Transparent)
+            .background(ftutterPostBackground(highlighted, mark, context.replyToSelfTint, colors.highlight, colors.henshin))
             .drawBehind {
                 if (lineColor != Color.Transparent) drawRect(lineColor, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
             }
@@ -1464,6 +1496,19 @@ private fun FtutterPostView(
             if (hasImage && settings.imagePosition == FtutterImagePosition.BOTTOM) {
                 Spacer(Modifier.height(settings.paddingTextFile.dp)); image()
             }
+            // あいもげ: the post's 2nd and 3rd files, each opening its own page of the viewer.
+            val extraAttachments = remember(post) { com.valoser.futacha.shared.service.threadSaveExtraAttachments(post) }
+            if (extraAttachments.isNotEmpty()) {
+                val alpha = if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f
+                com.valoser.futacha.shared.ui.image.PostExtraAttachments(
+                    attachments = extraAttachments,
+                    postKey = post.id,
+                    size = 96.dp,
+                    onClick = { url, _ -> actions.onInlineImageTap(index, url) },
+                    imageModifier = androidx.compose.ui.Modifier.graphicsLayer { this.alpha = alpha },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(top = settings.paddingTextFile.dp)
+                )
+            }
             FtutterApuPreviews(post.messageHtml, settings,
                 if (settings.isPrivacy) (1.0 - design.privacyThread).toFloat() else 1f, actions.apuLoaded,
                 legacy = context.legacyLook) { url -> actions.onInlineImageTap(index, url) }
@@ -1493,7 +1538,7 @@ private fun FtutterPostHeader(
             verticalAlignment = Alignment.CenterVertically,
             modifier = if (replyCount > 0) Modifier.clickable { actions.onRepliesTap(index, rowTop()) }.testTag("ftutter-reply-count") else Modifier
         ) {
-            Text("$index", color = replyColor, fontSize = size)
+            Text("${post.displayNumber ?: index}", color = replyColor, fontSize = size)
             if (replyCount > 0) {
                 Spacer(Modifier.width(1.dp))
                 Icon(Icons.AutoMirrored.Rounded.Reply, contentDescription = null, tint = replyColor,
@@ -1539,6 +1584,12 @@ private fun FtutterPostBody(
     shorten: Boolean,
     rowTop: () -> Float
 ) {
+    // あいもげ：ダイスの結果は太字、伏せ字は押すまで隠す。飾りのある本文は省略しない（伏せ字が見えないように）。
+    val aimogeDecorations = remember(post.messageHtml) {
+        com.valoser.futacha.shared.ui.board.aimogeTextDecorations(post.messageHtml, lineLength = { _, line -> line.length })
+    }
+    @Suppress("NAME_SHADOWING") val shorten = shorten && aimogeDecorations.isEmpty()
+    var revealedSpoilers by remember(post.messageHtml) { mutableStateOf(emptySet<Int>()) }
     val colors = LocalFtutterColors.current
     // 行と色付きの本文は、画面の外へ出た行が戻ってきた時に作り直さないよう、本文・色ごとに覚えておく（再監査L29：速く
     // スクロールすると、行ごとに本文の行とリンクを作り直していた）。
@@ -1570,7 +1621,7 @@ private fun FtutterPostBody(
                 } else {
                     com.valoser.futacha.shared.compat.compatInlineLinksCached(
                         line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    ).filter { ftutterKeepsLink(it.url, anchors, context.legacyLook) }.forEach { link ->
+                    ).filter { ftutterKeepsLink(it.url, anchors, ftutterLinksEveryUrl(post, context.legacyLook)) }.forEach { link ->
                         addStringAnnotation("url", link.url, start + link.start, start + link.endExclusive)
                         addStyle(SpanStyle(color = colors.link), start + link.start, start + link.endExclusive)
                     }
@@ -1579,8 +1630,8 @@ private fun FtutterPostBody(
         }
     }
     if (cached == null) androidx.compose.runtime.SideEffect { FtutterBodyCache.put(bodyKey, lines to base) }
-    val text = remember(base, lines, query, colors) {
-        if (query.isEmpty()) base else buildAnnotatedString {
+    val text = remember(base, lines, query, colors, aimogeDecorations, revealedSpoilers) {
+        (if (query.isEmpty()) base else buildAnnotatedString {
             append(base)
             var start = 0
             lines.forEachIndexed { lineIndex, line ->
@@ -1594,7 +1645,7 @@ private fun FtutterPostBody(
                 }
                 start += line.length
             }
-        }
+        }).withAimogeDecorations(aimogeDecorations, revealedSpoilers, colors.text)
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
@@ -1612,6 +1663,10 @@ private fun FtutterPostBody(
                 detectTapGestures(
                     onTap = { position ->
                         val offset = layout?.getOffsetForPosition(position)
+                        offset?.let { text.aimogeSpoilerAt(it) }?.let { spoiler ->
+                            revealedSpoilers = toggleAimogeSpoiler(revealedSpoilers, spoiler)
+                            return@detectTapGestures
+                        }
                         val quote = offset?.let { text.getStringAnnotations("quote", it, it).firstOrNull() }
                         val url = offset?.let { text.getStringAnnotations("url", it, it).firstOrNull() }
                         val top = coords[0]?.takeIf { it.isAttached }?.let { c ->
@@ -1746,7 +1801,7 @@ private fun FtutterPopupStack(
                             val isDeleted = index in context.hidden.deleted
                             val isNg = index in context.hidden.ng || index in context.hidden.removed
                             if (!layer.forceShow && (isDeleted || isNg)) {
-                                FtutterHiddenRowView(index, depth, context.design, isNg = !isDeleted) { anchor -> actions.onHiddenTap(index, anchor) }
+                                FtutterHiddenRowView(index, depth, context.design, isNg = !isDeleted, shownNumber = context.posts.getOrNull(index)?.displayNumber ?: index) { anchor -> actions.onHiddenTap(index, anchor) }
                             } else {
                                 FtutterPostView(index, depth, context, actions, highlighted = layer.highlight == index, inPopup = true)
                             }
@@ -1937,3 +1992,12 @@ internal const val FTUTTER_RESTORE_WAIT_MILLIS = 3_000L
 internal const val FTUTTER_REMOTE_SCRIM_MAX_MILLIS = 15_000L
 
 internal fun ftutterRemoteScrimShown(busy: Boolean, expired: Boolean): Boolean = busy && !expired
+
+/** レスの行の地：押した時の色が先、次に自分へのレスの淡い色（拡張機能）。 */
+internal fun ftutterPostBackground(
+    highlighted: Boolean, mark: FtutterPostMark, replyToSelfTint: Boolean, highlight: Color, henshin: Color
+): Color = when {
+    highlighted -> highlight.copy(alpha = 0.2f)
+    replyToSelfTint && mark == FtutterPostMark.REPLY_TO_SELF -> henshin.copy(alpha = 0.14f)
+    else -> Color.Transparent
+}

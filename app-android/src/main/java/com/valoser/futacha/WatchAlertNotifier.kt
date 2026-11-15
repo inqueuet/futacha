@@ -132,6 +132,7 @@ internal class WatchAlertNotifier(
  * `/<board>/res/<number>.htm`); null when it cannot be built safely.
  */
 internal fun watchAlertThreadUrl(boardUrl: String, threadId: String): String? {
+    com.valoser.futacha.shared.compat.aimogeWatchThreadUrlOf(boardUrl, threadId)?.let { return it }
     if (threadId.isEmpty() || !threadId.all { it in '0'..'9' }) return null
     val trimmed = boardUrl.trim().substringBefore('#').substringBefore('?')
     val scheme = listOf("https://", "http://").firstOrNull { trimmed.startsWith(it, ignoreCase = true) }

@@ -61,6 +61,17 @@ fun SavedThreadMetadata.toThreadPage(
         val resolvedImagePath = resolveLocalPath(savedPost.localImagePath)
         val resolvedVideoPath = resolveLocalPath(savedPost.localVideoPath)
         val resolvedThumbnailPath = resolveLocalPath(savedPost.localThumbnailPath)
+        val primaryImage = resolvedImagePath ?: resolvedVideoPath ?: savedPost.originalImageUrl ?: savedPost.originalVideoUrl
+        val primaryThumbnail = resolvedThumbnailPath ?: savedPost.originalThumbnailUrl
+        val attachments = if (savedPost.extraAttachments.isEmpty() || primaryImage == null) emptyList() else {
+            listOf(PostAttachment(url = primaryImage, thumbnailUrl = primaryThumbnail)) +
+                savedPost.extraAttachments.map { extra ->
+                    PostAttachment(
+                        url = resolveLocalPath(extra.localPath) ?: extra.originalUrl,
+                        thumbnailUrl = resolveLocalPath(extra.localThumbnailPath) ?: extra.originalThumbnailUrl
+                    )
+                }
+        }
         Post(
             id = savedPost.id,
             order = savedPost.order,
@@ -77,7 +88,8 @@ fun SavedThreadMetadata.toThreadPage(
             saidaneLabel = null,
             isDeleted = false,
             referencedCount = 0,
-            quoteReferences = emptyList()
+            quoteReferences = emptyList(),
+            attachments = attachments
         )
     }
     val postsWithReferences = ThreadHtmlParserCore.rebuildReferences(convertedPosts)

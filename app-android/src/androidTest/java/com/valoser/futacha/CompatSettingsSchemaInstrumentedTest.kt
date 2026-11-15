@@ -816,10 +816,12 @@ class CompatSettingsSchemaInstrumentedTest {
         }
 
         settingsList.performScrollToNode(hasText("メディア機能"))
-        rule.onNodeWithText("画像編集、動画編集").assertIsDisplayed()
+        rule.onNodeWithText("プロンプト・AIラベル、画像編集、動画編集").assertIsDisplayed()
         rule.onNodeWithText("メディア機能").performClick()
         val mediaList = rule.onNodeWithTag("compat-settings-list-media")
-        rule.onNodeWithTag("prompt-settings-toggle").assertDoesNotExist()
+        // 4モードどこからでも切り替えられる（11-12の指示）。保存値のONがそのまま出る。
+        mediaList.performScrollToNode(hasTestTag("prompt-settings-toggle"))
+        rule.onNodeWithTag("prompt-settings-toggle").assertIsOn()
         for (tag in listOf("image-editor-settings-toggle", "video-editor-settings-toggle", "media-help-open")) {
             mediaList.performScrollToNode(hasTestTag(tag))
             rule.onNodeWithTag(tag).assertIsDisplayed()
@@ -828,7 +830,7 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("image-editor-settings-toggle").performClick().assertIsOn()
         rule.onNodeWithContentDescription("戻る").performClick()
         rule.onNodeWithText("メディア機能").assertIsDisplayed().performClick()
-        rule.onNodeWithTag("prompt-settings-toggle").assertDoesNotExist()
+        rule.onNodeWithTag("prompt-settings-toggle").assertIsOn()
         rule.onNodeWithTag("image-editor-settings-toggle").assertIsOn()
         rule.runOnIdle { assertEquals(true, mediaSettings.value.promptDisplayEnabled) }
         rule.onNodeWithContentDescription("戻る").performClick()

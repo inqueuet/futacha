@@ -1,5 +1,9 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package com.valoser.futacha.shared.model
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 /**
@@ -79,7 +83,19 @@ data class SavedPost(
     val localVideoPath: String?,       // 動画のローカルパス（相対）
     val originalThumbnailUrl: String?, // 元のURL（参照用）
     val localThumbnailPath: String?,   // ローカルパス（相対）
-    val downloadSuccess: Boolean = true // ダウンロード成功フラグ
+    val downloadSuccess: Boolean = true, // ダウンロード成功フラグ
+    /** あいもげ: the 2nd and 3rd files (the first stays in the fields above). Never written when empty. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val extraAttachments: List<SavedAttachment> = emptyList()
+)
+
+/** One extra saved file of an あいもげ post. */
+@Serializable
+data class SavedAttachment(
+    val originalUrl: String,
+    val localPath: String? = null,
+    val originalThumbnailUrl: String? = null,
+    val localThumbnailPath: String? = null
 )
 
 /**

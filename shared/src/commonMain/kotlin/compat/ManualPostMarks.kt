@@ -15,7 +15,7 @@ private val markPostNoPattern = Regex("[0-9]{1,20}")
 @Serializable
 data class ManualPostMark(val threadUrl: String, val postNo: String)
 
-fun manualMarkThreadUrl(url: String): String = canonicalizeThreadUrl(url)?.canonicalUrl ?: url.substringBefore('#').substringBefore('?')
+fun manualMarkThreadUrl(url: String): String = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(url)?.canonicalUrl ?: url.substringBefore('#').substringBefore('?')
 fun decodeManualPostMarks(raw: String?): List<ManualPostMark> = raw?.takeIf { it.length <= 18_000 }?.let {
     runCatching { markJson.decodeFromString<List<ManualPostMark>>(it) }.getOrNull()
 }?.filter { it.postNo.matches(markPostNoPattern) && it.threadUrl.length <= 240 }

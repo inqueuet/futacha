@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.compat.BoardSite
+import com.valoser.futacha.shared.compat.boardSiteOf
+import com.valoser.futacha.shared.network.aimoge.aimogeApiException
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -39,7 +42,10 @@ internal fun buildPostingAwareFailureMessage(
     return "$failurePrefix: $detail"
 }
 
-internal fun shouldOfferCookieManagerForPostingFailure(error: Throwable): Boolean {
+internal fun shouldOfferCookieManagerForPostingFailure(error: Throwable, boardUrl: String? = null): Boolean {
+    // あいもげ has no Futaba cookies: its failures never lead to the cookie screen, whatever words they use (AM-B4).
+    if (error.aimogeApiException() != null) return false
+    if (boardUrl != null && boardSiteOf(boardUrl) == BoardSite.AIMOGE) return false
     val detail = error.message
         ?.take(POSTING_FAILURE_UI_DETAIL_MAX_CHARS)
         ?.trim()

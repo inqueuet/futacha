@@ -230,6 +230,19 @@ class HttpBoardApiSupportTest {
     }
 
     @Test
+    fun aThreadThatRefusesWritingIsNotCalledAnIpRestriction() {
+        // ふたちゃスレ 01a1d21b (2026-11-13): the server's 「このスレッドには書けません」 got an IP guess and a 1-hour wait.
+        assertEquals(
+            HttpBoardApiPostingFailureKind.UNKNOWN,
+            classifyHttpBoardApiPostingFailure("このスレッドには書けません")
+        )
+        assertEquals(
+            "返信に失敗しました: このスレッドには書けません",
+            buildHttpBoardApiPostingFailureMessage("返信に失敗しました", "このスレッドには書けません")
+        )
+    }
+
+    @Test
     fun postResponseHelpers_classifyTemporaryAndIpRestrictions() {
         assertEquals(
             HttpBoardApiPostingFailureKind.TEMPORARY_RESTRICTION,

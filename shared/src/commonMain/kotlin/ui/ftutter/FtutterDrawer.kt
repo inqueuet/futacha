@@ -91,6 +91,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -643,6 +644,16 @@ internal fun FtutterProtectedCloseDialog(onCancel: () -> Unit, onConfirm: () -> 
     ) }
 }
 
+internal enum class FtutterTabSwipe { UP, DOWN }
+internal const val FTUTTER_TAB_SWIPE_DP = 24f
+
+/** タブ帯のタブを縦に払った向き。短い動きは何もしない。 */
+internal fun ftutterTabStripSwipe(dy: Float, triggerPx: Float): FtutterTabSwipe? = when {
+    dy <= -triggerPx -> FtutterTabSwipe.UP
+    dy >= triggerPx -> FtutterTabSwipe.DOWN
+    else -> null
+}
+
 /** タブ帯（既定は非表示・下・高さ40・幅60）。開いているタブは枠で示し、未読があれば数を重ねる。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -655,6 +666,10 @@ internal fun FtutterTabStrip(
     onLongPress: (String) -> Unit,
     /** 長押しのまま横へ動かすと並べ替え（原作 DraggableTabbar。`disableDragTab`がONなら並べ替えない）。 */
     onMove: ((from: Int, to: Int) -> Unit)? = null,
+    /** 上へスワイプ：保護の切り替え（原作で確認、2026-11-12）。 */
+    onSwipeUp: ((String) -> Unit)? = null,
+    /** 下へスワイプ：閉じる（こちらの追加。原作は何もしない。スレ01a1cd5d #61「タブ帯のスレが閉じにくい」）。 */
+    onSwipeDown: ((String) -> Unit)? = null,
     /** タブ帯の位置。スレ画面はスレッドごとに作り直すので、アプリ側で持って渡す（再監査M3：切り替えると先頭に戻った）。 */
     listState: LazyListState = rememberLazyListState(),
     showStatus: Boolean = false,
@@ -670,6 +685,8 @@ internal fun FtutterTabStrip(
     val currentTabs by rememberUpdatedState(tabs)
     val currentOnMove by rememberUpdatedState(onMove)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val currentOnSwipeUp by rememberUpdatedState(onSwipeUp)
+    val currentOnSwipeDown by rememberUpdatedState(onSwipeDown)
     LazyRow(
         Modifier.fillMaxWidth().height(settings.tabHeight.dp).background(colors.toolBar).testTag("ftutter-tab-strip"),
         state = listState
@@ -682,6 +699,21 @@ internal fun FtutterTabStrip(
                     .then(if (dragging == tab.url) Modifier.offset { androidx.compose.ui.unit.IntOffset(dragOffset.toInt(), 0) } else Modifier)
                     .then(if (selected && legacyLook) Modifier.border(2.dp, colors.onToolBarActive) else Modifier)
                     .clickable { onOpen(tab.url) }
+                    .pointerInput(tab.url) {
+                        val trigger = FTUTTER_TAB_SWIPE_DP.dp.toPx()
+                        var dy = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = { dy = 0f },
+                            onVerticalDrag = { change, amount -> change.consume(); dy += amount },
+                            onDragEnd = {
+                                when (ftutterTabStripSwipe(dy, trigger)) {
+                                    FtutterTabSwipe.UP -> currentOnSwipeUp?.invoke(tab.url)
+                                    FtutterTabSwipe.DOWN -> currentOnSwipeDown?.invoke(tab.url)
+                                    null -> Unit
+                                }
+                            }
+                        )
+                    }
                     .pointerInput(tab.url) {
                         // 長押しで始まる。動かさずに離せばメニュー、横へ動かせば並べ替え。
                         try {

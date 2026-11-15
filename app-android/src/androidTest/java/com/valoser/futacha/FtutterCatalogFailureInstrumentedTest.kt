@@ -110,6 +110,8 @@ class FtutterCatalogFailureInstrumentedTest {
         rule.onNode(inlineError).assertExists()
         assertEquals("カタログを読み込めませんでした", holder.load!!.error)
         assertTrue(notices.none { it.contains("fixture exploded") })
+        // may 1447424787: the empty catalog shows the reason in the middle, so the same text is not sent as a notice on top.
+        assertTrue("$notices", notices.isEmpty())
         rule.mainClock.advanceTimeBy(30_000); rule.waitForIdle(); assertEquals(1, calls.size)
         failure = null; refresh(); awaitLoaded(2)
         assertEquals(items, holder.load!!.items)

@@ -26,6 +26,12 @@
 
     <!-- Android 11+ package visibility: allow enumerating file managers that handle document intents -->
     <queries>
+        <!-- Browsers for the あいもげ approval page (AM-B8; opened in a browser, never in this app). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
         <!-- Android 11+ must be able to discover installed text-to-speech engines. -->
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
@@ -119,6 +125,26 @@
         <!-- Shares and links from other apps (M66/M79): forwarded to the app's own task, where the single
              existing MainActivity receives them. MainActivity stays singleTop, so a launcher return brings
              the task back as it was (an open picker is kept). -->
+        <!-- あいもげ approval return (AM-B8): only com.valoser.futacha://auth/callback. No UI; the code never reaches
+             MainActivity. -->
+        <activity
+            android:name=".AimogeAuthCallbackActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.valoser.futacha"
+                    android:host="auth"
+                    android:path="/callback" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".ExternalIntentActivity"
             android:exported="true"
@@ -148,6 +174,16 @@
                 <data android:scheme="https" />
                 <data android:host="*.2chan.net" />
                 <data android:pathPattern="/.*/res/.*\\.htm" />
+            </intent-filter>
+            <!-- あいもげ thread links. Only the thread shape: the approval page
+                 (/b/{slug}/app-auth?requestId=…) must keep opening in the browser. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="nijiurachan.net" />
+                <data android:pathPattern="/b/.*/thread/.*" />
             </intent-filter>
         </activity>
 

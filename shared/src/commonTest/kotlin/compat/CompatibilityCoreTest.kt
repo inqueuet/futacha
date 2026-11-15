@@ -407,6 +407,35 @@ class CompatibilityCoreTest {
     }
 
     @Test
+    fun threadStatusNotice_doesNotTreatDeletedReplyCountAsThreadDeletion() {
+        for (notice in listOf(null, "", "削除された記事が4件あります.見る", "削除された記事が 4 件あります。 見る")) {
+            assertEquals(CompatThreadStatusFlags(), parseCompatThreadStatusFlags(notice), notice)
+        }
+        assertEquals(
+            CompatThreadStatusFlags(isIsolated = true),
+            parseCompatThreadStatusFlags("削除依頼によって隔離されました 削除された記事が4件あります.見る")
+        )
+        assertEquals(
+            CompatThreadStatusFlags(isAdminDeleted = true),
+            parseCompatThreadStatusFlags("管理者によって削除されました 削除された記事が4件あります.見る")
+        )
+    }
+
+    @Test
+    fun threadStatusNotice_parsedReplyCountDoesNotMarkLiveThreadDeleted() = runBlocking {
+        val page = com.valoser.futacha.shared.parser.ThreadHtmlParserCore.parseThread(
+            """
+                <div class="thre" data-res="1447418590">
+                <span class="cno">No.1447418590</span><blockquote>ふたちゃスレ</blockquote>
+                <span id=ddel>削除された記事が<span id=ddnum>4</span>件あります.<span id=ddbut onclick="onddbut()">見る</span><br></span>
+                </div>
+            """.trimIndent()
+        )
+        assertEquals("削除された記事が4件あります.見る", page.deletedNotice)
+        assertEquals(CompatThreadStatusFlags(), parseCompatThreadStatusFlags(page.deletedNotice))
+    }
+
+    @Test
     fun threadStatusNotice_keepsDeletedIsolatedAndAdminDeletedSeparate() {
         assertEquals(
             CompatThreadStatusFlags(isDeleted = true),
@@ -486,6 +515,20 @@ class CompatibilityCoreTest {
         ).state
 
         assertEquals(CompatHost.Settings(origin = CompatHost.Main), result.host)
+        assertNull(result.drawerPage)
+    }
+
+    @Test
+    fun aLateDrawerOpenNeverReachesTheDrawingScreen() {
+        // 手描き on img: an edge swipe still settling (or an AI command) opened the drawer over the drawing
+        // screen, which cannot close it, and only Back worked.
+        val drawing = CompatibilityWorkspaceState(host = CompatHost.PostDrawing(origin = CompatHost.Main))
+        val result = reduceCompatibilityWorkspace(
+            drawing,
+            CompatibilityEvent.OpenDrawer(CompatDrawerPage.HISTORY)
+        ).state
+
+        assertEquals(drawing.host, result.host)
         assertNull(result.drawerPage)
     }
 
@@ -1431,6 +1474,16 @@ class CompatibilityCoreTest {
                 ScrollAnchor(postNo = "missing", offsetPx = -10, fallbackIndex = -1)
             )
         )
+    }
+
+    @Test
+    fun ownWordsSelectionPicksOnlyThePartnersOwnBodyLines() {
+        val post = CompatPostSnapshot(position = 1, postNo = "101", timestamp = "now",
+            messageHtml = "&gt;No.99<br>&gt;長い引用<br>＞全角の引用<br>相手の言葉<br>二行目")
+        val candidates = compatPostActionCandidates(post)
+        val own = compatOwnWordsSelection(candidates)
+        assertEquals(listOf("相手の言葉", "二行目"), own.sorted().map { candidates[it].value })
+        assertEquals(">相手の言葉\n>二行目\n", compatQuoteSelection(candidates, own))
     }
 
     @Test

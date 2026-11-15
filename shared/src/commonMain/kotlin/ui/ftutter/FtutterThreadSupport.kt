@@ -640,6 +640,19 @@ internal fun ftutterQuoteLineTargets(posts: List<Post>, index: Int, line: String
  * 既読の保存値（`compat.ftutter.seen`）は原作の`kokomade`と同じ「読んだ返信の数」（OPを含まない）で、カタログの未読数と
  * 同じ数え方。スレッド画面は「読んだレスの数」（OPを含む）で帯の位置を決めるので、ここで1つずらす。
  */
+/**
+ * The last post seen among the rows seen. When no post row comes after the last one seen, every post counts as seen:
+ * posts taken out of the list (NG with 非表示, a search) after it are never shown, so the catalog kept its unread
+ * number (6, 12…) for good although nothing new had come (あいもげ seq 8).
+ */
+internal fun ftutterLastSeenPostIndex(rows: List<FtutterRow>, rowsSeen: List<Int>, postCount: Int): Int? {
+    fun postOf(row: FtutterRow?): Int? = (row as? FtutterRow.PostRow)?.index ?: (row as? FtutterRow.HiddenRow)?.index
+    val lastRow = rowsSeen.filter { postOf(rows.getOrNull(it)) != null }.maxOrNull() ?: return null
+    val seen = rowsSeen.mapNotNull { postOf(rows.getOrNull(it)) }.maxOrNull() ?: return null
+    val laterPost = (lastRow + 1 until rows.size).any { postOf(rows[it]) != null }
+    return if (laterPost || postCount <= 0) seen else maxOf(seen, postCount - 1)
+}
+
 internal fun ftutterPostsReadFromStored(stored: Int): Int = stored + 1
 internal fun ftutterStoredFromPostsRead(postsRead: Int): Int = (postsRead - 1).coerceAtLeast(0)
 
@@ -669,8 +682,14 @@ internal enum class FtutterEndState { NORMAL, DANGER, ARCHIVED, FALLEN }
 
 internal data class FtutterEndBand(val text: String, val state: FtutterEndState)
 
-internal fun ftutterEndBand(expiresAtLabel: String?, fallen: Boolean, archived: Boolean, legacyFallen: Boolean = false): FtutterEndBand = when {
+internal const val FTUTTER_ARCHIVE_MISSING_BAND = "スレッドは落ちています（過去ログは見つかりませんでした）"
+
+internal fun ftutterEndBand(
+    expiresAtLabel: String?, fallen: Boolean, archived: Boolean, legacyFallen: Boolean = false, archiveMissing: Boolean = false
+): FtutterEndBand = when {
     archived -> FtutterEndBand("過去ログ取得済み", FtutterEndState.ARCHIVED)
+    // 自動の過去ログ取得が空振りした時は、帯でそのことを伝える（何も出ないと「取得中のまま読めない」と見えた）。
+    fallen && archiveMissing -> FtutterEndBand(FTUTTER_ARCHIVE_MISSING_BAND, if (legacyFallen) FtutterEndState.DANGER else FtutterEndState.FALLEN)
     // M23：原作の落ちた帯は「ここまで読んだ」と同じ地に赤い字。従来の動きは赤い地に白い字。
     fallen -> FtutterEndBand("スレッドは落ちています", if (legacyFallen) FtutterEndState.DANGER else FtutterEndState.FALLEN)
     else -> {
@@ -753,7 +772,7 @@ internal fun ftutterSoudaneFailureNotice(error: Throwable, legacy: Boolean): Str
     return null
 }
 
-/** 従来の動き：落ちたスレを前の形（赤い地の帯、1度も読めていない時は中央の文と「再読み込み」「過去ログを取得」）で出す（M23）。 */
+/** 従来の動き：落ちたスレを前の形（赤い地の帯、1度も読めていない時は中央の文と「再読み込み」、過去ログは自動）で出す（M23）。 */
 internal val FTUTTER_LEGACY_FALLEN_KEY: String get() = FtutterKeys.PREFIX + "legacyFallen"
 internal const val FTUTTER_LEGACY_FALLEN_LABEL = "落ちたスレを前の形で出す"
 internal const val FTUTTER_LEGACY_FALLEN_NOTE =

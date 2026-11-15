@@ -30,6 +30,7 @@ internal class FutachaStaticThreadRepository(
     override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent = ThreadPageContent(page = page)
     override suspend fun probeThreadExists(threadUrl: String): Boolean = true
     override suspend fun probeThreadGone(threadUrl: String): Boolean = false
+    override suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(page = page)
 }
 
 /**

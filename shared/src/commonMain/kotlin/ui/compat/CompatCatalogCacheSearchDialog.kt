@@ -462,6 +462,8 @@ internal suspend fun searchCompatCatalogCacheRemote(
     },
     totalTimeoutMillis: Long = COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS
 ): Result<List<CatalogItem>> {
+    // The cache and archive search services are Futaba's: an あいもげ board is never sent to them (AM-B4).
+    if (com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl) != null) return Result.success(emptyList())
     val started = TimeSource.Monotonic.markNow()
     fun remaining(): Long = totalTimeoutMillis - started.elapsedNow().inWholeMilliseconds
     val scope = extractArchiveSearchScope(boardUrl)

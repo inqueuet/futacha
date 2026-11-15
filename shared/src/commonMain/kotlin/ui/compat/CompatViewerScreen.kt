@@ -6,6 +6,13 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.rounded.ZoomOut
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -308,6 +315,8 @@ internal fun CompatViewerScreen(
     val pagerKeys = remember(posts) { compatUniqueMediaKeys(posts) }
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var chromeVisible by remember { mutableStateOf(true) }
+    // may 1447447697: a mute for the viewer's videos, kept while the viewer is open.
+    var videoMuted by remember { mutableStateOf(false) }
     var quickMenu by remember { mutableStateOf(false) }
     var imageSearchSelectorOpen by remember { mutableStateOf(false) }
     var ascii2dRegistrationOpen by remember { mutableStateOf(false) }
@@ -361,6 +370,10 @@ internal fun CompatViewerScreen(
     val verticalSwipeCloseEnabled = preferences.compatPreferenceValue(
         "control", "controlViewerSwipeClose", "下にスワイプして閉じる", "縦にスワイプして閉じる"
     ) != "OFF"
+    // ふたちゃ拡張（既定OFF）：ダブルタップで押した所を拡大・元に戻す。OFF は原作どおり表示形式の切り替え。
+    val doubleTapZoom = preferences.compatPreferenceValue(
+        "control", COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY, "ダブルタップで拡大"
+    ) == "ON"
     val upsThumbnailMethod = preferences.compatPreferenceValue(
         "thread", "threadUpsThumbMethod", "あぷ小のサムネイルの読み込み", "あぷ小の読み込み"
     ) ?: COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
@@ -1117,7 +1130,14 @@ internal fun CompatViewerScreen(
                     val privacyOverlayAlpha = 1f - com.valoser.futacha.shared.ui.privacy.privacyImageContentAlpha(
                         compatPrivacyRenderAlpha(threadPrivacyEnabled, threadPrivacyAlpha)
                     )
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    // may 1447425813: a video can be zoomed too. A button steps 1x→2x→3x; while zoomed a drag moves it.
+                    var videoZoom by remember(mediaUrl) { mutableStateOf(com.valoser.futacha.shared.ui.board.AttachmentZoom()) }
+                    var videoBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+                    Box(modifier = Modifier.fillMaxSize().onSizeChanged { videoBox = it }) {
+                        Box(Modifier.fillMaxSize().graphicsLayer {
+                            scaleX = videoZoom.scale; scaleY = videoZoom.scale
+                            translationX = videoZoom.offset.x; translationY = videoZoom.offset.y
+                        }) {
                         CompositionLocalProvider(com.valoser.futacha.shared.ui.board.LocalVideoPlaybackOptions provides
                             viewerBehaviour.videoOptions,
                             com.valoser.futacha.shared.ui.board.LocalVideoPageSwipe provides { forward ->
@@ -1140,8 +1160,34 @@ internal fun CompatViewerScreen(
                             onMediaInfoKnown = { info -> videoMediaInfo[mediaUrl] = info },
                             onPlaybackError = { playbackError = it },
                             areControlsVisible = chromeVisible,
-                            onControlsVisibilityChanged = { visible -> chromeVisible = visible }
+                            onControlsVisibilityChanged = { visible -> chromeVisible = visible },
+                            isMuted = videoMuted
                         ) }
+                        }
+                        if (videoZoom.scale > 1f) {
+                            Box(Modifier.fillMaxSize().testTag("compat-video-zoom-pan").pointerInput(mediaUrl) {
+                                detectDragGestures { change, drag ->
+                                    change.consume()
+                                    videoZoom = videoZoom.transformed(Offset(videoBox.width / 2f, videoBox.height / 2f), drag, 1f, videoBox)
+                                }
+                            })
+                        }
+                        if (page == pagerState.currentPage && chromeVisible) {
+                            Row(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 56.dp, start = 4.dp)) {
+                                IconButton(onClick = { videoMuted = !videoMuted }, modifier = Modifier.testTag("compat-video-mute")
+                                    .background(Color.Black.copy(alpha = 0.45f), CircleShape)) {
+                                    Icon(if (videoMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                                        contentDescription = if (videoMuted) "音を出す" else "消音", tint = Color.White)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                IconButton(onClick = { videoZoom = compatNextVideoZoom(videoZoom, videoBox) },
+                                    modifier = Modifier.testTag("compat-video-zoom")
+                                        .background(Color.Black.copy(alpha = 0.45f), CircleShape)) {
+                                    Icon(if (videoZoom.scale >= COMPAT_VIDEO_ZOOM_STEPS.last()) Icons.Rounded.ZoomOut else Icons.Rounded.ZoomIn,
+                                        contentDescription = "動画を拡大（${compatVideoZoomLabel(videoZoom)}）", tint = Color.White)
+                                }
+                            }
+                        }
                         if (posterUrl != null && playbackState == VideoPlayerState.Buffering) {
                             val posterPainter = rememberAsyncImagePainter(
                                 model = ImageRequest.Builder(platformContext)
@@ -1225,7 +1271,8 @@ internal fun CompatViewerScreen(
                             }
                         },
                         onClick = { if (viewerBehaviour.tapTogglesToolbar) chromeVisible = !chromeVisible },
-                        onLongClick = { quickMenu = true }
+                        onLongClick = { quickMenu = true },
+                        onDoubleTapZoom = if (doubleTapZoom) { _ -> } else null
                     )
                 }
             }
@@ -1441,7 +1488,8 @@ internal fun CompatViewerImagePage(
         )
         val sourceImage = rememberViewerImagePainter(
             request = sourceRequest,
-            imageLoader = imageLoader
+            imageLoader = imageLoader,
+            animate = isCurrentPage
         )
         val thumbnailPainter = thumbnailImage.painter
         val sourcePainter = sourceImage.painter
@@ -1648,6 +1696,51 @@ internal fun CompatViewerImagePage(
                     Modifier
                 }
             )
+            // With the double-tap zoom: tap, then touch again and slide up (zoom in) or down (zoom out) with
+            // one finger (1447426705). Read on the Initial pass so the double click below does not fire too.
+            .then(if (onDoubleTapZoom != null && isCurrentPage) Modifier.pointerInput(mediaUrl, resetKey, "quick-scale") {
+                var lastUpTime = -1L
+                var lastUpPosition = Offset.Zero
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    val secondTap = lastUpTime >= 0 && down.uptimeMillis - lastUpTime <= viewConfiguration.doubleTapTimeoutMillis &&
+                        (down.position - lastUpPosition).getDistance() <= viewConfiguration.touchSlop * 4
+                    lastUpTime = -1L
+                    var moved = false
+                    var dragging = false
+                    var current = localTransform
+                    val startScale = current.scale
+                    var single = true
+                    while (true) {
+                        val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        if (event.changes.size > 1) single = false
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        val dy = change.position.y - down.position.y
+                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                        if (secondTap && single && !dragging && kotlin.math.abs(dy) > viewConfiguration.touchSlop) dragging = true
+                        if (dragging) {
+                            val scale = compatViewerQuickScale(startScale, dy)
+                            val translation = if (scale <= COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD) Offset.Zero else compatViewerZoomTranslation(
+                                currentX = current.translation.x, currentY = current.translation.y, panX = 0f, panY = 0f,
+                                centroidX = down.position.x, centroidY = down.position.y,
+                                viewportWidthPx = viewportSize.width.toFloat(), viewportHeightPx = viewportSize.height.toFloat(),
+                                oldScale = current.scale, newScale = scale
+                            ).let { Offset(it.first, it.second) }
+                            current = CompatViewerTransform(scale, translation)
+                            localTransform = current
+                            change.consume()
+                        }
+                        if (!change.pressed) {
+                            if (!secondTap && !moved && single) { lastUpTime = change.uptimeMillis; lastUpPosition = change.position }
+                            break
+                        }
+                    }
+                    if (dragging) {
+                        onZoomedChanged(current.scale > COMPAT_VIEWER_ZOOM_GESTURE_THRESHOLD)
+                        onTransformChanged(current.scale, current.translation)
+                    }
+                }
+            } else Modifier)
             .combinedClickable(
                 onClick = onClick,
                 onDoubleClick = {
@@ -1835,3 +1928,18 @@ private fun RowScope.ViewerButton(
         }
     }
 }
+
+internal val COMPAT_VIDEO_ZOOM_STEPS = listOf(1f, 2f, 3f)
+
+/** The zoom button's next step: 1x → 2x → 3x → back to the whole video, about the centre. */
+internal fun compatNextVideoZoom(
+    zoom: com.valoser.futacha.shared.ui.board.AttachmentZoom,
+    box: androidx.compose.ui.unit.IntSize
+): com.valoser.futacha.shared.ui.board.AttachmentZoom {
+    val next = COMPAT_VIDEO_ZOOM_STEPS.firstOrNull { it > zoom.scale + 0.01f }
+        ?: return com.valoser.futacha.shared.ui.board.AttachmentZoom()
+    return zoom.transformed(Offset(box.width / 2f, box.height / 2f), Offset.Zero, next / zoom.scale, box)
+}
+
+internal fun compatVideoZoomLabel(zoom: com.valoser.futacha.shared.ui.board.AttachmentZoom): String =
+    "${zoom.scale.toInt()}倍"

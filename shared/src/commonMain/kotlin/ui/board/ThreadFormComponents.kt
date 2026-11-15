@@ -185,7 +185,10 @@ internal fun ThreadFormDialog(
             return
         }
         // Files above the old 8 MB picker cap always go through the size decision.
-        if (sharedFeatures == null && image.bytes.size <= com.valoser.futacha.shared.util.MAX_PICKED_IMAGE_BYTES) {
+        // (A format the board does not take, such as WebP on img, always goes through the decision to be converted.)
+        if (sharedFeatures == null && image.bytes.size <= com.valoser.futacha.shared.util.MAX_PICKED_IMAGE_BYTES &&
+            com.valoser.futacha.shared.ui.compat.compatPostAttachmentExtension(image.fileName) in postingCapabilities.supportedExtensions.map(String::lowercase)
+        ) {
             finishPickedImage(image); return
         }
         val limit = postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
@@ -193,6 +196,10 @@ internal fun ThreadFormDialog(
         when (decision) {
             com.valoser.futacha.shared.ui.compat.CompatPostAttachmentDecision.Accept -> finishPickedImage(image)
             com.valoser.futacha.shared.ui.compat.CompatPostAttachmentDecision.AskImageCompression -> pendingCompression = image
+            com.valoser.futacha.shared.ui.compat.CompatPostAttachmentDecision.ConvertToJpeg ->
+                processAttachment("JPEGに変換できませんでした") {
+                    compressCompatPostImage(image, limit, forceJpeg = true)
+                }
             else -> attachmentProcessingError = com.valoser.futacha.shared.ui.compat.compatPostAttachmentDecisionMessage(decision, image.fileName, limit)
         }
     }
@@ -582,7 +589,9 @@ internal fun ThreadFormDialog(
                             enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentEnabled = !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentPickerPreference = attachmentPickerPreference,
-                            preferredFileManagerPackage = preferredFileManagerPackage
+                            preferredFileManagerPackage = preferredFileManagerPackage,
+                            currentAttachment = selectedImage,
+                            attachmentAllowed = !isReply || postingCapabilities.replyAttachmentsAllowed
                         )
                     } else Row(
                         modifier = Modifier

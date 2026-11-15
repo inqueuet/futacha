@@ -34,11 +34,17 @@ internal class ImeCompositionHighlight(
 }
 
 /** Input decoration has its own readable pair; a toolbar colour is not an input background. */
-internal data class ImeCompositionColors(val background: Color, val foreground: Color)
+internal data class ImeCompositionColors(
+    val background: Color,
+    val foreground: Color,
+    /** The clause being converted stands out from the rest of the composition. */
+    val clauseBackground: Color = background,
+    val clauseForeground: Color = foreground
+)
 
 internal fun imeCompositionColors(surface: Color): ImeCompositionColors =
-    if (surface.luminance() < .179f) ImeCompositionColors(Color(0xFF394B66), Color.White)
-    else ImeCompositionColors(Color(0xFFD7E4F7), Color(0xFF1A1C1E))
+    if (surface.luminance() < .179f) ImeCompositionColors(Color(0xFF394B66), Color.White, Color(0xFF2E7D76), Color.White)
+    else ImeCompositionColors(Color(0xFFD7E4F7), Color(0xFF1A1C1E), Color(0xFF7FB8B2), Color(0xFF1A1C1E))
 
 @Composable
 internal fun imeCompositionHighlight(range: TextRange?): VisualTransformation {
@@ -68,4 +74,42 @@ internal fun ImeOutlinedTextField(
     val input = rememberStableTextInputState(value, onValueChange)
     OutlinedTextField(input.value, input.onValueChange, modifier = modifier, label = label,
         singleLine = singleLine, visualTransformation = imeCompositionHighlight(input.value.composition))
+}
+
+/**
+ * The clause the IME is converting, if it says which one: on iOS the marked text's selectedRange
+ * becomes the selection inside the composition (BasicTextField with TextFieldState). Android IMEs
+ * send their clause styling as spans, which TextFieldState draws by itself.
+ */
+internal fun imeActiveClause(composition: TextRange?, selection: TextRange): TextRange? {
+    if (composition == null || selection.collapsed) return null
+    val start = maxOf(composition.min, selection.min)
+    val end = minOf(composition.max, selection.max)
+    return if (start < end) TextRange(start, end) else null
+}
+
+/** Draws the composition for a [androidx.compose.foundation.text.input.TextFieldState] field. */
+internal class ImeClauseHighlight(
+    private val state: androidx.compose.foundation.text.input.TextFieldState,
+    private val colors: ImeCompositionColors
+) : androidx.compose.foundation.text.input.OutputTransformation {
+    override fun androidx.compose.foundation.text.input.TextFieldBuffer.transformOutput() {
+        val composition = state.composition ?: return
+        val start = composition.min.coerceIn(0, length)
+        val end = composition.max.coerceIn(start, length)
+        if (start >= end) return
+        val clause = imeActiveClause(TextRange(start, end), state.selection)
+        if (clause == null) {
+            addStyle(SpanStyle(color = colors.foreground, background = colors.background), start, end)
+        } else {
+            addStyle(SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline), start, end)
+            addStyle(SpanStyle(color = colors.clauseForeground, background = colors.clauseBackground), clause.min, clause.max)
+        }
+    }
+}
+
+@Composable
+internal fun rememberImeClauseHighlight(state: androidx.compose.foundation.text.input.TextFieldState): ImeClauseHighlight {
+    val colors = imeCompositionColors(MaterialTheme.colorScheme.background)
+    return androidx.compose.runtime.remember(state, colors) { ImeClauseHighlight(state, colors) }
 }

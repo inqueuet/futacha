@@ -321,6 +321,9 @@ internal class FtutterNgMatcher(
 
     val isEmpty: Boolean get() = compiled.isEmpty()
 
+    /** ピックアップタイトルのルールがある。 */
+    val hasPickups: Boolean get() = pickups.isNotEmpty()
+
     /** 照合に時間がかかりすぎて使わなくなった正規表現のルール。 */
     val slowRules: List<FtutterNgRule>
         get() = compiled.filter { it.regex != null && ftutterIsSlowNgPattern(it.rule.text) }.map { it.rule }
@@ -470,6 +473,26 @@ internal fun ftutterApplyCatalogNg(
     }
     val picked = kept.filter { it.threadUrl in words }
     return FtutterCatalogNgResult(picked + kept.filter { it.threadUrl !in words }, words, removed)
+}
+
+/**
+ * 今の並びで取れた[main]に無い、ピックアップに一致するスレを[many]（多順で取った一覧）から足す（may 1447450673：
+ * 1000レスに届いたスレは上がらず沈み、カタログ順の300件から外れて、ピックアップしたスレが見えなくなっていた）。
+ * 足したスレは末尾に置き、[ftutterApplyCatalogNg]が先頭へ寄せる。
+ */
+internal fun ftutterWithMissingPickups(
+    main: List<CatalogItem>,
+    many: List<CatalogItem>,
+    matcher: FtutterNgMatcher,
+    ensureActive: () -> Unit = {}
+): List<CatalogItem> {
+    if (!matcher.hasPickups || many.isEmpty()) return main
+    val known = main.mapTo(HashSet()) { it.threadUrl }
+    val extra = many.filter { item ->
+        item.threadUrl !in known && !matcher.hidesTitle(item.title.orEmpty(), ensureActive) &&
+            matcher.pickupWord(item.title.orEmpty(), ensureActive) != null
+    }
+    return if (extra.isEmpty()) main else main + extra
 }
 
 /** 保存されている一覧から[rule]を1件消す（監査M2：画面の古い一覧の位置で消さない）。 */

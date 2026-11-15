@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.compat.shownSiteTabs
 import com.valoser.futacha.shared.model.CatalogMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -789,7 +790,7 @@ internal fun FutaberApp(
     // opened, Q1); the old row `compat.futaber.tabs` is only read for the threads with no shared place and the tabs the
     // migration stage has not taken in yet.
     val tabStore = mediaServices?.store
-    val sharedTabSource = remember(tabStore) { tabStore?.tabs ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
+    val sharedTabSource = remember(tabStore) { tabStore?.tabs?.shownSiteTabs() ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
     val sharedTabs by sharedTabSource.collectAsState(emptyList())
     val tabViewSource = remember(tabStore) { tabStore?.tabViews ?: kotlinx.coroutines.flow.flowOf(emptyList()) }
     val allTabViews by tabViewSource.collectAsState(emptyList())
@@ -982,7 +983,12 @@ internal fun FutaberApp(
     val viewedLastPostIds = remember { mutableMapOf<FutaberTabKey?, Pair<Int, String>>() }
     // L-B7 (S22・F03, FutaberOpenRefresh.kt): a catalog row loads its thread first; a tab's opening shows 「新着 N」.
     val catalogOpener = remember { FutaberCatalogOpener() }
+    var mixId by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(com.valoser.futacha.shared.compat.MixAvailability.enabled) {
+        if (!com.valoser.futacha.shared.compat.MixAvailability.enabled) mixId = null
+    }
     val openRef: (BoardSummary, FutaberThreadRef) -> Unit = { target, ref ->
+        mixId = null
         catalogOpener.reset()
         val existing = findFutaberHistoryEntry(history, target, ref.threadId)
         selectedBoardId = target.id
@@ -1019,6 +1025,7 @@ internal fun FutaberApp(
     // A row or a link of a board that is not registered asks to add it, then opens it (official boards only).
     val boardAdder = remember { FutaberBoardAddController() }
     val openBoardCatalog: (BoardSummary) -> Unit = { target ->
+        mixId = null
         selectedBoardId = target.id
         openThread = null
         offlineView = null
@@ -1030,6 +1037,34 @@ internal fun FutaberApp(
     LaunchedEffect(managePanelOpen) { if (!managePanelOpen) manageStartCategory = null }
     val addBoardAndOpen: (FutaberBoardAddRequest) -> Unit = { request ->
         boardAdder.openRequest(request, boards, openRef, openBoardCatalog)
+    }
+    var aimogeCalendarOpen by remember { mutableStateOf(false) }
+    val mixStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val confirmMixMembers = com.valoser.futacha.shared.ui.board.rememberMixR18Confirmation(mediaServices?.store)
+    if (aimogeCalendarOpen) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeEventCalendarDialog(
+            onOpenThread = { row ->
+                val threadId = row.threadId
+                val owner = com.valoser.futacha.shared.ui.aimoge.aimogeCalendarBoardIn(boards, row)
+                val request = if (threadId != null && owner == null) {
+                    futaberBoardAddRequest(row.threadUrl.orEmpty(), threadId = threadId, title = row.title)
+                } else null
+                when {
+                    threadId == null -> Unit
+                    owner != null -> {
+                        aimogeCalendarOpen = false
+                        openRef(owner, FutaberThreadRef(owner.id, threadId, row.title, row.thumbnailUrl.orEmpty(), 0))
+                    }
+                    request != null -> {
+                        aimogeCalendarOpen = false
+                        addBoardAndOpen(request)
+                    }
+                    // Kept open, as in the other modes: the reason is shown and another event can be picked.
+                    else -> notify("この板（/${row.slug}/）を開けません")
+                }
+            },
+            onDismiss = { aimogeCalendarOpen = false }
+        )
     }
     // Links from other apps. The board must be registered here; a link to one that is not says so instead of doing nothing.
     LaunchedEffect(initialThreadDeepLink, boards) {
@@ -1297,6 +1332,7 @@ internal fun FutaberApp(
                     selectedBoardId = board?.id,
                     modifier = Modifier.width(drawerWidth).fillMaxHeight(),
                     onSelect = { selected ->
+                        mixId = null
                         // A write screen left open would stay on top of another board's catalog.
                         postTarget?.let { saveDraftNow(it, postSubject, postComment) }
                         postTarget = null
@@ -1318,13 +1354,52 @@ internal fun FutaberApp(
                     onBulkAdd = bulkAddBoards,
                     onTogglePin = if (displaySettings.boardPin) { target -> editBoards { futaberTogglePin(it, target.id) } } else null,
                     overlay = screenOverlay,
-                    onReorderBoards = { ids -> editBoards { futaberReorderBoards(it, ids) } }
+                    onReorderBoards = { ids -> editBoards { futaberReorderBoards(it, ids) } },
+                    onOpenAimogeCalendar = if (com.valoser.futacha.shared.ui.aimoge.aimogeEventCalendarAvailable()) {
+                        { drawerOpen = false; aimogeCalendarOpen = true }
+                    } else null,
+                    onOpenMix = if (com.valoser.futacha.shared.compat.MixAvailability.enabled && mediaServices != null && com.valoser.futacha.shared.ui.board.mixOfferable(boards.map { it.url }, preferences[com.valoser.futacha.shared.mix.MIX_DEFINITIONS_KEY])) {
+                        {
+                            drawerOpen = false
+                            launchStore("open mix") {
+                                val id = com.valoser.futacha.shared.ui.board.firstMixIdOrCreate(
+                                    mediaServices.store, boards.map { it.url }, kotlin.time.Clock.System.now().toEpochMilliseconds(), confirmMixMembers
+                                ).idOrReport(notify)
+                                if (id != null) {
+                                    catalogOpener.reset()
+                                    openThread = null
+                                    offlineView = null
+                                    managePanelOpen = false
+                                    mixId = id
+                                }
+                            }
+                        }
+                    } else null
                 )
             }
             Box(
                 Modifier.fillMaxSize().offset { IntOffset(drawerDirection * (drawerWidthPx * drawerProgress).roundToInt(), 0) }
             ) {
                 when {
+                    com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null && mediaServices != null -> com.valoser.futacha.shared.ui.board.MixScreenHost(
+                        mixId = mixId!!,
+                        store = mediaServices.store,
+                        repository = repository,
+                        boards = boards,
+                        stateStore = stateStore,
+                        httpClient = mediaServices.httpClient,
+                        onExit = { mixId = null },
+                        onSwitch = { mixId = it },
+                        stateHolder = mixStateHolder,
+                        fileSystem = mediaServices.fileSystem,
+                        modePolicy = com.valoser.futacha.shared.ui.board.MixModePolicy.FUTABER,
+                        onUnavailable = notify,
+                        onOpen = { entry ->
+                            // Back from the thread lands on that board's catalog, not on the MIX (plan: Back closes the MIX).
+                            mixId = null
+                            openRef(entry.board, FutaberThreadRef(entry.board.id, entry.item.id, entry.item.title.orEmpty(), entry.item.thumbnailUrl.orEmpty(), entry.replyCountOrNull ?: 0))
+                        }
+                    )
                     offlineView != null -> offlineView?.let { view ->
                         val viewRepository = if (view.board.isMockBoard()) mockRepository else repository
                         val offlineRepository = remember(view) {
@@ -1830,14 +1905,16 @@ internal fun FutaberApp(
             }
         }
         FutaberBoardAddHost(boardAdder, boards, stateStore, openRef, openBoardCatalog, notify)
-        FutaberAiCatalogReceiver(aiScreens, board, catalogView, catalogSearch, shown = offlineView == null && thread == null)
+        FutaberAiCatalogReceiver(aiScreens, board, catalogView, catalogSearch, shown = (!com.valoser.futacha.shared.compat.MixAvailability.enabled || mixId == null) && offlineView == null && thread == null)
         FutaberAiCommandHost(
             screens = aiScreens,
             inbox = aiInbox,
             stateStore = stateStore,
             context = FutaberAiContext(
                 boards = boards, history = history,
-                currentBoard = offlineView?.board ?: board, currentThread = offlineView?.ref ?: thread,
+                currentBoard = if (!com.valoser.futacha.shared.compat.MixAvailability.enabled || mixId == null) offlineView?.board ?: board else null,
+                currentThread = if (!com.valoser.futacha.shared.compat.MixAvailability.enabled || mixId == null) offlineView?.ref ?: thread else null,
+                mixVisible = com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null,
                 historyRefreshAvailable = onRefreshHistory != null,
                 cookiesAvailable = mediaServices?.cookieRepository != null,
                 savedThreadsAvailable = savedRepository != null,

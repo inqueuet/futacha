@@ -135,9 +135,9 @@ internal fun FutachaThreadFeatureHost(
 ) {
     val features = LocalFutachaSharedFeatures.current
     val staticView = LocalFutachaStaticThreadView.current
-    val canonicalBoard = canonicalizeBoardUrl(board.url)
+    val canonicalBoard = siteCanonicalBoardUrlOf(board.url)
     if (features == null || canonicalBoard == null) { content(); return }
-    val sourceUrl = "${canonicalBoard}res/$threadId.htm"
+    val sourceUrl = siteThreadUrlOnBoard(canonicalBoard, threadId)
     val tabKey = compatTabKey(sourceUrl)
     val boardKey = compatBoardKey(canonicalBoard)
     val tabs by features.store.tabs.collectAsState(emptyList())

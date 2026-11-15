@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.ui.compat.COMPAT_MULTI_PICK_LABEL
 import kotlin.math.abs
 
 /*
@@ -86,6 +87,8 @@ internal fun futaberCameraMenuExtras(filesRefused: Boolean, toolsEnabled: Boolea
             add(FutaberCameraMenuEntry("tool-voice", "音声入力", extra = true))
             add(FutaberCameraMenuEntry("tool-network-info", "回線情報", extra = true))
             add(FutaberCameraMenuEntry("tool-device-info", "機種情報", extra = true))
+            // Several pictures at once: the first is attached, the rest go to あぷ小 (あいもげ: up to 3 in the post).
+            add(FutaberCameraMenuEntry("tool-multi", COMPAT_MULTI_PICK_LABEL, extra = true))
         }
     }
 

@@ -1,16 +1,16 @@
 package com.valoser.futacha.shared.ui.board
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import com.valoser.futacha.shared.ui.compat.CompatFastScrollbar
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
@@ -365,63 +365,19 @@ internal fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>>
     }
 }
 
+/** The standard indicator is also draggable; both layouts share the fast scrollbar's gesture handling. */
 @Composable
 internal fun ThreadScrollbar(
     listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
-    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-
-    Canvas(
-        modifier = modifier
-            .fillMaxHeight()
-            .width(6.dp)
-    ) {
-        val layoutInfo = listState.layoutInfo
-        val visibleItems = layoutInfo.visibleItemsInfo
-        if (visibleItems.isEmpty()) return@Canvas
-        val totalItems = layoutInfo.totalItemsCount
-        if (totalItems <= 0) return@Canvas
-        val viewportHeightPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-        if (viewportHeightPx <= 0) return@Canvas
-
-        var visibleSizeTotal = 0
-        var visibleSizeCount = 0
-        visibleItems.forEach { item ->
-            if (item.size > 0) {
-                visibleSizeTotal += item.size
-                visibleSizeCount += 1
-            }
-        }
-        if (visibleSizeCount == 0) return@Canvas
-
-        val avgItemSizePx = visibleSizeTotal.toFloat() / visibleSizeCount.toFloat()
-        val contentHeightPx = avgItemSizePx * totalItems
-        if (contentHeightPx <= viewportHeightPx) return@Canvas
-
-        val firstVisibleSize = visibleItems.firstOrNull()?.size?.coerceAtLeast(1) ?: 1
-        val partialIndex = listState.firstVisibleItemScrollOffset / firstVisibleSize.toFloat()
-        val totalScrollableItems = (totalItems - visibleItems.size).coerceAtLeast(1)
-        val scrollFraction = ((listState.firstVisibleItemIndex + partialIndex) / totalScrollableItems)
-            .coerceIn(0f, 1f)
-        val thumbHeightFraction = (viewportHeightPx / contentHeightPx).coerceIn(0.05f, 1f)
-
-        val trackWidth = size.width
-        val trackHeight = size.height
-        val trackCornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
-        drawRoundRect(
-            color = trackColor,
-            size = Size(trackWidth, trackHeight),
-            cornerRadius = trackCornerRadius
-        )
-        val thumbHeightPx = (trackHeight * thumbHeightFraction).coerceAtLeast(trackWidth)
-        val thumbOffsetPx = (trackHeight - thumbHeightPx) * scrollFraction
-        drawRoundRect(
-            color = thumbColor,
-            topLeft = Offset(x = 0f, y = thumbOffsetPx),
-            size = Size(trackWidth, thumbHeightPx),
-            cornerRadius = trackCornerRadius
-        )
+    val metrics by remember(listState) {
+        derivedStateOf { Triple(listState.layoutInfo.totalItemsCount, listState.firstVisibleItemIndex,
+            listState.layoutInfo.visibleItemsInfo.size) }
+    }
+    Box(modifier.fillMaxHeight().width(24.dp)) {
+        CompatFastScrollbar(true, metrics.first, metrics.second, metrics.third, listState.isScrollInProgress,
+            listState::scrollToItem, alwaysVisible = true,
+            thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
     }
 }

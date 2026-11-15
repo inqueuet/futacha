@@ -1,5 +1,6 @@
 package com.valoser.futacha.compat
 
+import com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
@@ -381,7 +382,7 @@ class AndroidCompatibilityStore(
     override suspend fun upsertBoard(board: CompatBoard) = mutate(
         refresh = setOf(CompatObservableState.BOARDS)
     ) { db ->
-        require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) { "Invalid Futaba board URL" }
+        require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) { "Invalid Futaba board URL" }
         db.upsertBoard(board)
         db.requireBoardCapacity()
     }
@@ -390,7 +391,7 @@ class AndroidCompatibilityStore(
         refresh = setOf(CompatObservableState.BOARDS)
     ) { db ->
         boards.forEach { board ->
-            require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) {
+            require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) {
                 "Invalid Futaba board URL"
             }
             db.upsertBoard(board)
@@ -1565,7 +1566,7 @@ class AndroidCompatibilityStore(
             val existingBoardKeys = db.readBoards().mapTo(mutableSetOf()) { it.key }
             val importedBoards = if (restoreUserSettings) {
                 backup.boards.forEach { board ->
-                    require(canonicalizeBoardUrl(board.originalUrl) == board.canonicalUrl) {
+                    require(storeCanonicalBoardUrlOf(board.originalUrl) == board.canonicalUrl) {
                         "バックアップの板URLが不正です"
                     }
                     db.upsertBoard(board)
@@ -2771,7 +2772,8 @@ class AndroidCompatibilityStore(
     private fun validatedModernBoards(modernBoards: List<BoardSummary>): List<CompatBoard> {
         val seen = mutableSetOf<String>()
         return modernBoards.mapIndexedNotNull { index, board ->
-            val canonical = canonicalizeBoardUrl(board.url)
+            // Official boards, and あいもげ boards while あいもげ is on (AM-B5).
+            val canonical = com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(board.url)
                 ?: return@mapIndexedNotNull null
             if (!seen.add(canonical)) return@mapIndexedNotNull null
             CompatBoard(

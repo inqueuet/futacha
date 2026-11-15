@@ -40,7 +40,8 @@ internal data class FutaberAiContext(
     val historyRefreshAvailable: Boolean = false,
     val cookiesAvailable: Boolean = false,
     val savedThreadsAvailable: Boolean = false,
-    val appVersion: String = ""
+    val appVersion: String = "",
+    val mixVisible: Boolean = false
 )
 
 /** The shared switches a command may turn on or off (the same stored values every mode reads). */
@@ -197,6 +198,7 @@ internal fun futaberAiPlan(
     enabled: Boolean,
     confirmed: Boolean = false
 ): FutaberAiPlan {
+    if (context.mixVisible) return FutaberAiPlan.Fail(com.valoser.futacha.shared.mix.MIX_AI_REFUSED)
     if (!enabled && !command.isAllowedWhenAiCommandsDisabled()) return FutaberAiPlan.Fail(FUTABER_AI_COMMANDS_DISABLED_MESSAGE)
     if (command.action !in FUTABER_AI_SUPPORTED_ACTIONS) return FutaberAiPlan.Fail(futaberAiUnsupportedNotice(command))
     val plan = futaberAiResolve(command, context)

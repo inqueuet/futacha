@@ -21,6 +21,7 @@ actual fun createHttpClient(
         // Installed first so the read retry inside it can never resend the POST.
         installPostRedirectFollowingAndReadRetry()
         installAmbiguousRequestUrlGuard()
+        installFutabaBrowserIdentity()
 
         install(HttpTimeout) {
             requestTimeoutMillis = 75_000
@@ -34,5 +35,9 @@ actual fun createHttpClient(
             storage = cookieStorage ?: AcceptAllCookiesStorage()
         }
 
-    }.also { it.attributes.put(PostingBrowserKey, IosPostingBrowser()) }
+    }.also {
+        val browser = IosPostingBrowser()
+        it.attributes.put(PostingBrowserKey, browser)
+        FutabaBrowserIdentity.register(browser)
+    }
 }

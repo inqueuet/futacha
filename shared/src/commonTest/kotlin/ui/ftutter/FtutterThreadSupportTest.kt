@@ -238,6 +238,10 @@ class FtutterThreadSupportTest {
         assertFalse(ftutterFallenBandsOnly(pageLoaded = true, fallen = true, legacy = false))
         assertFalse(ftutterFallenBandsOnly(pageLoaded = false, fallen = true, legacy = true))
         assertEquals(FtutterEndState.ARCHIVED, ftutterEndBand("x", true, true).state)
+        // 自動の過去ログ取得が空振りした時は帯で伝える。取れた後は「取得済み」。
+        assertEquals(FTUTTER_ARCHIVE_MISSING_BAND, ftutterEndBand("x", true, false, archiveMissing = true).text)
+        assertEquals("過去ログ取得済み", ftutterEndBand("x", true, true, archiveMissing = true).text)
+        assertEquals("19:54頃消えます", ftutterEndBand("19:54頃消えます", false, false, archiveMissing = true).text)
     }
 
     @Test
@@ -284,5 +288,14 @@ class FtutterThreadSupportTest {
         assertTrue(ftutterSaidaneCounted(""))
         assertEquals(false, ftutterSaidaneCounted("0"))
         assertEquals(false, ftutterSaidaneCounted(" 0\n"))
+    }
+
+    // あいもげ seq 8：末尾のレスが消されて（NGの非表示）出ないと、カタログの未読の数が残り続けた。
+    @Test fun reachingTheLastShownPostCountsThePostsTakenOutAfterItAsSeen() {
+        val rows = listOf(FtutterRow.PostRow(0, 0), FtutterRow.PostRow(1, 0), FtutterRow.PostRow(2, 0))
+        assertEquals(9, ftutterLastSeenPostIndex(rows, listOf(1, 2), 10))
+        assertEquals(1, ftutterLastSeenPostIndex(rows, listOf(0, 1), 10))
+        assertEquals(2, ftutterLastSeenPostIndex(rows, listOf(1, 2), 0))
+        assertEquals(null, ftutterLastSeenPostIndex(rows, emptyList(), 10))
     }
 }

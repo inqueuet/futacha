@@ -65,6 +65,7 @@ import kotlinx.coroutines.launch
 
 /** 板の追加ダイアログの入力の種類。 */
 internal sealed interface FtutterBoardInput {
+    data object AimogeBoards : FtutterBoardInput
     /** 掲示板全体（`www.2chan.net` のトップ・bbsmenu）：一括追加。 */
     data object AllBoards : FtutterBoardInput
     data class OneBoard(val url: String) : FtutterBoardInput
@@ -78,6 +79,17 @@ private val FTUTTER_ALL_BOARDS_URL =
 internal fun classifyFtutterBoardInput(raw: String, existing: List<BoardSummary>): FtutterBoardInput {
     val input = raw.trim()
     if (FTUTTER_ALL_BOARDS_URL.matches(input)) return FtutterBoardInput.AllBoards
+    // あいもげの板（AM-B5、あいもげが有効な時だけ）：正規の形の板のアドレスで足す。
+    when (val aimoge = com.valoser.futacha.shared.ui.aimoge.classifyAimogeBoardUrlInput(input)) {
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.NotAimoge -> Unit
+        com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.SelectBoards -> return FtutterBoardInput.AimogeBoards
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Refused ->
+            return FtutterBoardInput.Invalid(aimoge.message)
+        is com.valoser.futacha.shared.ui.aimoge.AimogeBoardUrlInput.Board ->
+            return if (existing.any { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) == aimoge.url }) {
+                FtutterBoardInput.Invalid("この板は登録済みです")
+            } else FtutterBoardInput.OneBoard(aimoge.url)
+    }
     if (!input.startsWith("http", ignoreCase = true) || !input.contains(".2chan.net/", ignoreCase = true)) {
         return FtutterBoardInput.Invalid("URLの形式が正しくありません")
     }
@@ -120,7 +132,14 @@ internal fun ftutterBoardNameFromPage(html: String, boardUrl: String): String? {
  * 板のページを取得して名前を得る。通信の部品が無い時（試験・デスクトップ）は URL から付けた名前。
  * ページを読めない時（404 等の失敗・通信の失敗）は null：原作は読み込みの後にその板を足さない（H10）。
  */
-internal suspend fun fetchFtutterBoardName(httpClient: HttpClient?, boardUrl: String): String? {
+internal suspend fun fetchFtutterBoardName(
+    httpClient: HttpClient?,
+    boardUrl: String,
+    aimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null
+): String? {
+    if (com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE) {
+        return fetchFtutterAimogeBoardName(boardUrl, aimogeBoards)
+    }
     val fallback = futaberDefaultBoardName(boardUrl)
     val client = httpClient ?: return fallback
     return try {
@@ -134,6 +153,41 @@ internal suspend fun fetchFtutterBoardName(httpClient: HttpClient?, boardUrl: St
         null
     }
 }
+
+/**
+ * あいもげの板の名前は `/boards` から取る（ふたばの `futaba.htm` は無い）。一覧に無い板は null（足さない、H10 と同じ）。
+ * 一覧を読めない時は板のスラッグを名前にする。
+ */
+internal suspend fun fetchFtutterAimogeBoardName(
+    boardUrl: String,
+    aimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null
+): String? {
+    val canonical = com.valoser.futacha.shared.compat.aimogeBoardOnlyShapeOf(boardUrl) ?: return null
+    val slug = canonical.removeSuffix("/").substringAfterLast('/')
+    val list = try {
+        if (aimogeBoards != null) aimogeBoards() else {
+            val repository = com.valoser.futacha.shared.repo.aimoge.AimogeBoardRepository.owningClient({
+                com.valoser.futacha.shared.network.aimoge.createAimogeHttpClient(appVersion = "")
+            })
+            try { repository.boards() } finally { repository.close() }
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        return slug
+    }
+    return list.firstOrNull { it.url == canonical }?.name
+}
+
+/** The section heading of a board in the board list: 「nijiurachan.net」 for an あいもげ board, else 「2chan.net」. */
+internal fun ftutterBoardSection(board: BoardSummary): String =
+    if (com.valoser.futacha.shared.compat.boardSiteOf(board.url) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE) {
+        FTUTTER_AIMOGE_SECTION
+    } else {
+        "2chan.net"
+    }
+
+internal const val FTUTTER_AIMOGE_SECTION = "nijiurachan.net"
 
 /** 区切りの帯（原作の DividerCard：「お気に入り」「2chan.net」）。 */
 @Composable
@@ -162,7 +216,9 @@ internal fun FtutterBoardListScreen(
     onOpenUrl: (String) -> Unit,
     onNotice: (String) -> Unit,
     boardsFromBottom: Boolean = false,
-    legacy: Boolean = true
+    legacy: Boolean = true,
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    onOpenMix: (() -> Unit)? = null
 ) {
     val colors = LocalFtutterColors.current
     var adding by remember { mutableStateOf(false) }
@@ -170,7 +226,8 @@ internal fun FtutterBoardListScreen(
     var confirmDelete by remember { mutableStateOf<BoardSummary?>(null) }
     var confirmMove by remember { mutableStateOf<Pair<BoardSummary, Boolean>?>(null) }
     val favorites = boards.filter { it.pinned }
-    val others = boards.filterNot { it.pinned }
+    val others = boards.filterNot { it.pinned || ftutterBoardSection(it) == FTUTTER_AIMOGE_SECTION }
+    val aimogeOthers = boards.filter { !it.pinned && ftutterBoardSection(it) == FTUTTER_AIMOGE_SECTION }
     val showUrl = boards.size > 1
 
     Column(Modifier.fillMaxSize().testTag("ftutter-boards")) {
@@ -188,6 +245,32 @@ internal fun FtutterBoardListScreen(
             item(key = "others-header") { FtutterDividerCard("2chan.net") }
             items(others, key = { "other-" + it.id }) { board ->
                 FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up }, legacy)
+            }
+            if (aimogeOthers.isNotEmpty()) {
+                item(key = "aimoge-header") { FtutterDividerCard(FTUTTER_AIMOGE_SECTION) }
+                items(aimogeOthers, key = { "aimoge-" + it.id }) { board ->
+                    FtutterBoardRow(board, showUrl, onOpenBoard, onEditBoards, { menuFor = it }, { b, up -> confirmMove = b to up }, legacy)
+                }
+            }
+            if (onOpenMix != null) {
+                item(key = "mix-catalog") {
+                    Text(
+                        "まとめカタログ",
+                        color = colors.text,
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenMix)
+                            .padding(horizontal = 16.dp, vertical = 14.dp).testTag("ftutter-mix-catalog")
+                    )
+                }
+            }
+            if (onOpenAimogeCalendar != null) {
+                item(key = "aimoge-calendar") {
+                    Text(
+                        "あいもげのイベントカレンダー",
+                        color = colors.text,
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenAimogeCalendar)
+                            .padding(horizontal = 16.dp, vertical = 14.dp).testTag("ftutter-aimoge-calendar")
+                    )
+                }
             }
         }
         Box(
@@ -378,19 +461,27 @@ internal fun FtutterLongPressIcon(
 }
 
 @Composable
-private fun FtutterAddBoardDialog(
+internal fun FtutterAddBoardDialog(
     existing: List<BoardSummary>,
     httpClient: HttpClient?,
     onDismiss: () -> Unit,
     onAdd: (BoardSummary) -> Unit,
     onBulkAdd: (suspend () -> Result<Int>)?,
     onNotice: (String) -> Unit,
-    legacy: Boolean = true
+    legacy: Boolean = true,
+    loadAimogeBoards: (suspend () -> List<com.valoser.futacha.shared.repo.aimoge.AimogeBoardInfo>)? = null
 ) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val aimogeAdder = com.valoser.futacha.shared.ui.aimoge.rememberAimogeBoardUrlAdder(
+        registeredUrls = existing.mapNotNull { com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(it.url) }.toSet(),
+        loadBoards = loadAimogeBoards,
+        onAdd = { name, boardUrl ->
+            onAdd(com.valoser.futacha.shared.ui.board.createCustomBoardSummary(name = name, url = boardUrl, existingBoards = existing))
+        }
+    )
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("板追加") },
@@ -419,12 +510,12 @@ private fun FtutterAddBoardDialog(
                     supportingText = error?.let { message -> { Text(message) } },
                     modifier = Modifier.fillMaxWidth().testTag("ftutter-add-board-input")
                 )
-                if (busy) CircularProgressIndicator(Modifier.padding(top = 8.dp).size(24.dp))
+                if (busy || aimogeAdder.busy) CircularProgressIndicator(Modifier.padding(top = 8.dp).size(24.dp))
             }
         },
         confirmButton = {
             TextButton(
-                enabled = !busy,
+                enabled = !busy && !aimogeAdder.busy,
                 onClick = {
                     // M62：原作は空なら黙って閉じ、形式が違えば閉じてトーストで知らせる。
                     if (!legacy && input.isBlank()) {
@@ -432,6 +523,7 @@ private fun FtutterAddBoardDialog(
                         return@TextButton
                     }
                     when (val kind = classifyFtutterBoardInput(input, existing)) {
+                        FtutterBoardInput.AimogeBoards -> aimogeAdder.selectBoards()
                         is FtutterBoardInput.Invalid -> if (legacy) error = kind.message else { onNotice(kind.message); onDismiss() }
                         FtutterBoardInput.AllBoards -> {
                             val bulk = onBulkAdd
@@ -448,6 +540,10 @@ private fun FtutterAddBoardDialog(
                             }
                         }
                         is FtutterBoardInput.OneBoard -> {
+                            if (com.valoser.futacha.shared.compat.aimogeBoardOnlyShapeOf(kind.url) == kind.url) {
+                                aimogeAdder.start(kind.url)
+                                return@TextButton
+                            }
                             busy = true
                             scope.launch {
                                 val name = fetchFtutterBoardName(httpClient, kind.url)

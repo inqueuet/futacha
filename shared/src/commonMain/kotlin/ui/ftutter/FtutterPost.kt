@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -333,22 +335,54 @@ internal fun FtutterPostDialog(
             else attachment.offer(picked, capabilities, isReply)
         }
     )
+    // こちらの追加：コピーした画像を添付する（may 1447450917）。添付の決まりは選んだファイルと同じ。
+    val pasteImage = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
+        onImage = { picked -> attachment.offer(picked, capabilities, isReply) },
+        onError = { attachment.error = it }
+    )
     val pickUps = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
         preference = pickerPreference,
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
         preferredFileManagerPackage = preferredFileManagerPackage,
         onSelectionError = { error = it },
-        onImageSelected = { picked ->
+        onImageSelected = { original ->
             val upload = uploadUps ?: return@rememberAttachmentPickerLauncher
-            if (!com.valoser.futacha.shared.ui.compat.isCompatUpsUploadSizeAllowed(picked.bytes.size)) {
-                error = "サイズが大きすぎます！"
-                return@rememberAttachmentPickerLauncher
-            }
             upsBusy = true
             scope.launch {
+                val prepared = com.valoser.futacha.shared.ui.compat.prepareCompatUpsUpload(original).getOrNull()
+                if (prepared == null) {
+                    error = "サイズが大きすぎます！"
+                    upsBusy = false
+                    return@launch
+                }
+                val picked = prepared.image
                 upload(picked, deleteKeyNow)
                     .onSuccess { file -> comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, file) }
                     .onFailure { error = it.message ?: "アップロードできませんでした" }
                 upsBusy = false
+            }
+        }
+    )
+    val isAimogeBoard = remember(boardUrl) { com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE }
+    val pickMany = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
+        maxCount = com.valoser.futacha.shared.ui.compat.compatMultiPickMax(isAimogeBoard),
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
+        onSelectionError = { error = it },
+        onImagesSelected = { picked ->
+            if (!upsBusy) {
+                upsBusy = true
+                scope.launch {
+                    try {
+                        error = com.valoser.futacha.shared.ui.compat.applyCompatPickedPictures(
+                            picked, attachment.image, !(imgB && isReply), isAimogeBoard, boardUrl,
+                            setAttachment = { attachment.offer(it, capabilities, isReply) },
+                            upload = uploadUps?.let { up -> { image -> up(image, deleteKeyNow).getOrThrow() } },
+                            appendName = { comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, it) }
+                        )
+                    } finally {
+                        upsBusy = false
+                    }
+                }
             }
         }
     )
@@ -391,6 +425,13 @@ internal fun FtutterPostDialog(
         }
     }
     var menu by remember { mutableStateOf(false) }
+    // 添付の画像を大きく見る（may 1447418590：選んだ画像を書き込み画面で確かめられなかった）。
+    var previewOpen by remember { mutableStateOf(false) }
+    val previewImage = attachment.image?.takeIf { previewOpen && ftutterAttachmentIsPicture(it.fileName) }
+    if (previewOpen && previewImage == null) previewOpen = false
+    previewImage?.let { image ->
+        com.valoser.futacha.shared.ui.board.ZoomableAttachmentPreviewDialog(image.bytes, "添付画像プレビュー") { previewOpen = false }
+    }
     // ︙の中身。原作：クリア／削除キー（値を見せる）／端末情報（文を見せる）／アップロードキャッシュのクリア（M46）。
     // こちらの「手書き」（拡張）は「その他の機能」へ（T-B1）。
     val menuOriginals: @Composable () -> Unit = {
@@ -421,6 +462,19 @@ internal fun FtutterPostDialog(
         )
     }
     val menuHandwriting: @Composable () -> Unit = {
+        // こちらの追加：複数の画像を一度に選ぶ（1枚目は添付、残りはあぷ小。あいもげは3枚まで1つの書き込みに）。
+        if (pickMany != null && (uploadUps != null || isAimogeBoard)) DropdownMenuItem(
+            text = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_MULTI_PICK_LABEL) },
+            enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
+            onClick = { menu = false; pickMany() },
+            modifier = Modifier.testTag("ftutter-post-multi")
+        )
+        DropdownMenuItem(
+            text = { Text("画像を貼り付け") },
+            enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy) && !pasteImage.busy,
+            onClick = { menu = false; pasteImage.paste() },
+            modifier = Modifier.testTag("ftutter-post-paste-image")
+        )
         if (handwritingEnabled) DropdownMenuItem(
             text = { Text("手書き") },
             enabled = ftutterPostCanSend(sending, attachment.processing, upsBusy),
@@ -437,7 +491,7 @@ internal fun FtutterPostDialog(
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuOriginals(); menuHandwriting() }
             } else {
                 FtutterFoldedMenu(
-                    expanded = menu, onDismiss = { menu = false }, tag = "ftutter-post-menu", hasExtras = handwritingEnabled,
+                    expanded = menu, onDismiss = { menu = false }, tag = "ftutter-post-menu", hasExtras = true,
                     original = { menuOriginals() }, extras = { menuHandwriting() }
                 )
             }
@@ -470,6 +524,7 @@ internal fun FtutterPostDialog(
                         if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
                             Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "画像を足す", tint = colors.text)
                         }
+                        FtutterAttachmentThumbnail(attachment.image) { previewOpen = true }
                         val shown = attachment.image?.fileName ?: if (attachment.processing) "準備中…" else null
                         if (shown != null) Text(shown, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
@@ -560,6 +615,7 @@ internal fun FtutterPostDialog(
                         if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
                             Icon(Icons.Rounded.AttachFile, contentDescription = "添付", tint = colors.text)
                         }
+                        FtutterAttachmentThumbnail(attachment.image) { previewOpen = true }
                         Text(
                             attachment.image?.fileName ?: if (attachment.processing) "準備中…" else "添付なし",
                             color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
@@ -830,4 +886,25 @@ internal fun ftutterDeleteKeySync(own: String?, shared: String?, lastSynced: Str
         lastSynced == null || mine == lastSynced -> FtutterDeleteKeySync(own = common)
         else -> FtutterDeleteKeySync(shared = mine)
     }
+}
+
+
+/** 添付が静止画・GIF（サムネイルとプレビューを出す）。動画は名前だけ。 */
+internal fun ftutterAttachmentIsPicture(fileName: String): Boolean =
+    com.valoser.futacha.shared.ui.compat.compatPostAttachmentKind(fileName) == com.valoser.futacha.shared.ui.compat.CompatPostAttachmentKind.IMAGE
+
+/** 添付のファイル名の前の小さなサムネイル。押すと拡大できるプレビュー。画像でない時・添付が無い時は何も出さない。 */
+@Composable
+private fun FtutterAttachmentThumbnail(image: com.valoser.futacha.shared.util.ImageData?, onOpen: () -> Unit) {
+    if (image == null || !ftutterAttachmentIsPicture(image.fileName)) return
+    coil3.compose.AsyncImage(
+        model = image.bytes,
+        imageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader.current,
+        contentDescription = "添付画像を大きく見る",
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        modifier = Modifier.padding(end = 6.dp).then(Modifier.size(40.dp))
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+            .clickable(onClick = onOpen)
+            .testTag("ftutter-post-attachment-thumbnail")
+    )
 }

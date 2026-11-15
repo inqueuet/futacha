@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -122,6 +123,20 @@ internal fun QuoteSelectionDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End
                     ) {
+                        val ownWords = remember(selectionItems) { ownWordsQuoteSelectionIds(selectionItems) }
+                        TextButton(
+                            onClick = {
+                                selectedIds = ownWords
+                                AnalyticsTracker.uiControl("quote_selection_own_words", "レス相手選択",
+                                    mapOf("selection_count_bucket" to analyticsCountBucket(ownWords.size)))
+                            },
+                            enabled = ownWords.isNotEmpty() && selectedIds != ownWords,
+                            modifier = Modifier.testTag("quote-selection-own-words"),
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        ) { Text("レス相手選択") }
                         TextButton(
                             onClick = { selectAll(true) },
                             enabled = selectedIds.size < selectionItems.size,

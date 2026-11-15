@@ -77,7 +77,8 @@ data class BoardSettingKeys(val key: String, val legacy: String? = null)
 
 fun boardSettingKeys(boardId: String?, boardUrl: String?): BoardSettingKeys? {
     val legacy = boardId?.trim()?.takeIf { it.isNotEmpty() } ?: boardUrl?.trim()?.takeIf { it.isNotEmpty() }
-    val shared = boardUrl?.let(::canonicalizeBoardUrl)?.let { runCatching { compatBoardKey(it) }.getOrNull() }
+    // An official board, or an あいもげ board while あいもげ is on (AM-B5), keeps its settings under its shared key.
+    val shared = boardUrl?.let { com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(it) }?.let { runCatching { compatBoardKey(it) }.getOrNull() }
     return when {
         shared != null -> BoardSettingKeys(shared, legacy?.takeIf { it != shared })
         legacy != null -> BoardSettingKeys(legacy)

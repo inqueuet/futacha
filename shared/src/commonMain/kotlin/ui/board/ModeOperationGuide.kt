@@ -24,14 +24,14 @@ internal fun modeOperationGuide(profile: ExperienceProfile): List<ModeOperation>
     val attach = when (profile) {
         ExperienceProfile.FUTACHA -> "投稿画面の添付ボタンから画像を選びます。添付後の削除ボタンで外せます。"
         ExperienceProfile.TOSHIAKI_COMPAT -> "投稿画面の「添付画像」で選択します。選択後は「添付削除」になります。画像の貼り付けは「その他」→「画像を貼り付け」です。"
-        ExperienceProfile.FUTABER -> "投稿画面の添付ボタンから選びます。書き込み先の板によって添付できる形式が異なります。"
+        ExperienceProfile.FUTABER -> "書き込み画面のカメラを押し、「最近の画像」「ファイル」「ライブラリ」から選びます。書き込み先の板によって添付できる形式が異なります。"
         ExperienceProfile.FTUTTER -> "投稿画面のクリップの「添付」で選択し、「添付を外す」で解除します。画像一覧はスレッドの「メニュー」からも開けます。"
     }
     val gestures = when (profile) {
-        ExperienceProfile.FTUTTER -> "設定→「ジェスチャー」で軌跡と操作を確認できます。カタログ・スレッドの「メニュー」→「ジェスチャーの操作を選ぶ」なら線を描かずに実行できます。前へ・次へは、カタログではお気に入りの板、スレッドではタブの移動です。"
+        ExperienceProfile.FTUTTER -> "設定→「ジェスチャー」で軌跡と操作を確認できます。カタログ・スレッドの「メニュー」→「ジェスチャーの操作を選ぶ」なら線を描かずに実行できます。前へ・次へは、カタログではお気に入りの板、スレッドではタブの移動です。タブ帯のタブは上へ払うと保護、下へ払うと閉じます。"
         ExperienceProfile.FUTABER -> "スレッドは右へスワイプでカタログへ戻り、左端から右へで板一覧、左へで書き込み画面を開きます。カタログは右へで板一覧、左へでこの板で最後に見たスレッドです。設定→「ジェスチャー」でタップスクロールや画像を閉じる操作を確認できます。更新・戻る・画像一覧は画面のボタンからも操作できます。"
         ExperienceProfile.TOSHIAKI_COMPAT -> "ジェスチャーやツールバーの設定を変えると操作が変わります。戻る・更新などは画面のボタンでも操作できます。AndroidではOSの戻るも使えます。"
-        ExperienceProfile.FUTACHA -> "画像の左右スワイプで前後へ移動します。スレッドの更新・戻るは画面のボタンからも操作できます。"
+        ExperienceProfile.FUTACHA -> "スレッドは中央から右へスワイプでカタログへ戻り、左端から右へで履歴を開きます（設定の「ふたちゃ拡張」で切れます）。画像の左右スワイプで前後へ移動します。スレッドの更新・戻るは画面のボタンからも操作できます。"
     }
     return listOf(
         ModeOperation("write", "書き込む", write),
@@ -55,7 +55,10 @@ internal fun modeOperationGuide(profile: ExperienceProfile): List<ModeOperation>
                 "」をONにすると、レスのdel／通報の確認で「$REPORT_POST_NG_CHECK_LABEL」を選べます。" +
                 "このスレッドのこのレスだけが対象で、送信とNGの成否は別々に表示します。"
         }),
-        ModeOperation("gesture", "ジェスチャーと代わりの操作", gestures)
+        ModeOperation("gesture", "ジェスチャーと代わりの操作", gestures),
+        ModeOperation("mix-catalog", "まとめカタログで板をまとめて見る", "複数の板のスレッドを1つのカタログに並べます。板一覧の「まとめカタログ」から開き（ふたちゃ＝メニュー、としあき(仮)＝右上のその他、ふたばー風＝板一覧、ふたったー風＝板一覧）、本物の板が2つ以上あるときだけ出ます。スレを押すとそのスレの板で開き、戻ると前の画面へ戻ります。スレは立てられず、AIは使えません。あいもげが休止中の板は飛ばします。更新は読み込み中と終わってから10秒の間は押せません。")
+        ,
+        ModeOperation("aimoge", "あいもげの板を使う", "ふたばと同じく「板を追加」のURL欄に、あいもげの板のURL（https://nijiurachan.net/b/板/）を入れます（Android・iOS）。名前は板一覧から取り、R18の板は追加の前に確認します。使えない版では理由を出して追加しません。読む・書く操作はふたばと同じ入口です。書き込む前に設定の「あいもげ」でブラウザの承認をします。削除キーはふたばとは別で、同じ設定で確認できます。")
     ) + when (profile) {
         ExperienceProfile.FUTABER -> listOf(
             ModeOperation("kana", "本文を半角カナにする", "書き込み画面下部の「カナ」で、本文全体のひらがな・カタカナを半角カナにします。漢字・英数字や半角の形がない文字はそのままです。"),

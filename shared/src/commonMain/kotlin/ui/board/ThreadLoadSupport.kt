@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.compat.isFallenSitePage
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -98,10 +99,12 @@ internal fun buildThreadInitialLoadUiOutcome(
         board = board,
         overrideThreadUrl = overrideThreadUrl,
         // An archive copy is served because the thread is gone (404/410).
-        confirmAlive = !usedOffline && !fromArchive
+        confirmAlive = !usedOffline && !fromArchive && !page.isFallenSitePage()
     )
+    // あいもげ answers a fallen thread with its posts: shown like an archive copy of a gone thread.
+    val siteFallen = page.isFallenSitePage()
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState.copy(isArchived = fromArchive, confirmedGone = confirmedGone),
+        uiState = successState.uiState.copy(isArchived = fromArchive || siteFallen, confirmedGone = confirmedGone || siteFallen),
         historyEntry = successState.historyEntry
     )
 }
@@ -153,10 +156,12 @@ internal fun buildThreadManualRefreshUiOutcome(
         threadTitle = threadTitle,
         board = board,
         overrideThreadUrl = overrideThreadUrl,
-        confirmAlive = !usedOffline && !fromArchive
+        confirmAlive = !usedOffline && !fromArchive && !page.isFallenSitePage()
     )
+    // あいもげ answers a fallen thread with its posts: shown like an archive copy of a gone thread.
+    val siteFallen = page.isFallenSitePage()
     return ThreadLoadUiOutcome(
-        uiState = successState.uiState.copy(isArchived = fromArchive, confirmedGone = confirmedGone),
+        uiState = successState.uiState.copy(isArchived = fromArchive || siteFallen, confirmedGone = confirmedGone || siteFallen),
         historyEntry = successState.historyEntry,
         snackbarMessage = buildThreadRefreshSuccessMessage(usedOffline)
     )

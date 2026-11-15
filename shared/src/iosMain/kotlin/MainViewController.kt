@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared
 
+import com.valoser.futacha.shared.network.aimoge.createAimogeHttpClientForThisApp
+import com.valoser.futacha.shared.repo.withAimogeRouting
 import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -728,6 +730,13 @@ fun updateIosWifiConnected(connected: Boolean) {
  * without eagerly initializing the heavy iOS app graph.
  */
 fun registerIosBackgroundRefreshTask() {
+    // At launch, before a background task can run without the screen.
+    com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+    com.valoser.futacha.shared.compat.MixAvailability.enabled = true
+    // User decisions (2026-11-11): attachments, new threads, del, polls and reports on the release build too.
+    com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedPostingEnabled = true
+    com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedDelEnabled = true
+    com.valoser.futacha.shared.network.aimoge.installIosAimogeAuth()
     BackgroundRefreshManager.registerAtLaunch()
     val defaults = NSUserDefaults.standardUserDefaults()
     // Compatibility preferences live in the profile store and cannot be
@@ -840,6 +849,13 @@ private suspend fun seedIosIssue78ArchiveFixture(store: IosCompatibilityStore) {
 
 fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
     com.valoser.futacha.shared.ui.initializeFutachaPointerDispatch()
+    // あいもげ boards are offered on every iOS build .
+    com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+    com.valoser.futacha.shared.compat.MixAvailability.enabled = true
+    // User decisions (2026-11-11): attachments, new threads, del, polls and reports on the release build too.
+    com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedPostingEnabled = true
+    com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedDelEnabled = true
+    com.valoser.futacha.shared.network.aimoge.installIosAimogeAuth()
     return ComposeUIViewController {
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
@@ -907,14 +923,18 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         val platformAiCommand = platformAiCommandQueue.firstOrNull()
         val sharedRepository = remember(httpClient, cookieRepository, stateStore) {
             val api = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
-            DefaultBoardRepository(
-                api = object : BoardApi by api {},
-                parser = createHtmlParser(),
-                cookieRepository = cookieRepository,
-                diagnosticFileSystem = fileSystem,
-                catalogFetchSettingsProvider = {
-                    CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized()
-                }
+            withAimogeRouting(
+                DefaultBoardRepository(
+                    api = object : BoardApi by api {},
+                    parser = createHtmlParser(),
+                    cookieRepository = cookieRepository,
+                    diagnosticFileSystem = fileSystem,
+                    catalogFetchSettingsProvider = {
+                        CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized()
+                    }
+                ),
+                // あいもげ gets its own client without cookies or redirects, made on its first request (AM-B4).
+                ::createAimogeHttpClientForThisApp
             )
         }
         DisposableEffect(sharedRepository) {
@@ -1432,14 +1452,18 @@ private suspend fun runIosBackgroundRefreshLocked(
     val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
     // Keep shared HttpClient ownership in MainViewController. Background repo closes only its own state.
     val nonClosingApi = object : BoardApi by sharedClientApi {}
-    val repo = DefaultBoardRepository(
-        api = nonClosingApi,
-        parser = createHtmlParser(),
-        cookieRepository = cookieRepository,
-        diagnosticFileSystem = fileSystem,
-        catalogFetchSettingsProvider = {
-            CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized()
-        }
+    // The あいもげ client is the background task's own and closes with the repository at its end (AM-B4).
+    val repo = withAimogeRouting(
+        DefaultBoardRepository(
+            api = nonClosingApi,
+            parser = createHtmlParser(),
+            cookieRepository = cookieRepository,
+            diagnosticFileSystem = fileSystem,
+            catalogFetchSettingsProvider = {
+                CatalogFetchSettings(rows = stateStore.catalogFetchRows.first()).normalized()
+            }
+        ),
+        ::createAimogeHttpClientForThisApp
     )
     val refresher = HistoryRefresher(
         stateStore = stateStore,
@@ -1489,7 +1513,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                                 threadId = match.history.threadNo,
                                 boardId = match.history.boardKey,
                                 boardName = match.history.boardName,
-                                boardUrl = match.history.originalUrl.substringBefore("/res/"),
+                                boardUrl = com.valoser.futacha.shared.compat.watchMatchBoardUrlOf(match.history.originalUrl),
                                 title = match.history.title,
                                 titleImageUrl = match.history.thumbnailUrl.orEmpty(),
                                 replyCount = match.history.replyCount,
@@ -1582,7 +1606,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                 maxTabs = maxThreadsPerRun, onNewMatches = { matches ->
                     val alerts = matches.map { match -> com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
                         threadId = match.history.threadNo, boardId = match.history.boardKey,
-                        boardName = match.history.boardName, boardUrl = match.history.originalUrl.substringBefore("/res/"),
+                        boardName = match.history.boardName, boardUrl = com.valoser.futacha.shared.compat.watchMatchBoardUrlOf(match.history.originalUrl),
                         title = match.history.title, titleImageUrl = match.history.thumbnailUrl.orEmpty(),
                         replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
                     notifyNewIosWatchAlertMatches(alerts)
@@ -1606,6 +1630,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                         maxAutoSavesPerRun = plan.maxAutoSavesPerRun,
                         threadFetchTimeoutMillisOverride = plan.threadFetchTimeoutMillis,
                         runBudgetMillis = plan.historyRunBudgetMillis,
+                        aimogeSummaryRequestLimit = plan.aimogeSummaryRequestLimit,
                         historyCommitGate = { commit ->
                             profileStore.runIfGenerationCurrent(
                                 activeProfile,

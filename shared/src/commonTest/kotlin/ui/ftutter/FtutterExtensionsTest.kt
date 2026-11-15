@@ -19,9 +19,9 @@ class FtutterExtensionsTest {
 
     @Test
     fun historyToolsAreOnByDefaultAndExplicitOffIsRespected() {
-        assertEquals(setOf(FtutterExtension.COMMON_NG, FtutterExtension.HISTORY_TOOLS), parseFtutterExtensions(emptyMap()).enabled)
-        assertEquals(setOf(FtutterExtension.COMMON_NG, FtutterExtension.HISTORY_TOOLS), parseFtutterExtensions(FtutterExtension.entries.associate { it.key to "x" }).enabled)
-        assertEquals(setOf(FtutterExtension.COMMON_NG), parseFtutterExtensions(mapOf(FtutterExtension.HISTORY_TOOLS.key to "false")).enabled)
+        assertEquals(setOf(FtutterExtension.COMMON_NG, FtutterExtension.HISTORY_TOOLS, FtutterExtension.REPLY_TO_SELF_TINT), parseFtutterExtensions(emptyMap()).enabled)
+        assertEquals(setOf(FtutterExtension.COMMON_NG, FtutterExtension.HISTORY_TOOLS, FtutterExtension.REPLY_TO_SELF_TINT), parseFtutterExtensions(FtutterExtension.entries.associate { it.key to "x" }).enabled)
+        assertEquals(setOf(FtutterExtension.COMMON_NG, FtutterExtension.REPLY_TO_SELF_TINT), parseFtutterExtensions(mapOf(FtutterExtension.HISTORY_TOOLS.key to "false")).enabled)
         assertTrue(parseFtutterExtensions(FtutterExtension.entries.associate { it.key to "false" }).enabled.isEmpty())
     }
 
