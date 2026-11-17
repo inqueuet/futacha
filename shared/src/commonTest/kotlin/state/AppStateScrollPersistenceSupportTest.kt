@@ -1,0 +1,277 @@
+package com.valoser.futacha.shared.state
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.yield
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+class AppStateScrollPersistenceSupportTest {
+    @Test
+    fun immediateWriteFailureKeepsUiScopeAlive() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val parent = Job()
+        val scope = CoroutineScope(coroutineContext + parent + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        try {
+            val failedWrite = scope.launchHistoryScrollPersistence {
+                throw IllegalStateException("simulated storage write failure")
+            }
+            failedWrite.join()
+            assertTrue(parent.isActive)
+            assertTrue(!failedWrite.isCancelled)
+            assertTrue(uncaught.isEmpty())
+            var saved = false
+            scope.launchHistoryScrollPersistence { saved = true }.join()
+            assertTrue(saved)
+        } finally {
+            parent.cancel()
+        }
+    }
+
+    @Test
+    fun finalScrollWriteRunsEvenWhenUiScopeIsAlreadyCancelled() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        scope.coroutineContext[Job]?.cancel()
+        var saved = false
+        scope.launchFinalHistoryScrollPersistence {
+            yield()
+            saved = true
+        }.join()
+        assertTrue(saved)
+    }
+
+    @Test
+    fun scrollWriteCancellationRemainsCancellation() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            val job = scope.launchHistoryScrollPersistence { throw CancellationException("screen closed") }
+            job.join()
+            assertTrue(job.isCancelled)
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun fatalScrollWriteErrorStillReachesExceptionHandler() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        val fatal = Error("fatal failure")
+        try {
+            scope.launchHistoryScrollPersistence { throw fatal }.join()
+            assertSame(fatal, uncaught.single())
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun debouncedWriteFailureDoesNotEscapeAndNextScrollCanSave() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        var attempts = 0
+        var saved = 0
+        val coordinator = AppStateHistoryScrollPersistenceCoordinator(
+            debounceDelayMillis = 0L,
+            buildScrollKey = { it.threadId },
+            performImmediateUpdate = {
+                attempts++
+                if (attempts == 1) throw IllegalStateException("simulated storage write failure")
+                saved++
+            }
+        )
+        try {
+            coordinator.setScope(scope)
+            val request = AppStateHistoryScrollUpdateRequest(
+                threadId = "123", index = 9, offset = 12, boardId = "b", title = "title",
+                titleImageUrl = "", boardName = "board", boardUrl = "https://example.com/b/", replyCount = 10
+            )
+            coordinator.schedule(request)
+            yield()
+            assertEquals(1, attempts)
+            assertTrue(uncaught.isEmpty(), "Storage failure escaped the scroll coroutine: $uncaught")
+            coordinator.schedule(request.copy(index = 10))
+            yield()
+            assertEquals(2, attempts)
+            assertEquals(1, saved)
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun scheduleAppStateHistoryScrollPersistence_runsImmediateWithoutScope() {
+        runBlocking {
+            val mutex = Mutex()
+            val jobMap = AtomicJobMap()
+            var immediateRuns = 0
+            var startedJob = false
+
+            scheduleAppStateHistoryScrollPersistence(
+                scrollPositionMutex = mutex,
+                currentScope = { null },
+                clearScope = {},
+                scrollPositionJobs = jobMap,
+                scrollKey = "thread-key",
+                startDebouncedJob = { _, _ ->
+                    startedJob = true
+                    Job()
+                },
+                performImmediateUpdate = { immediateRuns += 1 }
+            )
+
+            assertEquals(1, immediateRuns)
+            assertTrue(!startedJob)
+        }
+    }
+
+    @Test
+    fun scheduleAppStateHistoryScrollPersistence_clearsInactiveScopeAndRunsImmediate() {
+        runBlocking {
+            val mutex = Mutex()
+            val jobMap = AtomicJobMap()
+            val inactiveScope = CoroutineScope(Job().apply { cancel() })
+            var cleared = false
+            var immediateRuns = 0
+
+            scheduleAppStateHistoryScrollPersistence(
+                scrollPositionMutex = mutex,
+                currentScope = { inactiveScope },
+                clearScope = { cleared = true },
+                scrollPositionJobs = jobMap,
+                scrollKey = "thread-key",
+                startDebouncedJob = { _, _ -> Job() },
+                performImmediateUpdate = { immediateRuns += 1 }
+            )
+
+            assertTrue(cleared)
+            assertEquals(1, immediateRuns)
+        }
+    }
+
+    @Test
+    fun scheduleAppStateHistoryScrollPersistence_cancelsStaleJobsWhenScopeIsInactive() {
+        runBlocking {
+            val mutex = Mutex()
+            val jobMap = AtomicJobMap()
+            val inactiveScope = CoroutineScope(Job().apply { cancel() })
+            val staleJob = Job()
+            jobMap.putAndCancelOld("thread-key", staleJob)
+
+            scheduleAppStateHistoryScrollPersistence(
+                scrollPositionMutex = mutex,
+                currentScope = { inactiveScope },
+                clearScope = {},
+                scrollPositionJobs = jobMap,
+                scrollKey = "thread-key",
+                startDebouncedJob = { _, _ -> Job() },
+                performImmediateUpdate = {}
+            )
+
+            assertTrue(staleJob.isCancelled)
+        }
+    }
+
+    @Test
+    fun scheduleAppStateHistoryScrollPersistence_replacesOldJobWhenScopeIsActive() {
+        runBlocking {
+            val mutex = Mutex()
+            val jobMap = AtomicJobMap()
+            val scope = CoroutineScope(SupervisorJob())
+            val oldJob = Job()
+            jobMap.putAndCancelOld("thread-key", oldJob)
+            var immediateRuns = 0
+            var startedJob: Job? = null
+
+            scheduleAppStateHistoryScrollPersistence(
+                scrollPositionMutex = mutex,
+                currentScope = { scope },
+                clearScope = {},
+                scrollPositionJobs = jobMap,
+                scrollKey = "thread-key",
+                startDebouncedJob = { _, _ ->
+                    Job().also { startedJob = it }
+                },
+                performImmediateUpdate = { immediateRuns += 1 }
+            )
+
+            assertEquals(0, immediateRuns)
+            assertTrue(oldJob.isCancelled)
+            assertTrue(startedJob?.isActive == true)
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun historyScrollPersistenceCoordinator_runsImmediateWithoutScope() {
+        runBlocking {
+            val requests = mutableListOf<AppStateHistoryScrollUpdateRequest>()
+            val coordinator = AppStateHistoryScrollPersistenceCoordinator(
+                debounceDelayMillis = 1_000L,
+                buildScrollKey = { request -> request.threadId },
+                performImmediateUpdate = { request -> requests += request }
+            )
+
+            coordinator.schedule(
+                AppStateHistoryScrollUpdateRequest(
+                    threadId = "123",
+                    index = 1,
+                    offset = 2,
+                    boardId = "b",
+                    title = "title",
+                    titleImageUrl = "",
+                    boardName = "board",
+                    boardUrl = "https://may.2chan.net/b/",
+                    replyCount = 3
+                )
+            )
+
+            assertEquals(listOf("123"), requests.map { it.threadId })
+        }
+    }
+
+    @Test
+    fun historyScrollPersistenceCoordinator_canCancelPendingWriteBeforeNavigation() {
+        runBlocking {
+            val scope = CoroutineScope(SupervisorJob())
+            val requests = mutableListOf<AppStateHistoryScrollUpdateRequest>()
+            val coordinator = AppStateHistoryScrollPersistenceCoordinator(
+                debounceDelayMillis = 60_000L,
+                buildScrollKey = { request -> request.threadId },
+                performImmediateUpdate = { request -> requests += request }
+            )
+            coordinator.setScope(scope)
+            val request = AppStateHistoryScrollUpdateRequest(
+                threadId = "123",
+                index = 9,
+                offset = 12,
+                boardId = "b",
+                title = "title",
+                titleImageUrl = "",
+                boardName = "board",
+                boardUrl = "https://may.2chan.net/b/",
+                replyCount = 10
+            )
+
+            coordinator.schedule(request)
+            coordinator.cancelPending(request)
+            kotlinx.coroutines.delay(10L)
+
+            assertTrue(requests.isEmpty())
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+}

@@ -1,0 +1,412 @@
+package com.valoser.futacha.shared.repo
+
+import com.valoser.futacha.shared.network.HttpBoardApiPostingFailureKind
+import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.network.StoredCookie
+import com.valoser.futacha.shared.network.classifyHttpBoardApiPostingFailure
+import com.valoser.futacha.shared.network.extractHttpBoardApiPostingWaitSeconds
+import com.valoser.futacha.shared.network.formatHttpBoardApiPostingWaitLabel
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.isWithinEpochInterval
+import com.valoser.futacha.shared.util.safeEpochElapsedMillis
+import io.ktor.http.Url
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+
+private const val DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS = 3600L
+internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS = 60_000L
+
+/**
+ * How long a request that does not depend on the catalog layout waits for
+ * another caller's in-flight cookie setup before proceeding without it. The
+ * setup can take ~70 s (two 35 s attempts) on a bad line.
+ */
+internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_WAIT_MILLIS = 1_000L
+
+internal data class DefaultBoardRepositoryOpImageFetchResult(
+    val url: String?,
+    val timedOut: Boolean = false
+)
+
+internal data class DefaultBoardRepositoryHelperFetchResult<T>(
+    val value: T?,
+    val timedOut: Boolean
+)
+
+internal data class DefaultBoardRepositoryBoardInitLock(
+    val mutex: Mutex,
+    var holders: Int = 0
+)
+
+internal data class DefaultBoardRepositoryCookieSetupFailure(
+    val recordedAtMillis: Long
+)
+
+internal suspend fun initializeDefaultBoardRepositoryCookies(
+    board: String,
+    logTag: String,
+    initializedBoards: MutableSet<String>,
+    cookieRepository: CookieRepository?,
+    boardInitMutex: kotlinx.coroutines.sync.Mutex,
+    boardInitializationMutexes: MutableMap<String, DefaultBoardRepositoryBoardInitLock> = mutableMapOf(),
+    cookieSetupFailures: MutableMap<String, DefaultBoardRepositoryCookieSetupFailure> = mutableMapOf(),
+    forceSetup: Boolean = false,
+    requireSetup: suspend () -> Boolean = { false },
+    onSetupCompleted: suspend () -> Unit = {},
+    nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    negativeCacheTtlMillis: Long = DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS,
+    /**
+     * True for callers whose [requireSetup] can only be false (requests that do
+     * not depend on the catalog layout). They skip the per-board lock when the
+     * board is already usable, so a catalog re-setup in flight does not hold
+     * thread loads, replies or deletions behind its network call.
+     */
+    layoutIndependent: Boolean = false,
+    /** For [layoutIndependent] callers without [forceSetup]: bound on waiting for another caller's setup. */
+    maxSetupWaitMillis: Long = DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_WAIT_MILLIS,
+    fetchCatalogSetup: suspend (String) -> Unit
+) {
+    if (layoutIndependent && !resolveDefaultBoardRepositoryCookieInitializationState(
+            initializedBoards = initializedBoards,
+            board = board,
+            cookieRepository = cookieRepository,
+            boardInitMutex = boardInitMutex,
+            requireSetup = false
+        )
+    ) {
+        return
+    }
+    val boardInitializationLock = boardInitMutex.withLock {
+        val entry = boardInitializationMutexes.getOrPut(board) {
+            DefaultBoardRepositoryBoardInitLock(Mutex())
+        }
+        entry.holders += 1
+        entry
+    }
+
+    try {
+        val mutex = boardInitializationLock.mutex
+        if (layoutIndependent && !forceSetup) {
+            var locked = false
+            val acquired = withTimeoutOrNull(maxSetupWaitMillis.coerceAtLeast(1L)) {
+                mutex.lock()
+                locked = true
+            } != null
+            if (!acquired) {
+                // The lock can be granted just as the timeout fires.
+                if (locked) mutex.unlock()
+                Logger.w(logTag, "Cookie setup for board $board is still running; continuing without waiting")
+                return
+            }
+            mutex.unlock()
+            // The in-flight setup normally made the board usable meanwhile.
+            if (!resolveDefaultBoardRepositoryCookieInitializationState(
+                    initializedBoards = initializedBoards,
+                    board = board,
+                    cookieRepository = cookieRepository,
+                    boardInitMutex = boardInitMutex,
+                    requireSetup = false
+                )
+            ) {
+                return
+            }
+        }
+        mutex.withLock {
+            val setupRequired = requireSetup()
+            val shouldInitialize = resolveDefaultBoardRepositoryCookieInitializationState(
+                initializedBoards = initializedBoards,
+                board = board,
+                cookieRepository = cookieRepository,
+                boardInitMutex = boardInitMutex,
+                requireSetup = setupRequired
+            )
+            if (!shouldInitialize) return
+
+            if (!setupRequired && hasDefaultBoardRepositoryCookies(cookieRepository, board)) {
+                // The failure map is shared across boards and also touched by the
+                // repository under boardInitMutex; the per-board lock alone lets two
+                // boards mutate the same HashMap concurrently.
+                boardInitMutex.withLock { cookieSetupFailures.remove(board) }
+                Logger.d(logTag, "Skipping catalog setup for board $board (existing cookies found)")
+                onSetupCompleted()
+                return
+            }
+
+            if (!forceSetup && shouldSkipDefaultBoardRepositoryCookieSetup(
+                    failure = boardInitMutex.withLock { cookieSetupFailures[board] },
+                    nowMillis = nowMillis,
+                    negativeCacheTtlMillis = negativeCacheTtlMillis
+                )
+            ) {
+                return
+            }
+
+            var fetchedSetup = false
+            try {
+                fetchCatalogSetup(board)
+                fetchedSetup = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logger.e(logTag, "Failed to initialize cookies for board $board", e)
+            }
+
+            val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
+            val setupCompleted = hasCookies || (cookieRepository == null && fetchedSetup)
+            if (setupCompleted) {
+                boardInitMutex.withLock { cookieSetupFailures.remove(board) }
+                markDefaultBoardRepositoryBoardInitialized(
+                    initializedBoards = initializedBoards,
+                    board = board,
+                    boardInitMutex = boardInitMutex
+                )
+                onSetupCompleted()
+            } else {
+                boardInitMutex.withLock {
+                    cookieSetupFailures[board] = DefaultBoardRepositoryCookieSetupFailure(nowMillis)
+                }
+                Logger.w(logTag, "Cookie initialization incomplete for board $board; will retry on next request")
+            }
+        }
+    } finally {
+        withContext(NonCancellable) {
+            boardInitMutex.withLock {
+                val current = boardInitializationMutexes[board]
+                if (current === boardInitializationLock) {
+                    current.holders -= 1
+                    if (current.holders <= 0) {
+                        boardInitializationMutexes.remove(board)
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal suspend fun <T> withDefaultBoardRepositoryAuthRetry(
+    board: String,
+    logTag: String,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
+    invalidateCookies: suspend (String) -> Unit,
+    refreshLimiter: DefaultBoardRepositoryAuthRefreshLimiter? = null,
+    block: suspend () -> T
+): T {
+    val firstError = try {
+        ensureCookiesInitialized(board, false)
+        return block().also { refreshLimiter?.clear(board) }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        if (!isDefaultBoardRepositoryLikelyCookieAuthFailure(e)) throw e
+        e
+    }
+    if (refreshLimiter != null && !refreshLimiter.mayRefresh(board)) {
+        // The last fresh setup did not cure this board's auth error.
+        Logger.w(logTag, "Operation failed for board $board; cookie refresh is cooling down: ${firstError.message}")
+        throw firstError
+    }
+    Logger.w(logTag, "Operation failed for board $board, retrying with fresh cookies: ${firstError.message}")
+    invalidateCookies(board)
+    ensureCookiesInitialized(board, true)
+    return try {
+        block().also { refreshLimiter?.clear(board) }
+    } catch (e: Exception) {
+        if (e !is CancellationException && isDefaultBoardRepositoryLikelyCookieAuthFailure(e)) {
+            refreshLimiter?.recordUnresolved(board)
+        }
+        throw e
+    }
+}
+
+internal suspend fun <T> runDefaultBoardRepositoryWithInitializedCookies(
+    board: String,
+    cookieRepository: CookieRepository?,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
+    block: suspend () -> T
+): T {
+    ensureCookiesInitialized(board, true)
+    val exec: suspend () -> T = { block() }
+    return cookieRepository?.commitOnSuccess { exec() } ?: exec()
+}
+
+internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
+    board: String,
+    cookieRepository: CookieRepository?,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
+    block: suspend () -> T
+): T {
+    val exec: suspend () -> T = {
+        ensureCookiesInitialized(board, true)
+        block()
+    }
+    return try {
+        cookieRepository?.commitEvenOnFailure { exec() } ?: exec()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        throw enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = board,
+            cookieRepository = cookieRepository,
+            error = e
+        )
+    }
+}
+
+internal fun shouldSkipDefaultBoardRepositoryCookieSetup(
+    failure: DefaultBoardRepositoryCookieSetupFailure?,
+    nowMillis: Long,
+    negativeCacheTtlMillis: Long
+): Boolean {
+    val recordedAtMillis = failure?.recordedAtMillis ?: return false
+    return isWithinEpochInterval(
+        nowMillis = nowMillis,
+        startedAtMillis = recordedAtMillis,
+        intervalMillis = negativeCacheTtlMillis.coerceAtLeast(1L) - 1L
+    )
+}
+
+@OptIn(ExperimentalTime::class)
+internal suspend fun enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+    board: String,
+    cookieRepository: CookieRepository?,
+    error: Exception,
+    nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    inferredWaitSeconds: Long = DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS
+): Exception {
+    val networkError = error as? NetworkException ?: return error
+    val message = networkError.message?.trim().orEmpty()
+    if (message.isEmpty()) return error
+    if (extractHttpBoardApiPostingWaitSeconds(message) != null) return error
+    if (classifyHttpBoardApiPostingFailure(message) != HttpBoardApiPostingFailureKind.IP_RESTRICTION) {
+        return error
+    }
+    val posttimeMillis = resolveDefaultBoardRepositoryPosttimeMillis(
+        board = board,
+        cookieRepository = cookieRepository
+    ) ?: return error
+    val elapsedSeconds = safeEpochElapsedMillis(nowMillis, posttimeMillis) / 1000L
+    val remainingSeconds = inferredWaitSeconds - elapsedSeconds
+    if (remainingSeconds <= 0L) {
+        return NetworkException(
+            message = "$message 1時間の推定待機時間を過ぎましたが、サーバーの制限が続いています。" +
+                "保存済み情報は削除せず、サーバー応答を確認してください",
+            statusCode = networkError.statusCode,
+            cause = networkError
+        )
+    }
+    val waitLabel = formatHttpBoardApiPostingWaitLabel(remainingSeconds)
+    val guidance = "あと約${waitLabel}投稿できない可能性があります。" +
+        "1時間基準の推定です。保存済み情報は削除せず、そのままお待ちください"
+    return NetworkException(
+        message = "$message $guidance",
+        statusCode = networkError.statusCode,
+        cause = networkError
+    )
+}
+
+private suspend fun resolveDefaultBoardRepositoryPosttimeMillis(
+    board: String,
+    cookieRepository: CookieRepository?
+): Long? {
+    if (cookieRepository == null) return null
+    val boardUrl = runCatching { Url(board) }.getOrNull()
+    return cookieRepository.listCookies()
+        .asSequence()
+        .filter { it.name == "posttime" }
+        .filter { boardUrl == null || it.matchesDefaultBoardRepositoryCookieScope(boardUrl) }
+        .mapNotNull { it.value.toLongOrNull() }
+        .maxOrNull()
+}
+
+private fun StoredCookie.matchesDefaultBoardRepositoryCookieScope(url: Url): Boolean {
+    val host = url.host.lowercase()
+    val cookieDomain = domain.lowercase().removePrefix(".")
+    val domainMatches = host == cookieDomain || host.endsWith(".$cookieDomain")
+    if (!domainMatches) return false
+    val requestPath = url.encodedPath.ifBlank { "/" }
+    return path == "/" || requestPath.startsWith(path)
+}
+
+internal suspend fun fetchDefaultBoardRepositoryOpImageWithPermit(
+    semaphoreTimeoutMillis: Long,
+    fetchTimeoutMillis: Long,
+    semaphore: Semaphore,
+    fetch: suspend () -> String?
+): DefaultBoardRepositoryOpImageFetchResult {
+    val fetchResult = runDefaultBoardRepositoryHelperWithPermit(
+        semaphoreTimeoutMillis = semaphoreTimeoutMillis,
+        fetchTimeoutMillis = fetchTimeoutMillis,
+        semaphore = semaphore,
+        fetch = fetch
+    )
+    return DefaultBoardRepositoryOpImageFetchResult(
+        url = fetchResult.value,
+        timedOut = fetchResult.timedOut
+    )
+}
+
+internal suspend fun <T> runDefaultBoardRepositoryHelperWithPermit(
+    semaphoreTimeoutMillis: Long,
+    fetchTimeoutMillis: Long,
+    semaphore: Semaphore,
+    fetch: suspend () -> T?
+): DefaultBoardRepositoryHelperFetchResult<T> {
+    // A sub-millisecond/single-millisecond timeout can expire while a
+    // dispatcher hop is still starting the request, so the request body is
+    // never entered at all. That makes cancellation timing observable as a
+    // missing network attempt and causes unstable retry/cache behavior. Keep
+    // the caller's timeout semantics while allowing a small scheduling window.
+    val effectiveFetchTimeoutMillis = fetchTimeoutMillis.coerceAtLeast(25L)
+    // The timeout can fire after acquire() has returned but before the block completes;
+    // track the permit separately so it is released instead of shrinking the semaphore.
+    var permitHeld = false
+    val acquired = withTimeoutOrNull(semaphoreTimeoutMillis.coerceAtLeast(1L)) {
+        semaphore.acquire()
+        permitHeld = true
+        true
+    } == true
+    if (!acquired) {
+        if (permitHeld) {
+            semaphore.release()
+        }
+        return DefaultBoardRepositoryHelperFetchResult(value = null, timedOut = true)
+    }
+
+    return try {
+        var completed = false
+        val value = withTimeoutOrNull(effectiveFetchTimeoutMillis) {
+            val fetched = fetch()
+            completed = true
+            fetched
+        }
+        DefaultBoardRepositoryHelperFetchResult(
+            value = value,
+            timedOut = !completed
+        )
+    } finally {
+        semaphore.release()
+    }
+}
+
+internal suspend fun resolveDefaultBoardRepositoryOpImageUrl(
+    threadId: String,
+    logTag: String,
+    fetchThreadHead: suspend () -> String,
+    extractOpImageUrl: suspend (String) -> String?
+): String? {
+    return try {
+        val snippet = fetchThreadHead()
+        extractOpImageUrl(snippet)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Logger.w(logTag, "Failed to resolve OP image for thread $threadId: ${e.message}")
+        null
+    }
+}

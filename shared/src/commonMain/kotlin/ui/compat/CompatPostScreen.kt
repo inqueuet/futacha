@@ -1,0 +1,1711 @@
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    kotlin.time.ExperimentalTime::class
+)
+
+package com.valoser.futacha.shared.ui.compat
+
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
+
+import com.valoser.futacha.shared.ui.image.clearFutachaImageCaches
+import com.valoser.futacha.shared.ui.image.originalMediaCacheSizeBytes
+
+import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.BusinessCenter
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ViewCarousel
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.sp
+import futacha.shared.generated.resources.Res
+import futacha.shared.generated.resources.post_video_thumb
+import org.jetbrains.compose.resources.painterResource
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.DialogProperties
+import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.size.Size
+import coil3.request.crossfade
+import com.valoser.futacha.shared.compat.takeWithoutSplittingSurrogatePair
+import com.valoser.futacha.shared.compat.CompatBoard
+import com.valoser.futacha.shared.compat.compatOwnPostMarkerSave
+import com.valoser.futacha.shared.compat.CompatCatalogPreference
+import com.valoser.futacha.shared.compat.CompatBuildDraft
+import com.valoser.futacha.shared.compat.CompatNgKind
+import com.valoser.futacha.shared.compat.CompatNgRule
+import com.valoser.futacha.shared.compat.CompatSettingsBackupImportReport
+import com.valoser.futacha.shared.compat.appliesToThreadImage
+import com.valoser.futacha.shared.compat.compatThreadImageNgScopeKey
+import com.valoser.futacha.shared.compat.CompatImagePhash
+import com.valoser.futacha.shared.compat.CompatPostSnapshot
+import com.valoser.futacha.shared.compat.CompatReplyDraft
+import com.valoser.futacha.shared.compat.CompatTab
+import com.valoser.futacha.shared.compat.CompatToolbarItem
+import com.valoser.futacha.shared.compat.compatToolbarMenuItems
+import com.valoser.futacha.shared.compat.CompatToolbarSurface
+import com.valoser.futacha.shared.compat.COMPAT_REFERENCE_HELP_TITLE
+import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.compat.CompatLegacyScopedWord
+import com.valoser.futacha.shared.compat.CompatLegacyBackupData
+import com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY
+import com.valoser.futacha.shared.compat.ArchiveReportOutboxStats
+import com.valoser.futacha.shared.compat.COMPAT_SETTINGS_BACKUP_FILE_NAME
+import com.valoser.futacha.shared.compat.COMPAT_WATCH_NG_BACKUP_FILE_NAME
+import com.valoser.futacha.shared.compat.MAX_COMPAT_SETTINGS_BACKUP_BYTES
+import com.valoser.futacha.shared.compat.MAX_COMPAT_LEGACY_BACKUP_BYTES
+import com.valoser.futacha.shared.compat.MAX_COMPAT_NG_MEMO_CHARS
+import com.valoser.futacha.shared.compat.CURRENT_COMPAT_SETTINGS_BACKUP_VERSION
+import com.valoser.futacha.shared.compat.ExperienceProfile
+import com.valoser.futacha.shared.compat.LocalExperienceProfileUiController
+import com.valoser.futacha.shared.compat.compatToolbarMaster
+import com.valoser.futacha.shared.compat.compatToolbarShowsOverflow
+import com.valoser.futacha.shared.compat.compatNgRuleId
+import com.valoser.futacha.shared.compat.compatBoardKey
+import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
+import com.valoser.futacha.shared.compat.decodeCompatLegacyBackup
+import com.valoser.futacha.shared.compat.decodeCompatSettingsBackup
+import com.valoser.futacha.shared.compat.decodeCompatWatchNgBackup
+import com.valoser.futacha.shared.compat.encodeCompatSettingsBackup
+import com.valoser.futacha.shared.compat.encodeCompatWatchNgBackup
+import com.valoser.futacha.shared.compat.settingsOnly
+import com.valoser.futacha.shared.compat.watchAndNgOnly
+import com.valoser.futacha.shared.compat.ScrollAnchor
+import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.compat.formatCompatCacheUsage
+import com.valoser.futacha.shared.compat.CompatImageCacheUsage
+import com.valoser.futacha.shared.compat.formatCompatImageCacheUsage
+import com.valoser.futacha.shared.compat.reconcileCompatToolbar
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.network.BoardPostingCapabilities
+import com.valoser.futacha.shared.network.defaultBoardPostingCapabilities
+import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SavePhase
+import com.valoser.futacha.shared.model.SaveProgress
+import com.valoser.futacha.shared.service.ImageZipSaveService
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.SingleMediaSaveService
+import com.valoser.futacha.shared.service.buildCompatManualImageFolderName
+import com.valoser.futacha.shared.ui.board.PlatformVideoPlayer
+import com.valoser.futacha.shared.ui.board.VideoMediaInfo
+import com.valoser.futacha.shared.ui.board.VideoPlaybackError
+import com.valoser.futacha.shared.ui.board.VideoPlayerState
+import com.valoser.futacha.shared.ui.board.formatVideoMediaInfoLines
+import com.valoser.futacha.shared.ui.board.formatVideoPlaybackError
+import com.valoser.futacha.shared.ui.board.formatMediaLoadFailure
+import com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher
+import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader
+import com.valoser.futacha.shared.ui.image.CompatibilityCacheLocation
+import com.valoser.futacha.shared.ui.image.getPlatformCacheAvailableBytes
+import com.valoser.futacha.shared.ui.image.isPlatformRemovableCacheAvailable
+import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.util.rememberUrlLauncher
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.withContext
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlin.math.abs
+import kotlin.random.Random
+import kotlin.time.Clock
+
+private val compatSecondaryPostNumberRegex = Regex("[0-9]+")
+private val compatSecondarySageTokenRegex = Regex("(^|\\s)sage($|\\s)", RegexOption.IGNORE_CASE)
+private const val COMPAT_POST_NAME_MAX_CHARS = 100
+private const val COMPAT_POST_EMAIL_MAX_CHARS = 100
+private const val COMPAT_POST_SUBJECT_MAX_CHARS = 100
+private const val COMPAT_POST_COMMENT_MAX_CHARS = 10_000
+
+/**
+ * Post failures (above all the 12.4 "result unknown, check the thread before resending" text) are
+ * long and decide whether the user re-posts, so they stay until acknowledged instead of fading
+ * out like the short notices.
+ */
+internal fun compatPostFailureMessage(error: Throwable, isBuild: Boolean): String =
+    error.message?.takeIf { it.isNotBlank() } ?: if (isBuild) "スレッドを立てられませんでした" else "投稿できませんでした"
+
+@Suppress("UNUSED_PARAMETER")
+internal fun applyCompatMailPreset(email: String, preset: String, isBuild: Boolean): String = when (preset) {
+    // The reference labels are upper-case, while the values posted to Futaba
+    // intentionally use lower-case ASCII command tokens.
+    "ID表示" -> "id表示"
+    "IP表示" -> "ip表示"
+    "sage" -> "sage"
+    else -> email
+}
+
+internal fun compatPostMailPresets(isBuild: Boolean): List<String> =
+    if (isBuild) listOf("ID表示", "IP表示", "sage") else listOf("sage")
+
+internal data class CompatPostResetFields(
+    val name: String,
+    val email: String,
+    val subject: String,
+    val comment: String,
+    val deleteKey: String
+)
+
+internal fun compatPostResetFields(
+    isBuild: Boolean,
+    currentDeleteKey: String,
+    initialDraft: CompatReplyDraft
+): CompatPostResetFields = if (isBuild) {
+    // PostBuildActivity clears the editable content but deliberately keeps the
+    // current deletion key. PostResponseActivity restores its opening draft.
+    CompatPostResetFields("", "", "", "", currentDeleteKey)
+} else {
+    CompatPostResetFields(
+        initialDraft.name,
+        initialDraft.email,
+        initialDraft.subject,
+        initialDraft.comment,
+        initialDraft.deleteKey
+    )
+}
+
+/**
+ * The small-upload confirmation used by both compatibility posting screens.
+ *
+ * Keep this as a directly testable composable: both reference app use the
+ * same title, field order and button labels, and deliberately ignore an
+ * outside tap/back dismissal. Upload progress is shown by the separate
+ * non-cancelable waiting dialog after [onSubmit] is invoked.
+ */
+@Composable
+fun CompatUpsUploadDialog(
+    fileName: String,
+    comment: String,
+    deleteKey: String,
+    onCommentChange: (String) -> Unit,
+    onDeleteKeyChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val commentFocusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {},
+        modifier = Modifier.testTag("compat-ups-upload-dialog"),
+        title = { Text("あぷ小アップロード") },
+        text = {
+            // Inside the window (E4-2): a dialog opened while locked appears
+            // after the unlock, and only then takes focus and the keyboard.
+            LaunchedEffect(fileName) {
+                delay(150)
+                commentFocusRequester.requestFocus()
+                keyboard?.show()
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("アップロードファイル")
+                Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TextField(
+                    value = comment,
+                    onValueChange = { onCommentChange(it.take(COMPAT_POST_COMMENT_MAX_CHARS)) },
+                    label = { Text("コメント") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(commentFocusRequester)
+                )
+                TextField(
+                    value = deleteKey,
+                    onValueChange = { onDeleteKeyChange(it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH)) },
+                    label = { Text("削除キー") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSubmit) { Text("送信する") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("キャンセル") }
+        }
+    ) }
+}
+
+/** Attachment block shared by thread creation and reply forms. */
+@Composable
+fun CompatPostAttachmentPreview(
+    attachment: ImageData,
+    onImagePreview: () -> Unit,
+    onVideoPreview: () -> Unit
+) {
+    val kind = compatPostAttachmentKind(attachment.fileName)
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("compat-post-attachment-preview"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        when (kind) {
+            CompatPostAttachmentKind.IMAGE -> {
+                // The reference fixes the width at 150dp. Landscape previews
+                // preserve their ratio; portrait previews remain a 150dp square.
+                // Decoding the header copies the bytes on iOS (up to 32 MB into
+                // NSData); do it once per attachment, not per recomposition.
+                val ratio = remember(attachment.bytes) {
+                    compatPostImageAspectRatio(attachment.bytes)?.coerceIn(1f, 20f) ?: 1f
+                }
+                AsyncImage(
+                    model = attachment.bytes,
+                    imageLoader = LocalFutachaImageLoader.current,
+                    contentDescription = "添付画像をプレビュー",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .width(150.dp)
+                        .aspectRatio(ratio)
+                        .background(Color.Black)
+                        .clickable(onClick = onImagePreview)
+                        .testTag("compat-post-attachment-thumbnail")
+                )
+            }
+            CompatPostAttachmentKind.VIDEO -> {
+                Image(
+                    painter = painterResource(Res.drawable.post_video_thumb),
+                    contentDescription = "添付動画を開く",
+                    modifier = Modifier
+                        .size(100.dp)
+                        .clickable(onClick = onVideoPreview)
+                        .testTag("compat-post-attachment-thumbnail")
+                )
+            }
+            CompatPostAttachmentKind.UNSUPPORTED -> Unit
+        }
+        Text(
+            attachment.fileName,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(10.dp)
+                .clickable(onClick = if (kind == CompatPostAttachmentKind.VIDEO) onVideoPreview else onImagePreview)
+                .testTag("compat-post-attachment-file-name")
+        )
+    }
+}
+
+private enum class CompatPostDraftField { NAME, EMAIL, SUBJECT, COMMENT, DELETE_KEY, ATTACHMENT }
+
+@Composable
+internal fun CompatPostScreen(
+    tab: CompatTab,
+    board: CompatBoard,
+    repository: BoardRepository?,
+    httpClient: HttpClient? = null,
+    store: CompatibilityStore,
+    toolbarRefreshToken: Long = 0L,
+    onPostSent: () -> Unit = {},
+    preferences: Map<String, String>,
+    appVersion: String,
+    fileSystem: FileSystem?,
+    onToolbarEdit: () -> Unit,
+    isBuild: Boolean = false,
+    onBuildCreated: (String?) -> Unit = {},
+    onOpenDrawing: () -> Unit = {},
+    onOpenHelp: () -> Unit = {},
+    /** Outlives this screen: the draft is written and an attachment being kept finishes after it closes (L52). */
+    lastingScope: kotlinx.coroutines.CoroutineScope? = null,
+    /** Tells a send's failure once this screen has gone (L157); the screen tells it itself while it is shown. */
+    onLastingNotice: ((String) -> Unit)? = null,
+    onBack: () -> Unit
+) {
+    val ownerKey = if (isBuild) "build:${board.key}" else tab.key
+    val scope = rememberCoroutineScope()
+    val palette = LocalCompatibilityPalette.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    // A delayed restore must not overwrite edits, including an edit back to empty.
+    // Mutated/read on the UI thread; this is bookkeeping, not observable UI state.
+    val editedDraftFields = remember(ownerKey) { mutableSetOf<CompatPostDraftField>() }
+    var name by remember(ownerKey) { mutableStateOf("") }
+    var email by remember(ownerKey) { mutableStateOf("") }
+    var subject by remember(ownerKey) { mutableStateOf("") }
+    // The comment lives in a TextFieldState: it keeps the IME composition and, unlike the
+    // TextFieldValue field, hears which clause the IME is converting (iOS selectedRange,
+    // Android composing spans), so only that clause is highlighted.
+    val commentState = remember(ownerKey) { androidx.compose.foundation.text.input.TextFieldState() }
+    val comment = commentState.text.toString()
+
+    fun replaceComment(
+        text: String,
+        selection: TextRange = TextRange(text.length),
+        restoringDraft: Boolean = false
+    ) {
+        if (!restoringDraft) editedDraftFields.add(CompatPostDraftField.COMMENT)
+        val limitedText = text.take(COMPAT_POST_COMMENT_MAX_CHARS)
+        commentState.edit {
+            replace(0, length, limitedText)
+            this.selection = TextRange(
+                selection.start.coerceIn(0, limitedText.length),
+                selection.end.coerceIn(0, limitedText.length)
+            )
+        }
+    }
+    var deleteKey by remember(ownerKey) { mutableStateOf("") }
+    var attachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
+    var attachmentLocator by remember(ownerKey) { mutableStateOf<String?>(null) }
+    var initialDraft by remember(ownerKey) {
+        mutableStateOf(CompatReplyDraft(tabKey = ownerKey, updatedAtEpochMillis = 0L))
+    }
+    var initialAttachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
+    var initialAttachmentLocator by remember(ownerKey) { mutableStateOf<String?>(null) }
+    var draftLoaded by remember(ownerKey) { mutableStateOf(false) }
+    // The stored draft could not be read: the form is still used, its input kept (L51) and its help shown (L149).
+    var draftLoadFailed by remember(ownerKey) { mutableStateOf(false) }
+    var savingAttachment by remember(ownerKey) { mutableStateOf(false) }
+    var sending by remember(ownerKey) { mutableStateOf(false) }
+    com.valoser.futacha.shared.ui.ReportPostingInFlight(sending)
+    var message by remember(ownerKey) { mutableStateOf<String?>(null) }
+    // Post failures stay until acknowledged (the transient notice below fades after 2.5 s).
+    var postFailureMessage by remember(ownerKey) { mutableStateOf<String?>(null) }
+
+    fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
+        scope.launchCompatScreenAction("CompatPost", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }, block)
+    var pendingCompression by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
+    var attachmentPreviewOpen by remember(ownerKey) { mutableStateOf(false) }
+    var overflowOpen by remember { mutableStateOf(false) }
+    var toolbarOverflowOpen by remember { mutableStateOf(false) }
+    var upsAttachment by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
+    var upsDialogOpen by remember(ownerKey) { mutableStateOf(false) }
+    var upsComment by remember(ownerKey) { mutableStateOf("") }
+    var upsDeleteKey by remember(ownerKey) { mutableStateOf("") }
+    var upsUploadInProgress by remember(ownerKey) { mutableStateOf(false) }
+    var openingHelp by remember(ownerKey) { mutableStateOf(false) }
+    var discardConfirm by remember { mutableStateOf(false) }
+    var sendConfirm by remember { mutableStateOf(false) }
+    var postDestinationWarning by remember { mutableStateOf<String?>(null) }
+    var toolbarItems by remember { mutableStateOf(reconcileCompatToolbar(CompatToolbarSurface.POST, emptyList())) }
+    var postingCapabilities by remember(board.canonicalUrl) {
+        mutableStateOf(defaultBoardPostingCapabilities(board.canonicalUrl))
+    }
+    val attachmentLimitBytes = postingCapabilities.maxFileSizeBytes.toInt()
+    val storedDeleteKey = preferences.compatStoredPostDeleteKey()
+
+    // These read the form's state (commentState, not the composed comment): the writer run as the screen closes
+    // was made in an earlier composition (L52).
+    fun hasDraft(): Boolean = name.isNotEmpty() || email.isNotEmpty() || subject.isNotEmpty() ||
+        commentState.text.isNotEmpty() || deleteKey.isNotEmpty() || attachment != null
+
+    suspend fun persistCurrentDraftOrDelete() {
+        if (hasDraft()) {
+            val now = Clock.System.now().toEpochMilliseconds()
+            if (isBuild) {
+                store.saveBuildDraft(
+                    CompatBuildDraft(
+                        boardKey = board.key,
+                        name = name,
+                        email = email,
+                        subject = subject,
+                        comment = commentState.text.toString(),
+                        attachmentUri = attachmentLocator,
+                        attachmentIsHandwriting = attachment?.isHandwriting == true,
+                        deleteKey = deleteKey,
+                        updatedAtEpochMillis = now
+                    )
+                )
+            } else {
+                store.saveDraft(
+                    CompatReplyDraft(
+                        tabKey = tab.key,
+                        name = name,
+                        email = email,
+                        subject = subject,
+                        comment = commentState.text.toString(),
+                        attachmentUri = attachmentLocator,
+                        attachmentIsHandwriting = attachment?.isHandwriting == true,
+                        deleteKey = deleteKey,
+                        updatedAtEpochMillis = now
+                    )
+                )
+            }
+        } else {
+            if (isBuild) store.deleteBuildDraft(board.key) else store.deleteDraft(tab.key)
+        }
+    }
+
+    // After a draft that could not be read, what the user typed is saved, but an empty form deletes nothing: the
+    // stored draft may still be there (L51).
+    suspend fun persistDraftOfThisForm() {
+        if (draftLoaded) persistCurrentDraftOrDelete()
+        else if (draftLoadFailed && editedDraftFields.isNotEmpty() && hasDraft()) persistCurrentDraftOrDelete()
+    }
+
+    val postingInFlight = com.valoser.futacha.shared.ui.LocalPostingInFlight.current
+    // While the same form's earlier screen is still sending (or keeping its attachment), this one waits before
+    // offering the draft, which that send may already have posted (L157, L168).
+    var waitingForPreviousScreen by remember(ownerKey) { mutableStateOf(false) }
+    val attachmentSave = remember(ownerKey) { arrayOfNulls<Job>(1) }
+    // A post being sent goes on when the screen is taken away (L47): the screen is then left alone, not navigated.
+    val postSend = remember(ownerKey) { arrayOfNulls<Job>(1) }
+    val screenPresent = remember(ownerKey) { booleanArrayOf(true) }
+    // Closing the screen cancels its 300 ms autosave: the form is written once more as it is left, after an
+    // attachment still being kept (L52: the last input and a just-picked attachment were lost) and after a post
+    // being sent (a sent one has no draft any more; a failed one keeps it).
+    DisposableEffect(ownerKey) {
+        onDispose {
+            screenPresent[0] = false
+            val pendingAttachment = attachmentSave[0]
+            val pendingSend = postSend[0]
+            lastingScope?.launch {
+                runSuspendCatchingPreservingCancellation {
+                    pendingAttachment?.join()
+                    pendingSend?.join()
+                    persistDraftOfThisForm()
+                }.onFailure { failure -> Logger.e("CompatPost", "Draft persistence on leaving failed", failure) }
+            }?.let { leaving -> CompatPostWork.leave(ownerKey, leaving) }
+        }
+    }
+
+    LaunchedEffect(ownerKey) {
+        try {
+            CompatPostWork.previous(ownerKey)?.let { previous ->
+                waitingForPreviousScreen = true
+                try { previous.join() } finally { waitingForPreviousScreen = false }
+            }
+            val draft = if (isBuild) {
+                store.loadBuildDraft(board.key)?.let { build ->
+                    CompatReplyDraft(
+                        tabKey = ownerKey,
+                        name = build.name,
+                        email = build.email,
+                        subject = build.subject,
+                        comment = build.comment,
+                        attachmentUri = build.attachmentUri,
+                        attachmentIsHandwriting = build.attachmentIsHandwriting,
+                        deleteKey = build.deleteKey,
+                        updatedAtEpochMillis = build.updatedAtEpochMillis
+                    )
+                }
+            } else {
+                store.loadDraft(tab.key)
+            } ?: CompatReplyDraft(tabKey = ownerKey, updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
+            val restoredAttachment = draft.attachmentUri?.let { locator ->
+                fileSystem?.let { loadCompatPostAttachment(it, locator).getOrNull()?.copy(isHandwriting = draft.attachmentIsHandwriting) }
+            }
+            val effectiveDraft = if (draft.attachmentUri != null && restoredAttachment == null) {
+                draft.copy(attachmentUri = null)
+            } else {
+                draft
+            }
+            val draftWithStoredDeleteKey = effectiveDraft.copy(
+                deleteKey = effectiveDraft.deleteKey.ifBlank { storedDeleteKey }
+            )
+            initialDraft = draftWithStoredDeleteKey
+            if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.takeWithoutSplittingSurrogatePair(COMPAT_POST_NAME_MAX_CHARS)
+            if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.takeWithoutSplittingSurrogatePair(COMPAT_POST_EMAIL_MAX_CHARS)
+            if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.takeWithoutSplittingSurrogatePair(COMPAT_POST_SUBJECT_MAX_CHARS)
+            if (CompatPostDraftField.COMMENT !in editedDraftFields) {
+                replaceComment(draft.comment, TextRange(draft.comment.length), restoringDraft = true)
+            }
+            // Quick replies are inserted before opening this form. Put the caret
+            // after the generated quote, matching the legacy app's reply flow.
+            if (CompatPostDraftField.DELETE_KEY !in editedDraftFields) deleteKey = draftWithStoredDeleteKey.deleteKey
+            if (CompatPostDraftField.ATTACHMENT !in editedDraftFields) {
+                attachment = restoredAttachment
+                attachmentLocator = effectiveDraft.attachmentUri
+            }
+            initialAttachment = restoredAttachment
+            initialAttachmentLocator = effectiveDraft.attachmentUri
+            if (draft.attachmentUri != null && restoredAttachment == null) {
+                message = "添付ファイルが\nリセットされました"
+            }
+            draftLoaded = true
+            // Wait until the form is attached before requesting focus. This matches
+            // the reference reply screen, which opens directly on the comment field
+            // with the IME already visible.
+            delay(150)
+            focusRequester.requestFocus()
+            // On Android the first IME request can race the navigation transition.
+            // Request it once more after the focused EditText has reached a frame;
+            // the reference app opens the keyboard immediately on entering this form.
+            delay(200)
+            keyboard?.show()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatPost", "下書きを読み込めませんでした", failure)
+            message = "下書きを読み込めませんでした"
+            draftLoadFailed = true
+        }
+    }
+    // Preferences can arrive one frame after the form's draft. Fill the field once in that
+    // case, while preserving a draft or an edit the user has already made.
+    LaunchedEffect(ownerKey, storedDeleteKey, draftLoaded) {
+        if (!draftLoaded || storedDeleteKey.isBlank() || deleteKey.isNotBlank() ||
+            CompatPostDraftField.DELETE_KEY in editedDraftFields
+        ) return@LaunchedEffect
+        deleteKey = storedDeleteKey
+        initialDraft = initialDraft.copy(deleteKey = storedDeleteKey)
+    }
+    LaunchedEffect(toolbarRefreshToken) {
+        runSuspendCatchingPreservingCancellation { store.loadToolbar(CompatToolbarSurface.POST) }
+            .onSuccess { toolbarItems = it }
+            .onFailure { failure ->
+                Logger.e("CompatPost", "Toolbar load failed", failure)
+                message = "ツールバー設定を読み込めませんでした"
+            }
+    }
+    LaunchedEffect(repository, board.originalUrl, isBuild, tab.threadNo) {
+        postingCapabilities = runSuspendCatchingPreservingCancellation {
+            repository?.getPostingCapabilities(board.originalUrl, if (isBuild) null else tab.threadNo)
+        }.getOrNull() ?: defaultBoardPostingCapabilities(board.canonicalUrl)
+    }
+    LaunchedEffect(name, email, subject, comment, deleteKey, attachment, attachmentLocator, draftLoaded, draftLoadFailed) {
+        if (!draftLoaded && !draftLoadFailed) return@LaunchedEffect
+        delay(300)
+        try {
+            persistDraftOfThisForm()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatPost", "Draft persistence failed", failure)
+            message = "下書きを保存できませんでした"
+        }
+    }
+    // As the app's own notices: a long one stays longer, and the time runs only while the app is unlocked (L51: every
+    // notice went after 2.5 seconds, also behind the lock screen).
+    val isAppUnlocked = com.valoser.futacha.shared.ui.LocalFutachaAppUnlocked.current
+    LaunchedEffect(message, isAppUnlocked) {
+        val shownMessage = message ?: return@LaunchedEffect
+        if (!isAppUnlocked) return@LaunchedEffect
+        delay(compatAppNoticeMillis(shownMessage))
+        if (message == shownMessage) message = null
+    }
+
+    fun leave() {
+        keyboard?.hide()
+        onBack()
+    }
+
+    // Each attachment is kept in a folder of its own, which goes with it (L64: empty folders were left behind).
+    fun clearAttachment(deleteContainer: Boolean = true) {
+        editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
+        val locator = attachmentLocator
+        attachmentLocator = null
+        attachment = null
+        if (fileSystem != null && locator != null) {
+            launchScreenAction {
+                deleteCompatPostAttachment(fileSystem, locator, deleteContainer).onFailure { error ->
+                    message = "添付ファイルを削除できませんでした: ${error.message.orEmpty()}"
+                }
+            }
+        }
+    }
+
+    fun persistAcceptedAttachment(selected: ImageData) {
+        val localFileSystem = fileSystem
+        if (localFileSystem == null) {
+            editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
+            attachmentLocator = null
+            attachment = selected
+            return
+        }
+        val previousLocator = attachmentLocator
+        savingAttachment = true
+        // Kept on even when the screen closes meanwhile; the draft written then waits for it (L52).
+        attachmentSave[0] = (lastingScope ?: scope).launchCompatScreenAction("CompatPost", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }) {
+            try { persistCompatPostAttachment(localFileSystem, ownerKey, selected)
+                .onSuccess { persistedLocator ->
+                    editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
+                    attachmentLocator = persistedLocator
+                    attachment = selected
+                    if (previousLocator != null && previousLocator != persistedLocator) {
+                        deleteCompatPostAttachment(localFileSystem, previousLocator, deleteContainer = true)
+                    }
+                }
+                .onFailure { error ->
+                    message = "添付ファイルを一時保存できませんでした: ${error.message.orEmpty()}"
+                }
+            } finally { savingAttachment = false }
+        }
+    }
+
+    // The あぷ小 pick has pickers of its own: a pick left without a choice left an "あぷ小 mode" behind, which then
+    // took the next attachment, a shared image too, as an upload (L49).
+    fun acceptUpsAttachment(picked: ImageData) {
+        scope.launch {
+            val prepared = prepareCompatUpsUpload(picked).getOrNull()
+            if (prepared == null) {
+                message = "ファイルサイズ超過です\n3000KBまで"
+                return@launch
+            }
+            if (prepared.shrunk) message = COMPAT_UPS_SHRUNK_NOTICE
+            val selected = prepared.image
+            upsAttachment = selected
+            // The reference dialog starts with an empty upload comment and
+            // the globally remembered deletion key, not the post body or a
+            // not-yet-saved edit in the posting form.
+            val initialFields = compatUpsUploadInitialFields(storedDeleteKey)
+            upsComment = initialFields.comment
+            upsDeleteKey = initialFields.deleteKey
+            upsDialogOpen = true
+        }
+    }
+
+    fun acceptAttachment(selected: ImageData) {
+        if (!isBuild && !postingCapabilities.replyAttachmentsAllowed && !selected.isHandwriting) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+            return
+        }
+        val decision = decideCompatPostAttachment(
+                attachment = selected,
+                maxBytes = attachmentLimitBytes,
+                supportedExtensions = postingCapabilities.supportedExtensions
+            )
+        when (decision) {
+            CompatPostAttachmentDecision.Accept -> persistAcceptedAttachment(selected)
+            CompatPostAttachmentDecision.AskImageCompression -> {
+                message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
+                pendingCompression = selected
+            }
+            CompatPostAttachmentDecision.ConvertToJpeg -> {
+                message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
+                savingAttachment = true
+                launchScreenAction {
+                    var handedOff = false
+                    try {
+                        compressCompatPostImage(selected, attachmentLimitBytes, forceJpeg = true)
+                            .onSuccess {
+                                handedOff = fileSystem != null
+                                persistAcceptedAttachment(it)
+                            }.onFailure { message = "JPEGに変換できませんでした: ${it.message.orEmpty()}" }
+                    } finally {
+                        if (!handedOff) savingAttachment = false
+                    }
+                }
+            }
+            else -> message = compatPostAttachmentDecisionMessage(decision, selected.fileName, attachmentLimitBytes)
+        }
+    }
+
+    val clipboardPaste = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
+        onImage = ::acceptAttachment, onError = { message = it }
+    )
+    fun pasteImage() {
+        if (sending || savingAttachment || upsUploadInProgress || clipboardPaste.busy) return
+        if (!isBuild && !postingCapabilities.replyAttachmentsAllowed) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+        } else clipboardPaste.paste()
+    }
+
+    val isAimogeBoard = remember(board.originalUrl) {
+        com.valoser.futacha.shared.compat.boardSiteOf(board.originalUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+    }
+    val launchMultiplePicker = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
+        maxCount = compatMultiPickMax(isAimogeBoard),
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onSelectionError = { message = it },
+        onImagesSelected = { picked ->
+            if (!upsUploadInProgress) {
+                upsUploadInProgress = true
+                launchScreenAction {
+                    try {
+                        val client = httpClient
+                        message = applyCompatPickedPictures(
+                            picked, attachment, isBuild || postingCapabilities.replyAttachmentsAllowed, isAimogeBoard, board.originalUrl,
+                            setAttachment = ::acceptAttachment,
+                            upload = client?.let { c -> { image -> uploadCompatUps(c, image, "", storedDeleteKey, appVersion).getOrThrow() } },
+                            appendName = { replaceComment(appendCompatPostText(commentState.text.toString(), it)) }
+                        )
+                    } finally {
+                        upsUploadInProgress = false
+                    }
+                }
+            }
+        }
+    )
+
+    val launchAttachmentPicker = rememberAttachmentPickerLauncher(
+        // reference app uses ACTION_GET_CONTENT + CATEGORY_OPENABLE in both posting
+        // modes and reuses the component selected by a toolbar long press.
+        preference = AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
+        mimeType = "*/*",
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptAttachment,
+        onSelectionError = { message = it },
+        onPasteImage = ::pasteImage
+    )
+    val launchAttachmentChooser = rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.ALWAYS_ASK,
+        mimeType = "*/*",
+        maxBytes = COMPAT_POST_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptAttachment,
+        onSelectionError = { message = it },
+        onPasteImage = ::pasteImage
+    )
+    val launchUpsPicker = rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
+        mimeType = "*/*",
+        maxBytes = COMPAT_UPS_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptUpsAttachment,
+        onSelectionError = { message = it }
+    )
+    val launchUpsChooser = rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.ALWAYS_ASK,
+        mimeType = "*/*",
+        maxBytes = COMPAT_UPS_PICKER_MAX_BYTES,
+        onImageSelected = ::acceptUpsAttachment,
+        onSelectionError = { message = it }
+    )
+    fun attachmentCommand(explicitChooser: Boolean = false) {
+        if (attachment != null) {
+            clearAttachment()
+        } else if (!isBuild && !postingCapabilities.replyAttachmentsAllowed) {
+            message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
+        } else if (explicitChooser) {
+            launchAttachmentChooser()
+        } else {
+            launchAttachmentPicker()
+        }
+    }
+
+    fun upsUploadCommand(explicitChooser: Boolean = false) {
+        if (httpClient == null) {
+            message = "あぷ小連携を初期化できませんでした"
+        } else if (upsUploadInProgress) {
+            message = "アップロード中です"
+        } else {
+            if (explicitChooser) launchUpsChooser() else launchUpsPicker()
+        }
+    }
+
+    fun postValidationError(): String? = when {
+        repository == null -> "通信機能を初期化できませんでした"
+        comment.isBlank() && attachment == null -> "コメントが空白です"
+        deleteKey.isBlank() -> "削除キーを入力して下さい"
+        else -> null
+    }
+
+    fun sendPost() {
+        val validationError = postValidationError()
+        if (validationError != null) {
+            message = validationError
+        } else if (waitingForPreviousScreen) {
+            message = "前の書き込みの送信が終わるまでお待ちください"
+        } else if (!sending && !savingAttachment && !clipboardPaste.busy) {
+            // Claim the guard before the coroutine is dispatched, so a second
+            // tap in the same frame cannot send the post twice (E-13).
+            sending = true
+            postSend[0] = (lastingScope ?: scope).launchCompatScreenAction("CompatPost", { failure ->
+                message = failure.toCompatUserMessage("操作に失敗しました")
+            }) {
+                // After a created thread the guard is kept until the screen is left, so a second
+                // tap cannot create the same thread again while the new tab is being opened.
+                var keepSendingGuard = false
+                // Counted for the whole send, also once the screen has gone (L157): links and notifications wait.
+                postingInFlight?.begin()
+                try {
+                    val currentLocator = attachmentLocator
+                    if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
+                        message = "添付ファイルが見つかりません"
+                        attachment = null
+                        attachmentLocator = null
+                        sending = false
+                        return@launchCompatScreenAction
+                    }
+                    runSuspendCatchingPreservingCancellation {
+                        if (isBuild) {
+                            checkNotNull(repository).createThread(
+                                board = board.originalUrl,
+                                name = name,
+                                email = email,
+                                subject = subject,
+                                comment = comment,
+                                password = deleteKey,
+                                imageFile = attachment?.bytes,
+                                imageFileName = attachment?.fileName,
+                                textOnly = attachment == null,
+                                handwriting = attachment?.isHandwriting == true
+                            )
+                        } else {
+                            checkNotNull(repository).replyToThread(
+                                board = board.originalUrl,
+                                threadId = tab.threadNo,
+                                name = name,
+                                email = email,
+                                subject = subject,
+                                comment = comment,
+                                password = deleteKey,
+                                imageFile = attachment?.bytes,
+                                imageFileName = attachment?.fileName,
+                                textOnly = attachment == null,
+                                handwriting = attachment?.isHandwriting == true
+                            )
+                        }
+                    }.onSuccess { responseId ->
+                        draftLoaded = false
+                        draftLoadFailed = false
+                        suspend fun finishLocalStep(operation: suspend () -> Unit) {
+                            runSuspendCatchingPreservingCancellation { operation() }.onFailure { failure ->
+                                Logger.e("CompatPost", "Post accepted, but local cleanup failed", failure)
+                            }
+                        }
+                        finishLocalStep {
+                            store.savePreference(
+                                COMPAT_POST_DELETE_KEY_STORAGE_KEY,
+                                compatPostDeleteKeyForStorage(deleteKey)
+                            )
+                        }
+                        if (!isBuild) {
+                            responseId?.let { raw ->
+                                compatSecondaryPostNumberRegex.find(raw)?.value?.let { postNo ->
+                                    finishLocalStep {
+                                        store.savePreferences(compatOwnPostMarkerSave(preferences, tab.key, postNo))
+                                    }
+                                }
+                            }
+                        }
+                        finishLocalStep {
+                            if (isBuild) store.deleteBuildDraft(board.key) else store.deleteDraft(tab.key)
+                        }
+                        finishLocalStep {
+                            attachmentLocator?.let { locator ->
+                                fileSystem?.let { deleteCompatPostAttachment(it, locator, deleteContainer = true) }
+                            }
+                        }
+                        if (isBuild) {
+                            keepSendingGuard = true
+                            if (screenPresent[0]) onBuildCreated(responseId)
+                        } else {
+                            onPostSent()
+                            if (screenPresent[0]) leave()
+                        }
+                    }.onFailure { failure ->
+                        val failureMessage = compatPostFailureMessage(failure, isBuild)
+                        if (screenPresent[0]) postFailureMessage = failureMessage
+                        else onLastingNotice?.invoke(failureMessage)
+                    }
+                } finally {
+                    if (!keepSendingGuard) sending = false
+                    postingInFlight?.end()
+                }
+            }
+        }
+    }
+    fun requestSend() {
+        val destinationWarning = compatPostDestinationWarning(
+                boardUrl = board.originalUrl,
+                comment = comment,
+                enabled = preferences.compatPreferenceValue(
+                    "control", "controlPostDestinationConfirm", "板名の誤投稿確認"
+                ) == "ON"
+            )
+        if (destinationWarning != null) {
+            postDestinationWarning = destinationWarning
+            return
+        }
+        if (
+            preferences.compatPreferenceValue("control", "controlPostConfirm", "送信時の確認") == "OFF"
+        ) {
+            sendPost()
+        } else {
+            sendConfirm = true
+        }
+    }
+    fun openHelp() {
+        if (!(draftLoaded || draftLoadFailed) || sending || savingAttachment || upsUploadInProgress || clipboardPaste.busy ||
+            pendingCompression != null || openingHelp
+        ) return
+        overflowOpen = false
+        openingHelp = true
+        launchScreenAction {
+            try {
+                // Help replaces this form, cancelling its delayed autosave. Persist the latest draft first (audit M44).
+                persistDraftOfThisForm()
+                keyboard?.hide()
+                onOpenHelp()
+            } finally {
+                openingHelp = false
+            }
+        }
+    }
+    val postActions: Map<String, () -> Unit> = mapOf(
+        "send" to ::requestSend,
+        "attach" to { attachmentCommand() },
+        "pallete" to {
+            launchScreenAction {
+                persistDraftOfThisForm()
+                keyboard?.hide()
+                onOpenDrawing()
+            }
+        },
+        "sio" to { upsUploadCommand() },
+        "voice_input" to {},
+        "network_info" to {
+            launchScreenAction {
+                val info = fetchCompatPostNetworkInfo(httpClient, "Futacha/$appVersion")
+                // Read the actual state after the suspension, not this composition's String.
+                replaceComment(appendCompatPostText(commentState.text.toString(), info))
+            }
+        },
+        "model_info" to { replaceComment(appendCompatPostText(commentState.text.toString(), compatPostDeviceInfo(appVersion))) },
+        "reset" to {
+            editedDraftFields.addAll(CompatPostDraftField.entries)
+            val resetFields = compatPostResetFields(isBuild, deleteKey, initialDraft)
+            name = resetFields.name
+            email = resetFields.email
+            subject = resetFields.subject
+            replaceComment(resetFields.comment)
+            deleteKey = resetFields.deleteKey
+            val previousLocator = attachmentLocator
+            val resetAttachmentLocator = if (isBuild) null else initialAttachmentLocator
+            attachmentLocator = resetAttachmentLocator
+            attachment = if (isBuild) null else initialAttachment
+            if (
+                fileSystem != null &&
+                previousLocator != null &&
+                previousLocator != resetAttachmentLocator
+            ) {
+                launchScreenAction { deleteCompatPostAttachment(fileSystem, previousLocator, deleteContainer = true) }
+            }
+            // Removing or replacing the initial attachment deleted its file; restoring only the
+            // in-memory bytes and the old locator would leave a post that cannot be sent.
+            val restoredInitial = attachment
+            if (fileSystem != null && restoredInitial != null && resetAttachmentLocator != null) {
+                savingAttachment = true
+                launchScreenAction {
+                    try {
+                        if (!fileSystem.exists(resetAttachmentLocator)) {
+                            persistCompatPostAttachment(fileSystem, ownerKey, restoredInitial)
+                                .onSuccess { freshLocator ->
+                                    if (attachmentLocator == resetAttachmentLocator) {
+                                        attachmentLocator = freshLocator
+                                        initialAttachmentLocator = freshLocator
+                                    }
+                                }
+                                .onFailure { error ->
+                                    message = "添付ファイルを一時保存できませんでした: ${error.message.orEmpty()}"
+                                }
+                        }
+                    } finally {
+                        savingAttachment = false
+                    }
+                }
+            }
+            message = null
+        },
+        "discard" to { if (hasDraft()) discardConfirm = true else leave() }
+    )
+    val launchSpeechRecognizer = rememberCompatSpeechRecognizer(
+        onResult = { recognized -> replaceComment(appendCompatPostText(commentState.text.toString(), normalizeCompatSpeechResult(recognized))) },
+        onError = { message = it }
+    )
+    val launchVideoPreview = rememberCompatVideoAttachmentPreviewLauncher { message = it }
+    val resolvedPostActions = postActions + ("voice_input" to launchSpeechRecognizer)
+    val formScrollState = rememberScrollState()
+    val postTextFieldColors = TextFieldDefaults.colors(
+        focusedContainerColor = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        disabledContainerColor = Color.Transparent,
+        focusedIndicatorColor = palette.inputCursor,
+        unfocusedIndicatorColor = palette.divider,
+        // Black uses black chrome but a white colorAccent in reference app.
+        // Cursor visibility therefore follows the dedicated input token.
+        cursorColor = palette.inputCursor,
+        focusedTextColor = palette.text,
+        unfocusedTextColor = palette.text,
+        focusedLabelColor = palette.uiPrimaryText,
+        unfocusedLabelColor = palette.uiPrimaryText,
+        focusedPlaceholderColor = palette.uiPrimaryText,
+        unfocusedPlaceholderColor = palette.uiPrimaryText
+    )
+
+    CompatPostImePolicyEffect()
+    // WaitingDialogFragment in both reference app is explicitly non-cancelable.
+    // Consume Back while sending/uploading, or while saving the draft before Help replaces this screen.
+    PlatformBackHandler(enabled = sending || upsUploadInProgress || openingHelp) {}
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = SecondaryBackground,
+            topBar = {
+                TopAppBar(
+                    expandedHeight = 56.dp,
+                    title = { Text(if (isBuild) "スレ立て" else tab.title.ifBlank { "No.${tab.threadNo}" },
+                        fontSize = (preferences.compatPreferenceValue("thread", "threadTitleFontSize", "スレッドのタイトルの文字サイズ")
+                            ?.toIntOrNull()?.coerceIn(12, 20) ?: 20).sp,
+                        maxLines = 1, modifier = Modifier.padding(start = 16.dp).testTag("compat-post-thread-title")) },
+                    navigationIcon = {
+                        IconButton(onClick = ::leave) { Icon(Icons.Filled.ArrowBack, contentDescription = "戻る") }
+                    },
+                    actions = {
+                        Box {
+                            IconButton(onClick = { overflowOpen = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "その他")
+                            }
+                            DropdownMenu(
+                                expanded = overflowOpen,
+                                onDismissRequest = { overflowOpen = false },
+                                shape = RoundedCornerShape(2.dp),
+                                containerColor = compatibilityPopupSurface(LocalCompatibilityPalette.current),
+                                tonalElevation = 0.dp,
+                                shadowElevation = 8.dp
+                            ) {
+                                DropdownMenuItem(text = { Text("画像を貼り付け") }, enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; pasteImage() })
+                                launchMultiplePicker?.let { launch ->
+                                    DropdownMenuItem(text = { Text(COMPAT_MULTI_PICK_LABEL) }, enabled = !sending && !savingAttachment && !upsUploadInProgress,
+                                        colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; launch() })
+                                }
+                                DropdownMenuItem(text = { Text("ツールバー編集") }, colors = compatibilityMenuItemColors(), onClick = { overflowOpen = false; onToolbarEdit() })
+                                DropdownMenuItem(text = { Text("ヘルプ") },
+                                    enabled = (draftLoaded || draftLoadFailed) && !sending && !savingAttachment && !upsUploadInProgress &&
+                                        !clipboardPaste.busy && pendingCompression == null && !openingHelp,
+                                    colors = compatibilityMenuItemColors(), onClick = ::openHelp)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = SecondaryTeal,
+                        titleContentColor = SecondaryChromeContent,
+                        navigationIconContentColor = SecondaryChromeContent,
+                        actionIconContentColor = SecondaryChromeContent
+                    )
+                )
+            }
+        ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize()
+                .padding(padding)
+                .verticalScroll(formScrollState)
+                .padding(horizontal = 10.dp, vertical = 0.dp)
+                .padding(bottom = 40.dp)
+        ) {
+            com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending, onAttach = ::acceptAttachment)
+            // Keep the compact reference app spacing while retaining enough vertical
+            // room for the label, baseline and IME text.  A fixed 45dp box
+            // clips the glyphs on current Material3 fonts.
+            Spacer(Modifier.height(15.dp))
+            // PostResponseActivity puts the comment first, then the byte count,
+            // name/mail, sage, subject and delete key. The shared form used to
+            // place these in a modern create/reply order and showed a large empty
+            // comment box, which was visibly different on the reference app.
+            TextField(
+                state = commentState,
+                outputTransformation = com.valoser.futacha.shared.ui.board.rememberImeClauseHighlight(commentState),
+                inputTransformation = remember(commentState) {
+                    androidx.compose.foundation.text.input.InputTransformation {
+                        if (changes.changeCount > 0) editedDraftFields.add(CompatPostDraftField.COMMENT)
+                        if (length > COMPAT_POST_COMMENT_MAX_CHARS) {
+                            replace(COMPAT_POST_COMMENT_MAX_CHARS, length, "")
+                        }
+                    }
+                },
+                label = { Text("コメント", modifier = Modifier.offset(x = (-12).dp)) },
+                lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(1, Int.MAX_VALUE),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .focusRequester(focusRequester)
+                    .testTag("compat-post-comment-field"),
+                colors = postTextFieldColors
+            )
+            Spacer(Modifier.height(5.dp))
+            // The reference form displays an empty form as one line in both
+            // reply and thread-creation modes.
+            val lineCount = compatPostLineCount(comment, emptyIsOneLine = !isBuild)
+            // Counting needs a Shift_JIS round trip of the whole comment. Run
+            // it once per edit off the main thread (iOS encoding is slow for
+            // long texts); the first value is computed synchronously so the
+            // label never flashes an empty count.
+            var byteCount by remember { mutableStateOf(compatPostShiftJisByteCount(comment)) }
+            LaunchedEffect(comment) {
+                byteCount = withContext(AppDispatchers.textAnnotation) {
+                    compatPostShiftJisByteCount(comment)
+                }
+            }
+            Text(
+                "${lineCount}行 ${byteCount}バイト",
+                fontSize = 14.sp,
+                color = if (lineCount > 15 || byteCount > 1000) Color.Red else Color.Unspecified,
+                modifier = Modifier.height(18.dp).padding(horizontal = 4.dp)
+            )
+            Spacer(Modifier.height(25.dp))
+            attachment?.let { selected ->
+                CompatPostAttachmentPreview(
+                    attachment = selected,
+                    onImagePreview = { attachmentPreviewOpen = true },
+                    onVideoPreview = { launchVideoPreview(selected) }
+                )
+            }
+            if (postingCapabilities.nameAllowed) com.valoser.futacha.shared.ui.board.ImeTextField(
+                name,
+                { editedDraftFields.add(CompatPostDraftField.NAME); name = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_NAME_MAX_CHARS) },
+                label = { Text("おなまえ", modifier = Modifier.offset(x = (-12).dp)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-name-field"),
+                colors = postTextFieldColors
+            )
+            Spacer(Modifier.height(10.dp))
+            com.valoser.futacha.shared.ui.board.ImeTextField(
+                email,
+                { editedDraftFields.add(CompatPostDraftField.EMAIL); email = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_EMAIL_MAX_CHARS) },
+                label = { Text("メール", modifier = Modifier.offset(x = (-12).dp)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                colors = postTextFieldColors
+            )
+            Spacer(Modifier.height(5.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(Modifier.weight(1f))
+                compatPostMailPresets(isBuild).forEach { preset ->
+                    val selected = when (preset) {
+                        "sage" -> compatSecondarySageTokenRegex.containsMatchIn(email)
+                        else -> email == applyCompatMailPreset("", preset, isBuild)
+                    }
+                    Text(
+                        preset,
+                        fontSize = 16.sp,
+                        textAlign = TextAlign.Center,
+                        color = palette.uiPrimaryText,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier
+                            .width(80.dp)
+                            .fillMaxHeight()
+                            .clickable {
+                                editedDraftFields.add(CompatPostDraftField.EMAIL)
+                                email = applyCompatMailPreset(email, preset, isBuild)
+                            }
+                    )
+                }
+            }
+            if (postingCapabilities.subjectAllowed) com.valoser.futacha.shared.ui.board.ImeTextField(
+                subject,
+                { editedDraftFields.add(CompatPostDraftField.SUBJECT); subject = it.takeWithoutSplittingSurrogatePair(COMPAT_POST_SUBJECT_MAX_CHARS) },
+                label = { Text("題名", modifier = Modifier.offset(x = (-12).dp)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                colors = postTextFieldColors
+            )
+            Spacer(Modifier.height(10.dp))
+            TextField(
+                value = deleteKey,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false),
+                onValueChange = { editedDraftFields.add(CompatPostDraftField.DELETE_KEY); deleteKey = it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH) },
+                label = { Text("削除キー", modifier = Modifier.offset(x = (-12).dp)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-delete-key"),
+                colors = postTextFieldColors
+            )
+            Spacer(Modifier.imePadding())
+        }
+        }
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().imePadding()
+                .background(SecondaryTeal).navigationBarsPadding()
+                .testTag("compat-post-bottom-bar")
+        ) {
+            ScrollableToolbarRow(
+                itemCount = toolbarItems.count { it.active } + if (compatToolbarShowsOverflow(CompatToolbarSurface.POST, toolbarItems)) 1 else 0,
+                modifier = Modifier.fillMaxWidth().requiredHeight(40.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                toolbarItems.filter(CompatToolbarItem::active).sortedBy(CompatToolbarItem::position).forEach { item ->
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                        if (item.key == "attach") {
+                            Box(
+                                modifier = Modifier.fillMaxSize().combinedClickable(
+                                    enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
+                                    onClick = { attachmentCommand() },
+                                    onLongClick = { attachmentCommand(explicitChooser = true) }
+                                ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CompatToolbarArtworkIcon(
+                                    artwork = secondaryToolbarIcon(
+                                        CompatToolbarSurface.POST,
+                                        if (attachment == null) item.key else "attach_clear"
+                                    ),
+                                    contentDescription = compatPostAttachmentToolbarLabel(attachment != null),
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                        .testTag("compat-post-toolbar-icon-${item.key}")
+                                )
+                            }
+                        } else if (item.key == "sio") {
+                            Box(
+                                modifier = Modifier.fillMaxSize().combinedClickable(
+                                    enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
+                                    onClick = { upsUploadCommand() },
+                                    onLongClick = { upsUploadCommand(explicitChooser = true) }
+                                ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CompatToolbarArtworkIcon(
+                                    artwork = secondaryToolbarIcon(CompatToolbarSurface.POST, item.key),
+                                    contentDescription = compatToolbarLabel(CompatToolbarSurface.POST, item.key),
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                        .testTag("compat-post-toolbar-icon-${item.key}")
+                                )
+                            }
+                        } else {
+                            IconButton(
+                                onClick = { resolvedPostActions[item.key]?.invoke() },
+                                enabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy
+                            ) {
+                                if (item.key == "send" && sending) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
+                                } else {
+                                    CompatToolbarArtworkIcon(
+                                        artwork = secondaryToolbarIcon(CompatToolbarSurface.POST, item.key),
+                                        contentDescription = compatToolbarLabel(CompatToolbarSurface.POST, item.key),
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                            .testTag("compat-post-toolbar-icon-${item.key}")
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (compatToolbarShowsOverflow(CompatToolbarSurface.POST, toolbarItems)) {
+                    IconButton(onClick = { toolbarOverflowOpen = true }, modifier = Modifier.weight(1f)) {
+                        CompatToolbarArtworkIcon(
+                            artwork = secondaryToolbarIcon(CompatToolbarSurface.POST, "other"),
+                            contentDescription = "その他",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp).testTag("compat-post-toolbar-icon-other")
+                        )
+                    }
+                }
+            }
+        }
+        message?.let { transientMessage ->
+            Text(
+                text = transientMessage,
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().imePadding()
+                    .navigationBarsPadding()
+                    .padding(bottom = 40.dp)
+                    .background(Color(0xFF646464))
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            )
+        }
+        if (sending || upsUploadInProgress || openingHelp) {
+            // WaitingDialogFragment is a real non-cancelable dialog in both
+            // reference app. A plain overlay leaves Android's parent host
+            // BackHandler able to win during a busy frame and close the post
+            // screen while the request is still active.
+            FutachaAppLockAwareWindow { Dialog(
+                onDismissRequest = {},
+                properties = DialogProperties(
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                    usePlatformDefaultWidth = false
+                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.32f))
+                        .clickable(onClick = {})
+                        .testTag("compat-post-waiting-dialog"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CompatLoadingIndicator(
+                        style = preferences.compatPreferenceValue(
+                            "design", "designLoading", "ローディング"
+                        ),
+                        modifier = Modifier,
+                        size = 50.dp
+                    )
+                }
+            } }
+        }
+    }
+
+    pendingCompression?.let { oversizedImage ->
+        CompatPostImageCompressConfirmation(
+            onCompress = {
+                pendingCompression = null
+                // Compression can take seconds; sending meanwhile would post without the attachment.
+                savingAttachment = true
+                launchScreenAction {
+                    var handedOff = false
+                    try {
+                        compressCompatPostImage(
+                            oversizedImage,
+                            attachmentLimitBytes
+                        ).onSuccess {
+                            // persistAcceptedAttachment keeps/releases the guard itself when it persists.
+                            handedOff = fileSystem != null
+                            persistAcceptedAttachment(it)
+                        }.onFailure { message = "画像を圧縮できませんでした: ${it.message.orEmpty()}" }
+                    } finally {
+                        if (!handedOff) savingAttachment = false
+                    }
+                }
+            },
+            onCancel = { pendingCompression = null }
+        )
+    }
+    if (attachmentPreviewOpen) {
+        val previewAttachment = attachment
+        if (previewAttachment == null || compatPostAttachmentKind(previewAttachment.fileName) != CompatPostAttachmentKind.IMAGE) {
+            attachmentPreviewOpen = false
+        } else {
+            com.valoser.futacha.shared.ui.board.ZoomableAttachmentPreviewDialog(
+                bytes = previewAttachment.bytes,
+                contentDescription = "添付画像プレビュー",
+                onClose = { attachmentPreviewOpen = false }
+            )
+        }
+    }
+
+    if (upsDialogOpen) {
+        val selected = upsAttachment
+        if (selected != null) {
+            CompatUpsUploadDialog(
+                fileName = selected.fileName,
+                comment = upsComment,
+                deleteKey = upsDeleteKey,
+                onCommentChange = { upsComment = it },
+                onDeleteKeyChange = { upsDeleteKey = it },
+                onSubmit = submit@{
+                    // The dialog closes on the next frame; ignore a second tap before that (E-13).
+                    if (upsUploadInProgress) return@submit
+                    val client = httpClient
+                    upsDialogOpen = false
+                    if (client == null) {
+                        message = "あぷ小連携を初期化できませんでした"
+                        upsAttachment = null
+                    } else {
+                        upsUploadInProgress = true
+                        launchScreenAction {
+                            try {
+                                uploadCompatUps(
+                                    client = client,
+                                    attachment = selected,
+                                    comment = upsComment,
+                                    deleteKey = upsDeleteKey,
+                                    appVersion = appVersion
+                                ).onSuccess { fileName ->
+                                    replaceComment(appendCompatPostText(commentState.text.toString(), fileName))
+                                    message = "${fileName}を追記しました"
+                                }.onFailure { error ->
+                                    message = error.message ?: "あぷ小へのアップロードに失敗しました"
+                                }
+                            } finally {
+                                upsAttachment = null
+                                upsUploadInProgress = false
+                            }
+                        }
+                    }
+                },
+                onCancel = {
+                    upsDialogOpen = false
+                    upsAttachment = null
+                }
+            )
+        }
+    }
+
+    postFailureMessage?.let { failureMessage ->
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { postFailureMessage = null },
+            text = { Text(failureMessage) },
+            confirmButton = { TextButton(onClick = { postFailureMessage = null }) { Text("OK") } }
+        ) }
+    }
+    if (discardConfirm) {
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { discardConfirm = false },
+            title = { Text("投稿内容の破棄") },
+            text = { Text("本当によろしいですか？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    discardConfirm = false
+                    editedDraftFields.addAll(CompatPostDraftField.entries)
+                    val discardedAttachmentLocator = attachmentLocator
+                    name = ""; email = ""; subject = ""; replaceComment(""); deleteKey = ""; attachment = null
+                    attachmentLocator = null
+                    launchScreenAction {
+                        discardedAttachmentLocator?.let { locator ->
+                            fileSystem?.let { deleteCompatPostAttachment(it, locator, deleteContainer = true) }
+                        }
+                        if (isBuild) store.deleteBuildDraft(board.key) else store.deleteDraft(tab.key)
+                        leave()
+                    }
+                }) { Text("破棄する") }
+            },
+            dismissButton = { TextButton(onClick = { discardConfirm = false }) { Text("キャンセル") } }
+        ) }
+    }
+    if (sendConfirm) {
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { sendConfirm = false },
+            title = { Text("投稿の確認") },
+            text = { Text("本当によろしいですか？") },
+            confirmButton = {
+                TextButton(onClick = { sendConfirm = false; sendPost() }) { Text("送信する") }
+            },
+            dismissButton = { TextButton(onClick = { sendConfirm = false }) { Text("キャンセル") } }
+        ) }
+    }
+    postDestinationWarning?.let { warning ->
+        FutachaAppLockAwareWindow { AlertDialog(
+            onDismissRequest = { postDestinationWarning = null },
+            title = { Text("投稿先の確認") },
+            text = { Text(warning) },
+            confirmButton = {
+                TextButton(onClick = {
+                    postDestinationWarning = null
+                    if (preferences.compatPreferenceValue("control", "controlPostConfirm", "送信時の確認") == "OFF") {
+                        sendPost()
+                    } else {
+                        sendConfirm = true
+                    }
+                }) { Text("確認して続行") }
+            },
+            dismissButton = {
+                TextButton(onClick = { postDestinationWarning = null }) { Text("キャンセル") }
+            }
+        ) }
+    }
+    if (toolbarOverflowOpen) {
+        SecondaryToolbarOverflowPopup(
+            surface = CompatToolbarSurface.POST,
+            items = toolbarItems,
+            actions = resolvedPostActions,
+            onPasteImage = ::pasteImage,
+            pasteEnabled = !sending && !savingAttachment && !upsUploadInProgress && !clipboardPaste.busy,
+            onDismiss = { toolbarOverflowOpen = false }
+        )
+    }
+}
+
+@Composable
+fun CompatPostImageCompressConfirmation(
+    onCompress: () -> Unit,
+    onCancel: () -> Unit
+) {
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {},
+        title = { Text("確認") },
+        text = { Text("画像をリサイズしますか？") },
+        confirmButton = {
+            TextButton(onClick = onCompress) { Text("圧縮する") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("キャンセル") }
+        }
+    ) }
+}
+
+@Composable
+private fun SecondaryToolbarOverflowPopup(
+    surface: CompatToolbarSurface,
+    items: List<CompatToolbarItem>,
+    actions: Map<String, () -> Unit>,
+    onPasteImage: () -> Unit,
+    pasteEnabled: Boolean,
+    onDismiss: () -> Unit
+) {
+    val inactive = compatToolbarMenuItems(items.sortedBy(CompatToolbarItem::position))
+    CompatBottomPopup(
+        alignment = Alignment.BottomEnd,
+        testTag = "compat-post-toolbar-overflow-popup",
+        onDismiss = onDismiss
+    ) {
+        TextButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = pasteEnabled,
+            onClick = { onDismiss(); onPasteImage() }) {
+            Text("画像を貼り付け", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+        }
+        inactive.forEach { item ->
+            TextButton(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+                enabled = actions[item.key] != null,
+                onClick = {
+                    onDismiss()
+                    actions[item.key]?.invoke()
+                }
+            ) {
+                // reference app inflates a native PopupMenu here.  Its rows are
+                // text-only; placing the 192px toolbar artwork in this menu
+                // made every row and the whole popup several times too large.
+                Text(
+                    text = compatToolbarLabel(surface, item.key),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Start
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The work a post screen leaves running when it goes (its last draft write, which waits for its attachment and its
+ * send), per form (L157, L168). The same form opened again waits for it before reading its draft. Main thread only.
+ */
+internal object CompatPostWork {
+    private val leaving = mutableMapOf<String, Job>()
+
+    fun leave(ownerKey: String, job: Job) {
+        leaving.entries.removeAll { !it.value.isActive }
+        leaving[ownerKey] = job
+    }
+
+    fun previous(ownerKey: String): Job? = leaving[ownerKey]?.takeIf { it.isActive }
+}

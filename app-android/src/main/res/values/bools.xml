@@ -1,0 +1,5 @@
+<resources>
+    <!-- App Functions are available from Android 36. Keep the service disabled
+         on older devices so the framework never verifies an unavailable API. -->
+    <bool name="enable_app_functions">false</bool>
+</resources>

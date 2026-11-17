@@ -1,0 +1,809 @@
+package com.valoser.futacha.shared.repo
+
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogFetchSettings
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.ThreadPageContent
+import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.network.ConditionalTextFetchResult
+import com.valoser.futacha.shared.network.HttpConditionalValidators
+import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.network.BoardPostingCapabilities
+import com.valoser.futacha.shared.network.defaultBoardPostingCapabilities
+import com.valoser.futacha.shared.parser.extractCatalogDisplayTitleFromThreadHead
+import com.valoser.futacha.shared.parser.HtmlParser
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.shouldResolveCatalogItemTitleFromHead
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+
+/** [BoardRepository.getThreadIfModified]'s outcome. */
+sealed interface ConditionalThreadFetchResult {
+    data class Modified(
+        val page: ThreadPage,
+        /** Validators to send next time; null when the server sent none. */
+        val validators: HttpConditionalValidators?
+    ) : ConditionalThreadFetchResult
+
+    /** The server confirmed the page is unchanged (HTTP 304); nothing was parsed. */
+    data object NotModified : ConditionalThreadFetchResult
+}
+
+/** One thread's answer of [BoardRepository.getThreadSummaries]. */
+data class SiteThreadSummary(
+    val threadId: String,
+    val state: SiteThreadState,
+    /** The posts counting the OP; null unless [state] is [SiteThreadState.ALIVE]. */
+    val postCount: Int? = null
+)
+
+enum class SiteThreadState { ALIVE, GONE, UNKNOWN }
+
+interface BoardRepository {
+    /** The application's catalog layout, also used for shared patrols and update checks. */
+    suspend fun getCatalogFetchSettings(): CatalogFetchSettings = CatalogFetchSettings()
+
+    suspend fun getPostingCapabilities(board: String, threadId: String? = null): BoardPostingCapabilities =
+        defaultBoardPostingCapabilities(board)
+    suspend fun getCatalog(
+        board: String,
+        mode: CatalogMode = CatalogMode.default
+    ): List<CatalogItem>
+
+    /**
+     * Fetch a catalog with an operation-local server layout.
+     *
+     * The compatibility profile has a different cxyl contract from the
+     * modern catalog settings.  Keeping this override on the request avoids
+     * racing the application-wide profile/provider when a refresh starts
+     * immediately after a mode or preference change.
+     */
+    suspend fun getCatalogWithSettings(
+        board: String,
+        mode: CatalogMode = CatalogMode.default,
+        settings: CatalogFetchSettings
+    ): List<CatalogItem> = getCatalog(board, mode)
+    suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): CatalogPageContent =
+        CatalogPageContent(getCatalogWithSettings(board, mode, settings))
+    suspend fun getCatalogPage(
+        board: String,
+        mode: CatalogMode = CatalogMode.default
+    ): CatalogPageContent = CatalogPageContent(
+        items = getCatalog(board, mode)
+    )
+    suspend fun fetchOpImageUrl(board: String, threadId: String): String?
+    suspend fun resolveCatalogDisplayTitle(
+        board: String,
+        item: CatalogItem,
+        allowFallbackHeadScan: Boolean = true
+    ): String? = item.title
+    suspend fun getThread(board: String, threadId: String): ThreadPage
+    suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(
+        page = getThread(board, threadId)
+    )
+    /**
+     * [getThread] as a conditional GET: [ConditionalThreadFetchResult.NotModified]
+     * means the page is unchanged since the fetch that returned [validators].
+     */
+    suspend fun getThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalThreadFetchResult = ConditionalThreadFetchResult.Modified(getThread(board, threadId), null)
+    suspend fun getThreadByUrl(threadUrl: String): ThreadPage
+    suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent = ThreadPageContent(
+        page = getThreadByUrl(threadUrl)
+    )
+    /**
+     * The site's own archived copy of a thread that is gone, or null to use the existing fallback (the external
+     * archives for Futaba). Only あいもげ boards answer it (`snapshot.json`).
+     */
+    suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent? = null
+    suspend fun probeThreadExists(threadUrl: String): Boolean = false
+    suspend fun probeThreadGone(threadUrl: String): Boolean = false
+    /**
+     * The alive state and post count of up to 20 threads of one [board] in one request (あいもげ `summary`); null on a
+     * site without such a request (Futaba). Threads the answer leaves out are checked once with `/thread`.
+     */
+    suspend fun getThreadSummaries(board: String, threadIds: List<String>): List<SiteThreadSummary>? = null
+    /**
+     * Only the posts after the copy at hand (あいもげ `/state?after`), as a whole page; null on a site without it
+     * (Futaba) or when the thread was not read here.
+     */
+    suspend fun getThreadDelta(board: String, threadId: String): ThreadPage? = null
+    suspend fun voteSaidane(board: String, threadId: String, postId: String)
+    /** See [com.valoser.futacha.shared.network.BoardApi.voteSaidaneResponse]. */
+    suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String {
+        voteSaidane(board, threadId, postId)
+        return ""
+    }
+    suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
+    suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    )
+    /**
+     * Same del request as [requestDeletion], returning the server's answer as it came. The other modes keep
+     * [requestDeletion]; ふたったー風 shows the answer like the original does (M87).
+     */
+    suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String {
+        requestDeletion(board, threadId, postId, reasonCode)
+        return ""
+    }
+    /** Same deletion as [deleteByUser], returning the server's answer as it came (M87). */
+    suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String {
+        deleteByUser(board, threadId, postId, password, imageOnly)
+        return ""
+    }
+    suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean = false
+    ): String?
+
+    suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean = false
+    ): String?
+
+    /**
+     * Close the repository and release resources (e.g., HTTP client connections)
+     */
+    fun close()
+
+    /**
+     * Close the repository asynchronously and return a Job to wait for completion if needed
+     */
+    fun closeAsync(): Job
+
+    suspend fun clearOpImageCache(board: String? = null, threadId: String? = null)
+
+    /**
+     * Invalidate cookie initialization state for a board to force re-setup on next request.
+     */
+    suspend fun invalidateCookies(board: String)
+}
+
+class DefaultBoardRepository(
+    private val api: BoardApi,
+    private val parser: HtmlParser,
+    private val opImageCacheTtlMillis: Long = DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS,
+    private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES,
+    private val helperPermitTimeoutMillis: Long = DEFAULT_HELPER_PERMIT_TIMEOUT_MILLIS,
+    private val helperFetchTimeoutMillis: Long = DEFAULT_HELPER_FETCH_TIMEOUT_MILLIS,
+    private val cookieRepository: CookieRepository? = null,
+    private val diagnosticFileSystem: FileSystem? = null,
+    private val catalogFetchSettingsProvider: suspend () -> CatalogFetchSettings = { CatalogFetchSettings() }
+) : BoardRepository {
+    override suspend fun getCatalogFetchSettings(): CatalogFetchSettings = catalogFetchSettingsProvider().normalized()
+
+    // Track which boards have been initialized with cookies.
+    // Access only under boardInitMutex.withLock.
+    private val initializedBoards = mutableSetOf<String>()
+    private val initializedCatalogFetchSettings = mutableMapOf<String, CatalogFetchSettings>()
+    // Fix: Use Mutex to prevent race condition when multiple coroutines
+    // try to initialize the same board simultaneously
+    private val boardInitMutex = Mutex()
+    private val boardInitializationMutexes = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
+    private val cookieSetupFailures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+    private val authRefreshLimiter = DefaultBoardRepositoryAuthRefreshLimiter()
+    private val catalogLayoutLocksGuard = Mutex()
+    private val catalogLayoutLocks = mutableMapOf<String, Mutex>()
+
+    private suspend fun catalogLayoutLock(board: String): Mutex =
+        catalogLayoutLocksGuard.withLock { catalogLayoutLocks.getOrPut(board) { Mutex() } }
+
+    private val opImageCacheMutex = Mutex()
+    private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
+    private val catalogTitleCacheMutex = Mutex()
+    private val catalogTitleCache = createDefaultBoardRepositoryCatalogTitleCache(opImageCacheMaxEntries)
+
+    // Scope used by async close.
+    private val closeScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+
+    // Protect close state and prevent duplicate close.
+    private val closeMutex = Mutex()
+    private val closeState = DefaultBoardRepositoryCloseState()
+    private val closeCompletion = CompletableDeferred<Unit>()
+
+    companion object {
+        private const val TAG = "DefaultBoardRepository"
+        private const val OP_IMAGE_LINE_LIMIT = 65
+        private const val OP_IMAGE_CONCURRENCY = 4
+        private const val CATALOG_TITLE_INITIAL_LINE_LIMIT = 16
+        private const val CATALOG_TITLE_CONCURRENCY = 2
+        private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
+        private const val DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS = 30_000L // 30 seconds
+        private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
+        private const val DEFAULT_HELPER_PERMIT_TIMEOUT_MILLIS = 5_000L
+        private const val DEFAULT_HELPER_FETCH_TIMEOUT_MILLIS = 30_000L
+    }
+
+    private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
+    private val catalogTitleSemaphore = Semaphore(CATALOG_TITLE_CONCURRENCY)
+
+    /**
+     * Ensures cookies are initialized for the given board.
+     * This should be called before any operations that require cookies.
+     */
+    private suspend fun ensureCookiesInitialized(
+        board: String,
+        forceSetup: Boolean = false,
+        settingsOverride: CatalogFetchSettings? = null,
+        /**
+         * Only catalog requests depend on the catalog layout cookie. Thread,
+         * posting and helper requests must not re-post catset merely because
+         * another caller last used a different layout.
+         */
+        layoutSensitive: Boolean = false,
+        refreshCookies: Boolean = false
+    ) {
+        val settings = (settingsOverride ?: catalogFetchSettingsProvider()).normalized()
+        initializeDefaultBoardRepositoryCookies(
+            board = board,
+            logTag = TAG,
+            initializedBoards = initializedBoards,
+            cookieRepository = cookieRepository,
+            boardInitMutex = boardInitMutex,
+            boardInitializationMutexes = boardInitializationMutexes,
+            cookieSetupFailures = cookieSetupFailures,
+            forceSetup = forceSetup,
+            layoutIndependent = !layoutSensitive && !refreshCookies,
+            requireSetup = {
+                val previousSettings = boardInitMutex.withLock {
+                    initializedCatalogFetchSettings[board]
+                }
+                when {
+                    refreshCookies -> true
+                    previousSettings == null -> {
+                        layoutSensitive &&
+                            !hasDefaultBoardRepositoryCatalogSettingsCookie(cookieRepository, board, settings)
+                    }
+                    layoutSensitive && previousSettings != settings -> {
+                        boardInitMutex.withLock {
+                            initializedBoards.remove(board)
+                            initializedCatalogFetchSettings.remove(board)
+                            cookieSetupFailures.remove(board)
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            },
+            onSetupCompleted = {
+                boardInitMutex.withLock {
+                    initializedCatalogFetchSettings[board] = settings
+                }
+            },
+            fetchCatalogSetup = { targetBoard ->
+                api.fetchCatalogSetup(targetBoard, settings)
+                // The reference compatibility client writes cxyl after the
+                // setup request.  Do the same so a server-provided default
+                // cookie cannot silently cap the catalog at ~300 items.
+                persistDefaultBoardRepositoryCatalogSettingsCookie(
+                    cookieRepository = cookieRepository,
+                    board = targetBoard,
+                    settings = settings
+                )
+            }
+        )
+    }
+
+    override suspend fun invalidateCookies(board: String) {
+        clearCookieInitialization(board)
+        authRefreshLimiter.clear(board)
+    }
+
+    private suspend fun clearCookieInitialization(board: String) {
+        boardInitMutex.withLock {
+            initializedBoards.remove(board)
+            initializedCatalogFetchSettings.remove(board)
+            cookieSetupFailures.remove(board)
+        }
+    }
+
+    private suspend fun <T> withRetryOnAuthFailure(
+        board: String,
+        settingsOverride: CatalogFetchSettings? = null,
+        layoutSensitive: Boolean = false,
+        block: suspend () -> T
+    ): T {
+        // A request that does not choose a layout refreshes with the layout the
+        // board was last set up with, so an auth retry does not rewrite cxyl.
+        var refreshLayout: CatalogFetchSettings? = null
+        return withDefaultBoardRepositoryAuthRetry(
+            board = board,
+            logTag = TAG,
+            ensureCookiesInitialized = { targetBoard, forceSetup ->
+                ensureCookiesInitialized(targetBoard, forceSetup, settingsOverride ?: refreshLayout,
+                    layoutSensitive, refreshCookies = forceSetup)
+            },
+            invalidateCookies = { targetBoard ->
+                if (!layoutSensitive) {
+                    refreshLayout = boardInitMutex.withLock { initializedCatalogFetchSettings[targetBoard] }
+                }
+                clearCookieInitialization(targetBoard)
+            },
+            refreshLimiter = authRefreshLimiter,
+            block = block
+        )
+    }
+
+    private suspend fun runWithInitializedCookies(
+        board: String,
+        block: suspend () -> Unit
+    ) {
+        runDefaultBoardRepositoryWithInitializedCookies(
+            board = board,
+            cookieRepository = cookieRepository,
+            ensureCookiesInitialized = ::ensureCookiesInitialized,
+            block = block
+        )
+    }
+
+    override suspend fun getPostingCapabilities(board: String, threadId: String?): BoardPostingCapabilities =
+        withContext(AppDispatchers.io) { api.fetchPostingCapabilities(board, threadId) }
+
+    override suspend fun probeThreadExists(threadUrl: String): Boolean =
+        withContext(AppDispatchers.io) { api.probeThreadExists(threadUrl) }
+
+    override suspend fun probeThreadGone(threadUrl: String): Boolean =
+        withContext(AppDispatchers.io) { api.probeThreadGone(threadUrl) }
+
+    override suspend fun getCatalog(
+        board: String,
+        mode: CatalogMode
+    ): List<CatalogItem> {
+        return getCatalogPage(board, mode).items
+    }
+
+    override suspend fun getCatalogWithSettings(
+        board: String,
+        mode: CatalogMode,
+        settings: CatalogFetchSettings
+    ): List<CatalogItem> {
+        return getCatalogPageWithSettings(board, mode, settings).items
+    }
+
+    override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): CatalogPageContent =
+        loadCatalogPage(board, mode, settings)
+
+    override suspend fun getCatalogPage(
+        board: String,
+        mode: CatalogMode
+    ): CatalogPageContent {
+        return loadCatalogPage(board, mode, null)
+    }
+
+    private suspend fun loadCatalogPage(board: String, mode: CatalogMode, settings: CatalogFetchSettings?): CatalogPageContent {
+        // Setup (which rewrites the board's cxyl layout cookie) and the GET run
+        // under one per-board lock: otherwise a concurrent request with other
+        // settings can switch the cookie between them and this GET returns the
+        // other caller's layout.
+        // Only the cookie setup and the GET need the lock: parsing a large
+        // catalog under it made every other request for the board wait.
+        val html = catalogLayoutLock(board).withLock {
+            withRetryOnAuthFailure(board, settingsOverride = settings, layoutSensitive = true) {
+                withContext(AppDispatchers.io) {
+                    api.fetchCatalog(board, mode)
+                }
+            }
+        }
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return withContext(AppDispatchers.parsing) {
+            attachCatalogDiagnostics(
+                html = html,
+                parsed = parser.parseCatalogPage(html, baseUrl).copy(
+                    embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
+                ),
+                fileSystem = diagnosticFileSystem
+            )
+        }
+    }
+
+    override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
+        if (threadId.isBlank()) return null
+        val key = DefaultBoardRepositoryOpImageKey(board, threadId)
+        getCachedOpImageUrl(key)?.let { return it.url }
+
+        val fetchResult = fetchDefaultBoardRepositoryOpImageWithPermit(
+            semaphoreTimeoutMillis = helperPermitTimeoutMillis,
+            fetchTimeoutMillis = helperFetchTimeoutMillis,
+            semaphore = opImageSemaphore
+        ) {
+            withRetryOnAuthFailure(board) {
+                resolveOpImageUrl(board, threadId)
+            }
+        }
+        saveOpImageUrlToCache(key, fetchResult.url)
+        return fetchResult.url
+    }
+
+    override suspend fun resolveCatalogDisplayTitle(
+        board: String,
+        item: CatalogItem,
+        allowFallbackHeadScan: Boolean
+    ): String? {
+        if (!shouldResolveCatalogItemTitleFromHead(item.title, item.replyCount)) {
+            return item.title
+        }
+        val key = DefaultBoardRepositoryOpImageKey(board, item.id)
+        getCachedCatalogTitle(key)?.let { return it.title ?: item.title }
+
+        val titleResult = runDefaultBoardRepositoryHelperWithPermit(
+            semaphoreTimeoutMillis = helperPermitTimeoutMillis,
+            fetchTimeoutMillis = helperFetchTimeoutMillis,
+            semaphore = catalogTitleSemaphore
+        ) {
+            withRetryOnAuthFailure(board) {
+                resolveCatalogThreadTitle(
+                    board = board,
+                    threadId = item.id,
+                    allowFallbackHeadScan = allowFallbackHeadScan
+                )
+            }
+        }
+        val resolvedTitle = titleResult.value
+
+        saveCatalogTitleToCache(key, resolvedTitle)
+        return resolvedTitle ?: item.title
+    }
+
+    override suspend fun getThread(board: String, threadId: String): ThreadPage {
+        return getThreadContent(board, threadId).page
+    }
+
+    override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
+        return withRetryOnAuthFailure(board) {
+            val threadUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
+            val html = withContext(AppDispatchers.io) {
+                api.fetchThread(board, threadId)
+            }
+            withContext(AppDispatchers.parsing) {
+                ThreadPageContent(
+                    page = parser.parseThread(html, threadUrl),
+                    embeddedHtml = parser.extractThreadEmbeddedHtml(
+                        html = html,
+                        baseUrl = threadUrl
+                    )
+                )
+            }
+        }
+    }
+
+    override suspend fun getThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalThreadFetchResult {
+        return withRetryOnAuthFailure(board) {
+            val threadUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
+            when (val fetched = withContext(AppDispatchers.io) {
+                api.fetchThreadIfModified(board, threadId, validators)
+            }) {
+                ConditionalTextFetchResult.NotModified -> ConditionalThreadFetchResult.NotModified
+                is ConditionalTextFetchResult.Modified -> ConditionalThreadFetchResult.Modified(
+                    page = withContext(AppDispatchers.parsing) { parser.parseThread(fetched.body, threadUrl) },
+                    validators = fetched.validators
+                )
+            }
+        }
+    }
+
+    override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        return getThreadContentByUrl(threadUrl).page
+    }
+
+    override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent {
+        val html = withContext(AppDispatchers.io) {
+            api.fetchThreadByUrl(threadUrl)
+        }
+        return withContext(AppDispatchers.parsing) {
+            ThreadPageContent(
+                page = parser.parseThread(html, threadUrl),
+                embeddedHtml = parser.extractThreadEmbeddedHtml(html, threadUrl)
+            )
+        }
+    }
+
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.voteSaidane(board, threadId, postId)
+            }
+        }
+    }
+
+    override suspend fun voteSaidaneResponse(board: String, threadId: String, postId: String): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.voteSaidaneResponse(board, threadId, postId)
+            }
+            body
+        }
+
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.requestDeletion(board, threadId, postId, reasonCode)
+            }
+        }
+    }
+
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) {
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.deleteByUser(board, threadId, postId, password, imageOnly)
+            }
+        }
+    }
+
+    override suspend fun requestDeletionResponse(board: String, threadId: String, postId: String, reasonCode: String): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.requestDeletionResponse(board, threadId, postId, reasonCode)
+            }
+            body
+        }
+
+    override suspend fun deleteByUserResponse(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ): String =
+        withContext(AppDispatchers.io) {
+            var body = ""
+            runWithInitializedCookies(board) {
+                body = api.deleteByUserResponse(board, threadId, postId, password, imageOnly)
+            }
+            body
+        }
+
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? {
+        // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
+        // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
+        return withContext(AppDispatchers.io) {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = board,
+                cookieRepository = cookieRepository,
+                ensureCookiesInitialized = ::ensureCookiesInitialized
+            ) {
+                api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly, handwriting)
+            }
+        }
+    }
+
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? {
+        return withContext(AppDispatchers.io) {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = board,
+                cookieRepository = cookieRepository,
+                ensureCookiesInitialized = ::ensureCookiesInitialized
+            ) {
+                api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly, handwriting)
+            }
+        }
+    }
+
+    // Keep synchronous close lightweight and safe from main thread.
+    @Deprecated(
+        message = "Use closeAsync() instead for proper async cleanup",
+        replaceWith = ReplaceWith("closeAsync()"),
+        level = DeprecationLevel.WARNING
+    )
+    override fun close() {
+        // Keep close() non-blocking for callers on UI thread.
+        closeAsync()
+    }
+
+    // Async close for callers that need to await cleanup.
+    override fun closeAsync(): Job {
+        return closeScope.launch {
+            val shouldClose = beginDefaultBoardRepositoryClose(
+                closeMutex = closeMutex,
+                closeState = closeState
+            )
+            if (!shouldClose) {
+                closeCompletion.await()
+                return@launch
+            }
+            try {
+                (api as? AutoCloseable)?.close()
+            } catch (e: Exception) {
+                Logger.e("DefaultBoardRepository", "Error closing API asynchronously: ${e.message}", e)
+            } finally {
+                opImageCacheMutex.withLock {
+                    opImageCache.clear()
+                }
+                catalogTitleCacheMutex.withLock {
+                    catalogTitleCache.clear()
+                }
+                closeCompletion.complete(Unit)
+            }
+        }
+    }
+
+    override suspend fun clearOpImageCache(board: String?, threadId: String?) {
+        clearDefaultBoardRepositoryOpImageCache(
+            cacheMutex = opImageCacheMutex,
+            cache = opImageCache,
+            board = board,
+            threadId = threadId
+        )
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun getCachedOpImageUrl(key: DefaultBoardRepositoryOpImageKey): DefaultBoardRepositoryOpImageCacheEntry? {
+        val now = Clock.System.now().toEpochMilliseconds()
+        return opImageCacheMutex.withLock {
+            resolveDefaultBoardRepositoryCachedOpImageUrl(
+                cache = opImageCache,
+                key = key,
+                now = now
+            )
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun saveOpImageUrlToCache(key: DefaultBoardRepositoryOpImageKey, url: String?) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        opImageCacheMutex.withLock {
+            saveDefaultBoardRepositoryOpImageUrlToCache(
+                cache = opImageCache,
+                key = key,
+                url = url,
+                now = now,
+                hitTtlMillis = opImageCacheTtlMillis,
+                missTtlMillis = DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
+            )
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun getCachedCatalogTitle(key: DefaultBoardRepositoryOpImageKey): DefaultBoardRepositoryCatalogTitleCacheEntry? {
+        val now = Clock.System.now().toEpochMilliseconds()
+        return catalogTitleCacheMutex.withLock {
+            resolveDefaultBoardRepositoryCachedCatalogTitle(
+                cache = catalogTitleCache,
+                key = key,
+                now = now
+            )
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun saveCatalogTitleToCache(key: DefaultBoardRepositoryOpImageKey, title: String?) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        catalogTitleCacheMutex.withLock {
+            saveDefaultBoardRepositoryCatalogTitleToCache(
+                cache = catalogTitleCache,
+                key = key,
+                title = title,
+                now = now,
+                hitTtlMillis = opImageCacheTtlMillis,
+                missTtlMillis = DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
+            )
+        }
+    }
+
+    private suspend fun resolveOpImageUrl(
+        board: String,
+        threadId: String
+    ): String? {
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return resolveDefaultBoardRepositoryOpImageUrl(
+            threadId = threadId,
+            logTag = TAG,
+            fetchThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+                }
+            },
+            extractOpImageUrl = { snippet ->
+                withContext(AppDispatchers.parsing) {
+                    parser.extractOpImageUrl(snippet, baseUrl)
+                }
+            }
+        )
+    }
+
+    private suspend fun resolveCatalogThreadTitle(
+        board: String,
+        threadId: String,
+        allowFallbackHeadScan: Boolean
+    ): String? {
+        return resolveDefaultBoardRepositoryCatalogThreadTitle(
+            threadId = threadId,
+            logTag = TAG,
+            allowFallbackHeadScan = allowFallbackHeadScan,
+            fetchInitialThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, CATALOG_TITLE_INITIAL_LINE_LIMIT)
+                }
+            },
+            fetchFallbackThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+                }
+            },
+            extractTitle = { snippet ->
+                withContext(AppDispatchers.parsing) {
+                    extractCatalogDisplayTitleFromThreadHead(snippet)
+                }
+            }
+        )
+    }
+}

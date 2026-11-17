@@ -1,0 +1,340 @@
+package com.valoser.futacha.shared.repository
+
+import com.valoser.futacha.shared.model.HistoryArchiveEntry
+import com.valoser.futacha.shared.model.HistoryArchiveFile
+import com.valoser.futacha.shared.model.HistoryArchiveManifest
+import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
+
+const val HISTORY_ARCHIVE_DIRECTORY = "history_archives"
+
+data class HistoryArchiveExportRequest(
+    val archiveId: String,
+    val historyEntries: List<ThreadHistoryEntry>,
+    val exportedAtEpochMillis: Long,
+    val appVersion: String? = null
+)
+
+data class HistoryArchiveExportResult(
+    val manifest: HistoryArchiveManifest,
+    val archiveDirectory: String,
+    val copiedFileCount: Int,
+    val historyOnlyCount: Int,
+    val partialPayloadCount: Int,
+    // History entries left out because the archive holds at most
+    // MAX_HISTORY_ARCHIVE_ENTRIES (the oldest by last visit are dropped), or because their
+    // files would take the archive past its manifest or total size limit.
+    val omittedEntryCount: Int = 0,
+    // Saved files that existed but could not be copied into the archive. The source
+    // still holds them, so "export then clear" must not delete it.
+    val failedCopyCount: Int = 0
+)
+
+suspend fun exportHistoryArchive(
+    fileSystem: FileSystem,
+    sourceRepositories: List<SavedThreadRepository>,
+    request: HistoryArchiveExportRequest,
+    archiveBaseDirectory: String = HISTORY_ARCHIVE_DIRECTORY,
+    // Compact: indentation of up to 2,000 entries used a large part of the 4 MB manifest limit.
+    json: Json = Json {
+        ignoreUnknownKeys = true
+    }
+): Result<HistoryArchiveExportResult> = withContext(AppDispatchers.io) {
+    // Callers launch from the UI scope; payload copies and the manifest
+    // encoding run here.
+    var incompleteArchiveDirectory: String? = null
+    try {
+        coroutineContext.ensureActive()
+        require(request.historyEntries.size <= MAX_HISTORY_ARCHIVE_ENTRIES) {
+            "History archive contains too many entries"
+        }
+        val archiveId = normalizeHistoryArchivePathSegment(request.archiveId.ifBlank {
+            "archive_${request.exportedAtEpochMillis}"
+        })
+        val archiveDirectory = "$archiveBaseDirectory/$archiveId"
+        sweepAbandonedHistoryArchives(fileSystem, archiveBaseDirectory, request.exportedAtEpochMillis)
+        require(!fileSystem.exists(archiveDirectory)) {
+            "History archive already exists: $archiveId"
+        }
+        fileSystem.createDirectory(archiveDirectory).getOrThrow()
+        incompleteArchiveDirectory = archiveDirectory
+
+        val exportedEntries = mutableListOf<HistoryArchiveEntry>()
+        var copiedFileCount = 0
+        var totalFailedCopyCount = 0
+        var plannedFileCount = 0L
+        // The manifest and total payload limits are checked from the plan before an entry's
+        // files are copied. Found only after copying, they failed the export and deleted
+        // gigabytes of copies. Entries that no longer fit are left out and reported.
+        var plannedManifestBytes = HISTORY_ARCHIVE_MANIFEST_OVERHEAD_BYTES
+        var plannedPayloadBytes = 0L
+        var omittedForSizeCount = 0
+        for ((historyIndex, historyEntry) in request.historyEntries.withIndex()) {
+            coroutineContext.ensureActive()
+            val planned = chooseBestHistoryArchivePayloadPlan(
+                sourceRepositories = sourceRepositories,
+                historyEntry = historyEntry,
+                archiveId = archiveId
+            )
+            val sourceFiles = planned?.plan?.sourceFiles.orEmpty()
+            require(sourceFiles.size <= MAX_HISTORY_ARCHIVE_FILES_PER_ENTRY) {
+                "History archive entry contains too many files"
+            }
+            val plannedEntry = planned?.plan?.archiveEntry ?: buildHistoryOnlyArchiveEntry(historyEntry, archiveId)
+            // The copied entry lists a subset of the planned files, so this is an upper bound.
+            val entryManifestBytes = json.encodeToString(HistoryArchiveEntry.serializer(), plannedEntry)
+                .encodeToByteArray().size.toLong() + 1L
+            val entryPayloadBytes = sourceFiles
+                .filter { it.sizeBytes in 0L..MAX_HISTORY_ARCHIVE_SINGLE_PAYLOAD_BYTES }
+                .fold(0L) { total, file -> safeHistoryArchiveExportSizeAdd(total, file.sizeBytes) }
+            if (plannedManifestBytes + entryManifestBytes > MAX_HISTORY_ARCHIVE_MANIFEST_BYTES ||
+                plannedPayloadBytes + entryPayloadBytes > MAX_HISTORY_ARCHIVE_TOTAL_PAYLOAD_BYTES
+            ) {
+                omittedForSizeCount = request.historyEntries.size - historyIndex
+                break
+            }
+            plannedManifestBytes += entryManifestBytes
+            plannedPayloadBytes += entryPayloadBytes
+            val copiedFiles = mutableListOf<HistoryArchiveFile>()
+            var failedCopyCount = 0
+            plannedFileCount += sourceFiles.size.toLong()
+            require(plannedFileCount <= MAX_HISTORY_ARCHIVE_TOTAL_FILES) {
+                "History archive contains too many files"
+            }
+            sourceFiles.forEach { sourceFile ->
+                coroutineContext.ensureActive()
+                val sourceRepository = planned?.repository ?: return@forEach
+                if (sourceFile.sizeBytes !in 0L..MAX_HISTORY_ARCHIVE_SINGLE_PAYLOAD_BYTES) {
+                    failedCopyCount += 1
+                    return@forEach
+                }
+                val bytes = sourceRepository.readBytesAt(sourceFile.sourceRelativePath)
+                    .getOrElse {
+                        failedCopyCount += 1
+                        return@forEach
+                    }
+                if (bytes.size.toLong() > MAX_HISTORY_ARCHIVE_SINGLE_PAYLOAD_BYTES) {
+                    failedCopyCount += 1
+                    return@forEach
+                }
+                fileSystem.writeBytes("$archiveDirectory/${sourceFile.archiveRelativePath}", bytes)
+                    .getOrElse {
+                        failedCopyCount += 1
+                        return@forEach
+                    }
+                copiedFileCount += 1
+                copiedFiles += HistoryArchiveFile(
+                    relativePath = sourceFile.archiveRelativePath,
+                    sizeBytes = bytes.size.toLong(),
+                    kind = sourceFile.kind
+                )
+            }
+            totalFailedCopyCount += failedCopyCount
+            exportedEntries += buildCopiedHistoryArchiveEntry(
+                plannedEntry = plannedEntry,
+                copiedFiles = copiedFiles,
+                failedCopyCount = failedCopyCount
+            )
+        }
+
+        val totalPayloadBytes = exportedEntries
+            .flatMap { it.payloadFiles }
+            .fold(0L) { total, file -> safeHistoryArchiveExportSizeAdd(total, file.sizeBytes) }
+        require(totalPayloadBytes <= MAX_HISTORY_ARCHIVE_TOTAL_PAYLOAD_BYTES) {
+            "History archive payload is too large"
+        }
+        val manifest = HistoryArchiveManifest(
+            archiveId = archiveId,
+            exportedAtEpochMillis = request.exportedAtEpochMillis,
+            appVersion = request.appVersion,
+            entryCount = exportedEntries.size,
+            totalPayloadBytes = totalPayloadBytes,
+            entries = exportedEntries
+        )
+        val manifestPayload = json.encodeToString(HistoryArchiveManifest.serializer(), manifest)
+        require(manifestPayload.encodeToByteArray().size.toLong() <= MAX_HISTORY_ARCHIVE_MANIFEST_BYTES) {
+            "History archive manifest is too large"
+        }
+        fileSystem.writeString(
+            "$archiveDirectory/manifest.json",
+            manifestPayload
+        ).getOrThrow()
+        incompleteArchiveDirectory = null
+        Result.success(
+            HistoryArchiveExportResult(
+                manifest = manifest,
+                archiveDirectory = archiveDirectory,
+                copiedFileCount = copiedFileCount,
+                historyOnlyCount = exportedEntries.count {
+                    it.payloadStatus == HistoryArchivePayloadStatus.HISTORY_ONLY
+                },
+                partialPayloadCount = exportedEntries.count {
+                    it.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
+                },
+                omittedEntryCount = omittedForSizeCount,
+                failedCopyCount = totalFailedCopyCount
+            )
+        )
+    } catch (e: CancellationException) {
+        cleanupIncompleteHistoryArchive(fileSystem, incompleteArchiveDirectory)
+        throw e
+    } catch (t: Throwable) {
+        cleanupIncompleteHistoryArchive(fileSystem, incompleteArchiveDirectory)
+        Result.failure(t)
+    }
+}
+
+private suspend fun cleanupIncompleteHistoryArchive(fileSystem: FileSystem, directory: String?) {
+    val target = directory ?: return
+    withContext(NonCancellable) {
+        // A failed export can hold thousands of copied media files; five seconds left
+        // most of a large one behind. Whatever still remains is swept by a later export.
+        withTimeoutOrNull(HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS) {
+            fileSystem.deleteRecursively(target)
+        }
+    }
+}
+
+private const val HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS = 60_000L
+// Manifest header (ids, counts, version) and separators, with room to spare.
+private const val HISTORY_ARCHIVE_MANIFEST_OVERHEAD_BYTES = 4_096L
+private const val HISTORY_ARCHIVE_ABANDONED_AGE_MILLIS = 60L * 60L * 1000L
+private const val HISTORY_ARCHIVE_MAX_SWEPT_PER_EXPORT = 8
+private val HISTORY_ARCHIVE_TIMESTAMPED_NAME = Regex("^(?:history|archive)_([0-9]{10,15})$")
+
+/**
+ * The epoch encoded in an archive folder name, when it is a folder this app creates
+ * ("history_<millis>" / "archive_<millis>"). Other folders are never swept.
+ */
+internal fun historyArchiveFolderEpochMillis(name: String): Long? =
+    HISTORY_ARCHIVE_TIMESTAMPED_NAME.matchEntire(name.trim().trim('/'))?.groupValues?.get(1)?.toLongOrNull()
+
+/** An app-named archive without a manifest, older than an hour, was left by a killed export. */
+internal fun isAbandonedHistoryArchive(name: String, hasManifest: Boolean, nowEpochMillis: Long): Boolean {
+    if (hasManifest) return false
+    val createdAt = historyArchiveFolderEpochMillis(name) ?: return false
+    return createdAt <= nowEpochMillis - HISTORY_ARCHIVE_ABANDONED_AGE_MILLIS
+}
+
+private suspend fun sweepAbandonedHistoryArchives(
+    fileSystem: FileSystem,
+    archiveBaseDirectory: String,
+    nowEpochMillis: Long
+) {
+    val names = runCatching {
+        fileSystem.listFiles(archiveBaseDirectory)
+            .asSequence()
+            .map { it.trim().trim('/').substringAfterLast('/') }
+            .filter { historyArchiveFolderEpochMillis(it) != null }
+            .take(1_000)
+            .toList()
+    }.getOrNull().orEmpty()
+    var swept = 0
+    for (name in names) {
+        if (swept >= HISTORY_ARCHIVE_MAX_SWEPT_PER_EXPORT) break
+        coroutineContext.ensureActive()
+        // Unknown is treated as complete so a read error never deletes an archive.
+        val hasManifest = runCatching { fileSystem.exists("$archiveBaseDirectory/$name/manifest.json") }
+            .getOrDefault(true)
+        if (!isAbandonedHistoryArchive(name, hasManifest, nowEpochMillis)) continue
+        swept++
+        withTimeoutOrNull(HISTORY_ARCHIVE_CLEANUP_TIMEOUT_MILLIS) {
+            fileSystem.deleteRecursively("$archiveBaseDirectory/$name")
+        }
+    }
+}
+
+internal fun safeHistoryArchiveExportSizeAdd(current: Long, addition: Long): Long {
+    require(current >= 0L && addition >= 0L && current <= Long.MAX_VALUE - addition) {
+        "History archive payload size overflow"
+    }
+    return current + addition
+}
+
+private data class PlannedHistoryArchivePayload(
+    val repository: SavedThreadRepository,
+    val plan: SavedThreadArchivePayloadPlan
+)
+
+private suspend fun chooseBestHistoryArchivePayloadPlan(
+    sourceRepositories: List<SavedThreadRepository>,
+    historyEntry: ThreadHistoryEntry,
+    archiveId: String
+): PlannedHistoryArchivePayload? {
+    val snapshotId = buildHistoryArchiveSnapshotId(historyEntry)
+    return sourceRepositories
+        .mapNotNull { repository ->
+            repository.planHistoryArchivePayload(
+                historyEntry = historyEntry,
+                archiveId = archiveId,
+                snapshotId = snapshotId
+            ).getOrNull()?.let { plan ->
+                PlannedHistoryArchivePayload(repository, plan)
+            }
+        }
+        .maxByOrNull { payloadRank(it.plan.archiveEntry.payloadStatus) }
+}
+
+private fun buildCopiedHistoryArchiveEntry(
+    plannedEntry: HistoryArchiveEntry,
+    copiedFiles: List<HistoryArchiveFile>,
+    failedCopyCount: Int
+): HistoryArchiveEntry {
+    val copiedPaths = copiedFiles.mapTo(linkedSetOf()) { it.relativePath }
+    val copiedStatus = when {
+        copiedFiles.isEmpty() -> HistoryArchivePayloadStatus.HISTORY_ONLY
+        failedCopyCount > 0 || plannedEntry.payloadStatus == HistoryArchivePayloadStatus.PARTIAL ->
+            HistoryArchivePayloadStatus.PARTIAL
+        else -> HistoryArchivePayloadStatus.FULL
+    }
+    return plannedEntry.copy(
+        metadataPath = plannedEntry.metadataPath?.takeIf { it in copiedPaths },
+        htmlPath = plannedEntry.htmlPath?.takeIf { it in copiedPaths },
+        payloadFiles = copiedFiles,
+        payloadStatus = copiedStatus
+    )
+}
+
+private fun buildHistoryOnlyArchiveEntry(
+    historyEntry: ThreadHistoryEntry,
+    archiveId: String
+): HistoryArchiveEntry {
+    return HistoryArchiveEntry(
+        snapshotId = "${normalizeHistoryArchivePathSegment(archiveId)}_${buildHistoryArchiveSnapshotId(historyEntry)}",
+        historyEntry = historyEntry,
+        payloadStatus = HistoryArchivePayloadStatus.HISTORY_ONLY
+    )
+}
+
+private fun payloadRank(status: HistoryArchivePayloadStatus): Int {
+    return when (status) {
+        HistoryArchivePayloadStatus.FULL -> 3
+        HistoryArchivePayloadStatus.PARTIAL -> 2
+        HistoryArchivePayloadStatus.HISTORY_ONLY -> 1
+    }
+}
+
+private fun buildHistoryArchiveSnapshotId(entry: ThreadHistoryEntry): String {
+    val base = buildThreadStorageId(entry.boardId.ifBlank { null }, entry.threadId)
+    return normalizeHistoryArchivePathSegment("${base}_v${entry.lastVisitedEpochMillis}")
+}
+
+private fun normalizeHistoryArchivePathSegment(value: String): String {
+    return value
+        .trim()
+        .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+        .trim('_')
+        .ifBlank { "archive" }
+        .take(120)
+}

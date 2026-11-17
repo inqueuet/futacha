@@ -1,0 +1,147 @@
+package com.valoser.futacha.shared.ui.futaber
+
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+
+/**
+ * A tab is only a registered (board, thread) key: the title, thumbnail and reply count shown
+ * come from the shared history, so no thread data is copied. Tabs exist only when the user
+ * adds them; opening a thread never adds one.
+ */
+internal data class FutaberTabKey(val boardId: String, val threadId: String)
+
+private const val KEY_SEPARATOR = '\n'
+
+internal fun encodeFutaberTabs(keys: List<FutaberTabKey>): String =
+    Json.encodeToString(
+        ListSerializer(String.serializer()),
+        keys.map { "${it.boardId}$KEY_SEPARATOR${it.threadId}" }
+    )
+
+/** A damaged or unknown stored value reads as no tabs rather than failing. */
+internal fun decodeFutaberTabs(stored: String?): List<FutaberTabKey> {
+    if (stored.isNullOrBlank()) return emptyList()
+    val raw = runCatching { Json.decodeFromString(ListSerializer(String.serializer()), stored) }
+        .getOrNull() ?: return emptyList()
+    return raw.mapNotNull { entry ->
+        val parts = entry.split(KEY_SEPARATOR)
+        if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) null
+        else FutaberTabKey(parts[0], parts[1])
+    }.distinct()
+}
+
+/** Adds the tab at the end, or removes it when already registered (plan B8a, Q3b: no count limit of this mode's own). */
+internal fun futaberToggleTab(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> =
+    if (key in keys) keys - key else keys + key
+
+internal fun futaberRemoveTab(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> = keys - key
+
+/** The tab itself and everything before it stay; the tabs to its right go. */
+internal fun futaberRemoveTabsToTheRight(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> {
+    val index = keys.indexOf(key)
+    return if (index < 0) keys else keys.take(index + 1)
+}
+
+/** Only [key] stays (it stays only if it was a tab). */
+internal fun futaberKeepOnlyTab(keys: List<FutaberTabKey>, key: FutaberTabKey): List<FutaberTabKey> =
+    if (key in keys) listOf(key) else keys
+
+/** The tabs of threads that fell off the board are dropped. */
+internal fun futaberRemoveFallenTabs(keys: List<FutaberTabKey>, fallen: Set<FutaberTabKey>): List<FutaberTabKey> =
+    keys.filterNot { it in fallen }
+
+/**
+ * The clean-up that runs by itself: drops the tabs of a board that was removed from the board list, and nothing else.
+ * A thread missing from the shared history does not lose its tab (the history is emptied or trimmed by the other
+ * modes, and a restored backup brings the tabs before the history): such a tab is simply not shown until its row is
+ * back ([futaberTabViews]). An empty [boards] list drops nothing, since it cannot tell a removed board from a list
+ * that is not there yet.
+ */
+internal fun futaberPruneTabsOfRemovedBoards(keys: List<FutaberTabKey>, boards: List<BoardSummary>): List<FutaberTabKey> {
+    if (boards.isEmpty()) return keys
+    val boardIds = boards.mapTo(HashSet()) { it.id }
+    return keys.filter { it.boardId in boardIds }
+}
+
+/** What one tab shows. */
+internal data class FutaberTabView(
+    val key: FutaberTabKey,
+    val title: String,
+    val thumbnailUrl: String,
+    val replyCount: Int,
+    val boardName: String = "",
+    /** The thread fell off the board (the refresh found it gone). */
+    val fallen: Boolean = false,
+    val status: com.valoser.futacha.shared.model.ThreadStatus? = null
+)
+
+internal fun futaberTabViews(
+    keys: List<FutaberTabKey>,
+    history: List<ThreadHistoryEntry>,
+    showStatus: Boolean = false,
+    shared: Map<FutaberTabKey, com.valoser.futacha.shared.compat.CompatTab> = emptyMap()
+): List<FutaberTabView> {
+    val byKey = futaberHistoryRowsFor(keys.toHashSet(), history)
+    return keys.mapNotNull { key ->
+        val entry = byKey[key]
+        if (entry == null) {
+            // Audit F1 (plan B8a): a shared tab whose thread has no history row is shown from the shared tab.
+            val tab = shared[key] ?: return@mapNotNull null
+            return@mapNotNull FutaberTabView(
+                key, tab.title.ifBlank { "(無題)" }, tab.thumbnailUrl.orEmpty(), tab.replyCount + 1, tab.boardName,
+                fallen = tab.isDead
+            )
+        }
+        FutaberTabView(
+            key, entry.title.ifBlank { "(無題)" }, entry.titleImageUrl, entry.replyCount, entry.boardName,
+            fallen = entry.isAutoRefreshDisabled,
+            status = entry.threadStatus.takeIf { showStatus }
+        )
+    }
+}
+
+/**
+ * F27: the count the tab strip and the panel's history and tabs show: replies, as futaber (and the catalog) count them.
+ * The history keeps the posts including the first (the shared unit, docs/futaber-evolution-data-2026-10-31.md §2.2), so
+ * one is taken off for showing only; nothing stored changes.
+ */
+internal fun futaberShownReplyCount(storedPosts: Int): Int = (storedPosts - 1).coerceAtLeast(0)
+
+/** The thread to open for a history row, or null when its board is no longer registered. */
+internal fun futaberRefForHistory(entry: ThreadHistoryEntry, boards: List<BoardSummary>): FutaberThreadRef? {
+    val board = boards.firstOrNull { it.id == entry.boardId }
+        ?: boards.firstOrNull { entry.boardId.isBlank() && it.url == entry.boardUrl }
+        ?: return null
+    return FutaberThreadRef(board.id, entry.threadId, entry.title.ifBlank { "(無題)" }, entry.titleImageUrl, entry.replyCount)
+}
+
+/** How many closed tabs "閉じたタブを元に戻す" remembers. */
+internal const val FUTABER_MAX_CLOSED_TABS = 20
+
+/**
+ * Key of one history row of the manage panel. An old row may have no board id, so the address is part of the key; the
+ * rows of [futaberDistinctHistoryRows] never share one.
+ */
+internal fun futaberHistoryRowKey(entry: ThreadHistoryEntry): String =
+    "${entry.boardId}\n${entry.boardUrl}\n${entry.threadId}"
+
+/** [rows] without a second row of the same key (a lazy list refuses two items with one key). */
+internal fun futaberDistinctHistoryRows(rows: List<ThreadHistoryEntry>): List<ThreadHistoryEntry> =
+    rows.distinctBy(::futaberHistoryRowKey)
+
+/**
+ * The history rows of [keys] only (the last row of a key wins, as `associateBy` did). Audit L25: the tab strip and the
+ * favourites need a handful of rows, and a table of the whole history (up to 20,000 rows) was built on every history change.
+ */
+internal fun futaberHistoryRowsFor(keys: Set<FutaberTabKey>, history: List<ThreadHistoryEntry>): Map<FutaberTabKey, ThreadHistoryEntry> {
+    if (keys.isEmpty()) return emptyMap()
+    val out = HashMap<FutaberTabKey, ThreadHistoryEntry>(keys.size * 2)
+    history.forEach { entry ->
+        val key = FutaberTabKey(entry.boardId, entry.threadId)
+        if (key in keys) out[key] = entry
+    }
+    return out
+}

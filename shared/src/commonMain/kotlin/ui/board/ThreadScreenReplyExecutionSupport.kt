@@ -1,0 +1,160 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.analyticsPresentValue
+import com.valoser.futacha.shared.analytics.analyticsSessionContextId
+import com.valoser.futacha.shared.analytics.analyticsTextHasUrl
+import com.valoser.futacha.shared.analytics.analyticsTextLengthBucket
+import com.valoser.futacha.shared.analytics.analyticsTextLineCountBucket
+import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.util.confirmPostingNotice
+import androidx.compose.material3.SnackbarHostState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+internal data class ThreadScreenReplySubmitDependencies(
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val effectiveBoardUrl: String,
+    val threadId: String,
+    val boardId: String,
+    val coroutineScope: CoroutineScope,
+    val stateStore: AppStateStore?,
+    val updateLastUsedDeleteKey: suspend (String) -> Unit,
+    val actionBindings: ThreadScreenActionBindings,
+    val threadReplyActionCallbacks: ThreadReplyActionCallbacks,
+    val refreshThread: () -> Unit,
+    val snackbarHostState: SnackbarHostState,
+    val onOpenCookieManager: (() -> Unit)?,
+    val showMessage: suspend (String) -> Unit,
+    /** True while the post request runs; the screen holds navigation meanwhile. */
+    val onSendingChanged: (Boolean) -> Unit = {}
+)
+
+internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependencies) {
+    val submitState = deps.replyDialogBinding.currentState()
+    val submitOutcome = resolveThreadScreenReplySubmitOutcome(
+        state = submitState,
+        boardUrl = deps.effectiveBoardUrl,
+        threadId = deps.threadId
+    )
+    if (submitOutcome.validationMessage != null) {
+        deps.coroutineScope.launch { deps.showMessage(submitOutcome.validationMessage) }
+        return
+    }
+    val replyActionConfig = submitOutcome.actionConfig ?: return
+    val dismissedState = submitOutcome.dismissedState ?: return
+    AnalyticsTracker.event(
+        "thread_reply_submitted",
+        mapOf(
+            "board_context" to analyticsSessionContextId("board", deps.boardId, deps.effectiveBoardUrl),
+            "thread_context" to analyticsSessionContextId("thread", deps.effectiveBoardUrl, deps.threadId),
+            "has_name" to analyticsPresentValue(replyActionConfig.name.takeIf { it.isNotBlank() }),
+            "has_email" to analyticsPresentValue(replyActionConfig.email.takeIf { it.isNotBlank() }),
+            "has_subject" to analyticsPresentValue(replyActionConfig.subject.takeIf { it.isNotBlank() }),
+            "has_comment" to analyticsPresentValue(replyActionConfig.comment.takeIf { it.isNotBlank() }),
+            "has_image" to analyticsPresentValue(replyActionConfig.imageBytes),
+            "subject_length_bucket" to analyticsTextLengthBucket(replyActionConfig.subject),
+            "comment_length_bucket" to analyticsTextLengthBucket(replyActionConfig.comment),
+            "comment_line_count" to analyticsTextLineCountBucket(replyActionConfig.comment),
+            "comment_has_url" to analyticsTextHasUrl(replyActionConfig.comment)
+        )
+    )
+    deps.coroutineScope.launch {
+        if (!checkPostingNoticeIfNeeded(deps.stateStore)) return@launch
+        val sendJob = deps.actionBindings.launch(
+            successMessage = "返信を送信しました",
+            failurePrefix = "返信の送信に失敗しました",
+            onFailure = { error ->
+                showPostingFailureSnackbar(
+                    snackbarHostState = deps.snackbarHostState,
+                    message = buildThreadActionFailureMessage(
+                        failurePrefix = "返信の送信に失敗しました",
+                        error = error
+                    ),
+                    error = error,
+                    onOpenCookieManager = deps.onOpenCookieManager
+                )
+            },
+            onSuccess = { thisNo ->
+                handleReplySuccess(
+                    thisNo = thisNo,
+                    stateStore = deps.stateStore,
+                    coroutineScope = deps.coroutineScope,
+                    threadId = deps.threadId,
+                    boardId = deps.boardId,
+                    replyDialogBinding = deps.replyDialogBinding,
+                    completedState = submitOutcome.completedState,
+                    sentDraft = dismissedState.draft,
+                    refreshThread = deps.refreshThread
+                )
+            }
+        ) {
+            performThreadReplyAction(
+                config = replyActionConfig,
+                callbacks = deps.threadReplyActionCallbacks
+            )
+        } ?: return@launch
+        // Another action in progress: the launch above was refused, so the dialog (and its draft) stays open.
+        deps.replyDialogBinding.setState(dismissedState)
+        submitOutcome.normalizedPassword?.let { deps.updateLastUsedDeleteKey(it) }
+        deps.onSendingChanged(true)
+        try {
+            sendJob.join()
+        } finally {
+            deps.onSendingChanged(false)
+        }
+    }
+}
+
+internal suspend fun shouldConfirmThreadPostingNotice(
+    stateStore: AppStateStore?
+): Boolean {
+    val store = stateStore ?: return false
+    return !store.hasShownPostingNotice.first()
+}
+
+internal suspend fun checkPostingNoticeIfNeeded(
+    stateStore: AppStateStore?,
+    confirmNotice: suspend () -> Boolean = ::confirmPostingNotice
+): Boolean {
+    val store = stateStore ?: return true
+    if (!shouldConfirmThreadPostingNotice(store)) {
+        return true
+    }
+    if (!confirmNotice()) {
+        return false
+    }
+    store.setHasShownPostingNotice(true)
+    return true
+}
+
+private fun handleReplySuccess(
+    thisNo: String?,
+    stateStore: AppStateStore?,
+    coroutineScope: CoroutineScope,
+    threadId: String,
+    boardId: String,
+    replyDialogBinding: ThreadReplyDialogStateBinding,
+    completedState: ThreadReplyDialogState?,
+    sentDraft: ThreadReplyDraft,
+    refreshThread: () -> Unit
+) {
+    if (!thisNo.isNullOrBlank()) {
+        stateStore?.let { store ->
+            coroutineScope.launch {
+                store.addSelfPostIdentifier(
+                    threadId = threadId,
+                    identifier = thisNo,
+                    boardId = boardId.ifBlank { null }
+                )
+            }
+        }
+    }
+    if (completedState != null) {
+        // The draft as it is now, not as it was when sent (re-audit M29: a reply opened again and added to while sending
+        // was wiped by the state made at the press).
+        threadReplyStateAfterSuccess(replyDialogBinding.currentState(), sentDraft)?.let(replyDialogBinding.setState)
+        refreshThread()
+    }
+}

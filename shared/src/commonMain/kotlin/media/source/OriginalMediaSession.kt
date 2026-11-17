@@ -1,0 +1,263 @@
+package com.valoser.futacha.shared.media.source
+
+import coil3.disk.DiskCache
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import okio.Path
+
+sealed interface OriginalMediaTransitionState {
+    data object Idle : OriginalMediaTransitionState
+    data class WaitingForLeases(val openLeases: Int) : OriginalMediaTransitionState
+}
+
+data class OriginalMediaCacheConfiguration(val directory: Path, val maxBytes: Long) {
+    init { require(maxBytes > 0) }
+}
+
+fun interface OriginalMediaCacheImporter {
+    /** Return null only before writing to sink. HTTP is forbidden in this operation. */
+    suspend fun copyCached(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo?
+
+    /** A cheap existence check; false only when [copyCached] certainly returns null. */
+    suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean = true
+}
+
+/** Lives with the host's HTTP client, across Activity and Compose mode recreation. */
+class OriginalMediaSession internal constructor(
+    override val cacheIdentity: String,
+    private val downloader: OriginalMediaDownloader,
+    private val closeDownloader: () -> Unit = {},
+    private val createCache: suspend (OriginalMediaCacheConfiguration) -> DiskCache = {
+        DiskCache.Builder().directory(it.directory).maxSizeBytes(it.maxBytes).build()
+    },
+    private val dispatcher: CoroutineDispatcher = AppDispatchers.io,
+    private val shutdownReportIntervalMillis: Long = OriginalMediaStore.DEFAULT_SHUTDOWN_REPORT_INTERVAL_MILLIS,
+    /**
+     * How long a change of an open cache waits for the next published value. A new
+     * composition first publishes defaults and then the saved setting; without this,
+     * that brief default relocated (and cleared) the live cache.
+     */
+    private val configurationSettleMillis: Long = DEFAULT_CONFIGURATION_SETTLE_MILLIS,
+    /** Bound for acquire while the cache is (re)configured, e.g. behind a playing video. */
+    private val readyWaitTimeoutMillis: Long = DEFAULT_READY_WAIT_TIMEOUT_MILLIS
+) : OriginalMediaSource, AutoCloseable {
+    companion object {
+        internal const val DEFAULT_CONFIGURATION_SETTLE_MILLIS = 500L
+        internal const val DEFAULT_READY_WAIT_TIMEOUT_MILLIS = 30_000L
+    }
+
+    private data class Ready(val configuration: OriginalMediaCacheConfiguration, val store: OriginalMediaStore)
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+    private val requested = MutableStateFlow<OriginalMediaCacheConfiguration?>(null)
+    private val ready = MutableStateFlow<Ready?>(null)
+    private val closed = MutableStateFlow(false)
+    private val transitionStateValue = MutableStateFlow<OriginalMediaTransitionState>(OriginalMediaTransitionState.Idle)
+
+    /**
+     * Whether a cache change is waiting for open leases (a playing video or an
+     * export) before it can reopen the cache. Settings can show this instead of
+     * appearing stuck.
+     */
+    val transitionState: StateFlow<OriginalMediaTransitionState> = transitionStateValue
+    private val shutdown = CompletableDeferred<Unit>()
+    internal val shutdownSignal: Deferred<Unit> get() = shutdown
+    private val transition = Mutex()
+    private val importers = MutableStateFlow<List<OriginalMediaCacheImporter>>(emptyList())
+    private val persistedUrlEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
+    override val persistedUrls: kotlinx.coroutines.flow.Flow<String> = persistedUrlEvents
+    private val sharedDownloader = object : OriginalMediaDownloader {
+        override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink) = downloader.download(request, sink)
+        override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink, onHeaders: (OriginalMediaInfo) -> Unit) =
+            downloader.download(request, sink, onHeaders)
+        override suspend fun retryAfter(retry: Int, failure: Throwable) = downloader.retryAfter(retry, failure)
+        override suspend fun downloadCached(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo? {
+            if (request.reloadToken != 0L) return null
+            for (importer in importers.value) importer.copyCached(request, sink)?.let { return it }
+            return null
+        }
+        override suspend fun mayHaveCached(request: OriginalMediaRequest): Boolean =
+            request.reloadToken == 0L && importers.value.any { it.mayHaveCached(request) }
+    }
+    private val worker = scope.launch {
+        requested.filterNotNull().collect { published ->
+            transition.withLock {
+                var configuration = published
+                if (closed.value || ready.value?.configuration == configuration) return@withLock
+                if (ready.value != null) {
+                    delay(configurationSettleMillis)
+                    configuration = requested.value ?: configuration
+                    if (closed.value || ready.value?.configuration == configuration) return@withLock
+                }
+                val old = ready.value
+                ready.value = null
+                if (old != null) {
+                    withContext(NonCancellable) {
+                        try {
+                            // Do not leave an unaccounted second cache at the old location.
+                            if (old.configuration.directory != configuration.directory) {
+                                runCatching { old.store.clear() }.onFailure {
+                                    Logger.e("OriginalMediaSession", "Failed to clear the previous original cache", it)
+                                }
+                            }
+                        } finally {
+                            try {
+                                old.store.closeAndAwait(shutdownReportIntervalMillis) { report ->
+                                    transitionStateValue.value = OriginalMediaTransitionState.WaitingForLeases(report.liveEntries)
+                                    Logger.w(
+                                        "OriginalMediaSession",
+                                        "Cache change waits for ${report.liveEntries} open original(s), " +
+                                            "${report.playbackEntries} in playback, oldest ${report.oldestAgeMillis} ms"
+                                    )
+                                }
+                            } finally {
+                                transitionStateValue.value = OriginalMediaTransitionState.Idle
+                            }
+                        }
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                if (closed.value) return@withLock
+                // Cache opening is lazy and happens on the store's IO dispatcher.
+                ready.value = Ready(configuration, OriginalMediaStore(
+                    cacheNamespace = cacheIdentity,
+                    createCache = { createCache(configuration) },
+                    downloader = sharedDownloader,
+                    dispatcher = dispatcher,
+                    onPersisted = { url -> persistedUrlEvents.tryEmit(url) }
+                ))
+            }
+        }
+    }
+
+    override fun registerCacheImporter(importer: OriginalMediaCacheImporter): AutoCloseable {
+        check(!closed.value)
+        importers.update { it + importer }
+        return AutoCloseable { importers.update { it - importer } }
+    }
+
+    /** Publishing settings is nonblocking; callers wait for safe cache reconfiguration. */
+    fun configure(configuration: OriginalMediaCacheConfiguration) {
+        check(!closed.value) { "Original media session is closed" }
+        requested.value = configuration
+    }
+
+    /** Background-only launches cannot wait for Compose to publish its settings.
+     * A late background initializer must never override a live UI configuration. */
+    fun configureIfAbsent(configuration: OriginalMediaCacheConfiguration) {
+        check(!closed.value) { "Original media session is closed" }
+        requested.compareAndSet(null, configuration)
+    }
+
+    private suspend fun awaitReady(): Ready =
+        withTimeoutOrNull(readyWaitTimeoutMillis.coerceAtLeast(1L)) {
+            combine(requested, ready, closed) { desired, current, stopped ->
+                check(!stopped) { "Original media session is closed" }
+                current?.takeIf { it.configuration == desired }
+            }.filterNotNull().first()
+        } ?: throw IllegalStateException(
+            "Original media cache was not ready within ${readyWaitTimeoutMillis}ms " +
+                "(${transitionStateValue.value})"
+        )
+
+    override suspend fun acquire(request: OriginalMediaRequest): OriginalMediaStore.Lease {
+        while (true) {
+            val snapshot = awaitReady()
+            try {
+                val lease = snapshot.store.acquire(request)
+                if (ready.value === snapshot && requested.value == snapshot.configuration && !closed.value) return lease
+                lease.close()
+            } catch (failure: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                // A configuration switch retires its store; explicit clear/caller
+                // cancellation must not silently start a replacement download.
+                if (ready.value === snapshot && requested.value == snapshot.configuration) throw failure
+            } catch (failure: IllegalStateException) {
+                if (ready.value === snapshot && requested.value == snapshot.configuration) throw failure
+            }
+        }
+    }
+
+    override suspend fun acquireForPlayback(request: OriginalMediaRequest): OriginalMediaPlayback {
+        while (true) {
+            val snapshot = awaitReady()
+            try {
+                val playback = snapshot.store.acquireForPlayback(request)
+                if (ready.value === snapshot && requested.value == snapshot.configuration && !closed.value) return playback
+                playback.close()
+            } catch (failure: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (ready.value === snapshot && requested.value == snapshot.configuration) throw failure
+            } catch (failure: IllegalStateException) {
+                if (ready.value === snapshot && requested.value == snapshot.configuration) throw failure
+            }
+        }
+    }
+
+    override suspend fun clear(): Unit = withContext(dispatcher) {
+        transition.withLock { ready.value?.store?.clear(); Unit }
+    }
+
+    // Does not take the transition lock: a cache change may wait minutes for a
+    // playing video, and the settings screen must not wait with it.
+    override suspend fun sizeBytes(): Long = withContext(dispatcher) {
+        val store = ready.value?.store ?: return@withContext 0L
+        try {
+            store.sizeBytes()
+        } catch (closedDuringRead: IllegalStateException) {
+            0L
+        }
+    }
+
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        CoroutineScope(NonCancellable + dispatcher).launch {
+            try {
+                worker.cancelAndJoin()
+                transition.withLock {
+                    val old = ready.value
+                    ready.value = null
+                    old?.store?.closeAndAwait()
+                }
+            } finally {
+                importers.value = emptyList()
+                try { closeDownloader() } finally { scope.cancel(); shutdown.complete(Unit) }
+            }
+        }
+    }
+
+    suspend fun closeAndAwait() { close(); shutdown.await() }
+}
+
+/** Shared public Futaba assets; private/credential-specific sources need another namespace. */
+fun createOriginalMediaSession(client: HttpClient, beforeOpenCache: suspend () -> Unit = {}): OriginalMediaSession {
+    val transport = lazy { KtorOriginalMediaDownloader(client, maxBytes = 512L * 1024 * 1024) }
+    val downloader = object : OriginalMediaDownloader {
+        override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink) =
+            transport.value.download(request, sink)
+        override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink, onHeaders: (OriginalMediaInfo) -> Unit) =
+            transport.value.download(request, sink, onHeaders)
+        override suspend fun retryAfter(retry: Int, failure: Throwable) = transport.value.retryAfter(retry, failure)
+    }
+    return OriginalMediaSession(
+        cacheIdentity = "futaba-public-originals-v1",
+        downloader = downloader,
+        closeDownloader = { if (transport.isInitialized()) transport.value.close() },
+        createCache = {
+            beforeOpenCache()
+            DiskCache.Builder().directory(it.directory).maxSizeBytes(it.maxBytes).build()
+        }
+    )
+}

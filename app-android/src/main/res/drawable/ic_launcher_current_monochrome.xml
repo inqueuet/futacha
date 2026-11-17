@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Transparent themed-icon layer. The circular mark and its sprout cutout
+     remain visible when the launcher replaces every color with one tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+        android:pathData="M54,28 A26,26 0,1 1,54 80 A26,26 0,1 1,54 28 Z M53,66 C53,59 51,55 46,51 C39,52 35,47 35,40 C43,39 50,43 49,49 C51,51 53,54 54,57 C55,51 58,47 61,44 C59,41 63,38 69,38 C70,44 67,48 62,47 C59,51 57,57 57,66 Z" />
+</vector>

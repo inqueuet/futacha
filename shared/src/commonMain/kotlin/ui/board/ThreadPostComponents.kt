@@ -1,0 +1,898 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.ui.privacy.privacyMediaFilter
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+import com.valoser.futacha.shared.ui.image.InlinePrompt
+import com.valoser.futacha.shared.ui.image.HighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode
+import com.valoser.futacha.shared.ui.image.planHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberThreadHighQualityThumbnail
+import com.valoser.futacha.shared.ui.image.rememberThreadThumbnailPainter
+import androidx.compose.ui.platform.LocalWindowInfo
+import coil3.size.Precision
+
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImagePainter
+import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.analyticsSessionContextId
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.PostDeletionKind
+import com.valoser.futacha.shared.model.postDeletionKind
+import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadPostImageSize
+import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import kotlin.math.min
+
+internal val LocalJumpHighlightedPostId = androidx.compose.runtime.compositionLocalOf<String?> { null }
+
+private val ThreadPostThumbnailMaxWidth = 800.dp
+
+internal data class ThreadPostThumbnailDisplayBounds(
+    val width: Dp,
+    val height: Dp
+)
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ThreadPostCard(
+    post: Post,
+    isOp: Boolean,
+    isSelfPost: Boolean = false,
+    deletionSummary: String? = null,
+    posterIdLabel: PosterIdLabel?,
+    posterIdValue: String?,
+    saidaneLabelOverride: String?,
+    highlightRanges: List<IntRange> = emptyList(),
+    onQuoteClick: (QuoteReference) -> Unit,
+    onUrlClick: (String) -> Unit,
+    onQuoteRequested: (() -> Unit)? = null,
+    onPosterIdClick: (() -> Unit)? = null,
+    onReferencedByClick: (() -> Unit)? = null,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
+    onSaidaneClick: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    onRelatedClick: (() -> Unit)? = null,
+    onAiHideAgain: (() -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
+    compactHeader: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val platformContext = LocalPlatformContext.current
+    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
+    val density = LocalDensity.current
+    val backgroundColor = when {
+        post.isDeleted || post.isIsolated -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val features = LocalFutachaSharedFeatures.current
+    val rawSaidane = saidaneLabelOverride ?: post.saidaneLabel
+    val saidaneStyle = features?.value("thread", "threadHeaderSoudaneDisplay")
+    val saidaneLabel = when (saidaneStyle?.substringBefore('|')) {
+        "hide" -> null
+        "simple" -> parseSaidaneCount(rawSaidane)?.toString()
+        else -> rawSaidane
+    }
+    val sharedShowDeleted = features?.value("thread", "threadAdminDeleteShow") == "ON"
+    var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted, post.isIsolated, sharedShowDeleted) {
+        mutableStateOf(sharedShowDeleted)
+    }
+    val relatedTap = features?.value("control", POST_TAP_BEHAVIOR_KEY) == "related" && onRelatedClick != null
+    val onPostTap = if (relatedTap) onRelatedClick else LocalFutachaPostTap.current
+    val latestLongPress = androidx.compose.runtime.rememberUpdatedState(onLongPress)
+    val latestPostTap = androidx.compose.runtime.rememberUpdatedState(onPostTap)
+    val cardModifier = if (onLongPress != null || onPostTap != null) {
+        modifier.pointerInput(post.id, onLongPress != null, onPostTap != null) {
+            detectTapGestures(onLongPress = onLongPress?.let { { _: androidx.compose.ui.geometry.Offset -> latestLongPress.value?.invoke() } },
+                onTap = onPostTap?.let { { _: androidx.compose.ui.geometry.Offset -> latestPostTap.value?.invoke() } })
+        }
+    } else {
+        modifier
+    }
+
+    val safetyMenu = if (reviewComplianceEnabled) onLongPress else null
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = cardModifier
+            .fillMaxWidth()
+            .background(backgroundColor)
+            .then(if (LocalJumpHighlightedPostId.current == post.id) Modifier.border(2.dp, MaterialTheme.colorScheme.primary) else Modifier)
+            .postPressFeedback(post.id, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .then(if (safetyMenu != null) Modifier.padding(end = ThreadPostSafetyMenuSize - 4.dp) else Modifier)
+            .padding(
+                horizontal = if (compactHeader) 8.dp else 12.dp,
+                vertical = LocalFutachaSharedFeatures.current?.intValue("thread", "threadPostSpacing", 0..20)?.dp
+                    ?: if (compactHeader) 6.dp else 10.dp
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (compactHeader) 5.dp else 8.dp)
+    ) {
+        if (post.id in LocalManualPostMarkNos.current) Text("★ マーク", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium)
+        ThreadPostMetadata(
+            post = post,
+            isOp = isOp,
+            isSelfPost = isSelfPost,
+            posterIdLabel = posterIdLabel,
+            posterIdValue = posterIdValue,
+            saidaneLabel = saidaneLabel,
+            onUrlClick = onUrlClick,
+            onQuoteRequested = onQuoteRequested,
+            onSaidaneClick = onSaidaneClick,
+            onPosterIdClick = onPosterIdClick,
+            onReferencedByClick = onReferencedByClick,
+            onMediaClick = onMediaClick,
+            onMediaLongPress = onMediaLongPress,
+            bodyTextSize = bodyTextSize,
+            compactHeader = compactHeader
+        )
+        onAiHideAgain?.let { hideAgain ->
+            AiHiddenPostRestoreAction(onClick = hideAgain)
+        }
+        val shouldCollapseDeletedBody = (post.isDeleted || post.isIsolated) && !showDeletedBody
+        val thumbnailForDisplay = if (shouldCollapseDeletedBody) null else resolvePostDisplayMediaUrl(post)
+        thumbnailForDisplay?.let { displayUrl ->
+            val imageLoader = LocalFutachaImageLoader.current
+            val thumbnailMaxHeight = features?.intValue("thread", "threadThumbSize", 150..1200)?.dp
+                ?: resolveThreadPostThumbnailMaxHeight(postImageSize)
+            val thumbnailTargetWidthPx = remember(density) {
+                with(density) { ThreadPostThumbnailMaxWidth.roundToPx() }
+            }
+            val thumbnailTargetHeightPx = remember(density, thumbnailMaxHeight) {
+                with(density) { thumbnailMaxHeight.roundToPx() }
+            }
+            val thumbnailRequest = remember(
+                platformContext,
+                displayUrl,
+                thumbnailTargetWidthPx,
+                thumbnailTargetHeightPx
+            ) {
+                ImageRequest.Builder(platformContext)
+                    .data(displayUrl)
+                    .crossfade(false)
+                    .size(thumbnailTargetWidthPx, thumbnailTargetHeightPx)
+                    // Futaba thumbnails are at most 250px: enlarging them while
+                    // decoding adds no detail and uses ~12x the memory cache.
+                    .precision(Precision.INEXACT)
+                    .build()
+            }
+            val thumbnailPainter = rememberAsyncImagePainter(
+                model = thumbnailRequest,
+                imageLoader = imageLoader
+            )
+            val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            val highQualityMode = LocalHighQualityThumbnailMode.current
+            val windowWidthPx = LocalWindowInfo.current.containerSize.width
+            val targetMediaUrl = resolvePostTargetMediaUrl(post)
+            val highQualityPlan = remember(
+                highQualityMode, targetMediaUrl, displayUrl, post.imageFileSizeBytes,
+                post.thumbnailWidth, post.thumbnailHeight, thumbnailTargetWidthPx,
+                thumbnailTargetHeightPx, windowWidthPx, thumbnailPainterState
+            ) {
+                planHighQualityThumbnail(
+                    mode = highQualityMode,
+                    originalUrl = targetMediaUrl,
+                    thumbnailUrl = displayUrl,
+                    thumbnailWidthPx = post.thumbnailWidth
+                        ?: thumbnailPainter.intrinsicSize.width.takeIf { it.isFinite() }?.toInt(),
+                    thumbnailHeightPx = post.thumbnailHeight
+                        ?: thumbnailPainter.intrinsicSize.height.takeIf { it.isFinite() }?.toInt(),
+                    boxWidthPx = if (windowWidthPx > 0) minOf(thumbnailTargetWidthPx, windowWidthPx)
+                        else thumbnailTargetWidthPx,
+                    boxHeightPx = thumbnailTargetHeightPx,
+                    originalSizeBytes = post.imageFileSizeBytes,
+                    isUnmeteredConnection = highQualityMode == HighQualityThumbnailMode.UNMETERED &&
+                        com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
+                )
+            }
+            val quality = rememberThreadHighQualityThumbnail(
+                plan = highQualityPlan,
+                thumbnailReady = thumbnailPainterState is AsyncImagePainter.State.Success,
+                imageLoader = imageLoader
+            )
+            val highQualityPainter = quality.painter
+            val displayPainter = if (quality.fromCache) requireNotNull(highQualityPainter) else rememberThreadThumbnailPainter(thumbnailPainter, highQualityPainter)
+            val promptMetadata = rememberGenerationMetadata(resolvePostTargetMediaUrl(post), thumbnailPainterState)
+            val shouldShowThumbnailFallback = !quality.checkingCache && highQualityPainter == null && thumbnailPainterState is AsyncImagePainter.State.Error
+            // Measured with layout modifiers instead of BoxWithConstraints: that is a
+            // SubcomposeLayout per image post, only to read the available width.
+            val thumbnailBoundsFor: Density.(Int) -> ThreadPostThumbnailDisplayBounds = { maxWidthPx ->
+                resolveThreadPostThumbnailDisplayBounds(
+                    intrinsicWidth = post.thumbnailWidth?.takeIf { it > 0 }?.toFloat() ?: thumbnailPainter.intrinsicSize.width,
+                    intrinsicHeight = post.thumbnailHeight?.takeIf { it > 0 }?.toFloat() ?: thumbnailPainter.intrinsicSize.height,
+                    maxWidth = if (maxWidthPx == Constraints.Infinity) Dp.Infinity else maxWidthPx.toDp(),
+                    maxHeight = thumbnailMaxHeight
+                )
+            }
+            Box(
+                modifier = run {
+                    val baseModifier = Modifier
+                        .fillMaxWidth()
+                    val targetUrl = resolvePostTargetMediaUrl(post) ?: displayUrl
+                    val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
+                    if (onMediaLongPress != null) {
+                        baseModifier.combinedClickable(
+                            onClick = {
+                                onMediaClick?.invoke(targetUrl, targetMediaType)
+                            },
+                            onLongClick = {
+                                onMediaLongPress.invoke(post, targetUrl, targetMediaType)
+                            }
+                        )
+                    } else {
+                        baseModifier.clickable {
+                            onMediaClick?.invoke(targetUrl, targetMediaType)
+                        }
+                    }
+                }.layout { measurable, constraints ->
+                    val bounds = thumbnailBoundsFor(constraints.maxWidth)
+                    val widthPx = if (constraints.hasBoundedWidth) constraints.maxWidth
+                        else bounds.width.roundToPx().coerceAtLeast(constraints.minWidth)
+                    val heightPx = bounds.height.roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight)
+                    val placeable = measurable.measure(Constraints.fixed(widthPx, heightPx))
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                }
+            ) {
+                val imageContainerModifier = Modifier
+                    .fillMaxSize()
+                    .clip(MaterialTheme.shapes.small)
+                    .background(backgroundColor)
+                Box(modifier = imageContainerModifier.privacyMediaFilter()) {
+                    if (shouldShowThumbnailFallback) {
+                        MediaThumbnailFallbackIcon(
+                            url = displayUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    } else {
+                        Box(Modifier.align(Alignment.CenterStart).layout { measurable, constraints ->
+                            val bounds = thumbnailBoundsFor(constraints.maxWidth)
+                            val placeable = measurable.measure(
+                                Constraints.fixed(
+                                    bounds.width.roundToPx().coerceIn(constraints.minWidth, constraints.maxWidth),
+                                    bounds.height.roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight)
+                                )
+                            )
+                            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                        }) {
+                            Image(
+                                painter = displayPainter,
+                                contentDescription = "添付画像",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
+                        }
+                    }
+                }
+            }
+            InlinePrompt(promptMetadata)
+        }
+        if (shouldCollapseDeletedBody) {
+            DeletedPostBodyPlaceholder(
+                notice = remember(post.messageHtml, post.isDeleted, post.isIsolated) {
+                    postDeletionKind(messageHtmlToPlainText(post.messageHtml), post.isDeleted, post.isIsolated)
+                        ?.notice ?: PostDeletionKind.UNKNOWN.notice
+                },
+                hasBody = post.messageHtml.isNotBlank(),
+                onReveal = { showDeletedBody = true },
+                bodyTextSize = bodyTextSize
+            )
+        } else {
+            // あいもげ: the 2nd and 3rd files of the post. Each opens its own page of the viewer.
+            val extraAttachments = remember(post) { com.valoser.futacha.shared.service.threadSaveExtraAttachments(post) }
+            com.valoser.futacha.shared.ui.image.PostExtraAttachments(
+                attachments = extraAttachments,
+                postKey = post.id,
+                size = 96.dp,
+                onClick = { url, _ ->
+                    if (onMediaClick != null) onMediaClick(url, determineMediaType(url)) else onUrlClick(url)
+                },
+                imageModifier = Modifier.privacyMediaFilter(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 4.dp)
+            )
+            if (features != null) {
+                val method = features.value("thread", "threadUpsThumbMethod") ?: com.valoser.futacha.shared.ui.compat.COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
+                val wifi = !com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, false) &&
+                    com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, true) && com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
+                // Start from the cached result so a post scrolled back into view
+                // keeps its height instead of growing a frame later.
+                val cachedUrls = remember(post.messageHtml, post.imageUrl, post.thumbnailUrl, method, wifi) {
+                    peekThreadInlineMediaUrls(post.messageHtml, method, wifi)
+                        ?.filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                }
+                val urls by androidx.compose.runtime.produceState(cachedUrls ?: emptyList(), post, method, wifi) {
+                    if (cachedUrls != null) {
+                        value = cachedUrls
+                        return@produceState
+                    }
+                    value = kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                        cachedThreadInlineMediaUrls(post.messageHtml, method, wifi)
+                            .filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                    }
+                }
+                com.valoser.futacha.shared.ui.compat.CompatInlineApuSmallPreviews(urls,
+                    features.intValue("thread", "threadUpsThumbSize", 150..1200) ?: 250, 1f,
+                    { url -> if (onMediaClick != null) onMediaClick(url, determineMediaType(url)) else onUrlClick(url) })
+            }
+            ThreadMessageText(
+                messageHtml = post.messageHtml,
+                isDeleted = post.isDeleted || post.isIsolated,
+                quoteReferences = post.quoteReferences,
+                onQuoteClick = if (relatedTap) { { onRelatedClick?.invoke(); Unit } } else onQuoteClick,
+                onUrlClick = onUrlClick,
+                highlightRanges = highlightRanges,
+                bodyTextSize = bodyTextSize,
+                quoteLongPressOpensMenu = relatedTap,
+                onPlainLongPress = onLongPress?.let { { latestLongPress.value?.invoke() } },
+                onPlainTap = onPostTap?.let { { latestPostTap.value?.invoke() } }
+            )
+        }
+        deletionSummary?.let { summary ->
+            Text(text = summary, color = Color.Red)
+        }
+    }
+    // The iOS report/block entry used to take a whole row under every post
+    // (thread 01a1cd5d #50). It is now a small menu button in the corner
+    // that opens the same action sheet, so it adds no height.
+    safetyMenu?.let { openMenu ->
+        androidx.compose.material3.IconButton(
+            onClick = openMenu,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(ThreadPostSafetyMenuSize)
+        ) {
+            androidx.compose.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Rounded.MoreVert,
+                contentDescription = "通報・ブロック",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    }
+}
+
+internal val ThreadPostSafetyMenuSize = 36.dp
+
+internal fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
+    return when (size) {
+        ThreadPostImageSize.ExtraSmall -> 120.dp
+        ThreadPostImageSize.Small -> 200.dp
+        ThreadPostImageSize.Medium -> 320.dp
+        ThreadPostImageSize.Large -> 480.dp
+    }
+}
+
+internal fun resolveThreadPostThumbnailDisplayBounds(
+    intrinsicWidth: Float,
+    intrinsicHeight: Float,
+    maxWidth: Dp,
+    maxHeight: Dp
+): ThreadPostThumbnailDisplayBounds {
+    val resolvedMaxWidth = if (maxWidth.value.isFinite() && maxWidth > 0.dp) {
+        maxWidth
+    } else {
+        ThreadPostThumbnailMaxWidth
+    }
+    val resolvedMaxHeight = if (maxHeight.value.isFinite() && maxHeight > 0.dp) {
+        maxHeight
+    } else {
+        resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.Small)
+    }
+    if (
+        !intrinsicWidth.isFinite() ||
+        !intrinsicHeight.isFinite() ||
+        intrinsicWidth <= 0f ||
+        intrinsicHeight <= 0f
+    ) {
+        return ThreadPostThumbnailDisplayBounds(
+            width = resolvedMaxWidth,
+            height = resolvedMaxHeight
+        )
+    }
+    val scale = min(
+        resolvedMaxWidth.value / intrinsicWidth,
+        resolvedMaxHeight.value / intrinsicHeight
+    )
+    if (!scale.isFinite() || scale <= 0f) {
+        return ThreadPostThumbnailDisplayBounds(
+            width = resolvedMaxWidth,
+            height = resolvedMaxHeight
+        )
+    }
+    return ThreadPostThumbnailDisplayBounds(
+        width = (intrinsicWidth * scale).dp,
+        height = (intrinsicHeight * scale).dp
+    )
+}
+
+@Composable
+private fun AiHiddenPostRestoreAction(
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = {
+            AnalyticsTracker.uiControl("thread_post", "AI非表示に戻す")
+            onClick()
+        }) {
+            Text("AI非表示に戻す")
+        }
+    }
+}
+
+@Composable
+private fun DeletedPostBodyPlaceholder(
+    notice: String,
+    hasBody: Boolean,
+    onReveal: () -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
+) {
+    val textStyle = MaterialTheme.typography.bodySmall.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = notice,
+            style = textStyle,
+            color = Color.Red,
+            modifier = Modifier.weight(1f)
+        )
+        if (hasBody) {
+            TextButton(onClick = {
+                AnalyticsTracker.uiControl("thread_post", "削除済みレスの本文を表示")
+                onReveal()
+            }) {
+                Text("本文を表示")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ThreadPostMetadata(
+    post: Post,
+    isOp: Boolean,
+    isSelfPost: Boolean = false,
+    posterIdLabel: PosterIdLabel?,
+    posterIdValue: String?,
+    saidaneLabel: String?,
+    onUrlClick: (String) -> Unit,
+    onQuoteRequested: (() -> Unit)? = null,
+    onSaidaneClick: (() -> Unit)? = null,
+    onPosterIdClick: (() -> Unit)? = null,
+    onReferencedByClick: (() -> Unit)? = null,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    compactHeader: Boolean = false
+) {
+    val threadColors = LocalFutabaThreadColors.current
+    val headerSp = LocalFutachaSharedFeatures.current?.intValue("thread", "threadHeaderFontSize", 8..16)
+    fun androidx.compose.ui.text.TextStyle.headerSized() =
+        if (headerSp == null) this else copy(fontSize = headerSp.sp, lineHeight = (headerSp * 1.4f).sp)
+    val orderStyle = MaterialTheme.typography.labelLarge.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
+    ).headerSized()
+    val subjectStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
+    ).headerSized()
+    val authorStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
+    ).headerSized()
+    val secondaryStyle = MaterialTheme.typography.bodySmall.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    ).headerSized()
+    val labelStyle = MaterialTheme.typography.labelMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    ).headerSized()
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("futacha-post-header-${post.id}"),
+        verticalArrangement = Arrangement.spacedBy(if (compactHeader) 2.dp else 6.dp)
+    ) {
+        val hideDefaults = LocalFutachaSharedFeatures.current?.value("thread", "threadHideDefaultNameAndSubject") == "ON"
+        val subjectText = (post.subject?.ifBlank { "無題" } ?: "無題").let { if (hideDefaults && it in setOf("無題", "無念")) "" else it }
+        val authorText = (post.author?.ifBlank { "名無し" } ?: "名無し").let { if (hideDefaults && it in setOf("名無し", "としあき")) "" else it }
+        val timestampText = remember(post.timestamp) {
+            extractTimestampWithoutId(post.timestamp)
+        }
+        val subjectColor = when {
+            subjectText.contains("無念") || subjectText.contains("株") -> MaterialTheme.colorScheme.tertiary
+            isOp -> MaterialTheme.colorScheme.onSurface
+            else -> MaterialTheme.colorScheme.onSurface
+        }
+        if (compactHeader) {
+            ThreadPostCompactMetadata(
+                order = post.order ?: 0,
+                subjectText = subjectText,
+                subjectColor = subjectColor,
+                authorText = authorText,
+                timestampText = timestampText,
+                postId = post.id,
+                orderStyle = orderStyle,
+                subjectStyle = subjectStyle,
+                authorStyle = authorStyle,
+                secondaryStyle = secondaryStyle,
+                labelStyle = labelStyle,
+                saidaneLabel = saidaneLabel,
+                onSaidaneClick = onSaidaneClick,
+                canSendSaidane = !isSelfPost,
+                bodyTextSize = bodyTextSize
+            )
+            return@Column
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                modifier = Modifier.alignByBaseline(),
+                text = (post.order ?: 0).toString(),
+                style = orderStyle,
+                fontWeight = FontWeight.Bold,
+                color = threadColors.accent
+            )
+            Text(
+                modifier = Modifier.alignByBaseline(),
+                text = subjectText,
+                style = subjectStyle,
+                color = subjectColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                modifier = Modifier.alignByBaseline(),
+                text = authorText,
+                style = authorStyle,
+                color = threadColors.author,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (post.referencedCount > 0) {
+                ReplyCountLabel(
+                    count = post.referencedCount,
+                    onClick = onReferencedByClick?.let { callback ->
+                        {
+                            AnalyticsTracker.uiControl(
+                                "thread_post_reference",
+                                "この投稿を参照したレスを表示",
+                                mapOf("post_context" to analyticsSessionContextId("post", post.id))
+                            )
+                            callback()
+                        }
+                    },
+                    bodyTextSize = bodyTextSize
+                )
+            }
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+                Text(
+                    text = timestampText,
+                    style = secondaryStyle,
+                    color = threadColors.footerText
+                )
+                posterIdLabel?.let { label ->
+                    val idModifier = if (posterIdValue != null && onPosterIdClick != null) {
+                        Modifier.clickable {
+                            AnalyticsTracker.uiControl(
+                                "thread_post_id",
+                                "同じIDの投稿を表示",
+                                mapOf("post_context" to analyticsSessionContextId("post", post.id))
+                            )
+                            onPosterIdClick()
+                        }
+                    } else {
+                        Modifier
+                    }
+                    Text(
+                        modifier = idModifier,
+                        text = label.text,
+                        style = labelStyle,
+                        color = if (label.highlight) {
+                            threadColors.accent
+                        } else {
+                            threadColors.footerText
+                        }
+                    )
+                }
+                if (saidaneLabel != null) {
+                    val canSendSaidane = !isSelfPost && onSaidaneClick != null
+                    SaidaneLink(
+                        label = saidaneLabel,
+                        enabled = canSendSaidane,
+                        onClick = {
+                            AnalyticsTracker.uiControl(
+                                "thread_post_saidane",
+                                "投稿のそうだねを選択",
+                                mapOf("post_context" to analyticsSessionContextId("post", post.id))
+                            )
+                            onSaidaneClick?.invoke()
+                        },
+                        bodyTextSize = bodyTextSize
+                    )
+                }
+            Text(
+                text = "No.${post.id}",
+                style = labelStyle,
+                color = threadColors.footerText
+            )
+        }
+        val targetUrl = resolvePostTargetMediaUrl(post)
+        val fileName = extractFileNameFromUrl(targetUrl)
+        if (fileName != null && targetUrl != null) {
+            val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
+            Text(
+                text = fileName,
+                style = secondaryStyle,
+                color = threadColors.link,
+                textDecoration = TextDecoration.None,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (onMediaLongPress != null) {
+                    Modifier.combinedClickable(
+                        onClick = {
+                            AnalyticsTracker.uiControl(
+                                "thread_post_media",
+                                "投稿添付を開く",
+                                mapOf("post_context" to analyticsSessionContextId("post", post.id), "media_type" to targetMediaType.name.lowercase())
+                            )
+                            onMediaClick?.invoke(targetUrl, targetMediaType)
+                        },
+                        onLongClick = {
+                            AnalyticsTracker.uiControl(
+                                "thread_post_media_long_press",
+                                "投稿添付を長押し",
+                                mapOf("post_context" to analyticsSessionContextId("post", post.id), "media_type" to targetMediaType.name.lowercase())
+                            )
+                            onMediaLongPress.invoke(post, targetUrl, targetMediaType)
+                        }
+                    )
+                } else {
+                    Modifier.clickable {
+                        AnalyticsTracker.uiControl(
+                            "thread_post_media",
+                            "投稿添付を開く",
+                            mapOf("post_context" to analyticsSessionContextId("post", post.id), "media_type" to targetMediaType.name.lowercase())
+                        )
+                        onMediaClick?.invoke(targetUrl, targetMediaType)
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReplyCountLabel(
+    count: Int,
+    onClick: (() -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
+) {
+    val threadColors = LocalFutabaThreadColors.current
+    val labelModifier = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
+    Text(
+        modifier = labelModifier,
+        text = if (LocalFutachaSharedFeatures.current?.value("thread", "threadHeaderQuoteSimple") == "ON") "+$count" else "${count}レス",
+        style = MaterialTheme.typography.labelMedium.withThreadTextSize(
+            bodyTextSize = bodyTextSize,
+            fallbackFontSize = 12.sp,
+            fallbackLineHeight = 16.sp
+        ),
+        fontWeight = FontWeight.Bold,
+        color = threadColors.accent
+    )
+}
+
+@Composable
+private fun SaidaneLink(
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
+) {
+    val threadColors = LocalFutabaThreadColors.current
+    val normalized = if (label == "+") "そうだね" else label
+    Text(
+        text = normalized,
+        style = MaterialTheme.typography.labelMedium.withThreadTextSize(
+            bodyTextSize = bodyTextSize,
+            fallbackFontSize = 12.sp,
+            fallbackLineHeight = 16.sp
+        ).copy(
+            color = threadColors.footerText,
+            fontWeight = FontWeight.SemiBold
+        ),
+        textDecoration = TextDecoration.None,
+        modifier = Modifier.clickable(
+            enabled = enabled,
+            onClick = onClick
+        )
+    )
+}
+
+private fun extractTimestampWithoutId(timestamp: String): String {
+    val idx = timestamp.indexOf("ID:")
+    if (idx == -1) return timestamp.trim()
+    return timestamp.substring(0, idx).trimEnd()
+}
+
+@Composable
+private fun ThreadPostCompactMetadata(
+    order: Int,
+    subjectText: String,
+    subjectColor: androidx.compose.ui.graphics.Color,
+    authorText: String,
+    timestampText: String,
+    postId: String,
+    orderStyle: androidx.compose.ui.text.TextStyle,
+    subjectStyle: androidx.compose.ui.text.TextStyle,
+    authorStyle: androidx.compose.ui.text.TextStyle,
+    secondaryStyle: androidx.compose.ui.text.TextStyle,
+    labelStyle: androidx.compose.ui.text.TextStyle,
+    saidaneLabel: String?,
+    onSaidaneClick: (() -> Unit)?,
+    canSendSaidane: Boolean,
+    bodyTextSize: ThreadBodyTextSize
+) {
+    val threadColors = LocalFutabaThreadColors.current
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = order.toString(),
+            style = orderStyle,
+            fontWeight = FontWeight.Bold,
+            color = threadColors.accent
+        )
+        Text(
+            text = subjectText,
+            style = subjectStyle,
+            color = subjectColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.alignByBaseline()
+        )
+        Text(
+            text = authorText,
+            style = authorStyle,
+            color = threadColors.author,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.alignByBaseline()
+        )
+        Text(
+            text = timestampText,
+            style = secondaryStyle,
+            color = threadColors.footerText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.alignByBaseline()
+        )
+        Text(
+            text = "No.$postId",
+            style = labelStyle,
+            color = threadColors.footerText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        // そうだねは通常のヘッダーと同じく後ろに置く（Playのレビュー 2026-11-16：左に出ていた）。
+        if (saidaneLabel != null) {
+            SaidaneLink(
+                label = saidaneLabel,
+                enabled = canSendSaidane && onSaidaneClick != null,
+                onClick = { onSaidaneClick?.invoke() },
+                bodyTextSize = bodyTextSize
+            )
+        }
+    }
+}
+
+private val threadInlineMediaCache = LinkedHashMap<String, List<String>>()
+private val threadInlineMediaMutex = kotlinx.coroutines.sync.Mutex()
+private var threadInlineMediaBytes = 0
+
+/** Non-blocking cache lookup for composition; null when not yet extracted. */
+private fun peekThreadInlineMediaUrls(html: String, method: String, wifi: Boolean): List<String>? {
+    if (!com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, wifi)) return emptyList()
+    if (!threadInlineMediaMutex.tryLock()) return null
+    return try { threadInlineMediaCache[html] } finally { threadInlineMediaMutex.unlock() }
+}
+
+private suspend fun cachedThreadInlineMediaUrls(html: String, method: String, wifi: Boolean): List<String> {
+    if (!com.valoser.futacha.shared.ui.compat.compatApuSmallThumbEnabled(method, wifi)) return emptyList()
+    threadInlineMediaMutex.lock()
+    try {
+        threadInlineMediaCache.remove(html)?.let {
+            threadInlineMediaCache[html] = it
+            return it
+        }
+    } finally { threadInlineMediaMutex.unlock() }
+    val urls = com.valoser.futacha.shared.ui.compat.compatInlineApuSmallMediaUrls(html)
+    threadInlineMediaMutex.lock()
+    try {
+        if (html !in threadInlineMediaCache) {
+            threadInlineMediaCache[html] = urls
+            threadInlineMediaBytes += (html.length + urls.sumOf { it.length }) * 2
+            while (threadInlineMediaCache.size > 512 || threadInlineMediaBytes > 2 * 1024 * 1024) {
+                val oldest = threadInlineMediaCache.entries.first()
+                threadInlineMediaBytes -= (oldest.key.length + oldest.value.sumOf { it.length }) * 2
+                threadInlineMediaCache.remove(oldest.key)
+            }
+        }
+    } finally { threadInlineMediaMutex.unlock() }
+    return urls
+}

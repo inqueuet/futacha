@@ -1,0 +1,1541 @@
+package com.valoser.futacha.shared.service
+
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.parser.HtmlParser
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repo.ConditionalThreadFetchResult
+import com.valoser.futacha.shared.network.HttpConditionalValidators
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.BaseInMemoryPlatformStateStorage
+import com.valoser.futacha.shared.state.FakePlatformStateStorage
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.util.FileSystem
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.mock.MockRequestHandleScope
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.HttpRequestData
+import io.ktor.client.request.HttpResponseData
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+
+class HistoryRefresherTest {
+    /** L29: a row an older version made for a saved thread whose board is gone (saved.invalid) is kept, not fetched. */
+    @Test
+    fun refresh_keepsButNeverFetchesTheSavedThreadPlaceholderRows() = runBlocking {
+        val board = boardSummary()
+        val placeholder = historyEntry(threadId = "123", title = "saved")
+            .copy(boardId = "gone", boardUrl = "https://saved.invalid/gone")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(placeholder))
+        val repository = FakeHistoryBoardRepository()
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(placeholder))
+
+        assertEquals(0, repository.getThreadCalls)
+        assertEquals(listOf(placeholder), store.history.first())
+    }
+
+    @Test
+    fun refresh_updatesHistoryEntryFromFetchedThread() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 2
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(entry)
+        )
+
+        val updated = store.history.first().single()
+        assertEquals("new title", updated.title)
+        assertEquals("thumb-new", updated.titleImageUrl)
+        assertEquals("board-new", updated.boardName)
+        assertEquals(2, updated.replyCount)
+        assertEquals(1, repository.getThreadCalls)
+    }
+
+    /** L88: the refresh writes from the row it read at the start; a post made meanwhile keeps its mark and time. */
+    @Test
+    fun refresh_keepsASelfPostMadeWhileTheThreadWasBeingFetched() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        var postedAt: Long? = null
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 3
+            )
+            onGetThread = {
+                store.addSelfPostIdentifier(threadId = "123", identifier = "3", boardId = board.id)
+                postedAt = store.history.first().single().lastSelfPostEpochMillis
+            }
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals(3, updated.replyCount)
+        assertTrue(postedAt != null)
+        assertTrue(updated.hasSelfPost)
+        assertEquals(postedAt, updated.lastSelfPostEpochMillis)
+    }
+
+    @Test
+    fun refresh_reusesUnchangedThreadAfterNotModified() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old").copy(hasAutoSave = true)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag = HttpConditionalValidators(etag = "\"abc\"", lastModified = null)
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 1
+            )
+            responseValidators = etag
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        val afterFull = store.history.first().single()
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(afterFull))
+
+        assertEquals(listOf<HttpConditionalValidators?>(null, etag), repository.receivedValidators)
+        assertEquals(1, repository.getThreadCalls)
+        val afterNotModified = store.history.first().single()
+        assertEquals("new title", afterNotModified.title)
+        assertEquals(afterFull.replyCount, afterNotModified.replyCount)
+        assertFalse(afterNotModified.isAutoRefreshDisabled)
+        assertEquals(afterFull.lastVisitedEpochMillis, afterNotModified.lastVisitedEpochMillis)
+        assertTrue(
+            requireNotNull(afterNotModified.lastConfirmedAliveEpochMillis) >=
+                requireNotNull(afterFull.lastConfirmedAliveEpochMillis)
+        )
+    }
+
+    @Test
+    fun refresh_abortsEarlyWhenAWholeBackgroundWindowFails() = runBlocking {
+        val board = boardSummary()
+        val entries = (1..20).map { historyEntry(threadId = "$it") }
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(entries)
+        val repository = FakeHistoryBoardRepository().apply {
+            entries.forEach { threadErrors[board.url to it.threadId] = NetworkException("connection refused") }
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        val failure = assertFailsWith<NetworkException> {
+            refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 20)
+        }
+
+        assertTrue(failure.message.orEmpty().startsWith("Aborting history refresh"), failure.message)
+        assertEquals(10, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_leavesThreadsForTheNextRunWhenTheBudgetIsSpent() = runBlocking {
+        val board = boardSummary()
+        val entries = (1..4).map { historyEntry(threadId = "$it") }
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(entries)
+        val repository = FakeHistoryBoardRepository().apply {
+            entries.forEach {
+                threadPages[board.url to it.threadId] = threadPage(
+                    threadId = it.threadId,
+                    boardTitle = "board",
+                    titleLine = "title",
+                    thumbnailUrl = "thumb",
+                    replyCount = 1
+                )
+            }
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        // No time left for even one fetch: nothing starts.
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = entries,
+            maxThreadsPerRun = 2,
+            threadFetchTimeoutMillisOverride = 1_000L,
+            runBudgetMillis = 0L
+        )
+        assertEquals(emptyList(), repository.fetchedThreadIds)
+
+        // The next run starts with the threads the first one could not reach.
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 2)
+        assertEquals(setOf("1", "2"), repository.fetchedThreadIds.toSet())
+        assertEquals(2, repository.fetchedThreadIds.size)
+    }
+
+    @Test
+    fun refresh_windowCursorSurvivesANewRefresherInstance() = runBlocking {
+        val board = boardSummary()
+        val entries = (1..3).map { historyEntry(threadId = "$it") }
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(entries)
+        val repository = FakeHistoryBoardRepository().apply {
+            entries.forEach {
+                threadPages[board.url to it.threadId] = threadPage(
+                    threadId = it.threadId,
+                    boardTitle = "board",
+                    titleLine = "title",
+                    thumbnailUrl = "thumb",
+                    replyCount = 1
+                )
+            }
+        }
+        val fileSystem = InMemoryFileSystem()
+        fun newRefresher() = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            fileSystem = fileSystem,
+            maxConcurrency = 1
+        )
+
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 1)
+        // A worker cold start: a new process has a new refresher.
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 1)
+
+        assertEquals(listOf("1", "2"), repository.fetchedThreadIds)
+    }
+
+    @Test
+    fun refresh_cancelledRunStartsTheNextRunAtTheFirstUnfinishedThread() = runBlocking {
+        val board = boardSummary()
+        val entries = (1..5).map { historyEntry(threadId = "$it") }
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(entries)
+        val secondFetchStarted = CompletableDeferred<Unit>()
+        val repository = FakeHistoryBoardRepository().apply {
+            entries.forEach {
+                threadPages[board.url to it.threadId] = threadPage(
+                    threadId = it.threadId,
+                    boardTitle = "board",
+                    titleLine = "title",
+                    thumbnailUrl = "thumb",
+                    replyCount = 1
+                )
+            }
+        }
+        // The second fetch hangs until the run is cancelled, like an iOS BGTask expiry.
+        repository.onGetThread = {
+            if (repository.fetchedThreadIds.size == 2 && !secondFetchStarted.isCompleted) {
+                secondFetchStarted.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val fileSystem = InMemoryFileSystem()
+        fun newRefresher() = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            fileSystem = fileSystem,
+            maxConcurrency = 1
+        )
+
+        val run = launch {
+            newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 3)
+        }
+        secondFetchStarted.await()
+        run.cancelAndJoin()
+        // The window was 1..3: one finished, one was cut off, one never started.
+        val (finished, cutOff) = repository.fetchedThreadIds.toList()
+        assertEquals(setOf("1", "2"), setOf(finished, cutOff))
+
+        // A new process starts at the first unfinished thread of that window
+        // instead of after it (4, 5, 1), so 3 and the cut-off one are not skipped.
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = entries, maxThreadsPerRun = 3)
+        val next = repository.fetchedThreadIds.drop(2)
+        val expectedStart = if (finished == "1") 1 else 0
+        // Fetches start concurrently, so only the window's members are fixed, not their order.
+        assertEquals(3, next.size)
+        assertEquals(entries.drop(expectedStart).take(3).map { it.threadId }.toSet(), next.toSet())
+    }
+
+    @Test
+    fun refresh_treatsAnEvictedAutoSaveAsMissing() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123").copy(hasAutoSave = true)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board",
+                titleLine = "title",
+                thumbnailUrl = "thumb",
+                replyCount = 1
+            )
+            responseValidators = HttpConditionalValidators(etag = "\"abc\"", lastModified = null)
+        }
+        // Nothing is indexed: the size cap evicted the save after the flag was set.
+        val autoSaves = SavedThreadRepository(InMemoryFileSystem(), baseDirectory = AUTO_SAVE_DIRECTORY)
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+
+        // Never answered from the conditional path while no save exists, so the
+        // whole page is fetched and can be saved again.
+        assertEquals(listOf<HttpConditionalValidators?>(null, null), repository.receivedValidators)
+        assertEquals(2, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_fetchesWholePageWhileTheThreadHasNoAutoSave() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 1
+            )
+            responseValidators = HttpConditionalValidators(etag = "\"abc\"", lastModified = null)
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        // The page is needed to create the missing auto-save.
+        assertEquals(listOf<HttpConditionalValidators?>(null, null), repository.receivedValidators)
+        assertEquals(2, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_dropsBufferedUpdatesWhenGenerationCommitGateRejects() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "new-board",
+                titleLine = "must not commit",
+                thumbnailUrl = "new-thumb",
+                replyCount = 2
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        assertFailsWith<HistoryRefreshCommitRejectedException> {
+            refresher.refresh(
+                boardsSnapshot = listOf(board),
+                historySnapshot = listOf(entry),
+                historyCommitGate = { false }
+            )
+        }
+
+        assertEquals("old", store.history.first().single().title)
+        assertEquals("thumb-old", store.history.first().single().titleImageUrl)
+        assertEquals(1, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_rejectsConcurrentRunsAcrossInstances() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val firstRepository = FakeHistoryBoardRepository().apply {
+            onGetThread = {
+                firstStarted.complete(Unit)
+                releaseFirst.await()
+            }
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board",
+                titleLine = "first",
+                thumbnailUrl = "thumb-first",
+                replyCount = 1
+            )
+        }
+        val secondRepository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board",
+                titleLine = "second",
+                thumbnailUrl = "thumb-second",
+                replyCount = 2
+            )
+        }
+        val firstRefresher = HistoryRefresher(
+            stateStore = store,
+            repository = firstRepository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+        val secondRefresher = HistoryRefresher(
+            stateStore = store,
+            repository = secondRepository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        val firstRefresh = async {
+            firstRefresher.refresh(
+                boardsSnapshot = listOf(board),
+                historySnapshot = listOf(entry)
+            )
+        }
+        firstStarted.await()
+
+        assertFailsWith<HistoryRefresher.RefreshAlreadyRunningException> {
+            secondRefresher.refresh(
+                boardsSnapshot = listOf(board),
+                historySnapshot = listOf(entry)
+            )
+        }
+
+        releaseFirst.complete(Unit)
+        firstRefresh.await()
+        assertEquals(0, secondRepository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_keepsExistingReplyCountWhenFetchedThreadIsTruncated() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old").copy(replyCount = 120)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 1,
+                isTruncated = true,
+                truncationReason = "Parse timeout exceeded (5001ms > 5000ms)"
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(entry)
+        )
+
+        val updated = store.history.first().single()
+        assertEquals("new title", updated.title)
+        assertEquals(120, updated.replyCount)
+    }
+
+    @Test
+    fun refresh_skips404ThreadOnSubsequentRuns() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "404")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "404"] = NetworkException("gone", statusCode = 404)
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        assertEquals(1, repository.getThreadCalls)
+        val updated = store.history.first().single()
+        assertEquals(entry.threadId, updated.threadId)
+        assertTrue(updated.isAutoRefreshDisabled)
+    }
+
+    @Test
+    fun refresh_usesArchiveFallbackWhenThreadIsMissing() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "555", title = "old archive title")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "555"] = NetworkException("gone", statusCode = 404)
+            threadPagesByUrl["https://may.inqueuet.com/b/res/555.htm"] = threadPage(
+                threadId = "555",
+                boardTitle = "archive-board",
+                titleLine = "archive title",
+                thumbnailUrl = "archive-thumb",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createArchiveClient(
+                """
+                    {"results":[
+                      {"threadId":"555","server":"may","board":"b","title":"archive candidate","htmlUrl":"https://may.inqueuet.com/b/res/555.htm","thumbUrl":"https://may.inqueuet.com/b/thumb/555s.jpg"}
+                    ]}
+                """.trimIndent()
+            ),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals("archive title", updated.title)
+        assertEquals("archive-thumb", updated.titleImageUrl)
+        // L90: the row stays on its own board, not the archive's address and page title.
+        assertEquals("board-old", updated.boardName)
+        assertEquals(entry.boardUrl, updated.boardUrl)
+        assertTrue(updated.isAutoRefreshDisabled)
+        assertEquals(true, updated.threadStatus?.isDead)
+        assertEquals(1, repository.getThreadCalls)
+        assertEquals(1, repository.getThreadByUrlCalls)
+    }
+
+    @Test
+    fun refresh_archiveFallbackBuildsThreadUrlWhenHistoryHasBoardUrl() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(
+            threadId = "556",
+            title = "old archive title",
+            boardUrl = "https://may.2chan.net/b/futaba.php"
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "556"] = NetworkException("gone", statusCode = 404)
+            threadPagesByUrl["https://may.inqueuet.com/b/res/556.htm"] = threadPage(
+                threadId = "556",
+                boardTitle = "archive-board",
+                titleLine = "archive title",
+                thumbnailUrl = "archive-thumb",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createThreadHtmlClient("<html></html>"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals("archive title", updated.title)
+        assertEquals("https://may.2chan.net/b/futaba.php", updated.boardUrl)
+        assertEquals(1, repository.getThreadByUrlCalls)
+    }
+
+    /**
+     * L90: a row without a board id is found by its board address; while the archive's address was written
+     * over it the update could not find the row and was dropped, so the fall mark was never stored.
+     */
+    @Test
+    fun refresh_archiveFallbackMarksARowWithoutBoardIdAsFallen() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "557", boardId = "")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "557"] = NetworkException("gone", statusCode = 404)
+            threadPagesByUrl["https://may.inqueuet.com/b/res/557.htm"] = threadPage(
+                threadId = "557",
+                boardTitle = "archive-board",
+                titleLine = "archive title",
+                thumbnailUrl = "archive-thumb",
+                replyCount = 4
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createThreadHtmlClient("<html></html>"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals(1, repository.getThreadByUrlCalls)
+        assertEquals("archive title", updated.title)
+        assertEquals(4, updated.replyCount)
+        assertEquals(entry.boardUrl, updated.boardUrl)
+        assertTrue(updated.isAutoRefreshDisabled)
+        assertEquals(true, updated.threadStatus?.isDead)
+    }
+
+    /** L90 (decided): rows an earlier archive refresh pointed at the archive's board are put back on their own. */
+    @Test
+    fun refresh_repairsRowsAnArchiveRefreshPointedAtTheArchiveBoard() = runBlocking {
+        val board = boardSummary()
+        val fallen = com.valoser.futacha.shared.model.ThreadStatus(isDead = true)
+        val registered = historyEntry(threadId = "558", boardName = "archive-board", boardUrl = "https://may.inqueuet.com/b")
+            .copy(isAutoRefreshDisabled = true, threadStatus = fallen)
+        val unregistered = historyEntry(
+            threadId = "559",
+            boardId = "gone",
+            boardName = "archive-gone",
+            boardUrl = "https://img.inqueuet.com/b"
+        ).copy(isAutoRefreshDisabled = true, threadStatus = fallen)
+        val untouched = historyEntry(threadId = "560")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(registered, unregistered, untouched))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "560"] = threadPage(
+                threadId = "560",
+                boardTitle = "board-new",
+                titleLine = "title-560",
+                thumbnailUrl = "thumb-old",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(registered, unregistered, untouched)
+        )
+
+        val byThread = store.history.first().associateBy { it.threadId }
+        assertEquals(registered.copy(boardUrl = board.url, boardName = board.name), byThread.getValue("558"))
+        assertEquals(unregistered.copy(boardUrl = "https://img.2chan.net/b"), byThread.getValue("559"))
+        assertEquals(untouched.boardUrl, byThread.getValue("560").boardUrl)
+        assertEquals(listOf("560"), repository.fetchedThreadIds)
+    }
+
+    @Test
+    fun refresh_continuesAPartialAutoSaveWithoutNewReplies() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g5-continue"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag = HttpConditionalValidators(etag = "\"g5\"", lastModified = null)
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = textOnlyThreadPage(threadId)
+            responseValidators = etag
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        val first = autoSaves.getAllThreads().single()
+        // The media budget ran out: the generation was published with media missing.
+        autoSaves.updateThread(first.copy(incompleteMediaCount = 3, status = SaveStatus.PARTIAL)).getOrThrow()
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val continued = autoSaves.getAllThreads().single()
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+
+        // Same reply count, yet the second refresh fetched the whole page and saved again;
+        // the completed generation then lets the third answer from the conditional path.
+        assertEquals(listOf(null, null, etag), repository.receivedValidators)
+        assertTrue(continued.storageId != first.storageId)
+        assertEquals(0, continued.incompleteMediaCount)
+        assertEquals(continued.storageId, autoSaves.getAllThreads().single().storageId)
+        assertTrue(store.history.first().single().hasAutoSave)
+    }
+
+    @Test
+    fun refresh_stopsContinuingWhenMissingMediaKeepsFailing() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g5-stalled"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag = HttpConditionalValidators(etag = "\"g5s\"", lastModified = null)
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = textOnlyThreadPage(threadId)
+            responseValidators = etag
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        // A continuation that leaves as much missing as before made no progress: the index
+        // marks the generation stalled, as a Worker/BGTask in another process left it.
+        val first = autoSaves.getAllThreads().single()
+        autoSaves.updateThread(
+            first.copy(
+                incompleteMediaCount = 2,
+                status = SaveStatus.PARTIAL,
+                autoSaveContinuationStalledAtMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            )
+        ).getOrThrow()
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+
+        // Not re-saved on every refresh: the unchanged page is answered conditionally.
+        assertEquals(listOf(null, etag), repository.receivedValidators)
+        assertEquals(first.storageId, autoSaves.getAllThreads().single().storageId)
+    }
+
+    @Test
+    fun refresh_newRepliesKeepAStalledContinuationFromSavingTwice() = runBlocking {
+        val board = boardSummary()
+        val threadId = "g44-stalled"
+        val entry = historyEntry(threadId = threadId)
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val etag1 = HttpConditionalValidators(etag = "\"g44-1\"", lastModified = null)
+        val etag2 = HttpConditionalValidators(etag = "\"g44-2\"", lastModified = null)
+        fun page(replyCount: Int) = threadPage(
+            threadId = threadId,
+            boardTitle = "board",
+            titleLine = "title",
+            thumbnailUrl = "https://may.2chan.net/b/thumb/${threadId}s.jpg",
+            replyCount = replyCount
+        )
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to threadId] = page(1)
+            responseValidators = etag1
+        }
+        fun newRefresher() = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = createMissingMediaClient(),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+        val refresher = newRefresher()
+        // The thread's media can never be fetched (404).
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        val first = autoSaves.getAllThreads().single()
+        assertTrue(first.incompleteMediaCount > 0)
+        assertEquals(0L, first.autoSaveContinuationStalledAtMillis)
+        // One continuation without progress marks the indexed generation stalled.
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val stalled = autoSaves.getAllThreads().single()
+        assertTrue(stalled.storageId != first.storageId)
+        assertTrue(stalled.autoSaveContinuationStalledAtMillis > 0L)
+
+        // A new reply is saved once and keeps the stall: missing media did not decrease.
+        repository.threadPages[board.url to threadId] = page(2)
+        repository.responseValidators = etag2
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        val afterReply = autoSaves.getAllThreads().single()
+        assertTrue(afterReply.storageId != stalled.storageId)
+        assertEquals(stalled.autoSaveContinuationStalledAtMillis, afterReply.autoSaveContinuationStalledAtMillis)
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        // G4-4: no second save for the same reply, also in a new process (a new refresher).
+        newRefresher().refresh(boardsSnapshot = listOf(board), historySnapshot = store.history.first())
+        assertEquals(listOf(null, null, etag1, etag2, null), repository.receivedValidators)
+        assertEquals(afterReply.storageId, autoSaves.getAllThreads().single().storageId)
+    }
+
+    @Test
+    fun refresh_newReplySaveTakesTheSlotOfAContinuation() = runBlocking {
+        val board = boardSummary()
+        val continuedId = "h43-cont"
+        val repliedId = "h43-new"
+        val fileSystem = InMemoryFileSystem()
+        val autoSaves = SavedThreadRepository(fileSystem = fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        val partial = SavedThread(
+            threadId = continuedId,
+            boardId = "b",
+            boardName = "board",
+            title = "title",
+            storageId = "b__${continuedId}_gen0",
+            thumbnailPath = null,
+            savedAt = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+            postCount = 1,
+            imageCount = 1,
+            videoCount = 0,
+            totalSize = 1L,
+            status = SaveStatus.PARTIAL,
+            incompleteMediaCount = 1
+        )
+        autoSaves.addThreadToIndex(partial).getOrThrow()
+        val continuedEntry = historyEntry(threadId = continuedId).copy(hasAutoSave = true)
+        val repliedEntry = historyEntry(threadId = repliedId)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(continuedEntry, repliedEntry))
+        val continuationStarted = CompletableDeferred<Unit>()
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to continuedId] = threadPage(
+                threadId = continuedId,
+                boardTitle = "board",
+                titleLine = "title",
+                thumbnailUrl = "https://may.2chan.net/b/thumb/${continuedId}s.jpg",
+                replyCount = 1
+            )
+            threadPages[board.url to repliedId] = textOnlyThreadPage(repliedId)
+            // The thread with new replies is fetched only once the continuation holds the only slot.
+            onGetThreadFor = { threadId -> if (threadId == repliedId) continuationStarted.await() }
+        }
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                addHandler { request ->
+                    when {
+                        continuedId in request.url.toString() -> {
+                            continuationStarted.complete(Unit)
+                            awaitCancellation()
+                        }
+                        "/src/" in request.url.encodedPath || "/thumb/" in request.url.encodedPath ->
+                            respond("", HttpStatusCode.NotFound)
+                        else -> threadHtmlResponse("<html><body>thread html</body></html>")
+                    }
+                }
+            }
+        )
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSaves,
+            httpClient = HttpClient(engine),
+            fileSystem = fileSystem,
+            maxConcurrency = 2,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        withTimeout(30_000L) {
+            refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(continuedEntry, repliedEntry))
+        }
+
+        // H4-3: the thread with new replies got the slot; the continuation is left for later.
+        val indexed = autoSaves.getAllThreads().associateBy { it.threadId }
+        assertTrue(repliedId in indexed)
+        assertEquals(partial.storageId, indexed.getValue(continuedId).storageId)
+        assertTrue(store.history.first().single { it.threadId == repliedId }.hasAutoSave)
+        // The cancelled continuation left no generation folder behind.
+        assertTrue(fileSystem.listFiles(AUTO_SAVE_DIRECTORY).none { continuedId in it })
+    }
+
+    @Test
+    fun refresh_autoSavesThreadAndMarksHistoryEntry() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "777")
+        val fileSystem = InMemoryFileSystem()
+        val autoSavedRepository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = AUTO_SAVE_DIRECTORY
+        )
+        val storage = CountingHistoryWriteStorage()
+        val store = AppStateStore(storage)
+        store.setHistory(listOf(entry))
+        storage.historyWriteCount = 0
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "777"] = threadPage(
+                threadId = "777",
+                boardTitle = "board-auto",
+                titleLine = "auto saved title",
+                thumbnailUrl = "thumb-auto",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSavedRepository,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val saved = autoSavedRepository.getAllThreads().single()
+        val updated = store.history.first().single()
+        assertEquals("777", saved.threadId)
+        assertTrue(updated.hasAutoSave)
+        assertEquals("auto saved title", updated.title)
+        assertEquals(1, storage.historyWriteCount)
+    }
+
+    @Test
+    fun refresh_discardsStagedAutoSaveWhenGenerationCommitGateRejects() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "778")
+        val fileSystem = InMemoryFileSystem()
+        val autoSavedRepository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = AUTO_SAVE_DIRECTORY
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "778"] = threadPage(
+                threadId = "778",
+                boardTitle = "board-auto",
+                titleLine = "stale auto save",
+                thumbnailUrl = "thumb-auto",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSavedRepository,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(entry),
+            autoSaveCommitGate = { false }
+        )
+
+        assertTrue(autoSavedRepository.getAllThreads().isEmpty())
+        assertFalse(store.history.first().single().hasAutoSave)
+        assertTrue(fileSystem.listFiles(AUTO_SAVE_DIRECTORY).isEmpty())
+    }
+
+    @Test
+    fun refresh_doesNotMarkHistoryEntryAutoSavedWhenIndexWriteFails() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "777")
+        val fileSystem = IndexWriteFailingFileSystem()
+        val autoSavedRepository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = AUTO_SAVE_DIRECTORY
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "777"] = threadPage(
+                threadId = "777",
+                boardTitle = "board-auto",
+                titleLine = "auto saved title",
+                thumbnailUrl = "thumb-auto",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSavedRepository,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        assertTrue(autoSavedRepository.getAllThreads().isEmpty())
+        assertFalse(store.history.first().single().hasAutoSave)
+    }
+
+    @Test
+    fun refresh_skipListIsScopedPerBoardForSameThreadId() = runBlocking {
+        val missingBoard = boardSummary(id = "b1", name = "board-1", url = "https://may.2chan.net/b/futaba.php")
+        val activeBoard = boardSummary(id = "b2", name = "board-2", url = "https://dat.2chan.net/img/futaba.php")
+        val missingEntry = historyEntry(
+            threadId = "900",
+            boardId = missingBoard.id,
+            boardName = missingBoard.name,
+            boardUrl = "https://may.2chan.net/b/res/900.htm"
+        )
+        val activeEntry = historyEntry(
+            threadId = "900",
+            boardId = activeBoard.id,
+            boardName = activeBoard.name,
+            boardUrl = "https://dat.2chan.net/img/res/900.htm"
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(missingEntry, activeEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[missingBoard.url to "900"] = NetworkException("gone", statusCode = 404)
+            threadPages[activeBoard.url to "900"] = threadPage(
+                threadId = "900",
+                boardTitle = "active-board",
+                titleLine = "active title",
+                thumbnailUrl = "active-thumb",
+                replyCount = 3
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(missingBoard, activeBoard),
+            historySnapshot = listOf(missingEntry, activeEntry)
+        )
+        refresher.refresh(
+            boardsSnapshot = listOf(missingBoard, activeBoard),
+            historySnapshot = store.history.first()
+        )
+
+        assertEquals(3, repository.getThreadCalls)
+        val updated = store.history.first()
+        assertEquals("title-900", updated.first { it.boardId == missingBoard.id }.title)
+        assertEquals("active title", updated.first { it.boardId == activeBoard.id }.title)
+    }
+
+    @Test
+    fun clearSkippedThreads_allowsRetryAfter404() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "404")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "404"] = NetworkException("gone", statusCode = 404)
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.clearSkippedThreads()
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        assertEquals(2, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_recordsPartialFailuresWithoutDiscardingSuccessfulUpdates() = runBlocking {
+        val okBoard = boardSummary(id = "ok", name = "ok-board", url = "https://may.2chan.net/ok/futaba.php")
+        val failingBoard = boardSummary(id = "ng", name = "ng-board", url = "https://may.2chan.net/ng/futaba.php")
+        val okEntry = historyEntry(threadId = "101", boardId = okBoard.id, boardName = okBoard.name, boardUrl = "https://may.2chan.net/ok/res/101.htm")
+        val failingEntry = historyEntry(threadId = "202", boardId = failingBoard.id, boardName = failingBoard.name, boardUrl = "https://may.2chan.net/ng/res/202.htm")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(okEntry, failingEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[okBoard.url to "101"] = threadPage(
+                threadId = "101",
+                boardTitle = "ok-board-new",
+                titleLine = "updated ok title",
+                thumbnailUrl = "ok-thumb",
+                replyCount = 4
+            )
+            threadErrors[failingBoard.url to "202"] = IllegalStateException("backend down")
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(okBoard, failingBoard),
+            historySnapshot = listOf(okEntry, failingEntry)
+        )
+
+        val updated = store.history.first()
+        assertEquals("updated ok title", updated.first { it.threadId == "101" }.title)
+        assertEquals("title-202", updated.first { it.threadId == "202" }.title)
+        val error = refresher.lastRefreshError.first()
+        assertEquals(1, error?.errorCount)
+        assertEquals(2, error?.totalThreads)
+        assertEquals(1, error?.stageCounts?.get("thread_refresh"))
+        assertEquals("202", error?.errors?.single()?.threadId)
+    }
+
+    @Test
+    fun refresh_recordsArchiveLookupFailuresAsPartialErrors() = runBlocking {
+        val archiveBoard = boardSummary(id = "b", name = "archive-board", url = "https://may.2chan.net/b/futaba.php")
+        val okBoard = boardSummary(id = "img", name = "img-board", url = "https://dat.2chan.net/img/futaba.php")
+        val archiveEntry = historyEntry(threadId = "404", boardId = archiveBoard.id, boardName = archiveBoard.name, boardUrl = "https://may.2chan.net/b/res/404.htm")
+        val okEntry = historyEntry(threadId = "505", boardId = okBoard.id, boardName = okBoard.name, boardUrl = "https://dat.2chan.net/img/res/505.htm")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(archiveEntry, okEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[archiveBoard.url to "404"] = NetworkException("gone", statusCode = 404)
+            threadPages[okBoard.url to "505"] = threadPage(
+                threadId = "505",
+                boardTitle = "img-new",
+                titleLine = "ok title",
+                thumbnailUrl = "ok-thumb",
+                replyCount = 2
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createFailingArchiveClient("archive unavailable"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(archiveBoard, okBoard),
+            historySnapshot = listOf(archiveEntry, okEntry)
+        )
+
+        val updated = store.history.first()
+        assertEquals("ok title", updated.first { it.threadId == "505" }.title)
+        assertEquals("title-404", updated.first { it.threadId == "404" }.title)
+        val error = refresher.lastRefreshError.first()
+        assertEquals(1, error?.stageCounts?.get("archive_lookup"))
+        assertEquals("404", error?.errors?.single()?.threadId)
+    }
+}
+
+private class FakeHistoryBoardRepository : BoardRepository {
+    val threadPages = mutableMapOf<Pair<String, String>, ThreadPage>()
+    val threadErrors = mutableMapOf<Pair<String, String>, Throwable>()
+    val threadPagesByUrl = mutableMapOf<String, ThreadPage>()
+    var getThreadCalls = 0
+    var getThreadByUrlCalls = 0
+    var onGetThread: suspend () -> Unit = {}
+    var onGetThreadFor: suspend (threadId: String) -> Unit = {}
+    /** Validators the fake server sends; a request echoing them gets 304. */
+    var responseValidators: HttpConditionalValidators? = null
+    val receivedValidators = mutableListOf<HttpConditionalValidators?>()
+
+    override suspend fun getThreadIfModified(
+        board: String,
+        threadId: String,
+        validators: HttpConditionalValidators?
+    ): ConditionalThreadFetchResult {
+        receivedValidators += validators
+        if (validators != null && validators == responseValidators) {
+            return ConditionalThreadFetchResult.NotModified
+        }
+        return ConditionalThreadFetchResult.Modified(getThread(board, threadId), responseValidators)
+    }
+
+    override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> = emptyList()
+
+    override suspend fun fetchOpImageUrl(board: String, threadId: String): String? = null
+
+    val fetchedThreadIds = mutableListOf<String>()
+
+    override suspend fun getThread(board: String, threadId: String): ThreadPage {
+        getThreadCalls += 1
+        fetchedThreadIds += threadId
+        onGetThread()
+        onGetThreadFor(threadId)
+        threadErrors[board to threadId]?.let { throw it }
+        return threadPages[board to threadId] ?: error("Missing thread for $board/$threadId")
+    }
+
+    override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        getThreadByUrlCalls += 1
+        return threadPagesByUrl[threadUrl] ?: error("Missing thread for $threadUrl")
+    }
+
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) = Unit
+
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) = Unit
+
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) = Unit
+
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? = null
+
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? = null
+
+    override fun close() = Unit
+
+    override fun closeAsync() = kotlinx.coroutines.Job().apply { complete() }
+
+    override suspend fun clearOpImageCache(board: String?, threadId: String?) = Unit
+
+    override suspend fun invalidateCookies(board: String) = Unit
+}
+
+private fun createArchiveClient(
+    responseBody: String
+): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { archiveJsonResponse(responseBody) }
+        }
+    )
+    return HttpClient(engine)
+}
+
+private fun createThreadHtmlClient(
+    responseBody: String
+): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { threadHtmlResponse(responseBody) }
+        }
+    )
+    return HttpClient(engine)
+}
+
+/** Thread HTML is served; every image and thumbnail answers 404. */
+private fun createMissingMediaClient(): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { request ->
+                if ("/src/" in request.url.encodedPath || "/thumb/" in request.url.encodedPath) {
+                    respond("", HttpStatusCode.NotFound)
+                } else {
+                    threadHtmlResponse("<html><body>thread html</body></html>")
+                }
+            }
+        }
+    )
+    return HttpClient(engine)
+}
+
+private fun createFailingArchiveClient(
+    message: String
+): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { throw IllegalStateException(message) }
+        }
+    )
+    return HttpClient(engine)
+}
+
+private fun MockRequestHandleScope.archiveJsonResponse(
+    body: String
+): HttpResponseData = respond(
+    content = body,
+    status = HttpStatusCode.OK,
+    headers = Headers.build {
+        append(HttpHeaders.ContentType, "application/json")
+    }
+)
+
+private fun MockRequestHandleScope.threadHtmlResponse(
+    body: String
+): HttpResponseData = respond(
+    content = body,
+    status = HttpStatusCode.OK,
+    headers = Headers.build {
+        append(HttpHeaders.ContentType, "text/html; charset=UTF-8")
+        append(HttpHeaders.ContentLength, body.encodeToByteArray().size.toString())
+    }
+)
+
+private fun boardSummary(): BoardSummary {
+    return boardSummary(
+        id = "b",
+        name = "board",
+        url = "https://may.2chan.net/b/futaba.php"
+    )
+}
+
+private fun boardSummary(
+    id: String,
+    name: String,
+    url: String
+): BoardSummary {
+    return BoardSummary(
+        id = id,
+        name = name,
+        category = "",
+        url = url,
+        description = ""
+    )
+}
+
+private fun historyEntry(
+    threadId: String,
+    title: String = "title-$threadId",
+    boardId: String = "b",
+    boardName: String = "board-old",
+    boardUrl: String = "https://may.2chan.net/b/res/$threadId.htm"
+): ThreadHistoryEntry {
+    return ThreadHistoryEntry(
+        threadId = threadId,
+        boardId = boardId,
+        title = title,
+        titleImageUrl = "thumb-old",
+        boardName = boardName,
+        boardUrl = boardUrl,
+        lastVisitedEpochMillis = 1L,
+        replyCount = 1
+    )
+}
+
+private fun textOnlyThreadPage(threadId: String): ThreadPage = ThreadPage(
+    threadId = threadId,
+    boardTitle = "board",
+    expiresAtLabel = null,
+    deletedNotice = null,
+    posts = listOf(
+        Post(
+            id = "1",
+            author = "author",
+            subject = null,
+            timestamp = "24/01/01(月)00:00:00",
+            messageHtml = "title<br>rest",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
+    ),
+    isTruncated = false,
+    truncationReason = null
+)
+
+private fun threadPage(
+    threadId: String,
+    boardTitle: String,
+    titleLine: String,
+    thumbnailUrl: String,
+    replyCount: Int,
+    isTruncated: Boolean = false,
+    truncationReason: String? = null
+): ThreadPage {
+    val posts = buildList {
+        add(
+            Post(
+                id = "1",
+                author = "author",
+                subject = null,
+                timestamp = "24/01/01(月)00:00:00",
+                messageHtml = "$titleLine<br>rest",
+                imageUrl = "https://may.2chan.net/src/$threadId.jpg",
+                thumbnailUrl = thumbnailUrl
+            )
+        )
+        repeat((replyCount - 1).coerceAtLeast(0)) { index ->
+            add(
+                Post(
+                    id = "${index + 2}",
+                    author = "author",
+                    subject = null,
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "reply-${index + 2}",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            )
+        }
+    }
+    return ThreadPage(
+        threadId = threadId,
+        boardTitle = boardTitle,
+        expiresAtLabel = null,
+        deletedNotice = null,
+        posts = posts,
+        isTruncated = isTruncated,
+        truncationReason = truncationReason
+    )
+}
+
+private suspend fun waitUntil(
+    message: String,
+    attempts: Int = 20,
+    delayMillis: Long = 50L,
+    predicate: suspend () -> Boolean
+) {
+    repeat(attempts) { attempt ->
+        if (predicate()) return
+        if (attempt < attempts - 1) {
+            delay(delayMillis)
+        }
+    }
+    error("Timed out waiting for $message")
+}
+
+private class IndexWriteFailingFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return if (path.endsWith("/index.json") || path.endsWith("/index.json.backup")) {
+            Result.failure(IllegalStateException("index write failed for $path"))
+        } else {
+            delegate.writeString(path, content)
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        return if (
+            relativePath == "index.json" ||
+            relativePath == "index.json.backup"
+        ) {
+            Result.failure(IllegalStateException("index write failed for $relativePath"))
+        } else {
+            delegate.writeString(base, relativePath, content)
+        }
+    }
+}
+
+private class CountingHistoryWriteStorage : BaseInMemoryPlatformStateStorage() {
+    var historyWriteCount = 0
+
+    override suspend fun updateHistoryJson(value: String) {
+        historyWriteCount += 1
+        super.updateHistoryJson(value)
+    }
+}

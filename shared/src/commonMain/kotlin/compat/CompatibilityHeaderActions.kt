@@ -1,0 +1,266 @@
+package com.valoser.futacha.shared.compat
+
+import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+
+enum class CompatHeaderExtractionKind { QUOTE, ID, IP }
+
+sealed interface CompatHeaderTapTarget {
+    data class Url(val value: String) : CompatHeaderTapTarget
+    data class Email(val value: String) : CompatHeaderTapTarget
+}
+
+data class CompatPosterIdentity(val kind: CompatHeaderExtractionKind, val value: String) {
+    val display: String get() = "${kind.name}:$value"
+}
+
+/** The ordinal and total count shown after an ID/IP in the reference header. */
+data class CompatPosterIdentityProgress(
+    val identity: CompatPosterIdentity,
+    val current: Int,
+    val total: Int
+) {
+    val label: String get() = "$current/$total"
+}
+
+fun parseCompatPosterIdentity(raw: String?): CompatPosterIdentity? {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank()) return null
+    return when {
+        value.startsWith("IP:", ignoreCase = true) -> CompatPosterIdentity(
+            CompatHeaderExtractionKind.IP,
+            value.substringAfter(':').trim()
+        )
+        value.startsWith("ID:", ignoreCase = true) -> CompatPosterIdentity(
+            CompatHeaderExtractionKind.ID,
+            value.substringAfter(':').trim()
+        )
+        else -> CompatPosterIdentity(CompatHeaderExtractionKind.ID, value)
+    }.takeIf { it.value.isNotBlank() }
+}
+
+private val compatHeaderIdentityPattern = Regex("(?:ID|IP):[^\\s<]+", RegexOption.IGNORE_CASE)
+
+/**
+ * Returns every visible ID/IP token in source order.  New parser snapshots normally keep
+ * an ID in posterId, while IP (and older cached IDs) can still be present in timestamp.
+ */
+fun compatPosterIdentities(post: CompatPostSnapshot): List<CompatPosterIdentity> =
+    compatPosterIdentities(post.timestamp, post.posterId)
+
+/** Header fields only: callers with a live Post need not allocate a compatibility snapshot. */
+internal fun compatPosterIdentities(timestamp: String, posterId: String?): List<CompatPosterIdentity> {
+    val fromTimestamp = compatHeaderIdentityPattern.findAll(timestamp)
+        .mapNotNull { parseCompatPosterIdentity(it.value) }
+        .toList()
+    return (fromTimestamp + listOfNotNull(parseCompatPosterIdentity(posterId)))
+        .distinct()
+}
+
+/**
+ * Futaba normally exposes an ID/IP inside the timestamp span. The shared parser currently
+ * promotes IDs to [CompatPostSnapshot.posterId], while legacy IP headers can remain only in
+ * [CompatPostSnapshot.timestamp]. Keep the compatibility layer tolerant of both shapes so that
+ * cached snapshots and boards using IP display behave like the original application.
+ */
+fun compatPosterIdentity(post: CompatPostSnapshot): CompatPosterIdentity? =
+    parseCompatPosterIdentity(post.posterId)
+        ?: compatPosterIdentities(post).firstOrNull()
+
+/**
+ * Builds the exact current/total values used by reference app.  Counts are calculated from
+ * the complete raw snapshot, not the currently filtered rows, so NG and visibility changes
+ * cannot change an ID's displayed total.
+ */
+fun compatPosterIdentityProgress(
+    post: CompatPostSnapshot,
+    posts: List<CompatPostSnapshot>
+): List<CompatPosterIdentityProgress> {
+    val identities = compatPosterIdentities(post)
+    if (identities.isEmpty()) return emptyList()
+    return identities.map { identity ->
+        val matching = posts.filter { candidate ->
+            identity in compatPosterIdentities(candidate)
+        }
+        CompatPosterIdentityProgress(
+            identity = identity,
+            current = matching.count { it.position <= post.position }.coerceAtLeast(1),
+            total = matching.size.coerceAtLeast(1)
+        )
+    }
+}
+
+/**
+ * Builds identity progress for an entire snapshot in one pass.
+ *
+ * The straightforward implementation above is useful for an individual post,
+ * but calling it for every post makes thread rendering O(n²) and reparses the
+ * ID/IP regexes repeatedly. A live Futaba thread can contain thousands of
+ * responses, so the UI must precompute the per-identity totals and ordinals
+ * once before composing the LazyColumn.
+ */
+fun compatPosterIdentityProgressByPost(
+    posts: List<CompatPostSnapshot>
+): Map<String, List<CompatPosterIdentityProgress>> {
+    if (posts.isEmpty()) return emptyMap()
+    val identitiesByPostNo = posts.associate { post ->
+        post.postNo to compatPosterIdentities(post)
+    }
+    val totals = identitiesByPostNo.values
+        .flatten()
+        .groupingBy { it }
+        .eachCount()
+    val currentByIdentity = mutableMapOf<CompatPosterIdentity, Int>()
+    val result = mutableMapOf<String, List<CompatPosterIdentityProgress>>()
+    posts.sortedBy(CompatPostSnapshot::position).forEach { post ->
+        result[post.postNo] = identitiesByPostNo[post.postNo].orEmpty().map { identity ->
+            val current = (currentByIdentity[identity] ?: 0) + 1
+            currentByIdentity[identity] = current
+            CompatPosterIdentityProgress(
+                identity = identity,
+                current = current.coerceAtLeast(1),
+                total = totals[identity].orZero().coerceAtLeast(1)
+            )
+        }
+    }
+    return result
+}
+
+private fun Int?.orZero(): Int = this ?: 0
+
+/**
+ * Counts all posts carrying the same visible ID/IP.  The old viewer shows this
+ * next to the identity, and counting the raw snapshot (rather than the NG
+ * filtered list) keeps the number stable while the user changes filters.
+ */
+fun compatPosterReplyCounts(posts: List<CompatPostSnapshot>): Map<CompatPosterIdentity, Int> =
+    posts.mapNotNull(::compatPosterIdentity).groupingBy { it }.eachCount()
+
+fun compatPosterReplyCount(
+    post: CompatPostSnapshot,
+    counts: Map<CompatPosterIdentity, Int>
+): Int? = compatPosterIdentity(post)?.let(counts::get)?.takeIf { it > 1 }
+
+fun compatHeaderTapTarget(text: String): CompatHeaderTapTarget? {
+    val url = Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).find(text)?.value
+    if (url != null) return CompatHeaderTapTarget.Url(url.trimEnd('.', ',', ')', ']', '」', '。'))
+    compatInlineLinks(text).firstOrNull()?.let { return CompatHeaderTapTarget.Url(it.url) }
+    val email = Regex("[-+.0-9a-z]+@[-a-z0-9]+(?:\\.[-a-z0-9]+)*\\.[a-z]{2,6}", RegexOption.IGNORE_CASE)
+        .find(text)?.value
+    return email?.let(CompatHeaderTapTarget::Email)
+}
+
+fun compatHeaderText(post: CompatPostSnapshot): String = listOfNotNull(
+    post.subject?.takeIf(String::isNotBlank),
+    post.author?.takeIf(String::isNotBlank),
+    post.timestamp.takeIf(String::isNotBlank),
+    post.mail?.takeIf(String::isNotBlank),
+    compatPosterIdentity(post)?.display
+        ?.takeUnless { post.timestamp.contains(it, ignoreCase = true) },
+    "No.${post.postNo}"
+).joinToString(" ")
+
+fun compatHeaderExtractionKinds(
+    post: CompatPostSnapshot,
+    posts: List<CompatPostSnapshot>
+): List<CompatHeaderExtractionKind> = buildList {
+    // Only "is there at least one reply" is needed here, so stop at the first one.
+    if (post.referencedCount > 0 || posts.any(compatQuoteReplyPredicate(post, posts))) {
+        add(CompatHeaderExtractionKind.QUOTE)
+    }
+    compatPosterIdentities(post).map(CompatPosterIdentity::kind).distinct().forEach { add(it) }
+}
+
+/**
+ * Whether a candidate is a later post quoting [source]. The source's identities, media file
+ * names and text matcher are derived once and reused for every candidate line.
+ */
+private fun compatQuoteReplyPredicate(source: CompatPostSnapshot, posts: List<CompatPostSnapshot>): (CompatPostSnapshot) -> Boolean {
+    // Only built for a quote the plain source test cannot decide (number-prefixed text, text that only
+    // contains a source line); the common case never pays for it.
+    val resolver by lazy(LazyThreadSafetyMode.NONE) { CompatQuoteIndex(posts) }
+    val sourceFileNames by lazy(LazyThreadSafetyMode.NONE) { compatPostMediaFileNames(source) }
+    val sourceIdentities by lazy(LazyThreadSafetyMode.NONE) { compatPosterIdentities(source) }
+    val sourceMatcher by lazy(LazyThreadSafetyMode.NONE) { CompatQuoteTextMatcher(source) }
+    // Old snapshots have no parsed mappings. Rebuild once only if one of their
+    // nested quotes needs the same depth/block semantics as the displayed count.
+    val rebuiltReferences by lazy(LazyThreadSafetyMode.NONE) {
+        val page = CompatThreadSnapshot("", 0L, 0L, posts = posts.sortedBy { it.position }).toThreadPage("")
+        ThreadHtmlParserCore.rebuildReferences(page.posts).associate { it.id to it.quoteReferences }
+    }
+    // A thread read by the current parser carries quote mappings; a post of it without one only has quotes the parser
+    // could not resolve, which the "Nレス" count leaves out. Older caches have none anywhere and keep the compatibility
+    // matching below (M12).
+    val parsedThread = posts.any { it.quoteReferencesParsed || it.quoteReferences.isNotEmpty() }
+    return predicate@{ candidate ->
+        if (candidate.position <= source.position) return@predicate false
+        val plainText = candidate.messageHtml.toCompatPlainText()
+        val quotesSourceIp = plainText.lineSequence().any { line ->
+            val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
+            query.startsWith("ip:", ignoreCase = true) && query.substringAfter(':').trim().let { value ->
+                sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
+            }
+        }
+        if (quotesSourceIp) return@predicate true
+        if (candidate.quoteReferences.isNotEmpty()) {
+            return@predicate candidate.quoteReferences.any { source.postNo in it.replyTargetPostIds }
+        }
+        if (parsedThread) {
+            // L138: no unbounded partial-text match for those (it listed posts the count did not include); an IP quote
+            // is still listed, as before (the decision for L138).
+            return@predicate plainText.lineSequence().any { line ->
+                val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
+                query.startsWith("ip:", ignoreCase = true) && query.substringAfter(':').trim().let { value ->
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
+                }
+            }
+        }
+        if (plainText.lineSequence().any { line -> line.trimStart().takeWhile { it == '>' || it == '＞' }.length > 1 }) {
+            val references = rebuiltReferences[candidate.postNo].orEmpty()
+            if (references.isNotEmpty()) return@predicate references.any { source.postNo in it.replyTargetPostIds }
+        }
+        // Keep the compatibility resolver's number-led text, IP, header and
+        // partial-text fallbacks for legacy lines with no parsed mapping.
+        plainText.lineSequence().any { line ->
+            val query = compatQuoteQueryForLine(line.trimStart()) ?: return@any false
+            when {
+                query.startsWith("no:", ignoreCase = true) ->
+                    compatQuoteQueryPostNo(query) == source.postNo ||
+                        (compatQuoteQueryTextFallback(query) != null &&
+                            resolver.resolve(candidate.position, query).any { it.postNo == source.postNo })
+                query.startsWith("id:", ignoreCase = true) -> {
+                    val value = query.substringAfter(':').trim()
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.ID && compatIdentityValueMatches(it.value, value) }
+                }
+                query.startsWith("ip:", ignoreCase = true) -> {
+                    val value = query.substringAfter(':').trim()
+                    sourceIdentities.any { it.kind == CompatHeaderExtractionKind.IP && compatIdentityValueMatches(it.value, value) }
+                }
+                query.startsWith("file:", ignoreCase = true) -> {
+                    val value = query.substringAfter(':').trim()
+                    sourceFileNames.any { it.equals(value, ignoreCase = true) }
+                }
+                query.startsWith("text:", ignoreCase = true) -> {
+                    val text = query.substringAfter(':')
+                    sourceMatcher.matches(text) || sourceMatcher.matchesLineInside(text)
+                }
+                else -> false
+            }
+        }
+    }
+}
+
+fun extractCompatHeaderPosts(
+    posts: List<CompatPostSnapshot>,
+    source: CompatPostSnapshot,
+    kind: CompatHeaderExtractionKind
+): List<CompatPostSnapshot> = when (kind) {
+    CompatHeaderExtractionKind.QUOTE -> posts.filter(compatQuoteReplyPredicate(source, posts))
+    CompatHeaderExtractionKind.ID,
+    CompatHeaderExtractionKind.IP -> {
+        val identities = compatPosterIdentities(source).filter { it.kind == kind }
+        if (identities.isEmpty()) emptyList()
+        else posts.filter { candidate ->
+            compatPosterIdentities(candidate).any { it in identities }
+        }
+    }
+}

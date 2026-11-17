@@ -1,0 +1,851 @@
+package com.valoser.futacha.shared.ui.compat
+
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.valoser.futacha.shared.model.CatalogFetchSettings
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+private const val COMPAT_PULL_FRICTION = 2f
+// The legacy refresh gesture has a deliberate dead zone.  A 48dp header as
+// the trigger made a light touch at the end of a short thread refresh it.
+// A short/diagonal reading drag must not refresh a board. Keep this larger
+// than the visual header so the release gesture is intentional on short lists.
+private val COMPAT_PULL_MIN_TRIGGER = 96.dp
+private const val COMPAT_PULL_MAX_DISPLAY_MULTIPLIER = 1.5f
+private const val COMPAT_PULL_SETTLE_MILLIS = 200
+private const val COMPAT_PULL_LOADING_ROTATION_MILLIS = 1_200
+private const val COMPAT_FAST_SCROLL_HIDE_DELAY_MILLIS = 1_500L
+private const val COMPAT_FAST_SCROLL_FADE_MILLIS = 500
+private val CompatPullSettleEasing = CubicBezierEasing(0f, 0f, 0.2f, 1f)
+
+internal enum class CompatPullLabel {
+    PULL,
+    RELEASE,
+    LOADING
+}
+
+internal fun compatPullLabel(offsetPx: Float, thresholdPx: Float, refreshing: Boolean): CompatPullLabel = when {
+    refreshing -> CompatPullLabel.LOADING
+    abs(offsetPx) >= thresholdPx -> CompatPullLabel.RELEASE
+    else -> CompatPullLabel.PULL
+}
+
+internal fun shouldTriggerCompatPullRefresh(offsetPx: Float, thresholdPx: Float): Boolean =
+    thresholdPx > 0f && abs(offsetPx) >= thresholdPx
+
+/**
+ * Updates the raw pull distance while consuming a reversal only until the
+ * gesture reaches neutral. Keeping this reducer shared by nested-scroll and
+ * pointer fallback paths prevents the latter from getting stuck above the
+ * refresh threshold (#45).
+ */
+internal data class CompatPullDragUpdate(
+    val totalDrag: Float,
+    val consumedDrag: Float
+)
+
+internal fun updateCompatPullDrag(
+    totalDrag: Float,
+    dragAmount: Float,
+    maxAbsDrag: Float
+): CompatPullDragUpdate {
+    val maximum = abs(maxAbsDrag)
+    if (dragAmount == 0f || maximum == 0f) {
+        return CompatPullDragUpdate(totalDrag, 0f)
+    }
+    if (totalDrag == 0f || totalDrag * dragAmount >= 0f) {
+        val updated = (totalDrag + dragAmount).coerceIn(-maximum, maximum)
+        return CompatPullDragUpdate(updated, updated - totalDrag)
+    }
+    val consumed = if (abs(dragAmount) <= abs(totalDrag)) dragAmount else -totalDrag
+    return CompatPullDragUpdate(totalDrag + consumed, consumed)
+}
+
+/**
+ * Progress of the pull header itself, rather than progress towards refresh.
+ * The legacy UI reveals the hint as the finger moves; it must not be fully
+ * visible for a one-pixel overscroll.
+ */
+internal fun compatPullVisualProgress(offsetPx: Float, headerHeightPx: Float): Float =
+    if (headerHeightPx <= 0f) 0f else (abs(offsetPx) / headerHeightPx).coerceIn(0f, 1f)
+
+/**
+ * The content follows the finger by the actual overscroll amount.  Returning
+ * a fixed header height here causes a sudden 48dp jump on the first pixel.
+ */
+internal fun compatPullContentOffsetPx(offsetPx: Float): Float = offsetPx
+
+/**
+ * Pull-to-refresh must only own a clearly vertical gesture.  Without an axis
+ * lock, the vertical component of a diagonal pager/read gesture can reach the
+ * list edge and refresh the board even though the user is moving sideways.
+ */
+internal enum class CompatPullGestureAxis { UNDECIDED, VERTICAL, REJECTED }
+
+internal const val COMPAT_PULL_DIRECTION_RATIO = 1.25f
+
+internal fun compatPullGestureAxis(
+    totalDx: Float,
+    totalDy: Float,
+    touchSlopPx: Float
+): CompatPullGestureAxis {
+    val slop = touchSlopPx.coerceAtLeast(0f)
+    val dx = abs(totalDx)
+    val dy = abs(totalDy)
+    if (maxOf(dx, dy) < slop) return CompatPullGestureAxis.UNDECIDED
+    return if (dy >= dx * COMPAT_PULL_DIRECTION_RATIO) {
+        CompatPullGestureAxis.VERTICAL
+    } else {
+        CompatPullGestureAxis.REJECTED
+    }
+}
+
+/** A completed catalog refresh is a new snapshot, so the legacy screen starts at its first row. */
+internal fun shouldScrollCompatCatalogToTopAfterRefresh(refreshSucceeded: Boolean): Boolean =
+    refreshSucceeded
+
+/**
+ * The single mapping from the shared "スレッド数" preference to catalog fetch
+ * settings. Every caller (both modes and the watcher) must use it: different
+ * settings per caller make the repository re-post catset on every switch.
+ * Returns null when the preference is unset.
+ */
+internal fun compatCatalogFetchSettingsFromPreferences(preferences: Map<String, String>): CatalogFetchSettings? =
+    preferences.compatPreferenceValue("catalog", "catalogThreadSize", "スレッド数")
+        ?.filter(Char::isDigit)?.toIntOrNull()
+        ?.let(::compatCatalogFetchSettings)
+
+/**
+ * The reference app sends catalogThreadSize as `${size / 25}x25x256x0x1`.
+ * The reference app uses integer division here, not a ceiling. Keep the
+ * exact wire value so the selected size is not silently changed by a mode
+ * switch or background refresh (#17).
+ */
+internal fun compatCatalogFetchSettings(threadCount: Int): CatalogFetchSettings {
+    val normalizedCount = threadCount.coerceIn(50, 3_000)
+    val columns = (normalizedCount / 25).coerceIn(2, 120)
+    return CatalogFetchSettings(
+        columns = columns,
+        rows = 25,
+        titleLines = 256,
+        showVisitedHistory = true
+    ).normalized()
+}
+
+internal fun compatFastScrollbarTarget(
+    totalItems: Int,
+    trackHeightPx: Int,
+    y: Float
+): Int {
+    val height = trackHeightPx.coerceAtLeast(1)
+    val fraction = (y / height).coerceIn(0f, 1f)
+    return ((totalItems - 1) * fraction).roundToInt().coerceIn(0, (totalItems - 1).coerceAtLeast(0))
+}
+
+internal fun compatFastScrollbarDragTarget(
+    firstVisibleItemIndex: Int,
+    totalItems: Int,
+    visibleItemCount: Int,
+    trackHeightPx: Int,
+    dragDeltaY: Float
+): Int {
+    val maxFirstIndex = (totalItems - visibleItemCount).coerceAtLeast(0)
+    if (maxFirstIndex == 0) return 0
+    val thumbFraction = (visibleItemCount.toFloat() / totalItems.coerceAtLeast(1)).coerceIn(0.06f, 1f)
+    val travelPx = (trackHeightPx.coerceAtLeast(1) * (1f - thumbFraction)).coerceAtLeast(1f)
+    val deltaItems = (dragDeltaY / travelPx * maxFirstIndex).roundToInt()
+    return (firstVisibleItemIndex + deltaItems).coerceIn(0, maxFirstIndex)
+}
+
+@Composable
+internal fun CompatBidirectionalPullRefresh(
+    enabled: Boolean,
+    refreshing: Boolean,
+    canScrollBackward: () -> Boolean,
+    canScrollForward: () -> Boolean,
+    onRefresh: suspend () -> Unit,
+    modifier: Modifier = Modifier,
+    testTag: String = "compat-pull-refresh",
+    content: @Composable BoxScope.() -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val latestEnabled by rememberUpdatedState(enabled)
+    val latestRefreshing by rememberUpdatedState(refreshing)
+    val latestCanScrollBackward by rememberUpdatedState(canScrollBackward)
+    val latestCanScrollForward by rememberUpdatedState(canScrollForward)
+    val latestOnRefresh by rememberUpdatedState(onRefresh)
+    val minimumTriggerPx = with(LocalDensity.current) { COMPAT_PULL_MIN_TRIGGER.toPx() }
+    val maximumDisplayOffsetPx = minimumTriggerPx * COMPAT_PULL_MAX_DISPLAY_MULTIPLIER
+    val touchSlopPx = LocalViewConfiguration.current.touchSlop
+    var totalRawDrag by remember { mutableFloatStateOf(0f) }
+    var displayOffset by remember { mutableFloatStateOf(0f) }
+    var pointerGestureActive by remember { mutableStateOf(false) }
+    var gestureDx by remember { mutableFloatStateOf(0f) }
+    var gestureDy by remember { mutableFloatStateOf(0f) }
+    var gestureAxis by remember { mutableStateOf(CompatPullGestureAxis.UNDECIDED) }
+    // `refreshing` also covers the initial catalog/thread load.  The reference app's
+    // pull hint is gesture-owned, so an ordinary load must not expose it.
+    var pullRefreshActive by remember { mutableStateOf(false) }
+    var headerHeightPx by remember { mutableIntStateOf(0) }
+    var settleJob by remember { mutableStateOf<Job?>(null) }
+
+    suspend fun animateOffset(start: Float, target: Float) {
+        animate(
+            initialValue = start,
+            targetValue = target,
+            animationSpec = tween(COMPAT_PULL_SETTLE_MILLIS, easing = CompatPullSettleEasing)
+        ) { value, _ -> displayOffset = value }
+    }
+
+    fun animateOffsetTo(target: Float) {
+        settleJob?.cancel()
+        settleJob = scope.launch { animateOffset(displayOffset, target) }
+    }
+
+    fun resetPullState() {
+        totalRawDrag = 0f
+        displayOffset = 0f
+        pullRefreshActive = false
+        gestureDx = 0f
+        gestureDy = 0f
+        gestureAxis = CompatPullGestureAxis.UNDECIDED
+    }
+
+    fun recordGestureDelta(dx: Float, dy: Float) {
+        if (gestureAxis != CompatPullGestureAxis.UNDECIDED) return
+        gestureDx += dx
+        gestureDy += dy
+        gestureAxis = compatPullGestureAxis(gestureDx, gestureDy, touchSlopPx)
+    }
+
+    fun finishGesture() {
+        // A nested-scroll child can consume the final delta before the
+        // pointer observer sees ACTION_UP.  In that case raw drag is already
+        // zero while the visual offset may still be non-zero; returning here
+        // was the source of the intermittent stuck "画面を引っ張って…"
+        // overlay.  Always clear a stale visual state on gesture end.
+        if (totalRawDrag == 0f) {
+            // ACTION_UP can be consumed by LazyColumn/LazyGrid before the
+            // nested-scroll observer sees the last delta.  Never leave the
+            // visual hint armed in that case; a real refresh is represented
+            // by `refreshing` and will redraw the loading state separately.
+            if (displayOffset != 0f) {
+                settleJob?.cancel()
+                resetPullState()
+            }
+            return
+        }
+        if (pullRefreshActive || latestRefreshing) return
+        val threshold = maxOf(headerHeightPx.toFloat(), minimumTriggerPx)
+        val direction = if (displayOffset >= 0f) 1f else -1f
+        val trigger = latestEnabled && !latestRefreshing &&
+            shouldTriggerCompatPullRefresh(displayOffset, threshold)
+        totalRawDrag = 0f
+        if (trigger) {
+            pullRefreshActive = true
+            settleJob?.cancel()
+            settleJob = scope.launch {
+                try {
+                    animateOffset(displayOffset, direction * threshold)
+                    latestOnRefresh()
+                    animateOffset(displayOffset, 0f)
+                } finally {
+                    // The reference app removes the pull hint after the refresh callback,
+                    // including timeout/cancellation paths.  Leaving the last
+                    // drag offset here makes "画面を引っ張って…" remain on screen.
+                    resetPullState()
+                }
+            }
+        } else {
+            settleJob?.cancel()
+            // Dismiss the hint at ACTION_UP immediately. A nested-scroll
+            // child may otherwise keep the old reference app's release text visible
+            // during the settle animation.
+            resetPullState()
+        }
+    }
+
+    LaunchedEffect(refreshing) {
+        if (!refreshing) {
+            // A nested-scroll child can consume ACTION_UP before the pointer
+            // observer sees it (especially at a LazyColumn edge). Completion
+            // of the refresh is the authoritative reset for both directions.
+            settleJob?.cancel()
+            resetPullState()
+        }
+    }
+
+    LaunchedEffect(enabled) {
+        if (!enabled) {
+            settleJob?.cancel()
+            resetPullState()
+        }
+    }
+
+    LaunchedEffect(displayOffset, pullRefreshActive, refreshing, pointerGestureActive) {
+        // LazyColumn/LazyGrid may consume the final pointer event. If that
+        // happens the release callback above is never delivered and the
+        // threshold label remains painted indefinitely. A quiet visual state
+        // is safe to dismiss after a short grace period; an active refresh is
+        // excluded because its lifecycle is owned by `refreshing`.
+        if (!pointerGestureActive && !pullRefreshActive && !refreshing && abs(displayOffset) > 0.5f) {
+            delay(350)
+            if (!pointerGestureActive && !pullRefreshActive && !refreshing && abs(displayOffset) > 0.5f) {
+                settleJob?.cancel()
+                resetPullState()
+            }
+        }
+    }
+
+    val connection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                recordGestureDelta(available.x, available.y)
+                if (gestureAxis != CompatPullGestureAxis.VERTICAL || totalRawDrag == 0f) {
+                    return Offset.Zero
+                }
+                if (available.y == 0f || available.y * totalRawDrag >= 0f) return Offset.Zero
+                val consumed = if (abs(available.y) <= abs(totalRawDrag)) available.y else -totalRawDrag
+                totalRawDrag += consumed
+                displayOffset = totalRawDrag / COMPAT_PULL_FRICTION
+                return Offset(0f, consumed)
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source == NestedScrollSource.UserInput && gestureAxis == CompatPullGestureAxis.UNDECIDED) {
+                    recordGestureDelta(consumed.x + available.x, consumed.y + available.y)
+                }
+                if (!latestEnabled || latestRefreshing || pullRefreshActive || source != NestedScrollSource.UserInput) {
+                    return Offset.Zero
+                }
+                if (gestureAxis != CompatPullGestureAxis.VERTICAL) return Offset.Zero
+                val mayPullTop = available.y > 0f && !latestCanScrollBackward()
+                val mayPullBottom = available.y < 0f && !latestCanScrollForward()
+                if (!mayPullTop && !mayPullBottom) return Offset.Zero
+                if (totalRawDrag != 0f && totalRawDrag * available.y < 0f) return Offset.Zero
+                settleJob?.cancel()
+                totalRawDrag = (totalRawDrag + available.y)
+                    .coerceIn(
+                        -maximumDisplayOffsetPx * COMPAT_PULL_FRICTION,
+                        maximumDisplayOffsetPx * COMPAT_PULL_FRICTION
+                    )
+                displayOffset = totalRawDrag / COMPAT_PULL_FRICTION
+                return Offset(0f, available.y)
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            // Keep the pull header outside the viewport until the finger has
+            // actually moved far enough to reveal it. Rendering a full-height
+            // child at the edge and changing only its alpha made the whole
+            // "画面を引っ張って…" block appear after a one-pixel overscroll
+            // on Android 11 (#26).
+            .clipToBounds()
+            .testTag(testTag)
+            .nestedScroll(connection)
+            .pointerInput(enabled, refreshing) {
+                awaitEachGesture {
+                    var gestureFinished = false
+                    try {
+                        pointerGestureActive = true
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var lastY = down.position.y
+                        var fallbackRawDrag = 0f
+                        gestureDx = 0f
+                        gestureDy = 0f
+                        gestureAxis = CompatPullGestureAxis.UNDECIDED
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            recordGestureDelta(
+                                change.position.x - change.previousPosition.x,
+                                change.position.y - change.previousPosition.y
+                            )
+                            val delta = change.position.y - lastY
+                            lastY = change.position.y
+                            // LazyColumn normally exposes the overscroll through
+                            // NestedScrollConnection. Some Android/Compose versions
+                            // consume the final bottom delta before onPostScroll;
+                            // retain a small pointer-level fallback so an upward
+                            // pull at the last response still refreshes.
+                            if (
+                                latestEnabled && !latestRefreshing && !pullRefreshActive &&
+                                gestureAxis == CompatPullGestureAxis.VERTICAL &&
+                                totalRawDrag == 0f && fallbackRawDrag == 0f &&
+                                ((delta > 0f && !latestCanScrollBackward()) ||
+                                    (delta < 0f && !latestCanScrollForward()))
+                            ) {
+                                fallbackRawDrag = delta
+                            } else if (fallbackRawDrag != 0f) {
+                                fallbackRawDrag = updateCompatPullDrag(
+                                    totalDrag = fallbackRawDrag,
+                                    dragAmount = delta,
+                                    maxAbsDrag = maximumDisplayOffsetPx * COMPAT_PULL_FRICTION
+                                ).totalDrag
+                            }
+                            if (fallbackRawDrag != 0f && totalRawDrag == 0f) {
+                                displayOffset = fallbackRawDrag / COMPAT_PULL_FRICTION
+                            }
+                        }
+                        if (totalRawDrag == 0f && fallbackRawDrag != 0f) {
+                            totalRawDrag = fallbackRawDrag
+                        }
+                        finishGesture()
+                        gestureFinished = true
+                    } finally {
+                        pointerGestureActive = false
+                        if (!gestureFinished) {
+                            totalRawDrag = 0f
+                            gestureDx = 0f
+                            gestureDy = 0f
+                            gestureAxis = CompatPullGestureAxis.UNDECIDED
+                            if (!pullRefreshActive) {
+                                settleJob?.cancel()
+                                displayOffset = 0f
+                            }
+                        }
+                    }
+                }
+            }
+    ) {
+        val density = LocalDensity.current
+        val visualHeaderHeightPx = with(density) { 48.dp.toPx() }
+        val pullVisualProgress = compatPullVisualProgress(
+            offsetPx = displayOffset,
+            headerHeightPx = maxOf(headerHeightPx.toFloat(), visualHeaderHeightPx)
+        )
+        // The reference app exposes the pull hint only while a gesture is in progress.
+        // At offset == 0 it must not sit permanently over the catalog/loading UI.
+        val pullHeaderVisible = pullRefreshActive || abs(displayOffset) > 0.5f
+        // Only spin while the loading hint is actually painted.  An always-on
+        // InfiniteTransition requested a frame on every vsync while idle.
+        val loadingRotation by rememberCompatPullLoadingRotation(
+            running = refreshing && pullHeaderVisible
+        )
+        if (pullHeaderVisible) {
+            val label = when (compatPullLabel(displayOffset, maxOf(headerHeightPx.toFloat(), minimumTriggerPx), refreshing)) {
+                CompatPullLabel.PULL -> "画面を引っ張って…"
+                CompatPullLabel.RELEASE -> "指を離して更新…"
+                CompatPullLabel.LOADING -> "読み込み中…"
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .onSizeChanged { headerHeightPx = it.height }
+                    .graphicsLayer { alpha = pullVisualProgress }
+                    .graphicsLayer {
+                        val headerHeight = maxOf(headerHeightPx.toFloat(), visualHeaderHeightPx)
+                        translationY = if (displayOffset >= 0f) {
+                            -headerHeight + displayOffset
+                        } else {
+                            headerHeight + displayOffset
+                        }
+                    }
+                    .align(if (displayOffset >= 0f) Alignment.TopCenter else Alignment.BottomCenter),
+                contentAlignment = Alignment.Center
+            ) {
+                val pullFraction = pullVisualProgress
+                Canvas(
+                    modifier = Modifier
+                        .width(25.dp)
+                        .height(25.dp)
+                        .testTag("$testTag-indicator")
+                        .graphicsLayer {
+                            rotationZ = if (refreshing) loadingRotation else pullFraction * 90f
+                        }
+                ) {
+                    drawArc(
+                        color = Color(0xFF00897B),
+                        startAngle = -90f,
+                        sweepAngle = 300f,
+                        useCenter = false,
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+                Text(
+                    text = label,
+                    color = LocalCompatibilityPalette.current.uiPrimaryText,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        // Leave room for the hint while it is visible.  Otherwise the label
+        // is painted over the first/last response during a pull gesture.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = compatPullContentOffsetPx(displayOffset)
+                },
+            content = content
+        )
+    }
+}
+
+/**
+ * Rotation of the pull-refresh loading arc.  The animation exists only while
+ * [running]; when idle it awaits no frames, so the host stays asleep.
+ */
+@Composable
+internal fun rememberCompatPullLoadingRotation(running: Boolean): State<Float> {
+    val rotation = remember { Animatable(0f) }
+    LaunchedEffect(running) {
+        if (!running) {
+            rotation.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            rotation.snapTo(0f)
+            rotation.animateTo(
+                targetValue = 720f,
+                animationSpec = tween(COMPAT_PULL_LOADING_ROTATION_MILLIS, easing = LinearEasing)
+            )
+        }
+    }
+    return rotation.asState()
+}
+
+// Read layout state inside a small restart scope, and not at all when disabled.
+// Reading layoutInfo in the catalog/thread caller invalidates its entire screen
+// on every scroll frame, even if the first row and visible count did not change.
+private data class CompatFastScrollMetrics(
+    val totalItems: Int,
+    val firstVisible: Int,
+    val visibleCount: Int,
+    val scrolling: Boolean
+)
+
+/**
+ * Same as the overload taking totalItems, but also reads the item count here.
+ * Callers that passed listState.layoutInfo.totalItemsCount read layout state in
+ * their own body and recomposed the whole thread screen on every scroll frame.
+ */
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    listState: LazyListState
+) {
+    if (!enabled) return
+    val metrics by remember(listState) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            CompatFastScrollMetrics(layout.totalItemsCount, listState.firstVisibleItemIndex,
+                layout.visibleItemsInfo.size, listState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, metrics.totalItems, metrics.firstVisible, metrics.visibleCount, metrics.scrolling,
+        listState::scrollToItem)
+}
+
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    totalItems: Int,
+    listState: LazyListState
+) {
+    if (!enabled) return
+    val metrics by remember(listState) {
+        derivedStateOf {
+            Triple(listState.firstVisibleItemIndex, listState.layoutInfo.visibleItemsInfo.size, listState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, totalItems, metrics.first, metrics.second, metrics.third, listState::scrollToItem)
+}
+
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    totalItems: Int,
+    gridState: LazyGridState
+) {
+    if (!enabled) return
+    val metrics by remember(gridState) {
+        derivedStateOf {
+            Triple(gridState.firstVisibleItemIndex, gridState.layoutInfo.visibleItemsInfo.size, gridState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, totalItems, metrics.first, metrics.second, metrics.third, gridState::scrollToItem)
+}
+
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    totalItems: Int,
+    firstVisibleItemIndex: Int,
+    visibleItemCount: Int,
+    isScrollInProgress: Boolean,
+    onScrollToItem: suspend (Int) -> Unit,
+    alwaysVisible: Boolean = false,
+    onLeft: Boolean = false,
+    thickness: androidx.compose.ui.unit.Dp = 6.dp,
+    thumbColor: Color = Color(0xFF757575)
+) {
+    if (!enabled || totalItems <= visibleItemCount || visibleItemCount <= 0) return
+    val scope = rememberCoroutineScope()
+    val latestOnScrollToItem by rememberUpdatedState(onScrollToItem)
+    val latestFirstVisibleItemIndex by rememberUpdatedState(firstVisibleItemIndex)
+    val latestTotalItems by rememberUpdatedState(totalItems)
+    val latestVisibleItemCount by rememberUpdatedState(visibleItemCount)
+    val touchSlopPx = LocalViewConfiguration.current.touchSlop
+    var trackHeightPx by remember { mutableIntStateOf(0) }
+    var dragging by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(false) }
+    var opacity by remember { mutableFloatStateOf(0f) }
+    var scrollJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(isScrollInProgress, dragging, alwaysVisible) {
+        if (isScrollInProgress || dragging || alwaysVisible) {
+            visible = true
+            animate(opacity, 1f, animationSpec = tween(COMPAT_FAST_SCROLL_FADE_MILLIS)) { value, _ ->
+                opacity = value
+            }
+        } else if (visible) {
+            delay(COMPAT_FAST_SCROLL_HIDE_DELAY_MILLIS)
+            animate(opacity, 0f, animationSpec = tween(COMPAT_FAST_SCROLL_FADE_MILLIS)) { value, _ ->
+                opacity = value
+            }
+            visible = false
+        }
+    }
+
+    fun scrollForDrag(startIndex: Int, startTotal: Int, startVisibleCount: Int, startHeight: Int, dragDeltaY: Float) {
+        val target = compatFastScrollbarDragTarget(
+            firstVisibleItemIndex = startIndex,
+            totalItems = startTotal,
+            visibleItemCount = startVisibleCount,
+            trackHeightPx = startHeight,
+            dragDeltaY = dragDeltaY
+        )
+        scrollJob?.cancel()
+        scrollJob = scope.launch { latestOnScrollToItem(target) }
+    }
+
+    val thumbFraction = (visibleItemCount.toFloat() / totalItems).coerceIn(0.06f, 1f)
+    val travelFraction = if (totalItems <= visibleItemCount) 0f else {
+        firstVisibleItemIndex.toFloat() / (totalItems - visibleItemCount).coerceAtLeast(1)
+    }.coerceIn(0f, 1f)
+    // Only the visible thumb owns fast scrolling. A full-height transparent
+    // hit strip intercepts ordinary reading swipes made near the right edge
+    // and turns them into absolute seeks. Drag relative to the position at
+    // pointer-down so grabbing the thumb never causes an initial jump.
+    // Visible rows change while dragging past differently sized posts. Keep the gesture alive and
+    // use the metrics at pointer-down. Accumulate movement rather than comparing with a local
+    // down position: the thumb itself moves under the finger as the list scrolls.
+    val thumbGestureModifier = Modifier.pointerInput(touchSlopPx) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val startIndex = latestFirstVisibleItemIndex
+            val startTotal = latestTotalItems
+            val startVisibleCount = latestVisibleItemCount
+            val startHeight = trackHeightPx
+            var distance = 0f
+            var isDragging = false
+            dragging = true
+            try { while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                val moved = change.position != change.previousPosition
+                if (moved) {
+                    distance += change.position.y - change.previousPosition.y
+                    if (!isDragging && abs(distance) >= touchSlopPx) {
+                        isDragging = true
+                    }
+                    if (isDragging) {
+                        change.consume()
+                        scrollForDrag(startIndex, startTotal, startVisibleCount, startHeight, distance)
+                    }
+                }
+                if (!change.pressed) {
+                    dragging = false
+                    break
+                }
+            } } finally { dragging = false }
+        }
+    }
+    Box(
+        modifier = Modifier
+            .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
+            .width(maxOf(24.dp, thickness + 6.dp))
+            .fillMaxHeight()
+            .testTag("compat-fast-scrollbar")
+            .onSizeChanged { trackHeightPx = it.height }
+    ) {
+        Box(
+            Modifier
+                .align(if (onLeft) Alignment.TopStart else Alignment.TopEnd)
+                .width(maxOf(18.dp, thickness + 6.dp))
+                .fillMaxHeight(thumbFraction)
+                .graphicsLayer {
+                    alpha = opacity
+                    translationY = (trackHeightPx * (1f - thumbFraction) * travelFraction)
+                }
+                .then(if (visible || opacity > 0.01f) thumbGestureModifier else Modifier),
+            contentAlignment = if (onLeft) Alignment.CenterStart else Alignment.CenterEnd
+        ) {
+            Box(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .width(thickness)
+                    .fillMaxHeight()
+                    .background(thumbColor, RoundedCornerShape(thickness / 2))
+            )
+        }
+    }
+}
+
+/** としあき(仮)の「スクロールバーを表示」（may/aimg No.39）：右端の細いバー。押せない表示だけで、スクロール中に出て止まると消える。 */
+internal const val COMPAT_THREAD_SCROLL_BAR_KEY = "threadScrollBar"
+internal const val COMPAT_CATALOG_SCROLL_BAR_KEY = "catalogScrollBar"
+
+/** The plain bar is drawn only when it is on and the fast scroll bar (which already shows the place) is off. */
+internal fun compatShowsScrollIndicator(indicatorOn: Boolean, fastScrollOn: Boolean): Boolean = indicatorOn && !fastScrollOn
+
+/**
+ * Where a drag at [y] px of a bar [height] px tall goes in a list of [totalItems] (No.39: the bar can be dragged).
+ */
+internal fun compatScrollIndicatorTarget(y: Float, height: Float, totalItems: Int): Int {
+    if (totalItems <= 0 || height <= 0f) return 0
+    val fraction = (y / height).coerceIn(0f, 1f)
+    return (fraction * (totalItems - 1)).toInt().coerceIn(0, totalItems - 1)
+}
+
+/** How long the bar stays draggable after a scroll stops (it fades in the meantime). */
+internal const val COMPAT_SCROLL_INDICATOR_GRAB_MILLIS = 1500L
+
+/**
+ * The right edge strip that moves the list by dragging. It only takes a drag while the bar is shown (a scroll is
+ * going on or just stopped), so a scroll that starts at the right edge stays a scroll otherwise; taps pass through.
+ */
+@Composable
+private fun BoxScope.CompatScrollIndicatorDrag(
+    isScrolling: () -> Boolean,
+    totalItems: () -> Int,
+    scrollTo: suspend (Int) -> Unit
+) {
+    var shown by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var dragging by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        androidx.compose.runtime.snapshotFlow { isScrolling() || dragging }.collectLatest { active ->
+            if (active) shown = true
+            else { kotlinx.coroutines.delay(COMPAT_SCROLL_INDICATOR_GRAB_MILLIS); shown = false }
+        }
+    }
+    if (!shown) return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    androidx.compose.foundation.layout.Box(
+        androidx.compose.ui.Modifier.align(androidx.compose.ui.Alignment.CenterEnd)
+            .fillMaxHeight().width(28.dp)
+            .testTag("compat-scroll-indicator-drag")
+            .pointerInput(Unit) {
+                val height = size.height.toFloat()
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        dragging = true
+                        scope.launch { scrollTo(compatScrollIndicatorTarget(offset.y, height, totalItems())) }
+                    },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false }
+                ) { change, _ ->
+                    change.consume()
+                    scope.launch { scrollTo(compatScrollIndicatorTarget(change.position.y, height, totalItems())) }
+                }
+            }
+    )
+}
+
+@Composable
+internal fun BoxScope.CompatScrollIndicator(enabled: Boolean, listState: LazyListState) {
+    if (!enabled) return
+    val ink = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+    androidx.compose.foundation.layout.Box(
+        androidx.compose.ui.Modifier.matchParentSize()
+            .then(com.valoser.futacha.shared.ui.futaber.rememberFutaberScrollIndicator(listState, ink))
+            .testTag("compat-scroll-indicator")
+    )
+    CompatScrollIndicatorDrag({ listState.isScrollInProgress }, { listState.layoutInfo.totalItemsCount }, listState::scrollToItem)
+}
+
+@Composable
+internal fun BoxScope.CompatScrollIndicator(enabled: Boolean, gridState: LazyGridState) {
+    if (!enabled) return
+    val ink = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+    val columns by remember(gridState) {
+        derivedStateOf {
+            val visible = gridState.layoutInfo.visibleItemsInfo
+            val firstRow = visible.firstOrNull()?.row
+            visible.count { it.row == firstRow }.coerceAtLeast(1)
+        }
+    }
+    androidx.compose.foundation.layout.Box(
+        androidx.compose.ui.Modifier.matchParentSize()
+            .then(com.valoser.futacha.shared.ui.futaber.rememberFutaberScrollIndicator(gridState, columns, ink))
+            .testTag("compat-scroll-indicator")
+    )
+    CompatScrollIndicatorDrag({ gridState.isScrollInProgress }, { gridState.layoutInfo.totalItemsCount }, gridState::scrollToItem)
+}

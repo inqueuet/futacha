@@ -1,0 +1,3 @@
+<resources>
+    <bool name="enable_app_functions">true</bool>
+</resources>

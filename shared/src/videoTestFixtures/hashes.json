@@ -1,0 +1,22 @@
+{
+  "landscape": {
+    "reference_sha256": "373033cc078453b09bcf439c291f565789bc8d7819e14d1bdabfbbe5c70566c6",
+    "test_sha256": "373033cc078453b09bcf439c291f565789bc8d7819e14d1bdabfbbe5c70566c6"
+  },
+  "portrait": {
+    "reference_sha256": "d35cea0ed4705de8720ab2306aabbdfab5edc101346335f7cd6e96f289c39c5e",
+    "test_sha256": "d35cea0ed4705de8720ab2306aabbdfab5edc101346335f7cd6e96f289c39c5e"
+  },
+  "variable": {
+    "reference_sha256": "fdfcc7b619e2dd17418d1893fc085a7db278fcb16104a232fb456228e6c131e8",
+    "test_sha256": "fdfcc7b619e2dd17418d1893fc085a7db278fcb16104a232fb456228e6c131e8"
+  },
+  "rotated": {
+    "reference_sha256": "13cef478ab2003ae7ed365f12455a1d1ef60add8805d78a09744d1a12c214ac7",
+    "test_sha256": "6263da085236e14183865c8ddb6273bb7cb292ae9e3e07c50f9bf0ef5b2bf065"
+  },
+  "asymmetric-rotated": {
+    "reference_sha256": "b3778fd5d0d8101dc532d2526bd6c60f26bc5092a3c8deea41931c8cc2176607",
+    "test_sha256": "51c99165e915ba1d89f6cd87ad3db314dacaac20c82ca587d53621fc684c41e8"
+  }
+}

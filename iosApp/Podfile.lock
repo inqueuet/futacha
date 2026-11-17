@@ -1,0 +1,23 @@
+PODS:
+  - onnxruntime-c (1.30.0)
+  - shared (1.8):
+    - onnxruntime-c (= 1.30.0)
+
+DEPENDENCIES:
+  - shared (from `../shared`)
+
+SPEC REPOS:
+  trunk:
+    - onnxruntime-c
+
+EXTERNAL SOURCES:
+  shared:
+    :path: "../shared"
+
+SPEC CHECKSUMS:
+  onnxruntime-c: 36ca0f2cdbc89c6b330ec5287c3faf5ca6ed394d
+  shared: fbab0e61849b2a654441917cb3a6b595b08d12c3
+
+PODFILE CHECKSUM: c0d375c7eb7e3a4054cfc47540a270a9538ca7dd
+
+COCOAPODS: 1.17.0

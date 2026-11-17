@@ -1,0 +1,176 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.runtime.*
+import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.ui.compat.*
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
+
+internal data class FutachaThreadProjection(
+    val tabKey: String,
+    val boardKey: String,
+    val extraction: CompatExtractionKind? = null
+)
+internal val LocalFutachaThreadProjection = staticCompositionLocalOf<FutachaThreadProjection?> { null }
+
+/** The preferences a thread projection depends on; other keys must not restart it. */
+internal data class FutachaThreadProjectionSettings(
+    val ngEnabled: Boolean,
+    val saidaneThreshold: Int,
+    val quoteThreshold: Int
+) {
+    companion object {
+        fun from(preferences: Map<String, String>) = FutachaThreadProjectionSettings(
+            ngEnabled = preferences.compatPreferenceValue("thread", "threadNg", "NG機能") != "OFF",
+            saidaneThreshold = preferences.compatPreferenceValue("thread", "threadExtractSoudaneNum", "そうだねが多いレス")?.toIntOrNull() ?: 3,
+            quoteThreshold = preferences.compatPreferenceValue("thread", "threadExtractQuoteNum", "返信が多いレス")?.toIntOrNull() ?: 3
+        )
+    }
+}
+
+internal fun projectFutachaThread(
+    source: ThreadPage,
+    normallyFiltered: ThreadPage,
+    context: FutachaThreadProjection,
+    rules: List<CompatNgRule>,
+    preferences: Map<String, String>,
+    phashHidden: Set<String> = emptySet(),
+    modernNgHidden: Set<String> = emptySet()
+): ThreadPage = projectFutachaThread(
+    source, normallyFiltered, context, rules, FutachaThreadProjectionSettings.from(preferences), phashHidden, modernNgHidden
+)
+
+internal fun projectFutachaThread(
+    source: ThreadPage,
+    normallyFiltered: ThreadPage,
+    context: FutachaThreadProjection,
+    rules: List<CompatNgRule>,
+    settings: FutachaThreadProjectionSettings,
+    phashHidden: Set<String> = emptySet(),
+    modernNgHidden: Set<String> = emptySet()
+): ThreadPage {
+    if (isFutachaProjectionPassThrough(context, rules, settings, phashHidden)) {
+        return normallyFiltered
+    }
+    val snapshots = source.toCompatThreadSnapshot(context.tabKey, 0).posts
+    val index = buildCompatThreadNgRuleIndex(rules, context.tabKey, context.boardKey)
+    val hidden = snapshots.filter { it.postNo in phashHidden || it.matchesCompatThreadNg(index) }
+        .mapTo(mutableSetOf(), CompatPostSnapshot::postNo).apply { addAll(modernNgHidden) }
+    val selected = context.extraction?.let { kind ->
+        if (kind == CompatExtractionKind.NG) hidden else extractCompatPosts(
+            snapshots, kind, context.tabKey, rules, context.boardKey,
+            saidaneThreshold = settings.saidaneThreshold,
+            quoteThreshold = settings.quoteThreshold
+        ).mapTo(mutableSetOf(), CompatPostSnapshot::postNo)
+    }
+    val candidates = if (selected != null) source else normallyFiltered
+    val ngEnabled = settings.ngEnabled
+    return candidates.copy(posts = candidates.posts.filter { post ->
+        (selected == null || post.id in selected) &&
+            (context.extraction == CompatExtractionKind.NG || !ngEnabled || post.id !in hidden)
+    })
+}
+
+/** True when [projectFutachaThread] returns the normally filtered page as is (nothing to hide or extract). */
+internal fun isFutachaProjectionPassThrough(
+    context: FutachaThreadProjection,
+    rules: List<CompatNgRule>,
+    settings: FutachaThreadProjectionSettings,
+    phashHidden: Set<String>
+): Boolean = context.extraction == null && (!settings.ngEnabled || (rules.isEmpty() && phashHidden.isEmpty()))
+
+/**
+ * Whether the modern (header/word) NG ids are read by [projectFutachaThread]: they only count when NG is
+ * enabled, or when the NG extraction itself is shown.
+ */
+internal fun futachaProjectionUsesModernNg(
+    context: FutachaThreadProjection,
+    settings: FutachaThreadProjectionSettings
+): Boolean = settings.ngEnabled || context.extraction == CompatExtractionKind.NG
+
+/**
+ * The Futacha page with the shared (compatibility) NG rules and extraction
+ * applied. Returns null while a needed projection is still running, so the
+ * initial frame waits instead of exposing posts that NG rules will hide. Later
+ * projections keep the last accepted page mounted; when
+ * nothing needs hiding or extracting the normal page is returned at once.
+ * Image NG needs network hashes and is applied as its results arrive.
+ */
+/** Whether a stored NG rule applies to the thread shown ([tabKey] is the thread's, [boardKey] its board's). */
+internal fun futachaThreadRuleApplies(rule: CompatNgRule, tabKey: String, boardKey: String): Boolean = when (rule.kind) {
+    CompatNgKind.THREAD_IMAGE, CompatNgKind.THREAD_IMAGE_PHASH -> rule.appliesToThreadImage(boardKey, tabKey)
+    // ふたばー風・ふたったー風's "del＋レスNG" is scoped to the thread's address, not a tab key (L38), as としあき(仮) reads it.
+    CompatNgKind.THREAD_POST_NO -> rule.scopeKey == "*" || rule.scopeKey == tabKey ||
+        com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rule.scopeKey)?.let { compatTabKey(it.canonicalUrl) == tabKey } == true
+    CompatNgKind.THREAD_POSTER_ID, CompatNgKind.THREAD_WORD,
+    CompatNgKind.THREAD_IGNORE, CompatNgKind.THREAD_REFUSE -> rule.scopeKey == "*" || rule.scopeKey == tabKey
+    else -> false
+}
+
+@Composable
+internal fun rememberFutachaFilteredThreadPage(
+    source: ThreadPage,
+    normallyFiltered: ThreadPage,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    postTextCache: ThreadPostTextCache? = null
+): ThreadPage? {
+    val features = LocalFutachaSharedFeatures.current ?: return normallyFiltered
+    val context = LocalFutachaThreadProjection.current ?: return normallyFiltered
+    // null until the store delivered its rules; an empty initial list showed NG'd posts first.
+    val loadedRules by features.store.ngRules.collectAsState<List<CompatNgRule>, List<CompatNgRule>?>(features.ngRulesState?.value)
+    val rules = remember(loadedRules, context.tabKey, context.boardKey) {
+        loadedRules?.filter { rule -> futachaThreadRuleApplies(rule, context.tabKey, context.boardKey) }
+    }
+    val phashRules = remember(rules, context) { rules.orEmpty().filter {
+        it.kind == CompatNgKind.THREAD_IMAGE_PHASH && it.appliesToThreadImage(context.boardKey, context.tabKey)
+    } }
+    val threshold = features.value("thread", "threadImageNgPhashThreshold")
+        ?.toIntOrNull() ?: CompatImagePhash.DEFAULT_THRESHOLD
+    val phashHidden by produceState(emptySet<String>(), source, phashRules, threshold) {
+        if (phashRules.isEmpty()) {
+            value = emptySet()
+            return@produceState
+        }
+        val posts = withContext(AppDispatchers.parsing) { source.toCompatThreadSnapshot(context.tabKey, 0).posts }
+        value = compatImagePhashHiddenPostNos(features.httpClient, posts, phashRules, threshold, store = features.store)
+    }
+    val settings = FutachaThreadProjectionSettings(
+        ngEnabled = features.value("thread", "threadNg", "NG機能") != "OFF",
+        saidaneThreshold = features.value("thread", "threadExtractSoudaneNum", "そうだねが多いレス")?.toIntOrNull() ?: 3,
+        quoteThreshold = features.value("thread", "threadExtractQuoteNum", "返信が多いレス")?.toIntOrNull() ?: 3
+    )
+    val needsProjection = rules == null || context.extraction != null ||
+        (settings.ngEnabled && rules.isNotEmpty())
+    val result = key(context.tabKey) {
+    val projected by produceState<ThreadPage?>(null, source, normallyFiltered, context, rules,
+        settings, phashHidden, ngHeaders, ngWords, needsProjection) {
+        // The result is not read when nothing needs projecting; do not walk every post for it.
+        if (!needsProjection) return@produceState
+        val currentRules = rules ?: return@produceState
+        if (isFutachaProjectionPassThrough(context, currentRules, settings, phashHidden)) {
+            value = normallyFiltered
+            return@produceState
+        }
+        value = withContext(AppDispatchers.parsing) {
+            // Posts the modern NG hides, found only when projectFutachaThread reads them; rules are
+            // canonicalized once and bodies come from the screen's text cache (guarded by its lock).
+            // Off the main thread too (re-audit M20: every post was matched there on each open and refresh).
+            val modernNgHidden = if (futachaProjectionUsesModernNg(context, settings)) {
+                findNgHiddenPostIds(source.posts, ngHeaders, ngWords, postTextCache)
+            } else {
+                emptySet()
+            }
+            projectFutachaThread(source, normallyFiltered, context, currentRules, settings,
+                phashHidden, modernNgHidden)
+        }
+    }
+    projected
+    }
+    if (!needsProjection) return normallyFiltered
+    result?.let { return it }
+    // Modern NG is already applied to normallyFiltered; only shared rules or an
+    // extraction can hide more.
+    return null
+}

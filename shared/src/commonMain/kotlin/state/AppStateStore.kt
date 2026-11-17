@@ -1,0 +1,983 @@
+package com.valoser.futacha.shared.state
+
+import com.valoser.futacha.shared.compat.removeDuplicateBoardSummaries
+import com.valoser.futacha.shared.compat.upgradeOfficialFutabaHttpUrl
+import com.valoser.futacha.shared.media.MediaFeatureSettings
+
+import com.valoser.futacha.shared.model.AppIconVariant
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogDisplayStyle
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadDisplayMode
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
+import com.valoser.futacha.shared.model.ThreadPostImageSize
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.service.buildTrimmedHistoryAutoSavePurger
+import com.valoser.futacha.shared.util.PreferredFileManager
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlin.time.ExperimentalTime
+
+/**
+ * Central state store for shared preferences, boards, and thread history.
+ * Large helper types and persistence utilities live in sibling support files.
+ */
+
+@OptIn(ExperimentalTime::class)
+class AppStateStore internal constructor(
+    private val storage: PlatformStateStorage,
+    private val historyFileStore: AppStateHistoryFileStore? = null,
+    private val json: Json = Json {
+        ignoreUnknownKeys = true
+    },
+    scrollDebounceDelayMillis: Long = SCROLL_DEBOUNCE_DELAY_MS,
+    /** Cleans up storage of entries the history size limit dropped; runs off the history write. */
+    private val onHistoryEntriesTrimmed: (suspend (List<ThreadHistoryEntry>) -> Unit)? = null,
+    /** Keeps history deletions across restarts; beside the split history store when there is one. */
+    historyTombstonePersistence: AppStateHistoryTombstonePersistence? = historyFileStore?.tombstonePersistence()
+) {
+    private val observationScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private fun <T> Flow<T>.shared(): Flow<T> =
+        flowOn(AppDispatchers.io).shareIn(observationScope, SharingStarted.WhileSubscribed(0, 0), replay = 1)
+
+    fun close() { observationScope.cancel() }
+
+    // FIX: 複数のMutexを使用する際のデッドロック防止ガイドライン
+    // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
+    // - history 用のロックは historyCoordinator に閉じ込め、store 本体では
+    //   boards / scroll / catalogMode / selfPostIdentifiers を個別に扱う
+    private val mediaFeatureSettingsMutex = Mutex()
+    private val boardsMutex = Mutex()
+    private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
+    private val catalogModeMutex = Mutex()
+    private val selfPostIdentifiersMutex = Mutex()
+    private val boardWatchWordsMutex = Mutex()
+    // Serializes read-modify-write edits of the NG / watch word lists so that
+    // two quick edits computed from the same (stale) UI snapshot cannot drop
+    // one another.  Only ever taken before boardWatchWordsMutex, never inside it.
+    private val wordListEditMutex = Mutex()
+    private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+    private val stringListMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+    private val stringListSerializer = ListSerializer(String.serializer())
+    private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
+    private val threadSettingsMenuConfigSerializer = ListSerializer(ThreadSettingsMenuItemConfig.serializer())
+    private val threadMenuEntriesSerializer = ListSerializer(ThreadMenuEntryConfig.serializer())
+    private val catalogNavEntriesSerializer = ListSerializer(CatalogNavEntryConfig.serializer())
+
+    private val preferenceFlows = buildAppStatePreferenceFlows(
+        storage = storage,
+        json = json,
+        stringListSerializer = stringListSerializer,
+        stringListMapSerializer = stringListMapSerializer,
+        selfPostIdentifierMapSerializer = selfPostIdentifierMapSerializer,
+        threadMenuConfigSerializer = threadMenuConfigSerializer,
+        threadSettingsMenuConfigSerializer = threadSettingsMenuConfigSerializer,
+        threadMenuEntriesSerializer = threadMenuEntriesSerializer,
+        catalogNavEntriesSerializer = catalogNavEntriesSerializer,
+        selfIdentifierMaxEntries = SELF_IDENTIFIER_MAX_ENTRIES
+    )
+    private val preferenceSnapshotCoordinator = AppStatePreferenceSnapshotCoordinator(
+        storage = storage,
+        json = json,
+        catalogModeMutex = catalogModeMutex,
+        selfPostIdentifiersMutex = selfPostIdentifiersMutex,
+        boardWatchWordsMutex = boardWatchWordsMutex,
+        selfPostIdentifierMapSerializer = selfPostIdentifierMapSerializer,
+        stringListMapSerializer = stringListMapSerializer,
+        tag = TAG,
+        rethrowIfCancellation = ::rethrowIfCancellation
+    )
+    private val historyCoordinator = AppStateHistoryCoordinator(
+        storage = storage,
+        historyFileStore = historyFileStore,
+        json = json,
+        tag = TAG,
+        rethrowIfCancellation = ::rethrowIfCancellation,
+        onEntriesTrimmed = { trimmed ->
+            onHistoryEntriesTrimmed?.let { cleanup ->
+                observationScope.launch {
+                    try {
+                        cleanup(trimmed)
+                    } catch (error: Exception) {
+                        rethrowIfCancellation(error)
+                        Logger.w(TAG, "Failed to clean up storage of trimmed history: ${error.message}")
+                    }
+                }
+            }
+        }
+    )
+    private val scrollPersistenceCoordinator = AppStateHistoryScrollPersistenceCoordinator(
+        debounceDelayMillis = scrollDebounceDelayMillis,
+        buildScrollKey = { request ->
+            buildHistoryScrollJobKey(request.threadId, request.boardId, request.boardUrl)
+        },
+        performImmediateUpdate = ::performHistoryScrollPositionImmediateUpdate
+    )
+
+    // Error propagation
+    private val _lastStorageError = MutableStateFlow<StorageError?>(null)
+    val lastStorageError: StateFlow<StorageError?> = _lastStorageError.asStateFlow()
+
+    companion object {
+        private const val TAG = "AppStateStore"
+        private const val SCROLL_DEBOUNCE_DELAY_MS = 2_000L
+        private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
+        private const val SELF_POST_KEY_DELIMITER = "::"
+    }
+
+    private val storageMutationHandler = AppStateStorageMutationHandler(
+        tag = TAG,
+        lastStorageError = _lastStorageError,
+        rethrowIfCancellation = ::rethrowIfCancellation
+    )
+    private val boardsCoordinator = AppStateBoardsCoordinator(
+        storage = storage,
+        json = json,
+        boardsMutex = boardsMutex,
+        runStorageMutation = ::runStorageMutation,
+        tag = TAG
+    )
+    private val historyOperations = AppStateHistoryOperations(
+        tag = TAG,
+        historyCoordinator = historyCoordinator,
+        scrollPersistenceCoordinator = scrollPersistenceCoordinator,
+        runStorageMutation = ::runStorageMutation,
+        tombstonePersistence = historyTombstonePersistence
+    )
+
+    suspend fun setScrollDebounceScope(scope: CoroutineScope) = setScrollDebounceScopeInternal(scope)
+
+    private suspend fun setScrollDebounceScopeInternal(scope: CoroutineScope) {
+        scrollPersistenceCoordinator.setScope(scope)
+    }
+
+    val boards: Flow<List<BoardSummary>> = buildAppStateBoardsFlow(
+        storage = storage,
+        json = json,
+        tag = TAG
+    )
+    val observedBoards: Flow<List<BoardSummary>> = boards.shared()
+    /** A successfully persisted empty list, rather than the UI's unloaded / unreadable empty placeholder. */
+    val boardsExplicitlyEmpty: Flow<Boolean> = storage.boardsJson.map { raw ->
+        raw?.trim()?.let { value -> value.length <= 32 && value.filterNot(Char::isWhitespace) == "[]" } == true
+    }.distinctUntilChanged()
+
+
+    private val persistedHistory: Flow<List<ThreadHistoryEntry>> =
+        if (historyFileStore != null) {
+            merge(
+                historyFileStore.changes.map { Unit },
+                storage.historyJson.map { Unit }
+            )
+                .mapNotNull {
+                    try {
+                        historyFileStore.readHistorySnapshot(
+                            clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+                        ) {
+                            storage.historyJson.first()
+                        }
+                    } catch (error: AppStateHistoryUnavailableException) {
+                        // An unavailable read is not a loaded empty history. Keep
+                        // subscribers waiting, and retry on the next storage event.
+                        Logger.e(TAG, "Failed to observe saved history", error)
+                        null
+                    }
+                }
+                .distinctUntilChanged()
+        } else {
+            storage.historyJson
+                .distinctUntilChanged()
+                .map { stored ->
+                    if (stored == null) {
+                        emptyList()
+                    } else {
+                        withContext(AppDispatchers.parsing) {
+                            decodeAppStateHistory(stored, json, TAG)
+                        }
+                    }
+                }
+        }
+
+    val history: Flow<List<ThreadHistoryEntry>> = combine(
+        persistedHistory,
+        preferenceFlows.selfPostIdentifierMapFlow
+    ) { historyEntries, selfPostMap ->
+        applyPersistedSelfPostFlags(historyEntries, selfPostMap)
+    }.distinctUntilChanged().flowOn(AppDispatchers.io)
+    val observedHistory: Flow<List<ThreadHistoryEntry>> = history.shared()
+
+    /** For actions: an unavailable store fails promptly instead of waiting for a flow that cannot publish a row. */
+    suspend fun readHistory(): List<ThreadHistoryEntry> = withContext(AppDispatchers.io) {
+        val entries = if (historyFileStore != null) historyFileStore.readHistorySnapshot(
+            clearLegacyHistoryJson = { storage.updateHistoryJson("[]") }
+        ) { storage.historyJson.first() }
+        else storage.historyJson.first()?.let { decodeAppStateHistory(it, json, TAG) }.orEmpty()
+        applyPersistedSelfPostFlags(entries, preferenceFlows.selfPostIdentifierMapFlow.first())
+    }
+
+
+    val mediaFeatureSettings: Flow<MediaFeatureSettings> = storage.mediaFeatureSettingsJson
+        .map(MediaFeatureSettings::decode).distinctUntilChanged()
+
+    suspend fun updateMediaFeatureSettings(change: (MediaFeatureSettings) -> MediaFeatureSettings) {
+        mediaFeatureSettingsMutex.withLock {
+            val previous = MediaFeatureSettings.decode(storage.mediaFeatureSettingsJson.first())
+            storage.updateMediaFeatureSettingsJson(MediaFeatureSettings.encode(change(previous)))
+        }
+    }
+
+    val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
+    val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
+    val isUpdateCheckEnabled: Flow<Boolean> = storage.updateCheckEnabled
+    val isWatchAlertEnabled: Flow<Boolean> = storage.watchAlertEnabled
+    val hasShownPostingNotice: Flow<Boolean> = storage.hasShownPostingNotice
+    val isPastThreadSearchNoticeHidden: Flow<Boolean> = storage.pastThreadSearchNoticeHidden
+    val isLightweightModeEnabled: Flow<Boolean> = storage.lightweightModeEnabled
+    val isThreadSummaryModeEnabled: Flow<Boolean> = storage.threadSummaryModeEnabled
+    val isAiPostFilterEnabled: Flow<Boolean> = storage.aiPostFilterEnabled
+    val isAiCommandEnabled: Flow<Boolean> = storage.aiCommandEnabled
+    val isTelemetryCollectionEnabled: Flow<Boolean> = storage.telemetryCollectionEnabled
+    val appLockPasswordHash: Flow<String?> = preferenceFlows.appLockPasswordHash
+
+    /**
+     * Manual save directory as string (legacy support).
+     */
+    val manualSaveDirectory: Flow<String> = preferenceFlows.manualSaveDirectory
+
+    /**
+     * Manual save location as SaveLocation (supports paths, content URIs, and bookmarks).
+     * Legacy string paths are automatically converted via SaveLocation.fromString().
+     */
+    val manualSaveLocation: Flow<SaveLocation> = preferenceFlows.manualSaveLocation
+
+    val attachmentPickerPreference: Flow<AttachmentPickerPreference> = preferenceFlows.attachmentPickerPreference
+    val saveDirectorySelection: Flow<SaveDirectorySelection> = preferenceFlows.saveDirectorySelection
+    val threadGalleryTapAction: Flow<ThreadGalleryTapAction> = preferenceFlows.threadGalleryTapAction
+    val threadGalleryThumbnailMode: Flow<ThreadGalleryThumbnailMode> = preferenceFlows.threadGalleryThumbnailMode
+    val themeMode: Flow<ThemeMode> = preferenceFlows.themeMode
+    val themePalette: Flow<ThemePalette> = preferenceFlows.themePalette
+    val appIconVariant: Flow<AppIconVariant> = preferenceFlows.appIconVariant
+    val threadDisplayMode: Flow<ThreadDisplayMode> = preferenceFlows.threadDisplayMode
+    val threadBodyTextSize: Flow<ThreadBodyTextSize> = preferenceFlows.threadBodyTextSize
+    val threadPostImageSize: Flow<ThreadPostImageSize> = preferenceFlows.threadPostImageSize
+    val isCompactThreadHeaderEnabled: Flow<Boolean> = storage.compactThreadHeaderEnabled
+    val lastUsedDeleteKey: Flow<String> = preferenceFlows.lastUsedDeleteKey
+
+    val catalogModes: Flow<Map<String, CatalogMode>> = preferenceFlows.catalogModes
+    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = preferenceFlows.catalogDisplayStyle
+    val catalogGridColumns: Flow<Int> = preferenceFlows.catalogGridColumns
+    val catalogFetchRows: Flow<Int> = preferenceFlows.catalogFetchRows
+    val ngHeaders: Flow<List<String>> = preferenceFlows.ngHeaders
+    val ngWords: Flow<List<String>> = preferenceFlows.ngWords
+    val catalogNgWords: Flow<List<String>> = preferenceFlows.catalogNgWords
+    val watchWords: Flow<List<String>> = preferenceFlows.watchWords
+    val boardWatchWords: Flow<Map<String, List<String>>> = preferenceFlows.boardWatchWords
+    private val selfPostIdentifierMapFlow: Flow<Map<String, List<String>>> = preferenceFlows.selfPostIdentifierMapFlow
+    val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = selfPostIdentifierMapFlow
+    val selfPostIdentifiers: Flow<List<String>> = preferenceFlows.selfPostIdentifiers
+    private val preferredFileManagerFlow: Flow<PreferredFileManager?> = preferenceFlows.preferredFileManagerFlow
+    // UI observation is shared; authoritative mutation reads above remain fresh.
+    val observedCatalogModes = catalogModes.shared()
+    val observedCatalogDisplayStyle = catalogDisplayStyle.shared()
+    val observedCatalogGridColumns = catalogGridColumns.shared()
+    val observedNgHeaders = ngHeaders.shared()
+    val observedNgWords = ngWords.shared()
+    val observedCatalogNgWords = catalogNgWords.shared()
+    val observedWatchWords = watchWords.shared()
+    val observedBoardWatchWords = boardWatchWords.shared()
+    val observedLastUsedDeleteKey = lastUsedDeleteKey.shared()
+    val observedSelfPostIdentifiersByThread = selfPostIdentifiersByThread.shared()
+
+    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = preferenceFlows.threadMenuConfig
+    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = preferenceFlows.threadSettingsMenuConfig
+    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = preferenceFlows.threadMenuEntries
+    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = preferenceFlows.catalogNavEntries
+    private val preferenceOperations = AppStatePreferenceOperations(
+        storage = storage,
+        json = json,
+        stringListSerializer = stringListSerializer,
+        stringListMapSerializer = stringListMapSerializer,
+        threadMenuConfigSerializer = threadMenuConfigSerializer,
+        threadSettingsMenuConfigSerializer = threadSettingsMenuConfigSerializer,
+        threadMenuEntriesSerializer = threadMenuEntriesSerializer,
+        catalogNavEntriesSerializer = catalogNavEntriesSerializer,
+        preferredFileManagerFlow = preferredFileManagerFlow,
+        selfIdentifierMaxEntries = SELF_POST_THREAD_IDENTIFIER_MAX_ENTRIES,
+        tag = TAG,
+        rethrowIfCancellation = ::rethrowIfCancellation,
+        mutateCatalogModeMap = preferenceSnapshotCoordinator::mutateCatalogModeMap,
+        mutateSelfPostIdentifierMap = preferenceSnapshotCoordinator::mutateSelfPostIdentifierMap,
+        mutateBoardWatchWordMap = preferenceSnapshotCoordinator::mutateBoardWatchWordMap
+    )
+
+    suspend fun setBoards(boards: List<BoardSummary>) = boardsCoordinator.setBoards(boards)
+
+    suspend fun updateBoards(
+        transform: (List<BoardSummary>) -> List<BoardSummary>
+    ) = boardsCoordinator.updateBoards(transform)
+
+    suspend fun setHistory(history: List<ThreadHistoryEntry>) = historyOperations.setHistory(history)
+
+    /** See [AppStateHistoryOperations.beginHistoryImport]. */
+    suspend fun beginHistoryImport(): HistoryImportTicket = historyOperations.beginHistoryImport()
+
+    suspend fun mergeImportedHistory(
+        imported: Collection<ThreadHistoryEntry>,
+        ticket: HistoryImportTicket
+    ): HistoryArchiveImportMergeResult = historyOperations.mergeImportedHistory(imported, ticket)
+
+    suspend fun endHistoryImport(ticket: HistoryImportTicket) = historyOperations.endHistoryImport(ticket)
+
+    suspend fun clearHistory() = historyOperations.clearHistory()
+
+    suspend fun updateHistory(
+        transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>
+    ) = historyOperations.updateHistory(transform)
+
+    suspend fun setBackgroundRefreshEnabled(enabled: Boolean) =
+        preferenceOperations.setBackgroundRefreshEnabled(enabled)
+
+    suspend fun setUpdateCheckEnabled(enabled: Boolean) =
+        preferenceOperations.setUpdateCheckEnabled(enabled)
+
+    suspend fun setWatchAlertEnabled(enabled: Boolean) =
+        preferenceOperations.setWatchAlertEnabled(enabled)
+
+    suspend fun setHasShownPostingNotice(shown: Boolean) =
+        preferenceOperations.setHasShownPostingNotice(shown)
+
+    suspend fun setPastThreadSearchNoticeHidden(hidden: Boolean) =
+        preferenceOperations.setPastThreadSearchNoticeHidden(hidden)
+
+    suspend fun setLastUsedDeleteKey(deleteKey: String) =
+        preferenceOperations.setLastUsedDeleteKey(deleteKey)
+
+    suspend fun setLightweightModeEnabled(enabled: Boolean) =
+        preferenceOperations.setLightweightModeEnabled(enabled)
+
+    suspend fun setThreadSummaryModeEnabled(enabled: Boolean) =
+        preferenceOperations.setThreadSummaryModeEnabled(enabled)
+
+    suspend fun setAiPostFilterEnabled(enabled: Boolean) =
+        preferenceOperations.setAiPostFilterEnabled(enabled)
+
+    suspend fun setAiCommandEnabled(enabled: Boolean) =
+        preferenceOperations.setAiCommandEnabled(enabled)
+
+    suspend fun setTelemetryCollectionEnabled(enabled: Boolean) =
+        preferenceOperations.setTelemetryCollectionEnabled(enabled)
+
+    suspend fun setAppLockPassword(password: String) =
+        preferenceOperations.setAppLockPassword(password)
+
+    suspend fun clearAppLockPassword() =
+        preferenceOperations.clearAppLockPassword()
+
+    suspend fun setManualSaveDirectory(directory: String) =
+        preferenceOperations.setManualSaveDirectory(directory)
+
+    /**
+     * Set manual save location using SaveLocation (path, URI, or bookmark).
+     * Persists the raw string representation internally.
+     */
+    suspend fun setManualSaveLocation(location: SaveLocation) =
+        preferenceOperations.setManualSaveLocation(location)
+
+    suspend fun setAttachmentPickerPreference(preference: AttachmentPickerPreference) =
+        preferenceOperations.setAttachmentPickerPreference(preference)
+
+    suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) =
+        preferenceOperations.setSaveDirectorySelection(selection)
+
+    suspend fun setThreadGalleryTapAction(action: ThreadGalleryTapAction) =
+        preferenceOperations.setThreadGalleryTapAction(action)
+
+    suspend fun setThreadGalleryThumbnailMode(mode: ThreadGalleryThumbnailMode) =
+        preferenceOperations.setThreadGalleryThumbnailMode(mode)
+
+    suspend fun setThemeMode(mode: ThemeMode) =
+        preferenceOperations.setThemeMode(mode)
+
+    suspend fun setThemePalette(palette: ThemePalette) =
+        preferenceOperations.setThemePalette(palette)
+
+    suspend fun setAppIconVariant(variant: AppIconVariant) =
+        preferenceOperations.setAppIconVariant(variant)
+
+    suspend fun setThreadDisplayMode(mode: ThreadDisplayMode) =
+        preferenceOperations.setThreadDisplayMode(mode)
+
+    suspend fun setThreadBodyTextSize(size: ThreadBodyTextSize) =
+        preferenceOperations.setThreadBodyTextSize(size)
+
+    suspend fun setThreadPostImageSize(size: ThreadPostImageSize) =
+        preferenceOperations.setThreadPostImageSize(size)
+
+    suspend fun setCompactThreadHeaderEnabled(enabled: Boolean) =
+        preferenceOperations.setCompactThreadHeaderEnabled(enabled)
+
+    suspend fun setPreferredFileManager(packageName: String?, label: String?) =
+        preferenceOperations.setPreferredFileManager(packageName, label)
+
+    fun getPreferredFileManager(): Flow<PreferredFileManager?> =
+        preferenceOperations.getPreferredFileManager()
+
+    suspend fun setPrivacyFilterEnabled(enabled: Boolean) =
+        preferenceOperations.setPrivacyFilterEnabled(enabled)
+
+    suspend fun setCatalogDisplayStyle(style: CatalogDisplayStyle) =
+        preferenceOperations.setCatalogDisplayStyle(style)
+
+    suspend fun setCatalogGridColumns(columns: Int) =
+        preferenceOperations.setCatalogGridColumns(columns)
+
+    suspend fun setCatalogFetchRows(rows: Int) =
+        preferenceOperations.setCatalogFetchRows(rows)
+
+    suspend fun setCatalogMode(boardId: String, mode: CatalogMode) =
+        preferenceOperations.setCatalogMode(boardId, mode)
+
+    /** The board's catalog mode under its shared key ([BoardSettingKeys], D-B1). */
+    suspend fun setCatalogMode(keys: BoardSettingKeys, mode: CatalogMode) =
+        preferenceOperations.setCatalogMode(keys, mode)
+
+    /**
+     * The migration of the board-keyed settings (D-B1, stage `boardkeyed-maps-v1`): moves them from the keys earlier
+     * versions used to the shared ones ([moves]: earlier key to shared key). Fails when a map cannot be read or
+     * written; an unreadable board watch word map is left as it is.
+     */
+    internal suspend fun moveBoardKeyedSettings(moves: Map<String, String>) {
+        if (moves.isEmpty()) return
+        wordListEditMutex.withLock {
+            preferenceOperations.moveBoardKeyedSettings(moves, boardWatchWords = storedBoardWatchWordsForEdit() != null)
+        }
+    }
+
+    // The word lists below are not saved over while the stored one cannot be read (L87): see storedWordListForEdit.
+    suspend fun setNgHeaders(headers: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.NG_HEADERS) != null) preferenceOperations.setNgHeaders(headers)
+    }
+
+    suspend fun setNgWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.NG_WORDS) != null) preferenceOperations.setNgWords(words)
+    }
+
+    suspend fun setCatalogNgWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.CATALOG_NG_WORDS) != null) preferenceOperations.setCatalogNgWords(words)
+    }
+
+    suspend fun setWatchWords(words: List<String>) {
+        if (storedWordListForEdit(AppStateWordList.WATCH_WORDS) != null) preferenceOperations.setWatchWords(words)
+    }
+
+    suspend fun setBoardWatchWords(boardId: String, words: List<String>) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.setBoardWatchWords(boardId, words)
+    }
+
+    suspend fun clearBoardWatchWordsOverride(boardId: String) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.clearBoardWatchWordsOverride(boardId)
+    }
+
+    /** The board's own watch words under its shared key ([BoardSettingKeys], D-B1). */
+    suspend fun setBoardWatchWords(keys: BoardSettingKeys, words: List<String>) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.setBoardWatchWords(keys, words)
+    }
+
+    suspend fun clearBoardWatchWordsOverride(keys: BoardSettingKeys) {
+        if (storedBoardWatchWordsForEdit() != null) preferenceOperations.clearBoardWatchWordsOverride(keys)
+    }
+
+    /** [updateBoardWatchWords] for [keys]' board: read under either key, written under the shared one (D-B1). */
+    suspend fun updateBoardWatchWords(keys: BoardSettingKeys, edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            val boardLists = storedBoardWatchWordsForEdit() ?: return@withLock
+            val base = boardLists.boardSetting(keys)
+                ?: storedWordListForEdit(AppStateWordList.WATCH_WORDS)
+                ?: return@withLock
+            preferenceOperations.setBoardWatchWords(keys, edit(base))
+        }
+    }
+
+    /** Atomically re-applies [edit] to the latest stored NG headers. */
+    suspend fun updateNgHeaders(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.NG_HEADERS)?.let { preferenceOperations.setNgHeaders(edit(it)) }
+        }
+    }
+
+    /** Atomically re-applies [edit] to the latest stored NG words. */
+    suspend fun updateNgWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.NG_WORDS)?.let { preferenceOperations.setNgWords(edit(it)) }
+        }
+    }
+
+    /** Atomically re-applies [edit] to the latest stored catalog NG words. */
+    suspend fun updateCatalogNgWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.CATALOG_NG_WORDS)?.let { preferenceOperations.setCatalogNgWords(edit(it)) }
+        }
+    }
+
+    /** Atomically re-applies [edit] to the latest stored global watch words. */
+    suspend fun updateWatchWords(edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            storedWordListForEdit(AppStateWordList.WATCH_WORDS)?.let { preferenceOperations.setWatchWords(edit(it)) }
+        }
+    }
+
+    /**
+     * Atomically re-applies [edit] to the board's watch words; without an
+     * override the global list is the starting point, as in the editor.
+     */
+    suspend fun updateBoardWatchWords(boardId: String, edit: (List<String>) -> List<String>) {
+        wordListEditMutex.withLock {
+            val normalizedBoardId = boardId.trim()
+            val boardLists = storedBoardWatchWordsForEdit() ?: return@withLock
+            // An unreadable global list is not the starting point of a new override either.
+            val base = boardLists[normalizedBoardId]
+                ?: storedWordListForEdit(AppStateWordList.WATCH_WORDS)
+                ?: return@withLock
+            preferenceOperations.setBoardWatchWords(normalizedBoardId, edit(base))
+        }
+    }
+
+    private fun storedWordListJson(list: AppStateWordList): Flow<String?> = when (list) {
+        AppStateWordList.NG_HEADERS -> storage.ngHeadersJson
+        AppStateWordList.NG_WORDS -> storage.ngWordsJson
+        AppStateWordList.CATALOG_NG_WORDS -> storage.catalogNgWordsJson
+        AppStateWordList.WATCH_WORDS -> storage.watchWordsJson
+        AppStateWordList.BOARD_WATCH_WORDS -> storage.boardWatchWordsJson
+    }
+
+    private fun isStoredWordListReadable(list: AppStateWordList, raw: String?): Boolean =
+        if (list == AppStateWordList.BOARD_WATCH_WORDS) {
+            readStoredStringListMapValue(raw, json, stringListMapSerializer).isSuccess
+        } else {
+            readStoredStringListValue(raw, json, stringListSerializer).isSuccess
+        }
+
+    /**
+     * The word lists stored but unreadable (damaged, or too large). They show as empty, and their edits are not saved
+     * until [resetUnreadableWordList] (L87).
+     */
+    val unreadableWordLists: Flow<Set<AppStateWordList>> = combine(
+        AppStateWordList.entries.map { list ->
+            storedWordListJson(list).distinctUntilChanged().map { raw -> list.takeUnless { isStoredWordListReadable(it, raw) } }
+        }
+    ) { lists -> lists.filterNotNull().toSet() }
+        .distinctUntilChanged()
+        .flowOn(AppDispatchers.parsing)
+
+    /**
+     * The stored [list] for an edit, or null when one is stored but cannot be read. Such a list shows as empty, and an
+     * edit made on that view saved only the edit over every stored entry (L87): it is kept, and the refusal recorded in
+     * [lastStorageError], until [resetUnreadableWordList] (「初期化する」).
+     */
+    private suspend fun storedWordListForEdit(list: AppStateWordList): List<String>? {
+        val raw = storedWordListJson(list).first()
+        return withContext(AppDispatchers.parsing) { readStoredStringListValue(raw, json, stringListSerializer) }
+            .getOrElse { error -> refuseUnreadableWordListEdit(list, error); null }
+    }
+
+    /** [storedWordListForEdit] for the per-board watch words. */
+    private suspend fun storedBoardWatchWordsForEdit(): Map<String, List<String>>? {
+        val raw = storage.boardWatchWordsJson.first()
+        return withContext(AppDispatchers.parsing) { readStoredStringListMapValue(raw, json, stringListMapSerializer) }
+            .getOrElse { error -> refuseUnreadableWordListEdit(AppStateWordList.BOARD_WATCH_WORDS, error); null }
+    }
+
+    private suspend fun refuseUnreadableWordListEdit(list: AppStateWordList, error: Throwable) {
+        runStorageMutation(
+            "save ${list.name}",
+            { "Refusing to save ${list.name}: the stored list could not be read" }
+        ) {
+            throw error
+        }
+    }
+
+    /**
+     * 「初期化する」 for a list found unreadable: it is replaced by an empty one, so it can be edited and saved again.
+     * A list that reads by now is left as it is. True when it was reset (L87).
+     */
+    suspend fun resetUnreadableWordList(list: AppStateWordList): Boolean = wordListEditMutex.withLock {
+        val raw = storedWordListJson(list).first()
+        if (withContext(AppDispatchers.parsing) { isStoredWordListReadable(list, raw) }) return@withLock false
+        var reset = false
+        runStorageMutation("reset ${list.name}", { "Failed to reset the unreadable ${list.name}" }) {
+            when (list) {
+                AppStateWordList.NG_HEADERS -> storage.updateNgHeadersJson("[]")
+                AppStateWordList.NG_WORDS -> storage.updateNgWordsJson("[]")
+                AppStateWordList.CATALOG_NG_WORDS -> storage.updateCatalogNgWordsJson("[]")
+                AppStateWordList.WATCH_WORDS -> storage.updateWatchWordsJson("[]")
+                AppStateWordList.BOARD_WATCH_WORDS -> {
+                    storage.updateBoardWatchWordsJson("{}")
+                    // Edits read the cached map before the stored one; it must not bring the old entries back.
+                    preferenceSnapshotCoordinator.forgetBoardWatchWordMap()
+                }
+            }
+            reset = true
+        }
+        reset
+    }
+
+    suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) =
+        preferenceOperations.setThreadMenuConfig(config)
+
+    suspend fun setThreadSettingsMenuConfig(config: List<ThreadSettingsMenuItemConfig>) =
+        preferenceOperations.setThreadSettingsMenuConfig(config)
+
+    suspend fun setThreadMenuEntries(config: List<ThreadMenuEntryConfig>) =
+        preferenceOperations.setThreadMenuEntries(config)
+
+    suspend fun setCatalogNavEntries(config: List<CatalogNavEntryConfig>) =
+        preferenceOperations.setCatalogNavEntries(config)
+
+    suspend fun addSelfPostIdentifier(threadId: String, identifier: String, boardId: String? = null) {
+        preferenceOperations.addSelfPostIdentifier(threadId, identifier, boardId)
+        historyOperations.markHistorySelfPost(
+            threadId = threadId,
+            boardId = boardId,
+            postedAtMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        )
+    }
+
+    suspend fun removeSelfPostIdentifiersForThread(threadId: String, boardId: String? = null) =
+        preferenceOperations.removeSelfPostIdentifiersForThread(threadId, boardId)
+
+    /** Removes the person's own post numbers of several threads (threadId to boardId) with one write. */
+    suspend fun removeSelfPostIdentifiersForThreads(threads: Collection<Pair<String, String?>>) =
+        preferenceOperations.removeSelfPostIdentifiersForThreads(threads)
+
+    suspend fun clearSelfPostIdentifiers() =
+        preferenceSnapshotCoordinator.clearSelfPostIdentifierMap()
+
+    /**
+     * Insert or update a history entry while keeping the existing order intact.
+     * This is used for incremental updates (e.g., refreshing metadata) without
+     * requiring the caller to manage the whole list manually.
+     */
+    suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.upsertHistoryEntry(entry)
+
+    /**
+     * A screen's open. Pass [openedAtTicket] ([historyDeletionTicket] taken when the person opened the thread) when
+     * the write may land later than the open: a deletion made in between then wins (audit F8).
+     */
+    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry, openedAtTicket: Long? = null) =
+        historyOperations.prependOrReplaceHistoryEntry(entry, openedAtTicket)
+
+    /** The history deletion counter now, without suspending (for [prependOrReplaceHistoryEntry]'s ticket). */
+    fun historyDeletionTicket(): Long = historyOperations.deletionTicket()
+
+    suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) =
+        historyOperations.prependOrReplaceHistoryEntries(entries)
+
+    /**
+     * Rows the person chose to import (ふたったー風's `.ftt`): they go in even when deleted before, as an open would.
+     * Automatic paths must not call it (they would undo deletions); the source contract test pins its callers.
+     */
+    /** Rows opened or brought in on purpose; the shared history copy forgets their deletion in としあき(仮)'s store. */
+    val historyOpens: kotlinx.coroutines.flow.SharedFlow<List<ThreadHistoryEntry>> get() = historyOperations.historyOpens
+
+    /** Forgets the deletions of [entries]: としあき(仮) opened them again (plan B3). */
+    suspend fun forgetHistoryTombstones(entries: Collection<ThreadHistoryEntry>) =
+        historyOperations.forgetHistoryTombstones(entries)
+
+    /** A restore the person chose: rows [transform] adds come in whatever their deletion (plan B3). */
+    suspend fun restoreHistory(transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>) =
+        historyOperations.restoreHistory(transform)
+
+    suspend fun importHistoryEntries(entries: List<ThreadHistoryEntry>) =
+        historyOperations.prependOrReplaceHistoryEntries(entries)
+
+    suspend fun mergeHistoryEntries(entries: Collection<ThreadHistoryEntry>) =
+        historyOperations.mergeHistoryEntries(entries)
+
+    suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.removeHistoryEntry(entry)
+
+    suspend fun removeHistoryEntries(entries: Collection<ThreadHistoryEntry>) =
+        historyOperations.removeHistoryEntries(entries)
+
+    suspend fun cancelAllPendingHistoryScrollUpdates() =
+        historyOperations.cancelAllPendingScrollUpdates()
+
+    /**
+     * Thread-safe update of scroll position in history with debouncing.
+     * This prevents race conditions when multiple scroll updates occur concurrently
+     * and reduces disk I/O by debouncing rapid scroll events.
+     * Note: This should only be called for scroll position updates, not initial navigation.
+     */
+    suspend fun updateHistoryScrollPosition(
+        request: AppStateHistoryScrollUpdateRequest
+    ) = historyOperations.scheduleHistoryScrollPositionUpdate(request)
+
+    suspend fun updateHistoryScrollPositionImmediately(
+        request: AppStateHistoryScrollUpdateRequest
+    ) = historyOperations.updateHistoryScrollPositionImmediate(request)
+
+    /**
+     * Write used by the debounced scroll job and the scope-less fallback.
+     * It must not cancel pending jobs: the caller is that pending job.
+     */
+    private suspend fun performHistoryScrollPositionImmediateUpdate(
+        request: AppStateHistoryScrollUpdateRequest
+    ) {
+        historyOperations.persistHistoryScrollPosition(request)
+    }
+
+    suspend fun seedIfEmpty(defaults: AppStateSeedDefaults) {
+        try {
+            val seedBundles = buildAppStateSeedPayload(
+                AppStateSeedPayloadInputs(
+                    defaults = defaults,
+                    json = json,
+                    normalizedThreadMenuConfig = normalizeThreadMenuConfig(defaults.threadMenuConfig),
+                    normalizedThreadSettingsMenuConfig =
+                        normalizeThreadSettingsMenuConfig(defaults.threadSettingsMenuConfig),
+                    normalizedThreadMenuEntries = normalizeThreadMenuEntries(defaults.threadMenuEntries),
+                    normalizedCatalogNavEntries = normalizeCatalogNavEntries(defaults.catalogNavEntries)
+                )
+            ).toSeedBundles()
+            storage.seedIfEmpty(seedBundles)
+            val storedBoards = storage.boardsJson.first()
+            val decodedBoards = storedBoards?.let { decodeAppStateBoardsResult(it, json) }
+            if (decodedBoards?.isFailure == true) {
+                Logger.w(TAG, "Repairing corrupted boards preference from startup defaults")
+                storage.updateBoardsJson(seedBundles.boards.boardsJson)
+            } else {
+                // A board saved more than once (the tutorial copies of 2026-10-13 全体検証 7.6) crashes the board
+                // lists, which key their rows by id. Keep one of each.
+                decodedBoards?.getOrNull()?.let { boards ->
+                    val repaired = removeDuplicateBoardSummaries(boards)
+                    if (repaired.size != boards.size) {
+                        Logger.w(TAG, "Removing ${boards.size - repaired.size} boards stored more than once")
+                        boardsCoordinator.updateBoards { current -> removeDuplicateBoardSummaries(current) }
+                    }
+                    // A 2chan board saved with http:// is moved to https once (L100, the decision): over http it could
+                    // not post on iOS nor through the official pre-submit step. Registration gives https now, so a later
+                    // start finds nothing to move unless an old backup brings one back. Other hosts keep their address.
+                    if (boards.any { upgradeOfficialFutabaHttpUrl(it.url) != it.url }) {
+                        Logger.i(TAG, "Moving 2chan boards saved with http to https")
+                        boardsCoordinator.updateBoards { current ->
+                            current.map { board ->
+                                val upgraded = upgradeOfficialFutabaHttpUrl(board.url)
+                                if (upgraded == board.url) board else board.copy(url = upgraded)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e(TAG, "Failed to seed default data", e)
+            // Log error but don't crash - app will work with empty state
+        }
+    }
+
+    private suspend fun runStorageMutation(
+        operation: String,
+        failureMessage: () -> String,
+        onFailure: suspend () -> Unit = {},
+        rethrowOnFailure: Boolean = false,
+        block: suspend () -> Unit
+    ) {
+        storageMutationHandler.run(
+            operation = operation,
+            failureMessage = failureMessage,
+            onFailure = onFailure,
+            rethrowOnFailure = rethrowOnFailure,
+            block = block
+        )
+    }
+
+    private fun rethrowIfCancellation(error: Throwable) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+    }
+}
+
+fun createAppStateStore(platformContext: Any? = null, fileSystem: FileSystem? = null): AppStateStore {
+    val storage = createPlatformStateStorage(platformContext)
+    val historyFileStore = fileSystem?.let {
+        AppStateHistoryFileStore(
+            fileSystem = it,
+            json = Json {
+                ignoreUnknownKeys = true
+            },
+            tag = "AppStateStore"
+        )
+    }
+    return AppStateStore(
+        storage = storage,
+        historyFileStore = historyFileStore,
+        onHistoryEntriesTrimmed = fileSystem?.let(::buildTrimmedHistoryAutoSavePurger)
+    )
+}
+
+internal interface PlatformStateStorage {
+    val mediaFeatureSettingsJson: Flow<String?>
+    val boardsJson: Flow<String?>
+    val historyJson: Flow<String?>
+    val privacyFilterEnabled: Flow<Boolean>
+    val backgroundRefreshEnabled: Flow<Boolean>
+    val updateCheckEnabled: Flow<Boolean>
+    val watchAlertEnabled: Flow<Boolean>
+    val hasShownPostingNotice: Flow<Boolean>
+    val pastThreadSearchNoticeHidden: Flow<Boolean>
+    val lightweightModeEnabled: Flow<Boolean>
+    val threadSummaryModeEnabled: Flow<Boolean>
+    val aiPostFilterEnabled: Flow<Boolean>
+    val aiCommandEnabled: Flow<Boolean>
+    val telemetryCollectionEnabled: Flow<Boolean>
+    val appLockPasswordHash: Flow<String?>
+    val manualSaveDirectory: Flow<String>
+    val attachmentPickerPreference: Flow<String?>
+    val saveDirectorySelection: Flow<String?>
+    val threadGalleryTapAction: Flow<String?>
+    val threadGalleryThumbnailMode: Flow<String?>
+    val themeMode: Flow<String?>
+    val themePalette: Flow<String?>
+    val appIconVariant: Flow<String?>
+    val threadDisplayMode: Flow<String?>
+    val threadBodyTextSize: Flow<String?>
+    val threadPostImageSize: Flow<String?>
+    val compactThreadHeaderEnabled: Flow<Boolean>
+    val lastUsedDeleteKey: Flow<String?>
+    val catalogModeMapJson: Flow<String?>
+    val catalogDisplayStyle: Flow<String?>
+    val catalogGridColumns: Flow<String?>
+    val catalogFetchRows: Flow<String?>
+    val ngHeadersJson: Flow<String?>
+    val ngWordsJson: Flow<String?>
+    val catalogNgWordsJson: Flow<String?>
+    val watchWordsJson: Flow<String?>
+    val boardWatchWordsJson: Flow<String?>
+    val selfPostIdentifiersJson: Flow<String?>
+    val preferredFileManagerPackage: Flow<String>
+    val preferredFileManagerLabel: Flow<String>
+    val threadMenuConfigJson: Flow<String?>
+    val threadSettingsMenuConfigJson: Flow<String?>
+    val threadMenuEntriesConfigJson: Flow<String?>
+    val catalogNavEntriesConfigJson: Flow<String?>
+
+    suspend fun updateMediaFeatureSettingsJson(value: String)
+    suspend fun updateBoardsJson(value: String)
+    suspend fun updateHistoryJson(value: String)
+    suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
+    suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
+    suspend fun updateUpdateCheckEnabled(enabled: Boolean)
+    suspend fun updateWatchAlertEnabled(enabled: Boolean)
+    suspend fun updateHasShownPostingNotice(shown: Boolean)
+    suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean)
+    suspend fun updateLightweightModeEnabled(enabled: Boolean)
+    suspend fun updateThreadSummaryModeEnabled(enabled: Boolean)
+    suspend fun updateAiPostFilterEnabled(enabled: Boolean)
+    suspend fun updateAiCommandEnabled(enabled: Boolean)
+    suspend fun updateTelemetryCollectionEnabled(enabled: Boolean)
+    suspend fun updateAppLockPasswordHash(value: String)
+    suspend fun updateManualSaveDirectory(directory: String)
+    suspend fun updateAttachmentPickerPreference(preference: String)
+    suspend fun updateSaveDirectorySelection(selection: String)
+    suspend fun updateThreadGalleryTapAction(action: String)
+    suspend fun updateThreadGalleryThumbnailMode(mode: String)
+    suspend fun updateThemeMode(mode: String)
+    suspend fun updateThemePalette(palette: String)
+    suspend fun updateAppIconVariant(variant: String)
+    suspend fun updateThreadDisplayMode(mode: String)
+    suspend fun updateThreadBodyTextSize(size: String)
+    suspend fun updateThreadPostImageSize(size: String)
+    suspend fun updateCompactThreadHeaderEnabled(enabled: Boolean)
+    suspend fun updateLastUsedDeleteKey(value: String)
+    suspend fun updateCatalogModeMapJson(value: String)
+    suspend fun updateCatalogDisplayStyle(style: String)
+    suspend fun updateCatalogGridColumns(columns: String)
+    suspend fun updateCatalogFetchRows(rows: String)
+    suspend fun updateNgHeadersJson(value: String)
+    suspend fun updateNgWordsJson(value: String)
+    suspend fun updateCatalogNgWordsJson(value: String)
+    suspend fun updateWatchWordsJson(value: String)
+    suspend fun updateBoardWatchWordsJson(value: String)
+    suspend fun updateSelfPostIdentifiersJson(value: String)
+    suspend fun updatePreferredFileManager(packageName: String, label: String)
+    suspend fun updatePreferredFileManagerPackage(packageName: String)
+    suspend fun updatePreferredFileManagerLabel(label: String)
+    suspend fun updateThreadMenuConfigJson(value: String)
+    suspend fun updateThreadSettingsMenuConfigJson(value: String)
+    suspend fun updateThreadMenuEntriesConfigJson(value: String)
+    suspend fun updateCatalogNavEntriesConfigJson(value: String)
+
+    suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles)
+}
+
+internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage
+
+/**
+ * Marks entries that have self posts stored only in preferences. Returns
+ * [history] itself when nothing changes (the common case), so one history
+ * change does not rebuild the whole list and every entry's lookup key.
+ */
+internal fun applyPersistedSelfPostFlags(
+    history: List<ThreadHistoryEntry>,
+    selfPostMap: Map<String, List<String>>
+): List<ThreadHistoryEntry> {
+    if (selfPostMap.isEmpty()) return history
+    var updated: MutableList<ThreadHistoryEntry>? = null
+    history.forEachIndexed { index, entry ->
+        if (entry.hasSelfPost) return@forEachIndexed
+        val scopedKey = if (entry.boardId.isBlank()) {
+            entry.threadId
+        } else {
+            "${entry.boardId}::${entry.threadId}"
+        }
+        val hasPersistedSelfPost = selfPostMap[scopedKey].orEmpty().isNotEmpty() ||
+            selfPostMap[entry.threadId].orEmpty().isNotEmpty()
+        if (hasPersistedSelfPost) {
+            val target = updated ?: history.toMutableList().also { updated = it }
+            target[index] = entry.copy(hasSelfPost = true)
+        }
+    }
+    return updated ?: history
+}

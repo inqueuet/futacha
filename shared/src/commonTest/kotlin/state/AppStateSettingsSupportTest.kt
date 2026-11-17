@@ -1,0 +1,310 @@
+package com.valoser.futacha.shared.state
+
+import com.valoser.futacha.shared.model.CatalogDisplayStyle
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryId
+import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.ThreadMenuItemId
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemId
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.first
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class AppStateSettingsSupportTest {
+    @Test fun damagedSelfPostRecordsStayIntactUntilAnExplicitClearAndCanThenBeUsedAgain() = kotlinx.coroutines.runBlocking {
+        val storage = FakePlatformStateStorage().apply { updateSelfPostIdentifiersJson("{broken") }
+        val store = AppStateStore(storage)
+        try {
+            kotlin.test.assertFailsWith<UnreadableStoredListException> { store.addSelfPostIdentifier("1", "100", "b") }
+            assertEquals("{broken", storage.selfPostIdentifiersJson.first())
+            store.clearSelfPostIdentifiers()
+            assertEquals("{}", storage.selfPostIdentifiersJson.first())
+            store.addSelfPostIdentifier("1", "100", "b")
+            assertEquals(mapOf("b::1" to listOf("100")), store.selfPostIdentifiersByThread.first())
+        } finally { store.close() }
+    }
+    @Test fun damagedSelfPostNumbersCannotBeReadAsAnEmptyMapForTheNextWrite() {
+        kotlin.test.assertFailsWith<UnreadableStoredListException> {
+            decodeSelfPostIdentifierMapValue("{broken", json, selfPostSerializer)
+        }
+    }
+    @Test fun selfPostNumberWritesNeverExceedTheirReadLimit() = kotlinx.coroutines.runBlocking {
+        var writes = 0
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            persistAppStateSelfPostIdentifierMap(mapOf("b::1" to listOf("1".repeat(APP_STATE_SETTINGS_JSON_MAX_CHARS))), json) { writes++ }
+        }
+        assertEquals(0, writes)
+    }
+
+    @Test
+    fun decodeThreadGalleryThumbnailModeValue_defaultsToCropSquare() {
+        assertEquals(
+            ThreadGalleryThumbnailMode.Fit,
+            decodeThreadGalleryThumbnailModeValue("Fit")
+        )
+        assertEquals(
+            ThreadGalleryThumbnailMode.CropSquare,
+            decodeThreadGalleryThumbnailModeValue("unknown")
+        )
+    }
+    private val json = Json { ignoreUnknownKeys = true }
+    private val selfPostSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+    private val stringListSerializer = ListSerializer(String.serializer())
+    private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
+    private val threadSettingsMenuConfigSerializer = ListSerializer(ThreadSettingsMenuItemConfig.serializer())
+    private val threadMenuEntriesSerializer = ListSerializer(ThreadMenuEntryConfig.serializer())
+    private val catalogNavEntriesSerializer = ListSerializer(CatalogNavEntryConfig.serializer())
+
+    @Test
+    fun decodeCatalogDisplayStyleValue_fallsBackToGrid() {
+        assertEquals(CatalogDisplayStyle.List, decodeCatalogDisplayStyleValue("List"))
+        assertEquals(CatalogDisplayStyle.Grid, decodeCatalogDisplayStyleValue("unknown"))
+        assertEquals(CatalogDisplayStyle.Grid, decodeCatalogDisplayStyleValue(null))
+    }
+
+    @Test
+    fun decodeCatalogGridColumnsValue_clampsToSupportedRange() {
+        assertEquals(5, decodeCatalogGridColumnsValue(null))
+        assertEquals(2, decodeCatalogGridColumnsValue("1"))
+        assertEquals(8, decodeCatalogGridColumnsValue("99"))
+        assertEquals(6, decodeCatalogGridColumnsValue("6"))
+    }
+
+    @Test
+    fun catalogModeMap_helpers_decodeKnownValues_and_ignoreUnknownOnes() {
+        val decoded = decodeCatalogModeMapValue("""{"b":"New","img":"WatchWords","x":"Unknown"}""")
+
+        assertEquals(
+            mapOf(
+                "b" to CatalogMode.New,
+                "img" to CatalogMode.WatchWords
+            ),
+            decoded
+        )
+        assertEquals(
+            mapOf("b" to "New"),
+            encodeCatalogModeMapValue(mapOf("b" to CatalogMode.New))
+        )
+    }
+
+    @Test
+    fun selfPostIdentifier_helpers_decodeAndAggregateDistinctValues() {
+        val decoded = decodeSelfPostIdentifierMapValue(
+            raw = """{"b::123":[" ID:abc ","id:ABC",""],"img::456":["ID:def"]}""",
+            json = json,
+            serializer = selfPostSerializer
+        )
+
+        val aggregated = aggregateSelfPostIdentifiers(decoded, maxEntries = 10)
+
+        assertEquals(listOf("ID:abc", "ID:def"), aggregated)
+    }
+
+    @Test
+    fun decodeStringListValue_returnsDecodedValues_orEmptyOnInvalidJson() {
+        assertEquals(
+            listOf("one", "two"),
+            decodeStringListValue("""["one","two"]""", json, stringListSerializer)
+        )
+        assertEquals(
+            emptyList(),
+            decodeStringListValue("not-json", json, stringListSerializer)
+        )
+    }
+
+    @Test
+    fun decodeStringListValue_rejectsOversizedJsonBeforeParsing() {
+        val oversized = "[\"" + "x".repeat(APP_STATE_SETTINGS_JSON_MAX_CHARS) + "\"]"
+
+        assertEquals(
+            emptyList(),
+            decodeStringListValue(oversized, json, stringListSerializer)
+        )
+    }
+
+    @Test
+    fun menuConfigDecoders_fallBackToDefaultsWhenInputIsMissingOrInvalid() {
+        assertEquals(
+            defaultThreadMenuConfig(),
+            decodeThreadMenuConfigValue(null, json, threadMenuConfigSerializer)
+        )
+        assertEquals(
+            defaultThreadSettingsMenuConfig(),
+            decodeThreadSettingsMenuConfigValue("invalid", json, threadSettingsMenuConfigSerializer)
+        )
+        assertEquals(
+            defaultThreadMenuEntries(),
+            decodeThreadMenuEntriesValue("", json, threadMenuEntriesSerializer)
+        )
+        assertEquals(
+            defaultCatalogNavEntries(),
+            decodeCatalogNavEntriesValue("invalid", json, catalogNavEntriesSerializer)
+        )
+    }
+
+    @Test
+    fun menuConfigDecoders_dropOnlyUnknownEntriesAndKeepTheRestOfTheLayout() {
+        val threadMenu = decodeThreadMenuConfigValue(
+            """[{"id":"Gallery","isEnabled":false,"order":0},{"id":"FutureItem","order":1},""" +
+                """{"id":"Save","isEnabled":false,"order":2}]""",
+            json,
+            threadMenuConfigSerializer
+        )
+        assertEquals(ThreadMenuItemId.entries.toSet(), threadMenu.map { it.id }.toSet())
+        assertEquals(false, threadMenu.first { it.id == ThreadMenuItemId.Gallery }.isEnabled)
+        assertEquals(false, threadMenu.first { it.id == ThreadMenuItemId.Save }.isEnabled)
+
+        val settingsMenu = decodeThreadSettingsMenuConfigValue(
+            """[{"id":"Privacy","isEnabled":false,"order":0},{"id":"FutureItem"}]""",
+            json,
+            threadSettingsMenuConfigSerializer
+        )
+        assertEquals(ThreadSettingsMenuItemId.entries.size, settingsMenu.size)
+        assertEquals(false, settingsMenu.first { it.id == ThreadSettingsMenuItemId.Privacy }.isEnabled)
+
+        // An unknown placement for one entry must not reset the others.
+        val entries = decodeThreadMenuEntriesValue(
+            """[{"id":"Reply","placement":"HIDDEN","order":0},{"id":"Gallery","placement":"FUTURE","order":1},""" +
+                """{"id":"FutureEntry","placement":"BAR"}]""",
+            json,
+            threadMenuEntriesSerializer
+        )
+        assertEquals(ThreadMenuEntryId.entries.size, entries.size)
+        assertEquals(ThreadMenuEntryPlacement.HIDDEN, entries.first { it.id == ThreadMenuEntryId.Reply }.placement)
+        assertEquals(ThreadMenuEntryPlacement.BAR, entries.first { it.id == ThreadMenuEntryId.Gallery }.placement)
+
+        val catalogNav = decodeCatalogNavEntriesValue(
+            """[{"id":"Mode","placement":"HIDDEN","order":0},{"id":"FutureEntry","placement":"BAR"}]""",
+            json,
+            catalogNavEntriesSerializer
+        )
+        assertEquals(CatalogNavEntryId.entries.size, catalogNav.size)
+        assertEquals(CatalogNavEntryPlacement.HIDDEN, catalogNav.first { it.id == CatalogNavEntryId.Mode }.placement)
+    }
+
+    @Test
+    fun selfPostIdentifier_helpers_mergeLegacyAndScopedEntries() {
+        val merged = mergeSelfPostIdentifierMap(
+            currentMap = mapOf(
+                "123" to listOf("ID:legacy"),
+                "b::123" to listOf("ID:current")
+            ),
+            threadId = "123",
+            identifier = "id:CURRENT",
+            boardId = "b",
+            maxEntries = 10
+        )
+
+        assertEquals(
+            listOf("ID:current", "ID:legacy"),
+            merged["b::123"]
+        )
+    }
+
+    @Test
+    fun selfPostIdentifiersKeepEarlierPostsAfterTheTwentiethPost() {
+        var map = mapOf("img::123" to listOf("another-board"))
+        val expected = (1..30).map { (1000 + it).toString() }
+        expected.forEach { identifier ->
+            map = mergeSelfPostIdentifierMap(map, "123", identifier, "may")
+        }
+        assertEquals(expected, map["may::123"])
+        assertEquals(listOf("another-board"), map["img::123"])
+    }
+
+    @Test
+    fun selfPostIdentifierOverflowKeepsTheNewestRecordsAndDeduplicatesLegacyValues() {
+        val map = mapOf("123" to listOf("ID:a", "id:A", ""), "b::123" to listOf("ID:b", "ID:c"))
+        val merged = mergeSelfPostIdentifierMap(map, "123", " ID:d ", "b", maxEntries = 3)
+        assertEquals(listOf("ID:c", "ID:a", "ID:d"), merged["b::123"])
+        assertEquals(merged, mergeSelfPostIdentifierMap(merged, "123", "id:D", "b", maxEntries = 3))
+    }
+
+    @Test
+    fun selfPostIdentifier_helpers_removeScopedAndLegacyKeys() {
+        val current = mapOf(
+            "123" to listOf("ID:legacy"),
+            "b::123" to listOf("ID:b"),
+            "img::123" to listOf("ID:img"),
+            "b::999" to listOf("ID:other")
+        )
+
+        assertEquals(
+            mapOf("b::999" to listOf("ID:other")),
+            removeSelfPostIdentifiersFromMap(current, threadId = "123", boardId = null)
+        )
+        assertEquals(
+            mapOf(
+                "123" to listOf("ID:legacy"),
+                "img::123" to listOf("ID:img"),
+                "b::999" to listOf("ID:other")
+            ),
+            removeSelfPostIdentifiersFromMap(current, threadId = "123", boardId = "b")
+        )
+    }
+
+    @Test
+    fun buildSelfPostStorageKey_scopesByBoardWhenPresent() {
+        assertEquals("b::123", buildSelfPostStorageKey("123", "b"))
+        assertEquals("123", buildSelfPostStorageKey("123", null))
+    }
+
+    @Test
+    fun sanitizeManualSaveDirectoryValue_normalizesBlankAndCurrentDirectoryValues() {
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue(null))
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue("  "))
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue("./saved_threads"))
+        assertEquals("Documents/futacha", sanitizeManualSaveDirectoryValue("./Documents/futacha"))
+        assertEquals("/storage/emulated/0/futacha", sanitizeManualSaveDirectoryValue(" /storage/emulated/0/futacha "))
+    }
+
+    @Test
+    fun decodeAttachmentPickerPreferenceValue_defaultsToMediaForUnknownValues() {
+        assertEquals(
+            AttachmentPickerPreference.ALWAYS_ASK,
+            decodeAttachmentPickerPreferenceValue("ALWAYS_ASK")
+        )
+        assertEquals(
+            AttachmentPickerPreference.MEDIA,
+            decodeAttachmentPickerPreferenceValue("unknown")
+        )
+        assertEquals(
+            AttachmentPickerPreference.MEDIA,
+            decodeAttachmentPickerPreferenceValue(null)
+        )
+    }
+
+    @Test
+    fun decodeSaveDirectorySelectionValue_defaultsToManualInputForUnknownValues() {
+        assertEquals(
+            SaveDirectorySelection.PICKER,
+            decodeSaveDirectorySelectionValue("PICKER")
+        )
+        assertEquals(
+            SaveDirectorySelection.MANUAL_INPUT,
+            decodeSaveDirectorySelectionValue("invalid")
+        )
+        assertEquals(
+            SaveDirectorySelection.MANUAL_INPUT,
+            decodeSaveDirectorySelectionValue(null)
+        )
+    }
+}

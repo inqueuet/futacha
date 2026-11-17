@@ -1,0 +1,10 @@
+/build/
+/release/
+/resources/macos/vlc/
+/resources/macos/native/
+/resources/macos/icons/
+/resources/macos/*.icns
+/resources/windows/native/
+/resources/windows/vlc/
+/resources/windows/icons/
+/resources/windows/Futacha.ico

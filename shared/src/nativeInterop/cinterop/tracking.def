@@ -1,0 +1,2 @@
+headers = FutachaTracking.h
+package = com.valoser.futacha.shared.tracking

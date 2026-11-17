@@ -1,0 +1,713 @@
+package com.valoser.futacha
+
+import com.valoser.futacha.shared.network.aimoge.createAimogeHttpClient
+import com.valoser.futacha.shared.repo.withAimogeRouting
+import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
+import android.app.Application
+import android.app.ActivityManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.net.Uri
+import android.os.Build
+import android.os.StrictMode
+import androidx.work.WorkManager
+import com.valoser.futacha.compat.AndroidCompatibilityStore
+import com.valoser.futacha.compat.AndroidExperienceProfileStore
+import com.valoser.futacha.compat.AndroidLauncherAliasManager
+import com.valoser.futacha.compat.AndroidModeSwitchCoordinator
+import com.valoser.futacha.shared.compat.ExperienceProfile
+import com.valoser.futacha.shared.compat.ModeSwitchRecoveryException
+import com.valoser.futacha.shared.compat.compatForegroundPolicyEnabled
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.CrashReporter
+import com.valoser.futacha.shared.analytics.PerformanceTracker
+import com.valoser.futacha.shared.analytics.analyticsEnabledValue
+import com.valoser.futacha.shared.model.CatalogFetchSettings
+import com.valoser.futacha.shared.network.HttpBoardApi
+import com.valoser.futacha.shared.network.createHttpClient
+import com.valoser.futacha.shared.parser.createHtmlParser
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repo.DefaultBoardRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.AutoSaveNetworkPolicy
+import com.valoser.futacha.shared.service.CatalogWatchAlertRefresher
+import com.valoser.futacha.shared.service.HistoryRefresher
+import com.valoser.futacha.shared.service.initializeAndroidThreadSavePlatformProtection
+import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.createAppStateStore
+import com.valoser.futacha.shared.network.PersistentCookieStorage
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.createFileSystem
+import com.valoser.futacha.shared.util.initializeAndroidPersistentLogging
+import com.valoser.futacha.shared.ui.compat.initializeCompatPostPlatformContext
+import com.valoser.futacha.shared.ui.board.AndroidVideoPlaybackCache
+import com.valoser.futacha.shared.version.initializeVersionCheckerContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
+
+private const val BACKGROUND_FLOW_MAX_RETRIES = 12L
+private const val BACKGROUND_REFRESH_SCHEDULER_PREFS = "background_refresh_scheduler"
+private const val LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS =
+    "last_immediate_background_refresh_enqueue_millis"
+private const val STARTUP_TEMP_CLEANUP_DELAY_MILLIS = 15_000L
+private const val STARTUP_ARCHIVE_REPORT_DELAY_MILLIS = 15_000L
+private const val STARTUP_STRICT_MODE_DELAY_MILLIS = 3_000L
+private val STARTUP_PROFILE_RECOVERY_RETRY_DELAYS_MILLIS = longArrayOf(0L, 250L, 1_000L)
+private const val PROFILE_ALIAS_SETTLE_DELAY_MILLIS = 1_500L
+
+class FutachaApplication : Application() {
+    lateinit var experienceProfileStore: AndroidExperienceProfileStore
+        private set
+    lateinit var compatibilityStore: AndroidCompatibilityStore
+        private set
+    lateinit var modeSwitchCoordinator: AndroidModeSwitchCoordinator
+        private set
+    private var appStateStoreValue: AppStateStore? = null
+    val appStateStore: AppStateStore
+        get() = requireMainProcessValue("appStateStore", appStateStoreValue)
+
+    @Volatile
+    private var httpClientValue: io.ktor.client.HttpClient? = null
+    val httpClient: io.ktor.client.HttpClient
+        get() = requireMainProcessValue("httpClient", httpClientValue)
+
+    @Volatile
+    private var boardRepositoryValue: BoardRepository? = null
+    val boardRepository: BoardRepository
+        get() = requireMainProcessValue("boardRepository", boardRepositoryValue)
+
+    @Volatile
+    private var historyRefresherValue: HistoryRefresher? = null
+    val historyRefresher: HistoryRefresher
+        get() = requireMainProcessValue("historyRefresher", historyRefresherValue)
+
+    /** For error paths that must not throw when initialisation never finished. */
+    internal val historyRefresherOrNull: HistoryRefresher?
+        get() = historyRefresherValue
+
+    @Volatile
+    private var catalogWatchAlertRefresherValue: CatalogWatchAlertRefresher? = null
+    val catalogWatchAlertRefresher: CatalogWatchAlertRefresher
+        get() = requireMainProcessValue("catalogWatchAlertRefresher", catalogWatchAlertRefresherValue)
+
+    private var autoSavedThreadRepositoryValue: SavedThreadRepository? = null
+    val autoSavedThreadRepository: SavedThreadRepository
+        get() = requireMainProcessValue("autoSavedThreadRepository", autoSavedThreadRepositoryValue)
+
+    private var fileSystemValue: FileSystem? = null
+    val fileSystem: FileSystem
+        get() = requireMainProcessValue("fileSystem", fileSystemValue)
+
+    @Volatile
+    private var imageTransportValue: com.valoser.futacha.shared.network.FutachaImageTransport? = null
+    val imageTransport: com.valoser.futacha.shared.network.FutachaImageTransport
+        get() = requireMainProcessValue("imageTransport", imageTransportValue)
+
+    private var cookieStorageValue: PersistentCookieStorage? = null
+    val cookieStorage: PersistentCookieStorage
+        get() = requireMainProcessValue("cookieStorage", cookieStorageValue)
+
+    private var cookieRepositoryValue: CookieRepository? = null
+    val cookieRepository: CookieRepository
+        get() = requireMainProcessValue("cookieRepository", cookieRepositoryValue)
+
+    @Volatile
+    private var watchSyncManagerValue: WatchSyncManager? = null
+    val watchSyncManager: WatchSyncManager
+        get() = requireMainProcessValue("watchSyncManager", watchSyncManagerValue)
+
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+        com.valoser.futacha.shared.util.Logger.e("FutachaApplication", "Application task failed", error)
+    })
+
+    // Alias changes are followed by a delayed root relaunch. Keep only the
+    // newest request; an old delayed job must never bring a stale MainActivity
+    // above a screen that was opened after the profile switch.
+    @Volatile
+    private var profileRootRelaunchJob: Job? = null
+
+    private val networkServicesReadyValue = MutableStateFlow(false)
+    val networkServicesReady: StateFlow<Boolean> = networkServicesReadyValue.asStateFlow()
+
+    private val networkServicesErrorValue = MutableStateFlow<String?>(null)
+    val networkServicesError: StateFlow<String?> = networkServicesErrorValue.asStateFlow()
+
+    @Volatile
+    private var networkServicesInitJob: Job? = null
+
+    /**
+     * MainActivity's 再試行 after the network services failed to start (L125: iOS offers one;
+     * here the app had to be restarted). Clears the failure and builds them again; nothing
+     * while they are ready or being built.
+     */
+    @Synchronized
+    fun retryNetworkServices() {
+        if (networkServicesReadyValue.value || networkServicesInitJob?.isActive == true) return
+        networkServicesErrorValue.value = null
+        launchNetworkServicesInitialization()
+    }
+
+    private val profileRecoveryCompleteValue = MutableStateFlow(true)
+
+    /**
+     * False while a mode switch interrupted by the previous process is being
+     * completed. MainActivity waits for it, so the profile cannot change under
+     * a screen the user is already using (M-3).
+     */
+    val profileRecoveryComplete: StateFlow<Boolean> = profileRecoveryCompleteValue.asStateFlow()
+
+    private val profileRecoveryFailureValue = MutableStateFlow<ModeSwitchRecoveryException?>(null)
+
+    /**
+     * Set when that startup recovery failed even after retrying (M4-1). The
+     * journal stays, so commits keep being refused; MainActivity tells the user
+     * to restart, and the next launch or switch attempt recovers again.
+     */
+    val profileRecoveryFailure: StateFlow<ModeSwitchRecoveryException?> = profileRecoveryFailureValue.asStateFlow()
+
+    fun acknowledgeProfileRecoveryFailure() {
+        profileRecoveryFailureValue.value = null
+    }
+
+    /**
+     * Recovery is idempotent (it re-reads the journal), so a transient
+     * SharedPreferences commit failure is retried before the UI is shown.
+     * Retrying later under a live UI could change the profile beneath it (M-3).
+     */
+    private suspend fun recoverInterruptedProfileSwitch(): ModeSwitchRecoveryException? {
+        var lastFailure: Throwable? = null
+        for (retryDelayMillis in STARTUP_PROFILE_RECOVERY_RETRY_DELAYS_MILLIS) {
+            delay(retryDelayMillis)
+            val failure = modeSwitchCoordinator.recoverIfNeeded().exceptionOrNull() ?: return null
+            lastFailure = failure
+            com.valoser.futacha.shared.util.Logger.e(
+                "FutachaApplication",
+                "Failed to reconcile experience profile",
+                failure
+            )
+        }
+        return ModeSwitchRecoveryException(requireNotNull(lastFailure))
+    }
+
+    private val startedMainActivitiesValue = MutableStateFlow(0)
+
+    /** Number of MainActivity instances between onStart and onStop. */
+    internal val startedMainActivities: StateFlow<Int> = startedMainActivitiesValue.asStateFlow()
+
+    override fun onCreate() {
+        com.valoser.futacha.shared.ui.initializeFutachaPointerDispatch()
+        super.onCreate()
+        // Before any profile is read: unfinished (PREVIEW) modes exist only in debuggable builds, and the
+        // mobile-only modes (ふたばー風) exist on every Android build.
+        com.valoser.futacha.shared.compat.ExperienceProfileAvailability.previewModesEnabled =
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        com.valoser.futacha.shared.compat.ExperienceProfileAvailability.mobileModesEnabled = true
+        // あいもげ boards are offered on every Android build. User decisions (2026-11-11): attachments, new threads, del,
+        // polls and reports are offered on the release build too.
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+    com.valoser.futacha.shared.compat.MixAvailability.enabled = true
+        com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedPostingEnabled = true
+        com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedDelEnabled = true
+        // あいもげ approval (AM-B8): secrets in the Keystore-encrypted file; the waiting approval survives a stopped process.
+        com.valoser.futacha.shared.network.aimoge.installAndroidAimogeAuth(
+            applicationContext,
+            runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
+        )
+        initializeAndroidPersistentLogging(applicationContext)
+        initializeAndroidThreadSavePlatformProtection(this)
+        initializeCompatPostPlatformContext(applicationContext)
+        // Background auto-saves in a UI-less worker process need the context to
+        // tell Wi-Fi from metered data; without it they assume metered.
+        AutoSaveNetworkPolicy.install(applicationContext)
+        experienceProfileStore = AndroidExperienceProfileStore(applicationContext)
+        registerActivityLifecycleCallbacks(MainActivityStartTracker(startedMainActivitiesValue))
+        if (isLightweightWorkerProcess()) {
+            return
+        }
+        // StrictMode is useful while diagnosing main-thread I/O, but installing
+        // it before the first Compose frame makes every startup read pay the
+        // debug-policy bookkeeping cost.  Install the same diagnostics after
+        // the startup window so it cannot turn a cold start into a frame stall.
+        applicationScope.launch {
+            runCatching { com.valoser.futacha.shared.network.aimoge.AimogeAuthRegistry.auth?.discardExpired() }
+        }
+        applicationScope.launch {
+            delay(STARTUP_STRICT_MODE_DELAY_MILLIS)
+            withContext(Dispatchers.Main.immediate) {
+                configureDebugStrictMode()
+            }
+        }
+        initializeVersionCheckerContext(applicationContext)
+        // Telemetry is optional infrastructure.  Its Firebase facades can
+        // synchronously initialize Remote Config/SharedPreferences when they
+        // are first touched.  Do not pay that disk-I/O cost in Application.onCreate
+        // on the main thread; the first UI frame does not depend on telemetry.
+        applicationScope.launch {
+            runCatching {
+                AnalyticsTracker.configure(applicationContext)
+                PerformanceTracker.configure(applicationContext)
+                CrashReporter.configure(applicationContext)
+            }.onFailure { error ->
+                com.valoser.futacha.shared.util.Logger.w(
+                    "FutachaApplication",
+                    "Telemetry initialization skipped: ${error::class.simpleName.orEmpty()}"
+                )
+            }
+        }
+        // SimpleCache scans and exclusively locks its index. Warm that process-wide
+        // owner off-main so opening the first video keeps the existing interaction feel.
+        applicationScope.launch {
+            AndroidVideoPlaybackCache.initialize(applicationContext)
+        }
+        fileSystemValue = createFileSystem(applicationContext)
+        appStateStoreValue = createAppStateStore(applicationContext, fileSystem)
+        compatibilityStore = AndroidCompatibilityStore(applicationContext, fileSystem)
+        modeSwitchCoordinator = AndroidModeSwitchCoordinator(
+            profileStore = experienceProfileStore,
+            aliasReconciler = AndroidLauncherAliasManager(applicationContext)
+        )
+        // Already loaded by the store's constructor; no extra disk read here.
+        if (experienceProfileStore.readJournal() != null) {
+            profileRecoveryCompleteValue.value = false
+            applicationScope.launch {
+                try {
+                    profileRecoveryFailureValue.value = recoverInterruptedProfileSwitch()
+                } finally {
+                    profileRecoveryCompleteValue.value = true
+                }
+            }
+        }
+        applicationScope.launch {
+            // The shared data's migration stages (D-B1): once both stores are loaded. The screens read the legacy
+            // places too until it ran.
+            compatibilityStore.ensureInitialized()
+            com.valoser.futacha.shared.compat.shared.runSharedDataMigrations(appStateStore, compatibilityStore)
+        }
+        applicationScope.launch {
+            compatibilityStore.ensureInitialized()
+            compatibilityStore.recoverStaleArchiveReports(System.currentTimeMillis())
+            // Archive reporting is optional telemetry and is not part of the
+            // first interactive screen.  WorkManager startup plus the first
+            // outbox scan can compete with Compose's initial measure/draw on
+            // compact devices, so leave the UI a quiet startup window.
+            delay(STARTUP_ARCHIVE_REPORT_DELAY_MILLIS)
+            ArchiveReportWorker.enqueueStartup(applicationContext)
+        }
+
+        applicationScope.launch {
+            appStateStore.isTelemetryCollectionEnabled
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    runCatching {
+                        AnalyticsTracker.setQualityCollectionEnabled(enabled)
+                        PerformanceTracker.setCollectionEnabled(enabled)
+                        CrashReporter.setCollectionEnabled(enabled)
+                        CrashReporter.setKey("telemetry_enabled", analyticsEnabledValue(enabled))
+                    }.onFailure { error ->
+                        com.valoser.futacha.shared.util.Logger.w(
+                            "FutachaApplication",
+                            "Telemetry state update skipped: ${error::class.simpleName.orEmpty()}"
+                        )
+                    }
+                }
+        }
+
+        // FIX: 起動時ANR防止 - 一時ファイルクリーンアップはバックグラウンドで実行
+        applicationScope.launch {
+            delay(STARTUP_TEMP_CLEANUP_DELAY_MILLIS)
+            (fileSystem as? com.valoser.futacha.shared.util.AndroidFileSystem)
+                ?.cleanupTempFiles(includeExternalStorage = false)
+                ?.onSuccess { count ->
+                    if (count > 0) {
+                        com.valoser.futacha.shared.util.Logger.i("FutachaApplication", "Cleaned up $count temp files")
+                    }
+                }
+        }
+
+        autoSavedThreadRepositoryValue = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        cookieStorageValue = PersistentCookieStorage(fileSystem)
+        cookieRepositoryValue = CookieRepository(cookieStorage)
+        // Ktor's engine setup can initialize ServiceLoader/SLF4J classes and read
+        // jars. Do it off the main thread; the Activity shows a short loading state
+        // until this graph is ready instead of paying that cost during first frame.
+        launchNetworkServicesInitialization()
+
+        applicationScope.launch {
+            // Waits through a failure: a later 再試行 that succeeds starts it then (L125).
+            networkServicesReady.first { it }
+            // The generation is part of the key: a rolled-back switch keeps the
+            // profile but must restart the sync it quiesced. The persisted pair is
+            // read because the two flows update one after the other.
+            combine(experienceProfileStore.activeProfile, experienceProfileStore.generation) { _, _ ->
+                experienceProfileStore.readActiveProfile() to experienceProfileStore.readGeneration()
+            }.distinctUntilChanged().collect { (profile, _) ->
+                if (profile == ExperienceProfile.FUTACHA) watchSyncManager.start()
+                else watchSyncManager.stopAndAwait()
+            }
+        }
+
+        applicationScope.launch {
+            // Waits through a failure: a later 再試行 that succeeds starts it then (L125).
+            networkServicesReady.first { it }
+            // Initialize WorkManager off the Application.onCreate() critical path.
+            val workManager = WorkManager.getInstance(applicationContext)
+            StorageMaintenanceWorker.enqueuePeriodic(workManager)
+            val schedulerPrefs = applicationContext.getSharedPreferences(
+                BACKGROUND_REFRESH_SCHEDULER_PREFS,
+                Context.MODE_PRIVATE
+            )
+            var hasObservedBackgroundToggle = false
+            // The compatibility preferences read before the store has loaded
+            // are an empty placeholder: evaluating them disabled the refresh,
+            // cancelled the running worker and then re-enqueued it with an
+            // unthrottled immediate run. Decide from stored values only.
+            compatibilityStore.isLoaded.first { it }
+            try {
+                combine(
+                    appStateStore.isBackgroundRefreshEnabled,
+                    appStateStore.isWatchAlertEnabled,
+                    compatibilityStore.preferences,
+                    experienceProfileStore.activeProfile,
+                    // A rolled-back switch keeps the profile but cancelled this work;
+                    // the new generation re-enqueues it.
+                    experienceProfileStore.generation
+                ) { backgroundEnabled, watchAlertEnabled, compatPreferences, _, _ ->
+                    // The two profile flows update one after the other; the persisted
+                    // pair avoids enqueuing twice for one switch.
+                    val activeProfile = experienceProfileStore.readActiveProfile()
+                    val generation = experienceProfileStore.readGeneration()
+                    val enabled = when (activeProfile) {
+                        ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> backgroundEnabled || watchAlertEnabled ||
+                            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
+                        ExperienceProfile.TOSHIAKI_COMPAT -> {
+                            val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]
+                            val existence = compatPreferences["compat.background.backgroundThreadExistCheck"]
+                            val watchWords = com.valoser.futacha.shared.compat.compatWatchEnabled(compatPreferences)
+                            compatForegroundPolicyEnabled(update) ||
+                                compatForegroundPolicyEnabled(existence) ||
+                                watchWords
+                        }
+                    }
+                    Triple(activeProfile, generation, enabled)
+                }
+                    .distinctUntilChanged()
+                    .onEach { (_, _, enabled) ->
+                        if (enabled) {
+                            val profileGeneration = experienceProfileStore.readGeneration()
+                            HistoryRefreshWorker.enqueuePeriodic(workManager, profileGeneration)
+                            val nowMillis = System.currentTimeMillis()
+                            if (
+                                shouldEnqueueImmediateBackgroundRefresh(
+                                    enabled = true,
+                                    hasObservedBackgroundToggle = hasObservedBackgroundToggle,
+                                    lastImmediateEnqueueEpochMillis = schedulerPrefs.getLong(
+                                        LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS,
+                                        0L
+                                    ),
+                                    nowEpochMillis = nowMillis
+                                )
+                            ) {
+                                HistoryRefreshWorker.enqueueImmediate(workManager, profileGeneration)
+                                schedulerPrefs
+                                    .edit()
+                                    .putLong(LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS, nowMillis)
+                                    .apply()
+                            }
+                        } else {
+                            HistoryRefreshWorker.cancel(workManager)
+                        }
+                        hasObservedBackgroundToggle = true
+                    }
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) throw cause
+                        val shouldRetry = attempt < BACKGROUND_FLOW_MAX_RETRIES
+                        if (!shouldRetry) {
+                            com.valoser.futacha.shared.util.Logger.e(
+                                "FutachaApplication",
+                                "Background refresh flow failed too many times; stopping collector",
+                                cause
+                            )
+                            return@retryWhen false
+                        }
+                        val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
+                        com.valoser.futacha.shared.util.Logger.e(
+                            "FutachaApplication",
+                            "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
+                            cause
+                        )
+                        delay(backoffMillis)
+                        true
+                    }
+                    .collect()
+                com.valoser.futacha.shared.util.Logger.w(
+                    "FutachaApplication",
+                    "Background refresh flow completed unexpectedly"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                com.valoser.futacha.shared.util.Logger.e(
+                    "FutachaApplication",
+                    "Background refresh flow collection terminated unexpectedly",
+                    e
+                )
+            }
+        }
+    }
+
+    /**
+     * Builds the network services off the main thread. Run at launch and again by
+     * [retryNetworkServices] after a failure (L125).
+     */
+    private fun launchNetworkServicesInitialization() {
+        networkServicesInitJob = applicationScope.launch {
+            var initializingImages: com.valoser.futacha.shared.network.FutachaImageTransport? = null
+            var initializingClient: io.ktor.client.HttpClient? = null
+            runCatching {
+                val client = createHttpClient(applicationContext, cookieStorage).also {
+                    initializingClient = it
+                }
+                val images = com.valoser.futacha.shared.network.createAndroidImageTransport(cookieStorage).also { initializingImages = it }
+                com.valoser.futacha.shared.ui.image.initializeOriginalMediaCache(
+                    images.originalMediaSession,
+                    applicationContext,
+                    appStateStore.isLightweightModeEnabled.first() ||
+                        com.valoser.futacha.shared.util.detectDevicePerformanceProfile(applicationContext).isLowSpec
+                )
+                client.bindOriginalMediaSource(images.originalMediaSession)
+                val repository = withAimogeRouting(DefaultBoardRepository(
+                    api = HttpBoardApi(client),
+                    parser = createHtmlParser(),
+                    cookieRepository = cookieRepository,
+                    diagnosticFileSystem = fileSystem,
+                    catalogFetchSettingsProvider = {
+                        val modernSettings = CatalogFetchSettings(
+                            rows = appStateStore.catalogFetchRows.first()
+                        ).normalized()
+                        if (!experienceProfileStore.activeProfile.value.usesAppStateData) {
+                            val requestedThreads = compatibilityStore.loadPreference(
+                                "compat.catalog.catalogThreadSize"
+                            )?.filter(Char::isDigit)?.toIntOrNull()
+                                ?.coerceIn(50, 3_000)
+                                ?: 300
+                            // The compatibility reference app encodes the catalog
+                            // size as `${size / 25}x25x256x0x1`. Keep the
+                            // background/watch refresh path identical to the
+                            // foreground compatibility catalog. Match the
+                            // reference app's integer division exactly.
+                            CatalogFetchSettings(
+                                columns = (requestedThreads / 25).coerceIn(2, 120),
+                                rows = 25,
+                                titleLines = 256,
+                                showVisitedHistory = true
+                            ).normalized()
+                        } else {
+                            modernSettings
+                        }
+                    }
+                )) {
+                    // あいもげ gets its own client without cookies or redirects, made on its first request (AM-B4).
+                    createAimogeHttpClient(runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty())
+                }
+                val history = HistoryRefresher(
+                    stateStore = appStateStore,
+                    repository = repository,
+                    dispatcher = Dispatchers.IO,
+                    autoSavedThreadRepository = autoSavedThreadRepository,
+                    httpClient = client,
+                    fileSystem = fileSystem,
+                    maxConcurrency = 1
+                )
+                val catalogWatch = CatalogWatchAlertRefresher(
+                    stateStore = appStateStore,
+                    repository = repository,
+                    diagnosticsStore = compatibilityStore,
+                    dispatcher = Dispatchers.IO
+                )
+                val watchSync = WatchSyncManager(
+                    context = applicationContext,
+                    stateStore = appStateStore,
+                    historyRefresher = history,
+                    autoSavedThreadRepository = autoSavedThreadRepository,
+                    fileSystem = fileSystem,
+                    scope = applicationScope,
+                    isModernProfileActive = {
+                        experienceProfileStore.activeProfile.value == ExperienceProfile.FUTACHA
+                    },
+                    currentModernProfileGeneration = {
+                        experienceProfileStore.captureGenerationIfCommitAllowed(ExperienceProfile.FUTACHA)
+                    },
+                    runIfModernProfileGenerationCurrent = { generation, commit ->
+                        experienceProfileStore.runIfGenerationCurrent(
+                            ExperienceProfile.FUTACHA,
+                            generation,
+                            commit
+                        )
+                    },
+                    startedMainActivities = startedMainActivities
+                )
+                imageTransportValue = images
+                httpClientValue = client
+                boardRepositoryValue = repository
+                historyRefresherValue = history
+                catalogWatchAlertRefresherValue = catalogWatch
+                watchSyncManagerValue = watchSync
+                networkServicesReadyValue.value = true
+            }.onFailure { error ->
+                initializingImages?.close()
+                // The client is created before the remaining repository graph.
+                // Do not retain its engine/pool when a later constructor fails.
+                initializingClient?.let { client ->
+                    if (httpClientValue !== client) {
+                        runCatching { client.close() }
+                    }
+                }
+                if (error is CancellationException) throw error
+                networkServicesErrorValue.value = error.message ?: error::class.simpleName
+                com.valoser.futacha.shared.util.Logger.e(
+                    "FutachaApplication",
+                    "Failed to initialize network services",
+                    error
+                )
+            }
+        }
+    }
+
+    /**
+     * The watch manager is created by the asynchronous network-services job.
+     * A cold start by a Wear message reaches its listener before that job
+     * finishes; waiting here keeps the watch's command from being dropped.
+     * Returns null when initialization failed.
+     */
+    internal suspend fun awaitWatchSyncManagerOrNull(): WatchSyncManager? {
+        watchSyncManagerValue?.let { return it }
+        return if (awaitNetworkServicesReady()) watchSyncManagerValue else null
+    }
+
+    internal fun watchSyncManagerOrNull(): WatchSyncManager? = watchSyncManagerValue
+
+    private suspend fun awaitNetworkServicesReady(): Boolean =
+        combine(networkServicesReady, networkServicesError) { ready, error -> ready to error }
+            .first { (ready, error) -> ready || error != null }
+            .first
+
+    @Synchronized
+    fun scheduleProfileRootRelaunch(
+        threadDeepLink: String?,
+        expectedProfile: ExperienceProfile = experienceProfileStore.readActiveProfile()
+    ) {
+        profileRootRelaunchJob?.cancel()
+        val expectedGeneration = experienceProfileStore.readGeneration()
+        profileRootRelaunchJob = applicationScope.launch {
+            // Launcher alias updates emit a package-changed event after the component call returns.
+            // API 37 closes the current task at that point even with DONT_KILL_APP, so reopening
+            // immediately is racy. Relaunch from the application scope after the alias settles.
+            delay(PROFILE_ALIAS_SETTLE_DELAY_MILLIS)
+            if (experienceProfileStore.readActiveProfile() != expectedProfile ||
+                experienceProfileStore.readGeneration() != expectedGeneration
+            ) {
+                com.valoser.futacha.shared.util.Logger.d(
+                    "FutachaApplication",
+                    "Skipping stale profile root relaunch"
+                )
+                return@launch
+            }
+            withContext(Dispatchers.Main.immediate) {
+                startActivity(
+                    Intent(this@FutachaApplication, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        threadDeepLink?.let { data = Uri.parse(it) }
+                    }
+                )
+            }
+        }
+    }
+
+    private fun configureDebugStrictMode() {
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .penaltyLog()
+                .build()
+        )
+    }
+
+    override fun onTerminate() {
+        // This is only called in emulators, but close resources defensively
+        applicationScope.cancel()
+        // httpClient will be closed automatically when scope is cancelled
+        // Avoid runBlocking to prevent ANR
+        imageTransportValue?.close()
+        boardRepositoryValue?.closeAsync()
+        super.onTerminate()
+    }
+
+    private fun <T : Any> requireMainProcessValue(name: String, value: T?): T {
+        return value ?: error(
+            "FutachaApplication.$name is not initialized. " +
+                "A lightweight worker process skips app-wide initialization; its service must not access this value."
+        )
+    }
+
+    private fun isLightweightWorkerProcess(): Boolean {
+        val processName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            getProcessName()
+        } else {
+            currentProcessNameCompat()
+        }
+        return processName == "$packageName:ai" ||
+            processName == "$packageName:compat_snapshot_crash_test" ||
+            processName == "$packageName:profile_switch_crash_test"
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentProcessNameCompat(): String? {
+        val currentPid = android.os.Process.myPid()
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager ?: return null
+        return activityManager.runningAppProcesses
+            ?.firstOrNull { it.pid == currentPid }
+            ?.processName
+    }
+}
+
+private class MainActivityStartTracker(
+    private val startedCount: MutableStateFlow<Int>
+) : Application.ActivityLifecycleCallbacks {
+    override fun onActivityStarted(activity: android.app.Activity) {
+        if (activity is MainActivity) startedCount.update { it + 1 }
+    }
+
+    override fun onActivityStopped(activity: android.app.Activity) {
+        if (activity is MainActivity) startedCount.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+    override fun onActivityResumed(activity: android.app.Activity) = Unit
+    override fun onActivityPaused(activity: android.app.Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+    override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+}

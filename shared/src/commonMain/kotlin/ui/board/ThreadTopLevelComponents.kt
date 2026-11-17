@@ -1,0 +1,502 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
+
+import com.valoser.futacha.shared.ui.privacy.LocalPrivacyMode
+import com.valoser.futacha.shared.ui.privacy.PrivateTitle
+import com.valoser.futacha.shared.ui.privacy.privateTitleStyle
+import com.valoser.futacha.shared.ui.privacy.privateTitleAlpha
+import androidx.compose.ui.draw.alpha
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.navigationBarsPadding
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun ThreadTopBar(
+    boardName: String,
+    threadTitle: String,
+    replyCount: Int?,
+    statusLabel: String?,
+    isSearchActive: Boolean,
+    searchQueryState: State<String>,
+    currentSearchIndex: Int,
+    totalSearchMatches: Int,
+    onSearchQueryChange: (String) -> Unit,
+    onSearchPrev: () -> Unit,
+    onSearchNext: () -> Unit,
+    onSearchSubmit: () -> Unit,
+    onSearchClose: () -> Unit,
+    onBack: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onSearch: () -> Unit,
+    onMenuSettings: () -> Unit,
+    compactHeader: Boolean = false
+) {
+    val chromeColors = LocalFutachaChromeColors.current
+    val titleAppearance = LocalPrivacyMode.current?.options?.title ?: PrivateTitle.NORMAL
+    val visibleThreadTitle = if (titleAppearance == PrivateTitle.HIDDEN) "スレッド" else threadTitle
+    val searchQuery = searchQueryState.value
+    val focusRequester = remember { FocusRequester() }
+    val searchInputState = rememberStableTextInputState(
+        text = searchQuery,
+        onTextChange = onSearchQueryChange,
+        analyticsFieldLabel = "スレッド内検索"
+    )
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        }
+    }
+    var isMenuExpanded by remember { mutableStateOf(false) }
+    val displayIndex = if (totalSearchMatches <= 0) {
+        0
+    } else {
+        currentSearchIndex.coerceIn(0, totalSearchMatches - 1) + 1
+    }
+    TopAppBar(
+        modifier = Modifier.testTag("futacha-thread-top-bar"),
+        // Changing title typography alone leaves Material's 64dp bar intact.
+        // Retain the 48dp action targets and the platform's status-bar inset.
+        expandedHeight = if (compactHeader && !isSearchActive) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
+        navigationIcon = {
+            if (!isSearchActive) {
+                IconButton(onClick = {
+                    AnalyticsTracker.uiControl("thread_top_bar", "スレッドから戻る")
+                    onBack()
+                }) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "戻る"
+                    )
+                }
+            }
+        },
+        title = {
+            if (isSearchActive) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TextField(
+                            value = searchInputState.value,
+                            onValueChange = { nextValue ->
+                                val wasFilled = searchInputState.value.text.isNotBlank()
+                                val isFilled = nextValue.text.isNotBlank()
+                                if (wasFilled != isFilled) {
+                                    AnalyticsTracker.uiControl(
+                                        "thread_search_field_state",
+                                        if (isFilled) "スレッド内検索語の入力を開始" else "スレッド内検索語を消去",
+                                        mapOf("input_state" to if (isFilled) "入力あり" else "空")
+                                    )
+                                }
+                                searchInputState.onValueChange(nextValue)
+                            },
+                            placeholder = { Text("スレ内検索") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .focusRequester(focusRequester),
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { onSearchSubmit() }),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = chromeColors.onBar.copy(alpha = 0.12f),
+                                unfocusedContainerColor = chromeColors.onBar.copy(alpha = 0.12f),
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = chromeColors.onBar,
+                                focusedLeadingIconColor = chromeColors.onBar,
+                                unfocusedLeadingIconColor = chromeColors.onBar,
+                                focusedPlaceholderColor = chromeColors.onBar,
+                                unfocusedPlaceholderColor = chromeColors.onBar,
+                                focusedTextColor = chromeColors.onBar,
+                                unfocusedTextColor = chromeColors.onBar
+                            ),
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = {
+                                        if (searchInputState.value.text.isNotEmpty()) {
+                                            AnalyticsTracker.uiControl("thread_search_clear", "スレッド内検索語をクリア")
+                                            searchInputState.onValueChange(TextFieldValue(""))
+                                        } else {
+                                            AnalyticsTracker.uiControl("thread_search", "スレッド内検索を閉じる")
+                                            onSearchClose()
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("thread-search-clear-or-close")
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Close,
+                                        contentDescription = if (searchInputState.value.text.isNotEmpty()) "入力を消去" else "検索を閉じる"
+                                    )
+                                }
+                            }
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "$displayIndex / $totalSearchMatches",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = chromeColors.onBar
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        IconButton(onClick = {
+                            AnalyticsTracker.uiControl("thread_search", "前の検索結果へ移動")
+                            onSearchPrev()
+                        }, enabled = totalSearchMatches > 0) {
+                            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "前の検索結果")
+                        }
+                        IconButton(onClick = {
+                            AnalyticsTracker.uiControl("thread_search", "次の検索結果へ移動")
+                            onSearchNext()
+                        }, enabled = totalSearchMatches > 0) {
+                            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "次の検索結果")
+                        }
+                    }
+                }
+            } else {
+                if (compactHeader) {
+                    val detailText = remember(boardName, replyCount, statusLabel) {
+                        buildString {
+                            append(boardName)
+                            if (statusLabel != null) {
+                                append(" / ")
+                                append(statusLabel)
+                            } else if (replyCount != null) {
+                                append(" / ")
+                                append(replyCount)
+                                append("レス")
+                            }
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = visibleThreadTitle,
+                            style = privateTitleStyle(MaterialTheme.typography.titleMedium, titleAppearance),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.6f).alpha(privateTitleAlpha(titleAppearance)).testTag("futacha-thread-title")
+                        )
+                        Text(
+                            text = detailText,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.4f),
+                            color = chromeColors.onBar
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = visibleThreadTitle,
+                            style = privateTitleStyle(MaterialTheme.typography.titleLarge, titleAppearance),
+                            modifier = Modifier.alpha(privateTitleAlpha(titleAppearance)).testTag("futacha-thread-title"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = boardName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = chromeColors.onBar
+                            )
+                            if (statusLabel == null) {
+                                replyCount?.let {
+                                    Text(
+                                        text = "  /  ${it}レス",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = chromeColors.onBar
+                                    )
+                                }
+                            }
+                        }
+                        statusLabel?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = chromeColors.onBar
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        actions = {
+            if (!isSearchActive) {
+                IconButton(onClick = {
+                    AnalyticsTracker.uiControl("thread_top_bar", "スレッド内検索を開く")
+                    onSearch()
+                }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "スレ内検索"
+                    )
+                }
+                IconButton(onClick = {
+                    AnalyticsTracker.uiControl("thread_top_bar", "履歴を開く")
+                    onOpenHistory()
+                }) {
+                    Icon(
+                        imageVector = Icons.Rounded.History,
+                        contentDescription = "履歴を開く"
+                    )
+                }
+                IconButton(onClick = {
+                    isMenuExpanded = true
+                    AnalyticsTracker.uiControl("thread_top_bar", "スレッド上部メニューを開く")
+                }) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "その他"
+                    )
+                }
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = {
+                        isMenuExpanded = false
+                        AnalyticsTracker.uiControl("thread_top_bar", "スレッド上部メニューを閉じる")
+                    },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem { isMenuExpanded = false }
+                    com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem { isMenuExpanded = false }
+                    DropdownMenuItem(
+                        text = { Text("設定") },
+                        onClick = {
+                            isMenuExpanded = false
+                            AnalyticsTracker.uiControl("thread_top_bar", "スレッドの共通設定を開く")
+                            onMenuSettings()
+                        }
+                    )
+                }
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = chromeColors.topBar,
+            titleContentColor = chromeColors.onBar,
+            navigationIconContentColor = chromeColors.onBar,
+            actionIconContentColor = chromeColors.onBar
+        )
+    )
+}
+
+@Composable
+internal fun ThreadLoading(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        val style = LocalFutachaSharedFeatures.current?.value("design", "designLoading")
+        if (style == null) androidx.compose.material3.CircularProgressIndicator()
+        else com.valoser.futacha.shared.ui.compat.CompatLoadingIndicator(style, Modifier, 48.dp)
+    }
+}
+
+@Composable
+internal fun ThreadError(
+    message: String,
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center
+            )
+            Button(onClick = {
+                AnalyticsTracker.uiControl("thread_error", "スレッドの読み込みを再試行")
+                onRetry()
+            }) {
+                Text("再読み込み")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ThreadNoticeCard(message: String) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+}
+
+@Composable
+internal fun ThreadActionBar(
+    menuEntries: List<ThreadMenuEntryConfig>,
+    onAction: (ThreadMenuEntryId) -> Unit,
+    applyNavigationBarsPadding: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val chromeColors = LocalFutachaChromeColors.current
+    val visibleActions = remember(menuEntries) {
+        resolveThreadActionBarEntries(menuEntries)
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth().testTag("futacha-thread-action-bar"),
+        color = chromeColors.bottomBar
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .then(
+                    if (applyNavigationBarsPadding) {
+                        Modifier.navigationBarsPadding()
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
+            // (L67) As on the としあき(仮) bar (判断2): the slots narrow to 36dp before anything scrolls,
+            // so the default eight show from 320dp screens, and the last action (設定 by default, or
+            // whatever the saved order ends with) keeps a fixed slot at the right end instead of being
+            // cut off. While all fit, the equal slots centre the buttons where SpaceAround put them.
+            val slotWidth = futachaThreadActionBarItemWidth(maxWidth.value, visibleActions.size).dp
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val scrolling = visibleActions.dropLast(1)
+                if (scrolling.isNotEmpty()) {
+                    ScrollableToolbarRow(
+                        itemCount = scrolling.size,
+                        minItemWidth = FUTACHA_THREAD_ACTION_BAR_MIN_ITEM_WIDTH_DP.dp,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        scrolling.forEach { action ->
+                            ThreadActionBarButton(action, onAction, Modifier.weight(1f))
+                        }
+                    }
+                }
+                visibleActions.lastOrNull()?.let { action ->
+                    ThreadActionBarButton(action, onAction, Modifier.width(slotWidth))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadActionBarButton(
+    action: ThreadMenuEntryConfig,
+    onAction: (ThreadMenuEntryId) -> Unit,
+    modifier: Modifier
+) {
+    val meta = action.id.toMeta()
+    // Each button is touched only within its own slot (L160): the 48dp minimum touch size reached past a narrow
+    // slot (36-43dp below about 400dp wide), so the neighbours' touch areas overlapped and the pinned 設定 took the
+    // edge of the action beside it. The button fills its slot instead; from 40dp its circle is as before.
+    val viewConfiguration = androidx.compose.ui.platform.LocalViewConfiguration.current
+    val slotTouchConfiguration = androidx.compose.runtime.remember(viewConfiguration) {
+        object : androidx.compose.ui.platform.ViewConfiguration by viewConfiguration {
+            override val minimumTouchTargetSize = androidx.compose.ui.unit.DpSize(
+                0.dp, viewConfiguration.minimumTouchTargetSize.height
+            )
+        }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides androidx.compose.ui.unit.Dp.Unspecified,
+        androidx.compose.ui.platform.LocalViewConfiguration provides slotTouchConfiguration
+    ) {
+        IconButton(
+            onClick = {
+                AnalyticsTracker.uiControl("thread_action_bar", "スレッド操作: ${meta.label}")
+                onAction(action.id)
+            },
+            modifier = modifier
+        ) {
+            Icon(
+                imageVector = meta.icon,
+                contentDescription = meta.label,
+                tint = LocalFutachaChromeColors.current.onBar
+            )
+        }
+    }
+}

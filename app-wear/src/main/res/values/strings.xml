@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">futacha</string>
+    <string name="tile_label">futacha 新着</string>
+    <string name="tile_description">履歴と監視ワードの新着件数を表示します</string>
+</resources>

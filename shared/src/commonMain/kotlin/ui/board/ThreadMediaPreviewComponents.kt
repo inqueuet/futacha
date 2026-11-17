@@ -1,0 +1,430 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.ui.privacy.privacyWindowFilter
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.media.prompt.GenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+
+@Composable
+internal fun ThreadMediaPreviewBottomActions(
+    metadata: GenerationMetadata?,
+    onShowPost: (() -> Unit)?,
+    onOpenBrowser: () -> Unit,
+    modifier: Modifier = Modifier,
+    onCopyImage: (() -> Unit)? = null
+) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        PromptInfoAction(metadata, Modifier.align(Alignment.CenterVertically))
+        FlowRow(
+            modifier = Modifier.align(Alignment.CenterVertically),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+        ) {
+            onShowPost?.let { show ->
+                TextButton(
+                    onClick = show,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) { Text("レスに戻る") }
+            }
+            TextButton(
+                onClick = onOpenBrowser,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+            ) { Text("ブラウザで開く") }
+            onCopyImage?.let { copy -> TextButton(onClick = copy,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) { Text("画像をコピー") } }
+        }
+    }
+}
+
+@Composable
+internal fun ThreadMediaPreviewDialog(
+    state: ThreadMediaPreviewDialogState,
+    onDismiss: () -> Unit,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit,
+    onSave: (MediaPreviewEntry) -> Unit,
+    onImageSearch: ((MediaPreviewEntry) -> Unit)? = null,
+    onShowPost: ((MediaPreviewEntry) -> Unit)? = null
+) {
+    val trackedDismiss = {
+        AnalyticsTracker.uiControl("media_preview", "画像・動画プレビューを閉じる")
+        onDismiss()
+    }
+    val trackedNext = {
+        AnalyticsTracker.uiControl("media_preview", "次の添付を表示")
+        onNavigateNext()
+    }
+    val trackedPrevious = {
+        AnalyticsTracker.uiControl("media_preview", "前の添付を表示")
+        onNavigatePrevious()
+    }
+    // Remembered here, above the image and video dialogs, so turning to a video keeps a copy in progress and its notice
+    // (re-audit M26: the image dialog left, and the copy stopped without a word).
+    val copyImage = com.valoser.futacha.shared.ui.image.rememberImageClipboardAction(
+        state.entry.url.takeIf { state.entry.mediaType == MediaType.Image },
+        LocalFutachaSharedFeatures.current?.httpClient
+    )
+    when (state.entry.mediaType) {
+        MediaType.Image -> {
+            val displayTitle by rememberMediaPreviewDisplayTitle(state.entry)
+            ImagePreviewDialog(
+                entry = state.entry,
+                displayTitle = displayTitle,
+                currentIndex = state.currentIndex,
+                totalCount = state.totalCount,
+                onDismiss = trackedDismiss,
+                onNavigateNext = trackedNext,
+                onNavigatePrevious = trackedPrevious,
+                onSave = { onSave(state.entry) },
+                onShowPost = onShowPost?.let { show -> { show(state.entry) } },
+                onImageSearch = onImageSearch?.let { search -> { search(state.entry) } },
+                isSaveEnabled = state.isSaveEnabled,
+                isSaveInProgress = state.isSaveInProgress,
+                copyImage = copyImage
+            )
+        }
+
+        MediaType.Video -> VideoPreviewDialog(
+            entry = state.entry,
+            currentIndex = state.currentIndex,
+            totalCount = state.totalCount,
+            onDismiss = trackedDismiss,
+            onNavigateNext = trackedNext,
+            onNavigatePrevious = trackedPrevious,
+            onSave = { onSave(state.entry) },
+                onShowPost = onShowPost?.let { show -> { show(state.entry) } },
+            isSaveEnabled = state.isSaveEnabled,
+            isSaveInProgress = state.isSaveInProgress
+        )
+    }
+}
+
+@Composable
+private fun rememberMediaPreviewDisplayTitle(entry: MediaPreviewEntry) =
+    produceState(
+        initialValue = entry.title,
+        key1 = entry.url,
+        key2 = entry.postId,
+        key3 = entry.messageHtml
+    ) {
+        value = withContext(AppDispatchers.parsing) {
+            resolveMediaPreviewDisplayTitle(entry)
+        }
+    }
+
+@Composable
+internal fun ThreadMediaPreviewDialogFrame(
+    navigationKey: String,
+    onDismiss: () -> Unit,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit,
+    isSwipeNavigationEnabled: Boolean = true,
+    isTapNavigationEnabled: Boolean = true,
+    isEdgeTapNavigationEnabled: Boolean = true,
+    isNavigationOverlayVisible: Boolean = true,
+    navigationOverlayPadding: PaddingValues = PaddingValues(horizontal = 8.dp),
+    swipeNavigationPadding: PaddingValues = PaddingValues(),
+    containerModifier: Modifier = Modifier,
+    content: @Composable BoxScope.(IntSize) -> Unit
+) {
+    val windowSize = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+    var previewSize by remember(windowSize) { mutableStateOf(windowSize) }
+    val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
+    val swipeDownToClose = isFutachaPreviewSwipeDownCloseEnabled(
+        LocalFutachaSharedFeatures.current?.value(
+            "control", "controlViewerSwipeClose", "下にスワイプして閉じる", "縦にスワイプして閉じる"
+        )
+    )
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val swipeStartPaddingPx = remember(density, layoutDirection, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateLeftPadding(layoutDirection).toPx() }
+    }
+    val swipeTopPaddingPx = remember(density, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateTopPadding().toPx() }
+    }
+    val swipeEndPaddingPx = remember(density, layoutDirection, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateRightPadding(layoutDirection).toPx() }
+    }
+    val swipeBottomPaddingPx = remember(density, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateBottomPadding().toPx() }
+    }
+
+    FutachaAppLockAwareWindow { Dialog(
+        onDismissRequest = {
+            AnalyticsTracker.uiControl("media_preview", "画像・動画プレビューを閉じる")
+            onDismiss()
+        },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .privacyWindowFilter()
+                .background(Color.Black)
+                .onSizeChanged { previewSize = it }
+                .pointerInput(navigationKey, isSwipeNavigationEnabled, swipeNavigationPadding, swipeDownToClose) {
+                    if (!isSwipeNavigationEnabled) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
+                        )
+                        if (!isSwipeNavigationStartWithinBounds(
+                                position = down.position,
+                                containerSize = previewSize,
+                                startPaddingPx = swipeStartPaddingPx,
+                                topPaddingPx = swipeTopPaddingPx,
+                                endPaddingPx = swipeEndPaddingPx,
+                                bottomPaddingPx = swipeBottomPaddingPx
+                            )
+                        ) {
+                            return@awaitEachGesture
+                        }
+                        val pointerId = down.id
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        var cancelled = false
+
+                        while (true) {
+                            val event = awaitPointerEvent(
+                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Final
+                            )
+                            // Observe after children/native interop. A seekbar, slider,
+                            // zoom surface or other control owns the whole gesture once
+                            // it consumes any change; it must never page on release.
+                            if (event.changes.any { it.isConsumed } || event.changes.count { it.pressed } > 1) {
+                                cancelled = true
+                                break
+                            }
+                            val change = event.changes.firstOrNull { it.id == pointerId }
+                                ?: event.changes.firstOrNull()
+                                ?: continue
+                            if (!change.pressed || event.changes.none { it.pressed }) {
+                                break
+                            }
+                            val delta = change.positionChange()
+                            totalDx += delta.x
+                            totalDy += delta.y
+                        }
+                        if (cancelled) return@awaitEachGesture
+                        when (resolveSwipeNavigationAction(totalDx, totalDy, swipeThresholdPx, swipeDownToClose)) {
+                            SwipeNavigationAction.Close -> onDismiss()
+                            SwipeNavigationAction.Next -> onNavigateNext()
+                            SwipeNavigationAction.Previous -> onNavigatePrevious()
+                            SwipeNavigationAction.None -> Unit
+                        }
+                    }
+                }
+                .then(containerModifier)
+        ) {
+            content(previewSize)
+            if (isNavigationOverlayVisible && isTapNavigationEnabled) {
+                ThreadMediaPreviewNavigationOverlay(
+                    navigationKey = navigationKey,
+                    onNavigateNext = onNavigateNext,
+                    onNavigatePrevious = onNavigatePrevious,
+                    isTapNavigationEnabled = isTapNavigationEnabled,
+                    isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled,
+                    paddingValues = navigationOverlayPadding
+                )
+            }
+        }
+    } }
+}
+
+@Composable
+private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
+    navigationKey: String,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit,
+    isTapNavigationEnabled: Boolean,
+    isEdgeTapNavigationEnabled: Boolean,
+    paddingValues: PaddingValues
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(paddingValues),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ThreadMediaPreviewNavigationZone(
+            navigationKey = "$navigationKey-prev",
+            onNavigate = onNavigatePrevious,
+            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+            contentDescription = "前の添付へ移動",
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        ThreadMediaPreviewNavigationZone(
+            navigationKey = "$navigationKey-next",
+            onNavigate = onNavigateNext,
+            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = "次の添付へ移動",
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            isEdgeTapNavigationEnabled = isEdgeTapNavigationEnabled
+        )
+    }
+}
+
+@Composable
+private fun ThreadMediaPreviewNavigationZone(
+    navigationKey: String,
+    onNavigate: () -> Unit,
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    isTapNavigationEnabled: Boolean,
+    isEdgeTapNavigationEnabled: Boolean
+) {
+    Box(
+        modifier = Modifier
+            .width(72.dp)
+            .then(if (isEdgeTapNavigationEnabled) Modifier.fillMaxHeight()
+                .pointerInput(navigationKey, isTapNavigationEnabled) {
+                    if (!isTapNavigationEnabled) return@pointerInput
+                    detectTapGestures(onTap = { onNavigate() })
+                } else Modifier),
+        contentAlignment = Alignment.Center
+    ) {
+        IconButton(
+            onClick = onNavigate,
+            colors = IconButtonDefaults.iconButtonColors(
+                containerColor = Color.Black.copy(alpha = 0.28f),
+                contentColor = Color.White
+            )
+        ) {
+            Icon(
+                imageVector = imageVector,
+                contentDescription = contentDescription
+            )
+        }
+    }
+}
+
+@Composable
+private fun rememberSwipeNavigationThresholdPx(): Float {
+    val density = LocalDensity.current
+    return remember(density) {
+        density.run { 56.dp.toPx() }
+    }
+}
+
+@Composable
+internal fun ThreadMediaPreviewHeader(
+    title: String,
+    currentIndex: Int,
+    totalCount: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = 6.dp,
+        modifier = modifier
+            .padding(top = 72.dp, start = 16.dp, end = 16.dp)
+            .fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${currentIndex + 1}/${totalCount}",
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+internal fun ThreadMediaPreviewCloseButton(
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    IconButton(
+        onClick = onDismiss,
+        modifier = modifier.size(40.dp),
+        colors = IconButtonDefaults.iconButtonColors(
+            containerColor = Color.Black.copy(alpha = 0.7f),
+            contentColor = Color.White
+        )
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Close,
+            contentDescription = "プレビューを閉じる"
+        )
+    }
+}

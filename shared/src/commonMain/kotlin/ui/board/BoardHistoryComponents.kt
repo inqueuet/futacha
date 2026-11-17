@@ -1,0 +1,1272 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImagePainter
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.analyticsCountBucket
+import com.valoser.futacha.shared.compat.toCompatHistoryEntry
+import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
+import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreviewEntry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
+
+private const val HISTORY_FILTER_COUNT_DEBOUNCE_MS = 150L
+
+internal const val HISTORY_DRAWER_WARNING_ENTRY_COUNT = 100
+internal const val HISTORY_DISMISS_THRESHOLD_FRACTION = 0.72f
+
+internal fun historyDismissThresholdDistance(totalDistance: Float): Float =
+    totalDistance * HISTORY_DISMISS_THRESHOLD_FRACTION
+
+internal fun shouldShowHistoryDrawerGrowthWarning(historyCount: Int): Boolean {
+    return historyCount >= HISTORY_DRAWER_WARNING_ENTRY_COUNT
+}
+
+internal fun buildHistoryDrawerGrowthWarningTitle(historyCount: Int): String {
+    return "履歴が増えています"
+}
+
+internal fun buildHistoryDrawerGrowthWarningBody(historyCount: Int): String {
+    return "現在の履歴は${historyCount.coerceAtLeast(0)}件です。表示や保存が重くなる場合があります。"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun HistoryDrawerContent(
+    history: List<ThreadHistoryEntry>,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    isHistoryRefreshing: Boolean = false,
+    onBoardClick: () -> Unit = {},
+    onRefreshClick: () -> Unit = {},
+    onBatchDeleteClick: () -> Unit = {},
+    onExportClick: () -> Unit = {},
+    onExportThenClearClick: () -> Unit = {},
+    onExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    onLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
+    onImportClick: () -> Unit = {},
+    onImportSelectedClick: (Set<String>) -> Unit = {},
+    onSettingsClick: () -> Unit = {},
+    bodyTextSize: ThreadBodyTextSize? = null,
+    /**
+     * Whether the drawer is open. The drawer content stays composed while
+     * closed; freezing its list then avoids re-filtering and re-sorting the
+     * whole history on the main thread after every history save.
+     */
+    isVisible: Boolean = true
+) {
+    val sharedFeatures = LocalFutachaSharedFeatures.current
+    val tabs = sharedFeatures?.store?.tabs?.collectAsState(emptyList())?.value.orEmpty()
+    val tabsByUrl = remember(tabs) { tabs.associateBy { it.canonicalUrl } }
+    val currentSelection = rememberUpdatedState(onHistoryEntrySelected)
+    val currentDismissal = rememberUpdatedState(onHistoryEntryDismissed)
+    val stableSelection = remember { { entry: ThreadHistoryEntry -> currentSelection.value(entry) } }
+    val stableDismissal = remember { { entry: ThreadHistoryEntry -> currentDismissal.value(entry) } }
+    val historySnapshot = remember { HistoryDrawerSnapshotHolder() }
+    val shownHistory = historySnapshot.resolve(history, isVisible)
+    val content: @Composable () -> Unit = {
+    val coroutineScope = rememberCoroutineScope()
+    var archiveActionDialog by remember { mutableStateOf<HistoryArchiveAction?>(null) }
+    var isExportSelectionVisible by remember { mutableStateOf(false) }
+    var importSelectionState by remember {
+        mutableStateOf<HistoryImportSelectionState>(HistoryImportSelectionState.Hidden)
+    }
+    val importPreviewLoad = remember { LatestOnlyLoad() }
+    val sharedViewSettingsBinding = LocalHistoryViewSettingsBinding.current
+    var localViewSettings by rememberSaveable(stateSaver = HistoryViewSettings.Saver) {
+        mutableStateOf(HistoryViewSettings.Default)
+    }
+    val appliedViewSettings = sharedViewSettingsBinding?.settings ?: localViewSettings
+    val onAppliedViewSettingsChanged: (HistoryViewSettings) -> Unit = { settings ->
+        if (sharedViewSettingsBinding == null) {
+            localViewSettings = settings
+        } else {
+            sharedViewSettingsBinding.onSettingsChanged(settings)
+        }
+    }
+    var draftViewSettings by remember { mutableStateOf(HistoryViewSettings.Default) }
+    var isFilterSheetVisible by remember { mutableStateOf(false) }
+    var isBatchDeleteConfirmationVisible by remember { mutableStateOf(false) }
+    val historyView = rememberHistoryDrawerView(shownHistory, appliedViewSettings, isVisible)
+    val boardFilterOptions = historyView.boardFilterOptions
+    val displayedHistory = historyView.displayedHistory
+    val activeViewLabels = remember(appliedViewSettings, boardFilterOptions) {
+        buildHistoryViewSummaryLabels(appliedViewSettings, boardFilterOptions)
+    }
+    ModalDrawerSheet(
+        modifier = Modifier
+            .width(320.dp)
+            .fillMaxHeight()
+            .testTag("history-drawer"),
+        drawerShape = MaterialTheme.shapes.extraLarge,
+        drawerContainerColor = MaterialTheme.colorScheme.background,
+        drawerContentColor = MaterialTheme.colorScheme.onBackground
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                item {
+                    HistoryListHeader(
+                        visibleCount = displayedHistory.size,
+                        totalCount = history.size
+                    )
+                }
+                item(key = "shared-tabs-watcher") { FutachaDrawerTools(onHistoryEntrySelected) }
+                if (!appliedViewSettings.isDefault) {
+                    item(key = "history-active-view-settings") {
+                        HistoryActiveSettingsBanner(
+                            visibleCount = displayedHistory.size,
+                            totalCount = history.size,
+                            labels = activeViewLabels,
+                            onReset = {
+                                onAppliedViewSettingsChanged(HistoryViewSettings.Default)
+                            }
+                        )
+                    }
+                }
+                if (shouldShowHistoryDrawerGrowthWarning(history.size)) {
+                    item(key = "history-growth-warning") {
+                        HistoryGrowthWarningBanner(historyCount = history.size)
+                    }
+                }
+                if (displayedHistory.isEmpty() && history.isNotEmpty() && !appliedViewSettings.isDefault) {
+                    item(key = "history-empty-filter-result") {
+                        HistoryEmptyFilterResult(
+                            onReset = {
+                                onAppliedViewSettingsChanged(HistoryViewSettings.Default)
+                            }
+                        )
+                    }
+                }
+                items(
+                    items = displayedHistory,
+                    key = {
+                        buildString {
+                            append(it.boardId)
+                            append('|')
+                            append(it.threadId)
+                            append('|')
+                            append(it.boardUrl)
+                        }
+                    }
+                ) { entry ->
+                    DismissibleHistoryEntry(
+                        entry = entry,
+                        // boardUrl usually holds the thread's own URL, which canonicalizeBoardUrl rejects.
+                        tab = entry.toCompatHistoryEntry()?.canonicalUrl?.let { tabsByUrl[it] },
+                        onDismissed = stableDismissal,
+                        onClicked = { stableSelection(entry) }
+                    )
+                }
+            }
+            HistoryBottomBar(
+                onBoardClick = onBoardClick,
+                onRefreshClick = onRefreshClick,
+                isRefreshing = isHistoryRefreshing,
+                onFilterClick = {
+                    draftViewSettings = appliedViewSettings
+                    isFilterSheetVisible = true
+                },
+                activeFilterCount = appliedViewSettings.activeSettingCount,
+                onBatchDeleteClick = {
+                    if (history.isNotEmpty()) {
+                        isBatchDeleteConfirmationVisible = true
+                    }
+                },
+                onExportClick = { archiveActionDialog = HistoryArchiveAction.Export },
+                onImportClick = { archiveActionDialog = HistoryArchiveAction.Import },
+                onSettingsClick = onSettingsClick
+            )
+        }
+    }
+    archiveActionDialog?.let { action ->
+        HistoryArchiveActionDialog(
+            action = action,
+            onDismiss = { archiveActionDialog = null },
+            onAllClick = {
+                archiveActionDialog = null
+                if (action == HistoryArchiveAction.Export) {
+                    onExportClick()
+                } else {
+                    onImportClick()
+                }
+            },
+            onExportThenClearClick = if (action == HistoryArchiveAction.Export) {
+                {
+                    archiveActionDialog = null
+                    onExportThenClearClick()
+                }
+            } else {
+                null
+            },
+            onSelectedClick = {
+                archiveActionDialog = null
+                if (action == HistoryArchiveAction.Export) {
+                    isExportSelectionVisible = true
+                } else {
+                    importSelectionState = HistoryImportSelectionState.Loading
+                    importPreviewLoad.start(
+                        scope = coroutineScope,
+                        load = { loadHistoryImportSelectionState(onLoadImportPreview) },
+                        onResult = { importSelectionState = it }
+                    )
+                }
+            }
+        )
+    }
+    if (isExportSelectionVisible) {
+        HistoryExportSelectionDialog(
+            history = history,
+            onDismiss = { isExportSelectionVisible = false },
+            onExport = { selectedEntries ->
+                isExportSelectionVisible = false
+                onExportSelectedClick(selectedEntries)
+            }
+        )
+    }
+    when (val state = importSelectionState) {
+        HistoryImportSelectionState.Hidden -> Unit
+        HistoryImportSelectionState.Loading -> {
+            HistoryImportLoadingDialog(onDismiss = {
+                // Closing the loading dialog abandons the load, so a late
+                // preview or error never reopens a dialog the user closed.
+                importPreviewLoad.cancel()
+                importSelectionState = HistoryImportSelectionState.Hidden
+            })
+        }
+        is HistoryImportSelectionState.Error -> {
+            HistoryImportErrorDialog(
+                message = state.message,
+                onDismiss = { importSelectionState = HistoryImportSelectionState.Hidden }
+            )
+        }
+        is HistoryImportSelectionState.Ready -> {
+            HistoryImportSelectionDialog(
+                preview = state.preview,
+                onDismiss = { importSelectionState = HistoryImportSelectionState.Hidden },
+                onImport = { selectedSnapshotIds ->
+                    importSelectionState = HistoryImportSelectionState.Hidden
+                    onImportSelectedClick(selectedSnapshotIds)
+                }
+            )
+        }
+    }
+    if (isFilterSheetVisible) {
+        // Counted off the main thread and after typing pauses: history holds up
+        // to 20,000 entries and the title query changes on every keystroke.
+        val filteredCount by produceState<Int?>(null, history, draftViewSettings) {
+            delay(HISTORY_FILTER_COUNT_DEBOUNCE_MS)
+            value = withContext(AppDispatchers.parsing) {
+                countHistoryViewSettingsMatches(history, draftViewSettings)
+            }
+        }
+        FutachaAppLockAwareWindow { HistoryFilterSheet(
+            totalCount = history.size,
+            filteredCount = filteredCount,
+            settings = draftViewSettings,
+            boardOptions = boardFilterOptions,
+            onSettingsChanged = { draftViewSettings = it },
+            onReset = { draftViewSettings = HistoryViewSettings.Default },
+            onApply = {
+                onAppliedViewSettingsChanged(draftViewSettings)
+                isFilterSheetVisible = false
+            },
+            onDismiss = { isFilterSheetVisible = false }
+        ) }
+    }
+    if (isBatchDeleteConfirmationVisible) {
+        FutachaAppLockAwareWindow { HistoryBatchDeleteConfirmationDialog(
+            totalCount = history.size,
+            visibleCount = displayedHistory.size,
+            hasHiddenEntries = displayedHistory.size != history.size,
+            onConfirm = {
+                isBatchDeleteConfirmationVisible = false
+                onAppliedViewSettingsChanged(HistoryViewSettings.Default)
+                onBatchDeleteClick()
+            },
+            onDismiss = { isBatchDeleteConfirmationVisible = false }
+        ) }
+    }
+    }
+    if (bodyTextSize != null) {
+        ProvideThreadTextSizeTypography(bodyTextSize, content)
+    } else {
+        content()
+    }
+}
+
+@Composable
+private fun HistoryGrowthWarningBanner(historyCount: Int) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        shape = MaterialTheme.shapes.small
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = buildHistoryDrawerGrowthWarningTitle(historyCount),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    text = buildHistoryDrawerGrowthWarningBody(historyCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryListHeader(
+    visibleCount: Int,
+    totalCount: Int
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = MaterialTheme.shapes.small
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            text = if (visibleCount == totalCount) {
+                "閲覧中のスレッド（${totalCount}件）"
+            } else {
+                "閲覧中のスレッド（${visibleCount}/${totalCount}件）"
+            },
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+    }
+}
+
+@Composable
+private fun HistoryBottomBar(
+    onBoardClick: () -> Unit = {},
+    onRefreshClick: () -> Unit = {},
+    isRefreshing: Boolean = false,
+    onFilterClick: () -> Unit = {},
+    activeFilterCount: Int = 0,
+    onBatchDeleteClick: () -> Unit = {},
+    onExportClick: () -> Unit = {},
+    onImportClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {}
+) {
+    val chrome = LocalFutachaChromeColors.current
+    Surface(color = chrome.bottomBar, contentColor = chrome.onBar) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick, modifier = Modifier.weight(1f))
+                HistoryBottomIcon(
+                    icon = Icons.Rounded.Refresh,
+                    label = if (isRefreshing) "更新中" else "更新",
+                    onClick = onRefreshClick,
+                    modifier = Modifier.weight(1f),
+                    enabled = !isRefreshing,
+                    showProgress = isRefreshing
+                )
+                HistoryBottomIcon(
+                    icon = Icons.Rounded.FilterList,
+                    label = "フィルター",
+                    displayLabel = "絞込",
+                    onClick = onFilterClick,
+                    modifier = Modifier.weight(1f),
+                    badgeCount = activeFilterCount
+                )
+                HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick, modifier = Modifier.weight(1f))
+                HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick, modifier = Modifier.weight(1f))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HistoryBottomIcon(Icons.Rounded.FileUpload, "エクスポート", onExportClick, modifier = Modifier.weight(1f))
+                HistoryBottomIcon(Icons.Rounded.FileDownload, "インポート", onImportClick, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryBottomIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit = {},
+    modifier: Modifier = Modifier,
+    badgeCount: Int = 0,
+    enabled: Boolean = true,
+    showProgress: Boolean = false,
+    displayLabel: String = label
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier.heightIn(min = 48.dp).clickable(enabled = enabled) {
+            AnalyticsTracker.uiControl(
+                control = "history_bottom_bar",
+                label = "履歴下部メニュー: $label"
+            )
+            onClick()
+        }.padding(vertical = 4.dp)
+    ) {
+        Box {
+            if (showProgress) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp,
+                    color = LocalContentColor.current
+                )
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (badgeCount > 0) {
+                        MaterialTheme.colorScheme.tertiaryContainer
+                    } else {
+                        LocalContentColor.current
+                    }
+                )
+            }
+            if (badgeCount > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.error,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 8.dp, y = (-6).dp)
+                ) {
+                    Text(
+                        text = badgeCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+            }
+        }
+        Text(
+            text = displayLabel,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelSmall,
+            color = LocalContentColor.current
+        )
+    }
+}
+
+internal enum class HistoryArchiveAction {
+    Export,
+    Import
+}
+
+internal suspend fun loadHistoryImportSelectionState(
+    loadPreview: suspend () -> FutachaHistoryArchivePreview?
+): HistoryImportSelectionState = try {
+    val preview = loadPreview()
+    if (preview == null || preview.entries.isEmpty()) {
+        HistoryImportSelectionState.Error("選択できる履歴アーカイブがありません")
+    } else {
+        HistoryImportSelectionState.Ready(preview)
+    }
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    HistoryImportSelectionState.Error(e.message ?: "履歴アーカイブを読み込めませんでした")
+}
+
+/**
+ * Runs one load at a time on the caller's (main) scope. [cancel] or a newer
+ * [start] cancels the running load and drops its result even if the load
+ * finished without reaching a cancellation point, so a stale result never
+ * overwrites newer UI state.
+ */
+internal class LatestOnlyLoad {
+    private var job: Job? = null
+    private var generation = 0L
+
+    fun <T> start(scope: CoroutineScope, load: suspend () -> T, onResult: (T) -> Unit) {
+        cancel()
+        val token = generation
+        job = scope.launch {
+            val result = load()
+            if (token == generation) {
+                job = null
+                onResult(result)
+            }
+        }
+    }
+
+    fun cancel() {
+        generation += 1
+        job?.cancel()
+        job = null
+    }
+}
+
+internal sealed interface HistoryImportSelectionState {
+    data object Hidden : HistoryImportSelectionState
+    data object Loading : HistoryImportSelectionState
+    data class Ready(val preview: FutachaHistoryArchivePreview) : HistoryImportSelectionState
+    data class Error(val message: String) : HistoryImportSelectionState
+}
+
+@Composable
+internal fun HistoryArchiveActionDialog(
+    action: HistoryArchiveAction,
+    onDismiss: () -> Unit,
+    onAllClick: () -> Unit,
+    onExportThenClearClick: (() -> Unit)?,
+    onSelectedClick: () -> Unit,
+    /** False for a mode that sends no analytics (ふたばー風); the other callers keep the default. */
+    trackAnalytics: Boolean = true
+) {
+    val title = if (action == HistoryArchiveAction.Export) "履歴エクスポート" else "履歴インポート"
+    val allLabel = if (action == HistoryArchiveAction.Export) "すべてエクスポート" else "すべてインポート"
+    val selectedLabel = if (action == HistoryArchiveAction.Export) "選択してエクスポート" else "選択してインポート"
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {
+            historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴アーカイブ選択を閉じる")
+            onDismiss()
+        },
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    historyArchiveUiControl(trackAnalytics, 
+                        "history_archive_dialog",
+                        if (action == HistoryArchiveAction.Export) "全履歴をエクスポート" else "全履歴をインポート"
+                    )
+                    onAllClick()
+                }) {
+                    Text(allLabel)
+                }
+                if (onExportThenClearClick != null) {
+                    TextButton(onClick = {
+                        historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴をエクスポートして全削除")
+                        onExportThenClearClick()
+                    }) {
+                        Text("エクスポートして一括削除")
+                    }
+                }
+                TextButton(onClick = {
+                    historyArchiveUiControl(trackAnalytics, 
+                        "history_archive_dialog",
+                        if (action == HistoryArchiveAction.Export) "履歴を選択してエクスポート" else "履歴を選択してインポート"
+                    )
+                    onSelectedClick()
+                }) {
+                    Text(selectedLabel)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = {
+                historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴アーカイブ選択を閉じる")
+                onDismiss()
+            }) {
+                Text("閉じる")
+            }
+        }
+    ) }
+}
+
+@Composable
+internal fun HistoryExportSelectionDialog(
+    history: List<ThreadHistoryEntry>,
+    onDismiss: () -> Unit,
+    onExport: (List<ThreadHistoryEntry>) -> Unit,
+    trackAnalytics: Boolean = true
+) {
+    // Keyed by thread identity and kept while the dialog is open: history
+    // changes (visits, refreshes) shift indices and used to reset the choice.
+    // Changed in place: a tick of one row no longer copies a set of up to 20,000 keys twice (re-audit L30).
+    val selectedKeys = remember {
+        androidx.compose.runtime.mutableStateMapOf<String, Boolean>().also { selected ->
+            history.forEach { selected[buildHistoryExportSelectionKey(it)] = true }
+        }
+    }
+    val anySelected by remember(history) {
+        androidx.compose.runtime.derivedStateOf { history.any { buildHistoryExportSelectionKey(it) in selectedKeys } }
+    }
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {
+            historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート選択を閉じる")
+            onDismiss()
+        },
+        title = { Text("エクスポートする履歴") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        history.forEach { selectedKeys[buildHistoryExportSelectionKey(it)] = true }
+                        historyArchiveUiControl(trackAnalytics, 
+                            "history_export_selection",
+                            "履歴エクスポート対象を全選択",
+                            mapOf("selection_count_bucket" to analyticsCountBucket(selectedKeys.size))
+                        )
+                    }) {
+                        Text("全選択")
+                    }
+                    TextButton(onClick = {
+                        selectedKeys.clear()
+                        historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート対象を全解除")
+                    }) {
+                        Text("解除")
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(
+                        items = history,
+                        key = { index, entry -> buildHistorySelectionKey(index, entry) }
+                    ) { _, entry ->
+                        val key = buildHistoryExportSelectionKey(entry)
+                        HistoryEntrySelectionRow(
+                            entry = entry,
+                            checked = key in selectedKeys,
+                            onCheckedChange = { checked ->
+                                if (checked) selectedKeys[key] = true else selectedKeys.remove(key)
+                                historyArchiveUiControl(trackAnalytics, 
+                                    "history_export_selection",
+                                    if (checked) "履歴をエクスポート対象に追加" else "履歴をエクスポート対象から除外",
+                                    mapOf("selection_count_bucket" to analyticsCountBucket(selectedKeys.size))
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = anySelected,
+                onClick = {
+                    val selectedEntries = history.filter { entry ->
+                        buildHistoryExportSelectionKey(entry) in selectedKeys
+                    }
+                    historyArchiveUiControl(trackAnalytics, 
+                        "history_export_selection",
+                        "選択した履歴をエクスポート",
+                        mapOf("selection_count_bucket" to analyticsCountBucket(selectedEntries.size))
+                    )
+                    onExport(selectedEntries)
+                }
+            ) {
+                Text("エクスポート")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                historyArchiveUiControl(trackAnalytics, "history_export_selection", "履歴エクスポート選択を閉じる")
+                onDismiss()
+            }) {
+                Text("閉じる")
+            }
+        }
+    ) }
+}
+
+@Composable
+private fun HistoryEntrySelectionRow(
+    entry: ThreadHistoryEntry,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = entry.title.ifBlank { "無題" },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${entry.boardName} / ${entry.threadId} / ${entry.replyCount}レス",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "最終閲覧: ${formatLastVisited(entry.lastVisitedEpochMillis)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+internal fun HistoryImportLoadingDialog(onDismiss: () -> Unit, trackAnalytics: Boolean = true) {
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {
+            historyArchiveUiControl(trackAnalytics, "history_import_loading", "履歴インポート読み込みを閉じる")
+            onDismiss()
+        },
+        title = { Text("履歴アーカイブ") },
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                Text("読み込み中です")
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = {
+                historyArchiveUiControl(trackAnalytics, "history_import_loading", "履歴インポート読み込みを閉じる")
+                onDismiss()
+            }) {
+                Text("閉じる")
+            }
+        }
+    ) }
+}
+
+@Composable
+internal fun HistoryImportErrorDialog(
+    message: String,
+    onDismiss: () -> Unit,
+    trackAnalytics: Boolean = true
+) {
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {
+            historyArchiveUiControl(trackAnalytics, "history_import_error", "履歴インポートエラーを閉じる")
+            onDismiss()
+        },
+        title = { Text("履歴アーカイブ") },
+        text = { Text(message) },
+        confirmButton = {
+            TextButton(onClick = {
+                historyArchiveUiControl(trackAnalytics, "history_import_error", "履歴インポートエラーを確認")
+                onDismiss()
+            }) {
+                Text("OK")
+            }
+        }
+    ) }
+}
+
+@Composable
+internal fun HistoryImportSelectionDialog(
+    preview: FutachaHistoryArchivePreview,
+    onDismiss: () -> Unit,
+    onImport: (Set<String>) -> Unit,
+    trackAnalytics: Boolean = true
+) {
+    var selectedSnapshotIds by remember(preview) {
+        mutableStateOf(preview.entries.mapTo(linkedSetOf()) { it.snapshotId })
+    }
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = {
+            historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート選択を閉じる")
+            onDismiss()
+        },
+        title = { Text("インポートする履歴") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "${preview.entries.size}件 / ${formatLastVisited(preview.exportedAtEpochMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        selectedSnapshotIds = preview.entries.mapTo(linkedSetOf()) { it.snapshotId }
+                        historyArchiveUiControl(trackAnalytics, 
+                            "history_import_selection",
+                            "履歴インポート対象を全選択",
+                            mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
+                        )
+                    }) {
+                        Text("全選択")
+                    }
+                    TextButton(onClick = {
+                        selectedSnapshotIds = linkedSetOf()
+                        historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート対象を全解除")
+                    }) {
+                        Text("解除")
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(
+                        items = preview.entries,
+                        key = { it.snapshotId }
+                    ) { entry ->
+                        HistoryArchiveEntrySelectionRow(
+                            entry = entry,
+                            checked = entry.snapshotId in selectedSnapshotIds,
+                            onCheckedChange = { checked ->
+                                selectedSnapshotIds = selectedSnapshotIds.toMutableSet().also { ids ->
+                                    if (checked) ids.add(entry.snapshotId) else ids.remove(entry.snapshotId)
+                                }.toCollection(linkedSetOf())
+                                historyArchiveUiControl(trackAnalytics, 
+                                    "history_import_selection",
+                                    if (checked) "履歴をインポート対象に追加" else "履歴をインポート対象から除外",
+                                    mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selectedSnapshotIds.isNotEmpty(),
+                onClick = {
+                    historyArchiveUiControl(trackAnalytics, 
+                        "history_import_selection",
+                        "選択した履歴をインポート",
+                        mapOf("selection_count_bucket" to analyticsCountBucket(selectedSnapshotIds.size))
+                    )
+                    onImport(selectedSnapshotIds)
+                }
+            ) {
+                Text("インポート")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                historyArchiveUiControl(trackAnalytics, "history_import_selection", "履歴インポート選択を閉じる")
+                onDismiss()
+            }) {
+                Text("閉じる")
+            }
+        }
+    ) }
+}
+
+/** The history archive dialogs' analytics, skipped for a mode that sends none. */
+private fun historyArchiveUiControl(track: Boolean, control: String, label: String, params: Map<String, String> = emptyMap()) {
+    if (track) AnalyticsTracker.uiControl(control, label, params)
+}
+
+@Composable
+private fun HistoryArchiveEntrySelectionRow(
+    entry: FutachaHistoryArchivePreviewEntry,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val historyEntry = entry.historyEntry
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = historyEntry.title.ifBlank { "無題" },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${historyEntry.boardName} / ${historyEntry.threadId} / ${historyEntry.replyCount}レス",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = listOf(
+                    "最終閲覧: ${formatLastVisited(historyEntry.lastVisitedEpochMillis)}",
+                    buildHistoryArchivePayloadLabel(entry.payloadStatus),
+                    if (entry.alreadyExistsInHistory) "既存あり" else "新規"
+                ).joinToString(" / "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun buildHistorySelectionKey(index: Int, entry: ThreadHistoryEntry): String {
+    return "$index|${buildHistoryExportSelectionKey(entry)}"
+}
+
+private fun buildHistoryExportSelectionKey(entry: ThreadHistoryEntry): String {
+    return "${entry.boardId}|${entry.threadId}|${entry.boardUrl}"
+}
+
+internal fun buildHistoryArchivePayloadLabel(status: HistoryArchivePayloadStatus): String {
+    return when (status) {
+        HistoryArchivePayloadStatus.FULL -> "スレ本体あり"
+        HistoryArchivePayloadStatus.PARTIAL -> "一部あり"
+        HistoryArchivePayloadStatus.HISTORY_ONLY -> "履歴のみ"
+    }
+}
+
+@Suppress("DEPRECATION")
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DismissibleHistoryEntry(
+    entry: ThreadHistoryEntry,
+    tab: com.valoser.futacha.shared.compat.CompatTab?,
+    onDismissed: (ThreadHistoryEntry) -> Unit,
+    onClicked: () -> Unit
+) {
+    val latestEntry by rememberUpdatedState(entry)
+    val latestOnDismissed by rememberUpdatedState(onDismissed)
+    val dismissState = rememberSwipeToDismissBoxState(
+        positionalThreshold = ::historyDismissThresholdDistance,
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.StartToEnd) {
+                latestOnDismissed(latestEntry)
+            }
+            true
+        }
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromEndToStart = false,
+        backgroundContent = { HistoryDismissBackground() }
+    ) {
+        HistoryEntryCard(entry = entry, tab = tab, onClick = onClicked)
+    }
+}
+
+@Composable
+private fun HistoryDismissBackground() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Delete,
+                contentDescription = "削除",
+                tint = MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = "削除",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistoryEntryCard(
+    entry: ThreadHistoryEntry,
+    tab: com.valoser.futacha.shared.compat.CompatTab?,
+    onClick: () -> Unit
+) {
+    val density = LocalDensity.current
+    val titleImage = com.valoser.futacha.shared.ui.image.rememberHistoryImagePainter(
+        threadId = entry.threadId,
+        boardId = entry.boardId,
+        boardUrl = entry.boardUrl,
+        thumbnailUrl = entry.titleImageUrl,
+        sizePx = with(density) { 48.dp.roundToPx() },
+        savedCopyAvailable = entry.hasAutoSave,
+        catalogImageLoader = if (LocalFutachaSharedFeatures.current == null) null
+            else com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
+    )
+    val titlePainter = titleImage.painter
+    val titlePainterState = titleImage.state
+    val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
+        formatLastVisited(entry.lastVisitedEpochMillis)
+    }
+    val formattedLastConfirmedAlive = remember(entry.lastConfirmedAliveEpochMillis) {
+        entry.lastConfirmedAliveEpochMillis?.let(::formatLastVisited)
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("history-entry-${entry.threadId}")
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                when (titlePainterState) {
+                    is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
+                        MediaThumbnailFallbackIcon(
+                            url = entry.titleImageUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+
+                    else -> {
+                        Image(
+                            painter = titlePainter,
+                            contentDescription = "${entry.title} のタイトル画像",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = entry.title.ifBlank { "無題" },
+                    modifier = Modifier.testTag("history-title-${entry.threadId}"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(entry.boardName.ifBlank { "板名未取得" }, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${maxOf(entry.replyCount, tab?.replyCount ?: 0)}レス", style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CatalogNewRepliesBadge(tab?.let { (maxOf(entry.replyCount, it.replyCount) - it.checkedReplyCount).coerceAtLeast(0) } ?: 0)
+                    if (entry.hasSelfPost) Text("投稿済", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (entry.hasAutoSave) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Folder, contentDescription = "自動保存あり", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                        Text("保存済", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text(
+                    text = "最終閲覧: $formattedLastVisited",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = when (resolveHistoryLifeStatus(entry)) {
+                        HistoryLifeStatus.Alive -> "生存確認: $formattedLastConfirmedAlive"
+                        HistoryLifeStatus.Expired -> formattedLastConfirmedAlive?.let {
+                            "消滅確認済み / 最終生存: $it"
+                        } ?: "消滅確認済み"
+                        HistoryLifeStatus.Unknown -> "生存確認: 未取得"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (entry.isAutoRefreshDisabled) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** Keeps the last list shown while the drawer is closed; see HistoryDrawerContent.isVisible. */
+/** The drawer's filtered and sorted list and board choices, with the inputs they came from. */
+internal class HistoryDrawerView(
+    val history: List<ThreadHistoryEntry>,
+    val settings: HistoryViewSettings,
+    val boardFilterOptions: List<HistoryBoardFilterOption>,
+    val displayedHistory: List<ThreadHistoryEntry>
+)
+
+internal fun buildHistoryDrawerView(
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    previous: HistoryDrawerView? = null
+): HistoryDrawerView = HistoryDrawerView(
+    history = history,
+    settings = settings,
+    boardFilterOptions = previous?.takeIf { it.history === history }?.boardFilterOptions
+        ?: buildHistoryBoardFilterOptions(history),
+    displayedHistory = applyHistoryViewSettings(history, settings)
+)
+
+/**
+ * A history refresh publishes a new list many times, and filtering/sorting up
+ * to 20k entries took 100-300 ms on the main thread each time. The drawer is
+ * composed on every board/catalog/thread screen even while closed, so the
+ * view is built on [AppDispatchers.parsing]; it is built in place only when
+ * the drawer is shown before that first build finished, so it never opens
+ * empty. Later inputs are built off Main while the previous list stays shown.
+ */
+@Composable
+private fun rememberHistoryDrawerView(
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    isVisible: Boolean
+): HistoryDrawerView {
+    val cache = remember { HistoryDrawerViewCache() }
+    val produced by produceState<HistoryDrawerView?>(null, history, settings) {
+        val current = value ?: cache.view
+        value = if (current != null && current.history === history && current.settings == settings) {
+            current
+        } else {
+            withContext(AppDispatchers.parsing) { buildHistoryDrawerView(history, settings, current) }
+        }
+        cache.view = null
+    }
+    return resolveHistoryDrawerView(produced, cache, history, settings, isVisible)
+}
+
+/** The first view built in place, shared with the background build so it is not built twice. */
+internal class HistoryDrawerViewCache {
+    var view: HistoryDrawerView? = null
+}
+
+/**
+ * The drawer's view for this frame: the latest background result, else one
+ * built in place only while the drawer is shown, else an empty placeholder
+ * for the closed (invisible) drawer.
+ */
+internal fun resolveHistoryDrawerView(
+    produced: HistoryDrawerView?,
+    cache: HistoryDrawerViewCache,
+    history: List<ThreadHistoryEntry>,
+    settings: HistoryViewSettings,
+    isVisible: Boolean,
+    build: (List<ThreadHistoryEntry>, HistoryViewSettings) -> HistoryDrawerView = { h, s -> buildHistoryDrawerView(h, s) }
+): HistoryDrawerView {
+    produced?.let { return it }
+    cache.view?.let { return it }
+    if (!isVisible) return HistoryDrawerView(emptyList(), settings, emptyList(), emptyList())
+    return build(history, settings).also { cache.view = it }
+}
+
+internal class HistoryDrawerSnapshotHolder {
+    private var shown: List<ThreadHistoryEntry>? = null
+
+    fun resolve(latest: List<ThreadHistoryEntry>, visible: Boolean): List<ThreadHistoryEntry> {
+        val previous = shown
+        return if (visible || previous == null) latest.also { shown = it } else previous
+    }
+}

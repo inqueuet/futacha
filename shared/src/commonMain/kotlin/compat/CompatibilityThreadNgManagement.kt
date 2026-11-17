@@ -1,0 +1,154 @@
+package com.valoser.futacha.shared.compat
+
+/**
+ * The reference app keeps ThreadRefuse (header words) and ThreadIgnore (body
+ * words) in separate tables. Earlier Futacha builds also wrote post numbers
+ * and poster identities to dedicated kinds, so the ThreadRefuse manager must
+ * keep those entries visible and editable instead of leaving active rules
+ * that the user cannot remove.
+ */
+fun compatThreadReferenceKinds(kind: CompatNgKind): Set<CompatNgKind> = when (kind) {
+    CompatNgKind.THREAD_REFUSE -> setOf(
+        CompatNgKind.THREAD_REFUSE,
+        CompatNgKind.THREAD_POST_NO,
+        CompatNgKind.THREAD_POSTER_ID
+    )
+    CompatNgKind.THREAD_IGNORE -> setOf(CompatNgKind.THREAD_IGNORE)
+    else -> setOf(kind)
+}
+
+fun compatThreadReferenceRules(
+    rules: List<CompatNgRule>,
+    threadKey: String,
+    kind: CompatNgKind
+): List<CompatNgRule> {
+    val acceptedKinds = compatThreadReferenceKinds(kind)
+    return rules
+        .filter { it.kind in acceptedKinds && (it.scopeKey == threadKey || it.scopeKey == "*" ||
+            (it.kind == CompatNgKind.THREAD_POST_NO && com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(it.scopeKey)?.let { url -> compatTabKey(url.canonicalUrl) == threadKey } == true)) }
+        .sortedByPrecomputedKey { normalizeCompatSearchText(compatThreadReferenceDisplayValue(it)) }
+}
+
+/**
+ * `sortedBy` evaluates its selector for both sides of every comparison; for a normalized text key
+ * that is O(n log n) normalizations. This computes each key once and sorts with the same stable
+ * ordering, so equal keys keep their original order exactly as `sortedBy` does.
+ */
+internal inline fun <T> List<T>.sortedByPrecomputedKey(key: (T) -> String): List<T> {
+    if (size < 2) return toList()
+    return map { key(it) to it }.sortedBy { it.first }.map { it.second }
+}
+
+/** Preserve the exact word typed in the reference editor while matching NFKC/case-insensitively. */
+fun compatThreadReferenceDisplayValue(rule: CompatNgRule): String =
+    when (rule.kind) {
+        CompatNgKind.THREAD_POST_NO -> rule.normalizedValue
+            .takeIf { it.all(Char::isDigit) }
+            ?.let { "No.$it" }
+            ?: rule.normalizedValue
+        CompatNgKind.THREAD_POSTER_ID ->
+            parseCompatPosterIdentity(rule.normalizedValue)?.display ?: rule.normalizedValue
+        else -> rule.memo.takeIf(String::isNotBlank) ?: rule.normalizedValue
+    }
+
+internal fun isCompatTypedThreadReference(kind: CompatNgKind): Boolean =
+    kind == CompatNgKind.THREAD_POST_NO || kind == CompatNgKind.THREAD_POSTER_ID
+
+internal const val COMPAT_THREAD_IDENTITY_EDIT_LIMIT = 200
+
+/** Identities keep their case; a post-number label is decoded back to the number used by the matcher. */
+internal fun compatTypedThreadReferenceEditValue(kind: CompatNgKind, value: String): String? = when (kind) {
+    CompatNgKind.THREAD_POST_NO -> Regex("(?:no\\.?\\s*)?([0-9]+)")
+        .matchEntire(normalizeCompatSearchText(value))?.groupValues?.get(1)
+    CompatNgKind.THREAD_POSTER_ID -> parseCompatPosterIdentity(value)?.display
+        ?.takeIf { it.length <= COMPAT_THREAD_IDENTITY_EDIT_LIMIT }
+    else -> null
+}
+
+/**
+ * The first [maxLength] UTF-16 units, except that a surrogate pair straddling the limit is dropped
+ * whole: `take` kept a lone high surrogate, which is not a valid character in a stored NG word.
+ */
+internal fun String.takeWithoutSplittingSurrogatePair(maxLength: Int): String {
+    val end = maxLength.coerceIn(0, length)
+    if (end in 1 until length && this[end - 1].isHighSurrogate() && this[end].isLowSurrogate()) {
+        return substring(0, end - 1)
+    }
+    return substring(0, end)
+}
+
+/** Equivalent to ThreadNgWordUtil.cleanInput(word, 20) in reference app. */
+fun cleanCompatThreadReferenceWord(value: String, maxLength: Int = 20): String {
+    fun String.trimReferenceEdges(): String = trim { it <= ' ' || it == '\u3000' || it.isWhitespace() }
+    val trimmed = value.trimReferenceEdges()
+    return if (maxLength > 0 && trimmed.length > maxLength) {
+        trimmed.takeWithoutSplittingSurrogatePair(maxLength).trimReferenceEdges()
+    } else {
+        trimmed
+    }
+}
+
+fun isCompatThreadRefuseForbidden(value: String): Boolean =
+    cleanCompatThreadReferenceWord(value) in setOf("無念", "無題", "としあき", "名無し")
+
+/**
+ * Manual ThreadRefuse additions in reference app reject a duplicate regardless of
+ * scope. ThreadIgnore, and both edit dialogs, compare the target scope too.
+ */
+fun hasCompatThreadReferenceDuplicate(
+    rules: List<CompatNgRule>,
+    kind: CompatNgKind,
+    value: String,
+    globalScope: Boolean,
+    excludingRuleId: String? = null,
+    editing: Boolean = false
+): Boolean {
+    val normalized = normalizeCompatSearchText(cleanCompatThreadReferenceWord(value))
+    if (normalized.isBlank()) return false
+    return rules.any { rule ->
+        if (rule.id == excludingRuleId) return@any false
+        val sameWord = normalizeCompatSearchText(compatThreadReferenceDisplayValue(rule)) == normalized
+        val sameScope = (rule.scopeKey == "*") == globalScope
+        sameWord && if (kind == CompatNgKind.THREAD_REFUSE && !editing) true else sameScope
+    }
+}
+
+data class CompatThreadNgRegistrationCandidate(
+    val kind: CompatNgKind,
+    val value: String
+)
+
+/** Exact raw-value list built by ThreadNgRegisterDialogFragment in reference app. */
+fun compatReferenceThreadNgCandidates(post: CompatPostSnapshot): List<CompatThreadNgRegistrationCandidate> =
+    buildList {
+        post.subject
+            ?.let { cleanCompatThreadReferenceWord(it, maxLength = 0) }
+            ?.takeIf { it.isNotBlank() && it !in setOf("無念", "無題") }
+            ?.let { add(CompatThreadNgRegistrationCandidate(CompatNgKind.THREAD_REFUSE, it)) }
+        post.author
+            ?.let { cleanCompatThreadReferenceWord(it, maxLength = 0) }
+            ?.takeIf {
+                it.isNotBlank() && it !in setOf("としあき", "名無し") && !it.contains("href")
+            }
+            ?.let { add(CompatThreadNgRegistrationCandidate(CompatNgKind.THREAD_REFUSE, it)) }
+        compatPosterIdentities(post).sortedBy { identity ->
+            when (identity.kind) {
+                CompatHeaderExtractionKind.ID -> 0
+                CompatHeaderExtractionKind.IP -> 1
+                CompatHeaderExtractionKind.QUOTE -> 2
+            }
+        }.forEach { identity ->
+            add(CompatThreadNgRegistrationCandidate(CompatNgKind.THREAD_REFUSE, identity.display))
+        }
+        post.postNo.takeIf(String::isNotBlank)?.let {
+            add(CompatThreadNgRegistrationCandidate(CompatNgKind.THREAD_REFUSE, "No.$it"))
+        }
+        compatSelectablePostBodyLines(post)
+            .asSequence()
+            .filterNot { it.trimStart().startsWith(">") }
+            .map { cleanCompatThreadReferenceWord(it) }
+            .filter(String::isNotBlank)
+            .forEach {
+                add(CompatThreadNgRegistrationCandidate(CompatNgKind.THREAD_IGNORE, it))
+            }
+    }

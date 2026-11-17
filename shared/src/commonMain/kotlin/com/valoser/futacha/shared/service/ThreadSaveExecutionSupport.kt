@@ -1,0 +1,453 @@
+package com.valoser.futacha.shared.service
+
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.SavedPost
+import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.model.FileType
+import com.valoser.futacha.shared.repository.MAX_SAVED_THREAD_METADATA_BYTES
+import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
+
+/** Written while an overwriting save downloads media; removed once its metadata is saved. */
+internal const val THREAD_SAVE_PARTIAL_MEDIA_FILE = "media-reuse.partial.json"
+
+@kotlinx.serialization.Serializable
+internal data class ThreadSavePartialMediaEntry(
+    val relativePath: String,
+    val fileType: String,
+    val byteSize: Long
+)
+
+internal data class ThreadSaveLocalFileInfo(
+    val relativePath: String,
+    val fileType: FileType,
+    val byteSize: Long
+)
+
+internal data class ThreadSaveScheduledMediaItem(
+    val url: String,
+    val requestType: ThreadSaveMediaRequestType,
+    val postId: String
+)
+
+internal data class ThreadSaveMediaDownloadPlan(
+    val scheduledItems: List<ThreadSaveScheduledMediaItem>,
+    val totalMediaCount: Int,
+    val skippedMediaCount: Int = (totalMediaCount - scheduledItems.size).coerceAtLeast(0)
+)
+
+internal data class ThreadSaveMediaDownloadBatchResult(
+    val urlToPathMap: Map<String, String>,
+    val mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo>,
+    val mediaCounts: ThreadSaveMediaCounts,
+    val totalSizeBytes: Long,
+    val downloadFailureCount: Int,
+    val skippedMediaCount: Int
+)
+
+internal data class ThreadSaveMediaDownloadSeed(
+    val urlToPathMap: Map<String, String> = emptyMap(),
+    val mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo> = emptyMap(),
+    val mediaCounts: ThreadSaveMediaCounts = ThreadSaveMediaCounts(),
+    val totalSizeBytes: Long = 0L
+)
+
+internal data class ThreadSaveMetadataWriteRequest(
+    val threadId: String,
+    val boardId: String,
+    val boardName: String,
+    val boardUrl: String,
+    val title: String,
+    val storageId: String,
+    val savedAtTimestamp: Long,
+    val expiresAtLabel: String?,
+    val savedPosts: List<SavedPost>,
+    val rawHtmlRelativePath: String?,
+    val strippedExternalResources: Boolean,
+    val isTruncated: Boolean,
+    val truncationReason: String?,
+    val baseTotalSize: Long,
+    val isHtmlMissing: Boolean = false
+)
+
+internal data class ThreadSaveRawHtmlWriteResult(
+    val relativePath: String?,
+    val sizeBytes: Long
+)
+
+internal data class ThreadSaveOutputPreparationRequest(
+    val boardPath: String,
+    val clearExistingOutput: Boolean = true
+)
+
+internal data class ThreadSaveMediaPathLock(
+    val mutex: Mutex,
+    var holders: Int = 0
+)
+
+internal fun buildThreadSaveMediaDownloadPlan(
+    posts: List<Post>,
+    maxMediaItems: Int
+): ThreadSaveMediaDownloadPlan {
+    val scheduledKeys = linkedSetOf<String>()
+    val scheduledItems = buildList {
+        posts.forEach { post ->
+            val extras = threadSaveExtraAttachments(post)
+            (listOf(post.thumbnailUrl to post.imageUrl) + extras.map { it.thumbnailUrl to it.url }).forEach { (thumbnailUrl, imageUrl) ->
+            thumbnailUrl?.let { thumbnailUrl ->
+                val key = buildThreadSaveMediaDownloadKey(thumbnailUrl, ThreadSaveMediaRequestType.THUMBNAIL)
+                if (scheduledKeys.add(key) && size < maxMediaItems) {
+                    add(
+                        ThreadSaveScheduledMediaItem(
+                            url = thumbnailUrl,
+                            requestType = ThreadSaveMediaRequestType.THUMBNAIL,
+                            postId = post.id
+                        )
+                    )
+                }
+            }
+            imageUrl?.let { imageUrl ->
+                val key = buildThreadSaveMediaDownloadKey(imageUrl, ThreadSaveMediaRequestType.FULL_IMAGE)
+                if (scheduledKeys.add(key) && size < maxMediaItems) {
+                    add(
+                        ThreadSaveScheduledMediaItem(
+                            url = imageUrl,
+                            requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                            postId = post.id
+                        )
+                    )
+                }
+            }
+            }
+        }
+    }
+    return ThreadSaveMediaDownloadPlan(
+        scheduledItems = scheduledItems,
+        totalMediaCount = scheduledKeys.size
+    )
+}
+
+internal suspend fun executeThreadSaveMediaDownloadPlan(
+    plan: ThreadSaveMediaDownloadPlan,
+    opPostId: String?,
+    chunkSize: Int,
+    maxParallelDownloads: Int,
+    maxRetries: Int,
+    retryDelayMillis: Long,
+    logTag: String,
+    createUrlToPathMap: () -> MutableMap<String, String>,
+    createMediaKeyToFileInfoMap: () -> MutableMap<String, ThreadSaveLocalFileInfo>,
+    initialSeed: ThreadSaveMediaDownloadSeed = ThreadSaveMediaDownloadSeed(),
+    updateProgress: (current: Int, total: Int) -> Unit,
+    downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>,
+    enforceBudget: (Long) -> Unit,
+    /** Called after every chunk with all media stored so far (seeded and downloaded). */
+    onChunkApplied: suspend (Map<String, ThreadSaveLocalFileInfo>) -> Unit = {},
+    shouldContinueDownloading: () -> Boolean = { true }
+): ThreadSaveMediaDownloadBatchResult {
+    val accumulator = ThreadSaveMediaDownloadAccumulator(
+        urlToPathMap = createUrlToPathMap().also { it.putAll(initialSeed.urlToPathMap) },
+        mediaKeyToFileInfoMap = createMediaKeyToFileInfoMap().also {
+            it.putAll(initialSeed.mediaKeyToFileInfoMap)
+        },
+        mediaCounts = initialSeed.mediaCounts,
+        totalSizeBytes = initialSeed.totalSizeBytes
+    )
+    val progressTotal = minOf(plan.totalMediaCount, plan.scheduledItems.size)
+    var processedMediaCount = 0
+    val execution = ThreadSaveMediaDownloadExecutionContext(
+        maxRetries = maxRetries,
+        retryDelayMillis = retryDelayMillis,
+        progressTotal = progressTotal,
+        logTag = logTag,
+        updateProgress = updateProgress,
+        checkBudget = {
+            enforceBudget(accumulator.totalSizeBytes)
+        },
+        downloadMedia = downloadMedia,
+        shouldContinueDownloading = shouldContinueDownloading
+    )
+
+    chunks@ for (itemChunk in plan.scheduledItems.chunked(chunkSize)) {
+        coroutineContext.ensureActive()
+        yield()
+        enforceBudget(accumulator.totalSizeBytes)
+
+        for (itemBatch in itemChunk.chunked(maxParallelDownloads)) {
+            coroutineContext.ensureActive()
+            if (!shouldContinueDownloading()) break@chunks
+            val nextProgressIndex = processedMediaCount + 1
+            val results = executeThreadSaveMediaBatch(
+                itemBatch = itemBatch,
+                firstProgressIndex = nextProgressIndex,
+                execution = execution
+            )
+            processedMediaCount += itemBatch.size
+            applyThreadSaveMediaBatchResults(
+                results = results,
+                accumulator = accumulator,
+                opPostId = opPostId,
+                enforceBudget = enforceBudget,
+                logTag = logTag
+            )
+        }
+        onChunkApplied(accumulator.mediaKeyToFileInfoMap.toMap())
+    }
+
+    return ThreadSaveMediaDownloadBatchResult(
+        urlToPathMap = accumulator.urlToPathMap,
+        mediaKeyToFileInfoMap = accumulator.mediaKeyToFileInfoMap,
+        mediaCounts = accumulator.mediaCounts,
+        totalSizeBytes = accumulator.totalSizeBytes,
+        downloadFailureCount = accumulator.downloadFailureCount,
+        skippedMediaCount = plan.skippedMediaCount + plan.scheduledItems.size - processedMediaCount
+    )
+}
+
+internal suspend fun buildThreadSaveSavedPosts(
+    posts: List<Post>,
+    mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo>,
+    urlToPathMap: Map<String, String>,
+    updateProgress: (current: Int, total: Int) -> Unit
+): List<SavedPost> {
+    val savedPosts = ArrayList<SavedPost>(posts.size)
+    posts.forEachIndexed { index, post ->
+        coroutineContext.ensureActive()
+        if (index % 32 == 0) {
+            yield()
+        }
+        updateProgress(index + 1, posts.size)
+        savedPosts += buildThreadSaveSavedPost(
+            post = post,
+            resolvedMedia = resolveThreadSavePostMedia(
+                post = post,
+                mediaKeyToFileInfoMap = mediaKeyToFileInfoMap
+            ),
+            urlToPathMap = urlToPathMap,
+            mediaKeyToFileInfoMap = mediaKeyToFileInfoMap
+        )
+    }
+    return savedPosts
+}
+
+internal suspend fun prepareThreadSaveOutput(
+    fileSystem: FileSystem,
+    target: ThreadSaveStorageTarget,
+    request: ThreadSaveOutputPreparationRequest
+) {
+    prepareThreadSaveStorageTarget(
+        fileSystem = fileSystem,
+        target = target,
+        boardPath = request.boardPath,
+        clearExistingOutput = request.clearExistingOutput
+    )
+}
+
+internal suspend fun writeThreadSaveMetadataIfEnabled(
+    writeMetadata: Boolean,
+    fileSystem: FileSystem,
+    target: ThreadSaveStorageTarget,
+    request: ThreadSaveMetadataWriteRequest,
+    encodeMetadata: (SavedThreadMetadata) -> String
+): Long {
+    if (!writeMetadata) {
+        return 0L
+    }
+    val metadata = SavedThreadMetadata(
+        threadId = request.threadId,
+        boardId = request.boardId,
+        boardName = request.boardName,
+        boardUrl = request.boardUrl,
+        title = request.title,
+        storageId = request.storageId,
+        savedAt = request.savedAtTimestamp,
+        expiresAtLabel = request.expiresAtLabel,
+        posts = request.savedPosts,
+        totalSize = 0L,
+        rawHtmlPath = request.rawHtmlRelativePath,
+        strippedExternalResources = request.strippedExternalResources,
+        isTruncated = request.isTruncated,
+        truncationReason = request.truncationReason,
+        isHtmlMissing = request.isHtmlMissing,
+        version = 1
+    )
+    val (metadataPayload, payloadSize) = fitThreadSaveMetadataPayload(
+        metadata = metadata,
+        baseTotalSize = request.baseTotalSize,
+        encodeMetadata = encodeMetadata
+    )
+    writeThreadSaveTextFile(
+        fileSystem = fileSystem,
+        target = target,
+        relativePath = "metadata.json",
+        content = metadataPayload,
+        measureAbsolutePathSize = fileSystem::getFileSize
+    )
+    return payloadSize
+}
+
+private val THREAD_SAVE_METADATA_POST_HTML_LIMITS = intArrayOf(4_000, 2_000, 1_000, 400)
+private const val THREAD_SAVE_METADATA_SIZE_TRUNCATION_REASON = "metadata size limit"
+
+/**
+ * The metadata payload, kept within what the reader accepts ([maxBytes], the 8 MB cap of
+ * SavedThreadRepository). A thread that fit the parser limits could still produce a larger
+ * file; it was written anyway and then could not be opened or recovered. Post bodies are cut
+ * to shorter and shorter lengths until it fits (the save is then marked truncated), and a
+ * payload that still does not fit fails the save with an explicit error.
+ */
+internal fun fitThreadSaveMetadataPayload(
+    metadata: SavedThreadMetadata,
+    baseTotalSize: Long,
+    encodeMetadata: (SavedThreadMetadata) -> String,
+    maxBytes: Long = MAX_SAVED_THREAD_METADATA_BYTES
+): Pair<String, Long> {
+    var result = buildThreadSaveMetadataPayloadWithStableSize(metadata, baseTotalSize, encodeMetadata)
+    for (limit in THREAD_SAVE_METADATA_POST_HTML_LIMITS) {
+        if (result.second <= maxBytes) return result
+        val shortened = metadata.copy(
+            posts = metadata.posts.map { post ->
+                if (post.messageHtml.length > limit) post.copy(messageHtml = truncateSavedPostHtml(post.messageHtml, limit)) else post
+            },
+            isTruncated = true,
+            truncationReason = listOfNotNull(
+                metadata.truncationReason?.takeIf { it.isNotBlank() },
+                THREAD_SAVE_METADATA_SIZE_TRUNCATION_REASON
+            ).joinToString("; ")
+        )
+        result = buildThreadSaveMetadataPayloadWithStableSize(shortened, baseTotalSize, encodeMetadata)
+    }
+    check(result.second <= maxBytes) {
+        "Save aborted: thread metadata is too large to read back (${result.second} bytes > $maxBytes)"
+    }
+    return result
+}
+
+/** [html] cut to at most [maxChars], without a surrogate pair or a half-written tag at the end. */
+private fun truncateSavedPostHtml(html: String, maxChars: Int): String {
+    val cut = html.takeWithoutSplittingSurrogates(maxChars)
+    val lastOpen = cut.lastIndexOf('<')
+    return if (lastOpen > cut.lastIndexOf('>')) cut.substring(0, lastOpen) else cut
+}
+
+internal suspend fun saveThreadRawHtmlIfEnabled(
+    enabled: Boolean,
+    fileSystem: FileSystem,
+    target: ThreadSaveStorageTarget,
+    threadId: String,
+    fetchOriginalHtml: suspend () -> Result<String>,
+    rewriteHtml: suspend (String) -> String,
+    measureAbsolutePathSize: suspend (String) -> Long,
+    logWarning: (String) -> Unit
+): ThreadSaveRawHtmlWriteResult {
+    if (!enabled) {
+        return ThreadSaveRawHtmlWriteResult(relativePath = null, sizeBytes = 0L)
+    }
+
+    return fetchOriginalHtml()
+        .mapCatching { originalHtml ->
+            coroutineContext.ensureActive()
+            val rewritten = rewriteHtml(originalHtml)
+            coroutineContext.ensureActive()
+            val fileName = "$threadId.htm"
+            val sizeBytes = writeThreadSaveTextFile(
+                fileSystem = fileSystem,
+                target = target,
+                relativePath = fileName,
+                content = rewritten,
+                measureAbsolutePathSize = measureAbsolutePathSize
+            )
+            ThreadSaveRawHtmlWriteResult(relativePath = fileName, sizeBytes = sizeBytes)
+        }
+        .getOrElse { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            logWarning("Failed to save raw HTML: ${error.message}")
+            ThreadSaveRawHtmlWriteResult(relativePath = null, sizeBytes = 0L)
+        }
+}
+
+internal fun buildThreadSaveSavedThread(
+    threadId: String,
+    boardId: String,
+    boardName: String,
+    title: String,
+    storageId: String,
+    thumbnailPath: String?,
+    savedAtTimestamp: Long,
+    postCount: Int,
+    imageCount: Int,
+    videoCount: Int,
+    totalSize: Long,
+    downloadFailureCount: Int,
+    skippedMediaCount: Int,
+    totalMediaCount: Int,
+    isContentTruncated: Boolean = false,
+    statusOverride: SaveStatus? = null,
+    isHtmlMissing: Boolean = false
+): SavedThread {
+    return SavedThread(
+        threadId = threadId,
+        boardId = boardId,
+        boardName = boardName,
+        title = title,
+        storageId = storageId,
+        thumbnailPath = thumbnailPath,
+        savedAt = savedAtTimestamp,
+        postCount = postCount,
+        imageCount = imageCount,
+        videoCount = videoCount,
+        totalSize = totalSize,
+        incompleteMediaCount = downloadFailureCount + skippedMediaCount,
+        isHtmlMissing = isHtmlMissing,
+        status = statusOverride ?: if (isHtmlMissing) SaveStatus.PARTIAL else resolveThreadSaveStatus(
+            incompleteMediaCount = downloadFailureCount + skippedMediaCount,
+            totalMediaCount = totalMediaCount,
+            isContentTruncated = isContentTruncated
+        )
+    )
+}
+
+internal suspend fun <T> withThreadSaveMediaWriteLock(
+    relativePath: String,
+    mediaWriteLocksGuard: Mutex,
+    mediaWriteLocks: MutableMap<String, ThreadSaveMediaPathLock>,
+    block: suspend () -> T
+): T {
+    val lockEntry = mediaWriteLocksGuard.withLock {
+        val entry = mediaWriteLocks.getOrPut(relativePath) { ThreadSaveMediaPathLock(Mutex()) }
+        entry.holders += 1
+        entry
+    }
+    return try {
+        lockEntry.mutex.withLock {
+            block()
+        }
+    } finally {
+        withContext(NonCancellable) {
+            mediaWriteLocksGuard.withLock {
+                val current = mediaWriteLocks[relativePath]
+                if (current === lockEntry) {
+                    current.holders -= 1
+                    if (current.holders <= 0 && !current.mutex.isLocked) {
+                        mediaWriteLocks.remove(relativePath)
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal suspend fun cleanupThreadSaveFailedOutput(
+    fileSystem: FileSystem,
+    target: ThreadSaveStorageTarget
+) {
+    cleanupThreadSaveStorageTarget(fileSystem, target)
+}

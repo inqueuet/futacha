@@ -1,0 +1,616 @@
+package com.valoser.futacha
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequest
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import com.valoser.futacha.shared.compat.ExperienceProfile
+import com.valoser.futacha.shared.compat.CompatForegroundNetworkPolicy
+import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE
+import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE
+import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
+import com.valoser.futacha.shared.compat.parseCompatForegroundNetworkPolicy
+import com.valoser.futacha.shared.compat.parseCompatWatchWords
+import com.valoser.futacha.shared.compat.refreshCompatTabsInBackground
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.CrashReporter
+import com.valoser.futacha.shared.analytics.analyticsCountBucket
+import com.valoser.futacha.shared.analytics.analyticsFailureCategory
+import com.valoser.futacha.shared.service.CatalogWatchAlertMatch
+import com.valoser.futacha.shared.service.CatalogWatchAlertRefresher
+import com.valoser.futacha.shared.service.HistoryRefresher
+import com.valoser.futacha.shared.service.HistoryRefreshCommitRejectedException
+import com.valoser.futacha.shared.service.WatchAlertNotificationLedger
+import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.TimeUnit
+
+class HistoryRefreshWorker(
+    appContext: Context,
+    params: WorkerParameters
+) : CoroutineWorker(appContext, params) {
+
+    override suspend fun doWork(): Result {
+        val app = applicationContext.applicationContext as? FutachaApplication
+            ?: return Result.failure()
+        val expectedGeneration = inputData.getLong(INPUT_PROFILE_GENERATION, -1L)
+        // The switch that enqueued this work may not have cleared its journal yet (M4-3).
+        val journalCleared = awaitModeSwitchJournalCleared(
+            expectedGeneration = expectedGeneration,
+            readJournalGeneration = { app.experienceProfileStore.readJournal()?.generation },
+            maxWaitMillis = MODE_SWITCH_JOURNAL_WAIT_MILLIS
+        )
+        if (!journalCleared) {
+            Logger.w(TAG, "Mode switch journal still pending; retrying later")
+            return if (runAttemptCount < MAX_RETRY_ATTEMPTS) Result.retry() else Result.success()
+        }
+        val coverage = BackgroundRunCoverage()
+        return historyRefreshRunGate.runExclusive(
+            key = app.experienceProfileStore.readActiveProfile() to expectedGeneration,
+            maxWaitMillis = RUN_GATE_MAX_WAIT_MILLIS,
+            // Result.Success is restricted API; this worker only returns data-less
+            // successes, and Result.Success compares by its output data. A run
+            // that skipped a busy step did not do the waiting run's work.
+            isSuccess = { it == Result.success() && coverage.isComplete },
+            onSkipped = {
+                Logger.d(TAG, "Another refresh run covered this work; skipping")
+                Result.success()
+            }
+        ) {
+            doExclusiveWork(app, expectedGeneration, coverage)
+        }
+    }
+
+    private suspend fun doExclusiveWork(
+        app: FutachaApplication,
+        expectedGeneration: Long,
+        coverage: BackgroundRunCoverage
+    ): Result {
+        val activeProfile = app.experienceProfileStore.readActiveProfile()
+        if (!activeProfile.usesAppStateData) {
+            return doCompatibilityWork(app, expectedGeneration)
+        }
+        // ふたちゃ and ふたばー share the AppState data, so the commit gate follows the
+        // profile that was active when this run started; a later switch refuses commits.
+        fun isCurrentModernGeneration(): Boolean =
+            expectedGeneration >= 0L &&
+                app.experienceProfileStore.isGenerationCommitAllowed(
+                    activeProfile,
+                    expectedGeneration
+                )
+        if (!isCurrentModernGeneration()) {
+            Logger.d(TAG, "Inactive or stale experience profile; skipping work")
+            return Result.success()
+        }
+
+        val enabledState = try {
+            BackgroundWorkerEnabledState(
+                isBackgroundRefreshEnabled = app.appStateStore.isBackgroundRefreshEnabled.first(),
+                isWatchAlertEnabled = app.appStateStore.isWatchAlertEnabled.first()
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read background refresh setting", e)
+            return if (shouldRetryBackgroundSettingRead(runAttemptCount, MAX_SETTING_READ_RETRIES)) {
+                Result.retry()
+            } else {
+                Logger.e(TAG, "Aborting after repeated setting read failures (attempt=$runAttemptCount)")
+                Result.failure()
+            }
+        }
+        // The Application initializes the compatibility store asynchronously.
+        // On a cold WorkManager start its preferences are still the empty
+        // placeholder, which would silently disable shared patrol/liveness.
+        val sharedFeaturesEnabled = try {
+            app.compatibilityStore.ensureInitialized()
+            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(app.compatibilityStore.preferences.first())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read shared feature settings; skipping shared features", e)
+            false
+        }
+        if (!enabledState.hasAnyEnabled && !sharedFeaturesEnabled) {
+            Logger.d(TAG, "Background refresh disabled; skipping work")
+            trackBackgroundRefreshEvent(
+                activeProfile,
+                "background_refresh_result",
+                mapOf("source" to "workmanager", "result" to "disabled")
+            )
+            return Result.success()
+        }
+        awaitNetworkServicesOrResult()?.let { return it }
+
+        return try {
+            trackBackgroundRefreshEvent(activeProfile, "background_refresh_started", mapOf("source" to "workmanager"))
+            CrashReporter.log("background_refresh_started source=workmanager")
+            withTimeout(REFRESH_TIMEOUT_MILLIS) {
+                if (sharedFeaturesEnabled) {
+                    com.valoser.futacha.shared.compat.refreshSharedFeatures(app.compatibilityStore,
+                        app.boardRepository, isWifiConnected(), onNewMatches = { matches ->
+                            deliverNewWatchAlertMatches(applicationContext, matches.map { it.toCatalogWatchAlertMatch() }) { fresh ->
+                                isCurrentModernGeneration() && WatchAlertNotifier(applicationContext).notifyMatches(fresh)
+                            }
+                        }, commitGate = { commit ->
+                            app.experienceProfileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
+                        }, budgetMillis = SHARED_FEATURES_BUDGET_MILLIS)
+                }
+                // A foreground history refresh may hold the refresher's lock. Skip
+                // only this step: the watch alerts after it are independent (H4-4).
+                if (enabledState.isBackgroundRefreshEnabled) {
+                    val refreshed = coverage.runSkippingIfBusy(
+                        isBusy = { it is HistoryRefresher.RefreshAlreadyRunningException }
+                    ) {
+                        app.historyRefresher.refresh(
+                            autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS,
+                            maxThreadsPerRun = MAX_THREADS_PER_RUN,
+                            maxAutoSavesPerRun = MAX_AUTO_SAVES_PER_RUN,
+                            historyCommitGate = { commit ->
+                                app.experienceProfileStore.runIfGenerationCurrent(
+                                    activeProfile,
+                                    expectedGeneration,
+                                    commit
+                                )
+                            },
+                            autoSaveCommitGate = { commit ->
+                                app.experienceProfileStore.runIfGenerationCurrent(
+                                    activeProfile,
+                                    expectedGeneration,
+                                    commit
+                                )
+                            }
+                        )
+                    }
+                    if (refreshed == null) {
+                        Logger.d(TAG, "History refresh already running; skipped only the history step")
+                    }
+                }
+                if (!isCurrentModernGeneration()) return@withTimeout
+                if (enabledState.isWatchAlertEnabled) {
+                    val result = coverage.runSkippingIfBusy(
+                        isBusy = { it is CatalogWatchAlertRefresher.RefreshAlreadyRunningException }
+                    ) {
+                        // Also called with the matches found so far when the run
+                        // timeout cuts the check off, so they are not all dropped.
+                        app.catalogWatchAlertRefresher.refresh(commitGate = { commit ->
+                            // Its cursor and diagnostics are not written after a mode switch (re-audit L82).
+                            app.experienceProfileStore.runIfGenerationCurrent(activeProfile, expectedGeneration, commit)
+                        }, onMatchesFound = { matches ->
+                            deliverCatalogWatchAlertMatches(app, matches, ::isCurrentModernGeneration)
+                        })
+                    }
+                    if (result == null) {
+                        Logger.d(TAG, "Catalog watch alert refresh already running; skipped that step")
+                    } else if (result.failureCount > 0) {
+                        Logger.w(TAG, "Catalog watch alert partial failures: ${result.failureCount}")
+                    }
+                }
+            }
+            val errorSnapshot = app.historyRefresher.lastRefreshError.value
+            trackBackgroundRefreshEvent(
+                activeProfile,
+                "background_refresh_result",
+                mapOf(
+                    "source" to "workmanager",
+                    "result" to "success",
+                    "thread_count_bucket" to analyticsCountBucket(errorSnapshot?.totalThreads ?: 0),
+                    "error_count_bucket" to analyticsCountBucket(errorSnapshot?.errorCount ?: 0)
+                )
+            )
+            CrashReporter.setKey("last_background_refresh_result", "success")
+            Result.success()
+        } catch (e: HistoryRefreshCommitRejectedException) {
+            Logger.d(TAG, "Experience generation changed during refresh; dropping buffered updates")
+            Result.success()
+        } catch (e: TimeoutCancellationException) {
+            Logger.w(TAG, "Background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
+            trackBackgroundRefreshEvent(
+                activeProfile,
+                "background_refresh_result",
+                mapOf(
+                    "source" to "workmanager",
+                    "result" to "failure",
+                    "failure_category" to "timeout",
+                    "attempt_bucket" to analyticsCountBucket(runAttemptCount + 1)
+                )
+            )
+            CrashReporter.recordNonFatal(
+                e,
+                keys = mapOf(
+                    "last_background_refresh_result" to "timeout",
+                    "last_background_refresh_source" to "workmanager"
+                )
+            )
+            // The whole budget was used. Retrying (30 s, then 60 s backoff)
+            // spent up to three budgets of every 15-minute period on a bad
+            // network; finish and let the next periodic run continue.
+            Result.success()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Exception) {
+            Logger.e(TAG, "Background history refresh failed", t)
+            val category = analyticsFailureCategory(t)
+            trackBackgroundRefreshEvent(
+                activeProfile,
+                "background_refresh_result",
+                mapOf(
+                    "source" to "workmanager",
+                    "result" to "failure",
+                    "failure_category" to category,
+                    "attempt_bucket" to analyticsCountBucket(runAttemptCount + 1)
+                )
+            )
+            CrashReporter.recordNonFatal(
+                t,
+                keys = mapOf(
+                    "last_background_refresh_result" to "failure",
+                    "last_background_refresh_category" to category,
+                    "last_background_refresh_source" to "workmanager"
+                )
+            )
+            // Reading historyRefresher here would throw again when the failure came
+            // from services that were never initialised.
+            if (hasHistoryFlushFailure(app.historyRefresherOrNull?.lastRefreshError?.value?.stageCounts.orEmpty())) {
+                Logger.e(TAG, "History flush failed; skipping immediate retry to avoid retry churn")
+                return Result.failure()
+            }
+            if (shouldRetryBackgroundRefreshFailure(t, runAttemptCount, MAX_RETRY_ATTEMPTS)) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
+        }
+    }
+
+    private suspend fun doCompatibilityWork(
+        app: FutachaApplication,
+        expectedGeneration: Long
+    ): Result {
+        fun isCurrentGeneration(): Boolean =
+            expectedGeneration >= 0L &&
+                app.experienceProfileStore.isGenerationCommitAllowed(
+                    ExperienceProfile.TOSHIAKI_COMPAT,
+                    expectedGeneration
+                )
+        if (!isCurrentGeneration()) return Result.success()
+
+        return try {
+            // The Application initializes this store asynchronously. Waiting here
+            // makes a cold-start WorkManager run see the same tabs/preferences as UI.
+            app.compatibilityStore.ensureInitialized()
+            val preferences = app.compatibilityStore.preferences.first()
+            val updatePolicy = parseCompatForegroundNetworkPolicy(
+                preferences["compat.background.backgroundThreadUpdateCheck"]
+            )
+            val existencePolicy = parseCompatForegroundNetworkPolicy(
+                preferences["compat.background.backgroundThreadExistCheck"]
+            )
+            val compatWatchWordsEnabled = com.valoser.futacha.shared.compat.compatWatchAllowed(preferences, isWifiConnected())
+            val wifi = isWifiConnected()
+            fun allowed(policy: CompatForegroundNetworkPolicy): Boolean = when (policy) {
+                CompatForegroundNetworkPolicy.ALWAYS -> true
+                CompatForegroundNetworkPolicy.WIFI_ONLY -> wifi
+                CompatForegroundNetworkPolicy.NONE -> false
+            }
+            val updateAllowed = allowed(updatePolicy)
+            val existenceAllowed = allowed(existencePolicy)
+            val enabled = updateAllowed || existenceAllowed || compatWatchWordsEnabled
+            if (!enabled) return Result.success()
+            awaitNetworkServicesOrResult()?.let { return it }
+
+            val commitGate: suspend (suspend () -> Unit) -> Boolean = { commit ->
+                app.experienceProfileStore.runIfGenerationCurrent(
+                    ExperienceProfile.TOSHIAKI_COMPAT,
+                    expectedGeneration,
+                    commit
+                )
+            }
+            withTimeout(REFRESH_TIMEOUT_MILLIS) {
+                refreshCompatTabsInBackground(
+                    store = app.compatibilityStore,
+                    repository = app.boardRepository,
+                    maxTabs = MAX_COMPAT_TABS_PER_RUN,
+                    checkUpdates = updateAllowed,
+                    checkExistence = existenceAllowed,
+                    checkWatchWords = compatWatchWordsEnabled,
+                    // Rejects writes once the user switched modes during the run.
+                    commitGate = commitGate,
+                    // Within the timeout, so the watch phase leaves time for the reply counts and the check times
+                    // stored below (audit M23).
+                    budgetMillis = com.valoser.futacha.shared.compat.compatRefreshBudgetWithin(REFRESH_TIMEOUT_MILLIS),
+                    // Notify as soon as matches are recorded: a timeout in a later
+                    // phase must not drop notifications for matches already marked seen.
+                    onWatchMatchesRecorded = { recorded ->
+                        deliverNewWatchAlertMatches(
+                            applicationContext,
+                            recorded.map { it.toCatalogWatchAlertMatch() }
+                        ) { notifyMatches ->
+                            if (!isCurrentGeneration() ||
+                                preferences[com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY] == "OFF"
+                            ) return@deliverNewWatchAlertMatches false
+                            val notifier = WatchAlertNotifier(applicationContext)
+                            notifier.notifyMatches(notifyMatches) || notifier.isDeliveryDisabled()
+                        }
+                    }
+                )
+                val completedAt = compatForegroundLastCheckStoredValue(System.currentTimeMillis())
+                commitGate {
+                    if (updateAllowed) {
+                        app.compatibilityStore.savePreference(
+                            COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE,
+                            completedAt
+                        )
+                    }
+                    if (existenceAllowed) {
+                        app.compatibilityStore.savePreference(
+                            COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE,
+                            completedAt
+                        )
+                    }
+                }
+            }
+            Result.success()
+        } catch (e: TimeoutCancellationException) {
+            Logger.w(TAG, "Compatibility background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
+            // Same as the modern run: the next periodic run continues.
+            Result.success()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "Compatibility background refresh failed", e)
+            if (runAttemptCount < MAX_COMPAT_RETRY_ATTEMPTS) Result.retry() else Result.failure()
+        }
+    }
+
+    private fun deliverCatalogWatchAlertMatches(
+        app: FutachaApplication,
+        matches: List<CatalogWatchAlertMatch>,
+        isCurrentGeneration: () -> Boolean
+    ) {
+        deliverNewWatchAlertMatches(applicationContext, matches) { newMatches ->
+            if (!isCurrentGeneration()) return@deliverNewWatchAlertMatches false
+            val notifier = WatchAlertNotifier(applicationContext)
+            val notified = notifier.notifyMatches(newMatches)
+            app.watchSyncManager.sendWatchAlert(newMatches)
+            // A failed post is retried next run. When the user disabled
+            // notifications, retrying cannot help and would resend the
+            // Watch alert every run, so the matches are recorded anyway.
+            notified || notifier.isDeliveryDisabled()
+        }
+    }
+
+    private fun isWifiConnected(): Boolean {
+        val connectivity = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager ?: return false
+        val network = connectivity.activeNetwork ?: return false
+        return connectivity.getNetworkCapabilities(network)
+            ?.let { capabilities ->
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            } == true
+    }
+
+    private fun com.valoser.futacha.shared.compat.CompatWatchMatch.toCatalogWatchAlertMatch(): CatalogWatchAlertMatch {
+        return CatalogWatchAlertMatch(
+            threadId = history.threadNo.take(WATCH_ALERT_THREAD_ID_MAX_CHARS),
+            boardId = history.boardKey.take(WATCH_ALERT_BOARD_ID_MAX_CHARS),
+            boardName = history.boardName.take(WATCH_ALERT_BOARD_NAME_MAX_CHARS),
+            boardUrl = com.valoser.futacha.shared.compat.watchMatchBoardUrlOf(history.originalUrl).take(WATCH_ALERT_URL_MAX_CHARS),
+            title = history.title.take(WATCH_ALERT_TITLE_MAX_CHARS),
+            titleImageUrl = history.thumbnailUrl.orEmpty().take(WATCH_ALERT_URL_MAX_CHARS),
+            replyCount = history.replyCount,
+            detectedAtEpochMillis = history.contentUpdatedAtEpochMillis
+        )
+    }
+
+    /** Returns the result to finish with when network services are not usable, or null to continue. */
+    private suspend fun awaitNetworkServicesOrResult(): Result? {
+        val app = applicationContext.applicationContext as? FutachaApplication ?: return null
+        return when (
+            awaitBackgroundNetworkServices(app.networkServicesReady, app.networkServicesError, NETWORK_SERVICES_WAIT_MILLIS)
+        ) {
+            NetworkServicesReadiness.READY -> null
+            NetworkServicesReadiness.FAILED -> {
+                // This process does not retry initialisation; a later run starts fresh.
+                Logger.e(TAG, "Network services failed to initialise: ${app.networkServicesError.value}")
+                Result.failure()
+            }
+            NetworkServicesReadiness.TIMED_OUT -> {
+                Logger.w(TAG, "Network services not ready after ${NETWORK_SERVICES_WAIT_MILLIS}ms")
+                if (runAttemptCount < MAX_RETRY_ATTEMPTS) Result.retry() else Result.failure()
+            }
+        }
+    }
+
+    companion object {
+        private val NETWORK_SERVICES_WAIT_MILLIS = TimeUnit.SECONDS.toMillis(30)
+        // With the network wait and REFRESH_TIMEOUT_MILLIS, stays inside WorkManager's 10 minutes.
+        private val RUN_GATE_MAX_WAIT_MILLIS = TimeUnit.MINUTES.toMillis(3)
+        // A switch clears its journal right after updating the launcher alias;
+        // this plus the waits above still fits WorkManager's 10 minutes.
+        private val MODE_SWITCH_JOURNAL_WAIT_MILLIS = TimeUnit.SECONDS.toMillis(15)
+        // About a third of REFRESH_TIMEOUT_MILLIS, so the history refresh after it keeps 4+ minutes.
+        private val SHARED_FEATURES_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(2)
+        private const val TAG = "HistoryRefreshWorker"
+        private const val WATCH_ALERT_THREAD_ID_MAX_CHARS = 128
+        private const val WATCH_ALERT_BOARD_ID_MAX_CHARS = 256
+        private const val WATCH_ALERT_BOARD_NAME_MAX_CHARS = 256
+        private const val WATCH_ALERT_TITLE_MAX_CHARS = 1_000
+        private const val WATCH_ALERT_URL_MAX_CHARS = 8_192
+        private const val INPUT_PROFILE_GENERATION = "profile_generation"
+        const val UNIQUE_WORK_NAME = "history_refresh_periodic"
+        private const val UNIQUE_ONE_TIME_NAME = "history_refresh_once"
+        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(6)
+        private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.SECONDS.toMillis(90)
+        private const val INTERVAL_MINUTES = 15L
+        private const val MAX_THREADS_PER_RUN = 20
+        private const val HISTORY_FLUSH_STAGE = "history_flush"
+        // Keep full media auto-save enabled, but cap how many threads can download media per BG run.
+        private const val MAX_AUTO_SAVES_PER_RUN = 2
+        private const val MAX_COMPAT_TABS_PER_RUN = 20
+        private const val MAX_COMPAT_RETRY_ATTEMPTS = 2
+        private const val MAX_SETTING_READ_RETRIES = 3
+        private const val MAX_RETRY_ATTEMPTS = 3
+
+        private val constraints: Constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .build()
+
+        fun enqueuePeriodic(workManager: WorkManager, profileGeneration: Long) {
+            val request: PeriodicWorkRequest = PeriodicWorkRequestBuilder<HistoryRefreshWorker>(
+                INTERVAL_MINUTES,
+                TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setInputData(workDataOf(INPUT_PROFILE_GENERATION to profileGeneration))
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    30,
+                    TimeUnit.SECONDS
+                )
+                .build()
+
+            workManager.enqueueUniquePeriodicWork(
+                UNIQUE_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+        }
+
+        fun enqueueImmediate(workManager: WorkManager, profileGeneration: Long) {
+            val request: OneTimeWorkRequest = OneTimeWorkRequestBuilder<HistoryRefreshWorker>()
+                .setConstraints(constraints)
+                .setInputData(workDataOf(INPUT_PROFILE_GENERATION to profileGeneration))
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    1,
+                    TimeUnit.MINUTES
+                )
+                .build()
+
+            workManager.enqueueUniqueWork(
+                UNIQUE_ONE_TIME_NAME,
+                ExistingWorkPolicy.REPLACE,
+                request
+            )
+        }
+
+        fun cancel(workManager: WorkManager) {
+            workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
+            workManager.cancelUniqueWork(UNIQUE_ONE_TIME_NAME)
+        }
+
+        suspend fun cancelAndAwait(workManager: WorkManager): Boolean = withContext(Dispatchers.IO) {
+            listOf(
+                workManager.cancelUniqueWork(UNIQUE_WORK_NAME),
+                workManager.cancelUniqueWork(UNIQUE_ONE_TIME_NAME)
+            ).all { operation ->
+                runCatching {
+                    operation.result.get(WORK_CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    true
+                }.getOrElse { error ->
+                    Logger.w(TAG, "Timed out while quiescing background refresh: ${error.message}")
+                    false
+                }
+            }
+        }
+
+        internal fun hasHistoryFlushFailure(stageCounts: Map<String, Int>): Boolean =
+            stageCounts[HISTORY_FLUSH_STAGE]?.let { it > 0 } == true
+
+        private const val WORK_CANCEL_TIMEOUT_SECONDS = 5L
+    }
+}
+
+/** ふたばー風・ふたったー風モードはAnalyticsを送らない。判定はデータの所有者ではなくプロファイル自体で行う。 */
+internal fun shouldSendBackgroundRefreshAnalytics(profile: ExperienceProfile): Boolean =
+    profile != ExperienceProfile.FUTABER && profile != ExperienceProfile.FTUTTER
+
+private fun trackBackgroundRefreshEvent(
+    profile: ExperienceProfile,
+    name: String,
+    params: Map<String, String> = emptyMap()
+) {
+    if (!shouldSendBackgroundRefreshAnalytics(profile)) return
+    AnalyticsTracker.event(name, params)
+}
+
+/** Process-wide: the periodic and one-time works are different WorkManager entries. */
+private val historyRefreshRunGate = BackgroundRunGate<Pair<ExperienceProfile, Long>>()
+
+/** Posts only matches not yet notified; the ledger is read and written under one lock. */
+private fun deliverNewWatchAlertMatches(
+    context: Context,
+    matches: List<CatalogWatchAlertMatch>,
+    deliver: (List<CatalogWatchAlertMatch>) -> Boolean
+) = deliverNewMatchesOnce(
+    lock = watchAlertNotificationLedgerLock,
+    matches = matches,
+    filterNew = { filterNewWatchAlertMatches(context, it) },
+    markDelivered = { markWatchAlertMatchesNotified(context, it) },
+    deliver = deliver
+)
+
+private fun filterNewWatchAlertMatches(
+    context: Context,
+    matches: List<CatalogWatchAlertMatch>
+): List<CatalogWatchAlertMatch> {
+    val prefs = context.getSharedPreferences("watch_alert_notifications", Context.MODE_PRIVATE)
+    return WatchAlertNotificationLedger.filterNewMatches(
+        serializedEntries = prefs.getString(NOTIFIED_MATCH_ENTRIES_PREF, null),
+        legacyKeys = prefs.getStringSet(LEGACY_NOTIFIED_MATCH_KEYS_PREF, emptySet()).orEmpty(),
+        matches = matches
+    )
+}
+
+private fun markWatchAlertMatchesNotified(
+    context: Context,
+    matches: List<CatalogWatchAlertMatch>
+) {
+    if (matches.isEmpty()) return
+    synchronized(watchAlertNotificationLedgerLock) {
+    val prefs = context.getSharedPreferences("watch_alert_notifications", Context.MODE_PRIVATE)
+    val serialized = WatchAlertNotificationLedger.markMatches(
+        serializedEntries = prefs.getString(NOTIFIED_MATCH_ENTRIES_PREF, null),
+        legacyKeys = prefs.getStringSet(LEGACY_NOTIFIED_MATCH_KEYS_PREF, emptySet()).orEmpty(),
+        matches = matches,
+        nowMillis = System.currentTimeMillis()
+    )
+    prefs.edit()
+        .putString(NOTIFIED_MATCH_ENTRIES_PREF, serialized)
+        .remove(LEGACY_NOTIFIED_MATCH_KEYS_PREF)
+        .apply()
+    }
+}
+
+private val watchAlertNotificationLedgerLock = Any()
+
+private data class BackgroundWorkerEnabledState(
+    val isBackgroundRefreshEnabled: Boolean,
+    val isWatchAlertEnabled: Boolean
+) {
+    val hasAnyEnabled: Boolean
+        get() = isBackgroundRefreshEnabled || isWatchAlertEnabled
+}
+
+private const val NOTIFIED_MATCH_ENTRIES_PREF = "notified_match_entries"
+private const val LEGACY_NOTIFIED_MATCH_KEYS_PREF = "notified_match_keys"

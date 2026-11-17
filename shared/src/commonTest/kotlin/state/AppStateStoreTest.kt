@@ -1,0 +1,1357 @@
+package com.valoser.futacha.shared.state
+
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.PreferredFileManager
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertSame
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class AppStateStoreTest {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val selfPostSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+
+    @Test fun boardCountOverflowDoesNotReplaceTheStoredBoards() = runBlocking {
+        verifyUnreadableBoardWriteIsRefused(oversized = false)
+    }
+
+    @Test fun boardJsonOverflowDoesNotReplaceTheStoredBoards() = runBlocking {
+        verifyUnreadableBoardWriteIsRefused(oversized = true)
+    }
+
+    private suspend fun verifyUnreadableBoardWriteIsRefused(oversized: Boolean) {
+        val original = BoardSummary("b", "board", "", "https://may.2chan.net/b/", "")
+        val invalid = if (oversized) listOf(original.copy(name = "x".repeat(APP_STATE_BOARDS_JSON_MAX_CHARS)))
+            else List(APP_STATE_MAX_BOARDS + 1) { index -> original.copy(id = "$index", url = "https://may.2chan.net/board$index/") }
+        for (update in listOf(false, true)) {
+            val storage = FakePlatformStateStorage()
+            val store = AppStateStore(storage)
+            try {
+                store.setBoards(listOf(original))
+                val before = storage.boardsState.value
+                if (update) store.updateBoards { invalid } else store.setBoards(invalid)
+                assertTrue(before == storage.boardsState.value, "An unreadable board snapshot must never replace the stored value")
+                assertEquals(listOf(original), store.boards.first())
+                assertEquals(if (update) "updateBoards" else "setBoards", store.lastStorageError.value?.operation)
+            } finally { store.close() }
+        }
+    }
+
+    @Test
+    fun updateCheckDefaultsOnAndCanBeDisabled() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+
+        assertTrue(store.isUpdateCheckEnabled.first())
+        store.setUpdateCheckEnabled(false)
+
+        assertEquals(false, store.isUpdateCheckEnabled.first())
+    }
+
+    @Test
+    fun seedIfEmpty_populatesDefaultsWithoutOverwritingExistingValues() = runBlocking {
+        val storage = FakePlatformStateStorage().apply {
+            boardsState.value = """[{"id":"existing","name":"Existing","category":"cat","url":"https://may.2chan.net/existing/","description":"desc","pinned":false}]"""
+            manualSaveDirectoryState.value = "/custom/save"
+        }
+        val store = AppStateStore(storage)
+
+        store.seedIfEmpty(
+            AppStateSeedDefaults(
+                boards = listOf(
+                    BoardSummary(
+                        id = "b",
+                        name = "Board",
+                        category = "cat",
+                        url = "https://may.2chan.net/b/",
+                        description = "desc"
+                    )
+                ),
+                history = listOf(historyEntry(threadId = "123")),
+                lastUsedDeleteKey = "123456789"
+            )
+        )
+
+        assertEquals("existing", store.boards.first().single().id)
+        assertEquals("/custom/save", store.manualSaveDirectory.first())
+        assertEquals("12345678", store.lastUsedDeleteKey.first())
+        assertEquals(1, store.history.first().size)
+    }
+
+    @Test
+    fun seedIfEmpty_repairsMalformedBoardsButPreservesValidEmptyList() = runBlocking {
+        val defaultBoard = BoardSummary(
+            id = "b",
+            name = "Board",
+            category = "cat",
+            url = "https://may.2chan.net/b/",
+            description = "desc"
+        )
+        val corruptedStorage = FakePlatformStateStorage().apply {
+            boardsState.value = "{not-valid-json"
+        }
+        val corruptedStore = AppStateStore(corruptedStorage)
+
+        corruptedStore.seedIfEmpty(
+            AppStateSeedDefaults(boards = listOf(defaultBoard), history = emptyList())
+        )
+
+        assertEquals(listOf(defaultBoard), corruptedStore.boards.first())
+
+        val intentionallyEmptyStorage = FakePlatformStateStorage().apply {
+            boardsState.value = "[]"
+        }
+        val intentionallyEmptyStore = AppStateStore(intentionallyEmptyStorage)
+        intentionallyEmptyStore.seedIfEmpty(
+            AppStateSeedDefaults(boards = listOf(defaultBoard), history = emptyList())
+        )
+        assertTrue(intentionallyEmptyStore.boards.first().isEmpty())
+    }
+
+    @Test
+    fun seedIfEmpty_removesBoardsStoredMoreThanOnce() = runBlocking {
+        // 2026-10-13 全体検証 7.6: the iOS Simulator had six copies of the tutorial imported from the shared store,
+        // and ふたちゃ's board list crashed on the repeated key. The start removes them and saves the repaired list.
+        val tutorialCopy = BoardSummary(
+            id = "compat_board_da40da0736865b28",
+            name = "チュートリアル＠ふたちゃ",
+            category = "互換モード",
+            url = "https://www.example.com/t/futaba.php",
+            description = "https://img.2chan.net/t/"
+        )
+        val may = BoardSummary("may", "may", "", "https://may.2chan.net/b/", "", pinned = true)
+        val stored = List(6) { tutorialCopy } + may + may.copy(id = "may-copy", url = "https://may.2chan.net/b/futaba.php")
+        val storage = FakePlatformStateStorage().apply {
+            boardsState.value = json.encodeToString(ListSerializer(BoardSummary.serializer()), stored)
+        }
+        val store = AppStateStore(storage)
+
+        store.seedIfEmpty(AppStateSeedDefaults(boards = emptyList(), history = emptyList()))
+
+        assertEquals(listOf(tutorialCopy, may), store.boards.first())
+        assertEquals(
+            listOf(tutorialCopy, may),
+            json.decodeFromString(ListSerializer(BoardSummary.serializer()), storage.boardsState.value!!)
+        )
+    }
+
+    @Test
+    fun setBoards_recordsStorageErrorWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage().apply {
+            failBoardsUpdate = true
+        }
+        val store = AppStateStore(storage)
+
+        store.setBoards(
+            listOf(
+                BoardSummary(
+                    id = "b",
+                    name = "Board",
+                    category = "cat",
+                    url = "https://may.2chan.net/b/",
+                    description = "desc"
+                )
+            )
+        )
+
+        assertEquals(emptyList(), store.boards.first())
+        assertEquals("setBoards", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun updateBoards_keepsAnUnreadableStoredBoardListInsteadOfOverwritingIt() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val truncated = """[{"id":"b","name":"Board""""
+        storage.updateBoardsJson(truncated)
+
+        store.updateBoards { boards ->
+            boards + BoardSummary(
+                id = "c",
+                name = "Board C",
+                category = "cat",
+                url = "https://may.2chan.net/c/",
+                description = "desc"
+            )
+        }
+
+        assertEquals(truncated, storage.boardsJson.first())
+        assertEquals("updateBoards", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun updateBoards_recordsStorageErrorWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val initialBoards = listOf(
+            BoardSummary(
+                id = "b",
+                name = "Board",
+                category = "cat",
+                url = "https://may.2chan.net/b/",
+                description = "desc"
+            )
+        )
+
+        store.setBoards(initialBoards)
+        storage.failBoardsUpdate = true
+        store.updateBoards { boards ->
+            boards + BoardSummary(
+                id = "c",
+                name = "Board C",
+                category = "cat",
+                url = "https://may.2chan.net/c/",
+                description = "desc"
+            )
+        }
+
+        assertEquals(initialBoards, store.boards.first())
+        assertEquals("updateBoards", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun setHistory_rollsBackCachedStateWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val initial = listOf(historyEntry(threadId = "111"))
+        val updated = listOf(historyEntry(threadId = "222"))
+
+        store.setHistory(initial)
+        storage.failHistoryUpdate = true
+
+        assertFailsWith<IllegalStateException> {
+            store.setHistory(updated)
+        }
+
+        assertEquals(initial, store.history.first())
+        assertNull(store.lastStorageError.value?.takeIf { it.operation != "setHistory" })
+        assertEquals("setHistory", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun historyFileStore_migratesLegacyJsonIntoSplitFiles() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val legacyHistory = listOf(historyEntry(threadId = "111"))
+        storage.updateHistoryJson(encodeAppStateHistory(legacyHistory, json))
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(legacyHistory, store.history.first())
+        assertTrue(fileSystem.exists("private/history_store/manifest.json"))
+        assertEquals(1, fileSystem.listFiles("private/history_store/entries").size)
+
+        storage.updateHistoryJson(encodeAppStateHistory(emptyList(), json))
+        assertEquals(legacyHistory, store.history.first())
+    }
+
+    @Test
+    fun historyFileStore_clearsLegacyJsonAfterVerifiedMigration() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val legacyHistory = listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222"))
+        storage.updateHistoryJson(encodeAppStateHistory(legacyHistory, json))
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(legacyHistory, store.history.first())
+
+        // The migrated copy is replaced with the explicit empty value, so losing
+        // both manifests later cannot resurrect it.
+        assertEquals("[]", storage.historyState.value)
+        fileSystem.delete("private/history_store/manifest.json").getOrThrow()
+        fileSystem.delete("private/history_store/manifest.json.backup").getOrThrow()
+        val restarted = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        assertEquals(emptyList(), restarted.history.first())
+    }
+
+    @Test
+    fun historyFileStore_clearsLegacyJsonLeftByEarlierMigration() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val writer = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        writer.setHistory(listOf(historyEntry(threadId = "111")))
+        // Builds before this fix left the migrated blob in place.
+        storage.historyState.value = encodeAppStateHistory(listOf(historyEntry("stale")), json)
+
+        val reader = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(listOf("111"), reader.history.first().map { it.threadId })
+        assertEquals("[]", storage.historyState.value)
+    }
+
+    @Test
+    fun historyFileStore_keepsLegacyJsonWhenSplitEntriesAreUnreadable() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val writer = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        writer.setHistory(listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222")))
+        val legacy = encodeAppStateHistory(listOf(historyEntry("legacy")), json)
+        storage.historyState.value = legacy
+        val entryFile = fileSystem.listFiles("private/history_store/entries").first()
+        fileSystem.writeString("private/history_store/entries/$entryFile", "{broken").getOrThrow()
+
+        val reader = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(1, reader.history.first().size)
+        assertEquals(legacy, storage.historyState.value)
+    }
+
+    @Test
+    fun historyFileStore_doesNotCacheProvisionalEmptyBeforeSeedArrives() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(emptyList(), store.history.first())
+        store.seedIfEmpty(
+            AppStateSeedDefaults(
+                boards = emptyList(),
+                history = listOf(historyEntry(threadId = "seeded"))
+            )
+        )
+
+        assertEquals(listOf("seeded"), store.history.first { it.isNotEmpty() }.map { it.threadId })
+        assertTrue(fileSystem.exists("private/history_store/manifest.json"))
+    }
+
+    @Test
+    fun historyFileStore_reusesSnapshotAcrossIndependentCollectors() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = CountingHistoryFileSystem()
+        val writer = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        writer.setHistory(listOf(historyEntry(threadId = "111")))
+
+        val reader = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        fileSystem.readCount = 0
+        assertEquals(listOf("111"), reader.history.first().map { it.threadId })
+        val readsAfterFirstCollector = fileSystem.readCount
+        assertTrue(readsAfterFirstCollector > 0)
+
+        assertEquals(listOf("111"), reader.history.first().map { it.threadId })
+        assertEquals(readsAfterFirstCollector, fileSystem.readCount)
+    }
+
+    @Test
+    fun setHistory_withHistoryFileStoreWritesSplitFilesWithoutUpdatingLegacyJson() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+
+        assertNull(storage.historyJson.first())
+        assertTrue(fileSystem.exists("private/history_store/manifest.json"))
+        assertEquals(1, fileSystem.listFiles("private/history_store/entries").size)
+    }
+
+    @Test
+    fun setHistory_withHistoryFileStoreRollsBackWhenManifestWriteFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = ManifestWriteFailingFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        val initial = listOf(historyEntry(threadId = "111"))
+        val updated = listOf(historyEntry(threadId = "222"))
+        store.setHistory(initial)
+
+        fileSystem.failManifestWrites = true
+        assertFailsWith<IllegalStateException> {
+            store.setHistory(updated)
+        }
+
+        assertEquals(initial, store.history.first())
+        assertEquals("setHistory", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun upsertHistoryEntry_withHistoryFileStoreWritesOnlyChangedEntryWhenOrderIsUnchanged() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = CountingHistoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        fileSystem.entryWriteCount = 0
+        fileSystem.manifestWriteCount = 0
+
+        store.upsertHistoryEntry(first.copy(title = "updated"))
+
+        assertEquals(listOf("111", "222"), store.history.first().map { it.threadId })
+        assertEquals(1, fileSystem.entryWriteCount)
+        assertEquals(0, fileSystem.manifestWriteCount)
+    }
+
+    @Test
+    fun prependHistoryEntry_withHistoryFileStoreUpdatesManifestWhenOrderChanges() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = CountingHistoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        fileSystem.entryWriteCount = 0
+        fileSystem.manifestWriteCount = 0
+
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "222"))
+
+        assertEquals(listOf("222", "111"), store.history.first().map { it.threadId })
+        assertEquals(1, fileSystem.entryWriteCount)
+        assertEquals(1, fileSystem.manifestWriteCount)
+    }
+
+    @Test
+    fun historyReorderKeepsAnIndependentBackupAndDeletionRemainsDurable() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        files.readCount = 0
+        files.backupWriteCount = 0
+        store.prependOrReplaceHistoryEntry(second.copy(lastVisitedEpochMillis = 5000L))
+        // A reorder only leaves the backup: it still holds every thread (L135).
+        assertEquals(0, files.backupWriteCount)
+        assertEquals(0, files.readCount, "Known manifest and entry hashes stay in memory")
+        val restarted = AppStateStore(storage, AppStateHistoryFileStore(files, json, "restart"), json)
+        assertEquals(listOf("222", "111"), restarted.history.first().map { it.threadId })
+        files.backupWriteCount = 0
+        files.backupLinkCount = 0
+        store.removeHistoryEntry(first)
+        // The deletion updates an independent backup, so corruption cannot also
+        // affect the recovery source. Unchanged entry files are still reused.
+        assertEquals(1, files.backupWriteCount)
+        assertEquals(0, files.backupLinkCount)
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("222"), recovered.history.first().map { it.threadId })
+        store.close(); restarted.close(); recovered.close()
+    }
+
+    @Test
+    fun failedMembershipBackupIsRetriedOnTheNextReorder() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        files.failNextBackupWrite = true
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "333"))
+        store.prependOrReplaceHistoryEntry(second.copy(lastVisitedEpochMillis = 5000L))
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("222", "333", "111"), recovered.history.first().map { it.threadId })
+        store.close(); recovered.close()
+    }
+
+    @Test
+    fun addingHistoryEntryWritesTheManifestOnceAndKeepsACurrentBackup() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val files = CountingHistoryFileSystem()
+        val store = AppStateStore(storage, AppStateHistoryFileStore(files, json, "test"), json)
+        store.setHistory((1..50).map { historyEntry(threadId = "$it") })
+        files.entryWriteCount = 0
+        files.manifestWriteCount = 0
+        files.backupWriteCount = 0
+        files.backupLinkCount = 0
+
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "999"))
+
+        assertEquals(1, files.entryWriteCount, "only the added entry is written")
+        assertEquals(1, files.manifestWriteCount)
+        assertEquals(1, files.backupWriteCount, "one independent backup is written when membership changes")
+        assertEquals(0, files.backupLinkCount)
+        files.writeString("private/history_store/manifest.json", "corrupt").getOrThrow()
+        val recovered = AppStateStore(storage, AppStateHistoryFileStore(files, json, "recover"), json)
+        assertEquals(listOf("999") + (1..50).map { "$it" }, recovered.history.first().map { it.threadId })
+        store.close(); recovered.close()
+    }
+
+    @Test
+    fun persistedSelfPostFlagsReuseTheHistoryListWhenNothingChanges() {
+        val history = listOf(historyEntry(threadId = "111"), historyEntry(threadId = "222"))
+        assertSame(history, applyPersistedSelfPostFlags(history, emptyMap()))
+        assertSame(history, applyPersistedSelfPostFlags(history, mapOf("other::333" to listOf("1"))))
+        val boardId = history[1].boardId
+        val scopedKey = if (boardId.isBlank()) "222" else "$boardId::222"
+        val marked = applyPersistedSelfPostFlags(history, mapOf(scopedKey to listOf("5")))
+        assertEquals(listOf(false, true), marked.map { it.hasSelfPost })
+        assertSame(history[0], marked[0])
+        assertEquals(listOf(false, false), history.map { it.hasSelfPost })
+    }
+
+    @Test
+    fun setCatalogMode_ignoresBlankBoardId_andRollsBackOnPersistenceFailure() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setCatalogMode("board-a", CatalogMode.New)
+        storage.failCatalogModeUpdate = true
+        store.setCatalogMode("board-a", CatalogMode.WatchWords)
+        store.setCatalogMode("   ", CatalogMode.Old)
+
+        assertEquals(mapOf("board-a" to CatalogMode.New), store.catalogModes.first())
+    }
+
+    @Test
+    fun setPreferredFileManager_preservesPreviousSelectionWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setPreferredFileManager("com.example.files", "Files")
+        storage.failPreferredFileManagerUpdate = true
+
+        assertFailsWith<IllegalStateException> {
+            store.setPreferredFileManager("com.example.other", "Other")
+        }
+
+        assertEquals(
+            PreferredFileManager(
+                packageName = "com.example.files",
+                label = "Files"
+            ),
+            store.getPreferredFileManager().first()
+        )
+    }
+
+    @Test
+    fun preferenceSetters_preservePreviousValuesWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setBackgroundRefreshEnabled(true)
+        store.setHasShownPostingNotice(true)
+        store.setThreadSummaryModeEnabled(true)
+        store.setAiPostFilterEnabled(true)
+        store.setAiCommandEnabled(true)
+        store.setTelemetryCollectionEnabled(true)
+
+        storage.failBackgroundRefreshUpdate = true
+        storage.failPostingNoticeUpdate = true
+        storage.failThreadSummaryModeUpdate = true
+        storage.failAiPostFilterUpdate = true
+        storage.failAiCommandUpdate = true
+        storage.failTelemetryCollectionUpdate = true
+
+        store.setBackgroundRefreshEnabled(false)
+        store.setHasShownPostingNotice(false)
+        store.setThreadSummaryModeEnabled(false)
+        store.setAiPostFilterEnabled(false)
+        store.setAiCommandEnabled(false)
+        store.setTelemetryCollectionEnabled(false)
+
+        assertEquals(true, store.isBackgroundRefreshEnabled.first())
+        assertEquals(true, store.hasShownPostingNotice.first())
+        assertEquals(true, store.isThreadSummaryModeEnabled.first())
+        assertEquals(true, store.isAiPostFilterEnabled.first())
+        assertEquals(true, store.isAiCommandEnabled.first())
+        assertEquals(true, store.isTelemetryCollectionEnabled.first())
+    }
+
+    @Test
+    fun telemetryPreference_canBeDisabledAndIsNotResetBySeeding() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setTelemetryCollectionEnabled(false)
+        store.seedIfEmpty(
+            AppStateSeedDefaults(
+                boards = emptyList(),
+                history = emptyList()
+            )
+        )
+
+        assertEquals(false, store.isTelemetryCollectionEnabled.first())
+    }
+
+    @Test
+    fun setters_normalizeDeleteKeyDirectoryGridColumnsAndEnums() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setLastUsedDeleteKey(" 1234567890 ")
+        store.setPastThreadSearchNoticeHidden(true)
+        store.setManualSaveDirectory("./saved_threads")
+        store.setCatalogGridColumns(99)
+        store.setCatalogFetchRows(999)
+        store.setAttachmentPickerPreference(AttachmentPickerPreference.ALWAYS_ASK)
+        store.setSaveDirectorySelection(SaveDirectorySelection.PICKER)
+        store.setThreadGalleryThumbnailMode(ThreadGalleryThumbnailMode.Fit)
+
+        assertEquals("12345678", store.lastUsedDeleteKey.first())
+        assertEquals(true, store.isPastThreadSearchNoticeHidden.first())
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, store.manualSaveDirectory.first())
+        assertEquals(8, store.catalogGridColumns.first())
+        assertEquals(200, store.catalogFetchRows.first())
+        assertEquals(AttachmentPickerPreference.ALWAYS_ASK, store.attachmentPickerPreference.first())
+        assertEquals(SaveDirectorySelection.PICKER, store.saveDirectorySelection.first())
+        assertEquals(ThreadGalleryThumbnailMode.Fit, store.threadGalleryThumbnailMode.first())
+    }
+
+    @Test
+    fun selfPostIdentifiersSurviveReopeningAfterMoreThanTwentyPosts() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+        val expected = (1..30).map { (1000 + it).toString() }
+        expected.forEach { store.addSelfPostIdentifier("123", it, "b") }
+        assertEquals(expected, store.selfPostIdentifiersByThread.first()["b::123"])
+        assertEquals(expected, AppStateStore(storage).selfPostIdentifiersByThread.first()["b::123"])
+        store.removeSelfPostIdentifiersForThread("123", "b")
+        assertEquals(emptyMap(), AppStateStore(storage).selfPostIdentifiersByThread.first())
+    }
+
+    @Test
+    fun selfPostIdentifierMutations_updateAndRollbackAsExpected() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.addSelfPostIdentifier(threadId = "123", identifier = "ID:abc", boardId = "b")
+        assertEquals(
+            mapOf("b::123" to listOf("ID:abc")),
+            store.selfPostIdentifiersByThread.first()
+        )
+
+        storage.failSelfPostIdentifiersUpdate = true
+        assertFailsWith<IllegalStateException> {
+            store.addSelfPostIdentifier(threadId = "123", identifier = "ID:def", boardId = "b")
+        }
+        assertEquals(
+            mapOf("b::123" to listOf("ID:abc")),
+            store.selfPostIdentifiersByThread.first()
+        )
+
+        storage.failSelfPostIdentifiersUpdate = false
+        store.removeSelfPostIdentifiersForThread(threadId = "123", boardId = "b")
+        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
+
+        store.addSelfPostIdentifier(threadId = "123", identifier = "ID:xyz", boardId = "b")
+        store.clearSelfPostIdentifiers()
+        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
+        assertEquals(
+            emptyMap(),
+            json.decodeFromString(selfPostSerializer, storage.selfPostIdentifiersState.value ?: "{}")
+        )
+    }
+
+    @Test
+    fun historyMutations_preserveOrderAndApplyEntryUpdates() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val first = historyEntry("111")
+        val second = historyEntry("222")
+        store.setHistory(listOf(first, second))
+
+        store.upsertHistoryEntry(second.copy(title = "updated-222", replyCount = 22))
+        assertEquals(
+            listOf("111", "222"),
+            store.history.first().map { it.threadId }
+        )
+        assertEquals("updated-222", store.history.first()[1].title)
+        assertEquals(22, store.history.first()[1].replyCount)
+
+        val prepended = historyEntry("333")
+        store.prependOrReplaceHistoryEntry(prepended)
+        assertEquals(
+            listOf("333", "111", "222"),
+            store.history.first().map { it.threadId }
+        )
+
+        store.updateHistoryScrollPosition(
+            AppStateHistoryScrollUpdateRequest(
+                threadId = "222",
+                index = 7,
+                offset = 14,
+                boardId = "b",
+                title = "updated-222",
+                titleImageUrl = "thumb-222",
+                boardName = "board",
+                boardUrl = "https://may.2chan.net/b/futaba.php",
+                replyCount = 22
+            )
+        )
+        val updatedEntry = store.history.first().first { it.threadId == "222" }
+        assertEquals(7, updatedEntry.lastReadItemIndex)
+        assertEquals(14, updatedEntry.lastReadItemOffset)
+
+        // A later metadata/visit write is built from a stale history snapshot
+        // in the real thread loader. It must not replace the independent
+        // scroll position update.
+        store.upsertHistoryEntry(
+            updatedEntry.copy(
+                title = "metadata-refresh",
+                lastReadItemIndex = 0,
+                lastReadItemOffset = 0,
+                lastVisitedEpochMillis = updatedEntry.lastVisitedEpochMillis + 1_000L
+            )
+        )
+        val afterMetadataRefresh = store.history.first().first { it.threadId == "222" }
+        assertEquals("metadata-refresh", afterMetadataRefresh.title)
+        assertEquals(7, afterMetadataRefresh.lastReadItemIndex)
+        assertEquals(14, afterMetadataRefresh.lastReadItemOffset)
+
+        store.prependOrReplaceHistoryEntries(
+            listOf(
+                afterMetadataRefresh.copy(
+                    title = "batch-refresh",
+                    lastReadItemIndex = 0,
+                    lastReadItemOffset = 0
+                )
+            )
+        )
+        val afterBatchRefresh = store.history.first().first { it.threadId == "222" }
+        assertEquals("batch-refresh", afterBatchRefresh.title)
+        assertEquals(7, afterBatchRefresh.lastReadItemIndex)
+        assertEquals(14, afterBatchRefresh.lastReadItemOffset)
+
+        store.removeHistoryEntry(first)
+        assertEquals(
+            listOf("222", "333"),
+            store.history.first().map { it.threadId }
+        )
+    }
+
+    @Test
+    fun removingSeveralHistoryEntriesWritesOnceAndBlocksStaleUpdates() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val first = historyEntry("111")
+        val second = historyEntry("222")
+        val third = historyEntry("333")
+        store.setHistory(listOf(first, second, third))
+        store.removeHistoryEntries(listOf(first, third))
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+        // 消した行は、遅れて届いた更新でも戻らない（1件の削除と同じ）。
+        store.upsertHistoryEntry(first.copy(title = "stale metadata"))
+        store.updateHistory { it + third.copy(title = "stale bridge") }
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+        store.removeHistoryEntries(emptyList())
+        assertEquals(listOf("222"), store.history.first().map { it.threadId })
+    }
+
+    @Test
+    fun removingMoreHistoryEntriesThanTheTombstoneCapStillBlocksStaleUpdates() = runBlocking {
+        // 2026-10-14 監査A8：1,024件を超える一括削除では、削除の印が1,024件までしか残らず、遅れた更新で一部が戻った。
+        val store = AppStateStore(FakePlatformStateStorage())
+        val entries = (1..1_500).map { historyEntry("t$it") }
+        store.setHistory(entries + historyEntry("kept"))
+        store.removeHistoryEntries(entries)
+        assertEquals(listOf("kept"), store.history.first().map { it.threadId })
+        store.updateHistory { current -> current + entries }
+        assertEquals(listOf("kept"), store.history.first().map { it.threadId })
+        // その後に1件消しても、直前の一括削除の印は消えない。
+        store.removeHistoryEntry(historyEntry("kept"))
+        store.updateHistory { current -> current + entries }
+        assertEquals(emptyList(), store.history.first().map { it.threadId })
+    }
+
+    @Test
+    fun delayedMetadataAndScrollUpdatesDoNotRecreateDeletedHistory() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val entry = historyEntry("111")
+        store.setHistory(listOf(entry))
+        store.removeHistoryEntry(entry)
+
+        store.upsertHistoryEntry(entry.copy(title = "stale metadata"))
+        store.updateHistory { listOf(entry.copy(title = "stale bridge")) }
+        store.updateHistoryScrollPositionImmediately(
+            AppStateHistoryScrollUpdateRequest(
+                threadId = entry.threadId,
+                index = 10,
+                offset = 20,
+                boardId = entry.boardId,
+                title = entry.title,
+                titleImageUrl = entry.titleImageUrl,
+                boardName = entry.boardName,
+                boardUrl = entry.boardUrl,
+                replyCount = entry.replyCount,
+                forcePersist = true
+            )
+        )
+
+        assertEquals(emptyList(), store.history.first())
+
+        store.setHistory(listOf(entry))
+        store.clearHistory()
+        store.updateHistory { listOf(entry.copy(title = "stale clear bridge")) }
+        assertEquals(emptyList(), store.history.first())
+
+        // Explicit restore/import may preserve its archived visit timestamp;
+        // later bridge reconciliation must not filter an already-restored row.
+        store.setHistory(listOf(entry.copy(title = "explicit restore")))
+        store.updateHistory { current ->
+            current.map { restored -> restored.copy(title = "restored metadata") }
+        }
+        assertEquals(listOf("111"), store.history.first().map { it.threadId })
+        assertEquals("restored metadata", store.history.first().single().title)
+    }
+
+    @Test
+    fun clearingSplitHistoryAlsoPersistsExplicitEmptyLegacyValue() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        store.setHistory(listOf(historyEntry("111")))
+        storage.historyState.value = encodeAppStateHistory(listOf(historyEntry("legacy")), json)
+        fileSystem.writeString("private/history_store/entries/orphan.json", "stale").getOrThrow()
+        fileSystem.writeString("private/history_store/entries/orphan-dir/payload", "stale").getOrThrow()
+
+        store.setHistory(emptyList())
+
+        assertEquals("[]", storage.historyState.value)
+        assertEquals(emptyList(), store.history.first())
+        assertTrue(!fileSystem.exists("private/history_store/entries/orphan.json"))
+        assertTrue(!fileSystem.exists("private/history_store/entries/orphan-dir"))
+    }
+
+    fun preferenceFacade_forwardsPreferenceAndSelfPostOperations() = runBlocking {
+        val calls = mutableListOf<String>()
+        val facade = buildAppStatePreferenceFacade(
+            setBackgroundRefreshEnabledImpl = { calls += "background:$it" },
+            setHasShownPostingNoticeImpl = { calls += "postingNotice:$it" },
+            setLastUsedDeleteKeyImpl = { calls += "deleteKey:$it" },
+            setLightweightModeEnabledImpl = { calls += "lightweight:$it" },
+            setManualSaveDirectoryImpl = { calls += "directory:$it" },
+            setManualSaveLocationImpl = {
+                calls += when (it) {
+                    is com.valoser.futacha.shared.model.SaveLocation.Path -> "location:path:${it.path}"
+                    is com.valoser.futacha.shared.model.SaveLocation.TreeUri -> "location:tree:${it.uri}"
+                    is com.valoser.futacha.shared.model.SaveLocation.Bookmark -> "location:bookmark:${it.bookmarkData}"
+                }
+            },
+            setAttachmentPickerPreferenceImpl = { calls += "picker:${it.name}" },
+            setSaveDirectorySelectionImpl = { calls += "selection:${it.name}" },
+            setPreferredFileManagerImpl = { pkg, label -> calls += "fileManager:${pkg.orEmpty()}:${label.orEmpty()}" },
+            setPrivacyFilterEnabledImpl = { calls += "privacy:$it" },
+            setCatalogDisplayStyleImpl = { calls += "display:${it.name}" },
+            setCatalogGridColumnsImpl = { calls += "columns:$it" },
+            setCatalogFetchRowsImpl = { calls += "fetchRows:$it" },
+            setCatalogModeImpl = { boardId, mode -> calls += "catalogMode:$boardId:${mode.name}" },
+            setNgHeadersImpl = { calls += "ngHeaders:${it.size}" },
+            setNgWordsImpl = { calls += "ngWords:${it.size}" },
+            setCatalogNgWordsImpl = { calls += "catalogNgWords:${it.size}" },
+            setWatchWordsImpl = { calls += "watchWords:${it.size}" },
+            setThreadMenuConfigImpl = { calls += "threadMenuConfig:${it.size}" },
+            setThreadSettingsMenuConfigImpl = { calls += "threadSettingsMenuConfig:${it.size}" },
+            setThreadMenuEntriesImpl = { calls += "threadMenuEntries:${it.size}" },
+            setCatalogNavEntriesImpl = { calls += "catalogNavEntries:${it.size}" },
+            addSelfPostIdentifierImpl = { threadId, identifier, boardId ->
+                calls += "addSelfPost:$threadId:$identifier:${boardId.orEmpty()}"
+            },
+            removeSelfPostIdentifiersForThreadImpl = { threadId, boardId ->
+                calls += "removeSelfPost:$threadId:${boardId.orEmpty()}"
+            },
+            clearSelfPostIdentifiersImpl = { calls += "clearSelfPost" }
+        )
+
+        facade.setBackgroundRefreshEnabled(true)
+        facade.setHasShownPostingNotice(true)
+        facade.setLastUsedDeleteKey("1234")
+        facade.setLightweightModeEnabled(true)
+        facade.setManualSaveDirectory("/tmp")
+        facade.setManualSaveLocation(com.valoser.futacha.shared.model.SaveLocation.Path("/tmp"))
+        facade.setAttachmentPickerPreference(AttachmentPickerPreference.ALWAYS_ASK)
+        facade.setSaveDirectorySelection(SaveDirectorySelection.PICKER)
+        facade.setPreferredFileManager("pkg", "Files")
+        facade.setPrivacyFilterEnabled(true)
+        facade.setCatalogDisplayStyle(com.valoser.futacha.shared.model.CatalogDisplayStyle.List)
+        facade.setCatalogGridColumns(4)
+        facade.setCatalogFetchRows(100)
+        facade.setCatalogMode("b", CatalogMode.Old)
+        facade.setNgHeaders(listOf("a"))
+        facade.setNgWords(listOf("a", "b"))
+        facade.setCatalogNgWords(listOf("a"))
+        facade.setWatchWords(listOf("a"))
+        facade.setThreadMenuConfig(emptyList())
+        facade.setThreadSettingsMenuConfig(emptyList())
+        facade.setThreadMenuEntries(emptyList())
+        facade.setCatalogNavEntries(emptyList())
+        facade.addSelfPostIdentifier("123", "ID:abc", "b")
+        facade.removeSelfPostIdentifiersForThread("123", "b")
+        facade.clearSelfPostIdentifiers()
+
+        assertEquals(
+            listOf(
+                "background:true",
+                "postingNotice:true",
+                "deleteKey:1234",
+                "lightweight:true",
+                "directory:/tmp",
+                "location:path:/tmp",
+                "picker:ALWAYS_ASK",
+                "selection:PICKER",
+                "fileManager:pkg:Files",
+                "privacy:true",
+                "display:List",
+                "columns:4",
+                "fetchRows:100",
+                "catalogMode:b:Old",
+                "ngHeaders:1",
+                "ngWords:2",
+                "catalogNgWords:1",
+                "watchWords:1",
+                "threadMenuConfig:0",
+                "threadSettingsMenuConfig:0",
+                "threadMenuEntries:0",
+                "catalogNavEntries:0",
+                "addSelfPost:123:ID:abc:b",
+                "removeSelfPost:123:b",
+                "clearSelfPost"
+            ),
+            calls
+        )
+    }
+
+    @Test
+    fun boardsFlow_decodesPersistedBoards() = runBlocking {
+        val storage = FakePlatformStateStorage().apply {
+            boardsState.value = """
+                [{"id":"img","name":"img","category":"","url":"https://may.2chan.net/img/futaba.php","description":"","pinned":false}]
+            """.trimIndent()
+        }
+        assertEquals(
+            listOf("img"),
+            buildAppStateBoardsFlow(storage, json, "AppStateStoreTest").first().map { it.id }
+        )
+    }
+
+    @Test
+    fun debouncedScrollPosition_isWrittenToDisk() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+
+        // The debounced job used to cancel itself before its file write.
+        assertEquals(40, store.history.first().single().lastReadItemIndex)
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun debouncedScrollPosition_survivesForcedExitSaveAtTheSamePosition() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40, forcePersist = true))
+
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun nearbyScrollRightAfterAPersistedScrollIsThrottledLongAfterOpening() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        // Opened long ago: the visit time must not be the throttle base once a
+        // scroll position has been written in this session.
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40))
+        store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 41))
+
+        val saved = store.history.first().single()
+        assertEquals(40, saved.lastReadItemIndex)
+        assertEquals(100L, saved.lastVisitedEpochMillis)
+    }
+
+    @Test
+    fun exitSave_waitsForADebouncedWriteThatAlreadyStarted() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = GatedHistoryEntryFileSystem()
+        val store = debouncedScrollStore(storage, fileSystem)
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        val scope = CoroutineScope(SupervisorJob())
+        try {
+            store.setScrollDebounceScope(scope)
+            fileSystem.armed = true
+            store.updateHistoryScrollPosition(scrollRequest("111", index = 40))
+            // A debounced job that cancels itself never reaches the write.
+            withTimeout(5_000L) { fileSystem.writeStarted.await() }
+
+            // Leaving the thread at the same position while the debounced write
+            // is on disk I/O: cancelling that write used to leave memory ahead of
+            // disk, and the exit save then skipped the unchanged position.
+            val exitSave = launch {
+                store.updateHistoryScrollPositionImmediately(scrollRequest("111", index = 40))
+            }
+            yield()
+            fileSystem.release.complete(Unit)
+            exitSave.join()
+            scope.coroutineContext[Job]!!.children.toList().forEach { it.join() }
+        } finally {
+            scope.cancel()
+        }
+
+        assertEquals(40, reopenedHistory(storage, fileSystem).single().lastReadItemIndex)
+    }
+
+    @Test
+    fun historyAtItsLimitDropsTheOldestEntryInsteadOfFailing() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest", maxEntries = 3),
+            json = json
+        )
+        store.setHistory((1..3).map { historyEntry("$it").copy(lastVisitedEpochMillis = 100L * it) })
+
+        store.prependOrReplaceHistoryEntry(historyEntry("4").copy(lastVisitedEpochMillis = 50L))
+
+        val expected = listOf("2", "3", "4")
+        assertEquals(expected, store.history.first().map { it.threadId }.sorted())
+        val reopened = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest", maxEntries = 3),
+            json = json
+        )
+        assertEquals(expected, reopened.history.first().map { it.threadId }.sorted())
+    }
+
+    @Test
+    fun historyImportRestoresDeletionsMadeBeforeItStarted() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val a = historyEntry("a")
+        store.setHistory(listOf(a))
+        store.removeHistoryEntry(a)
+
+        val ticket = store.beginHistoryImport()
+        store.mergeImportedHistory(listOf(a), ticket)
+
+        assertEquals(listOf("a"), store.history.first().map { it.threadId })
+    }
+
+    @Test
+    fun historyImportDoesNotResurrectAnEntryDeletedWhileTheArchiveWasRead() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val a = historyEntry("a")
+        val b = historyEntry("b")
+        store.setHistory(listOf(a, b))
+
+        val ticket = store.beginHistoryImport()
+        // The user deletes B and scrolls A while the archive is being read.
+        store.removeHistoryEntry(b)
+        store.updateHistoryScrollPositionImmediately(scrollRequest("a", index = 25))
+        val merge = store.mergeImportedHistory(listOf(b, historyEntry("c")), ticket)
+
+        val history = store.history.first()
+        assertEquals(listOf("a", "c"), history.map { it.threadId }.sorted())
+        assertEquals(25, history.single { it.threadId == "a" }.lastReadItemIndex)
+        assertEquals(1, merge.skippedCount)
+    }
+
+    @Test
+    fun historyImportIsDroppedWhenHistoryWasClearedDuringIt() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(historyEntry("a")))
+
+        val ticket = store.beginHistoryImport()
+        store.clearHistory()
+        store.mergeImportedHistory(listOf(historyEntry("a"), historyEntry("b")), ticket)
+
+        assertEquals(emptyList(), store.history.first())
+    }
+
+    private fun debouncedScrollStore(storage: FakePlatformStateStorage, fileSystem: FileSystem) = AppStateStore(
+        storage = storage,
+        historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+        json = json,
+        scrollDebounceDelayMillis = 10L
+    )
+
+    private suspend fun reopenedHistory(storage: FakePlatformStateStorage, fileSystem: FileSystem) = AppStateStore(
+        storage = storage,
+        historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+        json = json
+    ).history.first()
+
+    private fun scrollRequest(threadId: String, index: Int, forcePersist: Boolean = false) =
+        AppStateHistoryScrollUpdateRequest(
+            threadId = threadId,
+            index = index,
+            offset = 0,
+            boardId = "b",
+            title = "title-$threadId",
+            titleImageUrl = "thumb-$threadId",
+            boardName = "board",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            replyCount = 1,
+            forcePersist = forcePersist
+        )
+
+    @Test
+    fun seedPayload_toSeedBundles_splitsBoardsHistoryAndPreferences() {
+        val bundles = AppStateSeedPayload(
+            defaultBoardsJson = "boards",
+            defaultHistoryJson = "history",
+            defaultNgHeadersJson = "ngHeaders",
+            defaultNgWordsJson = "ngWords",
+            defaultCatalogNgWordsJson = "catalogNgWords",
+            defaultWatchWordsJson = "watchWords",
+            defaultSelfPostIdentifiersJson = "selfPost",
+            defaultCatalogModeMapJson = "catalogMode",
+            defaultAttachmentPickerPreference = "MEDIA",
+            defaultSaveDirectorySelection = "MANUAL_INPUT",
+            defaultLastUsedDeleteKey = "12345678",
+            defaultThreadMenuConfigJson = "threadMenu",
+            defaultThreadSettingsMenuConfigJson = "threadSettings",
+            defaultThreadMenuEntriesConfigJson = "threadEntries",
+            defaultCatalogNavEntriesJson = "catalogEntries"
+        ).toSeedBundles()
+
+        assertEquals("boards", bundles.boards.boardsJson)
+        assertEquals("history", bundles.history.historyJson)
+        assertEquals("ngHeaders", bundles.preferences.ngHeadersJson)
+        assertEquals("catalogEntries", bundles.preferences.catalogNavEntriesJson)
+        assertEquals("12345678", bundles.preferences.lastUsedDeleteKey)
+    }
+}
+
+private fun historyEntry(threadId: String): ThreadHistoryEntry {
+    return ThreadHistoryEntry(
+        threadId = threadId,
+        boardId = "b",
+        title = "title-$threadId",
+        titleImageUrl = "thumb-$threadId",
+        boardName = "board",
+        boardUrl = "https://may.2chan.net/b/futaba.php",
+        lastVisitedEpochMillis = 100L,
+        replyCount = 1
+    )
+}
+
+internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
+
+    var failBoardsUpdate = false
+    var failHistoryUpdate = false
+    var failBackgroundRefreshUpdate = false
+    var failPostingNoticeUpdate = false
+    var failThreadSummaryModeUpdate = false
+    var failAiPostFilterUpdate = false
+    var failAiCommandUpdate = false
+    var failTelemetryCollectionUpdate = false
+    var failCatalogModeUpdate = false
+    var failSelfPostIdentifiersUpdate = false
+    var failPreferredFileManagerUpdate = false
+
+    override suspend fun updateBoardsJson(value: String) {
+        if (failBoardsUpdate) error("boards write failed")
+        super.updateBoardsJson(value)
+    }
+
+    override suspend fun updateHistoryJson(value: String) {
+        if (failHistoryUpdate) error("history write failed")
+        super.updateHistoryJson(value)
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        if (failBackgroundRefreshUpdate) error("background refresh write failed")
+        super.updateBackgroundRefreshEnabled(enabled)
+    }
+
+    override suspend fun updateHasShownPostingNotice(shown: Boolean) {
+        if (failPostingNoticeUpdate) error("posting notice write failed")
+        super.updateHasShownPostingNotice(shown)
+    }
+
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) {
+        if (failThreadSummaryModeUpdate) error("thread summary mode write failed")
+        super.updateThreadSummaryModeEnabled(enabled)
+    }
+
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) {
+        if (failAiPostFilterUpdate) error("AI post filter write failed")
+        super.updateAiPostFilterEnabled(enabled)
+    }
+
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) {
+        if (failAiCommandUpdate) error("AI command write failed")
+        super.updateAiCommandEnabled(enabled)
+    }
+
+    override suspend fun updateTelemetryCollectionEnabled(enabled: Boolean) {
+        if (failTelemetryCollectionUpdate) error("telemetry collection write failed")
+        super.updateTelemetryCollectionEnabled(enabled)
+    }
+
+    override suspend fun updateCatalogModeMapJson(value: String) {
+        if (failCatalogModeUpdate) error("catalog mode write failed")
+        super.updateCatalogModeMapJson(value)
+    }
+
+    override suspend fun updateSelfPostIdentifiersJson(value: String) {
+        if (failSelfPostIdentifiersUpdate) error("self post identifiers write failed")
+        super.updateSelfPostIdentifiersJson(value)
+    }
+
+    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
+        if (failPreferredFileManagerUpdate) error("preferred file manager write failed")
+        super.updatePreferredFileManager(packageName, label)
+    }
+}
+
+private class ManifestWriteFailingFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var failManifestWrites = false
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return if (failManifestWrites && path.endsWith("private/history_store/manifest.json")) {
+            Result.failure(IllegalStateException("manifest write failed"))
+        } else {
+            delegate.writeString(path, content)
+        }
+    }
+}
+
+/** Blocks the first history entry write after [armed] until [release] completes. */
+private class GatedHistoryEntryFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var armed = false
+    val writeStarted = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        if (armed && path.contains("history_store/entries")) {
+            armed = false
+            writeStarted.complete(Unit)
+            release.await()
+        }
+        return delegate.writeString(path, content)
+    }
+}
+
+private class CountingHistoryFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var entryWriteCount = 0
+    var manifestWriteCount = 0
+    var backupWriteCount = 0
+    var backupLinkCount = 0
+    /** Fails the next independent backup write. */
+    var failNextBackupWrite = false
+    var readCount = 0
+
+    override suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> {
+        if (toPath == "private/history_store/manifest.json.backup") {
+            backupLinkCount += 1
+            if (failNextBackupWrite) {
+                delegate.delete(toPath)
+                return Result.failure(IllegalStateException("backup link failed"))
+            }
+        }
+        return delegate.linkOrCopy(fromPath, toPath)
+    }
+
+    override suspend fun readString(path: String): Result<String> {
+        readCount += 1
+        return delegate.readString(path)
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        when {
+            path.startsWith("private/history_store/entries/") -> entryWriteCount += 1
+            path == "private/history_store/manifest.json" -> manifestWriteCount += 1
+            path == "private/history_store/manifest.json.backup" -> backupWriteCount += 1
+        }
+        if (failNextBackupWrite && path == "private/history_store/manifest.json.backup") {
+            failNextBackupWrite = false
+            return Result.failure(IllegalStateException("backup write failed"))
+        }
+        return delegate.writeString(path, content)
+    }
+}

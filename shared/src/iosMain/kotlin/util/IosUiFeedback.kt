@@ -1,0 +1,146 @@
+package com.valoser.futacha.shared.util
+
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.concurrent.AtomicInt
+import platform.UIKit.UIAlertAction
+import platform.UIKit.UIAlertActionStyleCancel
+import platform.UIKit.UIAlertActionStyleDefault
+import platform.UIKit.UIAlertController
+import platform.UIKit.UIAlertControllerStyleAlert
+import platform.UIKit.UIApplication
+import platform.UIKit.UIViewController
+import platform.UIKit.UIWindow
+import platform.UIKit.UIWindowScene
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
+
+/**
+ * The key window's root view controller, without following presented
+ * controllers. Unlike [findIosTopViewController] it stays the same while a
+ * picker, share sheet or alert is presented, so long-lived attachments (the
+ * left-edge back recognizer) are not moved onto a modal's view.
+ */
+internal fun findIosRootViewController(): UIViewController? {
+    val application = UIApplication.sharedApplication
+    val windows = buildList {
+        application.connectedScenes
+            .filterIsInstance<UIWindowScene>()
+            .forEach { scene ->
+                if (scene.activationState == 0L || scene.activationState == 1L) {
+                    addAll(scene.windows.filterIsInstance<UIWindow>())
+                }
+            }
+        if (isEmpty()) {
+            addAll(application.windows.filterIsInstance<UIWindow>())
+        }
+    }
+    return windows.firstOrNull { it.isKeyWindow() }?.rootViewController
+        ?: windows.firstOrNull()?.rootViewController
+}
+
+internal fun findIosTopViewController(): UIViewController? {
+    var controller = findIosRootViewController()
+    while (controller?.presentedViewController != null) {
+        controller = controller.presentedViewController
+    }
+    return controller
+}
+
+internal fun presentIosAlert(
+    title: String,
+    message: String,
+    buttonLabel: String = "OK"
+) {
+    dispatch_async(dispatch_get_main_queue()) {
+        val controller = findIosTopViewController() ?: run {
+            Logger.w("IosUiFeedback", "Cannot present alert: top view controller is unavailable")
+            return@dispatch_async
+        }
+        val alert = UIAlertController.alertControllerWithTitle(
+            title = title,
+            message = message,
+            preferredStyle = UIAlertControllerStyleAlert
+        )
+        alert.addAction(
+            UIAlertAction.actionWithTitle(
+                title = buttonLabel,
+                style = UIAlertActionStyleDefault,
+                handler = null
+            )
+        )
+        runCatching {
+            controller.presentViewController(alert, animated = true, completion = null)
+        }.onFailure { error ->
+            Logger.e("IosUiFeedback", "Failed to present alert", error)
+        }
+    }
+}
+
+/** Keeps source selection, cancellation and the following picker in one coroutine. */
+/** An alert with [labels] in order and a cancel button; the index of the one pressed, or null for cancel. */
+internal suspend fun awaitIosOptionChoice(
+    title: String,
+    message: String,
+    labels: List<String>,
+    cancelLabel: String = "キャンセル"
+): Int? = suspendCancellableCoroutine { continuation ->
+    val completed = AtomicInt(0)
+    val alert = UIAlertController.alertControllerWithTitle(title, message, UIAlertControllerStyleAlert)
+    fun finish(value: Int?) {
+        if (!completed.compareAndSet(0, 1)) return
+        alert.dismissViewControllerAnimated(true) { continuation.resume(value) }
+    }
+    labels.forEachIndexed { index, label ->
+        alert.addAction(UIAlertAction.actionWithTitle(label, UIAlertActionStyleDefault) { finish(index) })
+    }
+    alert.addAction(UIAlertAction.actionWithTitle(cancelLabel, UIAlertActionStyleCancel) { finish(null) })
+    continuation.invokeOnCancellation {
+        completed.compareAndSet(0, 1)
+        dispatch_async(dispatch_get_main_queue()) {
+            if (alert.presentingViewController != null) alert.dismissViewControllerAnimated(true, null)
+        }
+    }
+    dispatch_async(dispatch_get_main_queue()) {
+        if (!continuation.isActive) return@dispatch_async
+        presentPicker(alert, "attachment source chooser") {
+            if (completed.compareAndSet(0, 1)) {
+                continuation.resumeWithException(IllegalStateException("Cannot present attachment source chooser"))
+            }
+        }
+    }
+}
+
+internal suspend fun awaitIosTwoOptionChoice(
+    title: String,
+    message: String,
+    primaryLabel: String,
+    secondaryLabel: String,
+    cancelLabel: String = "キャンセル"
+): Boolean? = suspendCancellableCoroutine { continuation ->
+    val completed = AtomicInt(0)
+    val alert = UIAlertController.alertControllerWithTitle(title, message, UIAlertControllerStyleAlert)
+    fun finish(value: Boolean?) {
+        if (!completed.compareAndSet(0, 1)) return
+        // Do not present the next sheet while this alert is still in UIKit's chain.
+        alert.dismissViewControllerAnimated(true) { continuation.resume(value) }
+    }
+    alert.addAction(UIAlertAction.actionWithTitle(primaryLabel, UIAlertActionStyleDefault) { finish(true) })
+    alert.addAction(UIAlertAction.actionWithTitle(secondaryLabel, UIAlertActionStyleDefault) { finish(false) })
+    alert.addAction(UIAlertAction.actionWithTitle(cancelLabel, UIAlertActionStyleCancel) { finish(null) })
+    continuation.invokeOnCancellation {
+        completed.compareAndSet(0, 1)
+        dispatch_async(dispatch_get_main_queue()) {
+            if (alert.presentingViewController != null) alert.dismissViewControllerAnimated(true, null)
+        }
+    }
+    dispatch_async(dispatch_get_main_queue()) {
+        if (!continuation.isActive) return@dispatch_async
+        presentPicker(alert, "attachment source chooser") {
+            if (completed.compareAndSet(0, 1)) {
+                continuation.resumeWithException(IllegalStateException("Cannot present attachment source chooser"))
+            }
+        }
+    }
+}

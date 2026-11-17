@@ -1,0 +1,318 @@
+package com.valoser.futacha.shared.util
+
+import com.valoser.futacha.shared.model.SaveLocation
+
+interface FileWriteSink {
+    suspend fun write(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size)
+}
+
+interface FileReadSource {
+    /** Returns -1 at EOF. The supplied buffer is owned by the caller. */
+    suspend fun read(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size): Int
+}
+
+/**
+ * プラットフォーム非依存のファイルシステムインターフェース
+ *
+ * FIX: Result型の適切な使用について
+ * - すべてのI/O操作はResult<T>を返します
+ * - 呼び出し元は必ず.getOrThrow()、.getOrElse()、.onFailure()などで結果を処理してください
+ * - Result型を無視すると、エラーが見逃され、データ破損の原因となります
+ * - 例: fileSystem.writeBytes(path, data).getOrThrow() // 正しい
+ * - 例: fileSystem.writeBytes(path, data) // 間違い - 結果を無視している
+ *
+ * ## 安全性チェックのガイドライン：
+ *
+ * ### 1. 入力検証
+ * - パスは空文字列でないことを確認
+ * - パスにnull文字(\u0000)が含まれていないか確認
+ * - パストラバーサル攻撃（../）を防ぐ
+ * - ファイル名の長さ制限（255文字以下）
+ *
+ * ### 2. サイズ制限
+ * - ファイルサイズの上限チェック（MAX_FILE_SIZE）
+ * - ディレクトリの合計サイズチェック
+ * - 整数オーバーフロー防止（Long.MAX_VALUE超過）
+ *
+ * ### 3. エラーハンドリング
+ * - 権限エラー（PermissionRevokedException）の適切な処理
+ * - ディスク容量不足の検出と対応
+ * - I/O例外の詳細なログ記録
+ *
+ * ### 4. リソース管理
+ * - 一時ファイルの確実なクリーンアップ
+ * - ファイルハンドルのリーク防止
+ * - メモリマップドファイルの適切な解放
+ */
+interface FileSystem {
+    /** Resolve a saved file for native sharing without guessing document provider IDs. */
+    suspend fun resolveSavedFile(base: SaveLocation, relativePath: String): Result<String> =
+        runSuspendCatchingPreservingCancellation {
+            require(relativePath.isNotBlank() && !relativePath.startsWith('/') &&
+                relativePath.split('/').none { it == ".." })
+            val path = (base as? SaveLocation.Path)?.path
+                ?: error("この保存先のファイルを開けません")
+            resolveAbsolutePath(path).trimEnd('/') + "/" + relativePath
+        }
+
+    /**
+     * ディレクトリを作成
+     * @param path ディレクトリパス
+     */
+    suspend fun createDirectory(path: String): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を書き込み
+     * @param path ファイルパス
+     * @param bytes 書き込むデータ
+     */
+    suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を追記
+     * @param path ファイルパス
+     * @param bytes 追記するデータ
+     */
+    suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルを1回だけ開いてバイトストリームを書き込み
+     * @param path ファイルパス
+     * @param block 書き込み先シンク
+     */
+    suspend fun writeByteStream(path: String, block: suspend (FileWriteSink) -> Unit): Result<Unit>
+
+    /**
+     * ファイルに文字列を書き込み
+     * @param path ファイルパス
+     * @param content 書き込む文字列
+     */
+    suspend fun writeString(path: String, content: String): Result<Unit>
+
+    /**
+     * ファイルからバイト配列を読み込み
+     * @param path ファイルパス
+     */
+    suspend fun readBytes(path: String): Result<ByteArray>
+
+    /** Platforms override this to keep local media exports independent of file size. */
+    suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
+        runSuspendCatchingPreservingCancellation {
+            // Small in-memory/test implementations can use their existing reader.
+            val payload = readBytes(path).getOrThrow()
+            var position = 0
+            block(object : FileReadSource {
+                override suspend fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+                    if (length == 0) return 0
+                    if (position == payload.size) return -1
+                    val count = minOf(length, payload.size - position)
+                    payload.copyInto(bytes, offset, position, position + count)
+                    position += count
+                    return count
+                }
+            })
+        }
+
+    /**
+     * ファイルから文字列を読み込み
+     * @param path ファイルパス
+     */
+    suspend fun readString(path: String): Result<String>
+
+    /**
+     * ファイルまたはディレクトリを削除
+     * @param path ファイル/ディレクトリパス
+     */
+    suspend fun delete(path: String): Result<Unit>
+
+    /**
+     * ディレクトリを再帰的に削除
+     * @param path ディレクトリパス
+     */
+    suspend fun deleteRecursively(path: String): Result<Unit>
+
+    /**
+     * ファイルまたはディレクトリが存在するか確認
+     * @param path ファイル/ディレクトリパス
+     *
+     * FIX: パフォーマンス注意事項
+     * - この操作はI/Oスレッドで実行されますが、頻繁な呼び出しはパフォーマンスに影響します
+     * - 可能な限り、複数のファイルチェックをバッチ処理してください
+     * - ループ内での連続呼び出しは避けてください
+     */
+    suspend fun exists(path: String): Boolean
+
+    /**
+     * ファイルサイズを取得
+     * @param path ファイルパス
+     */
+    suspend fun getFileSize(path: String): Long
+
+    /**
+     * ディレクトリ内のファイル一覧を取得
+     * @param directory ディレクトリパス
+     */
+    suspend fun listFiles(directory: String): List<String>
+
+    /**
+     * アプリ専用データディレクトリの絶対パスを取得
+     */
+    fun getAppDataDirectory(): String
+
+    /**
+     * 相対パスを絶対パスに変換
+     * @param relativePath 相対パス
+     */
+    fun resolveAbsolutePath(relativePath: String): String
+
+    // ========================================
+    // SaveLocation-based APIs
+    // ========================================
+
+    /**
+     * ディレクトリを作成 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベースディレクトリを作成)
+     */
+    suspend fun createDirectory(base: SaveLocation, relativePath: String = ""): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param bytes 書き込むデータ
+     */
+    suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を追記 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param bytes 追記するデータ
+     */
+    suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルを1回だけ開いてバイトストリームを書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param block 書き込み先シンク
+     */
+    suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit>
+
+    /**
+     * ファイルに文字列を書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param content 書き込む文字列
+     */
+    suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit>
+
+    /**
+     * ファイルからバイト配列を読み込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス
+     */
+    suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray>
+
+    /**
+     * ファイルから文字列を読み込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     */
+    suspend fun readString(base: SaveLocation, relativePath: String): Result<String>
+
+    /**
+     * ファイルまたはディレクトリが存在するか確認 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を確認)
+     */
+    suspend fun exists(base: SaveLocation, relativePath: String = ""): Boolean
+
+    /**
+     * ファイルサイズを取得 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス
+     */
+    suspend fun getFileSize(base: SaveLocation, relativePath: String): Long
+
+    /**
+     * ディレクトリ内の直下ファイル/ディレクトリ名一覧を取得 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param directory ベースからの相対ディレクトリ
+     */
+    suspend fun listFiles(base: SaveLocation, directory: String = ""): List<String>
+
+    /**
+     * Like [listFiles], but a failure of the storage provider is thrown instead of being
+     * reported as an empty folder, so a caller can tell "nothing there" from "could not
+     * look". Cancellation is always rethrown. Locations that cannot fail this way keep the
+     * default.
+     */
+    suspend fun listFilesOrThrow(base: SaveLocation, directory: String = ""): List<String> =
+        listFiles(base, directory)
+
+    /**
+     * ファイルまたはディレクトリを削除 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を削除)
+     */
+    suspend fun delete(base: SaveLocation, relativePath: String = ""): Result<Unit>
+
+    /**
+     * Writes [relativePath] without ever truncating an existing file before a
+     * complete replacement exists. Returns the relative path that was written;
+     * it differs from [relativePath] when the location cannot rename files.
+     */
+    suspend fun writeByteStreamReplacing(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<String> = writeByteStreamReplacingImpl(base, relativePath, block)
+
+    /**
+     * Makes [toPath] hold the bytes of [fromPath], preferring a hard link so a
+     * new auto-save generation can take over media without copying or
+     * downloading. The source is never modified; thread-save writers delete a
+     * media file before rewriting it, so a shared link is not written in place.
+     */
+    suspend fun linkOrCopy(fromPath: String, toPath: String): Result<Unit> =
+        runSuspendCatchingPreservingCancellation {
+            writeBytes(toPath, readBytes(fromPath).getOrThrow()).getOrThrow()
+        }
+
+    /**
+     * Context to run one multi-file save in. Android adds a per-save index of
+     * SAF folder listings so writing N files does not list the folder N times;
+     * other file systems need nothing.
+     */
+    fun saveBatchContext(): kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext
+
+    /** Whether [replaceAtomically] works for this location. */
+    fun supportsAtomicReplace(base: SaveLocation): Boolean = false
+
+    /**
+     * Moves [fromRelative] over [toRelative] in one step; both are in the same
+     * directory. Only called when [supportsAtomicReplace] is true.
+     */
+    suspend fun replaceAtomically(base: SaveLocation, fromRelative: String, toRelative: String): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Atomic replace is not supported here"))
+
+    /**
+     * Renames [fromRelative] to the unused name [toRelative] in the same
+     * directory. Returns the resulting relative path (a provider may adjust the
+     * name) or null when renaming is not possible; nothing changes then.
+     */
+    suspend fun renameIfAbsent(base: SaveLocation, fromRelative: String, toRelative: String): Result<String?> =
+        Result.success(null)
+}
+
+/**
+ * プラットフォーム固有のFileSystem実装を取得
+ */
+expect fun createFileSystem(platformContext: Any? = null): FileSystem

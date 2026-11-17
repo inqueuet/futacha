@@ -1,0 +1,416 @@
+package com.valoser.futacha.shared.compat
+
+import com.valoser.futacha.shared.model.BoardSummary
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+
+const val MAX_COMPAT_PREFERENCE_KEY_CHARS = 300
+const val MAX_COMPAT_PREFERENCE_VALUE_CHARS = 20_000
+
+fun isValidCompatPreference(key: String, value: String): Boolean =
+    key.startsWith("compat.") &&
+        key.length <= MAX_COMPAT_PREFERENCE_KEY_CHARS &&
+        value.length <= MAX_COMPAT_PREFERENCE_VALUE_CHARS
+
+fun requireValidCompatPreference(key: String, value: String) {
+    require(isValidCompatPreference(key, value)) { "Compatibility preference is invalid or too large" }
+}
+
+/** Key prefix of the shared data layer's rows ([CompatibilityStore.loadSharedData]). */
+const val COMPAT_SHARED_DATA_KEY_PREFIX = "shared."
+
+fun requireValidCompatSharedDataKey(key: String) {
+    require(key.startsWith(COMPAT_SHARED_DATA_KEY_PREFIX) && key.length in (COMPAT_SHARED_DATA_KEY_PREFIX.length + 1)..MAX_COMPAT_PREFERENCE_KEY_CHARS) {
+        "Shared data key is invalid"
+    }
+}
+
+/**
+ * としあき(仮)'s per-board "そ順"/"監視" order (ui/compat/CompatCatalogExtraMode.kt). The stores remove it with the
+ * board, so a board added again starts in its own order.
+ */
+fun compatCatalogExtraModePreferenceKey(boardKey: String): String = "compat.catalog.extraMode.$boardKey"
+
+private val ALWAYS_LOADED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
+private val NEVER_FAILED_COMPAT_STORE: StateFlow<Boolean> = MutableStateFlow(false).asStateFlow()
+
+interface CompatibilityStore {
+    val boards: Flow<List<CompatBoard>>
+    val tabs: Flow<List<CompatTab>>
+    val history: Flow<List<CompatHistoryEntry>>
+    val workspace: Flow<CompatWorkspaceRecord>
+    val preferences: Flow<Map<String, String>>
+    val ngRules: Flow<List<CompatNgRule>>
+
+    /**
+     * True once the observable values above reflect persisted data. A store
+     * that loads asynchronously starts with empty placeholders; callers must
+     * not treat those as the user's settings (theme, NG rules, save location)
+     * or write defaults over them. Stores that load synchronously keep this
+     * default.
+     */
+    val isLoaded: StateFlow<Boolean> get() = ALWAYS_LOADED_COMPAT_STORE
+
+    /**
+     * True while the last load failed and [isLoaded] stays false. The placeholders are
+     * never published as the user's data, so the app must offer [retryLoading] instead
+     * of waiting forever (M74). Stores that load synchronously never fail this way.
+     */
+    val loadFailed: StateFlow<Boolean> get() = NEVER_FAILED_COMPAT_STORE
+
+    /** Retries a failed load. Failures are reported through [loadFailed], not thrown. */
+    suspend fun retryLoading() {}
+
+    /**
+     * Whether this store can hold the bundled tutorial board (example.com). The iOS and desktop stores keep it
+     * (under img.2chan.net/t/), so its absence there means the user deleted it in としあき(仮). The Android store
+     * accepts official boards only and never holds it: there its absence says nothing, and the board
+     * synchronization keeps the AppState's tutorial ([synchronizeModernBoardsFromCompatibility]).
+     */
+    val holdsBundledTutorialBoard: Boolean get() = true
+
+    suspend fun bootstrapBoardsIfNeeded(modernBoards: List<BoardSummary>): Boolean
+    suspend fun rememberModernBoardAliases(modernBoards: List<BoardSummary>) {}
+    suspend fun importModernBoards(modernBoards: List<BoardSummary>): Int
+    suspend fun importModernHistory(
+        modernHistory: List<com.valoser.futacha.shared.model.ThreadHistoryEntry>
+    ): Int = 0
+    suspend fun upsertBoard(board: CompatBoard)
+    suspend fun upsertBoards(boards: List<CompatBoard>) {
+        boards.forEach { board -> upsertBoard(board) }
+    }
+    suspend fun reorderBoards(orderedKeys: List<String>)
+    suspend fun deleteBoard(boardKey: String)
+
+    suspend fun openTab(tab: CompatTab, historyEntry: CompatHistoryEntry? = null)
+    /**
+     * D-B4: adds the tabs not yet present, as one change, without selecting one, trimming or touching the history.
+     * For a mode that keeps its own tab strip and shows those tabs to the others. Returns how many were added.
+     */
+    suspend fun addTabsIfAbsent(tabs: List<CompatTab>, expectedPreferences: Map<String, String?> = emptyMap()): Int = 0
+
+    suspend fun updateTab(tab: CompatTab)
+
+    /**
+     * Applies [transform] to the current stored tab and returns whether it was
+     * written. Background refreshers must use this instead of [updateTab] with a
+     * copy taken before a slow request: that copy rolls back read counts and
+     * favourites changed meanwhile, and [updateTab] re-adds a closed tab.
+     *
+     * A missing tab is never created. [transform] returns null for "no change".
+     * Key, canonical URL and scroll anchor always keep their current values.
+     * Stores override this to run inside their write lock; this default is for
+     * test doubles only.
+     */
+    suspend fun updateTabIfPresent(tabKey: String, transform: (CompatTab) -> CompatTab?): Boolean {
+        val current = tabs.first().firstOrNull { it.key == tabKey } ?: return false
+        val next = transform(current)?.pinnedTo(current) ?: return false
+        updateTab(next)
+        return true
+    }
+    suspend fun selectTab(tabKey: String?)
+    /**
+     * Closes the tabs and adds one record to the closed-tab record (plan B6: at most [COMPAT_CLOSED_BATCH_MAX] records,
+     * kept 24 hours; the undo notice is [ClosedTabBatch.noticeDeadlineEpochMillis]). [closedBy] is the mode closing them.
+     */
+    suspend fun closeTabs(
+        tabKeys: Set<String>,
+        nowEpochMillis: Long,
+        finalScrollAnchors: Map<String, ScrollAnchor> = emptyMap(),
+        closedBy: String? = null
+    ): ClosedTabBatch?
+
+    /**
+     * Brings back the stored record with [batch]'s id and removes it, in one change. A record already brought back
+     * (or gone) does nothing: ふたちゃ's undo and another mode's restore may name the same record. A tab open again
+     * meanwhile is not overwritten ([compatRestoredTab]).
+     */
+    suspend fun restoreClosedTabs(batch: ClosedTabBatch)
+
+    /** The newest record whose undo notice still shows; expired records are dropped. */
+    suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch?
+
+    /**
+     * Plan B6 (§1-4): brings back the newest record [profile] closed or showed a tab of, and removes it, in one
+     * change. Null when there is none. Stores that do not keep the record return null.
+     */
+    suspend fun popClosedTabBatch(profile: String, nowEpochMillis: Long): ClosedTabBatch? = null
+
+    /** The number of records [profile] could bring back with [popClosedTabBatch]. */
+    suspend fun countClosedTabBatches(profile: String, nowEpochMillis: Long): Int = 0
+
+    /**
+     * Plan B6: opens [tab] as a shared tab in one change. An existing tab keeps its star, `insertedAt` and the
+     * modes' marks ([mergeCompatReopenedTab]); [profile]'s mark is added at [placement] when it has none; [board]
+     * is added when the store does not have it yet (G2: an official board reached other than by the mirror).
+     * Returns false when the tab could not be stored (no board).
+     */
+    suspend fun openSharedTab(
+        tab: CompatTab,
+        profile: String?,
+        placement: CompatTabPlacement = CompatTabPlacement.LAST,
+        select: Boolean = false,
+        board: CompatBoard? = null
+    ): Boolean {
+        if (board != null && boards.first().none { it.key == board.key }) upsertBoard(board)
+        if (boards.first().none { it.key == tab.boardKey }) return false
+        val existing = tabs.first().firstOrNull { it.key == tab.key }
+        if (existing == null) addTabsIfAbsent(listOf(tab), emptyMap())
+        else updateTabIfPresent(tab.key) { current -> mergeCompatReopenedTab(current, tab).takeIf { it != current } }
+        if (tabs.first().none { it.key == tab.key }) return false
+        if (profile != null) {
+            replaceTabViews(profile, compatViewsWith(loadTabViews(profile), profile, tab.key, placement, tab.insertedAtEpochMillis))
+        }
+        if (select) selectTab(tab.key)
+        return true
+    }
+
+    suspend fun upsertHistory(entry: CompatHistoryEntry)
+
+    /**
+     * History counterpart of [updateTabIfPresent]: a deleted entry stays deleted
+     * and newer titles or visit times are not overwritten by an old copy.
+     */
+    suspend fun updateHistoryIfPresent(
+        canonicalUrl: String,
+        transform: (CompatHistoryEntry) -> CompatHistoryEntry?
+    ): Boolean {
+        val current = history.first().firstOrNull { it.canonicalUrl == canonicalUrl } ?: return false
+        val next = transform(current)?.copy(canonicalUrl = current.canonicalUrl) ?: return false
+        upsertHistory(next)
+        return true
+    }
+    /**
+     * Applies a catalog's reply counts to the stored tabs and history entries, with the same
+     * rules as [applyCatalogReplyCount] per tab (counts only grow; missing rows are never
+     * created), and returns how many tabs changed. Stores that rewrite their whole state per
+     * change (iOS, desktop) should override this to persist once; this default does one
+     * tab-and-history write pair per update.
+     */
+    suspend fun applyCatalogReplyCounts(updates: List<CompatCatalogReplyCountUpdate>): Int =
+        applyCatalogReplyCountsOneByOne(updates)
+    /** Called on thread activation, before any network request completes. */
+    suspend fun recordHistoryVisit(entry: CompatHistoryEntry)
+    suspend fun deleteHistory(canonicalUrl: String)
+    /**
+     * Several rows in one change (re-audit M27: one by one, each row re-read and published the whole history). Stores
+     * override it with one write; this default keeps other stores working.
+     */
+    suspend fun deleteHistories(canonicalUrls: Collection<String>) {
+        canonicalUrls.forEach { deleteHistory(it) }
+    }
+    /**
+     * Forgets the deletions of [canonicalUrls] (plan B3): a thread the person opened again, or history they chose to
+     * restore, comes back here whatever the times say (a clock set back left a newer tombstone than the visit). Other
+     * stores (test doubles) keep no tombstones.
+     */
+    suspend fun forgetHistoryTombstones(canonicalUrls: Collection<String>) {}
+
+    /**
+     * The shared tabs [profile]'s screen shows now (plan B4): the tab trim leaves them alone. Memory only; an empty set
+     * forgets the mode's. Test doubles that never trim ignore it.
+     */
+    fun setScreenHeldTabs(profile: ExperienceProfile, keys: Set<String>) {}
+    suspend fun clearHistory()
+
+    suspend fun saveDraft(draft: CompatReplyDraft)
+    suspend fun loadDraft(tabKey: String): CompatReplyDraft?
+    suspend fun deleteDraft(tabKey: String)
+
+    suspend fun saveBuildDraft(draft: CompatBuildDraft)
+    suspend fun loadBuildDraft(boardKey: String): CompatBuildDraft?
+    suspend fun deleteBuildDraft(boardKey: String)
+
+    /** Returns false when a newer or equal revision is already committed. */
+    suspend fun saveThreadSnapshot(snapshot: CompatThreadSnapshot): Boolean
+    suspend fun loadThreadSnapshot(tabKey: String): CompatThreadSnapshot?
+    /** Read a cached body by canonical Futaba URL so both UIs share it. */
+    suspend fun loadThreadSnapshotByCanonicalUrl(canonicalUrl: String): CompatThreadSnapshot? = null
+    /** Store a modern-mode response in the shared compatibility body cache. */
+    suspend fun saveSharedThreadSnapshot(
+        canonicalUrl: String,
+        originalUrl: String,
+        boardName: String,
+        title: String,
+        thumbnailUrl: String?,
+        snapshot: CompatThreadSnapshot
+    ): Boolean = false
+    suspend fun threadSnapshotCacheUsageBytes(): Long
+    /** Clears cached thread bodies only. Tabs, history, drafts, and closed Undo payloads remain. */
+    suspend fun clearThreadSnapshotCache(): Long
+    suspend fun updateScrollAnchor(tabKey: String, anchor: ScrollAnchor)
+    suspend fun updateWorkspace(record: CompatWorkspaceRecord)
+
+    suspend fun loadCatalogPreference(boardKey: String): CompatCatalogPreference
+    suspend fun saveCatalogPreference(preference: CompatCatalogPreference)
+    /** Returns false when an equal or newer snapshot already exists for this board/sort. */
+    suspend fun saveCatalogSnapshot(
+        snapshot: CompatCatalogSnapshot,
+        trackDropped: Boolean = false,
+        requestedThreadCount: Int = snapshot.items.size,
+        activeDroppedThreadIds: Set<String> = emptySet()
+    ): Boolean
+    /**
+     * Loads a catalog generation in newest-first order. `generation = 0` is
+     * the current snapshot, `1` is the state before the last reload, and so
+     * on. The compatibility UI intentionally exposes only four previous
+     * generations even though stores retain six for crash-safe rotation.
+     */
+    suspend fun loadCatalogSnapshot(
+        boardKey: String,
+        sort: CompatCatalogSort,
+        generation: Int = 0
+    ): CompatCatalogSnapshot?
+    suspend fun loadDroppedCatalogItems(boardKey: String): List<CompatDroppedCatalogItem>
+    suspend fun deleteDroppedCatalogItems(
+        boardKey: String,
+        classification: CompatCatalogDroppedClass
+    ): Int
+
+    /**
+     * The shared data layer's own rows (D-B1, docs/futaber-evolution-data-2026-10-31.md §3.1): the board
+     * synchronization's record (the deleted boards and the boards it last saw) and the migration marks, under keys
+     * starting with [COMPAT_SHARED_DATA_KEY_PREFIX]. They are not settings: they are not in the settings backup and
+     * do not count against Android's read of the settings rows (Android `compat_metadata`, the iOS / desktop state).
+     */
+    suspend fun loadSharedData(): Map<String, String>
+
+    /** Writes [values] as one change; a null value removes the key. Every key starts with [COMPAT_SHARED_DATA_KEY_PREFIX]. */
+    suspend fun saveSharedData(values: Map<String, String?>)
+
+    /**
+     * D-B4: one mode's mark and order on the shared tabs (Android `compat_tab_view`). Only views of tabs that exist
+     * are returned; a view goes with its tab. Stores that do not keep them return nothing and ignore writes.
+     */
+    suspend fun loadTabViews(profile: String): List<CompatSharedTabView> = emptyList()
+
+    /** Plan B6: every mode's views of the tabs that exist, updated when the views or the tabs change. */
+    val tabViews: Flow<List<CompatSharedTabView>> get() = flowOf(emptyList())
+
+    /** Replaces every view of [profile] with [views] (views of tabs that do not exist are dropped); one change. */
+    suspend fun replaceTabViews(profile: String, views: List<CompatSharedTabView>) {}
+
+    /**
+     * Plan B7a: false while the shared data migration stages run (a screen waits before reading what a stage moves, so
+     * a tab is not shown twice or not at all meanwhile). Stores that do not run them are always settled.
+     */
+    val sharedMigrationsSettled: StateFlow<Boolean> get() = COMPAT_ALWAYS_SETTLED
+
+    /** Set by [com.valoser.futacha.shared.compat.shared.runSharedDataMigrations] around the stages. */
+    fun setSharedMigrationsSettled(settled: Boolean) {}
+
+    suspend fun loadPreference(key: String): String?
+    suspend fun savePreference(key: String, value: String)
+
+    /**
+     * Writes several preferences as one change; a null value removes the key.
+     * Stores override this to persist once (iOS and desktop rewrite their whole
+     * state per change). This default is for test doubles.
+     */
+    suspend fun savePreferences(values: Map<String, String?>) {
+        values.forEach { (key, value) -> savePreference(key, value ?: "") }
+    }
+
+    /**
+     * Catalog image hashes by [compatImagePhashCachePreferenceKey]. They are a
+     * bounded cache in their own table, not preferences: stored as preferences
+     * they grew without limit, were rewritten with the whole iOS state on each
+     * save and pushed real settings past the 4096-preference limit. Stores
+     * without a cache table (test doubles) keep nothing.
+     */
+    suspend fun loadImagePhashes(keys: Collection<String>): Map<String, String> = emptyMap()
+
+    suspend fun saveImagePhashes(entries: Map<String, String>) {}
+
+    /**
+     * Export/import user settings only. Implementations that cannot persist a
+     * portable file may keep the default unsupported behavior; Android's
+     * compatibility store provides the transactional implementation.
+     */
+    suspend fun exportSettingsBackup(): String =
+        error("互換モードのバックアップはこのプラットフォームでは利用できません")
+
+    suspend fun importSettingsBackup(
+        payload: String,
+        restoreUserSettings: Boolean = true,
+        restoreNgRules: Boolean = true
+    ): CompatSettingsBackupImportReport =
+        error("互換モードの復元はこのプラットフォームでは利用できません")
+
+    suspend fun enqueueArchiveReport(rawThreadUrl: String, nowEpochMillis: Long): ArchiveReportEnqueueResult
+    /** Runs the bounded 4,500 -> 4,000 outbox cleanup from a background worker. */
+    suspend fun maintainArchiveReportOutbox(nowEpochMillis: Long): Int
+    suspend fun recoverStaleArchiveReports(nowEpochMillis: Long): Int
+    suspend fun claimArchiveReportBatch(nowEpochMillis: Long, newRequestId: String): ArchiveReportOutboxBatch?
+    suspend fun reassignSendingArchiveReportBatch(
+        oldRequestId: String,
+        payload: ArchiveReportPayload,
+        nowEpochMillis: Long
+    ): Boolean
+    suspend fun splitSendingArchiveReportBatch(
+        oldRequestId: String,
+        first: ArchiveReportPayload,
+        second: ArchiveReportPayload,
+        nowEpochMillis: Long
+    ): Boolean
+    suspend fun markArchiveReportAccepted(requestId: String, nowEpochMillis: Long): Int
+    suspend fun markArchiveReportRetry(requestId: String, nextAttemptAt: Long, errorCode: String): Int
+    suspend fun markArchiveReportBatchForSplit(requestId: String, nowEpochMillis: Long): Int
+    suspend fun markArchiveReportAbandoned(requestId: String, nowEpochMillis: Long, errorCode: String): Int
+    suspend fun archiveReportOutboxStats(): ArchiveReportOutboxStats
+    suspend fun archiveReportNextAttemptAt(): Long?
+    suspend fun clearArchiveReportOutbox(): Int
+
+    suspend fun loadToolbar(surface: CompatToolbarSurface): List<CompatToolbarItem>
+    suspend fun saveToolbar(surface: CompatToolbarSurface, items: List<CompatToolbarItem>)
+
+    /** Returns false when the board/tab scope disappeared before the write. */
+    suspend fun upsertNgRule(rule: CompatNgRule): Boolean
+    /** Replaces one existing rule atomically, preserving it on invalid scope, collision or write failure. */
+    suspend fun replaceNgRule(previousRuleId: String, rule: CompatNgRule): Boolean
+    suspend fun deleteNgRule(ruleId: String)
+
+    /** Deletes a set of NG rules as one logical user action. */
+    suspend fun deleteNgRules(ruleIds: Collection<String>) {
+        for (ruleId in ruleIds) deleteNgRule(ruleId)
+    }
+}
+
+/**
+ * Replaces [previousRuleId] with [rule] as one write, so a failed write or a scope gone meanwhile keeps the old rule
+ * (L139: the old rule was deleted first). An edit into a rule that is already there makes the two that one, as the
+ * delete-then-write did; the old one goes only once that one is written.
+ */
+suspend fun CompatibilityStore.replaceNgRuleMerging(previousRuleId: String, rule: CompatNgRule): Boolean =
+    replaceNgRule(previousRuleId, rule) ||
+        (rule.id != previousRuleId && ngRules.first().any { it.id == rule.id } &&
+            upsertNgRule(rule).also { written -> if (written) deleteNgRule(previousRuleId) })
+
+/** Keeps the identity and the durable scroll anchor of the stored tab. */
+fun CompatTab.pinnedTo(current: CompatTab): CompatTab =
+    copy(key = current.key, canonicalUrl = current.canonicalUrl, scrollAnchor = current.scrollAnchor)
+
+/**
+ * Patches only [tabKey]'s scroll anchor in a published (sorted) tab list, as Android's store does on a
+ * scroll stop (L80). The receiver is returned unchanged when nothing differs and every other element
+ * keeps its identity; the anchor is no sort key, so the order stays without sorting again.
+ */
+internal fun List<CompatTab>.withCompatTabScrollAnchor(tabKey: String, anchor: ScrollAnchor): List<CompatTab> {
+    if (none { it.key == tabKey && it.scrollAnchor != anchor }) return this
+    return map { if (it.key == tabKey && it.scrollAnchor != anchor) it.copy(scrollAnchor = anchor) else it }
+}
+
+/** History counterpart of [withCompatTabScrollAnchor], matched by canonical URL. */
+internal fun List<CompatHistoryEntry>.withCompatHistoryScrollAnchor(
+    canonicalUrl: String,
+    anchor: ScrollAnchor
+): List<CompatHistoryEntry> {
+    if (none { it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor }) return this
+    return map { if (it.canonicalUrl == canonicalUrl && it.scrollAnchor != anchor) it.copy(scrollAnchor = anchor) else it }
+}
+
+private val COMPAT_ALWAYS_SETTLED: StateFlow<Boolean> = MutableStateFlow(true)

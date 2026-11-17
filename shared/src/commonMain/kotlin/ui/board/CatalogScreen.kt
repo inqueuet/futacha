@@ -1,0 +1,712 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import coil3.Image
+import coil3.compose.AsyncImagePainter
+import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.draftCommentParameter
+import com.valoser.futacha.shared.ai.draftEmailParameter
+import com.valoser.futacha.shared.ai.draftNameParameter
+import com.valoser.futacha.shared.ai.draftPasswordParameter
+import com.valoser.futacha.shared.ai.draftSubjectParameter
+import com.valoser.futacha.shared.ai.searchQueryParameter
+import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.network.ArchiveSearchItem
+import com.valoser.futacha.shared.network.ArchiveSearchScope
+import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.HistoryRefresher
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.*
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlin.math.abs
+import kotlin.time.ExperimentalTime
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
+@Composable
+fun CatalogScreen(
+    board: BoardSummary?,
+    screenContract: ScreenContract,
+    onBack: () -> Unit,
+    onThreadSelected: (CatalogItem) -> Unit,
+    dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    CatalogScreenContent(
+        args = buildCatalogScreenContentArgsFromContract(
+            board = board,
+            screenContract = screenContract,
+            onBack = onBack,
+            onThreadSelected = onThreadSelected,
+            dependencies = dependencies,
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed,
+            modifier = modifier
+        )
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
+@Composable
+fun CatalogScreen(
+    board: BoardSummary?,
+    history: List<ThreadHistoryEntry>,
+    onBack: () -> Unit,
+    onThreadSelected: (CatalogItem) -> Unit,
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
+    dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    repository: BoardRepository? = dependencies.repository,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = dependencies.stateStore,
+    autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+    cookieRepository: CookieRepository? = dependencies.cookieRepository,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
+    modifier: Modifier = Modifier,
+    httpClient: HttpClient? = dependencies.httpClient
+) {
+    CatalogScreen(
+        board = board,
+        screenContract = buildScreenContract(
+            history = history,
+            historyCallbacks = historyCallbacks,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
+            onHistoryEntryUpdated = onHistoryEntryUpdated,
+            onHistoryRefresh = onHistoryRefresh,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
+        ),
+        onBack = onBack,
+        onThreadSelected = onThreadSelected,
+        dependencies = dependencies.withOverrides(
+            repository = repository,
+            stateStore = stateStore,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            fileSystem = fileSystem,
+            httpClient = httpClient
+        ),
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
+        modifier = modifier
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
+@Composable
+private fun CatalogScreenContent(
+    args: CatalogScreenContentArgs
+) {
+    val preparedSetup = rememberCatalogScreenPreparedSetupBundle(args)
+    val setupHandles = rememberCatalogScreenPreparedSetupHandles(preparedSetup)
+    val contextHandles = setupHandles.contextHandles
+    val board = contextHandles.board
+    val history = contextHandles.history
+    val requestedOnBack = contextHandles.onBack
+    val requestedOnThreadSelected = contextHandles.onThreadSelected
+    val requestedOnHistoryEntrySelected = contextHandles.onHistoryEntrySelected
+    val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
+    val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
+    val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val onHistoryExport = contextHandles.onHistoryExport
+    val onHistoryExportThenClear = contextHandles.onHistoryExportThenClear
+    val onHistoryExportSelected = contextHandles.onHistoryExportSelected
+    val onHistoryLoadImportPreview = contextHandles.onHistoryLoadImportPreview
+    val onHistoryImport = contextHandles.onHistoryImport
+    val onHistoryImportSelected = contextHandles.onHistoryImportSelected
+    val onHistoryCleared = contextHandles.onHistoryCleared
+    val stateStore = contextHandles.stateStore
+    val postingNoticeShown by (stateStore?.hasShownPostingNotice ?: kotlinx.coroutines.flow.flowOf(true))
+        .collectAsState(initial = false)
+    val autoSavedThreadRepository = contextHandles.autoSavedThreadRepository
+    val cookieRepository = contextHandles.cookieRepository
+    val fileSystem = contextHandles.fileSystem
+    val preferencesState = contextHandles.preferencesState
+    val preferencesCallbacks = contextHandles.preferencesCallbacks
+    val httpClient = contextHandles.httpClient
+    val modifier = contextHandles.modifier
+    val screenSetupHandles = setupHandles.setupHandles
+    val activeRepository = rememberFutachaSharedRepository(screenSetupHandles.activeRepository)
+    val archiveSearchScope = screenSetupHandles.archiveSearchScope
+    val runtimeHandles = setupHandles.runtimeHandles
+    val snackbarHostState = runtimeHandles.snackbarHostState
+    val coroutineScope = runtimeHandles.coroutineScope
+    val drawerState = runtimeHandles.drawerState
+    val isDrawerOpen = runtimeHandles.isDrawerOpen
+    val persistentBindings = screenSetupHandles.persistentBindings
+    val mutableStateHandles = setupHandles.mutableStateHandles
+    val uiRuntimeStateRefs = mutableStateHandles.uiRuntimeStateRefs
+    val searchOverlayStateRefs = mutableStateHandles.searchOverlayStateRefs
+    val draftDisplayStateRefs = mutableStateHandles.draftDisplayStateRefs
+    val uiState = uiRuntimeStateRefs.uiState
+    var catalogMode by uiRuntimeStateRefs.catalogMode
+    var isRefreshing by uiRuntimeStateRefs.isRefreshing
+    var viewedFirstThreadId by androidx.compose.runtime.saveable.rememberSaveable(board?.id) { mutableStateOf<String?>(null) }
+    // The order the placement was made in: another order drops it (L37).
+    var viewedFirstModeName by androidx.compose.runtime.saveable.rememberSaveable(board?.id) { mutableStateOf<String?>(null) }
+    // The refresh after creating a thread does not put the last viewed one above it (L37).
+    val viewedFirstSkipNext = remember(board?.id) { booleanArrayOf(false) }
+    val feedbackFeatures = LocalFutachaSharedFeatures.current
+    // Read only when a refresh succeeds, kept out of composition (L31: the whole history was collected here, and every
+    // change of it recomposed the catalog).
+    val latestFeedbackHistory = remember { arrayOf<List<ThreadHistoryEntry>>(emptyList()) }
+    LaunchedEffect(feedbackFeatures?.appStateStore) {
+        feedbackFeatures?.appStateStore?.history?.collect { latestFeedbackHistory[0] = it }
+    }
+    val viewedFirstEnabled = board?.let { feedbackFeatures?.rawValue(viewedThreadFirstKey(it.url)) == "ON" } == true
+    LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) viewedFirstThreadId = null }
+
+    var catalogLoadJob by uiRuntimeStateRefs.catalogLoadJob
+    var catalogLoadGeneration by uiRuntimeStateRefs.catalogLoadGeneration
+    var isHistoryRefreshing by uiRuntimeStateRefs.isHistoryRefreshing
+    var isSearchActive by searchOverlayStateRefs.isSearchActive
+    val searchQueryState = searchOverlayStateRefs.searchQuery
+    var debouncedSearchQuery by searchOverlayStateRefs.debouncedSearchQuery
+    var overlayState by searchOverlayStateRefs.overlayState
+    var createThreadDraft by draftDisplayStateRefs.createThreadDraft
+    var createThreadImage by draftDisplayStateRefs.createThreadImage
+    var isCreateThreadSubmitting by remember(board?.id) { mutableStateOf(false) }
+    com.valoser.futacha.shared.ui.ReportPostingInFlight(isCreateThreadSubmitting)
+    // Leaving the catalog while a thread is being created cancels the request.
+    val notifyCreateThreadSending: () -> Unit = {
+        coroutineScope.launch { snackbarHostState.showSnackbar(CATALOG_CREATE_THREAD_SENDING_MESSAGE) }
+    }
+    val onBack: () -> Unit = {
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnBack() }
+    }
+    val onThreadSelected: (CatalogItem) -> Unit = { item ->
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnThreadSelected(item) }
+    }
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = { entry ->
+        runUnlessPosting(isCreateThreadSubmitting, notifyCreateThreadSending, Unit) { requestedOnHistoryEntrySelected(entry) }
+    }
+    var archiveSearchQuery by searchOverlayStateRefs.archiveSearchQuery
+    var catalogNgFilteringEnabled by searchOverlayStateRefs.catalogNgFilteringEnabled
+    val catalogNgWords = persistentBindings.catalogNgWords
+    val watchWords = persistentBindings.watchWords
+    val globalWatchWords = persistentBindings.globalWatchWords
+    val boardWatchWordsForEditing = persistentBindings.boardWatchWordsOverride ?: persistentBindings.watchWords
+    val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
+    val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
+    val archiveSearchJson = runtimeHandles.archiveSearchJson
+    var pastSearchRuntimeState by searchOverlayStateRefs.pastSearchRuntimeState
+    var hasSyncedCatalogMode by remember(board?.id) { mutableStateOf(false) }
+    val catalogGridState = runtimeHandles.catalogGridState
+    val catalogListState = runtimeHandles.catalogListState
+    val catalogParseWarning = (uiState.value as? CatalogUiState.Success)?.content?.parseWarning
+    LaunchedEffect(catalogParseWarning?.reason, catalogParseWarning?.diagnosticPath) {
+        val warning = catalogParseWarning ?: return@LaunchedEffect
+        if (warning.isTruncated && !warning.reason.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(warning.reason)
+        }
+    }
+    // Local mode changes still being written: the store then emits the
+    // intermediate values, which briefly reverted a quickly changed mode.
+    val pendingCatalogModeWrites = remember { mutableIntStateOf(0) }
+    LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes, persistentBindings.isCatalogModeLoaded) {
+        if (!persistentBindings.isCatalogModeLoaded) return@LaunchedEffect
+        if (hasSyncedCatalogMode && pendingCatalogModeWrites.intValue > 0) return@LaunchedEffect
+        resolveCatalogModeSyncValue(
+            boardId = board?.id,
+            persistedCatalogModes = persistentBindings.persistedCatalogModes,
+            boardUrl = board?.url
+        )?.let { catalogMode = it }
+        hasSyncedCatalogMode = true
+    }
+    // Only after the stored order is applied: until then the screen shows the default order (L37).
+    LaunchedEffect(catalogMode, hasSyncedCatalogMode) {
+        if (hasSyncedCatalogMode && viewedFirstModeName != null && viewedFirstModeName != catalogMode.name) {
+            viewedFirstThreadId = null
+            viewedFirstModeName = null
+        }
+    }
+    LaunchedEffect(board?.url) {
+        pastSearchRuntimeState.job?.cancel()
+        val resetState = resolveCatalogPastSearchResetState(
+            scope = archiveSearchScope,
+            overlayState = overlayState
+        )
+        pastSearchRuntimeState = resetState.runtimeState
+        overlayState = resetState.overlayState
+    }
+    LaunchedEffect(searchOverlayStateRefs.searchQuery) {
+        snapshotFlow { searchOverlayStateRefs.searchQuery.value }
+            .map(::resolveCatalogDebouncedSearchQuery)
+            .distinctUntilChanged()
+            .debounce(::resolveCatalogSearchDebounceMillis)
+            .collect { normalized ->
+                debouncedSearchQuery = normalized
+            }
+    }
+    var lastCatalogItems by uiRuntimeStateRefs.lastCatalogItems
+    suspend fun loadCatalogItems(
+        currentBoard: BoardSummary,
+        mode: CatalogMode,
+        onPartial: CatalogPartialUpdate
+    ): CatalogPageContent {
+        return loadCatalogItemsForMode(
+            boardUrl = currentBoard.url,
+            mode = mode,
+            watchWords = watchWords,
+            onWatchWordsPartial = onPartial,
+            fetchCatalog = activeRepository::getCatalogPage
+        )
+    }
+    val isPrivacyFilterEnabled = persistentBindings.isPrivacyFilterEnabled
+    var localCatalogDisplayStyle by draftDisplayStateRefs.localCatalogDisplayStyle
+    var localCatalogGridColumns by draftDisplayStateRefs.localCatalogGridColumns
+    val displaySettings = remember(
+        stateStore,
+        persistentBindings.persistentDisplayStyle,
+        localCatalogDisplayStyle,
+        persistentBindings.persistentGridColumns,
+        localCatalogGridColumns
+    ) {
+        resolveCatalogScreenDisplaySettings(
+            hasStateStore = stateStore != null,
+            persistentDisplayStyle = persistentBindings.persistentDisplayStyle,
+            localDisplayStyle = localCatalogDisplayStyle,
+            persistentGridColumns = persistentBindings.persistentGridColumns,
+            localGridColumns = localCatalogGridColumns
+        )
+    }
+    val catalogDisplayStyle = displaySettings.displayStyle
+    val catalogGridColumns = displaySettings.gridColumns
+    CatalogBrowseProgressObservationEffect(
+        board = board,
+        displayStyle = catalogDisplayStyle,
+        catalogItemCount = lastCatalogItems.size,
+        gridState = catalogGridState,
+        listState = catalogListState
+    )
+    val interactionBindings = buildCatalogScreenInteractionBindingsBundle(
+        mutationInputs = CatalogScreenMutationInputs(
+            coroutineScope = coroutineScope,
+            stateStore = stateStore,
+            currentBoardId = { board?.id },
+            currentBoardSettingKeys = { persistentBindings.boardSettingKeys },
+            setCatalogMode = { catalogMode = it },
+            currentCatalogNgWords = { catalogNgWords },
+            currentGlobalWatchWords = { globalWatchWords },
+            currentBoardWatchWords = { boardWatchWordsForEditing },
+            currentCatalogNgFilteringEnabled = { catalogNgFilteringEnabled },
+            setCatalogNgFilteringEnabled = { catalogNgFilteringEnabled = it },
+            onFallbackCatalogNgWordsChanged = persistentBindings.onFallbackCatalogNgWordsChanged,
+            onFallbackWatchWordsChanged = persistentBindings.onFallbackWatchWordsChanged,
+            showSnackbar = snackbarHostState::showSnackbar,
+            setLocalCatalogDisplayStyle = { localCatalogDisplayStyle = it },
+            setLocalCatalogGridColumns = { localCatalogGridColumns = it },
+            currentCatalogDisplayStyle = {
+                if (stateStore != null) {
+                    persistentBindings.persistentDisplayStyle
+                } else {
+                    localCatalogDisplayStyle
+                }
+            },
+            catalogGridState = catalogGridState,
+            catalogListState = catalogListState,
+            onCatalogModeWriteStarted = { pendingCatalogModeWrites.intValue += 1 },
+            onCatalogModeWriteFinished = {
+                pendingCatalogModeWrites.intValue = (pendingCatalogModeWrites.intValue - 1).coerceAtLeast(0)
+            }
+        ),
+        runtimeInputs = CatalogScreenRuntimeInputs(
+            coroutineScope = coroutineScope,
+            drawerState = drawerState,
+            currentBoard = { board },
+            stateStore = stateStore,
+            currentCatalogMode = { catalogMode },
+            currentCatalogLoadGeneration = { catalogLoadGeneration },
+            setCatalogLoadGeneration = { catalogLoadGeneration = it },
+            currentCatalogLoadJob = { catalogLoadJob },
+            setCatalogLoadJob = { catalogLoadJob = it },
+            currentIsRefreshing = { isRefreshing },
+            setIsRefreshing = { isRefreshing = it },
+            setCatalogUiState = { next ->
+                uiState.value = next
+                if (isRefreshing && next is CatalogUiState.Success && !next.partial) {
+                    if (viewedFirstSkipNext[0]) {
+                        viewedFirstSkipNext[0] = false
+                        viewedFirstThreadId = null
+                    } else if (viewedFirstEnabled) {
+                        viewedFirstThreadId = latestFeedbackHistory[0].filter { it.boardId == board?.id }
+                            .maxByOrNull { it.lastVisitedEpochMillis }?.threadId
+                        viewedFirstModeName = catalogMode.name
+                    }
+                } else if (isRefreshing && next is CatalogUiState.Error) viewedFirstSkipNext[0] = false
+            },
+            onThreadCreated = { viewedFirstSkipNext[0] = true },
+            currentCatalogUiState = { uiState.value },
+            setLastCatalogItems = { lastCatalogItems = it },
+            loadCatalogItems = ::loadCatalogItems,
+            activeRepository = activeRepository,
+            currentCreateThreadDraft = { createThreadDraft },
+            currentCreateThreadImage = { createThreadImage },
+            currentIsCreateThreadSubmitting = { isCreateThreadSubmitting },
+            setIsCreateThreadSubmitting = { isCreateThreadSubmitting = it },
+            setCreateThreadDraft = { createThreadDraft = it },
+            setCreateThreadImage = { createThreadImage = it },
+            setShowCreateThreadDialog = { isVisible ->
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
+            },
+            updateLastUsedDeleteKey = updateLastUsedDeleteKey,
+            snackbarHostState = snackbarHostState,
+            showSnackbar = snackbarHostState::showSnackbar,
+            onOpenCookieManager = cookieRepository?.let {
+                {
+                    overlayState = setCatalogGlobalSettingsVisible(overlayState, false)
+                    overlayState = setCatalogCookieRecoveryGuideVisible(overlayState, true)
+                }
+            },
+            currentIsHistoryRefreshing = { isHistoryRefreshing },
+            setIsHistoryRefreshing = { isHistoryRefreshing = it },
+            onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected,
+            currentPastSearchRuntimeState = { pastSearchRuntimeState },
+            setPastSearchRuntimeState = { pastSearchRuntimeState = it },
+            httpClient = httpClient,
+            archiveSearchJson = archiveSearchJson,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onBack = onBack,
+            onHistoryCleared = onHistoryCleared,
+            setShowGlobalSettings = { isVisible ->
+                overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
+            },
+            setSearchQuery = { searchQueryState.value = it },
+            setSearchActive = { isSearchActive = it },
+            lastUsedDeleteKey = lastUsedDeleteKey,
+            currentCreateThreadPassword = { createThreadDraft.password },
+            setCreateThreadPassword = {
+                createThreadDraft = updateCreateThreadDraftPassword(createThreadDraft, it)
+            },
+            isPastThreadSearchNoticeHidden = { persistentBindings.isPastThreadSearchNoticeHidden },
+            setShowPastThreadSearchNoticeDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchNoticeDialogVisible(overlayState, isVisible)
+            },
+            setShowPastThreadSearchDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
+            },
+            setShowModeDialog = { isVisible ->
+                overlayState = setCatalogModeDialogVisible(overlayState, isVisible)
+            },
+            setShowSettingsMenu = { isVisible ->
+                overlayState = setCatalogSettingsMenuVisible(overlayState, isVisible)
+            }
+        ),
+        overlayInputs = CatalogScreenOverlayInputs(
+            currentBoard = { board },
+            currentCatalogMode = { catalogMode },
+            currentPastSearchRuntimeState = { pastSearchRuntimeState },
+            setPastSearchRuntimeState = { pastSearchRuntimeState = it },
+            setShowGlobalSettings = { isVisible ->
+                overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
+            },
+            setShowPastThreadSearchNoticeDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchNoticeDialogVisible(overlayState, isVisible)
+            },
+            setShowPastThreadSearchDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
+            },
+            setShowPastSearchSheetVisible = { isVisible ->
+                overlayState = setCatalogPastSearchSheetVisible(overlayState, isVisible)
+            },
+            setShowModeDialog = { isVisible ->
+                overlayState = setCatalogModeDialogVisible(overlayState, isVisible)
+            },
+            setShowDisplayStyleDialog = { isVisible ->
+                overlayState = setCatalogDisplayStyleDialogVisible(overlayState, isVisible)
+            },
+            setShowSettingsMenu = { isVisible ->
+                overlayState = setCatalogSettingsMenuVisible(overlayState, isVisible)
+            },
+            setNgManagementVisible = { isVisible ->
+                overlayState = setCatalogNgManagementVisible(overlayState, isVisible)
+            },
+            setWatchWordsVisible = { isVisible ->
+                overlayState = setCatalogWatchWordsVisible(overlayState, isVisible)
+            },
+            setCookieManagementVisible = { isVisible ->
+                overlayState = setCatalogCookieManagementVisible(overlayState, isVisible)
+            },
+            currentArchiveSearchScope = { archiveSearchScope },
+            setLastArchiveSearchScope = {
+                pastSearchRuntimeState = pastSearchRuntimeState.copy(lastArchiveSearchScope = it)
+            },
+            setArchiveSearchQuery = { archiveSearchQuery = it },
+            currentArchiveSearchQuery = { archiveSearchQuery },
+            currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
+            onThreadSelected = onThreadSelected,
+            urlLauncher = screenSetupHandles.urlLauncher,
+            stateStore = stateStore,
+            isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
+            coroutineScope = coroutineScope,
+            cookieRepository = cookieRepository
+        )
+    )
+    val interactionHandles = resolveCatalogScreenInteractionHandles(interactionBindings)
+    val mutationBindings = interactionHandles.mutationBindings
+    val runtimeBindings = interactionHandles.runtimeBindings
+    val performRefresh = interactionHandles.performRefresh
+    val initialLoadBindings = interactionHandles.initialLoadBindings
+    val createThreadBindings = interactionHandles.createThreadBindings
+    val historyDrawerCallbacks = interactionHandles.historyDrawerCallbacks
+    val aiCommandAppLock = com.valoser.futacha.shared.ui.LocalFutachaAppLockHolder.current
+    LaunchedEffect(com.valoser.futacha.shared.ui.AiCommandEffectKey(args.aiCommand)) {
+        val command = args.aiCommand ?: return@LaunchedEffect
+        // Same guard as ThreadScreen: the parent withdraws a command handed over
+        // just before the lock and hands it back after the unlock (C-1).
+        if (aiCommandAppLock?.isUnlocked == false) return@LaunchedEffect
+        var didConsume = true
+        when (command.action) {
+            FutachaAiAction.RefreshCurrentBoard,
+            FutachaAiAction.RefreshCatalog -> {
+                performRefresh()
+            }
+            FutachaAiAction.ScrollCatalogToTop -> {
+                mutationBindings.scrollCatalogToTop()
+            }
+            FutachaAiAction.StartCatalogSearch -> {
+                isSearchActive = true
+            }
+            FutachaAiAction.SearchCatalog -> {
+                searchQueryState.value = command.searchQueryParameter().orEmpty()
+                isSearchActive = true
+            }
+            FutachaAiAction.OpenHistoryDrawer -> {
+                drawerState.open()
+            }
+            FutachaAiAction.OpenCatalogSettings -> {
+                overlayState = setCatalogSettingsMenuVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenCatalogDisplaySettings -> {
+                overlayState = setCatalogDisplayStyleDialogVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenNgManagement -> {
+                overlayState = setCatalogNgManagementVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenWatchWords -> {
+                overlayState = setCatalogWatchWordsVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenCookieManagement -> {
+                if (cookieRepository != null) {
+                    overlayState = setCatalogCookieManagementVisible(overlayState, true)
+                }
+            }
+            FutachaAiAction.OpenBoardExternally -> {
+                board?.let { currentBoard ->
+                    screenSetupHandles.urlLauncher(
+                        BoardUrlResolver.resolveCatalogUrl(currentBoard.url, catalogMode)
+                    )
+                }
+            }
+            FutachaAiAction.DraftThread -> {
+                val requestedPassword = command.draftPasswordParameter()
+                // Use the manual dialog's trusted current/default ordering. A
+                // rejected external key must not bypass default autofill, even
+                // while the preference collector still has its initial empty value.
+                val savedDefault = if (requestedPassword == null && createThreadDraft.password.isBlank()) {
+                    stateStore?.lastUsedDeleteKey?.first() ?: lastUsedDeleteKey
+                } else lastUsedDeleteKey
+                if (aiCommandAppLock?.isUnlocked == false) return@LaunchedEffect
+                createThreadDraft = createThreadDraft.copy(
+                    name = command.draftNameParameter() ?: createThreadDraft.name,
+                    email = command.draftEmailParameter() ?: createThreadDraft.email,
+                    title = command.draftSubjectParameter() ?: createThreadDraft.title,
+                    comment = command.draftCommentParameter() ?: createThreadDraft.comment,
+                    password = requestedPassword ?: resolveCreateThreadDialogOpenPassword(createThreadDraft.password, savedDefault)
+                )
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, true)
+            }
+            else -> {
+                didConsume = false
+            }
+        }
+        if (didConsume) {
+            args.onAiCommandConsumed(command)
+        }
+    }
+    val lifecycleBindings = rememberCatalogScreenLifecycleBindings(
+        coroutineScope,
+        drawerState,
+        isDrawerOpen,
+        isSearchActive,
+        onBack = onBack,
+        onInitialLoad = initialLoadBindings.loadInitialCatalog,
+        currentCatalogLoadJob = { catalogLoadJob },
+        setCatalogLoadJob = { catalogLoadJob = it },
+        currentPastSearchRuntimeState = { pastSearchRuntimeState },
+        setPastSearchRuntimeState = { pastSearchRuntimeState = it },
+        setSearchActive = { isSearchActive = it },
+        setSearchQuery = { searchQueryState.value = it }
+    )
+    DisposableEffect(Unit) {
+        onDispose {
+            lifecycleBindings.onDispose()
+        }
+    }
+    PlatformBackHandler(enabled = lifecycleBindings.backAction == CatalogBackAction.CloseDrawer) {
+        lifecycleBindings.onCloseDrawerBack()
+    }
+    PlatformBackHandler(enabled = lifecycleBindings.backAction == CatalogBackAction.ExitSearch) {
+        lifecycleBindings.onExitSearchBack()
+    }
+    PlatformBackHandler(enabled = lifecycleBindings.backAction == CatalogBackAction.NavigateBack) {
+        lifecycleBindings.onNavigateBack()
+    }
+
+    if (hasSyncedCatalogMode) {
+        // Re-run when the real repository replaces Android's startup placeholder.
+        LaunchedEffect(board?.url, catalogMode, activeRepository) {
+            lifecycleBindings.onInitialLoad()
+        }
+    }
+    val overlayBindings = interactionHandles.overlayBindings
+    val (scaffoldBindings, overlayHostBindings) = buildCatalogScreenHostBindings(
+        CatalogScreenHostBindingsInputs(
+            history = history,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            historyDrawerCallbacks = historyDrawerCallbacks,
+            drawerState = drawerState,
+            isDrawerOpen = isDrawerOpen,
+            coroutineScope = coroutineScope,
+            snackbarHostState = snackbarHostState,
+            board = board,
+            catalogMode = catalogMode,
+            searchQueryState = searchQueryState,
+            isSearchActive = isSearchActive,
+            runtimeBindings = runtimeBindings,
+            preferencesState = preferencesState,
+            uiState = uiState.value,
+            watchWords = watchWords,
+            globalWatchWords = globalWatchWords,
+            boardWatchWordsOverride = persistentBindings.boardWatchWordsOverride,
+            isWatchWordsLoaded = persistentBindings.isWatchWordsLoaded,
+            catalogNgWords = catalogNgWords,
+            catalogNgFilteringEnabled = catalogNgFilteringEnabled,
+            debouncedSearchQuery = debouncedSearchQuery,
+            activeRepository = activeRepository,
+            onThreadSelected = onThreadSelected,
+            performRefresh = performRefresh,
+            isRefreshing = isRefreshing,
+            isHistoryRefreshing = isHistoryRefreshing,
+            catalogDisplayStyle = catalogDisplayStyle,
+            catalogGridColumns = catalogGridColumns,
+            catalogGridState = catalogGridState,
+            catalogListState = catalogListState,
+            resolveCatalogHeadMetadata = args.resolveCatalogHeadMetadata,
+            overlayState = overlayState,
+            overlayBindings = overlayBindings,
+            createThreadDraft = createThreadDraft,
+            setCreateThreadDraft = { createThreadDraft = it },
+            createThreadImage = createThreadImage,
+            setCreateThreadImage = { createThreadImage = it },
+            isCreateThreadSubmitting = isCreateThreadSubmitting,
+            setCreateThreadDialogVisible = { isVisible ->
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
+            },
+            archiveSearchQuery = archiveSearchQuery,
+            pastSearchRuntimeState = pastSearchRuntimeState,
+            isPrivacyFilterEnabled = isPrivacyFilterEnabled,
+            createThreadBindings = createThreadBindings,
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = fileSystem,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            onDismissCookieRecoveryGuide = {
+                overlayState = setCatalogCookieRecoveryGuideVisible(overlayState, false)
+            },
+            onOpenCookieManagerFromRecoveryGuide = {
+                overlayState = setCatalogCookieManagementVisible(overlayState, true)
+            }
+        )
+    )
+
+    FutachaCatalogFeatureHost(board, catalogMode, uiState.value, activeRepository, onThreadSelected,
+        onRestore = { uiState.value = it },
+        onScrollPage = { direction -> coroutineScope.launch {
+            if (catalogDisplayStyle == com.valoser.futacha.shared.model.CatalogDisplayStyle.Grid) {
+                catalogGridState.animateScrollToItem((catalogGridState.firstVisibleItemIndex + direction * catalogGridColumns * 4)
+                    .coerceIn(0, (catalogGridState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+            } else {
+                catalogListState.animateScrollToItem((catalogListState.firstVisibleItemIndex + direction * 5)
+                    .coerceIn(0, (catalogListState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+            }
+        } }, onScrollTop = { coroutineScope.launch {
+            catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
+        } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
+        viewedFirstThreadId = viewedFirstThreadId.takeIf { viewedFirstModeName == catalogMode.name },
+        ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
+        createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },
+            { createThreadDraft = it }, { createThreadImage = it }, { overlayState.showCreateThreadDialog },
+            // Sending starts once the first posting notice (if any) was accepted: until then the stored draft stays
+            // (re-audit L32: it went when the send was pressed, and was lost if the app ended after "同意しない").
+            isSubmitting = { isCreateThreadSubmitting && postingNoticeShown })
+    ) { projectedState ->
+        CatalogScreenScaffold(bindings = scaffoldBindings.copy(uiState = projectedState), modifier = modifier)
+        CatalogScreenOverlayHost(bindings = overlayHostBindings)
+    }
+}

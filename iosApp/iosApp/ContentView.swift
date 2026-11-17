@@ -1,0 +1,852 @@
+import UIKit
+import SwiftUI
+import Foundation
+import WebKit
+import shared
+
+// BEGIN APP LOCK SNAPSHOT PROTECTION
+/// Covers native sheets as well as Compose; the window never becomes key, so presenters keep their state/focus.
+final class FutachaAppSnapshotProtection {
+    static let shared = FutachaAppSnapshotProtection()
+    private var installed = false
+    private var enabled = true // Unknown/unreadable configuration fails closed until the direct Flow collector resolves it.
+    private var observers: [NSObjectProtocol] = []
+    private var scenes: [String: FutachaSnapshotScene] = [:]
+
+    func install() {
+        guard !installed else { return }
+        installed = true
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: Notification.Name("com.valoser.futacha.app-lock-snapshot-configuration"), object: nil, queue: .main) { [weak self] note in
+            self?.setEnabled((note.userInfo?["enabled"] as? NSNumber)?.boolValue ?? true)
+        })
+        observers.append(center.addObserver(forName: Notification.Name("com.valoser.futacha.app-lock-snapshot-frame"), object: nil, queue: .main) { [weak self] note in
+            if let identifier = note.userInfo?["sceneIdentifier"] as? String { self?.lockFrameDidDraw(sceneIdentifier: identifier) }
+        })
+        for name in [UIScene.willDeactivateNotification, UIScene.didEnterBackgroundNotification, UIScene.didActivateNotification, UIScene.didDisconnectNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self, let scene = note.object as? UIWindowScene else { return }
+                switch note.name {
+                case UIScene.willDeactivateNotification: self.willDeactivate(scene)
+                case UIScene.didEnterBackgroundNotification: self.didEnterBackground(scene)
+                case UIScene.didActivateNotification: self.didActivate(scene)
+                default:
+                    self.scenes.removeValue(forKey: scene.session.persistentIdentifier)?.hide()
+                }
+            })
+        }
+    }
+
+    private func state(_ scene: UIWindowScene) -> FutachaSnapshotScene {
+        let key = scene.session.persistentIdentifier
+        if let existing = scenes[key] { return existing }
+        let state = FutachaSnapshotScene(scene: scene, owner: self)
+        scenes[key] = state
+        return state
+    }
+    func setEnabled(_ enabled: Bool) {
+        self.enabled = enabled
+        if !enabled { SavedHtmlDocumentStore.shared.protectionDisabled() }
+        for state in scenes.values {
+            if !enabled { state.hide() }
+            else if !state.active {
+                if state.scene?.activationState == .background { state.backgrounded = true; state.lockFrameReady = false; SavedHtmlDocumentStore.shared.protectBackground() }
+                state.show()
+            }
+        }
+    }
+    func willDeactivate(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = false
+        state.eulaFrameReady = false
+        state.cancelRelease()
+        if enabled { state.show() }
+    }
+    func didEnterBackground(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = false
+        state.backgrounded = true
+        state.lockFrameReady = false
+        state.eulaFrameReady = false
+        state.cancelRelease()
+        if enabled { state.show(); SavedHtmlDocumentStore.shared.protectBackground() }
+    }
+    func didActivate(_ scene: UIWindowScene) {
+        let state = state(scene)
+        state.active = true
+        if !enabled || !state.backgrounded { state.hide(); return }
+        // A static, already-locked Compose screen also has to draw a fresh foreground frame.
+        NotificationCenter.default.post(name: Notification.Name("com.valoser.futacha.app-lock-snapshot-redraw"), object: nil)
+        state.eulaHost?.setNeedsDisplay()
+        tryRelease(state)
+    }
+    func lockFrameDidDraw(sceneIdentifier: String) {
+        guard let state = scenes[sceneIdentifier], state.active, state.backgrounded, enabled else { return }
+        state.lockFrameReady = true
+        SavedHtmlDocumentStore.shared.lockPresentationDidDraw()
+        tryRelease(state)
+    }
+    func savedHtmlPresentationChanged() { for state in scenes.values { tryRelease(state) } }
+    fileprivate func canRelease(_ state: FutachaSnapshotScene) -> Bool {
+        let safeEula = state.eulaFrameReady && state.eulaHost?.mayAcknowledge == true
+        return enabled && state.active && state.backgrounded && (state.lockFrameReady || safeEula) && !SavedHtmlDocumentStore.shared.isSheetPresented
+    }
+    private func tryRelease(_ state: FutachaSnapshotScene) {
+        if canRelease(state) { state.releaseAfterPresentedFrame() }
+    }
+    fileprivate func eulaHostAttached(_ host: FutachaEulaSnapshotDrawView) {
+        guard host.mayAcknowledge, let scene = host.window?.windowScene else { return }
+        let state = state(scene)
+        if state.eulaHost !== host {
+            state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = host
+        }
+    }
+    fileprivate func eulaHostDidDraw(_ host: FutachaEulaSnapshotDrawView) {
+        guard let identifier = host.window?.windowScene?.session.persistentIdentifier,
+              let state = scenes[identifier], state.eulaHost === host, host.mayAcknowledge,
+              enabled, state.active, state.backgrounded else { return }
+        state.eulaFrameReady = true
+        SavedHtmlDocumentStore.shared.eulaPresentationDidDraw()
+        tryRelease(state)
+    }
+    fileprivate func eulaHostDetached(_ host: FutachaEulaSnapshotDrawView) {
+        for state in scenes.values where state.eulaHost === host {
+            state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = nil
+        }
+    }
+    /// Revoke synchronously before accepting the EULA can create any private Compose content.
+    func leaveEula() {
+        for state in scenes.values {
+            state.eulaHost?.mayAcknowledge = false
+            if state.eulaHost != nil {
+                state.cancelRelease(); state.eulaFrameReady = false; state.eulaHost = nil
+            }
+        }
+    }
+}
+
+private final class FutachaSnapshotScene: NSObject {
+    weak var scene: UIWindowScene?
+    unowned let owner: FutachaAppSnapshotProtection
+    var active: Bool
+    var backgrounded = false
+    var lockFrameReady = false
+    weak var eulaHost: FutachaEulaSnapshotDrawView?
+    var eulaFrameReady = false
+    private var cover: UIWindow?
+    private var releaseLink: CADisplayLink?
+    private var presentedFrames = 0
+
+    init(scene: UIWindowScene, owner: FutachaAppSnapshotProtection) {
+        self.scene = scene; self.owner = owner; active = scene.activationState == .foregroundActive
+    }
+    func show() {
+        guard cover == nil, let scene else { return }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let controller = UIViewController()
+        controller.view.backgroundColor = .systemBackground
+        controller.view.accessibilityIdentifier = "app-lock-snapshot-cover"
+        controller.view.isAccessibilityElement = true
+        controller.view.accessibilityLabel = "ロック画面を準備しています"
+        controller.view.accessibilityViewIsModal = true
+        window.rootViewController = controller
+        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+        window.isHidden = false // Do not call makeKeyAndVisible: share/picker/sheet ownership stays unchanged.
+        cover = window
+    }
+    func hide() {
+        cancelRelease()
+        cover?.isHidden = true
+        cover = nil
+        backgrounded = false
+        lockFrameReady = false
+        eulaFrameReady = false
+    }
+    func cancelRelease() { releaseLink?.invalidate(); releaseLink = nil; presentedFrames = 0 }
+    func releaseAfterPresentedFrame() {
+        guard cover != nil, releaseLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(presentationTick))
+        releaseLink = link
+        link.add(to: .main, forMode: .common)
+    }
+    @objc private func presentationTick() {
+        guard owner.canRelease(self) else { cancelRelease(); return }
+        presentedFrames += 1
+        // The acknowledgement came from draw, not layout. Keep covering at least the next display interval.
+        if presentedFrames >= 2 { hide() }
+    }
+}
+
+/// Only the public, pre-Root EULA installs this view. Absence of a Root alone
+/// never authorises release, and a removed/revoked host cannot acknowledge a later draw.
+private final class FutachaEulaSnapshotDrawView: UIView {
+    var mayAcknowledge = true
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        FutachaAppSnapshotProtection.shared.eulaHostDetached(self)
+        if window != nil && mayAcknowledge {
+            FutachaAppSnapshotProtection.shared.eulaHostAttached(self)
+            setNeedsDisplay()
+        }
+    }
+    override func draw(_ rect: CGRect) {
+        super.draw(rect)
+        FutachaAppSnapshotProtection.shared.eulaHostDidDraw(self)
+    }
+    func revoke() {
+        mayAcknowledge = false
+        FutachaAppSnapshotProtection.shared.eulaHostDetached(self)
+    }
+}
+private struct FutachaEulaSnapshotDraw: UIViewRepresentable {
+    func makeUIView(context: Context) -> FutachaEulaSnapshotDrawView {
+        let view = FutachaEulaSnapshotDrawView()
+        view.isOpaque = false; view.backgroundColor = .clear; view.isUserInteractionEnabled = false
+        return view
+    }
+    func updateUIView(_ uiView: FutachaEulaSnapshotDrawView, context: Context) {}
+    static func dismantleUIView(_ uiView: FutachaEulaSnapshotDrawView, coordinator: ()) { uiView.revoke() }
+}
+// END APP LOCK SNAPSHOT PROTECTION
+
+struct SavedHtmlDocument: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+final class SavedHtmlDocumentStore: ObservableObject {
+    static let shared = SavedHtmlDocumentStore()
+    @Published var document: SavedHtmlDocument?
+    /// Published by Compose (MainViewController) once the lock state is resolved
+    /// and the app is unlocked. The saved-HTML sheet is presented outside
+    /// Compose, so it must not appear over (or instead of) the app lock (H7).
+    @Published private(set) var isAppUnlocked = false
+    private var securityScopedURL: URL?
+    private var appLockObserver: NSObjectProtocol?
+    private var awaitingLockFrame = false
+    private(set) var isSheetPresented = false
+
+    private init() {
+        appLockObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("com.valoser.futacha.app-lock"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let unlocked = (notification.userInfo?["unlocked"] as? NSNumber)?.boolValue ?? false
+            if unlocked && self?.awaitingLockFrame == true { return } // Discard a pre-background unlock notification.
+            if self?.isAppUnlocked != unlocked {
+                self?.isAppUnlocked = unlocked
+            }
+        }
+    }
+
+    @discardableResult
+    func openIfSupported(_ url: URL) -> Bool {
+        guard url.isFileURL, ["htm", "html"].contains(url.pathExtension.lowercased()) else {
+            return false
+        }
+        // Replacing an open document only releases the previous URL here; its
+        // sheet's onDismiss runs later and must not touch the new document.
+        releaseSecurityScopedAccess()
+        if url.startAccessingSecurityScopedResource() {
+            securityScopedURL = url
+        }
+        document = SavedHtmlDocument(url: url)
+        return true
+    }
+
+    func protectBackground() {
+        awaitingLockFrame = true
+        isAppUnlocked = false
+    }
+    func lockPresentationDidDraw() { awaitingLockFrame = false }
+    // The EULA itself remains a separate presentation gate. This permits a
+    // future Root unlock notification; it neither unlocks nor presents HTML.
+    func eulaPresentationDidDraw() { awaitingLockFrame = false }
+    func protectionDisabled() { awaitingLockFrame = false }
+    func sheetPresented() {
+        isSheetPresented = true
+        FutachaAppSnapshotProtection.shared.savedHtmlPresentationChanged()
+    }
+
+    /// onDismiss of the sheet. SwiftUI clears the binding before calling it when
+    /// the user closes the sheet; when the document was replaced, the old sheet
+    /// is dismissed while `document` already holds the new one, which stays open.
+    func sheetDismissed() {
+        isSheetPresented = false
+        FutachaAppSnapshotProtection.shared.savedHtmlPresentationChanged()
+        guard document == nil else { return }
+        releaseSecurityScopedAccess()
+    }
+
+    private func releaseSecurityScopedAccess() {
+        securityScopedURL?.stopAccessingSecurityScopedResource()
+        securityScopedURL = nil
+    }
+}
+
+#if DEBUG
+private enum SavedHtmlUITestFixture {
+    private static var didOpen = false
+
+    static func openIfRequested() {
+        guard !didOpen,
+              ProcessInfo.processInfo.arguments.contains("-futacha.issue78.saved_html_fixture") else {
+            return
+        }
+        didOpen = true
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("issue78-saved-thread.htm")
+        // A local 1x1 PNG (must still load) and, when the UI test supplies a
+        // listener, remote references the regex rewrite misses (must never load).
+        let probeImage = url.deletingLastPathComponent().appendingPathComponent("other/local-probe.png")
+        try? FileManager.default.createDirectory(
+            at: probeImage.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? Data(base64Encoded: localProbePng)?.write(to: probeImage)
+        let remote = ProcessInfo.processInfo.environment["FUTACHA_SAVED_HTML_REMOTE_PROBE"].map { base in
+            """
+            <img src=\(base)/unquoted.png><img srcset="\(base)/srcset.png 1x">
+            <link rel=stylesheet href=\(base)/style.css><style>@import "\(base)/import.css";</style>
+            <video poster=\(base)/poster.png></video><meta http-equiv="refresh" content="1;url=\(base)/refresh">
+            """
+        } ?? ""
+        let html = """
+        <!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>
+        <a target=_blank href="other/fu7199371.png">fu7199371.png</a><span
+          id="preview" onclick="previewImg('preview','other/fu7199371.png')">[見る]</span><br>保存本文
+        <img id="futacha-local-probe" src="other/local-probe.png">\(remote)
+        </body></html>
+        """
+        guard (try? html.write(to: url, atomically: true, encoding: .utf8)) != nil else { return }
+        _ = SavedHtmlDocumentStore.shared.openIfSupported(url)
+    }
+
+    static var isActive: Bool {
+        ProcessInfo.processInfo.arguments.contains("-futacha.issue78.saved_html_fixture")
+    }
+
+    private static let localProbePng =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+}
+#endif
+
+/// Blocks every request that is not local (S-3). Compiled once; the store keeps
+/// the compiled list across launches under this identifier.
+private enum SavedHtmlContentBlocker {
+    private static let identifier = "futacha.saved-html.local-only.v1"
+    private static let rules = """
+    [
+      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
+      {"trigger": {"url-filter": "^file:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^data:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^blob:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^about:"}, "action": {"type": "ignore-previous-rules"}}
+    ]
+    """
+    @MainActor private static var compiled: WKContentRuleList?
+
+    @MainActor static func ruleList() async -> WKContentRuleList? {
+        if let compiled { return compiled }
+        guard let store = WKContentRuleListStore.default() else { return nil }
+        let list: WKContentRuleList? = await withCheckedContinuation { continuation in
+            store.compileContentRuleList(
+                forIdentifier: identifier,
+                encodedContentRuleList: rules
+            ) { list, error in
+                if let error { NSLog("Saved HTML content blocker failed: %@", String(describing: error)) }
+                continuation.resume(returning: list)
+            }
+        }
+        compiled = list
+        return list
+    }
+}
+
+private struct SavedHtmlWebView: UIViewRepresentable {
+    let url: URL
+    /// DEBUG fixture only: reports whether the local probe image loaded.
+    var onLocalProbe: ((String) -> Void)? = nil
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        private var worker: Task<String?, Never>?
+        private var loadTask: Task<Void, Never>?
+        var onLocalProbe: ((String) -> Void)?
+
+        func load(_ url: URL, into view: WKWebView) {
+            cancel()
+            let worker = Task.detached(priority: .userInitiated) {
+                try? SavedHtmlDocumentLoader.load(url)
+            }
+            self.worker = worker
+            loadTask = Task { @MainActor [weak view] in
+                let html = await worker.value
+                // The rule list must be in place before the page's first request.
+                let blocker = await SavedHtmlContentBlocker.ruleList()
+                guard !Task.isCancelled, let view else { return }
+                if let blocker {
+                    view.configuration.userContentController.add(blocker)
+                }
+                view.loadHTMLString(
+                    html ?? "<html><meta charset='UTF-8'><body>保存ファイルを読み込めませんでした。</body></html>",
+                    baseURL: url.deletingLastPathComponent()
+                )
+            }
+        }
+
+        func cancel() {
+            loadTask?.cancel()
+            worker?.cancel()
+        }
+
+        /// Links, meta refresh and form posts may only stay on local content.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            decisionHandler(SavedHtmlDocumentLoader.isLocalURL(navigationAction.request.url) ? .allow : .cancel)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let onLocalProbe else { return }
+            // App-injected script runs although page JavaScript is disabled.
+            webView.evaluateJavaScript(
+                "(function(){var i=document.getElementById('futacha-local-probe');return i&&i.complete?i.naturalWidth:-1})()"
+            ) { result, _ in
+                onLocalProbe("local=\((result as? NSNumber)?.intValue ?? -1)")
+            }
+        }
+
+        deinit { cancel() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = false
+        configuration.defaultWebpagePreferences = preferences
+        // No cookies or caches shared with other web views.
+        configuration.websiteDataStore = .nonPersistent()
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        context.coordinator.onLocalProbe = onLocalProbe
+        view.navigationDelegate = context.coordinator
+        context.coordinator.load(url, into: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        coordinator.cancel()
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+    }
+}
+
+private struct SavedHtmlDocumentView: View {
+    let document: SavedHtmlDocument
+    @Environment(\.dismiss) private var dismiss
+    @State private var localProbe = ""
+
+    private var probeHandler: ((String) -> Void)? {
+        #if DEBUG
+        if SavedHtmlUITestFixture.isActive {
+            return { value in DispatchQueue.main.async { localProbe = value } }
+        }
+        #endif
+        return nil
+    }
+
+    var body: some View {
+        FutachaNavigationContainer {
+            SavedHtmlWebView(url: document.url, onLocalProbe: probeHandler)
+                .overlay(alignment: .bottomLeading) {
+                    if !localProbe.isEmpty {
+                        Text(localProbe).font(.caption2).accessibilityIdentifier("savedHtml.localProbe")
+                    }
+                }
+                .navigationTitle("保存済みスレ")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("閉じる") { dismiss() }
+                    }
+                }
+        }
+    }
+}
+
+private let ugcEulaCurrentVersion = "2026-08-22"
+private let ugcEulaDefaultsKey = "review.ugc_eula_accepted_version"
+
+struct ComposeView: UIViewControllerRepresentable {
+    final class Coordinator {
+        private static let issue78ArchiveFixture: Bool = {
+#if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-futacha.issue78.archive_fixture")
+#else
+            false
+#endif
+        }()
+
+        lazy var controller: UIViewController = {
+#if DEBUG
+            if let fixture = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FIXTURE_BASE64"],
+               let data = Data(base64Encoded: fixture),
+               let ext = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FIXTURE_EXTENSION"],
+               ["mp4", "webm"].contains(ext) {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation.\(ext)")
+                if (try? data.write(to: file)) != nil {
+                    if let mode = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_VIEWER"] {
+                        return FutachaComposeHostViewController(content:
+                            CompatViewerVideoValidationControllerKt.CompatViewerVideoValidationController(filePath: file.path, mode: mode))
+                    }
+                    var fallbackPath: String?
+                    if let encoded = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FALLBACK_BASE64"], let bytes = Data(base64Encoded: encoded) {
+                        let fallback = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation-fallback.mp4")
+                        if (try? bytes.write(to: fallback)) != nil { fallbackPath = fallback.path }
+                    }
+                    return FutachaComposeHostViewController(content:
+                        OriginalVideoValidationControllerKt.OriginalVideoValidationController(filePath: file.path, extension: ext,
+                            fallbackFilePath: fallbackPath, remoteUrl: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_REMOTE_URL"],
+                            useLocalFile: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_LOCAL_FILE"] == "1",
+                            muted: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_MUTED"] == "1"))
+                }
+            }
+#endif
+            return FutachaComposeHostViewController(content: MainViewControllerKt.MainViewController(
+                issue78ArchiveFixture: Self.issue78ArchiveFixture
+            ))
+        }()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        context.coordinator.controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+}
+
+/**
+ * Compose itself owns the app chrome, but iOS requires a UIViewController
+ * override to change status-bar glyph contrast or hide the home indicator.
+ * Kotlin publishes just those presentation values; this host keeps the
+ * visible result aligned with the Android compatibility viewer.
+ */
+private final class FutachaComposeHostViewController: UIViewController {
+    private let content: UIViewController
+    private var statusUsesDarkIcons = false
+    private var viewerChromeHidden = false
+    private var systemBarColor = UIColor.black
+    /// L-B11 (C28): the ふたばー風 picture list / viewer asks to be held upright; nothing else posts this.
+    private var portraitLocked = false
+    private var observers: [NSObjectProtocol] = []
+
+    init(content: UIViewController) {
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: Notification.Name("com.valoser.futacha.system-bars"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.applySystemBars(notification.userInfo)
+        })
+        observers.append(center.addObserver(
+            forName: Notification.Name("com.valoser.futacha.viewer-bars"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let hidden = (notification.userInfo?["hidden"] as? NSNumber)?.boolValue else { return }
+            self?.viewerChromeHidden = hidden
+            self?.setNeedsStatusBarAppearanceUpdate()
+            self?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+        })
+        observers.append(center.addObserver(
+            forName: Notification.Name("com.valoser.futacha.futaber-orientation-lock"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, let locked = (notification.userInfo?["portrait"] as? NSNumber)?.boolValue else { return }
+            self.portraitLocked = locked
+            if #available(iOS 16.0, *) {
+                self.setNeedsUpdateOfSupportedInterfaceOrientations()
+                if locked, let scene = self.view.window?.windowScene,
+                   scene.interfaceOrientation.isLandscape {
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+                }
+            } else {
+                // iOS 15: the system re-reads the supported orientations on this call.
+                UIViewController.attemptRotationToDeviceOrientation()
+            }
+        })
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        let center = NotificationCenter.default
+        observers.forEach(center.removeObserver)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = systemBarColor
+        addChild(content)
+        content.view.frame = view.bounds
+        content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(content.view)
+        content.didMove(toParent: self)
+    }
+
+    /// The Info.plist's own list (iPhone: upright and both sides; iPad: all four) unless the viewer asked to be upright.
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        if portraitLocked { return .portrait }
+        return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+    }
+
+    override var childForStatusBarStyle: UIViewController? { nil }
+    override var childForStatusBarHidden: UIViewController? { nil }
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        statusUsesDarkIcons ? .darkContent : .lightContent
+    }
+    override var prefersStatusBarHidden: Bool { viewerChromeHidden }
+    override var prefersHomeIndicatorAutoHidden: Bool { viewerChromeHidden }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        viewerChromeHidden ? .bottom : []
+    }
+
+    private func applySystemBars(_ userInfo: [AnyHashable: Any]?) {
+        func component(_ key: String) -> CGFloat {
+            CGFloat((userInfo?[key] as? NSNumber)?.doubleValue ?? 0.0)
+        }
+        statusUsesDarkIcons = (userInfo?["darkIcons"] as? NSNumber)?.boolValue ?? false
+        systemBarColor = UIColor(
+            red: component("red"),
+            green: component("green"),
+            blue: component("blue"),
+            alpha: 1.0
+        )
+        view.backgroundColor = systemBarColor
+        setNeedsStatusBarAppearanceUpdate()
+    }
+}
+
+struct ContentView: View {
+    /// Colour the ふたばー mode gives the strip below the Compose view (the home-indicator area).
+    /// Nil for every other mode, which keep the system background as before.
+    @State private var futaberHostBackground: Color?
+    @ObservedObject private var savedHtmlStore = SavedHtmlDocumentStore.shared
+    @AppStorage(ugcEulaDefaultsKey) private var acceptedEulaVersion = ""
+    @State private var isUiTestEulaOverrideActive = ProcessInfo.processInfo.arguments.contains(
+        "-review.force_ugc_eula"
+    )
+
+    var body: some View {
+        Group {
+            if acceptedEulaVersion == ugcEulaCurrentVersion && !isUiTestEulaOverrideActive {
+                composeContent
+                    .background(futaberHostBackground ?? Color.clear)
+                    .onReceive(
+                        NotificationCenter.default.publisher(
+                            for: Notification.Name("com.valoser.futacha.futaber-host-background")
+                        )
+                    ) { notification in
+                        if let info = notification.userInfo,
+                           let red = (info["red"] as? NSNumber)?.doubleValue,
+                           let green = (info["green"] as? NSNumber)?.doubleValue,
+                           let blue = (info["blue"] as? NSNumber)?.doubleValue {
+                            futaberHostBackground = Color(red: red, green: green, blue: blue)
+                        } else {
+                            futaberHostBackground = nil
+                        }
+                    }
+            } else {
+                UserGeneratedContentEulaView {
+                    FutachaAppSnapshotProtection.shared.leaveEula()
+                    acceptedEulaVersion = ugcEulaCurrentVersion
+                    isUiTestEulaOverrideActive = false
+                }
+                .background(FutachaEulaSnapshotDraw().allowsHitTesting(false))
+            }
+        }
+        .sheet(item: presentedSavedHtmlDocument, onDismiss: savedHtmlStore.sheetDismissed) { document in
+            SavedHtmlDocumentView(document: document)
+                .onAppear { savedHtmlStore.sheetPresented() }
+        }
+        .onAppear {
+#if DEBUG
+            SavedHtmlUITestFixture.openIfRequested()
+#endif
+        }
+    }
+
+    /// The pending document is held while the EULA is unaccepted or the app is
+    /// locked and presented once Compose reports the app unlocked. A dismissal
+    /// forced by locking keeps the document so it reappears after unlocking;
+    /// only a dismissal while presentable clears it.
+    private var canPresentSavedHtml: Bool {
+        acceptedEulaVersion == ugcEulaCurrentVersion && !isUiTestEulaOverrideActive &&
+            savedHtmlStore.isAppUnlocked
+    }
+
+    private var presentedSavedHtmlDocument: Binding<SavedHtmlDocument?> {
+        Binding(
+            get: { canPresentSavedHtml ? savedHtmlStore.document : nil },
+            set: { newValue in
+                if newValue != nil || canPresentSavedHtml {
+                    savedHtmlStore.document = newValue
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var composeContent: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            // iPadOS places window and tab controls in the top safe area. The
+            // old host extended Compose underneath them, which could clip the
+            // app's top menus on iPad. Keep iPhone's established status-bar
+            // treatment while respecting the complete iPad safe area.
+            ComposeView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Compose handles IME insets. SwiftUI keyboard avoidance would
+                // also shrink this host, lifting the post toolbar twice.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            ComposeView()
+                .ignoresSafeArea(.container, edges: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+}
+
+private struct UserGeneratedContentEulaView: View {
+    @State private var hasConfirmedAgreement = false
+    let onAccept: () -> Void
+
+    var body: some View {
+        FutachaNavigationContainer {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.teal)
+                            .accessibilityHidden(true)
+                        Text("利用規約（EULA）")
+                            .font(.largeTitle.bold())
+                        Text("ユーザー投稿コンテンツに関する同意")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("本アプリは、外部サービス「ふたば☆ちゃんねる」のユーザー投稿コンテンツを表示し、投稿・通報を補助する専用ブラウザです。登録やログインはありませんが、コンテンツへアクセスする前に以下へ同意してください。")
+
+                    TermsSection(
+                        title: "不適切なコンテンツ・迷惑行為を一切容認しません",
+                        body: "違法な内容、わいせつ・暴力的な内容、差別、嫌がらせ、脅迫、個人情報の暴露、その他他者を害する投稿や行為は禁止します。利用者はこれらを投稿せず、他の利用者を攻撃・虐待しないことに同意します。"
+                    )
+                    TermsSection(
+                        title: "通報とブロック",
+                        body: "投稿の右上のメニューボタン「通報・ブロック」（または投稿の長押し）から操作できます。不適切な投稿は「不適切な投稿を通報」で掲示板管理者へ報告できます。迷惑な利用者は「この利用者をブロック」からID・IP・名前などを端末内のNGへ登録し、その投稿を非表示にできます。"
+                    )
+                    TermsSection(
+                        title: "違反時の対応",
+                        body: "違反コンテンツは掲示板管理者により削除され、悪質な利用者はサービス側で利用を制限されることがあります。本アプリでもNGフィルターを利用して表示を制限できます。"
+                    )
+                    TermsSection(
+                        title: "お問い合わせ",
+                        body: "安全上の問題や本アプリについては admin@valoser.com へ連絡できます。投稿そのものの削除依頼は、各投稿の通報機能を利用してください。"
+                    )
+
+                    Button {
+                        hasConfirmedAgreement.toggle()
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: hasConfirmedAgreement ? "checkmark.square.fill" : "square")
+                                .font(.title2)
+                                .foregroundStyle(hasConfirmedAgreement ? .teal : .secondary)
+                            Text("上記の利用規約に同意し、不適切なコンテンツや迷惑行為を投稿しません")
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("ugc-eula-agreement")
+
+                    Button("同意して利用を開始", action: onAccept)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity)
+                        .disabled(!hasConfirmedAgreement)
+                        .accessibilityIdentifier("ugc-eula-accept")
+
+                    Text("同意しない場合、本アプリでユーザー投稿コンテンツを閲覧・投稿することはできません。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: 680, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 28)
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color(uiColor: .systemBackground))
+            .navigationTitle("安全に利用するために")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .accessibilityIdentifier("ugc-eula-screen")
+    }
+}
+
+private struct TermsSection: View {
+    let title: String
+    let bodyText: String
+
+    init(title: String, body: String) {
+        self.title = title
+        self.bodyText = body
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.headline)
+            Text(bodyText)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct FutachaNavigationContainer<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    private var forceLegacyNavigation: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-futacha.legacyNavigation")
+        #else
+        false
+        #endif
+    }
+    var body: some View {
+        if #available(iOS 16.0, *), !forceLegacyNavigation {
+            NavigationStack { content() }
+        } else {
+            NavigationView { content() }.navigationViewStyle(.stack)
+        }
+    }
+}

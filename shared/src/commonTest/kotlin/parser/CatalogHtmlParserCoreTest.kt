@@ -1,0 +1,218 @@
+package com.valoser.futacha.shared.parser
+
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class CatalogHtmlParserCoreTest {
+    @Test
+    fun parseCatalog_acceptsLegacyAndModernTableAttributeSpelling() {
+        val html = """
+            <table class="layout"><tr><td>ignored</td></tr></table>
+            <TABLE data-mode="cat" id = "cattable" class="old-catalog">
+              <TR><TD>
+                <A data-thread="1" HREF="res/7000000001.html">thread</A>
+                <IMG loading="lazy" SRC="/b/cat/7000000001s.JPG" WIDTH="90" HEIGHT="70">
+                <SMALL>世代差分</SMALL><FONT size="2">12</FONT>
+              </TD></TR>
+            </TABLE>
+        """.trimIndent()
+
+        val item = runBlocking {
+            CatalogHtmlParserCore.parseCatalog(html, "https://may.2chan.net/b").single()
+        }
+
+        assertEquals("7000000001", item.id)
+        assertEquals("https://may.2chan.net/b/res/7000000001.html", item.threadUrl)
+        assertEquals("https://may.2chan.net/b/thumb/7000000001s.JPG", item.thumbnailUrl)
+        assertEquals("世代差分", item.title)
+        assertEquals(12, item.replyCount)
+    }
+
+    @Test
+    fun parseCatalog_extractsCells() {
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td><a href='res/354621.htm'><img src='/t/cat/1762145224666s.jpg'></a><br><font size=2>17</font></td>
+                    <td><a href='res/1364612020.htm'><img src='/t/cat/1762436883775s.jpg'></a><br><font size=2>チュートリアル</font></td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(2, items.size)
+        assertEquals("354621", items[0].id)
+        assertEquals("https://www.example.com/res/354621.htm", items[0].threadUrl)
+        // Updated expectation: /cat/ -> /thumb/
+        assertEquals("https://www.example.com/t/thumb/1762145224666s.jpg", items[0].thumbnailUrl)
+        // Updated expectation: Derived full image URL
+        assertEquals("https://www.example.com/t/src/1762145224666.jpg", items[0].fullImageUrl)
+        assertEquals(17, items[0].replyCount)
+        assertEquals("No.354621", items[0].title)
+
+        assertEquals("1364612020", items[1].id)
+        assertEquals("https://www.example.com/res/1364612020.htm", items[1].threadUrl)
+        assertEquals("チュートリアル", items[1].title)
+        assertEquals(0, items[1].replyCount)
+    }
+
+    @Test
+    fun parseCatalog_decodesSupplementaryEntities() {
+        val expected = "\uD878\uDCBC"
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td><a href='res/4000000000.htm'></a><br><small>&#188604;</small><br><font size=2>1</font></td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(1, items.size)
+        assertEquals(expected, items[0].title)
+    }
+
+    @Test
+    fun parseCatalog_preservesNonJpgMediaUrls() {
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/5000000000.htm'>thread</a>
+                        <a href='/t/src/5000000000.webm'>media</a>
+                        <img src='/t/cat/5000000000s.gif'>
+                        <br><font size=2>2</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(1, items.size)
+        assertEquals("https://www.example.com/t/thumb/5000000000s.gif", items[0].thumbnailUrl)
+        assertEquals("https://www.example.com/t/src/5000000000.webm", items[0].fullImageUrl)
+    }
+
+    @Test
+    fun parseCatalog_skipsOversizedCell_andKeepsFollowingEntries() {
+        val oversizedTitle = "x".repeat(100_100)
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/6000000000.htm'>thread</a>
+                        <small>$oversizedTitle</small>
+                    </td>
+                    <td>
+                        <a href='res/6000000001.htm'><img src='/t/cat/6000000001s.jpg'></a>
+                        <br><font size=2>4</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(1, items.size)
+        assertEquals("6000000001", items.single().id)
+        assertEquals(4, items.single().replyCount)
+    }
+
+    @Test
+    fun parseCatalogPage_reportsOversizedSkippedCells() {
+        val oversizedTitle = "x".repeat(100_100)
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/6100000000.htm'>thread</a>
+                        <small>$oversizedTitle</small>
+                    </td>
+                    <td>
+                        <a href='res/6100000001.htm'><img src='/t/cat/6100000001s.jpg'></a>
+                        <br><font size=2>4</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { CatalogHtmlParserCore.parseCatalogPage(html) }
+
+        assertEquals(1, page.items.size)
+        assertTrue(page.parseWarning.isTruncated)
+        assertEquals(1, page.parseWarning.skippedItemCount)
+        assertEquals(1, page.parseWarning.oversizedBlockCount)
+    }
+
+    @Test
+    fun parseCatalog_resolvesProtocolRelativeAndQueryMediaUrls() {
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='//may.2chan.net/b/res/7000000000.htm'>thread</a>
+                        <a href='//may.2chan.net/b/src/7000000000.mp4?dl=1'>media</a>
+                        <img src='//may.2chan.net/b/cat/7000000000s.webp?x=1'>
+                        <br><small>動画テスト</small>
+                        <br><font size=2>9</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html, baseUrl = "https://may.2chan.net/b") }
+
+        assertEquals(1, items.size)
+        assertEquals("7000000000", items[0].id)
+        assertEquals("https://may.2chan.net/b/res/7000000000.htm", items[0].threadUrl)
+        assertEquals("https://may.2chan.net/b/thumb/7000000000s.webp?x=1", items[0].thumbnailUrl)
+        assertEquals("https://may.2chan.net/b/src/7000000000.mp4?dl=1", items[0].fullImageUrl)
+        assertEquals("動画テスト", items[0].title)
+        assertEquals(9, items[0].replyCount)
+    }
+
+    @Test
+    fun parseCatalog_acceptsTheCompatibilityMaximumOf3000Items() {
+        val cells = buildString {
+            repeat(3_000) { index ->
+                append("<td><a href='res/${7_000_000_000L + index}.htm'>thread</a><font size=2>$index</font></td>")
+            }
+        }
+        val html = "<table id='cattable'><tr>$cells</tr></table>"
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(3_000, items.size)
+        assertEquals("7000000000", items.first().id)
+        assertEquals("7000002999", items.last().id)
+    }
+}

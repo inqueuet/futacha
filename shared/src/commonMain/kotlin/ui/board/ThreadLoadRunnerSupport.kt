@@ -1,0 +1,323 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.ThreadPageContent
+import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
+import com.valoser.futacha.shared.compat.toThreadPage
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.ui.compat.threadReloadOnOpenEnabled
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+
+internal data class ThreadLoadRunnerConfig(
+    val threadId: String,
+    val effectiveBoardUrl: String,
+    val threadUrlOverride: String?,
+    val allowOfflineFallback: Boolean,
+    val archiveFallbackTimeoutMillis: Long,
+    val offlineFallbackTimeoutMillis: Long,
+    val localStaleLoadTimeoutMillis: Long,
+    val remoteLoadTimeoutMillis: Long,
+    val preferOfflineFallbackAfterLocalStale: Boolean
+)
+
+internal fun buildThreadLoadRunnerConfig(
+    threadId: String,
+    effectiveBoardUrl: String,
+    threadUrlOverride: String?,
+    allowOfflineFallback: Boolean,
+    archiveFallbackTimeoutMillis: Long,
+    offlineFallbackTimeoutMillis: Long,
+    localStaleLoadTimeoutMillis: Long = THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS,
+    remoteLoadTimeoutMillis: Long = THREAD_REMOTE_LOAD_TIMEOUT_MS,
+    preferOfflineFallbackAfterLocalStale: Boolean = false
+): ThreadLoadRunnerConfig {
+    return ThreadLoadRunnerConfig(
+        threadId = threadId,
+        effectiveBoardUrl = effectiveBoardUrl,
+        threadUrlOverride = threadUrlOverride,
+        allowOfflineFallback = allowOfflineFallback,
+        archiveFallbackTimeoutMillis = archiveFallbackTimeoutMillis,
+        offlineFallbackTimeoutMillis = offlineFallbackTimeoutMillis,
+        localStaleLoadTimeoutMillis = localStaleLoadTimeoutMillis.coerceAtLeast(1L),
+        remoteLoadTimeoutMillis = remoteLoadTimeoutMillis.coerceAtLeast(1_000L),
+        preferOfflineFallbackAfterLocalStale = preferOfflineFallbackAfterLocalStale
+    )
+}
+
+internal data class ThreadLoadRunnerCallbacks(
+    val loadRemoteByUrl: suspend (String) -> ThreadPageContent,
+    val loadRemoteByBoard: suspend (String, String) -> ThreadPageContent,
+    val loadArchiveFallback: suspend () -> ArchiveFallbackOutcome,
+    val loadOfflineFallback: suspend () -> ThreadPage?,
+    val loadLocalStalePage: suspend () -> ThreadPage? = loadOfflineFallback,
+    val onArchiveFallbackTimeout: (String) -> Unit = {},
+    val onOfflineFallbackMiss: () -> Unit = {},
+    val supplementRemote: suspend (ThreadLoadExecutionResult) -> ThreadLoadExecutionResult = { it },
+    val reloadOnOpenEnabled: suspend () -> Boolean = { true }
+)
+
+internal data class ThreadLoadExecutionResult(
+    val page: ThreadPage,
+    val embeddedHtml: List<com.valoser.futacha.shared.model.EmbeddedHtmlContent> = emptyList(),
+    val usedOffline: Boolean,
+    val nextThreadUrlOverride: String?,
+    /**
+     * The page is an archive copy of a dead thread (archive fallback, or a
+     * later load of the inqueuet URL it switched to). It does not prove the
+     * thread alive and may hold fewer posts than a local copy.
+     */
+    val fromArchive: Boolean = false,
+    /**
+     * The server answered 404/410 and the page is the local copy shown instead. The thread is confirmed gone, as when
+     * the copy on screen is kept after a failed refresh (L36: its fall was not recorded).
+     */
+    val remoteGone: Boolean = false
+)
+
+/** The remote load did not answer within its budget; offline/archive fallbacks apply. */
+internal class ThreadLoadTimeoutException(message: String) : Exception(message)
+
+internal fun buildThreadLoadRunnerCallbacks(
+    repository: BoardRepository,
+    httpClient: HttpClient?,
+    fileSystem: FileSystem?,
+    threadId: String,
+    threadTitle: String?,
+    boardName: String = "",
+    boardUrl: String,
+    archiveSearchJson: Json,
+    offlineLookupContext: OfflineThreadLookupContext,
+    offlineSources: List<OfflineThreadSource>,
+    currentThreadUrlOverride: () -> String?,
+    onWarning: (String) -> Unit = {},
+    onInfo: (String) -> Unit = {},
+    compatibilityStore: CompatibilityStore? = null
+): ThreadLoadRunnerCallbacks {
+    // The feature host persists the accepted page after it becomes visible.
+    // Keep loading free of conversion/write work (including manual refresh).
+    suspend fun loadSharedCachedCandidate(): OfflineThreadPageCandidate? {
+        val store = compatibilityStore ?: return null
+        val rawUrl = currentThreadUrlOverride()
+            ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
+        val parsed = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy(rawUrl) ?: return null
+        return runSuspendCatchingPreservingCancellation {
+            store.loadThreadSnapshotByCanonicalUrl(parsed.canonicalUrl)
+                ?.let { snapshot ->
+                    OfflineThreadPageCandidate(snapshot.toThreadPage(threadId), snapshot.fetchedAtEpochMillis)
+                }
+        }.onFailure { error ->
+            onWarning("共有スレキャッシュの読み込みに失敗しました: ${error.message}")
+        }.getOrNull()
+    }
+    // An opened MHT file is served by its own repository: no other copy on the device is shown in its place, and it is
+    // always read, whatever "開いた時に再読込" says (re-audit M30: a saved copy or the shared snapshot came first, and with
+    // the reload off the file's page never came).
+    val staticFile = repository is FutachaStaticThreadRepository
+    // The newer of the saved copy and the shared snapshot (previously a saved copy always won).
+    suspend fun loadNewestLocalPage(onBoardMismatch: (SavedThreadMetadata) -> Unit): ThreadPage? =
+        if (staticFile) null else chooseNewestOfflineThreadPage(
+            saved = loadOfflineThreadPageCandidate(
+                threadId = threadId,
+                lookupContext = offlineLookupContext,
+                fileSystem = fileSystem,
+                sources = offlineSources,
+                onBoardMismatch = onBoardMismatch
+            ),
+            shared = loadSharedCachedCandidate()
+        )
+
+    return ThreadLoadRunnerCallbacks(
+        reloadOnOpenEnabled = {
+            staticFile || (compatibilityStore?.preferences?.first()?.threadReloadOnOpenEnabled() ?: true)
+        },
+        supplementRemote = { result ->
+            if (result.usedOffline || result.fromArchive || repository !is FutachaSharedBoardRepository) result else {
+                // An archive result already merged the archive providers.
+                val source = result.nextThreadUrlOverride?.let(::resolveFutabaSourceUrlFromArchiveUrl)
+                    ?: "${boardUrl.trimEnd('/')}/res/$threadId.htm"
+                runSuspendCatchingPreservingCancellation {
+                    val supplemented = repository.supplement(source, ThreadPageContent(result.page, result.embeddedHtml))
+                    result.copy(page = supplemented.page, embeddedHtml = supplemented.embeddedHtml)
+                }.getOrElse { result }
+            }
+        },
+        loadRemoteByUrl = { url ->
+            val content = withContext(AppDispatchers.io) {
+                repository.getThreadContentByUrl(url)
+            }
+            content
+        },
+        loadRemoteByBoard = { effectiveBoardUrl, targetThreadId ->
+            val content = withContext(AppDispatchers.io) {
+                repository.getThreadContent(effectiveBoardUrl, targetThreadId)
+            }
+            content
+        },
+        loadArchiveFallback = {
+            performThreadArchiveFallback(
+                httpClient = httpClient,
+                repository = repository,
+                threadId = threadId,
+                threadTitle = threadTitle,
+                boardUrl = boardUrl,
+                threadUrlOverride = currentThreadUrlOverride(),
+                archiveSearchJson = archiveSearchJson,
+                onSearchFailure = onWarning,
+                onSuccessLog = onInfo
+            )
+        },
+        loadOfflineFallback = {
+            withContext(AppDispatchers.io) {
+                loadNewestLocalPage { metadata ->
+                    onWarning(
+                        buildOfflineMetadataBoardMismatchLogMessage(
+                            threadId = threadId,
+                            boardUrl = metadata.boardUrl
+                        )
+                    )
+                }
+            }
+        },
+        loadLocalStalePage = {
+            withContext(AppDispatchers.io) {
+                loadNewestLocalPage {}
+            }
+        },
+        onArchiveFallbackTimeout = onWarning,
+        onOfflineFallbackMiss = {
+            if (hasOfflineThreadSources(offlineSources)) {
+                onInfo(
+                    buildOfflineMetadataNotFoundLogMessage(
+                        threadId = threadId,
+                        boardIdCandidates = offlineLookupContext.boardIdCandidates
+                    )
+                )
+            }
+        }
+    )
+}
+
+internal suspend fun loadThreadLocalStalePageIfAvailable(
+    config: ThreadLoadRunnerConfig,
+    callbacks: ThreadLoadRunnerCallbacks
+): ThreadLoadExecutionResult? {
+    if (!config.allowOfflineFallback) return null
+    val localPage = withTimeoutOrNull(config.localStaleLoadTimeoutMillis) {
+        callbacks.loadLocalStalePage()
+    } ?: return null
+    return ThreadLoadExecutionResult(
+        page = localPage,
+        usedOffline = true,
+        nextThreadUrlOverride = config.threadUrlOverride
+    )
+}
+
+internal suspend fun performThreadLoadWithOfflineFallback(
+    config: ThreadLoadRunnerConfig,
+    callbacks: ThreadLoadRunnerCallbacks
+): ThreadLoadExecutionResult {
+    try {
+        val content = withTimeoutOrNull(config.remoteLoadTimeoutMillis) {
+            when (
+                val fetchRequest = resolveThreadRemoteFetchRequest(
+                    threadUrl = config.threadUrlOverride,
+                    targetThreadId = config.threadId,
+                    boardUrl = config.effectiveBoardUrl
+                )
+            ) {
+                is ThreadRemoteFetchRequest.ByUrl -> callbacks.loadRemoteByUrl(fetchRequest.url)
+                    .let { it to isInqueuetArchiveThreadUrl(fetchRequest.url) }
+                is ThreadRemoteFetchRequest.ByBoard -> callbacks.loadRemoteByBoard(
+                    fetchRequest.boardUrl,
+                    fetchRequest.threadId
+                ) to false
+            }
+        } ?: throw ThreadLoadTimeoutException("Thread load timed out after ${config.remoteLoadTimeoutMillis}ms")
+        return ThreadLoadExecutionResult(
+            page = content.first.page,
+            embeddedHtml = content.first.embeddedHtml,
+            usedOffline = false,
+            nextThreadUrlOverride = config.threadUrlOverride,
+            fromArchive = content.second
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        val fallbackState = resolveThreadLoadFallbackState(
+            error = e,
+            allowOfflineFallback = config.allowOfflineFallback
+        )
+        val shouldPreferOffline = shouldPreferOfflineFallbackAfterLocalStale(
+            config = config,
+            fallbackState = fallbackState
+        )
+        val archiveOutcome = if (!shouldPreferOffline && fallbackState.shouldTryArchiveFallback) {
+            withTimeoutOrNull(config.archiveFallbackTimeoutMillis) {
+                callbacks.loadArchiveFallback()
+            } ?: run {
+                callbacks.onArchiveFallbackTimeout(
+                    buildArchiveFallbackTimeoutMessage(
+                        threadId = config.threadId,
+                        timeoutMillis = config.archiveFallbackTimeoutMillis
+                    )
+                )
+                ArchiveFallbackOutcome.NoMatch
+            }
+        } else {
+            ArchiveFallbackOutcome.NoMatch
+        }
+        return when (
+            val archiveDecision = if (shouldPreferOffline) {
+                ThreadLoadPostArchiveDecision.TryOffline
+            } else {
+                resolveThreadLoadPostArchiveDecision(
+                    primaryError = e,
+                    fallbackState = fallbackState,
+                    archiveOutcome = archiveOutcome
+                )
+            }
+        ) {
+            is ThreadLoadPostArchiveDecision.UseArchive -> ThreadLoadExecutionResult(
+                page = archiveDecision.page,
+                embeddedHtml = archiveDecision.embeddedHtml,
+                usedOffline = false,
+                nextThreadUrlOverride = archiveDecision.threadUrl ?: config.threadUrlOverride,
+                fromArchive = true
+            )
+            is ThreadLoadPostArchiveDecision.Fail -> throw archiveDecision.error
+            ThreadLoadPostArchiveDecision.TryOffline -> {
+                val offlinePage = withTimeoutOrNull(config.offlineFallbackTimeoutMillis) {
+                    callbacks.loadOfflineFallback()
+                }
+                if (offlinePage == null) {
+                    callbacks.onOfflineFallbackMiss()
+                }
+                when (
+                    val offlineDecision = resolveThreadLoadPostOfflineDecision(
+                        primaryError = e,
+                        offlinePage = offlinePage
+                    )
+                ) {
+                    is ThreadLoadPostOfflineDecision.UseOffline -> ThreadLoadExecutionResult(
+                        page = offlineDecision.page,
+                        embeddedHtml = offlineDecision.embeddedHtml,
+                        usedOffline = true,
+                        nextThreadUrlOverride = config.threadUrlOverride,
+                        remoteGone = e.statusCodeOrNull().let { it == 404 || it == 410 }
+                    )
+                    is ThreadLoadPostOfflineDecision.Fail -> throw offlineDecision.error
+                }
+            }
+        }
+    }
+}

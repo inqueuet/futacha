@@ -1,0 +1,21 @@
+minimum_ios_version = '15.1'
+platform :ios, minimum_ios_version
+use_modular_headers!
+
+target 'iosApp' do
+  # Firebase 13+ is managed by the Xcode project's Swift Package references.
+  pod 'shared', :path => '../shared'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+      current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+      if current_target.nil? || Gem::Version.new(current_target) < Gem::Version.new(minimum_ios_version)
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
+      end
+    end
+
+  end
+end

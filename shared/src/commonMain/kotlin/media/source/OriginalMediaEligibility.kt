@@ -1,0 +1,42 @@
+package com.valoser.futacha.shared.media.source
+
+import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
+import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
+import io.ktor.http.Url
+
+/** Thumbnail and video requests must not implicitly download an original image. */
+internal fun isSharedOriginalImageUrl(value: String): Boolean =
+    isSharedOriginalUrl(value, FUTABA_COMPAT_IMAGE_EXTENSIONS) || isAimogeOriginalUrl(value, FUTABA_COMPAT_IMAGE_EXTENSIONS)
+
+internal fun isSharedOriginalVideoUrl(value: String): Boolean =
+    isSharedOriginalUrl(value, FUTABA_COMPAT_VIDEO_EXTENSIONS) || isAimogeOriginalUrl(value, FUTABA_COMPAT_VIDEO_EXTENSIONS)
+
+internal fun isSharedOriginalMediaUrl(value: String): Boolean =
+    isSharedOriginalImageUrl(value) || isSharedOriginalVideoUrl(value)
+
+/** Strip only UI fragments; signed query bytes remain part of the original's identity. */
+internal fun originalMediaRequestFromUrl(value: String): OriginalMediaRequest = OriginalMediaRequest(
+    url = value.substringBefore('#'),
+    reloadToken = value.substringAfter('#', "").takeIf { it.startsWith("compat-reload=") }
+        ?.substringAfter('=')?.toLongOrNull() ?: 0L
+)
+
+internal fun originalVideoRequest(value: String): OriginalMediaRequest = originalMediaRequestFromUrl(value)
+
+private fun isSharedOriginalUrl(value: String, extensions: Set<String>): Boolean {
+    val url = runCatching { Url(value) }.getOrNull() ?: return false
+    return url.protocol.name in setOf("http", "https") &&
+        (url.host.equals("2chan.net", true) || url.host.endsWith(".2chan.net", true)) &&
+        url.encodedPath.contains("/src/") &&
+        url.encodedPath.substringAfterLast('.').lowercase() in extensions
+}
+
+/** An あいもげ attachment original (`https://storage.nijiurachan.net/.../attachments/...`); thumbnails are not. */
+private fun isAimogeOriginalUrl(value: String, extensions: Set<String>): Boolean {
+    val url = runCatching { Url(value) }.getOrNull() ?: return false
+    return url.protocol.name == "https" &&
+        url.host.equals("storage.nijiurachan.net", true) &&
+        url.port == 443 &&
+        url.encodedPath.contains("/attachments/") &&
+        url.encodedPath.substringAfterLast('.').lowercase() in extensions
+}

@@ -1,0 +1,1596 @@
+package com.valoser.futacha.shared.repository
+
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedPost
+import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.SavedThreadIndex
+import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.service.buildLegacyThreadStorageId
+import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.FileWriteSink
+import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+
+class SavedThreadRepositoryTest {
+    private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
+
+    private companion object {
+        /** G4-1: the marker lives in the private files area, not beside a public root. */
+        const val PURGE_MARKER = "private/.autosaved_threads.purge-cutoff"
+        const val LEGACY_PURGE_MARKER = ".autosaved_threads.purge-cutoff"
+    }
+
+    @Test fun purgeMarkerIsKeptInThePrivateFilesArea() = runBlocking {
+        assertEquals(PURGE_MARKER, savedThreadPurgeMarkerPath("autosaved_threads"))
+        assertEquals("private/.imported_threads.purge-cutoff", savedThreadPurgeMarkerPath("imported_threads/"))
+        assertEquals("private/a/.b.purge-cutoff", savedThreadPurgeMarkerPath("a/b"))
+        // Already private or absolute roots keep their sibling.
+        assertEquals("private/x/.y.purge-cutoff", savedThreadPurgeMarkerPath("private/x/y"))
+        assertEquals("/data/.root.purge-cutoff", savedThreadPurgeMarkerPath("/data/root"))
+
+        val files = InMemoryFileSystem()
+        val failing = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        files.writeString("autosaved_threads/b__1/metadata.json", json.encodeToString(savedMetadata("1", "b", "b__1"))).getOrThrow()
+        files.writeString(LEGACY_PURGE_MARKER, "1\nstale").getOrThrow()
+        assertTrue(SavedThreadRepository(failing, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists(PURGE_MARKER))
+        // A new purge supersedes and removes a marker an older build left in the public folder.
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+    }
+
+    @Test fun legacyPurgeMarkerIsMovedAndHonouredOnce() = runBlocking {
+        val files = InMemoryFileSystem()
+        val storageId = buildThreadStorageId("b", "123")
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId))
+        ).getOrThrow()
+        // Left by an older build whose purge was interrupted, beside the root.
+        files.writeString(LEGACY_PURGE_MARKER, "${afterNowMillis()}\n$storageId").getOrThrow()
+
+        val restarted = SavedThreadRepository(object : FileSystem by files {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(!files.exists("autosaved_threads/$storageId"))
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertTrue(!files.exists(LEGACY_PURGE_MARKER))
+    }
+
+    @Test fun interruptedPurgeResumeDoesNotBlockReadsOrSaves() = runBlocking {
+        val files = InMemoryFileSystem()
+        val releaseDeletes = CompletableDeferred<Unit>()
+        val deleteStarted = CompletableDeferred<Unit>()
+        val slowDeletes = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path.startsWith("autosaved_threads/gone")) {
+                    deleteStarted.complete(Unit)
+                    releaseDeletes.await()
+                }
+                return files.deleteRecursively(path)
+            }
+        }
+        val goneIds = (1..3).map { "gone$it" }
+        goneIds.forEach { id ->
+            files.writeString("autosaved_threads/$id/metadata.json", json.encodeToString(savedMetadata(id, "b", id))).getOrThrow()
+        }
+        val liveId = buildThreadStorageId("b", "live")
+        files.writeString(
+            "autosaved_threads/$liveId/metadata.json",
+            json.encodeToString(savedMetadata("live", "b", liveId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+        files.writeString(PURGE_MARKER, (listOf(afterNowMillis().toString()) + goneIds).joinToString("\n")).getOrThrow()
+
+        val restarted = SavedThreadRepository(slowDeletes, "autosaved_threads")
+        withTimeout(5_000L) {
+            // G4-2: the first read returns while the leftovers are still being deleted.
+            assertEquals("live", restarted.loadThreadMetadata("live", "b").getOrThrow().threadId)
+            deleteStarted.await()
+            // Leftovers are hidden at once, and saves are not held up by the deletion.
+            assertTrue(restarted.loadThreadMetadata("gone2", "b").isFailure)
+            restarted.addThreadToIndex(savedThread("new", "b", "b__new", afterNowMillis(), 1L)).getOrThrow()
+        }
+        assertTrue(files.exists("autosaved_threads/gone2/metadata.json"))
+        releaseDeletes.complete(Unit)
+        restarted.awaitInterruptedPurgeResume()
+        goneIds.forEach { assertTrue(!files.exists("autosaved_threads/$it")) }
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertEquals(listOf("new"), restarted.getAllThreads().map { it.threadId })
+    }
+
+    @Test fun lateResumeOfAnOlderPurgeKeepsTheNewerMarker() = runBlocking {
+        val files = InMemoryFileSystem()
+        val releaseDeletes = CompletableDeferred<Unit>()
+        val deleteStarted = CompletableDeferred<Unit>()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path == "autosaved_threads/old") {
+                    deleteStarted.complete(Unit)
+                    releaseDeletes.await()
+                }
+                // The new purge's whole-root delete fails, leaving its marker.
+                if (path == "autosaved_threads") return Result.failure(IllegalStateException("storage failure"))
+                return files.deleteRecursively(path)
+            }
+        }
+        files.writeString("autosaved_threads/old/metadata.json", json.encodeToString(savedMetadata("old", "b", "old"))).getOrThrow()
+        files.writeString(PURGE_MARKER, "${afterNowMillis()}\nold").getOrThrow()
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        withTimeout(5_000L) {
+            assertTrue(repo.loadThreadMetadata("old", "b").isFailure)
+            deleteStarted.await()
+        }
+
+        // A new purge starts while the resume of the old one is still deleting.
+        files.writeString("autosaved_threads/newer/metadata.json", json.encodeToString(savedMetadata("newer", "b", "newer"))).getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").purgeAllStorage().isFailure)
+        val newerMarker = files.readString(PURGE_MARKER).getOrThrow()
+        releaseDeletes.complete(Unit)
+        repo.awaitInterruptedPurgeResume()
+
+        // G4-3: the late resume neither rewrote nor deleted the newer purge's marker.
+        assertEquals(newerMarker, files.readString(PURGE_MARKER).getOrThrow())
+        assertTrue("newer" in newerMarker)
+        assertTrue(repo.loadThreadMetadata("newer", "b").isFailure)
+    }
+
+    @Test fun partialDeletionBackupCannotResurrectDeletedThreads() = runBlocking {
+        val files = InMemoryFileSystem()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (path.endsWith("keep")) Result.failure(IllegalStateException("busy"))
+                else files.deleteRecursively(path)
+        }
+        val repo = SavedThreadRepository(fs, "saved_threads")
+        repo.addThreadToIndex(savedThread("1", "b", "gone", 1L, 10L)).getOrThrow()
+        repo.addThreadToIndex(savedThread("2", "b", "keep", 1L, 10L)).getOrThrow()
+        files.writeString("saved_threads/gone/media", "one").getOrThrow()
+        files.writeString("saved_threads/keep/media", "two").getOrThrow()
+        assertTrue(repo.deleteAllThreads().isFailure)
+        files.writeString("saved_threads/index.json", "{broken").getOrThrow()
+        assertEquals(listOf("2"), SavedThreadRepository(fs, "saved_threads").getAllThreads().map { it.threadId })
+    }
+
+    @Test fun purgeFailureStillClearsPrimaryAndRecoveryIndexes() = runBlocking {
+        val files = InMemoryFileSystem()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        repo.addThreadToIndex(savedThread("1", "b", "one", 1L, 10L)).getOrThrow()
+        assertTrue(repo.purgeAllStorage().isFailure)
+        files.writeString("autosaved_threads/index.json", "{broken").getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").getAllThreads().isEmpty())
+    }
+
+    @Test fun purgeContinuesAfterAFileCountChunkLimit() = runBlocking {
+        val files = InMemoryFileSystem()
+        var attempts = 0
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (++attempts == 1) Result.failure(IllegalStateException("Too many files while deleting file tree item"))
+                else files.deleteRecursively(path)
+        }
+        val repo = SavedThreadRepository(fs, "autosaved_threads")
+        files.writeString("autosaved_threads/orphan/media", "one").getOrThrow()
+        repo.purgeAllStorage().getOrThrow()
+        assertEquals(2, attempts)
+        assertTrue(!files.exists("autosaved_threads/orphan/media"))
+        assertTrue(repo.getAllThreads().isEmpty())
+    }
+
+    @Test fun interruptedPurgeKeepsDeletedThreadsOutOfRecoveryAfterRestart() = runBlocking {
+        val files = InMemoryFileSystem()
+        var failDeletes = true
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (failDeletes) Result.failure(IllegalStateException("storage failure"))
+                else files.deleteRecursively(path)
+        }
+        files.writeString(
+            "autosaved_threads/b__123/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", "b__123"))
+        ).getOrThrow()
+        assertTrue(SavedThreadRepository(fs, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists("autosaved_threads/b__123/metadata.json"))
+
+        // A new instance stands for the app after a restart.
+        val restarted = SavedThreadRepository(fs, "autosaved_threads")
+        assertEquals(0, restarted.recoverUnindexedThreads().getOrThrow())
+        assertTrue(restarted.loadIndex().threads.isEmpty())
+
+        failDeletes = false
+        restarted.purgeAllStorage().getOrThrow()
+        assertTrue(!files.exists(PURGE_MARKER))
+    }
+
+    @Test fun interruptedPurgeIsFinishedAfterRestartInsteadOfServingDeletedThreads() = runBlocking {
+        val files = InMemoryFileSystem()
+        // The whole-root delete fails (e.g. the OS file limit); single folders still delete.
+        val beforeRestart = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                if (path == "autosaved_threads") Result.failure(IllegalStateException("storage failure"))
+                else files.deleteRecursively(path)
+        }
+        val deletedId = buildThreadStorageId("b", "123")
+        val laterId = buildThreadStorageId("b", "456")
+        files.writeString(
+            "autosaved_threads/$deletedId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", deletedId))
+        ).getOrThrow()
+        files.writeString("autosaved_threads/index.json.1.all-delete.backup", "{}").getOrThrow()
+        assertTrue(SavedThreadRepository(beforeRestart, "autosaved_threads").purgeAllStorage().isFailure)
+        assertTrue(files.exists("autosaved_threads/$deletedId/metadata.json"))
+        // Saved after the failed purge: never part of it.
+        files.writeString(
+            "autosaved_threads/$laterId/metadata.json",
+            json.encodeToString(savedMetadata("456", "b", laterId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+
+        // A new file system object stands for a new process: no in-memory purge state.
+        val restarted = SavedThreadRepository(object : FileSystem by files {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        // The leftovers are deleted in the background (G4-2).
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(!files.exists("autosaved_threads/$deletedId"))
+        assertTrue(!files.exists("autosaved_threads/index.json.1.all-delete.backup"))
+        assertTrue(!files.exists(PURGE_MARKER))
+        assertEquals("456", restarted.loadThreadMetadata("456", "b").getOrThrow().threadId)
+    }
+
+    @Test fun undeletableLeftoverOfAPurgeStaysHiddenUntilSavedAgain() = runBlocking {
+        val files = InMemoryFileSystem()
+        val failing = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> =
+                Result.failure(IllegalStateException("storage failure"))
+        }
+        val storageId = buildThreadStorageId("b", "123")
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId))
+        ).getOrThrow()
+        val repo = SavedThreadRepository(failing, "autosaved_threads")
+        assertTrue(repo.loadThreadMetadata("123", "b").isSuccess)
+        assertTrue(repo.purgeAllStorage().isFailure)
+        assertTrue(repo.loadThreadMetadata("123", "b").isFailure)
+
+        val restarted = SavedThreadRepository(object : FileSystem by failing {}, "autosaved_threads")
+        assertTrue(restarted.loadThreadMetadata("123", "b").isFailure)
+        restarted.awaitInterruptedPurgeResume()
+        assertTrue(files.exists(PURGE_MARKER))
+
+        // The thread saved again into the same folder after the purge is shown.
+        files.writeString(
+            "autosaved_threads/$storageId/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", storageId).copy(savedAt = afterNowMillis()))
+        ).getOrThrow()
+        assertEquals("123", restarted.loadThreadMetadata("123", "b").getOrThrow().threadId)
+    }
+
+    @Test fun purgeThroughAnotherInstanceDiscardsASaveStartedBeforeIt() = runBlocking {
+        val files = InMemoryFileSystem()
+        val app = SavedThreadRepository(files, "autosaved_threads")
+        val cleanup = SavedThreadRepository(files, "autosaved_threads")
+        val startedBeforePurge = savedThread("123", "b", "b__123_s1_x", 1L, 10L)
+        files.writeString("autosaved_threads/b__123_s1_x/metadata.json", "{}").getOrThrow()
+
+        cleanup.purgeIndexedThreadStorage("123", "b").getOrThrow()
+
+        assertTrue(app.addThreadToIndex(startedBeforePurge).isFailure)
+        assertTrue(app.loadIndex().threads.isEmpty())
+        assertTrue(!files.exists("autosaved_threads/b__123_s1_x"))
+        // A save started afterwards is indexed as usual.
+        files.writeString("autosaved_threads/b__123_s1_x/metadata.json", "{}").getOrThrow()
+        app.addThreadToIndex(startedBeforePurge.copy(savedAt = afterNowMillis())).getOrThrow()
+        assertEquals(listOf("123"), cleanup.loadIndex().threads.map { it.threadId })
+    }
+
+    private fun afterNowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds() + 1_000L
+
+    @Test fun replacementCleanupDeletesWithoutHoldingTheIndexLock() = runBlocking {
+        val files = InMemoryFileSystem()
+        val deleting = CompletableDeferred<Unit>()
+        val releaseDelete = CompletableDeferred<Unit>()
+        val fs = object : FileSystem by files {
+            override suspend fun deleteRecursively(path: String): Result<Unit> {
+                if (path.endsWith("old_generation")) {
+                    deleting.complete(Unit)
+                    releaseDelete.await()
+                }
+                return files.deleteRecursively(path)
+            }
+        }
+        val repository = SavedThreadRepository(fs, "saved_threads")
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        repository.addThreadToIndex(old).getOrThrow()
+        val replacing = async {
+            repository.addThreadToIndex(old.copy(storageId = "new_generation", savedAt = 200L)).getOrThrow()
+        }
+        deleting.await()
+        // Index readers are not blocked by the slow delete of the old generation.
+        assertEquals("new_generation", withTimeout(2_000L) { repository.resolveIndexedStorageId("123", "b") })
+        releaseDelete.complete(Unit)
+        replacing.await()
+        assertTrue(!files.exists("saved_threads/old_generation/metadata.json"))
+    }
+
+    @Test
+    fun replacementCleanupKeepsGenerationRepublishedWhileWaitingForStorageLock() = runBlocking {
+        val files = InMemoryFileSystem()
+        val first = SavedThreadRepository(files, "saved_threads")
+        val second = SavedThreadRepository(files, "saved_threads")
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        val fresh = old.copy(storageId = "new_generation", savedAt = 200L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        files.writeString("saved_threads/new_generation/metadata.json", "{}").getOrThrow()
+        first.addThreadToIndex(old).getOrThrow()
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch {
+            ThreadStorageLockRegistry.withStorageLock(first.storageLockKey("old_generation")) {
+                acquired.complete(Unit)
+                release.await()
+            }
+        }
+        acquired.await()
+        val replacing = async { first.addThreadToIndex(fresh).getOrThrow() }
+        withTimeout(5_000L) {
+            while (second.resolveIndexedStorageId("123", "b") != "new_generation") delay(5)
+        }
+        second.addThreadToIndex(old.copy(savedAt = 300L)).getOrThrow()
+        release.complete(Unit)
+        holder.join()
+        replacing.await()
+        assertEquals("old_generation", first.resolveIndexedStorageId("123", "b"))
+        assertTrue(files.exists("saved_threads/old_generation/metadata.json"))
+    }
+
+    @Test
+    fun cleanupContinuesAfterCallerLockWaitExpires() = runBlocking {
+        val files = InMemoryFileSystem()
+        val repository = SavedThreadRepository(files, "saved_threads")
+        repository.replacedStorageCleanupWaitMillis = 20L
+        val old = savedThread("123", "b", "old_generation", 100L, 10L)
+        files.writeString("saved_threads/old_generation/metadata.json", "{}").getOrThrow()
+        repository.addThreadToIndex(old).getOrThrow()
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch {
+            ThreadStorageLockRegistry.withStorageLock(repository.storageLockKey("old_generation")) {
+                acquired.complete(Unit)
+                release.await()
+            }
+        }
+        acquired.await()
+        repository.addThreadToIndex(old.copy(storageId = "new_generation", savedAt = 200L)).getOrThrow()
+        assertTrue(files.exists("saved_threads/old_generation"))
+        release.complete(Unit)
+        holder.join()
+        withTimeout(5_000L) { while (files.exists("saved_threads/old_generation")) delay(5) }
+        assertEquals("new_generation", repository.resolveIndexedStorageId("123", "b"))
+    }
+
+    @Test
+    fun loadIndex_repairsDuplicateStorageEntriesAndTotalSize() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+        val newerThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val olderThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val otherThread = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 150L,
+            totalSize = 40L
+        )
+
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(olderThread, newerThread, otherThread),
+                    totalSize = 999L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        val repaired = repository.loadIndex()
+
+        assertEquals(listOf(newerThread, otherThread), repaired.threads)
+        assertEquals(60L, repaired.totalSize)
+    }
+
+    @Test
+    fun savedThreadRepositorySupport_resolvesMetadataCandidatesAndSanitizesIndex() {
+        val newer = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val older = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val sanitized = sanitizeSavedThreadIndex(
+            index = SavedThreadIndex(
+                threads = listOf(older, newer),
+                totalSize = 999L,
+                lastUpdated = 1L
+            ),
+            nowMillis = 300L
+        )
+
+        assertEquals(listOf(newer), sanitized.index.threads)
+        assertEquals(20L, sanitized.index.totalSize)
+        assertEquals(1, sanitized.droppedDuplicateCount)
+        assertEquals(
+            listOf(
+                "${buildThreadStorageId("b", "123")}/metadata.json",
+                "${buildLegacyThreadStorageId("b", "123")}/metadata.json",
+                "123/metadata.json"
+            ),
+            resolveSavedThreadMetadataCandidates(listOf(older, newer), "123", "b")
+        )
+    }
+
+    @Test
+    fun sanitizeSavedThreadIndexDropsInvalidPathsAndNegativeCounters() {
+        val valid = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val traversal = valid.copy(threadId = "456", storageId = "../private")
+        val negative = valid.copy(threadId = "789", storageId = "b__789", postCount = -1)
+
+        val sanitized = sanitizeSavedThreadIndex(
+            index = SavedThreadIndex(
+                threads = listOf(traversal, valid, negative),
+                totalSize = Long.MAX_VALUE,
+                lastUpdated = 1L
+            ),
+            nowMillis = 300L
+        )
+
+        assertEquals(listOf(valid), sanitized.index.threads)
+        assertEquals(20L, sanitized.index.totalSize)
+        assertEquals(0, sanitized.droppedDuplicateCount)
+        assertEquals(2, sanitized.droppedInvalidCount)
+    }
+
+    @Test
+    fun loadThreadMetadata_fallsBackToLegacyStoragePath() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val legacyStorageId = buildLegacyThreadStorageId("b", "123")
+        val metadata = savedMetadata(threadId = "123", boardId = "b", storageId = legacyStorageId)
+
+        fileSystem.writeString(
+            "saved_threads/$legacyStorageId/metadata.json",
+            json.encodeToString(metadata)
+        ).getOrThrow()
+
+        val loaded = repository.loadThreadMetadata("123", "b").getOrThrow()
+
+        assertEquals(metadata, loaded)
+    }
+
+    @Test
+    fun loadThreadMetadata_fallsBackToMetadataBackupWhenPrimaryIsCorrupted() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+        val metadata = savedMetadata(threadId = "123", boardId = "b", storageId = storageId)
+
+        fileSystem.writeString(
+            "saved_threads/$storageId/metadata.json",
+            "{broken"
+        ).getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/$storageId/metadata.json.backup",
+            json.encodeToString(metadata)
+        ).getOrThrow()
+
+        val loaded = repository.loadThreadMetadata("123", "b").getOrThrow()
+
+        assertEquals(metadata, loaded)
+    }
+
+    @Test
+    fun loadIndex_usesBackupWhenPrimaryIsCorrupted() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val thread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+
+        fileSystem.writeString("saved_threads/index.json", "{invalid").getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(thread),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        val loaded = repository.loadIndex()
+
+        assertEquals(listOf(thread), loaded.threads)
+        assertEquals(10L, loaded.totalSize)
+    }
+
+    @Test
+    fun loadIndex_throwsWhenPrimaryAndBackupAreBothCorrupted() {
+        runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+
+        fileSystem.writeString("saved_threads/index.json", "{invalid").getOrThrow()
+        fileSystem.writeString("saved_threads/index.json.backup", "{invalid").getOrThrow()
+
+        assertFailsWith<IllegalStateException> {
+            repository.loadIndex()
+        }
+        }
+    }
+
+    @Test
+    fun threadExists_checksFallbackStoragePathsWhenIndexIsMissing() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val currentStorageId = buildThreadStorageId("b", "123")
+
+        fileSystem.createDirectory("saved_threads/$currentStorageId").getOrThrow()
+
+        assertTrue(repository.threadExists("123", "b"))
+    }
+
+    @Test
+    fun getThreadHtmlPath_returnsResolvedAbsolutePathForPathStorage() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+
+        val path = repository.getThreadHtmlPath("123", "b")
+
+        assertEquals("/virtual/saved_threads/$storageId/123.htm", path)
+    }
+
+    @Test
+    fun getThreadHtmlPath_returnsRelativePathForTreeUriStorage() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = "ignored",
+            baseSaveLocation = SaveLocation.TreeUri("content://tree/root")
+        )
+        val storageId = buildThreadStorageId("b", "123")
+
+        val path = repository.getThreadHtmlPath("123", "b")
+
+        assertEquals("$storageId/123.htm", path)
+    }
+
+    @Test
+    fun getThreadHtmlPath_prefersLatestIndexedStorageId() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val indexed = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = "b__123_generation",
+            savedAt = 300L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(indexed).getOrThrow()
+        val indexJson = fileSystem.readString("saved_threads/index.json").getOrThrow()
+
+        val path = repository.getThreadHtmlPath("123", "b")
+
+        assertTrue(!indexJson.contains('\n'))
+        assertEquals("/virtual/saved_threads/b__123_generation/123.htm", path)
+    }
+
+    @Test
+    fun updateThread_replacesExistingEntryAndRecalculatesStats() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val original = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val other = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+        repository.addThreadToIndex(original).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+
+        val updated = original.copy(
+            title = "updated-title",
+            totalSize = 99L,
+            imageCount = 3
+        )
+
+        repository.updateThread(updated).getOrThrow()
+
+        val threads = repository.getAllThreads()
+        assertEquals(listOf(updated, other), threads)
+        assertEquals(119L, repository.getTotalSize())
+    }
+
+    @Test
+    fun updateThread_skipsIndexWriteWhenEntryIsUnchanged() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val original = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(original).getOrThrow()
+        val indexWritesBefore = fileSystem.writeCount("saved_threads/index.json")
+        val backupWritesBefore = fileSystem.writeCount("saved_threads/index.json.backup")
+
+        repository.updateThread(original).getOrThrow()
+
+        assertEquals(indexWritesBefore, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(backupWritesBefore, fileSystem.writeCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
+    fun removeThreadFromIndex_removesMatchingEntryAndRecalculatesStats() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val other = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+
+        repository.removeThreadFromIndex("123", "b").getOrThrow()
+
+        assertEquals(listOf(other), repository.getAllThreads())
+        assertEquals(20L, repository.getTotalSize())
+    }
+
+    @Test
+    fun removeThreadFromIndex_skipsIndexWriteWhenNoEntryMatches() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        val indexWritesBefore = fileSystem.writeCount("saved_threads/index.json")
+        val backupWritesBefore = fileSystem.writeCount("saved_threads/index.json.backup")
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(indexWritesBefore, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(backupWritesBefore, fileSystem.writeCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
+    fun removeThreadFromIndex_skipsIndexWriteWhenIndexIsMissingAndEmpty() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json.backup"))
+        assertTrue(!fileSystem.exists("saved_threads/index.json"))
+    }
+
+    @Test
+    fun removeThreadFromIndex_persistsRepairedIndexEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+        val newerThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val olderThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(olderThread, newerThread),
+                    totalSize = 999L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(listOf(newerThread), persisted.threads)
+        assertEquals(20L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_restoresPrimaryIndexFromBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString("saved_threads/index.json", "{broken").getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(listOf(target), persisted.threads)
+        assertEquals(10L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_restoresMissingPrimaryFromEmptyBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = emptyList(),
+                    totalSize = 0L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(emptyList(), persisted.threads)
+        assertEquals(0L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_recreatesMissingBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(target), backup.threads)
+        assertEquals(10L, backup.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_recreatesCorruptedBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+        fileSystem.writeString("saved_threads/index.json.backup", "{broken").getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(target), backup.threads)
+        assertEquals(10L, backup.totalSize)
+    }
+
+    @Test
+    fun addThreadToIndex_writesPrimaryAndBackupWithoutTempIndex() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+
+        repository.addThreadToIndex(target).getOrThrow()
+
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json.backup"))
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json.tmp"))
+        assertTrue(!fileSystem.exists("saved_threads/index.json.tmp"))
+    }
+
+    @Test
+    fun indexReads_reuseParsedIndexUntilItIsRewritten() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        repository.addThreadToIndex(first).getOrThrow()
+        val readsAfterWrite = fileSystem.readCount("saved_threads/index.json")
+
+        repeat(3) { assertEquals(listOf(first), repository.getAllThreads()) }
+        repository.getStats()
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(readsAfterWrite, fileSystem.readCount("saved_threads/index.json"))
+        assertEquals(0, fileSystem.readCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
+    fun indexCache_seesWritesFromAnotherInstanceOfTheSameFolder() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val reader = SavedThreadRepository(fileSystem, baseDirectory = "shared_threads")
+        val writer = SavedThreadRepository(fileSystem, baseDirectory = "shared_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        writer.addThreadToIndex(first).getOrThrow()
+        assertEquals(listOf(first), reader.getAllThreads())
+
+        // Same length as the first title, so only the revision reveals the change.
+        val renamed = first.copy(title = "title-xyz")
+        writer.updateThread(renamed).getOrThrow()
+
+        assertEquals(listOf(renamed), reader.getAllThreads())
+    }
+
+    @Test
+    fun indexCache_rereadsWhenTheFileChangesOutsideTheProcess() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        val other = savedThread("456", "b", buildThreadStorageId("b", "456"), savedAt = 90L, totalSize = 20L)
+        repository.addThreadToIndex(first).getOrThrow()
+
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(SavedThreadIndex(threads = listOf(first, other), totalSize = 30L, lastUpdated = 1L))
+        ).getOrThrow()
+
+        assertEquals(listOf(first, other), repository.getAllThreads())
+    }
+
+    @Test
+    fun pathIndexWrites_refreshBackupPeriodicallyButAlwaysForDeletion() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread("123", "b", buildThreadStorageId("b", "123"), savedAt = 100L, totalSize = 10L)
+        val second = savedThread("456", "b", buildThreadStorageId("b", "456"), savedAt = 90L, totalSize = 20L)
+        repository.addThreadToIndex(first).getOrThrow()
+        repository.addThreadToIndex(second).getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json.backup"))
+
+        repository.deleteThread("456", "b").getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("saved_threads/index.json.backup"))
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(first), backup.threads)
+        // The pre-delete copy is only written when a delete fails.
+        assertTrue(fileSystem.listFiles("saved_threads").none { it.endsWith(".thread_delete.backup") })
+    }
+
+    @Test
+    fun locationIndexWrites_keepWritingBackupFirst() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(
+            fileSystem,
+            baseDirectory = "content://tree/threads",
+            baseSaveLocation = SaveLocation.TreeUri("content://tree/threads")
+        )
+        repository.addThreadToIndex(savedThread("123", "b", buildThreadStorageId("b", "123"), 100L, 10L)).getOrThrow()
+        repository.addThreadToIndex(savedThread("456", "b", buildThreadStorageId("b", "456"), 90L, 20L)).getOrThrow()
+
+        assertEquals(2, fileSystem.writeCount("content://tree/threads/index.json"))
+        assertEquals(2, fileSystem.writeCount("content://tree/threads/index.json.backup"))
+    }
+
+    @Test
+    fun deleteThread_removesStoredDirectoryAndIndexEntry() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val other = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+        fileSystem.writeString("saved_threads/${target.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("saved_threads/${other.storageId}/metadata.json", "{}").getOrThrow()
+
+        repository.deleteThread("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists("saved_threads/${target.storageId}"))
+        assertTrue(fileSystem.exists("saved_threads/${other.storageId}"))
+        assertEquals(listOf(other), repository.getAllThreads())
+        assertEquals(20L, repository.getTotalSize())
+    }
+
+    @Test
+    fun deleteAllThreads_clearsDirectoriesAndIndex() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val first = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val second = savedThread(
+            threadId = "456",
+            boardId = "img",
+            storageId = buildThreadStorageId("img", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+        repository.addThreadToIndex(first).getOrThrow()
+        repository.addThreadToIndex(second).getOrThrow()
+        fileSystem.writeString("saved_threads/${first.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("saved_threads/${second.storageId}/metadata.json", "{}").getOrThrow()
+
+        repository.deleteAllThreads().getOrThrow()
+
+        assertTrue(!fileSystem.exists("saved_threads/${first.storageId}"))
+        assertTrue(!fileSystem.exists("saved_threads/${second.storageId}"))
+        assertEquals(emptyList(), repository.getAllThreads())
+        assertEquals(0L, repository.getTotalSize())
+    }
+
+    @Test
+    fun purgeAllStorage_removesOrphansStagingAndIndexBackups() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        fileSystem.writeString("autosaved_threads/orphan-generation/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("autosaved_threads/staging-generation/src/1.jpg", "payload").getOrThrow()
+        fileSystem.writeString("autosaved_threads/index.json.1.all_delete.backup", "stale").getOrThrow()
+
+        repository.purgeAllStorage().getOrThrow()
+
+        assertTrue(!fileSystem.exists("autosaved_threads/orphan-generation"))
+        assertTrue(!fileSystem.exists("autosaved_threads/staging-generation"))
+        assertTrue(!fileSystem.exists("autosaved_threads/index.json.1.all_delete.backup"))
+        assertEquals(emptyList(), repository.loadIndex().threads)
+        assertTrue(fileSystem.exists("autosaved_threads/index.json"))
+    }
+
+    @Test
+    fun purgeThreadStorage_removesUnindexedCurrentAndLegacyPaths() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        val current = buildThreadStorageId("b", "123")
+        val legacy = buildLegacyThreadStorageId("b", "123")
+        val orphanGeneration = "b_123_generation_orphan"
+        fileSystem.writeString("autosaved_threads/$current/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("autosaved_threads/$legacy/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString(
+            "autosaved_threads/$orphanGeneration/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", orphanGeneration))
+        ).getOrThrow()
+
+        repository.purgeThreadStorage("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists("autosaved_threads/$current"))
+        assertTrue(!fileSystem.exists("autosaved_threads/$legacy"))
+        assertTrue(!fileSystem.exists("autosaved_threads/$orphanGeneration"))
+    }
+
+    @Test
+    fun purgeThreadStorage_scansOrphanMetadataOffTheCallersDispatcherAndKeepsOtherThreads() = runBlocking {
+        val fileSystem = DispatcherRecordingFileSystem("generation_orphan")
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        val orphanGeneration = "b_123_generation_orphan"
+        val otherThread = "b_999_generation_other"
+        fileSystem.writeString(
+            "autosaved_threads/$orphanGeneration/metadata.json",
+            json.encodeToString(savedMetadata("123", "b", orphanGeneration))
+        ).getOrThrow()
+        fileSystem.writeString(
+            "autosaved_threads/$otherThread/metadata.json",
+            json.encodeToString(savedMetadata("999", "b", otherThread))
+        ).getOrThrow()
+        fileSystem.writeString("autosaved_threads/broken/metadata.json", "{not json").getOrThrow()
+        val caller = coroutineContext[kotlin.coroutines.ContinuationInterceptor]
+
+        repository.purgeThreadStorage("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists("autosaved_threads/$orphanGeneration"))
+        assertTrue(fileSystem.exists("autosaved_threads/$otherThread/metadata.json"))
+        assertTrue(fileSystem.exists("autosaved_threads/broken/metadata.json"))
+        assertTrue(fileSystem.recordedInterceptors.isNotEmpty())
+        assertTrue(fileSystem.recordedInterceptors.none { it === caller })
+    }
+
+    @Test
+    fun purgeAllStorage_rejectsSaveThatStartedBeforePurge() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        val stale = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 1L,
+            totalSize = 10L
+        )
+
+        repository.purgeAllStorage().getOrThrow()
+        fileSystem.writeString("autosaved_threads/${stale.storageId}/metadata.json", "{}").getOrThrow()
+
+        assertTrue(repository.addThreadToIndex(stale).isFailure)
+        assertTrue(!fileSystem.exists("autosaved_threads/${stale.storageId}"))
+        assertEquals(emptyList(), repository.loadIndex().threads)
+    }
+
+    @Test
+    fun purgeThreadStorage_rejectsStaleGenerationWithDifferentStorageId() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
+        val stale = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = "b_123_generation_stale",
+            savedAt = 1L,
+            totalSize = 10L
+        )
+
+        repository.purgeThreadStorage("123", "b").getOrThrow()
+        fileSystem.writeString("autosaved_threads/${stale.storageId}/metadata.json", "{}").getOrThrow()
+
+        assertTrue(repository.addThreadToIndex(stale).isFailure)
+        assertTrue(!fileSystem.exists("autosaved_threads/${stale.storageId}"))
+        assertEquals(emptyList(), repository.loadIndex().threads)
+    }
+
+    @Test
+    fun importedSnapshotStartedBeforePurgeIsRejectedButLaterExplicitImportIsAllowed() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "imported_threads")
+        val imported = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = "archive_old_snapshot",
+            savedAt = 1L,
+            totalSize = 10L
+        )
+
+        repository.purgeAllStorage().getOrThrow()
+        fileSystem.writeString("imported_threads/${imported.storageId}/metadata.json", "{}").getOrThrow()
+        assertTrue(repository.addThreadSnapshotToIndex(imported, mutationStartedAtMillis = 1L).isFailure)
+        assertTrue(!fileSystem.exists("imported_threads/${imported.storageId}"))
+
+        val explicitImport = imported.copy(storageId = "archive_explicit_restore")
+        fileSystem.writeString("imported_threads/${explicitImport.storageId}/metadata.json", "{}").getOrThrow()
+        repository.addThreadSnapshotToIndex(
+            explicitImport,
+            mutationStartedAtMillis = Long.MAX_VALUE
+        ).getOrThrow()
+        assertEquals(listOf(explicitImport), repository.loadIndex().threads)
+    }
+
+    @Test
+    fun deleteThread_cleansUpStaleOperationBackups() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        fileSystem.writeString("saved_threads/${target.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("saved_threads/index.json.0.thread_delete.backup", "old").getOrThrow()
+        fileSystem.writeString("saved_threads/index.json.1.all_delete.backup", "old").getOrThrow()
+
+        repository.deleteThread("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists("saved_threads/index.json.0.thread_delete.backup"))
+        assertTrue(!fileSystem.exists("saved_threads/index.json.1.all_delete.backup"))
+    }
+
+    @Test
+    fun threadExists_and_deleteThread_workWithTreeUriStorage() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val base = SaveLocation.TreeUri("content://tree/root")
+        val repository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = "ignored",
+            baseSaveLocation = base
+        )
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val other = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+        fileSystem.createDirectory(base, requireNotNull(target.storageId)).getOrThrow()
+        fileSystem.createDirectory(base, requireNotNull(other.storageId)).getOrThrow()
+
+        assertTrue(repository.threadExists("123", "b"))
+
+        repository.deleteThread("123", "b").getOrThrow()
+
+        assertTrue(!fileSystem.exists(base, requireNotNull(target.storageId)))
+        assertTrue(fileSystem.exists(base, requireNotNull(other.storageId)))
+        assertEquals(listOf(other), repository.getAllThreads())
+    }
+
+    private fun savedThread(
+        threadId: String,
+        boardId: String,
+        storageId: String,
+        savedAt: Long,
+        totalSize: Long
+    ): SavedThread {
+        return SavedThread(
+            threadId = threadId,
+            boardId = boardId,
+            boardName = "board",
+            title = "title-$threadId",
+            storageId = storageId,
+            thumbnailPath = null,
+            savedAt = savedAt,
+            postCount = 1,
+            imageCount = 0,
+            videoCount = 0,
+            totalSize = totalSize,
+            status = SaveStatus.COMPLETED
+        )
+    }
+
+    private fun savedMetadata(
+        threadId: String,
+        boardId: String,
+        storageId: String
+    ): SavedThreadMetadata {
+        return SavedThreadMetadata(
+            threadId = threadId,
+            boardId = boardId,
+            boardName = "board",
+            boardUrl = "https://may.2chan.net/$boardId/futaba.php",
+            title = "title-$threadId",
+            storageId = storageId,
+            savedAt = 100L,
+            expiresAtLabel = null,
+            posts = listOf(
+                SavedPost(
+                    id = "1",
+                    order = 1,
+                    author = null,
+                    subject = null,
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "body",
+                    originalImageUrl = null,
+                    localImagePath = null,
+                    originalVideoUrl = null,
+                    localVideoPath = null,
+                    originalThumbnailUrl = null,
+                    localThumbnailPath = null
+                )
+            ),
+            totalSize = 10L
+        )
+    }
+}
+
+internal class InMemoryFileSystem : FileSystem {
+    private val files = linkedMapOf<String, ByteArray>()
+    private val directories = linkedSetOf<String>("/", "/virtual")
+
+    override suspend fun createDirectory(path: String): Result<Unit> = runCatching {
+        ensureDirectory(normalize(path))
+    }
+
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        ensureParentDirectory(normalized)
+        files[normalized] = bytes.copyOf()
+    }
+
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        ensureParentDirectory(normalized)
+        val current = files[normalized] ?: ByteArray(0)
+        files[normalized] = current + bytes
+    }
+
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        ensureParentDirectory(normalized)
+        var written = ByteArray(0)
+        val sink = object : FileWriteSink {
+            override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                require(offset >= 0 && length >= 0 && offset + length <= bytes.size)
+                written += bytes.copyOfRange(offset, offset + length)
+            }
+        }
+        block(sink)
+        files[normalized] = written
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return writeBytes(path, content.encodeToByteArray())
+    }
+
+    override suspend fun readBytes(path: String): Result<ByteArray> = runCatching {
+        files[normalize(path)]?.copyOf() ?: error("File not found: ${normalize(path)}")
+    }
+
+    override suspend fun readString(path: String): Result<String> = runCatching {
+        readBytes(path).getOrThrow().decodeToString()
+    }
+
+    override suspend fun delete(path: String): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        files.remove(normalized)
+        directories.remove(normalized)
+    }
+
+    override suspend fun deleteRecursively(path: String): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        files.keys.filter { it == normalized || it.startsWith("$normalized/") }
+            .toList()
+            .forEach(files::remove)
+        directories.filter { it == normalized || it.startsWith("$normalized/") }
+            .toList()
+            .forEach(directories::remove)
+    }
+
+    override suspend fun exists(path: String): Boolean {
+        val normalized = normalize(path)
+        return normalized in files || normalized in directories
+    }
+
+    override suspend fun getFileSize(path: String): Long {
+        return files[normalize(path)]?.size?.toLong() ?: 0L
+    }
+
+    override suspend fun listFiles(directory: String): List<String> {
+        val normalized = normalize(directory).trimEnd('/')
+        val prefix = if (normalized == "/") "/" else "$normalized/"
+        val childNames = linkedSetOf<String>()
+        files.keys.forEach { path ->
+            if (path.startsWith(prefix)) {
+                val remainder = path.removePrefix(prefix)
+                remainder.substringBefore('/').takeIf { it.isNotBlank() }?.let(childNames::add)
+            }
+        }
+        directories.forEach { path ->
+            if (path != normalized && path.startsWith(prefix)) {
+                val remainder = path.removePrefix(prefix)
+                remainder.substringBefore('/').takeIf { it.isNotBlank() }?.let(childNames::add)
+            }
+        }
+        return childNames.toList()
+    }
+
+    override fun getAppDataDirectory(): String = "/virtual"
+
+    override fun resolveAbsolutePath(relativePath: String): String {
+        val normalized = normalize(relativePath)
+        return if (normalized.startsWith("/virtual/") || normalized == "/virtual") {
+            normalized
+        } else {
+            "/virtual/${normalized.removePrefix("/")}"
+        }
+    }
+
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> {
+        return createDirectory(resolvePath(base, relativePath))
+    }
+
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> {
+        return writeBytes(resolvePath(base, relativePath), bytes)
+    }
+
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> {
+        return appendBytes(resolvePath(base, relativePath), bytes)
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> {
+        return writeByteStream(resolvePath(base, relativePath), block)
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        return writeString(resolvePath(base, relativePath), content)
+    }
+
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> {
+        return readString(resolvePath(base, relativePath))
+    }
+
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> {
+        return readBytes(resolvePath(base, relativePath))
+    }
+
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean {
+        return exists(resolvePath(base, relativePath))
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long {
+        return getFileSize(resolvePath(base, relativePath))
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> {
+        return listFiles(resolvePath(base, directory))
+    }
+
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> {
+        return deleteRecursively(resolvePath(base, relativePath))
+    }
+
+    override fun supportsAtomicReplace(base: SaveLocation): Boolean = true
+
+    override suspend fun replaceAtomically(
+        base: SaveLocation,
+        fromRelative: String,
+        toRelative: String
+    ): Result<Unit> = runCatching {
+        val from = normalize(resolvePath(base, fromRelative))
+        val bytes = files.remove(from) ?: error("Missing file: $fromRelative")
+        files[normalize(resolvePath(base, toRelative))] = bytes
+    }
+
+    private fun resolvePath(base: SaveLocation, relativePath: String): String {
+        val root = when (base) {
+            is SaveLocation.Path -> base.path
+            is SaveLocation.TreeUri -> base.uri
+            is SaveLocation.Bookmark -> base.bookmarkData
+        }
+        return if (relativePath.isBlank()) root else "$root/$relativePath"
+    }
+
+    private fun ensureParentDirectory(path: String) {
+        ensureDirectory(path.substringBeforeLast('/', "/"))
+    }
+
+    private fun ensureDirectory(path: String) {
+        val normalized = normalize(path)
+        if (normalized == "/") {
+            directories.add("/")
+            return
+        }
+        val segments = normalized.removePrefix("/").split('/').filter { it.isNotBlank() }
+        var current = ""
+        segments.forEach { segment ->
+            current += "/$segment"
+            directories.add(current)
+        }
+    }
+
+    private fun normalize(path: String): String {
+        val trimmed = path.trim().replace('\\', '/')
+        if (trimmed.isBlank()) return "/"
+        val parts = trimmed.split('/').filter { it.isNotBlank() }
+        return "/" + parts.joinToString("/")
+    }
+}
+
+private class CountingIndexWriteFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    private val writeCounts = linkedMapOf<String, Int>()
+    private val readCounts = linkedMapOf<String, Int>()
+
+    fun writeCount(path: String): Int {
+        return writeCounts[normalizeKey(path)] ?: 0
+    }
+
+    fun readCount(path: String): Int {
+        return readCounts[normalizeKey(path)] ?: 0
+    }
+
+    override suspend fun readString(path: String): Result<String> {
+        val key = normalizeKey(path)
+        readCounts[key] = (readCounts[key] ?: 0) + 1
+        return delegate.readString(path)
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        recordIndexWrite(path)
+        return delegate.writeString(path, content)
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        recordIndexWrite("${baseKey(base)}/$relativePath")
+        return delegate.writeString(base, relativePath, content)
+    }
+
+    private fun recordIndexWrite(path: String) {
+        val key = normalizeKey(path)
+        if (
+            key.endsWith("index.json") ||
+            key.endsWith("index.json.backup") ||
+            key.endsWith("index.json.tmp")
+        ) {
+            writeCounts[key] = (writeCounts[key] ?: 0) + 1
+        }
+    }
+
+    private fun baseKey(base: SaveLocation): String {
+        return when (base) {
+            is SaveLocation.Path -> base.path
+            is SaveLocation.TreeUri -> base.uri
+            is SaveLocation.Bookmark -> base.bookmarkData
+        }
+    }
+
+    private fun normalizeKey(path: String): String {
+        return path.trim().replace('\\', '/').trim('/')
+    }
+}
+
+/** Records the dispatcher of reads whose path contains [marker]. */
+private class DispatcherRecordingFileSystem(
+    private val marker: String,
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    val recordedInterceptors = mutableListOf<kotlin.coroutines.ContinuationInterceptor?>()
+
+    override suspend fun readString(path: String): Result<String> {
+        if (marker in path) {
+            recordedInterceptors += kotlinx.coroutines.currentCoroutineContext()[kotlin.coroutines.ContinuationInterceptor]
+        }
+        return delegate.readString(path)
+    }
+}

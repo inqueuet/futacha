@@ -1,0 +1,5 @@
+// Copy this file to Local.xcconfig and fill in local signing values.
+// Local.xcconfig is ignored by Git.
+TEAM_ID = ABCDE12345
+IOS_PROVISIONING_PROFILE_SPECIFIER = Your iOS provisioning profile
+WATCH_PROVISIONING_PROFILE_SPECIFIER = Your watchOS provisioning profile

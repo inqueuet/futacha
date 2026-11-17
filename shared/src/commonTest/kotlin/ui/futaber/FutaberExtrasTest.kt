@@ -1,0 +1,237 @@
+package com.valoser.futacha.shared.ui.futaber
+
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.ui.board.ThreadTreeNode
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.StarOutline
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/** The "拡張機能" of ふたばー風モード: what they list, and that all of them are off until turned on. */
+class FutaberExtrasTest {
+    private fun post(
+        id: String, html: String = "本文", posterId: String? = null, image: String? = null,
+        saidane: String? = null, deleted: Boolean = false, quotes: List<String> = emptyList()
+    ) = Post(
+        id = id, author = null, subject = null, timestamp = "", messageHtml = html,
+        imageUrl = image, thumbnailUrl = image, posterId = posterId, saidaneLabel = saidane,
+        isDeleted = deleted, quoteReferences = quotes.map { QuoteReference(">>$it", listOf(it)) }
+    )
+
+    private val posts = listOf(
+        post("1", html = "ttp://example.com/a を見て", posterId = "AAA"),
+        post("2", image = "https://may/src/2.jpg", saidane = "そうだねx4", posterId = "BBB"),
+        post("3", deleted = true, posterId = "AAA"),
+        post("4", saidane = "そうだねx1", posterId = "CCC")
+    )
+
+    @Test fun everyExtensionIsOffByDefaultAndAnEmptySettingReadsAsOff() {
+        val defaults = FutaberDisplaySettings()
+        assertFalse(defaults.extTree); assertTrue(defaults.extExtract); assertTrue(defaults.extIdTap); assertTrue(defaults.extAutoScroll)
+        val read = FutaberDisplaySettings.from(emptyMap())
+        assertEquals(defaults, read)
+        val on = FutaberDisplaySettings.from(
+            mapOf(
+                FutaberSettingKeys.EXT_TREE to "ON", FutaberSettingKeys.EXT_EXTRACT to "ON",
+                FutaberSettingKeys.EXT_ID_TAP to "ON", FutaberSettingKeys.EXT_AUTO_SCROLL to "ON"
+            )
+        )
+        assertTrue(on.extTree && on.extExtract && on.extIdTap && on.extAutoScroll)
+    }
+
+    @Test fun theAutoScrollAmountAndIntervalReadTheSharedValuesAndFallBackWhenDamaged() {
+        val shared = FutaberDisplaySettings.from(
+            mapOf(FutaberSettingKeys.AUTO_SCROLL_PIXEL to "12px", FutaberSettingKeys.AUTO_SCROLL_SPEED to "80ミリ秒")
+        )
+        assertEquals(12, shared.autoScrollPixel)
+        assertEquals(80, shared.autoScrollSpeedMillis)
+        val damaged = FutaberDisplaySettings.from(
+            mapOf(FutaberSettingKeys.AUTO_SCROLL_PIXEL to "abc", FutaberSettingKeys.AUTO_SCROLL_SPEED to "99999")
+        )
+        assertEquals(FUTABER_AUTO_SCROLL_PIXEL_DEFAULT, damaged.autoScrollPixel)
+        assertEquals(FUTABER_AUTO_SCROLL_SPEED_DEFAULT, damaged.autoScrollSpeedMillis)
+    }
+
+    @Test fun eachExtractKindListsTheRightPosts() {
+        fun ids(kind: FutaberExtract, self: Set<String> = emptySet()) = futaberVisibleRows(
+            posts, FutaberViewFilter(extract = kind), emptyMap(), selfIds = self
+        ).map { it.post.id }
+        assertEquals(listOf("2"), ids(FutaberExtract.SelfPosts, setOf("2")))
+        assertEquals(emptyList(), ids(FutaberExtract.SelfPosts))
+        assertEquals(listOf("2"), ids(FutaberExtract.Saidane))
+        assertEquals(listOf("3"), ids(FutaberExtract.Deleted))
+        assertEquals(listOf("1"), ids(FutaberExtract.Url))
+        assertEquals(listOf("2"), ids(FutaberExtract.Image))
+    }
+
+    @Test fun theSamePosterIdListsThatPostersPostsWithTheirOwnNumbers() {
+        val rows = futaberVisibleRows(posts, FutaberViewFilter(sameId = "AAA"), emptyMap())
+        assertEquals(listOf("1", "3"), rows.map { it.post.id })
+        assertEquals(listOf(0, 2), rows.map { it.ordinal })
+        assertTrue(FutaberViewFilter(sameId = "AAA").isActive)
+        assertTrue(FutaberViewFilter(extract = FutaberExtract.Url).isActive)
+        assertFalse(FutaberViewFilter().isActive)
+    }
+
+    @Test fun theTreePutsRepliesUnderTheQuotedPostAndKeepsEachPostsNumber() {
+        val thread = listOf(post("1"), post("2"), post("3", quotes = listOf("1")), post("4", quotes = listOf("3")))
+        val tree = listOf(
+            ThreadTreeNode(thread[0], 0), ThreadTreeNode(thread[2], 1), ThreadTreeNode(thread[3], 2), ThreadTreeNode(thread[1], 0)
+        )
+        val rows = futaberApplyTree(futaberVisibleRows(thread, FutaberViewFilter(), emptyMap()), tree)
+        assertEquals(listOf("1", "3", "4", "2"), rows.map { it.post.id })
+        assertEquals(listOf(0, 1, 2, 0), rows.map { it.depth })
+        assertEquals(listOf(0, 2, 3, 1), rows.map { it.ordinal })
+        // A filter applied before the tree still lists only the posts that pass it.
+        val filtered = futaberApplyTree(futaberVisibleRows(thread, FutaberViewFilter(query = "本文"), emptyMap(), hidden = setOf("3")), tree)
+        assertEquals(listOf("1", "4", "2"), filtered.map { it.post.id })
+        assertEquals(thread.map { 0 }, futaberApplyTree(futaberVisibleRows(thread, FutaberViewFilter(), emptyMap()), emptyList()).map { it.depth })
+    }
+
+    @Test fun scrollingToAPostFindsItsRowEvenWhenTheTreeListsRowsOutOfOrder() {
+        val rows = listOf(FutaberRow(0, post("1")), FutaberRow(5, post("6")), FutaberRow(2, post("3")))
+        assertEquals(2, futaberRowPositionAtOrAfter(rows, 2))
+        assertEquals(1, futaberRowPositionAtOrAfter(rows, 3))
+        assertEquals(null, futaberRowPositionAtOrAfter(rows, 9))
+    }
+
+    @Test fun aChipCyclesThroughItsChoicesAndWrapsAround() {
+        assertEquals(2, futaberNextChoice(listOf(1, 2, 3), 1))
+        assertEquals(1, futaberNextChoice(listOf(1, 2, 3), 3))
+    }
+
+    @Test fun theOtherExtensionsAreOffByDefaultToo() {
+        val defaults = FutaberDisplaySettings()
+        assertTrue(defaults.extHistory); assertTrue(defaults.extMailPresets); assertFalse(defaults.extVolumeKeys)
+        // The B1 parity additions (2026-10-12) start off as well.
+        assertFalse(defaults.extTabsManage); assertTrue(defaults.extArchiveMenu); assertTrue(defaults.extSavedDetail)
+        assertTrue(defaults.extOtherFavorites); assertTrue(defaults.extScrollMenu); assertTrue(defaults.extSearchNav)
+        // G20 (L-B7): the tap to scroll is the one that starts on (futaber's default).
+        assertTrue(defaults.tapScroll); assertFalse(defaults.postDestinationConfirm)
+        // The second half of B1: off as well, and the volume keys keep scrolling a screen.
+        assertFalse(defaults.extSortByBoard); assertTrue(defaults.extCatalogLongPress); assertTrue(defaults.extPostDetailOps)
+        assertTrue(defaults.extGalleryColumns); assertTrue(defaults.extImageMenu)
+        assertEquals(FutaberVolumeKeyMode.Screen, defaults.volumeKeyMode)
+        val on = FutaberDisplaySettings.from(
+            mapOf(
+                FutaberSettingKeys.EXT_HISTORY to "ON", FutaberSettingKeys.EXT_MAIL_PRESETS to "ON",
+                FutaberSettingKeys.EXT_VOLUME_KEYS to "ON"
+            )
+        )
+        assertTrue(on.extHistory && on.extMailPresets && on.extVolumeKeys)
+    }
+
+    @Test fun aPostsPictureAddressIsTheFullOneElseTheThumbnail() {
+        assertEquals("https://x/full.jpg", futaberImageUrlOf(post("1", image = "https://x/full.jpg")))
+        val thumbOnly = post("2").copy(imageUrl = null, thumbnailUrl = "https://x/t.jpg")
+        assertEquals("https://x/t.jpg", futaberImageUrlOf(thumbOnly))
+        assertEquals(null, futaberImageUrlOf(post("3")))
+        assertEquals(null, futaberImageUrlOf(post("4").copy(imageUrl = " ", thumbnailUrl = "")))
+    }
+
+    @Test fun anImageNgRuleReadsAsItsNoteElseTheFileNameAndItsScope() {
+        val rule = com.valoser.futacha.shared.compat.CompatNgRule(
+            id = "i", kind = com.valoser.futacha.shared.compat.CompatNgKind.THREAD_IMAGE_PHASH, scopeKey = "*",
+            normalizedValue = "0123456789abcdef", createdAtEpochMillis = 1L, imageUrl = "https://x/b/src/99.jpg?x=1", memo = "迷惑画像"
+        )
+        assertEquals("迷惑画像　全板", futaberImageNgRuleLabel(rule))
+        assertEquals("99.jpg　この板", futaberImageNgRuleLabel(rule.copy(memo = "", scopeKey = "https://x/b/")))
+    }
+
+    private fun entry(id: String, board: String = "t", selfPost: Boolean = false, saved: Boolean = false, fallen: Boolean = false) =
+        com.valoser.futacha.shared.model.ThreadHistoryEntry(
+            threadId = id, boardId = board, title = "t$id", titleImageUrl = "", boardName = "板", boardUrl = "https://x/$board/res/$id.htm",
+            lastVisitedEpochMillis = 1L, replyCount = 1, hasSelfPost = selfPost, hasAutoSave = saved, isAutoRefreshDisabled = fallen
+        )
+
+    @Test fun aHistoryRowsMarksNameWhatHappenedToTheThread() {
+        assertEquals("", futaberHistoryMarks(entry("1")))
+        assertEquals("落ちた・書き込み済み・保存済み", futaberHistoryMarks(entry("1", selfPost = true, saved = true, fallen = true)))
+        assertEquals("保存済み", futaberHistoryMarks(entry("1", saved = true)))
+    }
+
+    @Test fun theTabExtensionIsOffByDefaultAndTheVideoViewerIsOnUntilTurnedOff() {
+        assertTrue(FutaberDisplaySettings().extTabs)
+        assertTrue(FutaberDisplaySettings().extVideo)
+        assertTrue(FutaberDisplaySettings.from(emptyMap()).extVideo)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_VIDEO to "ON")).extVideo)
+        assertFalse(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_VIDEO to "OFF")).extVideo)
+        assertTrue(FutaberDisplaySettings.from(mapOf(FutaberSettingKeys.EXT_TABS to "ON")).extTabs)
+    }
+
+    @Test fun theVideoPanelHidesOnlyWhilePlayingWithHiddenControls() {
+        val ready = com.valoser.futacha.shared.ui.board.VideoPlayerState.Ready
+        assertFalse(futaberVideoShowsPanel(ready, controlsVisible = false))
+        assertTrue(futaberVideoShowsPanel(ready, controlsVisible = true))
+        for (state in listOf(
+            com.valoser.futacha.shared.ui.board.VideoPlayerState.Idle,
+            com.valoser.futacha.shared.ui.board.VideoPlayerState.Buffering,
+            com.valoser.futacha.shared.ui.board.VideoPlayerState.Error
+        )) assertTrue(futaberVideoShowsPanel(state, controlsVisible = false))
+    }
+
+    @Test fun aFoundArchiveThreadReadsAsItsPostCountAndStatus() {
+        val item = com.valoser.futacha.shared.network.ArchiveSearchItem(
+            threadId = "123", server = "may", board = "b", title = "題", htmlUrl = "https://may.inqueuet.com/b/res/123.htm",
+            replyCount = 150, status = "available"
+        )
+        assertEquals("150レス　available", futaberArchiveItemLine(item))
+        assertEquals("80レス", futaberArchiveItemLine(item.copy(replyCount = 80, status = " ")))
+        assertEquals("0レス", futaberArchiveItemLine(item.copy(replyCount = 0, status = null)))
+        assertTrue(futaberArchiveNotice().isNotEmpty())
+    }
+
+    @Test fun theIconsAreLineGlyphsAndThisModesOwnIconsAreKept() {
+        // L-B2 (V04): the rounded filled glyphs of 2026-10-07 gave way to the original's thin lines.
+        val outlined = androidx.compose.material.icons.Icons.Outlined.Close
+        val line = futaberIconFor(outlined)
+        assertTrue(line !== outlined)
+        assertEquals("FutaberLine.Outlined.Close", line.name)
+        // A glyph the table does not know (this mode's own icons) is drawn as it is.
+        assertTrue(futaberIconFor(FutaberTwoPaneIcon) === FutaberTwoPaneIcon)
+        // The star shows its state by fill: a line star until the thread is starred, a solid one after.
+        assertEquals("FutaberLine.Outlined.StarOutline", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.StarOutline).name)
+        assertEquals("FutaberLine.Outlined.Star", futaberIconFor(androidx.compose.material.icons.Icons.Outlined.Star).name)
+    }
+
+    /** 監査M17：管理パネルの履歴の行は、裏で作っても以前（その場でふたちゃの絞り込み・並べ替え→1スレ1行）と同じ。 */
+    @Test
+    fun theManagePanelHistoryRowsMatchTheFilterAndSort() {
+        val history = (0 until 200).map { i ->
+            com.valoser.futacha.shared.model.ThreadHistoryEntry(
+                threadId = "${i % 150}", boardId = "b", title = if (i % 3 == 0) "ねこ$i" else "犬$i", titleImageUrl = "",
+                boardName = "板", boardUrl = "https://may.2chan.net/b/res/${i % 150}.htm", lastVisitedEpochMillis = (i * 37 % 200).toLong(),
+                replyCount = i
+            )
+        }
+        val settings = com.valoser.futacha.shared.ui.board.HistoryViewSettings(titleQuery = "ねこ")
+        assertEquals(
+            futaberDistinctHistoryRows(com.valoser.futacha.shared.ui.board.applyHistoryViewSettings(history, settings)),
+            futaberManageHistoryRows(history, settings, bandOn = true)
+        )
+        assertEquals(futaberDistinctHistoryRows(history), futaberManageHistoryRows(history, settings, bandOn = false))
+    }
+
+    /** 監査L25：タブ・お気に入りに要る行だけを引いても、以前（履歴全件の表、同じスレは後の行）と同じ。 */
+    @Test
+    fun theHistoryRowsOfTheTabsAreTheLastOfEachKey() {
+        val history = (0 until 50).map { i ->
+            com.valoser.futacha.shared.model.ThreadHistoryEntry("${i % 20}", "b", "t$i", "", "", "", i.toLong(), i)
+        }
+        val keys = setOf(FutaberTabKey("b", "3"), FutaberTabKey("b", "99"))
+        val before = history.associateBy { FutaberTabKey(it.boardId, it.threadId) }.filterKeys { it in keys }
+        assertEquals(before, futaberHistoryRowsFor(keys, history))
+    }
+
+    /** 監査L26：吹き出しの行の鍵は重ならない。 */
+    @Test
+    fun bubbleRowKeysAreDistinct() {
+        val post = Post(id = "1", author = null, subject = null, timestamp = "", messageHtml = "", imageUrl = null, thumbnailUrl = null)
+        val keys = futaberBubbleRowKeys(listOf(post, post.copy(id = "2"), post))
+        assertEquals(listOf("1", "2", "1#1"), keys)
+    }
+}

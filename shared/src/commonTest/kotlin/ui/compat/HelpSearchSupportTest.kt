@@ -1,0 +1,162 @@
+package com.valoser.futacha.shared.ui.compat
+
+import kotlin.test.*
+
+class HelpSearchSupportTest {
+    @Test fun modeSpecificOperationsAreSearchableInTheirOwnExpandedSections() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "ペーストボード").any { "設定のバックアップ・復元には含まれません" in it.body })
+        assertTrue(searchHelp(sections, "半角カナ").any { "本文全体" in it.body })
+        assertTrue(searchHelp(sections, "カタログの左右スワイプ").any { "最後に見たスレッド" in it.body })
+        assertTrue(searchHelp(sections, "画像一覧へ戻る位置").any { "選択保存用の一覧" in it.body })
+        assertTrue(searchHelp(sections, "スレッドを先頭から開く").any { "初期状態OFF" in it.body && "タブの切り替え" in it.body })
+        assertTrue(searchedHelpHtml(html, "ペーストボード").contains("<input checked type=\"checkbox\" id=\"futaber-help\""))
+        assertTrue(searchedHelpHtml(html, "スレッドを先頭から開く").contains("<input checked type=\"checkbox\" id=\"ftutter-opening-help\""))
+    }
+
+    @Test fun currentFeaturesAreSearchableWithoutBreakingSectionExtraction() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "ふたったー風").any { "初期状態OFF" in it.body })
+        assertTrue(searchHelp(sections, "下書き").any { "削除キーを保存しません" in it.body })
+        assertTrue(searchHelp(sections, "ずんだもん").any { "iOS 16" in it.body && "Android 10" in it.body })
+        assertTrue(searchHelp(sections, "音声データ").any { "明示操作" in it.body && "83MB" in it.body })
+        assertTrue(searchedHelpHtml(html, "ずんだもん").contains("<input checked type=\"checkbox\" id=\"speech-help\""))
+    }
+
+    @Test fun helpReview20261111CoversAimogeAndTheReviewFixes() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "あいもげ").any { "承認" in it.body })
+        assertTrue(searchHelp(sections, "あいもげの削除キー").any { "ふたばの削除キーとは別" in it.body })
+        assertTrue(searchHelp(sections, "自動で送り直しません").isNotEmpty())
+        assertTrue(searchHelp(sections, "あぷ小").any { "3000KB" in it.body && "縮小" in it.body })
+        assertTrue(searchHelp(sections, "タブを閉じたら履歴も消す").any { "最初はOFF" in it.body })
+        assertTrue(searchHelp(sections, "検索欄の入力を消す").any { "×" in it.body })
+        assertTrue(searchedHelpHtml(html, "あいもげの削除キー").contains("<input checked type=\"checkbox\" id=\"aimoge-help\""))
+        assertFalse("上部の戻るボタンも使えます" in html)
+    }
+
+    @Test fun aiHelpExplainsSharedSettingsProviderPrivacyAndNgRestoration() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "初期状態OFF").any { "モード間で共通" in it.body })
+        assertTrue(searchHelp(sections, "スレ要約").any { "端末内AIのみ" in it.body })
+        assertTrue(searchHelp(sections, "OpenAI").any { "外部サービスへ送信" in it.body })
+        assertTrue(searchHelp(sections, "APIキー").any { "登録だけでは判定は始まりません" in it.body })
+        assertTrue(searchHelp(sections, "閾値").any { "0.70" in it.body && "確率ではありません" in it.body })
+        assertTrue(searchHelp(sections, "NG表示切替").any { "手動NGとAI非表示の両方" in it.body })
+        assertTrue(searchHelp(sections, "判定候補").any { "手動NGへ登録しない" in it.body })
+        assertTrue(searchHelp(sections, "Windows").any { "OpenAIの荒らし判定" in it.body })
+        val searched = searchedHelpHtml(html, "OpenAI")
+        assertTrue(searched.contains("<input checked type=\"checkbox\" id=\"ai-help\""))
+        assertTrue(searched.contains("<mark>OpenAI</mark>"))
+    }
+
+    @Test fun thumbnailHelpExplainsSharedSettingDefaultNetworkLimitsAndExclusions() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(searchHelp(sections, "サムネイルの高画質表示").any { "4モード共通" in it.body })
+        assertTrue(searchHelp(sections, "初期設定").any { "「Wi-Fi回線では元画像を取得」です" in it.body })
+        assertTrue(searchHelp(sections, "4MB").any { "カタログはファイルサイズが分からない" in it.body })
+        assertTrue(searchHelp(sections, "テザリング").any { "対象外" in it.body })
+        assertTrue(searchHelp(sections, "WebM").any { "サムネイルのまま" in it.body })
+        assertTrue(searchHelp(sections, "250px").any { "引き伸ばされて粗く見えます" in it.body })
+        // Placed with the other image/network topics, before the network help.
+        assertTrue(html.indexOf("id=\"thumbnail-help\"") in 0 until html.indexOf("id=\"network\""))
+        val searched = searchedHelpHtml(html, "高画質表示")
+        assertTrue(searched.contains("<input checked type=\"checkbox\" id=\"thumbnail-help\""))
+    }
+
+    @Test fun searchesClosedSectionsJapaneseEntitiesAndLiteralWords() {
+        val html = """<html><style>invisible-style</style><body><label>巡回</label><input type="checkbox"><div>
+            <p class="title">Wi-Fi と通信</p><p>にじろぐは不要です。A&amp;B<br/>[検索]できます<img src="data:image/png;base64,private-image"/></p>
+            <p class="title">保存</p><p>保存方法はこちら <a href="https://example.com/?a=1&amp;b=2">詳細</a></p></div></body></html>"""
+        val sections = helpSearchSections(html)
+        assertEquals(2, sections.size)
+        assertEquals(sections.take(1), searchHelp(sections, " にじろぐ "))
+        assertEquals(sections.take(1), searchHelp(sections, "wi-fi"))
+        assertEquals(sections.take(1), searchHelp(sections, "A&B"))
+        assertEquals(sections.take(1), searchHelp(sections, "[検索]"))
+        assertEquals(sections, searchHelp(sections, " "))
+        assertTrue(searchHelp(sections, "存在しない語").isEmpty())
+        assertTrue(searchHelp(sections, "private-image").isEmpty())
+        assertTrue(searchHelp(sections, "invisible-style").isEmpty())
+        assertEquals(listOf("詳細" to "https://example.com/?a=1&b=2"), sections.last().links)
+    }
+
+    @Test fun currentHelpExplainsInternalExternalAndOsExecutionAndIndexesMedia() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val sections = helpSearchSections(html)
+        assertTrue(sections.size > 100)
+        assertTrue(searchHelp(sections, "にじろぐ").any { "不要" in it.body })
+        assertTrue(searchHelp(sections, "強制停止").any { "OS" in it.body })
+        assertTrue(searchHelp(sections, "閲覧順").any { "通信" in it.body })
+        assertTrue(searchHelp(sections, "ONNX").isNotEmpty())
+        assertFalse(html.contains("にじろぐ(仮) バージョン1.0.5以上が必要です"))
+        assertFalse(html.contains("別アプリ にじろぐ(仮)が行います"))
+    }
+
+    @Test fun helpStartsWithBasicOperationsAndAllSectionsCanCollapse() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val headings = Regex("<label for=\"([^\"]+)\"").findAll(html).map { it.groupValues[1] }.toList()
+        assertEquals("board", headings.first())
+        assertEquals(headings.indexOf("drawer") + 1, headings.indexOf("watcher-help"))
+        assertEquals(headings.indexOf("viewer") + 1, headings.indexOf("media-help"))
+        for (id in headings) {
+            assertTrue(html.contains("<input type=\"checkbox\" id=\"$id\" class=\"on-off\" />"), id)
+        }
+        assertFalse(html.contains(" checked"))
+    }
+
+    @Test fun searchOpensClosedMatchesHighlightsWordsAndResetsOnClear() {
+        val html = compatibilityReferenceHelpHtml(compatibilityPaletteFor(null))
+        val result = searchedHelpHtml(html, " 強制停止 ")
+        assertTrue(result.contains("<input checked type=\"checkbox\" id=\"watcher-help\""))
+        assertTrue(result.contains("<mark>強制停止</mark>"))
+        assertFalse(result.contains("<label for=\"board\""))
+        val changed = searchedHelpHtml(html, "onnx")
+        assertTrue(changed.contains("<input checked type=\"checkbox\" id=\"media-help\""))
+        assertTrue(changed.contains("<mark>ONNX</mark>"))
+        assertFalse(changed.contains("id=\"watcher-help\""))
+        assertEquals(html, searchedHelpHtml(html, " "))
+        assertFalse(searchedHelpHtml(html, "no-such-help-word").contains("<label"))
+    }
+
+    /** L70: the drawing screens of ふたちゃ, ふたばー風 and ふたったー風 show the reference help's 手書き section alone, opened. */
+    @Test fun drawingHelpIsOnlyTheReferenceHandwritingSectionOpened() {
+        val palette = compatibilityPaletteFor("pink")
+        val html = compatibilityReferenceHelpSectionHtml(palette, COMPAT_DRAWING_HELP_SECTION)
+        assertTrue(html.contains("<input checked type=\"checkbox\" id=\"drawing\" class=\"on-off\" />"))
+        assertTrue(html.contains("<label for=\"drawing\" class=\"index\">手書き</label>"))
+        assertTrue(html.contains("キャンバスを最初の状態に戻します"))
+        assertTrue(html.contains("二種類のブラシを保存して利用できます"))
+        // The document's styles (in the mode's accent) and its images stay, inside the same body / menu container.
+        assertTrue(html.contains("<style"))
+        assertTrue(html.contains("#ad1457"))
+        assertTrue(html.contains("<div class=\"menu\">"))
+        assertTrue(html.contains("data:image/png;base64,"))
+        assertTrue(html.trimEnd().endsWith("</html>"))
+        assertEquals(1, Regex("<label\\b").findAll(html).count())
+        for (other in listOf("board", "post", "ai-help", "gallery", "question")) {
+            assertFalse(html.contains("id=\"$other\""), other)
+        }
+        assertTrue(helpSearchSections(html).isNotEmpty())
+        assertTrue(helpSearchSections(html).all { it.title.startsWith("手書き") })
+        // A section that is not there gives the whole help rather than an empty page.
+        assertEquals(compatibilityReferenceHelpHtml(palette), compatibilityReferenceHelpSectionHtml(palette, "no-such-section"))
+    }
+
+    @Test fun highlightPreservesImagesLinksAndEscapesLiteralSearchText() {
+        val html = """<label for="test">A&amp;B</label><input type="checkbox" id="test" class="on-off" />
+            <div><p><a href="https://example.com/?a=1&amp;b=2">A&amp;B</a> a&amp;b &lt;tag&gt; [検索]
+            <img src="data:image/png;base64,A&amp;B" /></p></div>"""
+        val result = searchedHelpHtml(html, "a&b")
+        assertEquals(3, Regex("<mark>").findAll(result).count())
+        assertTrue(result.contains("href=\"https://example.com/?a=1&amp;b=2\""))
+        assertTrue(result.contains("src=\"data:image/png;base64,A&amp;B\""))
+        assertTrue(searchedHelpHtml(html, "<tag>").contains("<mark>&lt;tag&gt;</mark>"))
+        assertTrue(searchedHelpHtml(html, "[検索]").contains("<mark>[検索]</mark>"))
+    }
+}

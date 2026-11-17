@@ -1,0 +1,286 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import android.view.MotionEvent
+import android.view.GestureDetector
+import android.os.Build
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.C
+import androidx.media3.common.Tracks
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import androidx.media3.datasource.DataSource
+import com.valoser.futacha.shared.media.source.AndroidOriginalMediaDataSource
+import com.valoser.futacha.shared.media.source.OriginalMediaPlayback
+import com.valoser.futacha.shared.media.video.VideoEditPlayback
+import com.valoser.futacha.shared.media.video.MosaicEffect
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+
+@UnstableApi
+@Composable
+internal actual fun NativePlatformVideoPlayer(
+    videoUrl: String,
+    playback: OriginalMediaPlayback?,
+    modifier: Modifier,
+    onStateChanged: (VideoPlayerState) -> Unit,
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit,
+    areControlsVisible: Boolean,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
+    volume: Float,
+    isMuted: Boolean,
+    onMediaInfoKnown: (VideoMediaInfo) -> Unit,
+    onPlaybackError: (VideoPlaybackError) -> Unit,
+    editing: VideoEditPlayback?
+) {
+    val options = LocalVideoPlaybackOptions.current ?: VideoPlaybackOptions()
+    val context = LocalContext.current
+    val currentCallback by rememberUpdatedState(onStateChanged)
+    val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
+    val currentControlsCallback by rememberUpdatedState(onControlsVisibilityChanged)
+    val currentMediaInfoCallback by rememberUpdatedState(onMediaInfoKnown)
+    val currentErrorCallback by rememberUpdatedState(onPlaybackError)
+    var player by remember(context) { mutableStateOf<ExoPlayer?>(null) }
+    // What the screen drives: the player, with its audio focus and this app's reading aloud handled (L117).
+    var videoAudio by remember(context) { mutableStateOf<AppVideoAudio?>(null) }
+
+    DisposableEffect(context, videoUrl, playback, editing) {
+        val pin = playback?.retain()
+        val editPin = editing?.retain()
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .apply {
+                // API 37 emulator images currently expose goldfish hardware decoders that
+                // advertise support but fail while queueing the first buffers. Prefer the
+                // platform software codecs there; physical devices retain hardware decode.
+                if (isAndroidEmulator()) {
+                    setMediaCodecSelector(MediaCodecSelector.PREFER_SOFTWARE)
+                    forceDisableMediaCodecAsynchronousQueueing()
+                }
+            }
+        val createdPlayer = try { ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(
+                    if (pin != null) DataSource.Factory { AndroidOriginalMediaDataSource(pin) }
+                    else AndroidVideoPlaybackCache.createDataSourceFactory(context)
+                )
+            )
+            // Media3 defaults to an asymmetric 5-second rewind and 15-second
+            // fast-forward.  The reference viewer's gesture is ±10 seconds;
+            // make the visible controller buttons obey that same contract.
+            .setSeekBackIncrementMs(REFERENCE_VIDEO_SEEK_STEP_MILLIS)
+            .setSeekForwardIncrementMs(REFERENCE_VIDEO_SEEK_STEP_MILLIS)
+            .build()
+        } catch (failure: Throwable) { pin?.close(); editPin?.close(); throw failure }
+        val createdAudio = AppVideoAudio(createdPlayer, audible = normalizeVideoPlayerVolume(volume, isMuted) > 0f)
+        createdAudio.player.playWhenReady = options.autoPlay
+        player = createdPlayer
+        videoAudio = createdAudio
+        onDispose {
+            if (player === createdPlayer) {
+                player = null
+            }
+            if (videoAudio === createdAudio) videoAudio = null
+            try { createdAudio.release(); createdPlayer.release() } finally { pin?.close(); editPin?.close() }
+        }
+    }
+
+    val mediaItem = remember(videoUrl, playback) {
+        val extension = videoUrl.substringBefore('#').substringBefore('?').substringAfterLast('.').lowercase()
+        MediaItem.fromUri(if (playback == null) videoUrl else "futacha-original://media/asset.$extension")
+    }
+
+    LaunchedEffect(mediaItem, player, editing, options.autoPlay) {
+        val activePlayer = player ?: return@LaunchedEffect
+        currentCallback(VideoPlayerState.Buffering)
+        // The legacy viewer opens a video on its first frame.  Preparing the
+        // player must not be interpreted as a request to start playback.
+        editing?.let { activePlayer.setVideoEffects(listOf(MosaicEffect(AtomicReference(it.document), it.info.frames.timeAt(0)))) }
+        activePlayer.setMediaItem(mediaItem)
+        editing?.let { activePlayer.seekTo(((it.startUs - it.info.frames.timeAt(0)).coerceAtLeast(0)) / 1000) }
+        (videoAudio?.player ?: activePlayer).playWhenReady = editing != null || options.autoPlay
+        activePlayer.prepare()
+    }
+
+    LaunchedEffect(player, editing) {
+        val preview = editing ?: return@LaunchedEffect
+        val activePlayer = player ?: return@LaunchedEffect
+        preview.pausePlayer = {
+            activePlayer.pause()
+            preview.position(activePlayer.currentPosition * 1000 + 999 + preview.info.frames.timeAt(0))
+        }
+        try {
+            while (isActive && preview.isActive) {
+                preview.position(activePlayer.currentPosition * 1000 + 999 + preview.info.frames.timeAt(0))
+                if (activePlayer.playbackState == Player.STATE_ENDED) { preview.ended(); break }
+                delay(33)
+            }
+        } finally { preview.pausePlayer = null }
+    }
+
+    LaunchedEffect(player, options.loop) {
+        player?.repeatMode = if (options.loop && editing == null) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    }
+
+    LaunchedEffect(volume, isMuted, player) {
+        val normalized = normalizeVideoPlayerVolume(volume, isMuted)
+        player?.volume = normalized
+        videoAudio?.setAudible(normalized > 0f)
+    }
+
+    // Leaving the app must not keep the video and its sound running, as iOS
+    // already pauses on didEnterBackground. ON_STOP (not ON_PAUSE) keeps
+    // multi-window playback; returning does not resume automatically.
+    PlatformBackgroundLifecycleEffect {
+        val activePlayer = player ?: return@PlatformBackgroundLifecycleEffect
+        editing?.pausePlayer?.invoke() ?: activePlayer.pause()
+    }
+
+    AndroidView(
+        factory = {
+            lateinit var targetView: PlayerView
+            val doubleTapDetector = GestureDetector(
+                context,
+                object : GestureDetector.SimpleOnGestureListener() {
+                    override fun onDown(event: MotionEvent): Boolean = true
+
+                    override fun onDoubleTap(event: MotionEvent): Boolean {
+                        val activePlayer = player ?: return false
+                        activePlayer.seekTo(
+                            resolveReferenceVideoDoubleTapPosition(
+                                currentPositionMillis = activePlayer.currentPosition,
+                                durationMillis = activePlayer.duration,
+                                tappedRightHalf = event.x >= (targetView.width / 2f)
+                            )
+                        )
+                        currentControlsCallback(true)
+                        return true
+                    }
+                }
+            )
+            PlayerView(context).apply {
+                targetView = this
+                useController = editing == null
+                options.controlsAutoHideMillis?.let { controllerShowTimeoutMs = it }
+                if (options.controlsFollowChrome) {
+                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+                        currentControlsCallback(visibility == android.view.View.VISIBLE)
+                    })
+                }
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                this.player = videoAudio?.player ?: player
+                setOnTouchListener { _, event ->
+                    doubleTapDetector.onTouchEvent(event)
+                    if (event.action == MotionEvent.ACTION_DOWN) {
+                        currentControlsCallback(true)
+                    }
+                    false
+                }
+            }
+        },
+        update = { view ->
+            val shown = videoAudio?.player ?: player
+            if (view.player !== shown) {
+                view.player = shown
+            }
+            if (areControlsVisible) {
+                view.showController()
+            } else {
+                view.hideController()
+            }
+        },
+        modifier = modifier
+    )
+
+    DisposableEffect(player) {
+        val activePlayer = player ?: return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> currentCallback(VideoPlayerState.Buffering)
+                    Player.STATE_READY -> currentCallback(resolveReadyVideoPlayerState(activePlayer.isPlaying))
+                    Player.STATE_ENDED -> currentCallback(VideoPlayerState.Idle)
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                currentCallback(resolveReadyVideoPlayerState(isPlaying))
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                currentErrorCallback(
+                    VideoPlaybackError(
+                        code = "${error.errorCodeName} (${error.errorCode})",
+                        message = error.message ?: error.cause?.message
+                    )
+                )
+                currentCallback(VideoPlayerState.Error)
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                currentSizeCallback(videoSize.width, videoSize.height)
+                currentMediaInfoCallback(activePlayer.toVideoMediaInfo())
+            }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                currentMediaInfoCallback(activePlayer.toVideoMediaInfo())
+            }
+        }
+        activePlayer.addListener(listener)
+        onDispose {
+            activePlayer.removeListener(listener)
+        }
+    }
+}
+
+private fun ExoPlayer.toVideoMediaInfo(): VideoMediaInfo {
+    val video = videoFormat
+    val audio = audioFormat
+    val profileLevel = parseVideoCodecProfileLevel(video?.codecs)
+    return VideoMediaInfo(
+        videoCodec = video?.sampleMimeType,
+        codecId = video?.codecs,
+        profile = profileLevel.profile,
+        level = profileLevel.level,
+        width = video?.width?.takeIf { it > 0 },
+        height = video?.height?.takeIf { it > 0 },
+        frameRate = video?.frameRate?.takeIf { it > 0f },
+        bitrate = video?.bitrate?.takeIf { it > 0 },
+        audioCodec = audio?.sampleMimeType,
+        sampleRate = audio?.sampleRate?.takeIf { it > 0 },
+        channelCount = audio?.channelCount?.takeIf { it > 0 },
+        durationMillis = duration.takeIf { it != C.TIME_UNSET && it >= 0L }
+    )
+}
+
+private fun isAndroidEmulator(): Boolean {
+    val fingerprint = Build.FINGERPRINT.lowercase()
+    val model = Build.MODEL.lowercase()
+    val product = Build.PRODUCT.lowercase()
+    return fingerprint.startsWith("generic") ||
+        fingerprint.contains("emulator") ||
+        model.contains("sdk_gphone") ||
+        model.contains("emulator") ||
+        product.contains("sdk_gphone")
+}
+
+internal actual val platformVideoAutoPlayByDefault: Boolean = false

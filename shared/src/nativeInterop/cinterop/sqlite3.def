@@ -1,0 +1,4 @@
+headers = sqlite3.h
+package = com.valoser.futacha.shared.sqlite
+compilerOpts = -DSQLITE_ENABLE_FTS5
+linkerOpts = -lsqlite3

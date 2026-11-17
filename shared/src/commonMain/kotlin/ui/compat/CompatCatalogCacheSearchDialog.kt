@@ -1,0 +1,687 @@
+package com.valoser.futacha.shared.ui.compat
+
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.compat.CompatHistoryEntry
+import com.valoser.futacha.shared.compat.CompatThreadSnapshot
+import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.compat.normalizeCompatSearchText
+import com.valoser.futacha.shared.network.readBoundedHttpResponseText
+import com.valoser.futacha.shared.network.ArchiveSearchItem
+import com.valoser.futacha.shared.network.ArchiveSearchScope
+import com.valoser.futacha.shared.network.extractArchiveSearchScope
+import com.valoser.futacha.shared.network.searchInqueuetArchiveThreads
+import kotlinx.serialization.json.Json
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import io.ktor.client.HttpClient
+import io.ktor.client.request.prepareGet
+import io.ktor.client.request.parameter
+import io.ktor.client.request.headers
+import io.ktor.http.HttpHeaders
+import io.ktor.http.isSuccess
+import io.ktor.http.Url
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.TimeSource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlin.coroutines.cancellation.CancellationException
+
+private const val LEGACY_COMPAT_CATALOG_CACHE_SEARCH_URL =
+    "https://futabaapp.xsrv.jp/api/search/"
+private const val LEGACY_COMPAT_CACHE_USER_AGENT =
+    "Apache-HttpClient/4.4.1 (java 1.4)"
+internal const val COMPAT_CACHE_SEARCH_HISTORY_KEY =
+    "compat.catalog.cacheSearchKeywordHistory"
+private const val COMPAT_CACHE_SEARCH_HISTORY_MAX_STORED = 50
+private const val COMPAT_CACHE_SEARCH_HISTORY_MAX_SUGGESTIONS = 10
+private const val COMPAT_CACHE_SEARCH_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
+private val compatCatalogCacheThreadIdRegex = Regex("/res/(\\d+)\\.html?")
+private val compatCatalogCacheWhitespaceRegex = Regex("\\s+")
+
+internal enum class CompatCatalogCacheSearchMode { OR, AND }
+
+internal fun compatCatalogCacheSearchModeLabel(mode: CompatCatalogCacheSearchMode): String = when (mode) {
+    CompatCatalogCacheSearchMode.OR -> "OR検索"
+    CompatCatalogCacheSearchMode.AND -> "AND検索"
+}
+
+/** The original reference app's server-side catalog-cache search, kept separate from archive search. */
+@Composable
+internal fun CompatCatalogCacheSearchDialog(
+    httpClient: HttpClient?,
+    store: CompatibilityStore,
+    boardKey: String,
+    boardUrl: String,
+    localHistory: List<CompatHistoryEntry> = emptyList(),
+    initialSearchHistory: List<String> = emptyList(),
+    onSearchHistoryChanged: (List<String>) -> Unit = {},
+    onDismiss: () -> Unit,
+    onOpenThread: (CatalogItem) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var query by rememberSaveable { mutableStateOf("") }
+    var mode by rememberSaveable { mutableStateOf(CompatCatalogCacheSearchMode.OR) }
+    var baseResults by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
+    // Which search terms each locally cached thread body contains. Bodies themselves are never
+    // retained (hundreds of decoded threads were ~60MB); a mode switch only needs these flags.
+    var bodyTermMatches by remember { mutableStateOf<CompatCacheBodyTermMatches>(emptyMap()) }
+    var searchedTerms by remember { mutableStateOf<List<CompatCacheSearchTerm>>(emptyList()) }
+    var modeFilterJob by remember { mutableStateOf<Job?>(null) }
+    var results by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
+    var searchedQuery by remember { mutableStateOf("") }
+    var searchHistory by remember(initialSearchHistory) {
+        mutableStateOf(normalizeCompatCacheSearchHistory(initialSearchHistory.joinToString("\n")))
+    }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun applyMode(nextMode: CompatCatalogCacheSearchMode) {
+        mode = nextMode
+        val base = baseResults
+        val terms = searchedTerms
+        val matches = bodyTermMatches
+        modeFilterJob?.cancel()
+        modeFilterJob = scope.launch {
+            results = withContext(AppDispatchers.parsing) {
+                filterLegacyCompatCatalogCacheByTermMatches(base, terms, nextMode, matches)
+            }
+        }
+    }
+
+    fun runSearch(keyword: String = query) {
+        val normalized = cleanCompatCacheSearchKeyword(keyword)
+        if (normalized.isBlank()) {
+            error = "検索語を入力してください"
+            return
+        }
+        loading = true
+        error = null
+        scope.launch {
+            try {
+                val terms = compatCacheSearchTerms(normalized)
+                val localMatches = loadCompatCacheSearchBodyTermMatches(store, localHistory, boardKey, terms)
+                val remoteResult = httpClient?.let {
+                    searchCompatCatalogCacheRemote(it, boardUrl, normalized)
+                }
+                val fetched = remoteResult?.getOrDefault(emptyList()).orEmpty()
+                val searchMode = mode
+                val (merged, filtered) = withContext(AppDispatchers.parsing) {
+                    val mergedResults = mergeCompatCacheSearchResultsByTermMatches(
+                        remoteResults = fetched,
+                        localHistory = localHistory,
+                        boardKey = boardKey,
+                        terms = terms,
+                        bodyTermMatches = localMatches
+                    )
+                    mergedResults to filterLegacyCompatCatalogCacheByTermMatches(
+                        mergedResults,
+                        terms,
+                        searchMode,
+                        localMatches
+                    )
+                }
+                modeFilterJob?.cancel()
+                bodyTermMatches = localMatches
+                searchedTerms = terms
+                baseResults = merged
+                results = if (mode == searchMode) {
+                    filtered
+                } else {
+                    withContext(AppDispatchers.parsing) {
+                        filterLegacyCompatCatalogCacheByTermMatches(merged, terms, mode, localMatches)
+                    }
+                }
+                searchedQuery = normalized
+                searchHistory = rememberCompatCacheSearchKeyword(searchHistory, normalized)
+                onSearchHistoryChanged(searchHistory)
+                if (results.isEmpty()) {
+                    error = remoteResult?.exceptionOrNull()?.message
+                        ?: if (httpClient == null) "通信機能を初期化できませんでした" else null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                results = emptyList()
+                error = failure.message ?: "キャッシュ検索に失敗しました"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("キャッシュ検索") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextField(
+                        value = query,
+                        onValueChange = { query = it.take(200) },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        label = { Text("スレッド名・キーワード") },
+                        trailingIcon = {
+                            if (query.isNotEmpty()) {
+                                IconButton(onClick = { query = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "検索語を消去")
+                                }
+                            }
+                        }
+                    )
+                    TextButton(enabled = !loading, onClick = { runSearch() }) { Text("検索") }
+                }
+                val suggestions = compatCacheSearchSuggestions(searchHistory, query)
+                if (suggestions.isNotEmpty() && !loading) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp)
+                    ) {
+                        itemsIndexed(suggestions, key = { index, suggestion -> "suggestion:$suggestion:$index" }) { _, suggestion ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        query = suggestion
+                                        runSearch(suggestion)
+                                    },
+                                    modifier = Modifier.weight(1f).padding(vertical = 0.dp)
+                                ) {
+                                    Text(suggestion, modifier = Modifier.fillMaxWidth(), maxLines = 1)
+                                }
+                                IconButton(
+                                    onClick = {
+                                        searchHistory = searchHistory.filterNot { it == suggestion }
+                                        onSearchHistoryChanged(searchHistory)
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "$suggestion を検索履歴から削除")
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = mode == CompatCatalogCacheSearchMode.OR,
+                        onClick = { applyMode(CompatCatalogCacheSearchMode.OR) }
+                    )
+                    Text(compatCatalogCacheSearchModeLabel(CompatCatalogCacheSearchMode.OR))
+                    RadioButton(
+                        selected = mode == CompatCatalogCacheSearchMode.AND,
+                        onClick = { applyMode(CompatCatalogCacheSearchMode.AND) }
+                    )
+                    Text(compatCatalogCacheSearchModeLabel(CompatCatalogCacheSearchMode.AND))
+                }
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+                error?.let { Text(it) }
+                if (!loading && error == null && searchedQuery.isNotBlank() && results.isEmpty()) {
+                    Text("該当するキャッシュはありません")
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)
+                ) {
+                    itemsIndexed(results, key = { index, item -> "${item.threadUrl}:$index" }) { _, item ->
+                        TextButton(
+                            onClick = { onDismiss(); onOpenThread(item) },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(item.title.orEmpty().ifBlank { "No.${item.id}" }, maxLines = 2)
+                                Text("No.${item.id} / ${item.replyCount}レス", maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } }
+    ) }
+}
+
+/**
+ * The reference app searches its local thread database as well as the remote
+ * cache service, then applies AND/OR to that stable combined base list.
+ */
+internal fun mergeCompatCacheSearchResults(
+    remoteResults: List<CatalogItem>,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    query: String,
+    bodyTextByThreadId: Map<String, String> = emptyMap()
+): List<CatalogItem> = mergeCompatCacheSearchResultsNormalized(
+    remoteResults = remoteResults,
+    localHistory = localHistory,
+    boardKey = boardKey,
+    query = query,
+    normalizedBodyTextByThreadId = bodyTextByThreadId.mapValues { normalizeCompatSearchText(it.value) }
+)
+
+/** A search term with its search-normalized form, normalized once per search. */
+internal class CompatCacheSearchTerm(val raw: String) {
+    val normalized: String = normalizeCompatSearchText(raw)
+}
+
+/**
+ * [mergeCompatCacheSearchResults] for bodies that are already
+ * search-normalized; each title and term is also normalized only once.
+ */
+internal fun mergeCompatCacheSearchResultsNormalized(
+    remoteResults: List<CatalogItem>,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    query: String,
+    normalizedBodyTextByThreadId: Map<String, String>
+): List<CatalogItem> {
+    val terms = cleanCompatCacheSearchKeyword(query)
+        .split(compatCatalogCacheWhitespaceRegex)
+        .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
+    val localResults = localHistory.asSequence()
+        .filter { it.boardKey == boardKey }
+        .filter { entry ->
+            if (terms.isEmpty()) return@filter true
+            val title = normalizeCompatSearchText(entry.title)
+            val body = normalizedBodyTextByThreadId[entry.threadNo].orEmpty()
+            terms.any { term ->
+                title.contains(term.normalized) ||
+                    entry.threadNo.contains(term.raw) ||
+                    body.contains(term.normalized)
+            }
+        }
+        .map { entry ->
+            CatalogItem(
+                id = entry.threadNo,
+                threadUrl = entry.originalUrl,
+                title = entry.title,
+                thumbnailUrl = entry.thumbnailUrl,
+                fullImageUrl = entry.thumbnailUrl,
+                replyCount = entry.replyCount
+            )
+        }
+    return (remoteResults.asSequence() + localResults)
+        .distinctBy(CatalogItem::id)
+        .toList()
+}
+
+/** The terms of an already cleaned query ([cleanCompatCacheSearchKeyword]), each normalized once. */
+internal fun compatCacheSearchTerms(query: String): List<CompatCacheSearchTerm> =
+    cleanCompatCacheSearchKeyword(query)
+        .split(compatCatalogCacheWhitespaceRegex)
+        .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
+
+/**
+ * Per locally cached thread (by thread number), the indexes of the search terms its search-normalized
+ * body contains. Threads containing none are omitted. This is all the search needs from a body, so
+ * the bodies themselves are dropped as soon as each thread has been scanned.
+ */
+internal typealias CompatCacheBodyTermMatches = Map<String, Set<Int>>
+
+/** Whether the cached body of [threadNo] contains term [index]; an absent body behaves as the empty text. */
+private fun CompatCacheBodyTermMatches.bodyContains(
+    threadNo: String,
+    index: Int,
+    term: CompatCacheSearchTerm
+): Boolean = this[threadNo]?.contains(index) ?: term.normalized.isEmpty()
+
+internal fun compatCacheSearchTermMatchIndices(
+    snapshot: CompatThreadSnapshot,
+    terms: List<CompatCacheSearchTerm>
+): Set<Int> {
+    if (terms.isEmpty()) return emptySet()
+    val body = normalizeCompatSearchText(compatCacheSearchBodyText(snapshot))
+    return terms.indices.filterTo(HashSet()) { body.contains(terms[it].normalized) }
+}
+
+/** [mergeCompatCacheSearchResultsNormalized] driven by [bodyTermMatches] instead of the bodies. */
+internal fun mergeCompatCacheSearchResultsByTermMatches(
+    remoteResults: List<CatalogItem>,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    terms: List<CompatCacheSearchTerm>,
+    bodyTermMatches: CompatCacheBodyTermMatches
+): List<CatalogItem> {
+    val localResults = localHistory.asSequence()
+        .filter { it.boardKey == boardKey }
+        .filter { entry ->
+            if (terms.isEmpty()) return@filter true
+            val title = normalizeCompatSearchText(entry.title)
+            terms.withIndex().any { (index, term) ->
+                title.contains(term.normalized) ||
+                    entry.threadNo.contains(term.raw) ||
+                    bodyTermMatches.bodyContains(entry.threadNo, index, term)
+            }
+        }
+        .map { entry ->
+            CatalogItem(
+                id = entry.threadNo,
+                threadUrl = entry.originalUrl,
+                title = entry.title,
+                thumbnailUrl = entry.thumbnailUrl,
+                fullImageUrl = entry.thumbnailUrl,
+                replyCount = entry.replyCount
+            )
+        }
+    return (remoteResults.asSequence() + localResults)
+        .distinctBy(CatalogItem::id)
+        .toList()
+}
+
+/** [filterLegacyCompatCatalogCacheNormalized] driven by [bodyTermMatches] instead of the bodies. */
+internal fun filterLegacyCompatCatalogCacheByTermMatches(
+    items: List<CatalogItem>,
+    terms: List<CompatCacheSearchTerm>,
+    mode: CompatCatalogCacheSearchMode,
+    bodyTermMatches: CompatCacheBodyTermMatches
+): List<CatalogItem> {
+    if (terms.isEmpty()) return items
+    return items.filter { item ->
+        val title = normalizeCompatSearchText(item.title.orEmpty())
+        fun matches(index: Int): Boolean {
+            val term = terms[index]
+            return title.contains(term.normalized) ||
+                item.id.contains(term.raw) ||
+                bodyTermMatches.bodyContains(item.id, index, term)
+        }
+        if (mode == CompatCatalogCacheSearchMode.AND) terms.indices.all(::matches)
+        else terms.indices.any(::matches)
+    }
+}
+
+private const val COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS = 4
+
+/** The whole cache search (every archive term and the old server) ends within this time. */
+internal const val COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS = 60_000L
+
+internal class CompatCacheSearchTimeoutException : Exception("検索に時間がかかりすぎたため中止しました")
+private val compatCacheSearchArchiveJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * The cache search's remote results. The reference app's own server (futabaapp.xsrv.jp) answered 403
+ * for the whole site when checked on 2026-11-08, so the archive search the thread menu uses (inqueuet, then ふたポ
+ * and ふたばフォレスト) comes first, one search per term (at most four) so OR and AND are filtered
+ * locally as before. The old server is still tried last and quietly, in case it comes back; its
+ * failure is never what the screen shows.
+ */
+internal suspend fun searchCompatCatalogCacheRemote(
+    httpClient: HttpClient,
+    boardUrl: String,
+    query: String,
+    searchArchive: suspend (String, ArchiveSearchScope) -> List<ArchiveSearchItem> = { term, scope ->
+        searchInqueuetArchiveThreads(httpClient, compatCacheSearchArchiveJson, term, scope)
+    },
+    searchLegacy: suspend () -> Result<List<CatalogItem>> = {
+        searchLegacyCompatCatalogCache(httpClient, boardUrl, query)
+    },
+    totalTimeoutMillis: Long = COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS
+): Result<List<CatalogItem>> {
+    // The cache and archive search services are Futaba's: an あいもげ board is never sent to them (AM-B4).
+    if (com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl) != null) return Result.success(emptyList())
+    val started = TimeSource.Monotonic.markNow()
+    fun remaining(): Long = totalTimeoutMillis - started.elapsedNow().inWholeMilliseconds
+    val scope = extractArchiveSearchScope(boardUrl)
+        ?: return withTimeoutOrNull(totalTimeoutMillis) { searchLegacy() }
+            ?: Result.failure(CompatCacheSearchTimeoutException())
+    val terms = compatCacheSearchTerms(query).map(CompatCacheSearchTerm::raw).distinct()
+        .take(COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS)
+        .ifEmpty { listOf(query.trim()) }
+    var archiveFailure: Throwable? = null
+    val archived = ArrayList<CatalogItem>()
+    for (term in terms) {
+        // The whole search shares one time limit: a slow archive ends the remaining terms.
+        val left = remaining()
+        if (left <= 0) {
+            if (archiveFailure == null) archiveFailure = CompatCacheSearchTimeoutException()
+            break
+        }
+        val found = withTimeoutOrNull(left) {
+            runSuspendCatchingPreservingCancellation { searchArchive(term, scope) }
+        } ?: Result.failure(CompatCacheSearchTimeoutException())
+        found.exceptionOrNull()?.let { if (archiveFailure == null) archiveFailure = it }
+        found.getOrNull().orEmpty().forEach { item ->
+            val url = buildCompatArchiveSourceThreadUrl(item) ?: return@forEach
+            archived += CatalogItem(
+                id = item.threadId,
+                threadUrl = url,
+                title = item.title,
+                thumbnailUrl = item.thumbUrl,
+                fullImageUrl = item.thumbUrl,
+                replyCount = item.replyCount
+            )
+        }
+    }
+    if (archived.isNotEmpty()) return Result.success(archived.distinctBy(CatalogItem::threadUrl))
+    val legacy = remaining().takeIf { it > 0 }
+        ?.let { left -> withTimeoutOrNull(left) { searchLegacy() } }
+        ?.getOrNull().orEmpty()
+    if (legacy.isNotEmpty()) return Result.success(legacy)
+    return archiveFailure?.let { Result.failure(it) } ?: Result.success(emptyList())
+}
+
+internal suspend fun searchLegacyCompatCatalogCache(
+    httpClient: HttpClient,
+    boardUrl: String,
+    query: String
+): Result<List<CatalogItem>> = runSuspendCatchingPreservingCancellation {
+    withTimeoutOrNull(30_000L) {
+        val board = Url(boardUrl.trim())
+        val boardParameter = buildString {
+            // The reference app deliberately sends the board parameter as HTTP,
+            // even when the board was opened through HTTPS.
+            append("http://").append(board.host)
+            if (board.port != board.protocol.defaultPort) append(":").append(board.port)
+            append(board.encodedPath.trimEnd('/')).append('/')
+        }
+        // Streamed so the bounded reader applies before the body is buffered.
+        val body = httpClient.prepareGet(LEGACY_COMPAT_CATALOG_CACHE_SEARCH_URL) {
+            parameter("server", boardParameter)
+            parameter("keyword", query)
+            parameter("device", LEGACY_COMPAT_CACHE_USER_AGENT)
+            headers { append(HttpHeaders.UserAgent, LEGACY_COMPAT_CACHE_USER_AGENT) }
+        }.execute { response ->
+            val text = readBoundedHttpResponseText(response, COMPAT_CACHE_SEARCH_RESPONSE_MAX_BYTES)
+            check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+            text
+        }
+        withContext(AppDispatchers.parsing) {
+            val root = Json.parseToJsonElement(body).jsonObject
+            root.stringValue("E")?.takeIf { it.isNotBlank() }?.let { error(it) }
+            root["l"]?.jsonArray.orEmpty().mapNotNull { element ->
+                val item = element.jsonObject
+                val url = item.stringValue("u")?.replace("http://", "https://") ?: return@mapNotNull null
+                val id = compatCatalogCacheThreadIdRegex.find(url)?.groupValues?.getOrNull(1)
+                    ?: item.stringValue("i")?.filter(Char::isDigit)?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                // The legacy API calls this field `c` (catalog thumbnail).  `b` is
+                // not present in the sample reference app's response schema and would make a
+                // perfectly valid cache result look image-less.
+                val thumb = item.stringValue("c")?.replace("http://", "https://")
+                CatalogItem(
+                    id = id,
+                    threadUrl = url,
+                    title = item.stringValue("t"),
+                    thumbnailUrl = thumb,
+                    fullImageUrl = thumb,
+                    thumbnailWidth = item.stringValue("e")?.toIntOrNull(),
+                    thumbnailHeight = item.stringValue("f")?.toIntOrNull(),
+                    replyCount = item.stringValue("C")?.toIntOrNull() ?: 0
+                )
+            }.distinctBy(CatalogItem::threadUrl)
+        }
+    } ?: error("キャッシュ検索がタイムアウトしました")
+}
+
+internal fun filterLegacyCompatCatalogCache(
+    items: List<CatalogItem>,
+    query: String,
+    mode: CompatCatalogCacheSearchMode,
+    supplementalTextById: Map<String, String> = emptyMap()
+): List<CatalogItem> = filterLegacyCompatCatalogCacheNormalized(
+    items = items,
+    query = query,
+    mode = mode,
+    normalizedSupplementalTextById = supplementalTextById.mapValues { normalizeCompatSearchText(it.value) }
+)
+
+/**
+ * [filterLegacyCompatCatalogCache] for supplemental text that is already
+ * search-normalized; each title and term is also normalized only once.
+ */
+internal fun filterLegacyCompatCatalogCacheNormalized(
+    items: List<CatalogItem>,
+    query: String,
+    mode: CompatCatalogCacheSearchMode,
+    normalizedSupplementalTextById: Map<String, String>
+): List<CatalogItem> {
+    val terms = query.trim().split(compatCatalogCacheWhitespaceRegex)
+        .filter(String::isNotBlank)
+        .map(::CompatCacheSearchTerm)
+    if (terms.isEmpty()) return items
+    return items.filter { item ->
+        val title = normalizeCompatSearchText(item.title.orEmpty())
+        val supplemental = normalizedSupplementalTextById[item.id].orEmpty()
+        fun matches(term: CompatCacheSearchTerm): Boolean =
+            title.contains(term.normalized) ||
+                item.id.contains(term.raw) ||
+                supplemental.contains(term.normalized)
+        if (mode == CompatCatalogCacheSearchMode.AND) terms.all(::matches)
+        else terms.any(::matches)
+    }
+}
+
+internal fun compatCacheSearchBodyText(snapshot: CompatThreadSnapshot): String =
+    snapshot.posts.joinToString("\n") { post ->
+        listOfNotNull(post.subject, post.author, post.messageHtml).joinToString(" ")
+    }
+
+/**
+ * Scans the locally cached threads of [boardKey] for [terms], one thread at a time per worker.
+ * Only the term flags are kept: a decoded snapshot is dropped as soon as it has been scanned, so
+ * memory stays at a couple of threads instead of every history body, and each store read lets
+ * other store users in between. Cancelling the search stops after the thread being scanned.
+ */
+private suspend fun loadCompatCacheSearchBodyTermMatches(
+    store: CompatibilityStore,
+    localHistory: List<CompatHistoryEntry>,
+    boardKey: String,
+    terms: List<CompatCacheSearchTerm>
+): CompatCacheBodyTermMatches = coroutineScope {
+    if (terms.isEmpty()) return@coroutineScope emptyMap()
+    val semaphore = Semaphore(2)
+    localHistory.asSequence()
+        .filter { it.boardKey == boardKey }
+        .distinctBy(CompatHistoryEntry::canonicalUrl)
+        .map { entry ->
+            async {
+                // The permit covers the scan too, so at most two decoded snapshots are alive.
+                val matched = semaphore.withPermit {
+                    val snapshot = runSuspendCatchingPreservingCancellation {
+                        store.loadThreadSnapshotByCanonicalUrl(entry.canonicalUrl)
+                    }.getOrNull()
+                    val scanned = snapshot?.let {
+                        withContext(AppDispatchers.parsing) { compatCacheSearchTermMatchIndices(it, terms) }
+                    }
+                    yield()
+                    scanned
+                }
+                entry.threadNo to matched
+            }
+        }
+        .toList()
+        .awaitAll()
+        .mapNotNull { (threadNo, matched) -> matched?.takeIf { it.isNotEmpty() }?.let { threadNo to it } }
+        .toMap()
+}
+
+private fun JsonObject.stringValue(key: String): String? =
+    (this[key] as? JsonPrimitive)?.contentOrNull
+
+/** Exact normalization used by CatalogCacheSearchKeywordHistory in the reference app. */
+internal fun cleanCompatCacheSearchKeyword(keyword: String?): String =
+    keyword.orEmpty()
+        .replace('\u3000', ' ')
+        .replace('\r', ' ')
+        .replace('\n', ' ')
+        .trim()
+
+internal fun normalizeCompatCacheSearchHistory(stored: String): List<String> = buildList {
+    stored.split('\n').forEach { raw ->
+        val value = cleanCompatCacheSearchKeyword(raw)
+        if (value.isNotBlank() && value !in this && size < COMPAT_CACHE_SEARCH_HISTORY_MAX_STORED) {
+            add(value)
+        }
+    }
+}
+
+/** Newest first, de-duplicated, and capped at the same 50 entries as the reference app. */
+internal fun rememberCompatCacheSearchKeyword(stored: List<String>, keyword: String?): List<String> {
+    val value = cleanCompatCacheSearchKeyword(keyword)
+    if (value.isBlank()) return stored.distinct().take(COMPAT_CACHE_SEARCH_HISTORY_MAX_STORED)
+    return buildList {
+        add(value)
+        stored.forEach { old ->
+            val normalized = cleanCompatCacheSearchKeyword(old)
+            if (normalized.isNotBlank() && normalized != value && normalized !in this && size < COMPAT_CACHE_SEARCH_HISTORY_MAX_STORED) {
+                add(normalized)
+            }
+        }
+    }
+}
+
+internal fun compatCacheSearchSuggestions(stored: List<String>, query: String?): List<String> {
+    val normalizedQuery = cleanCompatCacheSearchKeyword(query).lowercase()
+    return stored.asSequence()
+        .map(::cleanCompatCacheSearchKeyword)
+        .filter(String::isNotBlank)
+        .distinct()
+        .filter { normalizedQuery.isBlank() || it.lowercase().contains(normalizedQuery) }
+        .take(COMPAT_CACHE_SEARCH_HISTORY_MAX_SUGGESTIONS)
+        .toList()
+}

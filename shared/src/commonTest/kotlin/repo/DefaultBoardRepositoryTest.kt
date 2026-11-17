@@ -1,0 +1,1528 @@
+package com.valoser.futacha.shared.repo
+
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogFetchSettings
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.parser.HtmlParser
+import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.network.PersistentCookieStorage
+import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class DefaultBoardRepositoryTest {
+    @Test
+    fun authenticationRetryRefreshesExistingCookies() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(io.ktor.http.Url(board), io.ktor.http.Cookie(
+            name = "posttime", value = "stale", domain = ".2chan.net", path = "/"))
+        var refreshed = false
+        val delegate = FakeBoardApi(onFetchCatalogSetup = { refreshed = true })
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                if (!refreshed) throw NetworkException("forbidden", 403)
+                return delegate.fetchThread(board, threadId)
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage))
+        repository.getThread(board, "123")
+        assertTrue(refreshed)
+        assertEquals(1, delegate.fetchCatalogSetupCalls)
+        assertEquals(1, delegate.fetchThreadCalls)
+    }
+
+    @Test
+    fun persistentAuthFailureDoesNotRepostCatalogSetupOnEveryRequest() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(io.ktor.http.Url(board), io.ktor.http.Cookie(
+            name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/"))
+        val delegate = FakeBoardApi()
+        var threadCalls = 0
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                threadCalls += 1
+                throw NetworkException("forbidden", 403)
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage))
+
+        repeat(3) { assertFailsWith<NetworkException> { repository.getThread(board, "123") } }
+        // One fresh setup that did not help; later refreshes report the 403 directly.
+        assertEquals(1, delegate.fetchCatalogSetupCalls)
+        assertEquals(4, threadCalls)
+
+        repository.invalidateCookies(board)
+        assertFailsWith<NetworkException> { repository.getThread(board, "123") }
+        assertEquals(2, delegate.fetchCatalogSetupCalls)
+    }
+
+    @Test
+    fun authRetryOfAThreadKeepsTheBoardsCatalogLayout() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val delegate = FakeBoardApi(onFetchCatalogSetup = {
+            storage.addCookie(
+                io.ktor.http.Url(boardUrl),
+                io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+            )
+        })
+        var forbidden = true
+        val api = object : BoardApi by delegate {
+            override suspend fun fetchThread(board: String, threadId: String): String {
+                if (forbidden) {
+                    forbidden = false
+                    throw NetworkException("forbidden", 403)
+                }
+                return delegate.fetchThread(board, threadId)
+            }
+        }
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+        repository.getThread(boardUrl, "123")
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+
+        // The refresh re-posted the board's own layout, so the next catalog needs no setup.
+        assertEquals(listOf(100, 100), delegate.fetchCatalogSetupSettings.map { it.rows })
+    }
+
+    @Test
+    fun catalogCountMismatchSavesRawHtmlAndReturnsVisibleWarning() = runBlocking {
+        val html = """
+            <table id='cattable'>
+              <td><a href='res/1.htm'>one</a></td>
+              <td><a href='res/2.htm'>two</a></td>
+            </table>
+        """.trimIndent()
+        val fileSystem = InMemoryFileSystem()
+        val repository = DefaultBoardRepository(
+            api = FakeBoardApi(catalogHtml = html),
+            parser = FakeHtmlParser(),
+            diagnosticFileSystem = fileSystem
+        )
+
+        val page = repository.getCatalogPage("https://dec.2chan.net/b/", CatalogMode.Catalog)
+
+        assertTrue(page.parseWarning.isTruncated)
+        assertTrue(page.parseWarning.reason.orEmpty().contains("HTML 2件 / 解析 1件"))
+        assertEquals(CATALOG_DIAGNOSTIC_HTML_PATH, page.parseWarning.diagnosticPath)
+        assertEquals(html, fileSystem.readString(CATALOG_DIAGNOSTIC_HTML_PATH).getOrThrow())
+    }
+
+    @Test
+    fun getCatalog_skipsCookieSetupWhenPostingCookieAndMatchingCatalogSettingsExist() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+        )
+        val api = FakeBoardApi()
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+
+        assertEquals(0, api.fetchCatalogSetupCalls)
+        assertEquals(1, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun getCatalog_runsCookieSetupWhenCatalogSettingsCookieIsMissing() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+        val api = FakeBoardApi()
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(1, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun getCatalog_runsCookieSetupWhenOnlyCatalogSettingsCookieExists() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+        )
+        val api = FakeBoardApi(
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(1, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun getCatalog_runsCookieSetupOnlyOnceUntilInvalidated() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+        repository.getCatalog(boardUrl, CatalogMode.New)
+        repository.invalidateCookies(boardUrl)
+        repository.getThread(boardUrl, "123")
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(2, api.fetchCatalogCalls)
+        assertEquals(1, api.fetchThreadCalls)
+    }
+
+    @Test
+    fun catalogParsingDoesNotHoldTheBoardLayoutLock() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi()
+        // The first parse waits until the second catalog GET was sent; with the
+        // parse under the layout lock that GET could never start.
+        val parser = object : HtmlParser by FakeHtmlParser() {
+            var parses = 0
+            override suspend fun parseCatalogPage(
+                html: String,
+                baseUrl: String?
+            ): com.valoser.futacha.shared.model.CatalogPageContent {
+                if (++parses == 1) {
+                    kotlinx.coroutines.withTimeout(5_000L) {
+                        while (api.fetchCatalogCalls < 2) delay(5L)
+                    }
+                }
+                return com.valoser.futacha.shared.model.CatalogPageContent(items = emptyList())
+            }
+        }
+        val repository = DefaultBoardRepository(api = api, parser = parser)
+
+        coroutineScope {
+            val first = async { repository.getCatalogPage(boardUrl, CatalogMode.Catalog) }
+            while (api.fetchCatalogCalls < 1) delay(5L)
+            val second = async { repository.getCatalogPage(boardUrl, CatalogMode.Catalog) }
+            listOf(first, second).awaitAll()
+        }
+
+        assertEquals(2, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun concurrentCatalogsWithDifferentSettingsNeverInterleaveSetupAndGet() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            fetchCatalogSetupDelayMillis = 20L,
+            fetchCatalogDelayMillis = 20L,
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser(), cookieRepository = CookieRepository(storage))
+
+        coroutineScope {
+            listOf(60, 100, 60, 100).map { rows ->
+                async(Dispatchers.Default) {
+                    repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = rows))
+                }
+            }.awaitAll()
+        }
+
+        // Every GET must use the layout set up right before it.
+        val events = api.catalogEvents.toList()
+        events.forEachIndexed { index, event ->
+            if (event.startsWith("setup:")) assertEquals("get", events.getOrNull(index + 1), events.toString())
+        }
+        assertEquals(4, events.count { it == "get" })
+    }
+
+    @Test
+    fun threadRequestDoesNotRepostCatalogSetupWhenOnlyTheLayoutDiffers() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(onFetchCatalogSetup = {
+            storage.addCookie(
+                io.ktor.http.Url(boardUrl),
+                io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+            )
+        })
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+
+        repository.getCatalogWithSettings(boardUrl, CatalogMode.Catalog, CatalogFetchSettings(rows = 100))
+        repository.fetchOpImageUrl(boardUrl, "123")
+
+        assertEquals(listOf(100), api.fetchCatalogSetupSettings.map { it.rows })
+    }
+
+    @Test
+    fun getCatalog_rerunsCatalogSetupWhenFetchRowsChange() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        var settings = CatalogFetchSettings(rows = 60)
+        val api = FakeBoardApi(
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { settings }
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+        settings = CatalogFetchSettings(rows = 100)
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+
+        assertEquals(2, api.fetchCatalogSetupCalls)
+        assertEquals(listOf(60, 100), api.fetchCatalogSetupSettings.map { it.rows })
+    }
+
+    @Test
+    fun getCatalogWithSettings_usesOperationLocalCompatibilityLayout() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+
+        repository.getCatalogWithSettings(
+            board = boardUrl,
+            mode = CatalogMode.Catalog,
+            settings = CatalogFetchSettings(columns = 32, rows = 25, titleLines = 256)
+        )
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(32, api.fetchCatalogSetupSettings.single().columns)
+        assertEquals(25, api.fetchCatalogSetupSettings.single().rows)
+        assertEquals(256, api.fetchCatalogSetupSettings.single().titleLines)
+        assertEquals(
+            "32x25x256x0x1",
+            storage.listCookies().first { it.name == "cxyl" }.value
+        )
+    }
+
+    /**
+     * L-B1 (docs/futaber-evolution-look-2026-10-31.md §5.3): ふたばー風 asks the server for the whole titles (cl=256);
+     * ふたちゃ, right after it on the same board and repository, still asks for its own 16 letters and sends its own
+     * cxyl cookie, and としあき(仮) for its own layout. Over the real HTTP client, cookies included.
+     */
+    @Test
+    fun futaberCatalogAsksForWholeTitlesWithoutChangingTheOtherModesLayouts() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+        val setupTitleLetters = mutableListOf<String?>()
+        val catalogCookies = mutableListOf<String?>()
+        val engine = io.ktor.client.engine.mock.MockEngine { request ->
+            if (request.url.parameters["mode"] == "catset") {
+                val body = request.body as io.ktor.http.content.OutgoingContent.ByteArrayContent
+                setupTitleLetters += io.ktor.http.parseQueryString(body.bytes().decodeToString())["cl"]
+            } else {
+                catalogCookies += request.headers[io.ktor.http.HttpHeaders.Cookie]
+            }
+            respond(
+                content = "<html><table id='cattable'><td><a href='res/1.htm'>one</a></td></table></html>",
+                headers = io.ktor.http.headersOf(io.ktor.http.HttpHeaders.ContentType, "text/html; charset=UTF-8")
+            )
+        }
+        val cookieStorage = storage
+        val client = io.ktor.client.HttpClient(engine) {
+            install(io.ktor.client.plugins.cookies.HttpCookies) { this.storage = cookieStorage }
+        }
+        val repository = DefaultBoardRepository(
+            api = com.valoser.futacha.shared.network.HttpBoardApi(client),
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage),
+            // ふたちゃ's layout: the saved rows, the default 16-letter titles.
+            catalogFetchSettingsProvider = { CatalogFetchSettings(rows = 60) }
+        )
+        try {
+            com.valoser.futacha.shared.ui.futaber.futaberFetchCatalogPage(repository, boardUrl, CatalogMode.Catalog, emptyList())
+            repository.getCatalogPage(boardUrl, CatalogMode.Catalog)
+            com.valoser.futacha.shared.ui.compat.fetchCompatCatalogItems(
+                repository = repository,
+                boardUrl = boardUrl,
+                baseMode = CatalogMode.Catalog,
+                extraMode = null,
+                settings = com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(300),
+                watchWords = { emptyList() }
+            )
+        } finally {
+            client.close()
+        }
+
+        assertEquals(listOf<String?>("256", "16", "256"), setupTitleLetters)
+        assertEquals(3, catalogCookies.size)
+        assertTrue(catalogCookies[0].orEmpty().contains("cxyl=5x60x256x0x1"), catalogCookies.toString())
+        assertTrue(catalogCookies[1].orEmpty().contains("cxyl=5x60x16x0x1"), catalogCookies.toString())
+        assertTrue(catalogCookies[2].orEmpty().contains("cxyl=12x25x256x0x1"), catalogCookies.toString())
+        assertEquals("12x25x256x0x1", storage.listCookies().single { it.name == "cxyl" }.value)
+    }
+
+    @Test
+    fun getCatalog_runsCookieSetupOnlyOnceForConcurrentRequests() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            fetchCatalogSetupDelayMillis = 50L,
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "cxyl", value = "5x60x16x0x1", domain = "dec.2chan.net", path = "/b/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        (1..8)
+            .map {
+                async {
+                    repository.getCatalog(boardUrl, CatalogMode.Catalog)
+                }
+            }
+            .awaitAll()
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(8, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun getCatalog_skipsRecentFailedCookieSetupWhenSetupDoesNotPersistPostingCookie() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi()
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH))
+        )
+
+        repository.getCatalog(boardUrl, CatalogMode.Catalog)
+        repository.getCatalog(boardUrl, CatalogMode.New)
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(2, api.fetchCatalogCalls)
+    }
+
+    @Test
+    fun fetchOpImageUrl_usesCacheUntilCleared() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(threadHeadHtml = "<img src=\"/src/a.jpg\">")
+        val parser = FakeHtmlParser(opImageUrl = "https://dec.2chan.net/src/a.jpg")
+        val repository = DefaultBoardRepository(api = api, parser = parser)
+
+        val first = repository.fetchOpImageUrl(boardUrl, "123")
+        val second = repository.fetchOpImageUrl(boardUrl, "123")
+        repository.clearOpImageCache(board = boardUrl, threadId = "123")
+        val third = repository.fetchOpImageUrl(boardUrl, "123")
+
+        assertEquals("https://dec.2chan.net/src/a.jpg", first)
+        assertEquals(first, second)
+        assertEquals(first, third)
+        assertEquals(2, api.fetchThreadHeadCalls)
+        assertEquals(2, parser.extractOpImageUrlCalls)
+    }
+
+    @Test
+    fun fetchOpImageUrl_cachesMisses() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(threadHeadHtml = "<html></html>")
+        val parser = FakeHtmlParser(opImageUrl = null)
+        val repository = DefaultBoardRepository(api = api, parser = parser)
+
+        val first = repository.fetchOpImageUrl(boardUrl, "456")
+        val second = repository.fetchOpImageUrl(boardUrl, "456")
+
+        assertNull(first)
+        assertNull(second)
+        assertEquals(1, api.fetchThreadHeadCalls)
+        assertEquals(1, parser.extractOpImageUrlCalls)
+    }
+
+    @Test
+    fun fetchOpImageUrl_cachesHelperTimeoutsAsMisses() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(fetchThreadHeadDelayMillis = 50L)
+        val parser = FakeHtmlParser(opImageUrl = "https://dec.2chan.net/src/late.jpg")
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = parser,
+            helperFetchTimeoutMillis = 1L
+        )
+
+        val first = repository.fetchOpImageUrl(boardUrl, "789")
+        val second = repository.fetchOpImageUrl(boardUrl, "789")
+
+        assertNull(first)
+        assertNull(second)
+        assertEquals(1, api.fetchThreadHeadCalls)
+        assertEquals(0, parser.extractOpImageUrlCalls)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_readsTheLargerThreadHeadInOneRequest() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<blockquote>補完タイトル</blockquote>"
+                } else {
+                    "<blockquote>大きい取得</blockquote>"
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "123",
+            threadUrl = "$boardUrl/res/123.htm",
+            title = "10",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 10
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("大きい取得", title)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_findsTitleBeyondTheSmallHeadWithoutASecondRequest() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<html></html>"
+                } else {
+                    "<blockquote>フォールバックタイトル</blockquote>"
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "456",
+            threadUrl = "$boardUrl/res/456.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("フォールバックタイトル", title)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_skipsLargerThreadHeadWhenFallbackIsDisabled() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<html></html>"
+                } else {
+                    error("unexpected fallback thread head fetch")
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "457",
+            threadUrl = "$boardUrl/res/457.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(
+            board = boardUrl,
+            item = item,
+            allowFallbackHeadScan = false
+        )
+
+        assertEquals("20", title)
+        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_skipsHeadFetchForNonPlaceholderTitle() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = {
+                error("unexpected thread head fetch")
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "789",
+            threadUrl = "$boardUrl/res/789.htm",
+            title = "通常タイトル",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 30
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("通常タイトル", title)
+        assertEquals(emptyList(), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_cachesHelperTimeoutsAsMisses() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            fetchThreadHeadDelayMillis = 50L,
+            threadHeadHtmlByMaxLines = { "<blockquote>遅い補完</blockquote>" }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            helperFetchTimeoutMillis = 1L
+        )
+        val item = CatalogItem(
+            id = "790",
+            threadUrl = "$boardUrl/res/790.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val first = repository.resolveCatalogDisplayTitle(boardUrl, item)
+        val second = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("20", first)
+        assertEquals("20", second)
+        assertEquals(listOf(65), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun voteDeleteOperations_forwardArgumentsAfterSingleCookieSetup() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+
+        repository.voteSaidane(boardUrl, "123", "10")
+        repository.requestDeletion(boardUrl, "123", "11", "120")
+        repository.deleteByUser(boardUrl, "123", "12", "pass", imageOnly = true)
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(VoteCall(boardUrl, "123", "10"), api.voteCalls.single())
+        assertEquals(DeletionCall(boardUrl, "123", "11", "120"), api.requestDeletionCalls.single())
+        assertEquals(
+            DeleteByUserCall(
+                board = boardUrl,
+                threadId = "123",
+                postId = "12",
+                password = "pass",
+                imageOnly = true
+            ),
+            api.deleteByUserCalls.single()
+        )
+    }
+
+    @Test
+    fun replyAndCreateThread_returnApiValuesAndReuseCookieSetup() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val api = FakeBoardApi(
+            replyResult = "5001",
+            createThreadResult = "9001",
+            onFetchCatalogSetup = {
+                storage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+                )
+            }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(storage)
+        )
+        val imageBytes = byteArrayOf(1, 2, 3)
+
+        val replyResult = repository.replyToThread(
+            board = boardUrl,
+            threadId = "321",
+            name = "name",
+            email = "sage",
+            subject = "subject",
+            comment = "comment",
+            password = "pw",
+            imageFile = imageBytes,
+            imageFileName = "a.png",
+            textOnly = false
+        )
+        val createResult = repository.createThread(
+            board = boardUrl,
+            name = "name2",
+            email = "",
+            subject = "subject2",
+            comment = "comment2",
+            password = "pw2",
+            imageFile = null,
+            imageFileName = null,
+            textOnly = true
+        )
+
+        assertEquals("5001", replyResult)
+        assertEquals("9001", createResult)
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(
+            ReplyCall(
+                board = boardUrl,
+                threadId = "321",
+                name = "name",
+                email = "sage",
+                subject = "subject",
+                comment = "comment",
+                password = "pw",
+                imageFile = imageBytes,
+                imageFileName = "a.png",
+                textOnly = false
+            ),
+            api.replyCalls.single()
+        )
+        assertEquals(
+            CreateThreadCall(
+                board = boardUrl,
+                name = "name2",
+                email = "",
+                subject = "subject2",
+                comment = "comment2",
+                password = "pw2",
+                imageFile = null,
+                imageFileName = null,
+                textOnly = true
+            ),
+            api.createThreadCalls.single()
+        )
+    }
+
+    @Test
+    fun postOperationsRetryCookieSetupWhenSetupNeverSucceeds() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(fetchCatalogSetupError = IllegalStateException("setup failed"))
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH))
+        )
+
+        repository.voteSaidane(boardUrl, "1", "10")
+        repository.voteSaidane(boardUrl, "1", "11")
+
+        assertEquals(2, api.fetchCatalogSetupCalls)
+        assertEquals(2, api.voteCalls.size)
+        assertTrue(api.voteCalls.contains(VoteCall(boardUrl, "1", "10")))
+        assertTrue(api.voteCalls.contains(VoteCall(boardUrl, "1", "11")))
+    }
+
+    @Test
+    fun defaultBoardRepositorySupport_handlesCookieStateAndOpImageCache() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        val initializedBoards = mutableSetOf<String>()
+        val boardInitMutex = Mutex()
+
+        assertTrue(
+            resolveDefaultBoardRepositoryCookieInitializationState(
+                initializedBoards = initializedBoards,
+                board = boardUrl,
+                cookieRepository = cookieRepository,
+                boardInitMutex = boardInitMutex
+            )
+        )
+
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "cxyl", value = "ok", domain = "dec.2chan.net", path = "/")
+        )
+        assertTrue(
+            resolveDefaultBoardRepositoryCookieInitializationState(
+                initializedBoards = mutableSetOf(),
+                board = boardUrl,
+                cookieRepository = cookieRepository,
+                boardInitMutex = Mutex()
+            )
+        )
+        assertFalse(hasDefaultBoardRepositoryCookies(cookieRepository, boardUrl))
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+        )
+        assertFalse(
+            resolveDefaultBoardRepositoryCookieInitializationState(
+                initializedBoards = mutableSetOf(),
+                board = boardUrl,
+                cookieRepository = cookieRepository,
+                boardInitMutex = Mutex()
+            )
+        )
+        assertTrue(hasDefaultBoardRepositoryCookies(cookieRepository, boardUrl))
+        assertTrue(isDefaultBoardRepositoryLikelyCookieAuthFailure(NetworkException("forbidden", 403)))
+
+        val cache = createDefaultBoardRepositoryOpImageCache(maxEntries = 2)
+        val key1 = DefaultBoardRepositoryOpImageKey(boardUrl, "1")
+        val key2 = DefaultBoardRepositoryOpImageKey(boardUrl, "2")
+        val key3 = DefaultBoardRepositoryOpImageKey(boardUrl, "3")
+        saveDefaultBoardRepositoryOpImageUrlToCache(cache, key1, "a", now = 100L, hitTtlMillis = 50L, missTtlMillis = 10L)
+        saveDefaultBoardRepositoryOpImageUrlToCache(cache, key2, null, now = 105L, hitTtlMillis = 50L, missTtlMillis = 10L)
+
+        assertEquals(
+            "a",
+            resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key1, now = 120L)?.url
+        )
+        assertNull(resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key2, now = 116L))
+
+        saveDefaultBoardRepositoryOpImageUrlToCache(cache, key3, "c", now = 130L, hitTtlMillis = 50L, missTtlMillis = 10L)
+        assertNull(resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key2, now = 130L))
+        assertEquals("c", resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key3, now = 131L)?.url)
+
+        assertTrue(shouldClearDefaultBoardRepositoryOpImageCacheEntry(key1, boardUrl, "1"))
+        assertFalse(shouldClearDefaultBoardRepositoryOpImageCacheEntry(key1, boardUrl, "9"))
+
+        clearDefaultBoardRepositoryOpImageCache(
+            cacheMutex = Mutex(),
+            cache = cache,
+            board = boardUrl,
+            threadId = "1"
+        )
+        assertNull(resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key1, now = 131L))
+
+        assertTrue(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 1_000L),
+                nowMillis = 1_999L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+        assertFalse(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 1_000L),
+                nowMillis = 2_000L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+        assertFalse(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 2_000L),
+                nowMillis = 1_000L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+
+        val closeState = DefaultBoardRepositoryCloseState()
+        assertTrue(beginDefaultBoardRepositoryClose(Mutex(), closeState))
+        assertFalse(beginDefaultBoardRepositoryClose(Mutex(), closeState))
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_retriesAndWrapsCookieExecution() = runBlocking {
+        val initializedBoards = mutableSetOf<String>()
+        val boardInitMutex = Mutex()
+        var setupCalls = 0
+        initializeDefaultBoardRepositoryCookies(
+            board = "https://dec.2chan.net/b/",
+            logTag = "DefaultBoardRepositoryTest",
+            initializedBoards = initializedBoards,
+            cookieRepository = null,
+            boardInitMutex = boardInitMutex,
+            fetchCatalogSetup = { setupCalls += 1 }
+        )
+        assertEquals(1, setupCalls)
+        assertTrue("https://dec.2chan.net/b/" in initializedBoards)
+
+        val storageWithCookie = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storageWithCookie.addCookie(
+            io.ktor.http.Url("https://dec.2chan.net/b/"),
+            io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+        )
+        setupCalls = 0
+        initializeDefaultBoardRepositoryCookies(
+            board = "https://dec.2chan.net/b/",
+            logTag = "DefaultBoardRepositoryTest",
+            initializedBoards = mutableSetOf(),
+            cookieRepository = CookieRepository(storageWithCookie),
+            boardInitMutex = Mutex(),
+            fetchCatalogSetup = { setupCalls += 1 }
+        )
+        assertEquals(0, setupCalls)
+
+        var ensureCalls = 0
+        var invalidateCalls = 0
+        var actionCalls = 0
+
+        val result = withDefaultBoardRepositoryAuthRetry(
+            board = "https://dec.2chan.net/b/",
+            logTag = "DefaultBoardRepositoryTest",
+            ensureCookiesInitialized = { _, forceSetup ->
+                ensureCalls += 1
+                if (ensureCalls == 1) {
+                    assertFalse(forceSetup)
+                } else {
+                    assertTrue(forceSetup)
+                }
+            },
+            invalidateCookies = { invalidateCalls += 1 }
+        ) {
+            actionCalls += 1
+            if (actionCalls == 1) {
+                throw NetworkException("forbidden", 403)
+            }
+            "ok"
+        }
+
+        assertEquals("ok", result)
+        assertEquals(2, ensureCalls)
+        assertEquals(1, invalidateCalls)
+        assertEquals(2, actionCalls)
+
+        var commitCalls = 0
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        val wrapped = runDefaultBoardRepositoryWithInitializedCookies(
+            board = "https://dec.2chan.net/b/",
+            cookieRepository = cookieRepository,
+            ensureCookiesInitialized = { _, forceSetup -> assertTrue(forceSetup) }
+        ) {
+            commitCalls += 1
+            "done"
+        }
+        assertEquals("done", wrapped)
+        assertEquals(1, commitCalls)
+
+        val postingStorage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val postingCookieRepository = CookieRepository(postingStorage)
+        val boardUrl = "https://dec.2chan.net/b/"
+        val postingSuccess = runDefaultBoardRepositoryPostingWithInitializedCookies(
+            board = boardUrl,
+            cookieRepository = postingCookieRepository,
+            ensureCookiesInitialized = { _, forceSetup ->
+                assertTrue(forceSetup)
+                postingStorage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "ok", domain = "dec.2chan.net", path = "/")
+                )
+            }
+        ) {
+            "posted"
+        }
+        assertEquals("posted", postingSuccess)
+        assertTrue(postingCookieRepository.hasValidCookieFor(boardUrl, preferredNames = setOf("posttime")))
+
+        val failedPostingStorage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val failedPostingCookieRepository = CookieRepository(failedPostingStorage)
+        try {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = boardUrl,
+                cookieRepository = failedPostingCookieRepository,
+                ensureCookiesInitialized = { _, forceSetup ->
+                    assertTrue(forceSetup)
+                    failedPostingStorage.addCookie(
+                        io.ktor.http.Url(boardUrl),
+                        io.ktor.http.Cookie(name = "posttime", value = "staged", domain = "dec.2chan.net", path = "/")
+                    )
+                }
+            ) {
+                throw IllegalStateException("post failed")
+            }
+        } catch (error: IllegalStateException) {
+            assertEquals("post failed", error.message)
+        }
+        assertTrue(failedPostingCookieRepository.hasValidCookieFor(boardUrl, preferredNames = setOf("posttime")))
+
+        val opImage = fetchDefaultBoardRepositoryOpImageWithPermit(
+            semaphoreTimeoutMillis = 100L,
+            fetchTimeoutMillis = 100L,
+            semaphore = Semaphore(1),
+        ) {
+            resolveDefaultBoardRepositoryOpImageUrl(
+                threadId = "123",
+                logTag = "DefaultBoardRepositoryTest",
+                fetchThreadHead = { "<img src=\"/src/a.jpg\">" },
+                extractOpImageUrl = { "https://dec.2chan.net/src/a.jpg" }
+            )
+        }
+        assertEquals("https://dec.2chan.net/src/a.jpg", opImage.url)
+        assertFalse(opImage.timedOut)
+
+        val busySemaphore = Semaphore(1)
+        busySemaphore.acquire()
+        try {
+            val timedOutOpImage = fetchDefaultBoardRepositoryOpImageWithPermit(
+                semaphoreTimeoutMillis = 1L,
+                fetchTimeoutMillis = 100L,
+                semaphore = busySemaphore
+            ) {
+                "unused"
+            }
+            assertNull(timedOutOpImage.url)
+            assertTrue(timedOutOpImage.timedOut)
+        } finally {
+            busySemaphore.release()
+        }
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_preservesIpRestrictionAndAppendsEstimatedWaitFromPosttime() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = NetworkException("返信に失敗しました: あなたのIPからは投稿できません"),
+            nowMillis = 1_000_100_000L
+        )
+
+        assertTrue(enriched is NetworkException)
+        assertTrue(enriched.message!!.contains("あなたのIPからは投稿できません"))
+        assertTrue(enriched.message!!.contains("あと約58分20秒投稿できない可能性があります"))
+        assertTrue(enriched.message!!.contains("1時間基準の推定です"))
+        assertTrue(enriched.message!!.contains("保存済み情報は削除せず"))
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_doesNotAppendEstimateWhenServerProvidesWaitSeconds() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+
+        val original = NetworkException("返信に失敗しました: あと120秒投稿できません")
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = original,
+            nowMillis = 1_000_100_000L
+        )
+
+        assertTrue(enriched === original)
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_preservesServerErrorAfterEstimatedWaitWithoutCookieDeletionGuidance() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+        )
+
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = NetworkException("返信に失敗しました: あなたのIPからは投稿できません"),
+            nowMillis = 1_004_000_000L
+        )
+
+        assertTrue(enriched is NetworkException)
+        assertTrue(enriched.message!!.contains("あなたのIPからは投稿できません"))
+        assertTrue(enriched.message!!.contains("1時間の推定待機時間を過ぎました"))
+        assertTrue(enriched.message!!.contains("保存済み情報は削除せず"))
+        assertFalse(enriched.message!!.contains("Cookie が古い"))
+        assertFalse(enriched.message!!.contains("posttime と ptmt を削除"))
+    }
+
+    @Test
+    fun layoutIndependentRequestDoesNotWaitForAnInFlightCatalogSetup() = runBlocking {
+        val board = "https://dec.2chan.net/b/"
+        val globalLock = Mutex()
+        val boardLocks = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
+        val failures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+        val initializedBoards = mutableSetOf(board)
+        val setupStarted = CompletableDeferred<Unit>()
+        val releaseSetup = CompletableDeferred<Unit>()
+        var independentSetups = 0
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        storage.addCookie(
+            io.ktor.http.Url(board),
+            io.ktor.http.Cookie(name = "posttime", value = "1782122070707", domain = ".2chan.net", path = "/")
+        )
+
+        // A catalog layout change re-posts catset and holds the per-board lock.
+        val catalogSetup = launch {
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = initializedBoards,
+                cookieRepository = CookieRepository(storage),
+                boardInitMutex = globalLock,
+                boardInitializationMutexes = boardLocks,
+                cookieSetupFailures = failures,
+                requireSetup = { true },
+                fetchCatalogSetup = {
+                    setupStarted.complete(Unit)
+                    releaseSetup.await()
+                }
+            )
+        }
+        setupStarted.await()
+
+        suspend fun independentRequest(cookieRepository: CookieRepository?) = withTimeout(2_000L) {
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = initializedBoards,
+                cookieRepository = cookieRepository,
+                boardInitMutex = globalLock,
+                boardInitializationMutexes = boardLocks,
+                cookieSetupFailures = failures,
+                layoutIndependent = true,
+                maxSetupWaitMillis = 50L,
+                fetchCatalogSetup = { independentSetups += 1 }
+            )
+        }
+
+        // Existing cookies: proceeds at once. Without them: waits only briefly.
+        independentRequest(CookieRepository(storage))
+        globalLock.withLock { initializedBoards.remove(board) }
+        independentRequest(cookieRepository = null)
+        assertEquals(0, independentSetups)
+
+        releaseSetup.complete(Unit)
+        catalogSetup.join()
+        assertTrue(boardLocks.isEmpty())
+    }
+
+    @Test
+    fun failedCookieInitializationDoesNotRetainPerBoardMutex() = runBlocking {
+        val boardLocks = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
+        val failures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
+
+        initializeDefaultBoardRepositoryCookies(
+            board = "https://dec.2chan.net/b/",
+            logTag = "DefaultBoardRepositoryTest",
+            initializedBoards = mutableSetOf(),
+            cookieRepository = null,
+            boardInitMutex = Mutex(),
+            boardInitializationMutexes = boardLocks,
+            cookieSetupFailures = failures,
+            fetchCatalogSetup = { error("setup failed") }
+        )
+
+        assertTrue(boardLocks.isEmpty())
+        assertEquals(1, failures.size)
+    }
+
+    @Test
+    fun cookieSetupFailureMapIsOnlyTouchedUnderTheGlobalLock() = runBlocking {
+        val globalLock = Mutex()
+        val failures = LockCheckingMap<String, DefaultBoardRepositoryCookieSetupFailure>(globalLock)
+        val board = "https://dec.2chan.net/b/"
+        suspend fun initialize(nowMillis: Long, fail: Boolean, cookieRepository: CookieRepository? = null) =
+            initializeDefaultBoardRepositoryCookies(
+                board = board,
+                logTag = "DefaultBoardRepositoryTest",
+                initializedBoards = mutableSetOf(),
+                cookieRepository = cookieRepository,
+                boardInitMutex = globalLock,
+                cookieSetupFailures = failures,
+                nowMillis = nowMillis,
+                fetchCatalogSetup = { if (fail) error("setup failed") }
+            )
+
+        initialize(nowMillis = 1_000L, fail = true)          // records a failure
+        initialize(nowMillis = 1_001L, fail = true)          // negative cache read
+        initialize(nowMillis = 10_000_000L, fail = false)    // success removes it
+        val storageWithCookie = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH).apply {
+            addCookie(
+                io.ktor.http.Url(board),
+                io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+            )
+        }
+        initialize(nowMillis = 10_000_001L, fail = true, cookieRepository = CookieRepository(storageWithCookie))
+
+        assertTrue(failures.accesses >= 4, "accesses=${failures.accesses}")
+        assertEquals(emptyList(), failures.unlockedAccesses)
+    }
+
+    companion object {
+        private const val STORAGE_PATH = "private/cookies/default-board-repository-test.json"
+    }
+}
+
+private class FakeBoardApi(
+    private val catalogHtml: String? = null,
+    private val threadHeadHtml: String = "<img src=\"/src/default.jpg\">",
+    private val threadHeadHtmlByMaxLines: ((Int) -> String)? = null,
+    private val fetchThreadHeadDelayMillis: Long = 0L,
+    private val fetchCatalogSetupError: Exception? = null,
+    private val fetchCatalogSetupDelayMillis: Long = 0L,
+    private val replyResult: String? = null,
+    private val createThreadResult: String? = null,
+    private val onFetchCatalogSetup: suspend () -> Unit = {},
+    private val fetchCatalogDelayMillis: Long = 0L
+) : BoardApi {
+    /** Ordered catalog setup / GET calls, for layout interleaving checks. */
+    val catalogEvents = mutableListOf<String>()
+    private val callsMutex = Mutex()
+    var fetchCatalogSetupCalls = 0
+    var fetchCatalogCalls = 0
+    val fetchCatalogSetupSettings = mutableListOf<CatalogFetchSettings>()
+    var fetchThreadHeadCalls = 0
+    val fetchThreadHeadMaxLines = mutableListOf<Int>()
+    var fetchThreadCalls = 0
+    val voteCalls = mutableListOf<VoteCall>()
+    val requestDeletionCalls = mutableListOf<DeletionCall>()
+    val deleteByUserCalls = mutableListOf<DeleteByUserCall>()
+    val replyCalls = mutableListOf<ReplyCall>()
+    val createThreadCalls = mutableListOf<CreateThreadCall>()
+
+    override suspend fun fetchCatalogSetup(board: String, settings: CatalogFetchSettings) {
+        callsMutex.withLock {
+            fetchCatalogSetupCalls += 1
+            fetchCatalogSetupSettings += settings
+            catalogEvents += "setup:${settings.rows}"
+        }
+        if (fetchCatalogSetupDelayMillis > 0L) {
+            delay(fetchCatalogSetupDelayMillis)
+        }
+        fetchCatalogSetupError?.let { throw it }
+        onFetchCatalogSetup()
+    }
+
+    override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
+        callsMutex.withLock {
+            fetchCatalogCalls += 1
+        }
+        if (fetchCatalogDelayMillis > 0L) delay(fetchCatalogDelayMillis)
+        callsMutex.withLock { catalogEvents += "get" }
+        return catalogHtml ?: "<catalog mode='${mode.name}'>$board</catalog>"
+    }
+
+    override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
+        fetchThreadHeadCalls += 1
+        fetchThreadHeadMaxLines += maxLines
+        if (fetchThreadHeadDelayMillis > 0L) {
+            delay(fetchThreadHeadDelayMillis)
+        }
+        return threadHeadHtmlByMaxLines?.invoke(maxLines) ?: threadHeadHtml
+    }
+
+    override suspend fun fetchThread(board: String, threadId: String): String {
+        fetchThreadCalls += 1
+        return "<thread id='$threadId'/>"
+    }
+
+    override suspend fun fetchThreadByUrl(threadUrl: String): String = "<thread url='$threadUrl'/>"
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        voteCalls += VoteCall(board, threadId, postId)
+    }
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        requestDeletionCalls += DeletionCall(board, threadId, postId, reasonCode)
+    }
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) {
+        deleteByUserCalls += DeleteByUserCall(board, threadId, postId, password, imageOnly)
+    }
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? {
+        replyCalls += ReplyCall(
+            board = board,
+            threadId = threadId,
+            name = name,
+            email = email,
+            subject = subject,
+            comment = comment,
+            password = password,
+            imageFile = imageFile,
+            imageFileName = imageFileName,
+            textOnly = textOnly
+        )
+        return replyResult
+    }
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        handwriting: Boolean
+    ): String? {
+        createThreadCalls += CreateThreadCall(
+            board = board,
+            name = name,
+            email = email,
+            subject = subject,
+            comment = comment,
+            password = password,
+            imageFile = imageFile,
+            imageFileName = imageFileName,
+            textOnly = textOnly
+        )
+        return createThreadResult
+    }
+}
+
+private data class VoteCall(
+    val board: String,
+    val threadId: String,
+    val postId: String
+)
+
+private data class DeletionCall(
+    val board: String,
+    val threadId: String,
+    val postId: String,
+    val reasonCode: String
+)
+
+private data class DeleteByUserCall(
+    val board: String,
+    val threadId: String,
+    val postId: String,
+    val password: String,
+    val imageOnly: Boolean
+)
+
+private data class ReplyCall(
+    val board: String,
+    val threadId: String,
+    val name: String,
+    val email: String,
+    val subject: String,
+    val comment: String,
+    val password: String,
+    val imageFile: ByteArray?,
+    val imageFileName: String?,
+    val textOnly: Boolean
+)
+
+private data class CreateThreadCall(
+    val board: String,
+    val name: String,
+    val email: String,
+    val subject: String,
+    val comment: String,
+    val password: String,
+    val imageFile: ByteArray?,
+    val imageFileName: String?,
+    val textOnly: Boolean
+)
+
+private class FakeHtmlParser(
+    private val opImageUrl: String? = "https://dec.2chan.net/src/default.jpg"
+) : HtmlParser {
+    var extractOpImageUrlCalls = 0
+
+    override suspend fun parseCatalog(html: String, baseUrl: String?): List<CatalogItem> {
+        return listOf(
+            CatalogItem(
+                id = "1",
+                threadUrl = "$baseUrl/res/1.htm",
+                title = "title",
+                thumbnailUrl = null,
+                fullImageUrl = null,
+                replyCount = 1
+            )
+        )
+    }
+
+    override suspend fun parseThread(html: String, baseUrl: String?): ThreadPage {
+        return ThreadPage(
+            threadId = "123",
+            boardTitle = "board",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = listOf(
+                Post(
+                    id = "1",
+                    author = "author",
+                    subject = null,
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            )
+        )
+    }
+
+    override fun extractOpImageUrl(html: String, baseUrl: String?): String? {
+        extractOpImageUrlCalls += 1
+        return opImageUrl
+    }
+}
+
+/** Records map accesses made while [lock] was not held. */
+private class LockCheckingMap<K, V>(
+    private val lock: Mutex,
+    private val delegate: MutableMap<K, V> = mutableMapOf()
+) : MutableMap<K, V> by delegate {
+    var accesses = 0
+    val unlockedAccesses = mutableListOf<String>()
+
+    private fun check(operation: String) {
+        accesses += 1
+        if (!lock.isLocked) unlockedAccesses += operation
+    }
+
+    override fun get(key: K): V? = delegate[key].also { check("get") }
+    override fun put(key: K, value: V): V? = delegate.put(key, value).also { check("put") }
+    override fun remove(key: K): V? = delegate.remove(key).also { check("remove") }
+}

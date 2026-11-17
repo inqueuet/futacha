@@ -1,0 +1,66 @@
+# Add project specific ProGuard rules here.
+# You can control the set of applied configuration files using the
+# proguardFiles setting in build.gradle.
+#
+# For more details, see
+#   http://developer.android.com/guide/developing/tools/proguard.html
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
+
+# Uncomment this to preserve the line number information for
+# debugging stack traces.
+#-keepattributes SourceFile,LineNumberTable
+
+# If you keep the line number information, uncomment this to
+# hide the original source file name.
+#-renamesourcefileattribute SourceFile
+
+# Firebase Analytics can optionally query the advertising ID. The app deliberately
+# excludes that dependency and removes the AD_ID permission, so these classes are absent.
+-dontwarn com.google.android.gms.ads.identifier.AdvertisingIdClient
+-dontwarn com.google.android.gms.ads.identifier.AdvertisingIdClient$Info
+
+# These facades live in the KMP shared Android artifact but are invoked from
+# the application module during Application.onCreate(). Keep their binary
+# names and implementations stable across the shared artifact and R8. This
+# also prevents a partially cached/incremental artifact from leaving the app
+# with a caller that references a facade absent from the final DEX.
+-keep class com.valoser.futacha.shared.analytics.AnalyticsTracker { *; }
+-keep class com.valoser.futacha.shared.analytics.AnalyticsTrackerKt { *; }
+-keep class com.valoser.futacha.shared.analytics.PerformanceTracker { *; }
+-keep class com.valoser.futacha.shared.analytics.CrashReporter { *; }
+-keep class com.valoser.futacha.shared.analytics.PlatformAnalytics { *; }
+-keep class com.valoser.futacha.shared.analytics.PlatformPerformance { *; }
+-keep class com.valoser.futacha.shared.analytics.PlatformPerformanceTrace { *; }
+-keep class com.valoser.futacha.shared.analytics.PlatformCrashReporter { *; }
+-keep class com.valoser.futacha.shared.media.analysis.TrackingNative { *; }
+
+# analyticsFailureCategory(), the Crashlytics "type=" message and Performance
+# "error_type" read Throwable::class.simpleName (e.g. "timeout"/"cancel"/"parse"
+# in Ktor/coroutines/app exception names). Keep exception class names only;
+# shrinking and optimisation still apply, so unused exceptions are removed.
+-keepnames class * extends java.lang.Throwable
+
+# libonnxruntime4j_jni.so resolves ONNX Runtime classes, constructors and
+# fields by their original JNI names (FindClass "ai/onnxruntime/OrtException",
+# TensorInfo, NodeInfo, OnnxMap, OnnxJavaType, ...). The AAR ships no consumer
+# rules, so renaming or shrinking them makes the first native error (including
+# a cancelled detection/contour/tracking run) abort the process.
+-keep class ai.onnxruntime.** { *; }
+
+# R8 9.5.0-dev emits invalid register types when optimizing this large
+# Compose entry point (13.0/220: FutaberThreadRef used by and-int/lit8 at
+# dex PC 0xB2). Static merging also put it in Utf8$Processor's superclass,
+# so Firebase Performance serialization crashed even outside this mode.
+# Keep only this entry point and its holder out of optimization/merging;
+# names may still be obfuscated and other methods remain optimizable.
+-keep,allowobfuscation class com.valoser.futacha.shared.ui.futaber.FutaberThreadKt {
+    public static void FutaberThreadScreen(...);
+}
+# VOICEVOX's small JNI surface is resolved by the native exported method names.
+-keep class com.valoser.futacha.shared.audio.voicevox.VoicevoxNative { *; }

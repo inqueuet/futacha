@@ -1,0 +1,564 @@
+package com.valoser.futacha.shared.ui.board
+
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.valoser.futacha.shared.compat.*
+import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
+import com.valoser.futacha.shared.ui.LocalIosReviewCompliance
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.ui.compat.*
+import com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtLibrary
+import com.valoser.futacha.shared.ui.futaber.mht.FutaberMhtSaveRequest
+import com.valoser.futacha.shared.util.rememberUrlLauncher
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
+import kotlin.time.Clock
+
+internal data class FutachaThreadTool(val label: String, val icon: ImageVector, val enabled: Boolean = true, val action: () -> Unit)
+internal val LocalFutachaThreadTools = compositionLocalOf<List<FutachaThreadTool>> { emptyList() }
+
+internal fun CompatTab.toFutachaHistoryEntry(): ThreadHistoryEntry = ThreadHistoryEntry(
+    threadId = threadNo, boardId = boardKey, boardName = boardName, boardUrl = originalUrl,
+    title = title, titleImageUrl = thumbnailUrl.orEmpty(), replyCount = replyCount,
+    lastVisitedEpochMillis = contentUpdatedAtEpochMillis
+)
+
+internal data class FutachaThreadUndoSnapshots(
+    val previous: ThreadUiState.Success? = null,
+    val latest: ThreadUiState.Success? = null,
+    val latestGeneration: Long? = null
+)
+
+/**
+ * "更新前に戻す" returns to the accepted remote page of an earlier load. A local copy is
+ * never recorded, and the archive supplement of the same load (same [generation])
+ * refines that load's page instead of becoming its own undo step.
+ */
+internal fun resolveFutachaThreadUndoSnapshots(
+    current: FutachaThreadUndoSnapshots,
+    next: ThreadUiState.Success,
+    isCachedPage: Boolean,
+    generation: Long,
+    restoring: Boolean
+): FutachaThreadUndoSnapshots {
+    if (isCachedPage) return current
+    val previous = if (!restoring && current.latestGeneration != generation) current.latest else current.previous
+    return FutachaThreadUndoSnapshots(previous = previous, latest = next, latestGeneration = generation)
+}
+
+/**
+ * Whether a page with the same text as the one shown is still written to the tab (re-audit L46): only a page read from
+ * the board after a device copy that was not written (an open tab's copy). It used to be skipped, and the tab kept the
+ * copy's reply and read counts until the text changed.
+ */
+internal fun futachaSamePageNeedsTabWrite(isCachedPage: Boolean, latestWrittenToTab: Boolean): Boolean =
+    !isCachedPage && !latestWrittenToTab
+
+/** The probe's verdict holds only for the page it was made on; a newer page (manual retry) clears it. */
+internal fun isFutachaThreadConfirmedGone(goneConfirmedFor: ThreadUiState?, shown: ThreadUiState): Boolean =
+    goneConfirmedFor != null && goneConfirmedFor === shown
+
+/**
+ * Whether the auto-scroll end-of-thread reload must stop instead of reloading
+ * again (C5). Only after a reload that left [shown] unchanged (failed, or no new
+ * reply) does it run the background refresher's 404/410 HEAD probe; a reload
+ * that brought a new page skips it. A timed-out or failed probe is not dead.
+ */
+internal suspend fun futachaAutoReloadConfirmsGone(
+    reloadedFrom: ThreadUiState?,
+    shown: ThreadUiState,
+    probeGone: suspend () -> Boolean
+): Boolean {
+    if (reloadedFrom == null || reloadedFrom !== shown) return false
+    return try {
+        withTimeoutOrNull(COMPAT_EXISTENCE_PROBE_TIMEOUT_MILLIS) { probeGone() } == true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+}
+
+@Composable
+internal fun FutachaThreadFeatureHost(
+    board: BoardSummary,
+    threadId: String,
+    threadTitle: String,
+    currentState: ThreadUiState,
+    isCachedPage: Boolean = false,
+    /** Incremented by the screen for each thread load; a supplement of one load keeps it. */
+    loadGeneration: Long = 0L,
+    listState: LazyListState,
+    repository: BoardRepository,
+    onRestore: (ThreadUiState.Success) -> Unit,
+    onRefresh: () -> Unit,
+    onOpenThread: (ThreadHistoryEntry) -> Unit,
+    onShowPost: (Post) -> Unit,
+    onOpenDrawer: () -> Unit,
+    onReply: () -> Unit,
+    onClose: () -> Unit,
+    /** Board URL the screen actually posts to (the archive URL while an archive copy is shown). */
+    effectiveBoardUrl: String = board.url,
+    /** Shares the screen's single "action in progress" flag with the "DEL依頼＋NG" action. */
+    isActionInProgress: () -> Boolean = { false },
+    setActionInProgress: (Boolean) -> Unit = {},
+    /** The screen's reply form; kept as the tab's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
+    replyDraft: ThreadReplyDialogStateBinding? = null,
+    /** True while the reply is being sent (its stored draft goes and is not written meanwhile; audit M19). */
+    replySending: () -> Boolean = { false },
+    content: @Composable () -> Unit
+) {
+    val features = LocalFutachaSharedFeatures.current
+    val staticView = LocalFutachaStaticThreadView.current
+    val canonicalBoard = siteCanonicalBoardUrlOf(board.url)
+    if (features == null || canonicalBoard == null) { content(); return }
+    val sourceUrl = siteThreadUrlOnBoard(canonicalBoard, threadId)
+    val tabKey = compatTabKey(sourceUrl)
+    val boardKey = compatBoardKey(canonicalBoard)
+    val tabs by features.store.tabs.collectAsState(emptyList())
+    val ngRules by features.store.ngRules.collectAsState(emptyList())
+    val scope = rememberCoroutineScope()
+    val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
+    val openUrl = rememberUrlLauncher()
+    var previous by remember(tabKey) { mutableStateOf<ThreadUiState.Success?>(null) }
+    var latest by remember(tabKey) { mutableStateOf<ThreadUiState.Success?>(null) }
+    var restoring by remember(tabKey) { mutableStateOf(false) }
+    var automatic by remember(tabKey) { mutableStateOf(false) }
+    var touchedAt by remember(tabKey) { mutableLongStateOf(0L) }
+    var message by remember { mutableStateOf<String?>(null) }
+    if (replyDraft != null) {
+        FutachaDraftPersistenceEffect(
+            features.store, features.fileSystem, FutachaDraftOwner.Reply(tabKey),
+            enabled = !staticView && features.value("control", FUTACHA_DRAFT_PERSIST_PREFERENCE_KEY) == "ON",
+            form = futachaReplyDraftFormBinding(replyDraft, replySending), onMessage = { message = it }
+        )
+    }
+    var mediaOpen by remember(tabKey) { mutableStateOf(false) }
+    var viewerIndex by remember(tabKey) { mutableStateOf<Int?>(null) }
+    var viewerPostNo by remember(tabKey) { mutableStateOf<String?>(null) }
+    var viewerToolbarOpen by remember { mutableStateOf(false) }
+    var viewerToolbarRevision by remember { mutableLongStateOf(0) }
+    var marksOpen by remember(tabKey) { mutableStateOf(false) }
+    var urlsOpen by remember { mutableStateOf(false) }
+    var cacheSearchOpen by remember { mutableStateOf(false) }
+    var tabsOpen by remember { mutableStateOf(false) }
+    var ngOpen by remember { mutableStateOf(false) }
+    var pageSaveOpen by remember { mutableStateOf(false) }
+    var mhtSaveFull by remember { mutableStateOf<Boolean?>(null) }
+    // What the MHT save was asked to save, fixed when it was asked: a reload of the thread while the file is written must not change it.
+    var mhtSaveRequest by remember { mutableStateOf<FutaberMhtSaveRequest?>(null) }
+    var stripVisible by remember(tabKey) { mutableStateOf(features.value("design", "designTabSelectorOpened") == "ON") }
+    LaunchedEffect(features.value("design", "designTabSelectorOpened")) {
+        stripVisible = features.value("design", "designTabSelectorOpened") == "ON"
+    }
+    var extraction by remember(tabKey) { mutableStateOf<CompatExtractionKind?>(null) }
+    val apngCache = remember(scope) { CompatApngMarkerCache(scope) }
+    fun launchAction(block: suspend () -> Unit) = scope.launch {
+        try { block() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { message = failure.message ?: "操作に失敗しました" }
+    }
+    var latestGeneration by remember(tabKey) { mutableStateOf<Long?>(null) }
+    // Whether the page in [latest] was written to the tab (a device copy of an open tab is not): a board page with the
+    // same text is then written once (re-audit L46).
+    var latestWrittenToTab by remember(tabKey) { mutableStateOf(false) }
+    val currentLoadGeneration by rememberUpdatedState(loadGeneration)
+    // Q9 (plan B9): a tab closed while this screen shows its thread is not opened again by the next page.
+    val closedTabMemory = remember(tabKey) { FutachaClosedTabMemory() }
+    LaunchedEffect(features.store, tabKey, closedTabMemory) {
+        features.store.tabs.collect { list -> closedTabMemory.observe(list.any { it.key == tabKey }) }
+    }
+    LaunchedEffect(currentState, tabKey, isCachedPage) {
+        val next = currentState as? ThreadUiState.Success ?: return@LaunchedEffect
+        // Compared once, off the main thread; repeating it here deep-compared
+        // up to 2,000 posts on every accepted page.
+        val samePage = withContext(AppDispatchers.parsing) { latest?.page == next.page }
+        if (samePage && !futachaSamePageNeedsTabWrite(isCachedPage, latestWrittenToTab)) {
+            // The same text read from the board after the device's copy was shown is still a viewing of the thread: noted
+            // for "閲覧スレ通知" as well (audit L28; the note skips copies, archives and restores by itself).
+            features.noteViewedThreadForArchive(sourceUrl, isCachedPage, next.isArchived, staticView, restoring,
+                Clock.System.now().toEpochMilliseconds())
+            return@LaunchedEffect
+        }
+        val wasRestoring: Boolean
+        if (samePage) {
+            // The board's page has the device copy's text, but the copy was not written to the tab (re-audit L46): the
+            // tab's reply and read counts are brought up now. The undo snapshots stay as they are (nothing changed).
+            latest = next
+            latestGeneration = currentLoadGeneration
+            wasRestoring = false
+        } else {
+            val snapshots = resolveFutachaThreadUndoSnapshots(
+                FutachaThreadUndoSnapshots(previous, latest, latestGeneration),
+                next, isCachedPage, currentLoadGeneration, restoring
+            )
+            previous = snapshots.previous
+            latest = snapshots.latest
+            latestGeneration = snapshots.latestGeneration
+            wasRestoring = restoring
+            restoring = false
+        }
+        latestWrittenToTab = false
+        if (wasRestoring) return@LaunchedEffect
+        // A read-only copy (an opened MHT file) is shown as it is: nothing is written to the tabs or the shared snapshots.
+        if (staticView) return@LaunchedEffect
+        // "閲覧スレ通知" (FutachaArchiveReport.kt): only a page read from the board now.
+        features.noteViewedThreadForArchive(sourceUrl, isCachedPage, next.isArchived, staticView, wasRestoring,
+            Clock.System.now().toEpochMilliseconds())
+        if (isCachedPage && features.store.tabs.first().any { it.key == tabKey }) return@LaunchedEffect
+        try {
+            val now = Clock.System.now().toEpochMilliseconds()
+            features.store.importModernBoards(listOf(board))
+            // Single persistence path, after the accepted page is visible. The
+            // effect is cancelled when this page is superseded or the screen closes.
+            val snapshot = withContext(AppDispatchers.parsing) { next.page.toCompatThreadSnapshot(tabKey, now) }
+            val storedSnapshot = features.store.loadThreadSnapshot(tabKey)
+            val snapshotChanged = withContext(AppDispatchers.parsing) {
+                storedSnapshot?.copy(revision = snapshot.revision, fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis) != snapshot
+            }
+            if (snapshotChanged) {
+                features.store.saveSharedThreadSnapshot(sourceUrl, sourceUrl, board.name, threadTitle,
+                    next.page.posts.firstOrNull()?.thumbnailUrl, snapshot)
+            }
+            writeFutachaThreadTab(features.store, FutachaThreadTabWrite(
+                tabKey = tabKey, sourceUrl = sourceUrl, boardKey = boardKey, boardName = board.name, threadId = threadId,
+                title = threadTitle, replyCount = next.page.compatReplyCount(), thumbnailUrl = next.page.posts.firstOrNull()?.thumbnailUrl,
+                snapshotChanged = snapshotChanged, snapshotRevision = snapshot.revision, storedSnapshotRevision = storedSnapshot?.revision,
+                confirmedGone = next.confirmedGone,
+                confirmedStatus = if (!isCachedPage && !next.isArchived) parseCompatThreadStatusFlags(next.page.deletedNotice) else null,
+                nowEpochMillis = now
+            ), closedTabMemory)
+            latestWrittenToTab = true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { message = "追加操作用のスレッドを保存できませんでした" }
+    }
+    val confirmedGone = !staticView && !restoring &&
+        ((currentState as? ThreadUiState.Error)?.confirmedGone == true || ((currentState as? ThreadUiState.Success)?.let { it.isArchived || it.confirmedGone } == true))
+    var goneSaveFailure by remember(tabKey) { mutableStateOf<String?>(null) }
+    var goneSaveFailureOpen by remember(tabKey) { mutableStateOf(false) }
+    var goneSaveInProgress by remember(tabKey) { mutableStateOf(false) }
+    var goneSaveRetry by remember(tabKey) { mutableIntStateOf(0) }
+    fun retryGoneSave() { if (!goneSaveInProgress) { goneSaveFailureOpen = false; goneSaveRetry++ } }
+    LaunchedEffect(confirmedGone, tabKey, features.store, goneSaveRetry) {
+        goneSaveFailure = null
+        goneSaveFailureOpen = false
+        if (!confirmedGone) return@LaunchedEffect
+        goneSaveInProgress = true
+        try {
+            persistFutachaGoneTab(features.store, tabKey).exceptionOrNull()?.let { failure ->
+                goneSaveFailure = futachaGoneTabSaveFailureReason(failure)
+                goneSaveFailureOpen = true
+            }
+        } finally {
+            goneSaveInProgress = false
+        }
+    }
+    val page = (currentState as? ThreadUiState.Success)?.page ?: latest?.page
+    val tab = tabs.firstOrNull { it.key == tabKey } ?: CompatTab(
+        tabKey, sourceUrl, sourceUrl, boardKey, board.name, threadId, threadTitle,
+        insertedAtEpochMillis = 0, contentUpdatedAtEpochMillis = 0
+    )
+    val latestTabs by rememberUpdatedState(tabs)
+    val latestRefresh by rememberUpdatedState(onRefresh)
+    fun moveThread(direction: Int) {
+        // An opened MHT file is no tab: the tab moves do nothing there (re-audit M31).
+        if (staticView) return
+        val index = latestTabs.indexOfFirst { it.key == tabKey }
+        latestTabs.getOrNull(index + direction)?.let { onOpenThread(it.toFutachaHistoryEntry()) }
+    }
+    fun scrollPage(direction: Int) { scope.launch {
+        listState.scrollBy((listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset) * direction.toFloat())
+    } }
+    fun closeTab(key: String) {
+        // An opened MHT file is closed as a screen; the real tab of the same thread stays (re-audit M31: it was closed).
+        if (staticView) { onClose(); return }
+        // While this thread's reply is being sent the screen cannot be left, so closing its tab is refused with a word
+        // (re-audit L40: only the tab went, and the next load brought it back).
+        if (key == tabKey && replySending()) {
+            message = FUTACHA_CLOSE_WHILE_SENDING_NOTICE
+            return
+        }
+        launchAction {
+            features.store.closeTabs(setOf(key), Clock.System.now().toEpochMilliseconds(), closedBy = com.valoser.futacha.shared.compat.ExperienceProfile.FUTACHA.persistedValue)?.let(features.onTabsClosed)
+            if (key == tabKey) {
+                val next = latestTabs.firstOrNull { it.key != key }
+                if (features.value("control", "controlThreadCloseBack") == "ON" || next == null) onClose()
+                else onOpenThread(next.toFutachaHistoryEntry())
+            }
+        }
+    }
+    val volumeAction = features.displayValue("control", "controlThreadVolumeKey", "ボリュームキー")
+    val volumeOwner = remember { Any() }
+    DisposableEffect(volumeAction, tabKey) {
+        CompatVolumeKeyBus.register(volumeOwner) { key ->
+            val direction = if (key == CompatVolumeKey.UP) -1 else 1
+            when (volumeAction) {
+                "1レス分スクロール" -> { scope.launch {
+                    listState.animateScrollToItem((listState.firstVisibleItemIndex + direction)
+                        .coerceIn(0, (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+                }; true }
+                "1画面分スクロール" -> { scrollPage(direction); true }
+                "スレッドの切り替え" -> { moveThread(direction); true }
+                else -> false
+            }
+        }
+        onDispose { CompatVolumeKeyBus.unregister(volumeOwner) }
+    }
+    val scrollPixels = features.value("thread", "autoScrollPixel", "オートスクロール量")?.filter(Char::isDigit)?.toFloatOrNull()?.coerceIn(1f, 100f) ?: 5f
+    val scrollDelay = features.value("thread", "autoScrollSpeed", "オートスクロール速度")?.filter(Char::isDigit)?.toLongOrNull()?.coerceIn(10, 1000) ?: 50L
+    // Auto-scroll pauses while the app is not foreground-visible; otherwise its
+    // end-of-thread reload kept refreshing (and auto-saving) every ~12 s with the
+    // screen off. It resumes when the app returns.
+    var isForeground by remember { mutableStateOf(true) }
+    CompatForegroundLifecycleEffect { isForeground = it }
+    // A dead thread without an archive copy keeps its old page on screen, so
+    // neither tab.isDead nor isArchived changes (C5). Holds the page on which
+    // the 404/410 probe confirmed that; a newer page (manual retry) clears it.
+    var goneConfirmedFor by remember(tabKey) { mutableStateOf<ThreadUiState?>(null) }
+    val latestState by rememberUpdatedState(currentState)
+    val threadGone = confirmedGone || tab.isDead || (currentState as? ThreadUiState.Success)?.isArchived == true ||
+        !page?.deletedNotice.isNullOrBlank() || isFutachaThreadConfirmedGone(goneConfirmedFor, currentState)
+    LaunchedEffect(automatic, scrollPixels, scrollDelay, threadGone, isForeground) {
+        if (!automatic || threadGone) { automatic = false; return@LaunchedEffect }
+        if (!isForeground) return@LaunchedEffect
+        var reloadedFrom: ThreadUiState? = null
+        while (isActive) {
+            delay(scrollDelay)
+            if (Clock.System.now().toEpochMilliseconds() - touchedAt < 5_000 || listState.isScrollInProgress) continue
+            if (listState.canScrollForward) listState.scrollBy(scrollPixels)
+            else { delay(12_000); if (isActive && Clock.System.now().toEpochMilliseconds() - touchedAt >= 5_000) {
+                val shown = latestState
+                if (futachaAutoReloadConfirmsGone(reloadedFrom, shown) { repository.probeThreadGone(sourceUrl) }) {
+                    goneConfirmedFor = shown
+                    return@LaunchedEffect
+                }
+                reloadedFrom = shown
+                latestRefresh()
+            } }
+        }
+    }
+    val manualMarksRaw = features.rawValue(MANUAL_POST_MARKS_KEY)
+    val manualMarkedNos = remember(manualMarksRaw, sourceUrl) {
+        decodeManualPostMarks(manualMarksRaw).filter { it.threadUrl == manualMarkThreadUrl(sourceUrl) }.mapTo(mutableSetOf()) { it.postNo }
+    }
+    val latestMarkJump by rememberUpdatedState(onShowPost)
+    val markContext = remember(features.store, sourceUrl, page?.posts) {
+        PostMarkContext(features.store, sourceUrl, page?.posts.orEmpty().map { it.id to it.messageHtml },
+            { no -> page?.posts?.firstOrNull { it.id == no }?.let(latestMarkJump) })
+    }
+    if (marksOpen) ManualPostMarkDialog(markContext, onDismiss = { marksOpen = false })
+    val tools = listOfNotNull(
+        FutachaThreadTool("レスマーク", Icons.Rounded.Star) { marksOpen = true },
+        FutachaThreadTool("ブラウザで開く", Icons.Rounded.Link) { openUrl(sourceUrl) },
+        // The tab entries are not offered for an opened MHT file, which is no tab (re-audit M31).
+        FutachaThreadTool("タブ一覧", Icons.Rounded.Tab) { tabsOpen = true }.takeUnless { staticView },
+        FutachaThreadTool(if (stripVisible) "タブバーを隠す" else "タブバーを表示", Icons.Rounded.Tab) { stripVisible = !stripVisible }.takeUnless { staticView },
+        FutachaThreadTool("前のスレッド", Icons.AutoMirrored.Rounded.ArrowBack, tabs.indexOfFirst { it.key == tabKey } > 0) { moveThread(-1) }.takeUnless { staticView },
+        FutachaThreadTool("次のスレッド", Icons.AutoMirrored.Rounded.ArrowForward, tabs.indexOfFirst { it.key == tabKey } in 0 until tabs.lastIndex) { moveThread(1) }.takeUnless { staticView },
+        FutachaThreadTool("更新前に戻す", Icons.AutoMirrored.Rounded.Undo, previous != null) { previous?.let { restoring = true; previous = null; onRestore(it) } },
+        FutachaThreadTool("1ページ上へ", Icons.Rounded.ArrowUpward) { scrollPage(-1) },
+        FutachaThreadTool("1ページ下へ", Icons.Rounded.ArrowDownward) { scrollPage(1) },
+        FutachaThreadTool(if (automatic) "自動スクロールを停止" else "自動スクロール", if (automatic) Icons.Rounded.Stop else Icons.Rounded.SwapVert, !threadGone) { automatic = !automatic },
+        FutachaThreadTool("落ち状態の保存を再試行", Icons.Rounded.Refresh, !goneSaveInProgress, ::retryGoneSave).takeIf { goneSaveFailure != null },
+        FutachaThreadTool("画像一覧・選択保存", Icons.Rounded.PhotoLibrary, page != null) { mediaOpen = true },
+        FutachaThreadTool("形式を選んでスレッド保存", Icons.Rounded.Archive, page != null && features.fileSystem != null && features.httpClient != null) { pageSaveOpen = true },
+        FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
+        FutachaThreadTool(if (extraction == CompatExtractionKind.NG) "NG抽出を解除" else "NGレスを抽出", Icons.Rounded.FilterList) {
+            extraction = if (extraction == CompatExtractionKind.NG) null else CompatExtractionKind.NG
+        },
+        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_SAIDANE) "そうだね抽出を解除" else "しきい値で抽出：そうだね", Icons.Rounded.ThumbUp) {
+            extraction = if (extraction == CompatExtractionKind.MANY_SAIDANE) null else CompatExtractionKind.MANY_SAIDANE
+        },
+        FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_REPLIES) "返信抽出を解除" else "しきい値で抽出：返信", Icons.Rounded.Forum) {
+            extraction = if (extraction == CompatExtractionKind.MANY_REPLIES) null else CompatExtractionKind.MANY_REPLIES
+        },
+        FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { cacheSearchOpen = true },
+        FutachaThreadTool("URL・アーカイブ", Icons.Rounded.Link) { urlsOpen = true },
+        FutachaThreadTool("表示・抽出の詳細設定", Icons.Rounded.Settings) { features.openSettings("thread") },
+        FutachaThreadTool("スレッドを閉じる", Icons.Rounded.Close) { closeTab(tabKey) }
+    )
+    val fontSize = features.intValue("thread", "threadFontSize", 10..30)
+    val baseTypography = MaterialTheme.typography
+    val readingTypography = if (fontSize == null) baseTypography else baseTypography.copy(
+        bodyLarge = baseTypography.bodyLarge.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp),
+        bodyMedium = baseTypography.bodyMedium.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp),
+        bodySmall = baseTypography.bodySmall.copy(fontSize = fontSize.sp, lineHeight = (fontSize * 1.45).sp))
+    val strip: (@Composable () -> Unit)? = if (!stripVisible || staticView) null else ({
+        CompatTabSelector(tabs, tabKey, true, { onOpenThread(it.toFutachaHistoryEntry()) }, { closing -> closeTab(closing.key) },
+            onReply = onReply, onCheckUpdates = { launchAction {
+                refreshCompatTabsInBackground(features.store, repository, maxTabs = 100)
+            } }, onReload = onRefresh,
+            longTapAction = features.displayValue("control", "controlTabSelectorLongTap") ?: "選択メニュー")
+    })
+    CompositionLocalProvider(LocalFutachaThreadTools provides tools, LocalPostMarkContext provides markContext, LocalManualPostMarkNos provides manualMarkedNos,
+        LocalDelPostAndNg provides { post ->
+            // Same gates as the plain DEL request: writable board and one action at a time.
+            when (resolveDelAndNgGate(effectiveBoardUrl, isActionInProgress())) {
+                DelAndNgGate.BUSY -> { message = buildThreadActionBusyMessage() }
+                DelAndNgGate.ARCHIVE_READ_ONLY -> { message = buildArchiveReadOnlyActionMessage() }
+                DelAndNgGate.PROCEED -> {
+                    setActionInProgress(true)
+                    scope.launch {
+                        try {
+                            message = sendReportAndOptionalNg(true,
+                                send = { repository.requestDeletion(effectiveBoardUrl, threadId, post.id, DEFAULT_DEL_REASON_CODE) },
+                                registerNg = { registerReportedPostNg(features.store, tabKey, post.id) },
+                                reviewCompliance = reviewComplianceEnabled)
+                        } finally {
+                            setActionInProgress(false)
+                        }
+                    }
+                }
+            }
+        },
+        LocalFutachaTabStrip provides strip,
+        LocalFutachaScrollRefreshEnabled provides (features.value("thread", "threadPullToRefresh") != "OFF"),
+        LocalFutachaPostTap provides if (features.value("control", "controlTouchOpenDrawer") == "ON") onOpenDrawer else null,
+        LocalFutachaThreadProjection provides FutachaThreadProjection(tabKey, boardKey, extraction)) {
+        MaterialTheme(typography = readingTypography) {
+        Box(Modifier.fillMaxSize().pointerInput(tabKey) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.changes.any { it.pressed }) touchedAt = Clock.System.now().toEpochMilliseconds()
+                }
+            }
+        }) { content() }
+        }
+    }
+    if (tabsOpen) FutachaTabsDialog(features, repository, onOpenThread, onDismiss = { tabsOpen = false })
+    if (pageSaveOpen && page != null) FutachaPageSaveDialog(features, page, boardKey, board.name,
+        canonicalBoard, threadTitle, { pageSaveOpen = false },
+        onSaveMht = if (features.fileSystem != null && features.httpClient != null) { full ->
+            pageSaveOpen = false
+            mhtSaveRequest = FutaberMhtSaveRequest(
+                boardKey = boardKey, boardName = board.name, boardUrl = canonicalBoard, threadId = page.threadId,
+                title = threadTitle, threadUrl = sourceUrl, page = page
+            )
+            mhtSaveFull = full
+        } else null,
+        offerMediaOnly = true)
+    val mhtFull = mhtSaveFull
+    val mhtPinnedRequest = mhtSaveRequest
+    val mhtFileSystem = features.fileSystem
+    if (mhtFull != null && mhtPinnedRequest != null && mhtFileSystem != null) {
+        val mhtLibrary = remember(mhtFileSystem, features.httpClient) { FutaberMhtLibrary(mhtFileSystem, features.httpClient) }
+        FutachaMhtSaveRun(mhtLibrary, mhtPinnedRequest, mhtFull) { mhtSaveFull = null; mhtSaveRequest = null }
+    }
+    if (ngOpen) FutachaNgManagementDialog(features, boardKey, tabKey, board.name, onDismiss = { ngOpen = false })
+    if (mediaOpen) {
+        val galleryGridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        val preparedMedia by produceState<CompatThreadSnapshot?>(null, page, tabKey) {
+            value = withContext(AppDispatchers.parsing) {
+                page?.toCompatThreadSnapshot(tabKey, tab.snapshotRevision)
+            } ?: features.store.loadThreadSnapshot(tabKey)?.let {
+                withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
+            }
+        }
+        FutachaAppLockAwareWindow { Dialog(onDismissRequest = { mediaOpen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Surface(Modifier.fillMaxSize()) {
+                when {
+                    preparedMedia == null -> CircularProgressIndicator()
+                    viewerToolbarOpen -> CompatToolbarEditorScreen(CompatToolbarSurface.VIEWER, features.store) {
+                        viewerToolbarOpen = false; viewerToolbarRevision++
+                    }
+                    viewerIndex != null -> CompatViewerScreen(
+                        tab = tab, initialIndex = viewerIndex ?: 0, initialPostNo = viewerPostNo,
+                        preparedSnapshot = preparedMedia,
+                        followsFutabaViewer = false,
+                        store = features.store, preferences = features.preferences, ngRules = ngRules,
+                        httpClient = features.httpClient, fileSystem = features.fileSystem,
+                        cookieRepository = features.cookieRepository, toolbarRefreshToken = viewerToolbarRevision,
+                        onToolbarEdit = { viewerToolbarOpen = true },
+                        onShowSourcePost = { anchor ->
+                            page?.posts?.firstOrNull { it.id == anchor.postNo }?.let(onShowPost)
+                            mediaOpen = false; viewerIndex = null
+                        },
+                        onOpenGallery = { _, _ -> viewerIndex = null },
+                        onOpenSettings = { features.openSettings("viewer") },
+                        onOpenCommonSettings = { features.openSettings("viewer") },
+                        onBack = { viewerIndex = null }
+                    )
+                    else -> CompatGalleryScreen(tab = tab, store = features.store, preferences = features.preferences,
+                        preparedSnapshot = preparedMedia, gridState = galleryGridState, restoreInitialPosition = false,
+                        ngRules = ngRules, httpClient = features.httpClient, apngMarkerCache = apngCache,
+                        fileSystem = features.fileSystem, cookieRepository = features.cookieRepository,
+                        saveCoroutineScope = features.lastingScope, onSaveNotice = features.notify,
+                        onOpenViewer = { index, post -> viewerIndex = index; viewerPostNo = post },
+                        onOpenSettings = { features.openSettings("viewer") },
+                        onOpenCommonSettings = { features.openSettings("viewer") }, onBack = { mediaOpen = false })
+                }
+            }
+        } }
+    }
+    if (cacheSearchOpen) FutachaAppLockAwareWindow { CompatCatalogCacheSearchDialog(features.httpClient, features.store, boardKey, canonicalBoard,
+        localHistory = features.store.history.collectAsState(emptyList()).value,
+        onDismiss = { cacheSearchOpen = false }, onOpenThread = { item ->
+            onOpenThread(tab.copy(threadNo = item.id, title = item.title.orEmpty(), originalUrl = item.threadUrl,
+                canonicalUrl = item.threadUrl, key = compatTabKey(item.threadUrl)).toFutachaHistoryEntry())
+            cacheSearchOpen = false
+        }) }
+    if (urlsOpen) {
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val share = rememberCompatShareLauncher()
+        FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { urlsOpen = false }, title = { Text("URL・アーカイブ") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(sourceUrl)); urlsOpen = false }) { Text("URLをコピー") }
+                TextButton(onClick = { share(sourceUrl, "text/plain", null) }) { Text("URLを共有") }
+                TextButton(onClick = { openUrl(buildCompatFtbucketUrl(sourceUrl)) }) { Text("FTBucketに登録") }
+                TextButton(onClick = { launchAction {
+                    val client = features.httpClient ?: error("通信機能を利用できません")
+                    openUrl(registerCompatTsumanne(client, sourceUrl, tab.title).getOrThrow())
+                } }) { Text("つまんね。に登録") }
+                buildCompatForestUrl(sourceUrl)?.let { url -> TextButton(onClick = { openUrl(url) }) { Text("ふたばフォレストで開く") } }
+                buildCompatFutapoUrl(sourceUrl)?.let { url -> TextButton(onClick = { openUrl(url) }) { Text("ふたポで開く") } }
+            }
+        }, confirmButton = { TextButton(onClick = { urlsOpen = false }) { Text("閉じる") } }) }
+    }
+    if (goneSaveFailureOpen && goneSaveFailure != null) FutachaAppLockAwareWindow { AlertDialog(
+        onDismissRequest = { goneSaveFailureOpen = false },
+        title = { Text("落ち状態を保存できませんでした") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("スレッドの落ちは確認済みです。本文と既存のタブは保持しています。")
+            Text(goneSaveFailure.orEmpty())
+            Text("端末の空き容量などを確認して再試行してください。閉じた後も操作メニューから再試行できます。")
+        } },
+        confirmButton = { TextButton(onClick = ::retryGoneSave, enabled = !goneSaveInProgress) { Text("再試行") } },
+        dismissButton = { TextButton(onClick = { goneSaveFailureOpen = false }) { Text("閉じる") } }
+    ) }
+    message?.let { text -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { message = null }) { Text("閉じる") } }) } }
+}
+
+/**
+ * True while the thread shown is a read-only copy (an opened MHT file). The thread's extra tools stay,
+ * but the screen does not register the thread as a tab or write it to the shared snapshots.
+ */
+internal val LocalFutachaStaticThreadView = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+internal const val FUTACHA_CLOSE_WHILE_SENDING_NOTICE = "返信を送信中です。終わってから閉じてください"
