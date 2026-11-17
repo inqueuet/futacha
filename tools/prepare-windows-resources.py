@@ -13,7 +13,7 @@ from desktop_vlc import prune_vlc
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / 'build/windows-dependencies'
 OUT = ROOT / 'app-desktop/resources/windows'
-OPENCV_SHA = '40738fb16ceddb5fb3fea747585f7ce6abb0605b'
+OPENCV_SHA = 'e4f78fbcf1a773fbed69e14500e8b734963eb585'
 ARCHIVES = {
     'llvm': ('https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-x86_64.zip',
              'fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74cd'),
@@ -80,9 +80,9 @@ def main():
     cmake = CACHE / 'cmake/cmake-4.5.0-rc1-windows-x86_64/bin/cmake.exe'
     ninja = CACHE / 'ninja/ninja.exe'
     env = dict(os.environ, PATH=str(llvm) + os.pathsep + os.environ['PATH'])
-    source = CACHE / 'opencv'
+    source = CACHE / 'opencv-5.1.0'
     if not (source / '.git').exists():
-        run('git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', '5.0.0',
+        run('git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', '5.1.0',
             'https://github.com/opencv/opencv.git', source)
         run('git', '-C', source, 'sparse-checkout', 'set', '--cone', 'cmake', '3rdparty', 'include', 'platforms',
             'doc', 'docs_sphinx', 'modules/core', 'modules/imgproc', 'modules/features', 'modules/geometry', 'modules/video', 'modules/flann')

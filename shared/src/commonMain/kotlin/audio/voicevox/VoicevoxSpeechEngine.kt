@@ -87,6 +87,8 @@ internal class VoicevoxSpeechEngine(
                                     throw failure
                                 }
                             }
+                            // On playback failure, cancel/join every lookahead before the outer finally closes the model.
+                            coroutineScope {
                             val native = requireNotNull(resources).native.session
                             suspend fun synthesizeChunk(chunk: String): ByteArray? = nativeExecution.withLock {
                                 ensureActive()
@@ -111,6 +113,7 @@ internal class VoicevoxSpeechEngine(
                                 if (wav == null) continue
                                 require(wav.size in 44..16 * 1024 * 1024) { "音声データの長さが不正です" }
                                 output.play(wav)
+                            }
                             }
                             completed = true
                         } finally {

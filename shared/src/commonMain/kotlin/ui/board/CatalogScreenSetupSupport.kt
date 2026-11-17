@@ -210,7 +210,7 @@ internal fun rememberCatalogScreenSetupBundle(
         repository ?: FakeBoardRepository()
     }
     val archiveSearchScope = remember(board?.url) {
-        com.valoser.futacha.shared.network.extractArchiveSearchScope(board)
+        com.valoser.futacha.shared.network.extractPastSearchScope(board)
     }
     val coreBindings = rememberCatalogScreenCoreBindingsBundle(
         stateStore = stateStore,

@@ -65,7 +65,7 @@ suspend fun synchronizeSharedHistory(
                 val urls = entries.mapNotNullTo(LinkedHashSet()) { it.toCompatHistoryEntry()?.canonicalUrl }
                 if (urls.isEmpty()) return@pass
                 compatibilityStore.forgetHistoryTombstones(urls)
-                compatibilityStore.importModernHistory(appStateHistory.first())
+                compatibilityStore.importModernHistory(stateStore.readHistory())
             }
         }
     }

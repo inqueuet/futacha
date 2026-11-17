@@ -55,9 +55,16 @@ internal class IosBoundedImageDecoder(
         if (peek.request(6) && peek.readUtf8(6) in setOf("GIF87a", "GIF89a")) {
             return decodeIosGif(input.use { it.readBoundedCompatAnimatedImageBytes() })
         }
-        val bytes = input.use { it.readByteArray() }
+        val bytes = input.use { it.readBoundedCompatAnimatedImageBytes() }
         val maximumSide = maxOf(options.size.width.pxOrElse { 0 }, options.size.height.pxOrElse { 0 })
-        decodeBounded(bytes, maximumSide)?.let { return it }
+        decodeBounded(bytes, maximumSide.coerceAtMost(4096))?.let { return it }
+        org.jetbrains.skia.Data.makeFromBytes(bytes).useGifNative { data ->
+            org.jetbrains.skia.Codec.makeFromData(data).useGifNative { codec ->
+                require(codec.width > 0 && codec.height > 0 && codec.width.toLong() * codec.height <= 16_000_000L) {
+                    "画像が大きすぎます"
+                }
+            }
+        }
         return SkiaImageDecoder(ImageSource(Buffer().write(bytes), options.fileSystem), options).decode()
     }
 

@@ -21,16 +21,16 @@ val macStoreProperties = Properties().apply {
 fun macStoreProperty(name: String, fallback: String = ""): String =
     providers.gradleProperty(name).orNull ?: macStoreProperties.getProperty(name, fallback)
 val desktopVersion = when {
-    macAppStore -> macStoreProperty("futachaMacVersion", "14.2")
-    desktopWindows -> "14.2"
-    else -> "14.2"
+    macAppStore -> macStoreProperty("futachaMacVersion", "14.6")
+    desktopWindows -> "14.6"
+    else -> "14.6"
 }
 val desktopPackageVersion = when {
     macAppStore -> desktopVersion
-    desktopWindows -> "14.2.0"
-    else -> "14.2.0"
+    desktopWindows -> "14.6.0"
+    else -> "14.6.0"
 }
-val windowsStoreVersion = providers.gradleProperty("futachaWindowsStoreVersion").orElse("14.2.0.0")
+val windowsStoreVersion = providers.gradleProperty("futachaWindowsStoreVersion").orElse("14.6.0.0")
 val macStoreSigningDir = layout.buildDirectory.dir("macos-store/signing")
 val prepareMacStoreSigning = tasks.register<Exec>("prepareMacStoreSigning") {
     onlyIf { macAppStore }
@@ -175,7 +175,7 @@ compose.desktop {
             }
             macOS {
                 bundleID = if (macAppStore) "com.valoser.futacha" else "com.valoser.futacha.desktop"
-                packageBuildVersion = if (macAppStore) macStoreProperty("futachaMacBuild", "34") else "14.2.0"
+                packageBuildVersion = if (macAppStore) macStoreProperty("futachaMacBuild", "35") else "14.6.0"
                 if (macAppStore) {
                     appStore = true
                     appCategory = "public.app-category.social-networking"

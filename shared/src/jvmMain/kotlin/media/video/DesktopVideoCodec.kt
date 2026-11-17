@@ -8,12 +8,19 @@ import java.awt.image.BufferedImage
 import kotlinx.coroutines.*
 import org.bytedeco.ffmpeg.global.avutil.*
 
-internal fun desktopGrabber(path: String): FFmpegFrameGrabber = FFmpegFrameGrabber(path).apply {
+internal fun desktopGrabber(path: String, thumbnailEdge: Int? = null): FFmpegFrameGrabber = FFmpegFrameGrabber(path).apply {
     av_log_set_level(AV_LOG_ERROR)
     setOption("threads", "2")
     try {
         start()
-        require(imageWidth in 1..2048 && imageHeight in 1..2048) { "動画編集は長辺2048ピクセル以下に対応しています" }
+        require(videoStream >= 0 && imageWidth > 0 && imageHeight > 0) { "映像ストリームがありません" }
+        if (thumbnailEdge == null) {
+            require(imageWidth <= 2048 && imageHeight <= 2048) { "動画編集は長辺2048ピクセル以下に対応しています" }
+        } else {
+            val scale = minOf(1.0, thumbnailEdge.toDouble() / maxOf(imageWidth, imageHeight))
+            imageWidth = (imageWidth * scale).toInt().coerceAtLeast(1)
+            imageHeight = (imageHeight * scale).toInt().coerceAtLeast(1)
+        }
     } catch (failure: Throwable) {
         runCatching { close() }
         throw failure
@@ -28,7 +35,7 @@ internal fun desktopRotation(grabber: FFmpegFrameGrabber): Int {
 }
 
 internal fun desktopRaster(frame: Frame, converter: Java2DFrameConverter, rotation: Int): EditRaster {
-    val image = converter.convert(frame)
+    val image = converter.convert(frame) ?: error("動画のフレームを読み込めません")
     val w = image.width; val h = image.height
     val source = image.getRGB(0, 0, w, h, null, 0, w)
     if (rotation == 0) return EditRaster(w, h, source)

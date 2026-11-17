@@ -10,7 +10,7 @@ import platform.Foundation.*
 private val connectionStore by lazy { AiConnectionStore(IosAiConnectionStorage()) }
 actual fun getAiConnectionStore(platformContext: Any?): AiConnectionStore = connectionStore
 
-internal class IosAiConnectionStorage(private val serviceName: String = "com.valoser.futacha.openai") : AiConnectionStorage {
+internal class IosAiConnectionStorage(private val serviceName: String = "com.valoser.futacha.openai", private val maxBytes: Int = MAX_AI_CREDENTIAL_BYTES) : AiConnectionStorage {
     private fun <T> query(block: (CFMutableDictionaryRef) -> T): T {
         val dict = checkNotNull(CFDictionaryCreateMutable(null, 0, null, null))
         val service = checkNotNull(CFStringCreateWithCString(null, serviceName, kCFStringEncodingUTF8))
@@ -88,7 +88,8 @@ internal class IosAiConnectionStorage(private val serviceName: String = "com.val
         val data: CFDataRef = checkNotNull(result.value).reinterpret()
         try {
             val length = CFDataGetLength(data).toInt()
-            check(length in 1..MAX_AI_CREDENTIAL_BYTES)
+            check(length in 0..maxBytes)
+            if (length == 0) return@memScoped ""
             checkNotNull(CFDataGetBytePtr(data)).readBytes(length).decodeToString()
         } finally { CFRelease(data) }
     } }
@@ -99,7 +100,9 @@ internal class IosAiConnectionStorage(private val serviceName: String = "com.val
 
     private fun writeItem(value: String) = query { dict ->
         val bytes = value.encodeToByteArray()
-        val data = bytes.usePinned { CFDataCreate(null, it.addressOf(0).reinterpret(), bytes.size.toLong()) }!!
+        check(bytes.size <= maxBytes)
+        val data = if (bytes.isEmpty()) CFDataCreate(null, null, 0)!!
+            else bytes.usePinned { CFDataCreate(null, it.addressOf(0).reinterpret(), bytes.size.toLong()) }!!
         val update = CFDictionaryCreateMutable(null, 0, null, null)!!
         try {
             CFDictionarySetValue(update, kSecValueData, data)

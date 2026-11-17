@@ -41,6 +41,8 @@ class FtutterCatalogFailureInstrumentedTest {
     private var preferences by mutableStateOf(mapOf(viewedThreadFirstKey(board.url) to "ON"))
     private lateinit var loader: ImageLoader
     private val repository = object : BoardRepository by FakeBoardRepository() {
+        override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: com.valoser.futacha.shared.model.CatalogFetchSettings): CatalogPageContent =
+            getCatalogPage(board, mode)
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
             calls += mode
             gate?.await()

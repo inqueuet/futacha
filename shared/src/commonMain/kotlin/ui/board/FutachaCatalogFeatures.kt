@@ -116,6 +116,7 @@ internal fun FutachaCatalogFeatureHost(
     var replyDeltas by remember(boardKey, mode) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var restoring by remember(boardKey, mode) { mutableStateOf(false) }
     var ngOpen by remember { mutableStateOf(false) }
+    var serverSearchOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
     var droppedOpen by remember { mutableStateOf(false) }
     var undoOpen by remember { mutableStateOf(false) }
@@ -259,6 +260,12 @@ internal fun FutachaCatalogFeatureHost(
         FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
         FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true },
         FutachaThreadTool("表示・取得の詳細設定", Icons.Rounded.Settings) { features.openSettings("catalog") }
+    ) + listOfNotNull(
+        if (features.httpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(boardUrl) != null)
+            FutachaThreadTool("ふたばのレス検索", Icons.Rounded.Search) { serverSearchOpen = true } else null
+    )
+    if (serverSearchOpen && features.httpClient != null) FutabaServerSearchDialog(
+        features.httpClient, boardUrl, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
     )
     val volume = features.displayValue("control", "controlCatalogVolumeKey")
     val owner = remember { Any() }

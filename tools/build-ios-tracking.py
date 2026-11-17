@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_COMMIT = "40738fb16ceddb5fb3fea747585f7ce6abb0605b"  # Official OpenCV 5.0.0 tag.
+SOURCE_COMMIT = "e4f78fbcf1a773fbed69e14500e8b734963eb585"  # Official OpenCV 5.1.0 tag.
 
 
 def run(*args):
@@ -46,12 +46,12 @@ def main():
 
     cache = ROOT / "build/native-tracking"
     cache.mkdir(parents=True, exist_ok=True)
-    source = cache / "opencv-5.0.0"
+    source = cache / "opencv-5.1.0"
     with (cache / "source.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not (source / ".git").exists():
             run("git", "-c", "http.version=HTTP/1.1", "clone", "--depth", "1", "--filter=blob:none",
-                "--no-checkout", "--branch", "5.0.0", "https://github.com/opencv/opencv.git", source)
+                "--no-checkout", "--branch", "5.1.0", "https://github.com/opencv/opencv.git", source)
         commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
         if commit != SOURCE_COMMIT:
             raise RuntimeError("OpenCV source revision mismatch")

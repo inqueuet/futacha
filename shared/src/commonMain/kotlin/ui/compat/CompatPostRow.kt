@@ -1258,7 +1258,9 @@ private fun CompatMessageText(
         )
     }
     val spoilerCover = palette.uiSecondaryText
+    val diceColor = com.valoser.futacha.shared.ui.board.DiceColorState.color
     val annotated = remember(
+        diceColor,
         revealedSpoilers,
         aimogeDecorations,
         spoilerCover,
@@ -1334,7 +1336,7 @@ private fun CompatMessageText(
                     addStyle(SpanStyle(background = searchTextHighlight), start, end)
                 }
             }
-        }.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover)
+        }.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover, diceColor = diceColor)
     }
     var textLayoutResult by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
     val latestClick by rememberUpdatedState(onClick)

@@ -985,6 +985,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("フォントサイズ", "14sp", preferenceKey = "catalogListViewTitleFontSize"),
         CompatSettingEntry("長辺の列数", "7行", preferenceKey = "catalogListViewLineNum"),
         CompatSettingEntry("カタログを開いた時リロードを行う", "OFF", preferenceKey = "catalogOpenWithReload"),
+        CompatSettingEntry("板一覧から開いた時だけ更新して先頭へ", "OFF", preferenceKey = COMPAT_CATALOG_ENTRY_REFRESH_KEY),
         CompatSettingEntry("スレッドを開いた時に更新", "ON", preferenceKey = "catalogThreadOpenWithReload"),
         CompatSettingEntry(
             "リロード後に先頭へ戻る",
@@ -1112,7 +1113,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
                 "catalogListViewTitleLength", "catalogListViewTitleFontSize", "catalogListViewLineNum"
             ),
             "読み込み" to entries.compatKeys(
-                "catalogOpenWithReload", "catalogThreadOpenWithReload", "catalogReloadScrollTop", "catalogThreadSize",
+                "catalogOpenWithReload", COMPAT_CATALOG_ENTRY_REFRESH_KEY, "catalogThreadOpenWithReload", "catalogReloadScrollTop", "catalogThreadSize",
                 "catalogFindThreadDeleted", "catalogAppendDropped", "catalogTitleLength"
             )
         )
@@ -1146,7 +1147,7 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "controlPostConfirm", "controlViewerSwipeClose", "controlPostDestinationConfirm",
         COMPAT_THREAD_EDGE_SWIPE_BACK_KEY, COMPAT_VIEWER_DOUBLE_TAP_ZOOM_KEY,
         "catalogPullToRefresh", "catalogFastScroll", "catalogThumbCrop", "catalogEco",
-        "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", "catalogThreadOpenWithReload",
+        "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", COMPAT_CATALOG_ENTRY_REFRESH_KEY, "catalogThreadOpenWithReload",
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
         "threadPullToRefresh", "threadFastScroll", "threadNg",
         "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple",

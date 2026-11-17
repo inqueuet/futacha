@@ -202,6 +202,11 @@ internal fun FutaberCatalogScreen(
     val display = LocalFutaberDisplaySettings.current
     LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) view.viewedFirstId = null }
     val load = view.load
+    var serverSearchOpen by remember(board.id) { mutableStateOf(false) }
+    val canServerSearch = archiveHttpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.url) != null
+    if (serverSearchOpen && archiveHttpClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
+        archiveHttpClient, board.url, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
+    )
     val searchOpen = search.open
     val query = search.query
     var sheetItem by remember(board.id) { mutableStateOf<CatalogItem?>(null) }
@@ -313,9 +318,16 @@ internal fun FutaberCatalogScreen(
     }
     // The NG rules are applied when the list or the rules change, not at every key of the search; the search then only
     // compares the typed word (a moment after the last key) with the titles, folded once.
-    val ngVisibleItems = remember(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds, catalogSharedNg) {
-        futaberApplyCatalogRules(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds, catalogSharedNg)
+    val ngInput = listOf(board.id, load.items, catalogNgWords, catalogNgIndex, phashHiddenIds, catalogSharedNg)
+    val ngResult by produceState<Pair<List<Any?>, List<CatalogItem>>?>(null, ngInput) {
+        val filtered = withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+            futaberApplyCatalogRules(load.items, catalogNgWords, catalogNgIndex, phashHiddenIds, catalogSharedNg)
+        }
+        value = ngInput to filtered
     }
+    // Keep this board's last filtered list until the next result is ready. Clearing it between partial image-hash
+    // updates would reset the LazyList position; another board must never borrow the previous board's rows.
+    val ngVisibleItems = ngResult?.takeIf { it.first.first() == board.id }?.second.orEmpty()
     // The B7a reordering (watch words first, few replies later / hidden) runs once per list, before the search.
     // The watch-word matching (every thread against every word and extraction rule) runs on the parsing dispatcher, once
     // per list and settings (audit L24: it ran in composition, again whenever any setting changed). Until it is ready the
@@ -443,7 +455,9 @@ internal fun FutaberCatalogScreen(
     }
     FutaberCatalogRefreshSheets(
         refreshSheet, { refreshSheet = it }, droppedSheet, { droppedSheet = it }, view, perGenerationBack, droppedItems,
-        viewedFirstEnabled, onViewedFirstChange, refreshActions, onOpenThread
+        viewedFirstEnabled, onViewedFirstChange, refreshActions + listOfNotNull(
+            if (canServerSearch) FutaberPostAction("server-search", "ふたばのレス検索") { serverSearchOpen = true } else null
+        ), onOpenThread
     )
     sheetItem?.let { item ->
         val actions = longPressActions?.invoke(item).orEmpty()
@@ -707,7 +721,7 @@ private fun FutaberCatalogList(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            gridItems(items, key = { it.id }) { item -> FutaberGridCell(item, columns, onOpenThread, onLongPress, badges[item.id], item.id in readIds, item.id == openingId) }
+            gridItems(items.distinctBy { it.id }, key = { it.id }) { item -> FutaberGridCell(item, columns, onOpenThread, onLongPress, badges[item.id], item.id in readIds, item.id == openingId) }
         }
     } else {
         val state = view.listState
@@ -716,7 +730,7 @@ private fun FutaberCatalogList(
         }
         com.valoser.futacha.shared.ui.KeepCatalogPlaceOnNewItems(items, list = state)
         LazyColumn(Modifier.fillMaxSize().then(rememberFutaberScrollIndicator(state)).testTag("futaber-catalog-list"), state = state) {
-            items(items, key = { it.id }) { item ->
+            items(items.distinctBy { it.id }, key = { it.id }) { item ->
                 FutaberRowCell(item, style.titleLines, onOpenThread, onLongPress, badges[item.id], item.id in readIds, item.id == openingId)
             }
         }

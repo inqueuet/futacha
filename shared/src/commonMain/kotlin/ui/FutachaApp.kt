@@ -1528,7 +1528,12 @@ private fun FutachaAppContent(
                                     repository = mixRepository,
                                     store = compatibilityStore,
                                     registeredBoards = persistedBoards,
-                                    gridColumns = com.valoser.futacha.shared.ui.board.MixGridColumns(mixColumns),
+                                    gridColumns = com.valoser.futacha.shared.ui.board.MixGridColumns(run {
+                                        // The shared portrait/landscape column setting first, as the board catalogs (audit 2026-11-17 L11).
+                                        val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+                                        com.valoser.futacha.shared.ui.board.LocalFutachaSharedFeatures.current?.let { features -> with(com.valoser.futacha.shared.ui.board.FutachaSharedDisplayAccess) { features.columns(
+                                            if (window.width > window.height) "catalogGridViewLandscapeClmNum" else "catalogGridViewPortraitClmNum") } } ?: mixColumns
+                                    }),
                                     stateStore = stateStore,
                                     fileSystem = fileSystem,
                                     httpClient = httpClient,

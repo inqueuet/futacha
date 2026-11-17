@@ -385,6 +385,7 @@ internal fun SharedSettingsLink(path: String, title: String, description: String
         leadingContent = when (path) {
             "watcher" -> ({ Icon(Icons.Rounded.Settings, contentDescription = null) })
             "help" -> ({ Icon(Icons.Rounded.HelpOutline, contentDescription = null) })
+            "changelog" -> ({ Icon(Icons.Rounded.History, contentDescription = null) })
             else -> null
         },
         modifier = Modifier.fillMaxWidth().clickable { features.openSettings(path) }

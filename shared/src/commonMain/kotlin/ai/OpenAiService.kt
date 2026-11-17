@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ai
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.util.replaceHtmlBreakTags
 import com.valoser.futacha.shared.util.stripHtmlTagsLinear
@@ -235,7 +236,7 @@ internal class OpenAiService(
                     if (buffer.size > OPENAI_MAX_RESPONSE_BYTES) break
                     buffer = buffer.copyOf(minOf(buffer.size * 2L, OPENAI_MAX_RESPONSE_BYTES + 1L).toInt())
                 }
-                val count = channel.readAvailable(buffer, size, buffer.size - size)
+                val count = readResponseBody { channel.readAvailable(buffer, size, buffer.size - size) }
                 if (count < 0) break
                 size += count
             }

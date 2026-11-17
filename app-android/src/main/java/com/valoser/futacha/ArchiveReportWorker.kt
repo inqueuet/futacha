@@ -1,5 +1,6 @@
 package com.valoser.futacha
 
+import com.valoser.futacha.shared.util.readResponseBody
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -322,12 +323,12 @@ internal class ArchiveReportSender(
             "Untrusted archive report endpoint"
         }
         val response = withTimeout(ARCHIVE_REPORT_HTTP_TIMEOUT_MILLIS) {
-            client.post(endpoint) {
+            readResponseBody { client.post(endpoint) {
                 header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 accept(ContentType.Application.Json)
                 header(HttpHeaders.UserAgent, "Futacha/5")
                 setBody(payload.bytes)
-            }
+            } }
         }
         val bytes = response.readArchiveReportResponseBytes()
         val decoded = bytes?.let { body ->
@@ -350,7 +351,7 @@ internal class ArchiveReportSender(
             val buffer = ByteArray(8 * 1024)
             var zeroReadCount = 0
             while (true) {
-                val read = channel.readAvailable(buffer, 0, buffer.size)
+                val read = readResponseBody { channel.readAvailable(buffer, 0, buffer.size) }
                 if (read == -1) break
                 if (read == 0) {
                     zeroReadCount += 1

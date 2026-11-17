@@ -186,22 +186,34 @@ class AimogeBoardRepository private constructor(
 
     override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> = getCatalogPage(board, mode).items
 
-    override suspend fun getCatalogPage(board: String, mode: CatalogMode): com.valoser.futacha.shared.model.CatalogPageContent {
+    override suspend fun getCatalogPage(board: String, mode: CatalogMode): com.valoser.futacha.shared.model.CatalogPageContent =
+        readCatalog(board, mode, 300)
+
+    private suspend fun readCatalog(board: String, mode: CatalogMode, count: Int): com.valoser.futacha.shared.model.CatalogPageContent = withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
         val slug = slugOf(board)
-        val body = api.catalog(slug, aimogeSortOf(mode))
-        val threads = decode { decodeAimogeCatalog(body) }.threads
-        val pairs = threads.map { it to it.toCatalogItem(threadUrl(slug, it.id)) }
+        val threads = mutableListOf<com.valoser.futacha.shared.network.aimoge.AimogeThreadDto>()
+        val wanted = count.coerceIn(1, 3000)
+        val pageSize = minOf(wanted, 300)
+        var seed: Long? = null
+        for (page in 1..((wanted + pageSize - 1) / pageSize)) {
+            val body = api.catalog(slug, aimogeSortOf(mode), pageSize, page, seed)
+            val dto = decode { decodeAimogeCatalog(body) }
+            threads += dto.threads
+            seed = dto.seed ?: seed
+            if (dto.pagination?.hasNextPage != true || dto.threads.isEmpty()) break
+        }
+        val pairs = threads.distinctBy { it.id }.take(wanted).map { it to it.toCatalogItem(threadUrl(slug, it.id)) }
         val created = HashMap<String, Long>()
         pairs.forEach { (dto, item) -> aimogeEpochMillis(dto.createdAt)?.let { created[item.id] = it } }
         val items = pairs.map { it.second }
-        return com.valoser.futacha.shared.model.CatalogPageContent(
+        return@withContext com.valoser.futacha.shared.model.CatalogPageContent(
             items = if (mode == CatalogMode.Few) items.sortedBy { it.replyCount } else items,
             threadCreatedAtEpochMillis = created
         )
     }
 
     override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: com.valoser.futacha.shared.model.CatalogFetchSettings): com.valoser.futacha.shared.model.CatalogPageContent =
-        getCatalogPage(board, mode)
+        readCatalog(board, mode, settings.approximateThreadCount)
 
     /** From the copy at hand only; null when the thread was not read here. */
     override suspend fun fetchOpImageUrl(board: String, threadId: String): String? =
@@ -230,22 +242,22 @@ class AimogeBoardRepository private constructor(
     override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent =
         ThreadPageContent(page = getThread(board, threadId))
 
-    private suspend fun readFull(slug: String, uuid: String): ThreadPage {
+    private suspend fun readFull(slug: String, uuid: String): ThreadPage = withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
         val sentAt = nowMillis()
         val body = api.thread(uuid, slug)
         val dto = decode { decodeAimogeThread(body) }
         val posts = withPollStates(slug, uuid, dto.posts)
         val page = aimogeThreadPage(dto, posts, nowMillis())
         hold(uuid, Held(slug, dto.copy(posts = emptyList()), posts, null, sentAt, sentAt, page))
-        return page
+        return@withContext page
     }
 
-    private suspend fun readDelta(held: Held, uuid: String): ThreadPage {
+    private suspend fun readDelta(held: Held, uuid: String): ThreadPage = withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
         val sentAt = nowMillis()
         val body = api.threadState(uuid, held.maxSeq, held.slug)
         val state = decode { decodeAimogeState(body) }
         val fresh = state.newPosts.sortedBy { it.seq }
-        if (fresh.isNotEmpty() && fresh.first().seq > held.maxSeq + 1) return readFull(held.slug, uuid)
+        if (fresh.isNotEmpty() && fresh.first().seq > held.maxSeq + 1) return@withContext readFull(held.slug, uuid)
         val bySeq = LinkedHashMap<Long, AimogePostDto>()
         held.posts.forEach { bySeq[it.seq] = it }
         fresh.forEach { row ->
@@ -270,7 +282,7 @@ class AimogeBoardRepository private constructor(
         val base = aimogeThreadPage(held.thread, posts, nowMillis())
         val page = if (archivedAt != null && archivedAt <= nowMillis()) base.copy(archived = true) else base
         hold(uuid, Held(held.slug, held.thread, posts, archivedAt, held.fullAtMillis, sentAt, page))
-        return page
+        return@withContext page
     }
 
     /**
@@ -481,19 +493,19 @@ class AimogeBoardRepository private constructor(
     // ---- Fallen threads. ----
 
     /** The archived copy (`snapshot.json`) of a thread `/thread` no longer has; null when there is none. */
-    override suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent? {
+    override suspend fun getArchivedThreadContent(board: String, threadId: String): ThreadPageContent? = withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
         val slug = slugOf(board)
         val uuid = uuidOf(threadId)
         val body = try {
             api.archiveSnapshot(slug, uuid)
         } catch (e: NetworkException) {
-            if (e.statusCode == 404) return null
+            if (e.statusCode == 404) return@withContext null
             throw e
         }
         val snapshot = decode { decodeAimogeSnapshot(body) }
-        val thread = snapshot.thread ?: return null
+        val thread = snapshot.thread ?: return@withContext null
         val page = aimogeThreadPage(thread, snapshot.posts, nowMillis()).copy(archived = true)
-        return ThreadPageContent(page = page)
+        return@withContext ThreadPageContent(page = page)
     }
 
     /** The boards あいもげ lists. */
@@ -723,7 +735,7 @@ class AimogeBoardRepository private constructor(
         val result = write { confirmed -> writer.reply(request, confirmed) }
         if (extras.isNotEmpty()) AimogePendingExtras.clear()
         mutex.withLock { val now = nowMillis(); lastReplyAt[slug] = now; lastReplyAt["$slug/$uuid"] = now }
-        return runCatching { readFull(slug, uuid) }.getOrNull()?.let {
+        return runCatching { readFull(slug, uuid) }.onFailure { if (it is CancellationException) throw it }.getOrNull()?.let {
             mutex.withLock { threads[uuid]?.postUuids?.entries?.firstOrNull { e -> e.value == result.postId }?.key }
         }
     }
@@ -811,7 +823,7 @@ class AimogeBoardRepository private constructor(
                 is AimogeActionOutcome.Done -> AIMOGE_POLL_VOTED_MESSAGE
             }
         }
-        runCatching { readFull(slug, held.key) }
+        runCatching { readFull(slug, held.key) }.onFailure { if (it is CancellationException) throw it }
         return message
     }
 
@@ -832,7 +844,7 @@ class AimogeBoardRepository private constructor(
         if (!confirmed) throw NetworkException(AIMOGE_DEL_CANCELLED_MESSAGE)
         action { writer.closeThread(slugOf(board), uuidOf(threadId)) }
         AimogeNotices.show(AIMOGE_CLOSED_MESSAGE)
-        runCatching { readFull(slugOf(board), uuidOf(threadId)) }
+        runCatching { readFull(slugOf(board), uuidOf(threadId)) }.onFailure { if (it is CancellationException) throw it }
     }
 
     override fun close() {

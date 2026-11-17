@@ -58,3 +58,8 @@ internal fun Modifier.futachaTouchScroll(listState: LazyListState): Modifier = c
         }
     }
 }
+
+/** Lets other packages read a shared catalog column count (audit 2026-11-17 L11). */
+internal object FutachaSharedDisplayAccess {
+    fun FutachaSharedFeatures.columns(key: String): Int? = intValue("catalog", key, 2..12)
+}

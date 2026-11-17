@@ -146,6 +146,13 @@ class AndroidThreadSaveForegroundService : Service() {
     private fun stopIfIdle() {
         val currentId = activeSessionId
         if (currentId != null && AndroidProtectedThreadSaveRegistry.get(currentId) != null) return
+        val nextId = AndroidProtectedThreadSaveRegistry.sessions.value.keys.firstOrNull()
+        val next = nextId?.let(AndroidProtectedThreadSaveRegistry::get)
+        if (next != null) {
+            notificationManager().notify(NOTIFICATION_ID, buildProgressNotification(nextId, next.title, next.progress.value))
+            activate(nextId, next)
+            return
+        }
         activeSessionId = null
         progressJob?.cancel()
         progressJob = null
@@ -199,7 +206,7 @@ class AndroidThreadSaveForegroundService : Service() {
 
     private fun acquireLocks() {
         runCatching {
-            wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            if (wakeLock?.isHeld != true) wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
                 .apply {
                     setReferenceCounted(false)
@@ -208,7 +215,7 @@ class AndroidThreadSaveForegroundService : Service() {
         }
         runCatching {
             @Suppress("DEPRECATION")
-            wifiLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+            if (wifiLock?.isHeld != true) wifiLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
                 ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, WAKE_LOCK_TAG)
                 ?.apply {
                     setReferenceCounted(false)

@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import coil3.network.ktor3.asNetworkClient
 import com.valoser.futacha.shared.compat.BoardSite
 import com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl
 import com.valoser.futacha.shared.compat.compatSiteArchiveLoader
@@ -633,7 +634,7 @@ fun CompatibilityApp(
             .serviceLoaderEnabled(false)
             .components {
                 addPlatformImageComponents()
-                httpClient?.let { add(coil3.network.ktor3.KtorNetworkFetcherFactory(httpClient = it)) }
+                httpClient?.let { client -> add(coil3.network.NetworkFetcher.Factory(networkClient = { com.valoser.futacha.shared.ui.image.CacheOnlyAwareNetworkClient(client.asNetworkClient()) })) }
             }
             .build()
     }
@@ -750,6 +751,7 @@ private fun CompatibilityAppContent(
         parseCompatArchiveSearchHistory(archiveSearchHistoryRaw)
     }
     var catalogSelectorOpen by rememberSaveable { mutableStateOf(false) }
+    var catalogExplicitOpen by remember { mutableStateOf(false) }
     var threadSelectorOpen by rememberSaveable { mutableStateOf(false) }
     var ngRules by remember { mutableStateOf<List<CompatNgRule>>(emptyList()) }
     var toolbarRefreshToken by remember { mutableStateOf(0L) }
@@ -1059,6 +1061,10 @@ private fun CompatibilityAppContent(
         }
         val closingTabUrls = state.tabs.filter { it.key in closingTabKeys }.map { it.canonicalUrl }.toSet()
         val reduction = reduceCompatibilityWorkspace(state, event)
+        if (reduction.state.host is CompatHost.Catalog &&
+            (state.host != reduction.state.host || event is CompatibilityEvent.OpenCatalog)) {
+            catalogExplicitOpen = event is CompatibilityEvent.OpenCatalog
+        }
         state = reduction.state.copy(tabs = distinctCompatTabs(reduction.state.tabs))
         closingTabKeys.forEach(latestThreadScrollAnchors::remove)
         reduction.effects.forEach { effect ->
@@ -2772,6 +2778,7 @@ private fun CompatibilityAppContent(
                             preferences[COMPAT_ARCHIVE_SEARCH_NOTICE_HIDDEN_KEY] == "ON",
                         localHistory = histories,
                         freshSnapshotRevision = freshCatalogRevisions[board.key],
+                        explicitCatalogOpen = catalogExplicitOpen,
                         onFreshSnapshotCommitted = { boardKey, revision ->
                             freshCatalogRevisions = freshCatalogRevisions + (boardKey to revision)
                         },
@@ -3039,7 +3046,7 @@ private fun CompatibilityAppContent(
                                 return@CompatThreadScreen
                             }
                             val matchingBoard = boards.firstOrNull { board ->
-                                extractArchiveSearchScope(board.originalUrl)?.let { archiveScope ->
+                                com.valoser.futacha.shared.network.extractPastSearchScope(board.originalUrl)?.let { archiveScope ->
                                     archiveScope.server == item.server && archiveScope.board == item.board
                                 } == true
                             } ?: boards.firstOrNull { it.key == tab.boardKey }
@@ -3964,9 +3971,15 @@ private fun CompatCatalogScreen(
     canUndoClose: Boolean,
     onUndoClose: () -> Unit,
     /** Counts the threads created on this board (L37). */
-    createdThreadToken: Long = 0L
+    createdThreadToken: Long = 0L,
+    explicitCatalogOpen: Boolean = false
 ) {
     val scope = rememberCoroutineScope()
+    var serverSearchOpen by remember(board.key) { mutableStateOf(false) }
+    val serverSearchAvailable = httpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.originalUrl) != null
+    if (serverSearchOpen && httpClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
+        httpClient, board.originalUrl, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
+    )
     val effectiveRepository = remember(board.key, repository) {
         if (isCompatFixtureBoard(board)) FakeBoardRepository() else repository
     }
@@ -4731,7 +4744,10 @@ private fun CompatCatalogScreen(
         val reloadOnOpen = preferences.compatPreferenceValue(
             "catalog", "catalogOpenWithReload", "カタログを開いた時リロードを行う"
         ) == "ON"
-        if (cached == null || reloadOnOpen || forceRefresh) refresh(sort)
+        val entryOnly = preferences.compatPreferenceValue("catalog", COMPAT_CATALOG_ENTRY_REFRESH_KEY) == "ON"
+        if (compatCatalogShouldReload(cached != null, reloadOnOpen, entryOnly, explicitCatalogOpen, forceRefresh)) {
+            refresh(sort)
+        }
     }
     suspend fun showPreviousCatalogGeneration() {
         if (loading) {
@@ -4795,7 +4811,8 @@ private fun CompatCatalogScreen(
         }
     }
     LaunchedEffect(catalogRefreshGeneration, catalogReloadScrollTopEnabled) {
-        if (catalogRefreshGeneration == 0 || !catalogReloadScrollTopEnabled) return@LaunchedEffect
+        val entryToTop = explicitCatalogOpen && preferences.compatPreferenceValue("catalog", COMPAT_CATALOG_ENTRY_REFRESH_KEY) == "ON"
+        if (catalogRefreshGeneration == 0 || (!catalogReloadScrollTopEnabled && !entryToTop)) return@LaunchedEffect
         // Run after the new item snapshot has been measured. Calling
         // scrollToItem from the network coroutine can race LazyGrid/LazyColumn
         // layout on Android 11 and leave the old position visible (#27).
@@ -5289,7 +5306,10 @@ private fun CompatCatalogScreen(
             cacheEnabled = preferences[COMPAT_CACHE_ENABLED_KEY] == "ON",
             activeToolbarKeys = compatToolbarKeysOutOfMenu(toolbarItems),
             commonNgEnabled = onOpenCommonNg != null
-        )
+        ).let { items ->
+            if (route == CompatOtherMenuRoute.CATALOG_ROOT && serverSearchAvailable)
+                items + com.valoser.futacha.shared.compat.CompatOtherMenuItem("server_search", "ふたばのレス検索") else items
+        }
         CompatHierarchicalOtherMenuDialog(
             route = route,
             items = menuItems,
@@ -5305,6 +5325,7 @@ private fun CompatCatalogScreen(
                         managedNgKind = CompatNgKind.CATALOG_EXTRACT
                     }
                     "watcher" -> onOpenWatcher()
+                    "server_search" -> serverSearchOpen = true
                     "cache" -> cacheSearchOpen = true
                     "archive" -> archiveSearchOpen = true
                     // reference app opens the board catalog endpoint, not the
@@ -5520,7 +5541,7 @@ private fun CompatCatalogScreen(
     if (archiveSearchOpen) {
         CompatArchiveSearchDialog(
             httpClient = httpClient,
-            archiveScope = extractArchiveSearchScope(board.originalUrl),
+            archiveScope = com.valoser.futacha.shared.network.extractPastSearchScope(board.originalUrl),
             archiveBaseUrl = archiveBaseUrl,
             localHistory = localHistory,
             initialSearchHistory = archiveSearchHistory,
@@ -5881,6 +5902,7 @@ private fun CompatThreadScreen(
     // vertical LazyColumn scrolling and post actions remain independent.
     val pagerOffset = remember(tab.key) { Animatable(0f) }
     var pagerDragUpdateJob by remember(tab.key) { mutableStateOf<Job?>(null) }
+    val tapPager = remember(tab.key) { CompatTapPager() }
     var pagerWidthPx by remember(tab.key) { mutableStateOf(0) }
     val tabIndex = tabs.indexOfFirst { it.key == tab.key }
     val previousTab = tabs.getOrNull(tabIndex - 1)
@@ -8130,7 +8152,6 @@ private fun CompatThreadScreen(
                             var totalDx = 0f
                             var totalDy = 0f
                             var horizontal = false
-                            var rejected = false
                             var finished = false
                             var gesturePagerOffset = pagerOffset.value
                             while (true) {
@@ -8150,7 +8171,7 @@ private fun CompatThreadScreen(
                                 val dy = change.position.y - change.previousPosition.y
                                 totalDx += dx
                                 totalDy += dy
-                                if (!horizontal && !rejected) {
+                                if (!horizontal) {
                                     when (compatPagerGestureAxis(totalDx, totalDy, pagerTouchSlopPx)) {
                                         CompatPagerGestureAxis.HORIZONTAL -> horizontal = true
                                         CompatPagerGestureAxis.VERTICAL -> {
@@ -8159,14 +8180,10 @@ private fun CompatThreadScreen(
                                             finished = true
                                             break
                                         }
-                                        CompatPagerGestureAxis.REJECTED -> {
-                                            finished = true
-                                            break
-                                        }
                                         CompatPagerGestureAxis.UNDECIDED -> Unit
                                     }
                                 }
-                                if (horizontal || rejected) {
+                                if (horizontal) {
                                     change.consume()
                                 }
                                 if (horizontal) {
@@ -8221,11 +8238,11 @@ private fun CompatThreadScreen(
                                             when (action) {
                                                 CompatTouchScrollAction.PAGE_UP -> {
                                                     change.consume()
-                                                    scope.launch { listState.animateScrollBy(-page) }
+                                                    tapPager.page(scope, listState, -page)
                                                 }
                                                 CompatTouchScrollAction.PAGE_DOWN -> {
                                                     change.consume()
-                                                    scope.launch { listState.animateScrollBy(page) }
+                                                    tapPager.page(scope, listState, page)
                                                 }
                                                 CompatTouchScrollAction.NONE -> Unit
                                             }
@@ -8614,7 +8631,7 @@ private fun CompatThreadScreen(
     if (archiveSearchOpen) {
         CompatArchiveSearchDialog(
             httpClient = httpClient,
-            archiveScope = extractArchiveSearchScope(tab.originalUrl),
+            archiveScope = com.valoser.futacha.shared.network.extractPastSearchScope(tab.originalUrl),
             archiveBaseUrl = archiveBaseUrl,
             localHistory = localHistory,
             initialSearchHistory = archiveSearchHistory,

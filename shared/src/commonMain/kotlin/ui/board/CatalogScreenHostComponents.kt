@@ -287,7 +287,7 @@ internal fun CatalogScreenOverlayHost(
             onRetry = bindings.overlayBindings.pastThreadSearchResultCallbacks.onRetry,
             onItemSelected = bindings.overlayBindings.pastThreadSearchResultCallbacks.onItemSelected,
             query = bindings.archiveSearchQuery,
-            archiveScope = bindings.board?.let { com.valoser.futacha.shared.network.extractArchiveSearchScope(it) }
+            archiveScope = bindings.board?.let { com.valoser.futacha.shared.network.extractPastSearchScope(it) }
         )
     }
 

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.media.FutabaMediaKind
 import com.valoser.futacha.shared.media.classifyFutabaMedia
 import com.valoser.futacha.shared.media.mediaFileExtension
@@ -377,7 +378,7 @@ private suspend fun searchCompatMultipartHtmlProvider(
     image: CompatSearchUploadImage,
     acceptRedirectedResultUrl: Boolean = false
 ): CompatImageSearchResult {
-    val postResponse = httpClient.submitFormWithBinaryData(
+    val postResponse = readResponseBody { httpClient.submitFormWithBinaryData(
         url = endpoint,
         formData = formData {
             append(
@@ -396,7 +397,7 @@ private suspend fun searchCompatMultipartHtmlProvider(
         header(HttpHeaders.UserAgent, COMPAT_FILE_SEARCH_USER_AGENT)
         header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
         header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8")
-    }
+    } }
     val providerHost = Url(baseUrl).host
     // Ktor's redirect plugin never follows a POST, and on iOS the Darwin
     // engine hands the 302/303 back as is (OkHttp follows it natively), so
@@ -435,11 +436,11 @@ private suspend fun followCompatSearchPostRedirects(
         require(isTrustedCompatSearchResultUrl(location, providerHost)) {
             "${title}検索の応答先が不正です"
         }
-        response = httpClient.get(location) {
+        response = readResponseBody { httpClient.get(location) {
             header(HttpHeaders.UserAgent, COMPAT_FILE_SEARCH_USER_AGENT)
             header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
             header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        }
+        } }
     }
     return response
 }
@@ -457,7 +458,7 @@ private suspend fun searchCompatYandexFile(
     httpClient: HttpClient,
     image: CompatSearchUploadImage
 ): CompatImageSearchResult {
-    val response = httpClient.post(
+    val response = readResponseBody { httpClient.post(
         "https://yandex.com/images-apphost/image-download" +
             "?cbird=111&images_avatars_size=preview&images_avatars_namespace=images-cbir"
     ) {
@@ -468,7 +469,7 @@ private suspend fun searchCompatYandexFile(
         header(HttpHeaders.Referrer, "https://yandex.com/images/")
         contentType(image.mime)
         setBody(image.bytes)
-    }
+    } }
     require(response.status.isSuccess()) { "Yandex画像検索に失敗しました (${response.status.value})" }
     val body = readBoundedHttpResponseText(
         response,
@@ -527,14 +528,14 @@ internal suspend fun searchCompatAscii2d(
             require(isValidCompatAscii2dEndpoint(endpointUrl)) { "ascii2dの検索先が不正です" }
             require(isRemoteCompatImageUrl(imageUrl)) { "検索する画像URLが不正です" }
 
-            val response = httpClient.submitForm(
+            val response = readResponseBody { httpClient.submitForm(
                 url = endpointUrl,
                 formParameters = Parameters.build {
                     // ascii2d's URI form accepts the already-public Futaba media URL;
                     // no second download or multipart copy is needed on the client.
                     append("uri", imageUrl)
                 }
-            )
+            ) }
             val location = response.headers[HttpHeaders.Location]
             if (!response.status.isSuccess() && location == null) {
                 error("HTTP ${response.status.value}")
@@ -619,7 +620,7 @@ internal suspend fun searchCompatGoogleLensFile(
 
             val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
             val uploadUrl = "$GOOGLE_LENS_UPLOAD_ENDPOINT?ep=cntpubb&hl=ja&re=df&s=4&st=$nowEpochMillis"
-            val response = httpClient.submitFormWithBinaryData(
+            val response = readResponseBody { httpClient.submitFormWithBinaryData(
                 url = uploadUrl,
                 formData = formData {
                     append(
@@ -634,7 +635,7 @@ internal suspend fun searchCompatGoogleLensFile(
                         }
                     )
                 }
-            )
+            ) }
             val location = response.headers[HttpHeaders.Location]
             if (!response.status.isSuccess() && location == null) {
                 error("Lens HTTP ${response.status.value}")
@@ -685,7 +686,7 @@ private suspend fun searchCompatGoogleFileUpload(
             ).bytes
             require(imageBytes.isNotEmpty()) { "画像が空です" }
             val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
-            val response = httpClient.submitFormWithBinaryData(
+            val response = readResponseBody { httpClient.submitFormWithBinaryData(
                 url = endpoint,
                 formData = formData {
                     append(
@@ -701,7 +702,7 @@ private suspend fun searchCompatGoogleFileUpload(
                     )
                     append(extraFieldName, "")
                 }
-            )
+            ) }
             normalizeCompatGoogleResultUrl(response.headers[HttpHeaders.Location])
                 ?: normalizeCompatGoogleResultUrl(response.call.request.url.toString())
                 ?: error("Google画像検索の結果URLを取得できませんでした")

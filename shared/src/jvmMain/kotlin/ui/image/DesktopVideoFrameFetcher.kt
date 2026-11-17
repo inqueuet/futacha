@@ -13,19 +13,24 @@ import com.valoser.futacha.shared.media.video.*
 import org.bytedeco.javacv.Java2DFrameConverter
 import kotlinx.coroutines.*
 import okio.Buffer
+import coil3.size.pxOrElse
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import javax.imageio.ImageIO
 import java.io.ByteArrayOutputStream
 
 /** Local video thumbnails only; remote originals continue through the shared media transport. */
 internal class DesktopVideoFrameFetcher(private val path: String, private val options: Options) : Fetcher {
-    override suspend fun fetch(): FetchResult = withContext(Dispatchers.IO) {
-        val png = desktopGrabber(path).use { grabber -> Java2DFrameConverter().use { converter ->
+    override suspend fun fetch(): FetchResult = desktopVideoFramePermits.withPermit { withContext(Dispatchers.IO) {
+        val edge = maxOf(options.size.width.pxOrElse { 512 }, options.size.height.pxOrElse { 512 }).coerceIn(1, 2048)
+        val png = desktopGrabber(path, thumbnailEdge = edge).use { grabber -> Java2DFrameConverter().use { converter ->
             ensureActive()
             val frame = grabber.grabImage() ?: error("動画のサムネイルを読み込めません")
             val image = desktopRaster(frame, converter, desktopRotation(grabber)).bufferedImage()
             ByteArrayOutputStream().also { ImageIO.write(image, "png", it) }.toByteArray()
         } }
         SourceFetchResult(ImageSource(Buffer().write(png), options.fileSystem), "image/png", DataSource.DISK)
+    }
     }
     class Factory : Fetcher.Factory<Uri> {
         override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
@@ -37,3 +42,5 @@ internal class DesktopVideoFrameFetcher(private val path: String, private val op
         }
     }
 }
+
+private val desktopVideoFramePermits = Semaphore(2)

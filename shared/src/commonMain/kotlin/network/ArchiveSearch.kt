@@ -29,7 +29,11 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
 
-data class ArchiveSearchScope(val server: String, val board: String)
+/**
+ * The board a past-log search runs on. [aimogeSlug] is set only by [extractPastSearchScope] for an あいもげ board:
+ * the search then asks あいもげ's own archive and never the Futaba services ([server] is "aimoge").
+ */
+data class ArchiveSearchScope(val server: String, val board: String, val aimogeSlug: String? = null)
 
 data class ArchiveSearchItem(
     val threadId: String,
@@ -123,6 +127,23 @@ private data class InqueuetArchiveSearchResult(
     val thumbnailUrlSnake: String? = null
 )
 
+/**
+ * The scope of the past-log search screens: [extractArchiveSearchScope], or for an あいもげ board a scope that sends
+ * the search to あいもげ's archive (`/archive/{slug}?q=`). The thread fallbacks keep using [extractArchiveSearchScope],
+ * which stays null for あいもげ.
+ */
+fun extractPastSearchScope(boardUrl: String?): ArchiveSearchScope? {
+    if (boardUrl.isNullOrBlank()) return null
+    com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl)?.let { board ->
+        if (!com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled) return null
+        val slug = board.trimEnd('/').substringAfterLast('/')
+        return ArchiveSearchScope(server = "aimoge", board = slug, aimogeSlug = slug)
+    }
+    return extractArchiveSearchScope(boardUrl)
+}
+
+fun extractPastSearchScope(board: BoardSummary?): ArchiveSearchScope? = extractPastSearchScope(board?.url)
+
 fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
     return extractArchiveSearchScope(board?.url)
 }
@@ -210,6 +231,10 @@ fun buildDirectArchiveSearchItems(
  * other sites have nothing either. A thread-number search and a search against a custom [archiveBaseUrl]
  * stay with inqueuet alone.
  */
+/** Tests replace this to count the あいもげ archive searches without a network. */
+internal var aimogeArchiveSearcher: suspend (slug: String, query: String, limit: Int) -> List<ArchiveSearchItem> =
+    { slug, query, limit -> com.valoser.futacha.shared.network.aimoge.searchAimogeArchiveThreadsWithOwnClient(slug, query, limit) }
+
 suspend fun searchInqueuetArchiveThreads(
     httpClient: HttpClient,
     archiveSearchJson: Json,
@@ -224,6 +249,11 @@ suspend fun searchInqueuetArchiveThreads(
     require(normalized.isNotBlank()) { "q required" }
     require(normalized.length <= ARCHIVE_SEARCH_QUERY_MAX_CHARS) {
         "q exceeds $ARCHIVE_SEARCH_QUERY_MAX_CHARS characters"
+    }
+    scope?.aimogeSlug?.let { slug ->
+        // あいもげ: its own archive only; the Futaba services never see an あいもげ board.
+        require(normalized.length <= com.valoser.futacha.shared.network.aimoge.AIMOGE_SEARCH_QUERY_MAX_CHARS) { "q exceeds ${com.valoser.futacha.shared.network.aimoge.AIMOGE_SEARCH_QUERY_MAX_CHARS} characters" }
+        return aimogeArchiveSearcher(slug, normalized, limit)
     }
     if (archiveBaseUrl != null || buildDirectArchiveSearchItems(normalized, scope, archiveBaseUrl).isNotEmpty()) {
         return searchInqueuetArchiveThreadsOnly(httpClient, archiveSearchJson, normalized, scope, limit, archiveBaseUrl)

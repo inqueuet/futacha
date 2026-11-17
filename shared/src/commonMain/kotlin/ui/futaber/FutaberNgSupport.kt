@@ -56,9 +56,10 @@ internal class FutaberNgPrepared(
 
     /** What looking at one post costs, in word comparisons (a rough weight, to tell a small list from a big one). */
     internal val costPerPost: Long
-        get() = headers.size.toLong() + words.size +
-            if (ruleIndex == null) 0L else FUTABER_NG_RULE_POST_COST + ruleIndex.bodyWords.size +
-                ruleIndex.headerWords.size + ruleIndex.bodyAndHeaderWords.size
+        get() = (if (shared != null) FUTABER_NG_SYNC_BUDGET + 1 else 0L) +
+            headers.size.toLong() + words.size +
+            (if (ruleIndex == null) 0L else FUTABER_NG_RULE_POST_COST + ruleIndex.bodyWords.size +
+                ruleIndex.headerWords.size + ruleIndex.bodyAndHeaderWords.size)
 }
 
 /** Converting one post for the thread rules costs about this many word comparisons. */

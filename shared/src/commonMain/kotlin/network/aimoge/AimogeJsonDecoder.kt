@@ -92,7 +92,11 @@ internal fun AimogeThreadDto.isR18(): Boolean = tags.any { it.name.equals("R18",
 internal const val AIMOGE_R18_MARK = "[R18] "
 
 @Serializable
-internal data class AimogeCatalogDto(val sort: String? = null, val threads: List<AimogeThreadDto> = emptyList())
+internal data class AimogeCatalogDto(val sort: String? = null, val threads: List<AimogeThreadDto> = emptyList(),
+    val pagination: AimogeCatalogPaginationDto? = null, val seed: Long? = null)
+
+@Serializable
+internal data class AimogeCatalogPaginationDto(val hasNextPage: Boolean = false)
 
 @Serializable
 internal data class AimogeBoardPresentationDto(

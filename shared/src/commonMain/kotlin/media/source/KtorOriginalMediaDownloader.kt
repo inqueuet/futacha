@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.media.source
 
+import com.valoser.futacha.shared.util.readResponseBody
 import coil3.network.HttpException
 import coil3.network.NetworkHeaders
 import coil3.network.NetworkResponse
@@ -85,7 +86,7 @@ class KtorOriginalMediaDownloader(
             val channel = response.bodyAsChannel()
             while (true) {
                 currentCoroutineContext().ensureActive()
-                val count = channel.readAvailable(buffer)
+                val count = readResponseBody { channel.readAvailable(buffer) }
                 if (count < 0) break
                 if (count == 0) continue
                 if (count > maxBytes - received) throw OriginalMediaRejectedResponse("Original media exceeds the size limit")

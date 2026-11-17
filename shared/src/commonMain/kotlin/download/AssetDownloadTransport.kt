@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.download
 
+import com.valoser.futacha.shared.util.readResponseBody
 import io.ktor.client.*
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.prepareGet
@@ -60,7 +61,7 @@ internal class KtorAssetDownloader(private val client: HttpClient = createAssetD
                     var count = offset
                     while (true) {
                         currentCoroutineContext().ensureActive()
-                        val n = channel.readAvailable(buffer)
+                        val n = readResponseBody { channel.readAvailable(buffer) }
                         if (n < 0) break
                         if (n == 0) continue
                         if (n > distribution.bytes - count) throw IOException("モデルのサイズが一致しません")

@@ -309,7 +309,7 @@ internal fun FtutterWatcherScreen(
                     modifier = Modifier.padding(horizontal = 8.dp).testTag("ftutter-watcher-clear")
                 ) { Text("すべて削除", color = colors.text, fontWeight = FontWeight.Bold) }
             }
-            items(list, key = { it.history.canonicalUrl }) { result ->
+            items(list.distinctBy { it.history.canonicalUrl }, key = { it.history.canonicalUrl }) { result ->
                 val board = ftutterBoardForWatchResult(result, boards)
                 Row(
                     Modifier.fillMaxWidth()
@@ -392,7 +392,7 @@ internal fun FtutterArchiveSearchSheet(
         state = FtutterArchiveState.Loading
         state = try {
             val found = futaberDistinctArchiveItems(
-                searchInqueuetArchiveThreads(httpClient, ftutterArchiveSearchJson, query.trim(), extractArchiveSearchScope(board), includeAllSources = allSources)
+                searchInqueuetArchiveThreads(httpClient, ftutterArchiveSearchJson, query.trim(), com.valoser.futacha.shared.network.extractPastSearchScope(board), includeAllSources = allSources)
             )
             if (found.isEmpty()) FtutterArchiveState.Empty else FtutterArchiveState.Results(found)
         } catch (cancelled: CancellationException) {

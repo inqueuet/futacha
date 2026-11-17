@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.statement.HttpResponse
@@ -139,7 +140,7 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
                     val read = withTimeoutOrNull(
                         httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
                     ) {
-                        channel.readAvailable(buffer, 0, buffer.size)
+                        readResponseBody { channel.readAvailable(buffer, 0, buffer.size) }
                     } ?: throw httpBoardApiResponseReadStalled("body")
                     if (read == -1) {
                         fullyConsumed = true
@@ -248,7 +249,7 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                     val read = withTimeoutOrNull(
                         httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
                     ) {
-                        channel.readAvailable(buffer, 0, buffer.size)
+                        readResponseBody { channel.readAvailable(buffer, 0, buffer.size) }
                     } ?: throw httpBoardApiResponseReadStalled("head")
                     if (read == -1) {
                         fullyConsumed = true

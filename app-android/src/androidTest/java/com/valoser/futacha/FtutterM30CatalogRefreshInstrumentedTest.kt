@@ -32,6 +32,8 @@ class FtutterM30CatalogRefreshInstrumentedTest {
     private lateinit var loader: ImageLoader
     @Volatile private var holdSecondFetch = false
     private val repository = object : BoardRepository by FakeBoardRepository() {
+        override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: com.valoser.futacha.shared.model.CatalogFetchSettings): CatalogPageContent =
+            getCatalogPage(board, mode)
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
             calls += board to mode
             if (holdSecondFetch && calls.size == 2) kotlinx.coroutines.awaitCancellation()

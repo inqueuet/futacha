@@ -1040,6 +1040,7 @@ internal fun FtutterApp(
             columnsOverride = columnsOverride,
             openTabUrls = tabUrlSet,
             commonCatalogNgWords = if (commonNgOn) sharedCatalogNgWords else emptyList(),
+            serverSearchClient = if (board.isMockBoard()) null else httpClient,
             archiveClient = if (FtutterExtension.ARCHIVE_SEARCH in extensions && !board.isMockBoard()) httpClient else null,
             ngRules = ngRules,
             onSaveNgRules = saveNgRules,

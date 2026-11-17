@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.compat.stableCompatHash
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import com.valoser.futacha.shared.util.ImageData
@@ -42,7 +43,7 @@ internal suspend fun uploadCompatUps(
     require(attachment.bytes.size <= COMPAT_UPS_MAX_BYTES) { "ファイルサイズ超過です\n3000KBまで" }
     require(deleteKey.isNotBlank()) { "削除キーがありません" }
     val token = stableCompatHash("${attachment.fileName}:$nowEpochMillis")
-    val response = client.submitFormWithBinaryData(
+    val response = readResponseBody { client.submitFormWithBinaryData(
         url = COMPAT_UPS_ENDPOINT,
         formData = formData {
             append("mode", "reg")
@@ -70,7 +71,7 @@ internal suspend fun uploadCompatUps(
         headers[HttpHeaders.CacheControl] = "no-cache"
         headers[HttpHeaders.Pragma] = "no-cache"
         headers[HttpHeaders.Referrer] = "https://dec.2chan.net/up2/"
-    }
+    } }
     val responseBody = readBoundedHttpResponseText(response, COMPAT_UPS_RESPONSE_MAX_BYTES)
     if (!response.status.isSuccess()) error("Http ${response.status.value} Error")
     val errorMessage = compatUpsErrorRegex
@@ -86,7 +87,7 @@ internal suspend fun uploadCompatUps(
     // generated fuXXXXX.ext name in up.htm. Keep that observable behavior instead
     // of inventing a URL from the local filename.
     delay(publishDelayMillis)
-    val indexResponse = client.get(COMPAT_UPS_INDEX)
+    val indexResponse = readResponseBody { client.get(COMPAT_UPS_INDEX) }
     val indexBody = readBoundedHttpResponseText(indexResponse, COMPAT_UPS_RESPONSE_MAX_BYTES)
     if (!indexResponse.status.isSuccess()) {
         error("トップページが取得できませんでした\nHTTP status ${indexResponse.status.value} error")

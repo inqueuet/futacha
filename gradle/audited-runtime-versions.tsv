@@ -85,10 +85,10 @@ com.google.firebase:firebase-measurement-connector	24.0.0
 com.google.guava:failureaccess	1.0.3
 com.google.guava:guava	33.8.0-android
 com.google.j2objc:j2objc-annotations	3.1
-com.google.protobuf:protobuf-javalite	4.37.0-RC1
+com.google.protobuf:protobuf-javalite	4.37.0-RC3
 com.google.truth:truth	1.4.5
 org.checkerframework:checker-compat-qual	2.5.6
-org.codehaus.mojo:animal-sniffer-annotations	1.29
+org.codehaus.mojo:animal-sniffer-annotations	1.29.1
 org.hamcrest:hamcrest-core	3.0
 org.hamcrest:hamcrest-library	3.0
 org.jetbrains.androidx.lifecycle:lifecycle-common	2.11.0
@@ -106,9 +106,9 @@ org.jetbrains.androidx.savedstate:savedstate-compose-uikitarm64	1.4.0
 org.jetbrains.androidx.savedstate:savedstate-compose-uikitsimarm64	1.4.0
 org.jetbrains.compose.annotation-internal:annotation	1.12.0-alpha02
 org.jetbrains.compose.collection-internal:collection	1.12.0-alpha02
-org.jetbrains.kotlin:kotlin-bom	2.5.0-Beta2
-org.jetbrains.kotlin:kotlin-stdlib-jdk7	2.5.0-Beta2
-org.jetbrains.kotlin:kotlin-stdlib-jdk8	2.5.0-Beta2
+org.jetbrains.kotlin:kotlin-bom	2.5.0-RC
+org.jetbrains.kotlin:kotlin-stdlib-jdk7	2.5.0-RC
+org.jetbrains.kotlin:kotlin-stdlib-jdk8	2.5.0-RC
 org.jetbrains.kotlinx:atomicfu	0.33.0
 org.jetbrains.kotlinx:atomicfu-jvm	0.33.0
 org.jetbrains.runtime:jbr-api	1.12.0

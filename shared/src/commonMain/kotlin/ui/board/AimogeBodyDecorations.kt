@@ -33,7 +33,9 @@ fun aimogeLineDecorations(
     toLines: (String) -> List<String> = ::messageHtmlToLines
 ): List<List<AimogeDecoration>>? {
     if (!html.contains(AIMOGE_DICE_CLASS) && !html.contains(AIMOGE_SPOILER_CLASS) && !html.contains("dice", ignoreCase = true)) return null
-    val stack = ArrayDeque<Char?>()
+    // Each open tag with its name: a closing tag closes the latest open tag of its own name, so a stray </font> (or
+    // </b>) does not close another kind of marker early (audit 2026-11-17 L4).
+    val stack = ArrayList<Pair<String, Char?>>()
     val marked = decorationTagRegex.replace(html) { match ->
         val closing = match.groupValues[1] == "/"
         val name = match.groupValues[2].lowercase()
@@ -45,10 +47,11 @@ fun aimogeLineDecorations(
                 name == "font" && futabaDiceBeforeFont.containsMatchIn(html.substring(maxOf(0, match.range.first - 24), match.range.first)) -> DICE_OPEN
                 else -> null
             }
-            stack.addLast(marker)
+            stack.add(name to marker)
             marker?.toString() ?: match.value
         } else {
-            when (stack.removeLastOrNull()) {
+            val index = stack.indexOfLast { it.first == name }
+            when (if (index < 0) null else stack.removeAt(index).second) {
                 DICE_OPEN -> DICE_CLOSE.toString()
                 SPOILER_OPEN -> SPOILER_CLOSE.toString()
                 else -> match.value

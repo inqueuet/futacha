@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.ui.board.statusCodeOrNull
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -1386,7 +1387,7 @@ internal suspend fun fetchCompatRemoteMediaInfo(
     httpClient: HttpClient,
     url: String
 ): Result<CompatRemoteMediaInfo> = runSuspendCatchingPreservingCancellation {
-    val response = httpClient.request(url) { method = HttpMethod.Head }
+    val response = readResponseBody { httpClient.request(url) { method = HttpMethod.Head } }
     check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
     CompatRemoteMediaInfo(
         contentType = response.headers[HttpHeaders.ContentType]?.substringBefore(';')?.trim(),

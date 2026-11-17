@@ -42,8 +42,9 @@ internal fun settingsFontScaleOption(preferences: Map<String, String>): Settings
 @Composable
 internal fun SettingsFontScale(preferences: Map<String, String>, content: @Composable () -> Unit) {
     val scale = settingsFontScaleOption(preferences).scale
-    if (scale == 1f) { content(); return }
     val density = LocalDensity.current
+    // Always the same provider, also at 1x: switching between two composition groups would recreate the settings
+    // screen's state (its scroll position, the open page) when the size is changed (audit 2026-11-17 L1).
     CompositionLocalProvider(LocalDensity provides Density(density.density, density.fontScale * scale), content = content)
 }
 

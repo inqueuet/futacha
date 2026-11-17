@@ -305,7 +305,7 @@ internal fun FtutterNgTypeScreen(
                         Text(rule.text, color = colors.text, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(rule.ita?.name?.ifBlank { null } ?: FTUTTER_NG_ALL_BOARDS, color = colors.headerText, fontSize = 13.sp)
                         // こちらだけ：使われていないルール（正規表現が作れない・時間がかかりすぎて止めた）。
-                        remember(rule) { ftutterNgRuleProblem(rule) }?.let { problem ->
+                        rememberFtutterNgRuleProblem(rule)?.let { problem ->
                             Text(problem, color = colors.deleted, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-ng-row-problem"))
                         }
                     }
@@ -398,7 +398,7 @@ internal fun FtutterNgListScreen(
                             )
                             Text(notes.joinToString("・"), color = colors.headerText, fontSize = 12.sp)
                             // 使われていないルール（正規表現が作れない・照合に時間がかかりすぎて止めた）。
-                            remember(rule) { ftutterNgRuleProblem(rule) }?.let { problem ->
+                            rememberFtutterNgRuleProblem(rule)?.let { problem ->
                                 Text(problem, color = colors.deleted, fontSize = 12.sp, modifier = Modifier.testTag("ftutter-ng-row-problem"))
                             }
                         }
@@ -424,4 +424,14 @@ internal fun FtutterNgListScreen(
             }
         )
     }
+}
+
+@Composable
+private fun rememberFtutterNgRuleProblem(rule: FtutterNgRule): String? {
+    val result by androidx.compose.runtime.produceState<Pair<FtutterNgRule, String?>?>(null, rule) {
+        value = rule to kotlinx.coroutines.withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+            ftutterNgRuleProblem(rule)
+        }
+    }
+    return result?.takeIf { it.first == rule }?.second
 }

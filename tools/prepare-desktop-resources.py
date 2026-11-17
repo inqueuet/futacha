@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'app-desktop/resources/macos'
 CACHE = ROOT / 'build/desktop-dependencies'
 VLC_SHA = 'c0e41e496f47edcda1fdba5e6a7f14671c87284acdbc73e669d532fc32c06824'
-OPENCV_SHA = '40738fb16ceddb5fb3fea747585f7ce6abb0605b'
+OPENCV_SHA = 'e4f78fbcf1a773fbed69e14500e8b734963eb585'
 
 def run(*args):
     subprocess.run([str(a) for a in args], check=True)
@@ -115,9 +115,9 @@ def main():
             run('hdiutil', 'detach', mount)
     # Gradle/jpackage changes file timestamps; the upstream cache would be stale.
     prune_vlc(OUT / 'vlc', 'macos')
-    source = ROOT / 'build/native-tracking/opencv-5.0.0'
+    source = ROOT / 'build/native-tracking/opencv-5.1.0'
     if not (source / '.git').exists():
-        run('git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', '5.0.0', 'https://github.com/opencv/opencv.git', source)
+        run('git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', '5.1.0', 'https://github.com/opencv/opencv.git', source)
         run('git', '-C', source, 'sparse-checkout', 'set', '--cone', 'cmake', '3rdparty', 'include', 'platforms', 'doc', 'docs_sphinx', 'modules/core', 'modules/imgproc', 'modules/features', 'modules/geometry', 'modules/video', 'modules/flann')
         run('git', '-C', source, 'checkout', '--detach', OPENCV_SHA)
     if subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() != OPENCV_SHA:

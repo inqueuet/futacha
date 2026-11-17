@@ -164,7 +164,7 @@ private suspend fun <T> withRemoteMediaSaveSource(
             block(MediaSaveSource(
                 contentType = response.headers[HttpHeaders.ContentType]?.let { runCatching { ContentType.parse(it) }.getOrNull() },
                 declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
-                read = { channel.readAvailable(it, 0, it.size) }
+                read = { readResponseBody { channel.readAvailable(it, 0, it.size) } }
             ))
         }
     } catch (timeout: io.ktor.client.plugins.HttpRequestTimeoutException) {

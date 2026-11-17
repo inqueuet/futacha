@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.network.aimoge
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.compat.AimogeAvailability
 import com.valoser.futacha.shared.compat.aimogeUnverifiedDelEnabled
 import com.valoser.futacha.shared.compat.aimogeUnverifiedPostingEnabled
@@ -165,11 +166,11 @@ data class AimogeDeleteResult(val postId: String, val threadDeleted: Boolean)
 
 sealed interface AimogeWriteOutcome {
     /** Sent and taken. [message] is what to show (also for an earlier result or a held post), or null. */
-    data class Posted(val result: AimogeWriteResult, val sameAsBefore: Boolean) : AimogeWriteOutcome {
+    data class Posted(val result: AimogeWriteResult, val sameAsBefore: Boolean, val recordWarning: String? = null) : AimogeWriteOutcome {
         val message: String? get() = when {
             sameAsBefore -> AIMOGE_SAME_AS_BEFORE_MESSAGE
             result.shadowed -> AIMOGE_SHADOWED_MESSAGE
-            else -> null
+            else -> recordWarning
         }
     }
     /** Nothing was sent. */
@@ -335,7 +336,7 @@ class AimogeWriteApi(private val client: HttpClient) {
 
     private suspend fun send(request: suspend () -> HttpResponse): AimogeWriteAnswer {
         val response = try {
-            request()
+            readResponseBody { request() }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -343,7 +344,7 @@ class AimogeWriteApi(private val client: HttpClient) {
             throw AimogeNoAnswerException(timedOut = isTimeout(e))
         }
         val text = try {
-            response.bodyAsText()
+            readAimogeControlBody(response)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -412,13 +413,23 @@ class AimogeRequestLedger(
 
     private fun load(): AimogeLedgerState {
         val store = storage ?: return memory ?: AimogeLedgerState()
-        val text = runCatching { store.read() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return AimogeLedgerState()
-        return runCatching { ledgerJson.decodeFromString(AimogeLedgerState.serializer(), text) }.getOrDefault(AimogeLedgerState())
+        return try {
+            val text = store.read() ?: return AimogeLedgerState()
+            ledgerJson.decodeFromString(AimogeLedgerState.serializer(), text)
+        } catch (error: Exception) {
+            throw com.valoser.futacha.shared.network.NetworkException(AIMOGE_LEDGER_UNAVAILABLE_MESSAGE, cause = error)
+        }
     }
 
     private fun save(state: AimogeLedgerState) {
         val store = storage ?: run { memory = state; return }
-        store.write(ledgerJson.encodeToString(AimogeLedgerState.serializer(), state))
+        try {
+            val text = ledgerJson.encodeToString(AimogeLedgerState.serializer(), state)
+            check(text.encodeToByteArray().size <= AIMOGE_LEDGER_MAX_BYTES)
+            store.write(text)
+        } catch (error: Exception) {
+            throw com.valoser.futacha.shared.network.NetworkException(AIMOGE_LEDGER_UNAVAILABLE_MESSAGE, cause = error)
+        }
     }
 
     private fun pruned(state: AimogeLedgerState): AimogeLedgerState {
@@ -454,7 +465,13 @@ class AimogeRequestLedger(
             val oldestKnown = kept.filter { !it.unconfirmed }.minByOrNull { it.savedAtMillis } ?: return@withLock false
             kept = kept - oldestKnown
         }
-        save(state.copy(entries = kept + entry))
+        var next = state.copy(entries = kept + entry)
+        while (ledgerJson.encodeToString(AimogeLedgerState.serializer(), next).encodeToByteArray().size > AIMOGE_LEDGER_MAX_BYTES) {
+            val oldestKnown = kept.filter { !it.unconfirmed }.minByOrNull { it.savedAtMillis } ?: return@withLock false
+            kept = kept - oldestKnown
+            next = state.copy(entries = kept + entry)
+        }
+        save(next)
         true
     }
 
@@ -474,6 +491,9 @@ class AimogeRequestLedger(
     internal suspend fun size(): Int = mutex.withLock { pruned(load()).entries.size }
 }
 
+const val AIMOGE_LEDGER_MAX_BYTES = 262_144
+const val AIMOGE_LEDGER_UNAVAILABLE_MESSAGE = "送信記録を読み書きできません。端末のロックを解いてからやり直してください"
+const val AIMOGE_LEDGER_CLEANUP_MESSAGE = "投稿しましたが、端末の送信記録を更新できませんでした"
 const val AIMOGE_LEDGER_MAX_ENTRIES = 200
 const val AIMOGE_LEDGER_LIFETIME_MILLIS = 24 * 60 * 60 * 1000L
 
@@ -868,6 +888,12 @@ class AimogeWriteRepository(
                 put("attachmentSources", JsonArray(sources))
             }
         }
+        // Persist the recoverable payload and unknown-result flag before the POST. If the device locks during
+        // transport, a later failure to update Keychain must not erase the only way to retry with the same id.
+        val recoverable = JsonObject((recordSent ?: fields) - "deleteKey")
+        if (!ledger.put(entry.copy(unconfirmed = true, sent = recoverable.toString(), savedAtMillis = nowMillis()))) {
+            return AimogeWriteOutcome.Refused(AIMOGE_LEDGER_FULL_MESSAGE)
+        }
         val answer = try {
             send(identity.credential, body)
         } catch (e: AimogeNoAnswerException) {
@@ -887,10 +913,13 @@ class AimogeWriteRepository(
                 markUnconfirmed(entry, recordSent ?: fields)
                 return AimogeWriteOutcome.Unconfirmed(AIMOGE_UNCONFIRMED_POST_LEAD + UNREADABLE_KIND)
             }
-            ledger.remove(entry.key)
+            // A confirmed server success stays a success even if the locked device cannot update its record.
+            val recordWarning = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+                ledger.remove(entry.key)
+            }.exceptionOrNull()?.let { AIMOGE_LEDGER_CLEANUP_MESSAGE }
             val same = if (knownIsThread) result.threadId.lowercase() in known.map { it.lowercase() }
             else result.postId.lowercase() in known.map { it.lowercase() }
-            return AimogeWriteOutcome.Posted(result, sameAsBefore = same)
+            return AimogeWriteOutcome.Posted(result, sameAsBefore = same, recordWarning = recordWarning)
         }
         val error = parseAimogeErrorBody(answer.body)
         val code = error.code
@@ -919,7 +948,10 @@ class AimogeWriteRepository(
     private suspend fun markUnconfirmed(entry: AimogeLedgerEntry, sent: JsonObject) {
         // The delete key is never kept: a resend reads it again (J7).
         val kept = JsonObject(sent - "deleteKey")
-        ledger.put(entry.copy(unconfirmed = true, sent = kept.toString(), savedAtMillis = nowMillis()))
+        // The pre-send requestId remains durable if this update fails; never report an unknown send as unsent.
+        com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+            ledger.put(entry.copy(unconfirmed = true, sent = kept.toString(), savedAtMillis = nowMillis()))
+        }.onFailure { com.valoser.futacha.shared.util.Logger.w("AimogeWrite", "Could not update the unconfirmed request record") }
     }
 
     private fun failureKept(answer: AimogeWriteAnswer): AimogeWriteOutcome {

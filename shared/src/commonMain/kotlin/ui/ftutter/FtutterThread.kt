@@ -374,6 +374,15 @@ internal fun FtutterThreadScreen(
     var searching by remember(board.id, ref.threadId) { mutableStateOf(false) }
     // 「ここまで読んだ」の件数。開いた時の記録で決め、保存する時（更新・戻る）だけ動かす（スクロール中は動かさない）。
     var readCount by remember(board.id, ref.threadId) { mutableIntStateOf(storedReadCount?.let { stored -> initialPage?.posts?.let { ftutterPostsReadFromSite(it, stored) } ?: stored } ?: 0) }
+    // Opened without the page in memory, the stored count is in あいもげ's numbering (seq): turn it into this list's
+    // position once the first page is here, or the posts added since would read as read (audit 2026-11-17 M3).
+    val readCountFromSite = remember(board.id, ref.threadId) { booleanArrayOf(initialPage != null || storedReadCount == null) }
+    if (!readCountFromSite[0]) {
+        page?.posts?.let { posts ->
+            readCountFromSite[0] = true
+            readCount = ftutterPostsReadFromSite(posts, storedReadCount ?: 0)
+        }
+    }
     var restored by remember(board.id, ref.threadId) { mutableStateOf(false) }
     var highlight by remember(board.id, ref.threadId) { mutableStateOf<Int?>(null) }
     val layers = remember(board.id, ref.threadId) { mutableStateListOf<FtutterPopupLayer>() }
@@ -532,7 +541,8 @@ internal fun FtutterThreadScreen(
                 readCount = next
             }
             onReadCount(ftutterSitePostsRead(all, next))
-            if (next == seen + 1) all.getOrNull(seen)?.id?.let { onReadBoundary(next, it) }
+            // Stored in the same numbering as the read count, which is what the boundary is looked up with.
+            if (next == seen + 1) all.getOrNull(seen)?.id?.let { onReadBoundary(ftutterSitePostsRead(all, next), it) }
         }
     }
     val storeOnLeave by rememberUpdatedState(::storePosition)
@@ -1588,7 +1598,10 @@ private fun FtutterPostBody(
     val aimogeDecorations = remember(post.messageHtml) {
         com.valoser.futacha.shared.ui.board.aimogeTextDecorations(post.messageHtml, lineLength = { _, line -> line.length })
     }
-    @Suppress("NAME_SHADOWING") val shorten = shorten && aimogeDecorations.isEmpty()
+    // Only hidden text keeps the whole body (a shortened body could cut a spoiler open); a dice result alone is
+    // shortened as before (audit 2026-11-17 L5).
+    @Suppress("NAME_SHADOWING") val shorten = shorten &&
+        aimogeDecorations.none { it.kind == com.valoser.futacha.shared.ui.board.AimogeDecorationKind.SPOILER }
     var revealedSpoilers by remember(post.messageHtml) { mutableStateOf(emptySet<Int>()) }
     val colors = LocalFtutterColors.current
     // 行と色付きの本文は、画面の外へ出た行が戻ってきた時に作り直さないよう、本文・色ごとに覚えておく（再監査L29：速く
@@ -1630,7 +1643,8 @@ private fun FtutterPostBody(
         }
     }
     if (cached == null) androidx.compose.runtime.SideEffect { FtutterBodyCache.put(bodyKey, lines to base) }
-    val text = remember(base, lines, query, colors, aimogeDecorations, revealedSpoilers) {
+    val diceColor = com.valoser.futacha.shared.ui.board.DiceColorState.color
+    val text = remember(base, lines, query, colors, aimogeDecorations, revealedSpoilers, diceColor) {
         (if (query.isEmpty()) base else buildAnnotatedString {
             append(base)
             var start = 0
@@ -1645,7 +1659,7 @@ private fun FtutterPostBody(
                 }
                 start += line.length
             }
-        }).withAimogeDecorations(aimogeDecorations, revealedSpoilers, colors.text)
+        }).withAimogeDecorations(aimogeDecorations, revealedSpoilers, colors.text, diceColor = diceColor)
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }

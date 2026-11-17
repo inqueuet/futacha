@@ -555,6 +555,10 @@ private class WebmThumbnailNavigationDelegate(
         finish(Result.failure(IllegalStateException(withError.localizedDescription)))
     }
 
+    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
+        finish(Result.failure(IllegalStateException("WebM thumbnail process terminated")))
+    }
+
     private fun pollVideoReady() {
         if (completionDelivered) return
         webView.evaluateJavaScript(

@@ -196,7 +196,7 @@ class CompatPreferenceSchemaTest {
         // Includes the approved reopen, post-tap, and tree-display settings.
         val expectedCounts = mapOf(
             "background" to 2,
-            "catalog" to 22,
+            "catalog" to 23, // Includes the board-list-entry-only refresh extension.
             "control" to 14, // + the edge swipe back and the viewer double tap zoom
             "design" to 7,
             // Includes the high-quality thumbnail extension and its note.
@@ -210,9 +210,9 @@ class CompatPreferenceSchemaTest {
                 .map { path to it }
         }
 
-        assertEquals(91, entries.size) // + four reference app 18-20 settings, + the thread title size, + the press highlight switch
+        assertEquals(92, entries.size) // Includes the board-list-entry-only refresh extension.
         assertEquals(
-            90,
+            91,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )

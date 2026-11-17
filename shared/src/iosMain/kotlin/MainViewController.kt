@@ -857,6 +857,12 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
     com.valoser.futacha.shared.compat.AimogeAvailability.unverifiedDelEnabled = true
     com.valoser.futacha.shared.network.aimoge.installIosAimogeAuth()
     return ComposeUIViewController {
+        DisposableEffect(Unit) {
+            val observer = platform.Foundation.NSNotificationCenter.defaultCenter.addObserverForName(
+                platform.UIKit.UIApplicationDidBecomeActiveNotification, null, platform.Foundation.NSOperationQueue.mainQueue
+            ) { com.valoser.futacha.shared.network.aimoge.installIosAimogeAuth() }
+            onDispose { platform.Foundation.NSNotificationCenter.defaultCenter.removeObserver(observer) }
+        }
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
         val autoSavedThreadRepository = remember { IosAppGraph.autoSavedThreadRepository }

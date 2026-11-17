@@ -370,7 +370,7 @@ private fun FutaberSavedBoxBody(
                 when (extra) {
                     FutaberManageExtra.HtmlSaves -> {
                         item(key = "saved-header") { MhtSectionTitle("保存したスレッド（HTML）") }
-                        items(savedBox.threads, key = { "${it.boardId}:${it.threadId}" }) { saved ->
+                        items(savedBox.threads, key = { it.storageId ?: "${it.boardId}:${it.threadId}" }) { saved ->
                             val openable = futaberBoardForSaved(saved, boards) != null
                             ManageRow(
                                 title = saved.title.ifBlank { "(無題)" },

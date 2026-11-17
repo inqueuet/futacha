@@ -108,6 +108,8 @@ internal fun buildCompatArchiveSourceThreadUrl(item: ArchiveSearchItem): String?
     val server = item.server.trim().lowercase()
     val board = item.board.trim().trim('/').lowercase()
     val threadId = item.threadId.trim()
+    // あいもげ's archive gives its own thread address (https://nijiurachan.net/b/{slug}/thread/{uuid}).
+    if (server == "aimoge") return item.htmlUrl.takeIf { com.valoser.futacha.shared.compat.aimogeBoardShapeOf(it) != null && "/thread/" in it }
     if (!server.matches(compatArchiveServerRegex)) return null
     if (!board.matches(compatArchiveBoardRegex)) return null
     if (!threadId.matches(compatArchiveThreadIdRegex)) return null

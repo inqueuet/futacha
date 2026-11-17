@@ -113,7 +113,9 @@ internal data class FtutterCatalogLoad(
     val items: List<CatalogItem> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
-    val viewedFirstId: String? = null
+    val viewedFirstId: String? = null,
+    val fetchCount: Int = 500,
+    val pickupInputs: Pair<List<FtutterNgRule>, String?>? = null
 )
 
 /**
@@ -205,11 +207,11 @@ internal class FtutterCatalogHolder {
         cachedTabBoardId = null
         return if (reuse) cached(key) else null
     }
-    fun reusableLoad(boardId: String, key: String, tick: Int): FtutterCatalogLoad? {
+    fun reusableLoad(boardId: String, key: String, tick: Int, fetchCount: Int = 500): FtutterCatalogLoad? {
         val current = load
-        takeTabCache(boardId, key)?.let { return it.copy(tick = tick) }
+        takeTabCache(boardId, key)?.takeIf { it.fetchCount == fetchCount }?.let { return it.copy(tick = tick) }
         // A record still marked 「取得中」 is never reused: its fetch did not finish (L144).
-        return current?.takeIf { it.key == key && it.tick == tick && !it.loading && it.items.isNotEmpty() && it.error == null }
+        return current?.takeIf { it.key == key && it.tick == tick && it.fetchCount == fetchCount && !it.loading && it.items.isNotEmpty() && it.error == null }
     }
     var manualRefreshKey: String? = null
     var refreshTick by mutableIntStateOf(0)
@@ -311,8 +313,14 @@ internal fun FtutterCatalogScreen(
     commonCatalogNgWords: List<String> = emptyList(),
     /** 拡張「過去ログ検索」がONの時の通信（OFFなら null で、ボタンを出さない）。 */
     archiveClient: io.ktor.client.HttpClient? = null,
-    openTabUrls: Set<String> = emptySet()
+    openTabUrls: Set<String> = emptySet(),
+    serverSearchClient: io.ktor.client.HttpClient? = null
 ) {
+    var serverSearchOpen by remember(board.id) { mutableStateOf(false) }
+    val canServerSearch = serverSearchClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.url) != null
+    if (serverSearchOpen && serverSearchClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
+        serverSearchClient, board.url, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
+    )
     val colors = LocalFtutterColors.current
     val design = remember(preferences) { parseFtutterDesign(preferences) }
     val settings = remember(preferences) { parseFtutterCatalogSettings(preferences) }
@@ -353,21 +361,23 @@ internal fun FtutterCatalogScreen(
         }
     }
 
-    LaunchedEffect(key, holder.refreshTick) {
+    LaunchedEffect(key, holder.refreshTick, settings.maxThreadCount, ngRules, preferences[FtutterKeys.PICKUP_ORDER_MODES]) {
         val current = holder.load
         val tick = holder.refreshTick
-        holder.reusableLoad(board.id, key, tick)
+        val pickupInputs = ngRules to preferences[FtutterKeys.PICKUP_ORDER_MODES]
+        holder.reusableLoad(board.id, key, tick, settings.maxThreadCount)
+            ?.takeIf { it.pickupInputs == pickupInputs }
             ?.let { holder.load = it; return@LaunchedEffect }
         val retained = current?.takeIf { it.key == key } ?: FtutterCatalogLoad(key = key)
         // Keep the displayed rows and their viewed-first placement until a new response succeeds.
-        val started = retained.copy(tick = tick, loading = true, error = null)
+        val started = retained.copy(tick = tick, loading = true, error = null, fetchCount = settings.maxThreadCount)
         holder.load = started
         try {
-            val page = repository.getCatalogPage(board.url, order.mode)
+            val page = ftutterFetchCatalogPage(repository, board.url, order.mode, settings.maxThreadCount)
             val items = ftutterCatalogItemsWithPickups(page.items, order, board.url, ngRules, preferences) { mode ->
-                repository.getCatalogPage(board.url, mode).items
+                ftutterFetchCatalogPage(repository, board.url, mode, settings.maxThreadCount).items
             }
-            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = items,
+            holder.load = FtutterCatalogLoad(key = key, tick = tick, items = items, fetchCount = settings.maxThreadCount, pickupInputs = pickupInputs,
                 viewedFirstId = if (holder.manualRefreshKey == key && preferences[com.valoser.futacha.shared.ui.board.viewedThreadFirstKey(board.url)] == "ON")
                     history.filter { it.boardId == board.id }.maxByOrNull { it.lastVisitedEpochMillis }?.threadId
                 else current?.takeIf { it.key == key }?.viewedFirstId)
@@ -600,6 +610,7 @@ internal fun FtutterCatalogScreen(
                     viewedFirstEnabled = viewedFirstEnabled,
                     onToggleViewedFirst = { savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON") },
                     onGesture = { handleGesture(it, fromMenu = true) },
+                    onServerSearch = if (canServerSearch) ({ serverSearchOpen = true }) else null,
                     onTogglePrivacy = { savePreference(FtutterKeys.IS_PRIVACY, (!settings.privacy).toString()) },
                     onToolbarEdit = onEditToolbar,
                     onHiddenAndNg = onOpenHiddenAndNg,
@@ -852,7 +863,8 @@ private fun FtutterCatalogMenu(
     onCopyUrl: () -> Unit,
     onGesture: (FtutterGestureAction) -> Unit,
     legacy: Boolean = false,
-    onOpenBrowser: () -> Unit = {}
+    onOpenBrowser: () -> Unit = {},
+    onServerSearch: (() -> Unit)? = null
 ) {
     val colors = LocalFtutterColors.current
     var gestureMenu by remember { mutableStateOf(false) }
@@ -869,6 +881,7 @@ private fun FtutterCatalogMenu(
     // 原作のカタログのメニュー（H9・M64）：ツールバー編集／プライバシー／非表示・NG／URLから開く／URLをコピー／ブラウザで開く。
     val original: @Composable (withViewedFirst: Boolean) -> Unit = { withViewedFirst ->
         if (withViewedFirst) viewedFirst()
+        onServerSearch?.let { action -> DropdownMenuItem(text = { Text("ふたばのレス検索") }, onClick = { open = false; action() }) }
         DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onToolbarEdit() })
         DropdownMenuItem(
             text = { Text("プライバシー") },
@@ -1263,7 +1276,7 @@ internal fun FtutterHiddenAndNgScreen(
                 }
                 HorizontalDivider(color = colors.outline)
             }
-            items(ngRemoved, key = { "ng-" + it.threadUrl }) { item ->
+            items(ngRemoved.distinctBy { it.threadUrl }, key = { "ng-" + it.threadUrl }) { item ->
                 Column {
                 Text(
                     item.title.orEmpty(), color = colors.text, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -1279,3 +1292,8 @@ internal fun FtutterHiddenAndNgScreen(
 
 /** カタログの取得の失敗を知らせに出すか：一覧が空なら画面の真ん中の文だけにする（同じ文を重ねない）。 */
 internal fun ftutterCatalogFailureNeedsNotice(shownItems: List<CatalogItem>): Boolean = shownItems.isNotEmpty()
+
+/** Fetch the requested count and the complete catalog text before display/NG/pickup truncation. */
+internal suspend fun ftutterFetchCatalogPage(repository: BoardRepository, board: String,
+    mode: com.valoser.futacha.shared.model.CatalogMode, count: Int): com.valoser.futacha.shared.model.CatalogPageContent =
+    repository.getCatalogPageWithSettings(board, mode, com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(count))

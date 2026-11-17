@@ -90,7 +90,7 @@ internal class AimogeBoardsStage(private val stateStore: AppStateStore) : Shared
 
     override suspend fun migrate(legacy: String) {
         if (!AimogeAvailability.sitesEnabled) return
-        val move = planAimogeBoardsMove(stateStore.boards.first(), stateStore.history.first())
+        val move = planAimogeBoardsMove(stateStore.boards.first(), stateStore.readHistory())
         stateStore.moveBoardKeyedSettings(move.settingMoves)
         stateStore.updateHistory { current -> moveAimogeHistory(current, move.idMoves) }
         stateStore.updateBoards { current -> planAimogeBoardsMove(current, emptyList()).boards }

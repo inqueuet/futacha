@@ -573,7 +573,7 @@ private fun WebVideoPlayer(
 ) {
     val localUrl = remember(videoUrl) { NSURL.URLWithString(videoUrl)?.takeIf { it.fileURL } }
     val needsDocument = playback != null || localUrl != null
-    var document by remember { mutableStateOf<IosLocalVideoDocument?>(null) }
+    var document by remember(videoUrl, playback) { mutableStateOf<IosLocalVideoDocument?>(null) }
     LaunchedEffect(videoUrl, playback) {
         if (!needsDocument) return@LaunchedEffect
         var owned: IosLocalVideoDocument? = null
@@ -612,6 +612,7 @@ private fun WebVideoPlayer(
         } finally { document = null; owned?.close() }
     }
     if (needsDocument && document == null) { Box(modifier); return }
+    androidx.compose.runtime.key(videoUrl) {
     val localDocument = document
     var viewPin by remember { mutableStateOf<IosLocalVideoDocument?>(null) }
     val delegate = remember { WebVideoNavigationDelegate() }
@@ -705,6 +706,8 @@ private fun WebVideoPlayer(
             }
         }
     )
+}
+
 }
 
 private class WebVideoSyncStateTracker {

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -143,9 +144,9 @@ internal suspend fun fetchFtutterBoardName(
     val fallback = futaberDefaultBoardName(boardUrl)
     val client = httpClient ?: return fallback
     return try {
-        val response = client.get(ftutterBoardBaseUrl(boardUrl) + "futaba.htm")
+        val response = readResponseBody { client.get(ftutterBoardBaseUrl(boardUrl) + "futaba.htm") }
         if (!response.status.isSuccess()) return null
-        val html = TextEncoding.decodeToString(response.bodyAsBytes(), response.contentType()?.toString())
+        val html = TextEncoding.decodeToString(readResponseBody { response.bodyAsBytes() }, response.contentType()?.toString())
         ftutterBoardNameFromPage(html, boardUrl) ?: fallback
     } catch (cancelled: CancellationException) {
         throw cancelled

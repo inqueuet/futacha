@@ -24,7 +24,7 @@ internal class MosaicEffect(private val document: AtomicReference<MosaicDocument
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class MosaicShaderProgram(private val document: AtomicReference<MosaicDocument>, useHdr: Boolean, private val timeOffsetUs: Long) : BaseGlShaderProgram(useHdr, 1) {
-    private val program = GlProgram(VERTEX, fragment())
+    private val program: GlProgram
     private var width = 1
     private var height = 1
     private val atlasEdge=MosaicMask.EDGE*4
@@ -32,7 +32,11 @@ internal class MosaicShaderProgram(private val document: AtomicReference<MosaicD
     private val previousMasks=arrayOfNulls<MosaicMask>(MosaicDocument.MAX_REGIONS)
     private val maskTexture=IntArray(1)
     init {
-        program.setBufferAttribute("aPosition", GlUtil.getNormalizedCoordinateBounds(), 4)
+        var created: GlProgram? = null
+        try {
+        val next = GlProgram(VERTEX, fragment())
+        created = next
+        next.setBufferAttribute("aPosition", GlUtil.getNormalizedCoordinateBounds(), 4)
         GLES20.glGenTextures(1,maskTexture,0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,maskTexture[0])
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_MIN_FILTER,GLES20.GL_NEAREST)
@@ -41,6 +45,12 @@ internal class MosaicShaderProgram(private val document: AtomicReference<MosaicD
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_WRAP_T,GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D,0,GLES20.GL_ALPHA,atlasEdge,atlasEdge,0,GLES20.GL_ALPHA,GLES20.GL_UNSIGNED_BYTE,atlas)
         GlUtil.checkGlError()
+        program = next
+        } catch (error: GlUtil.GlException) {
+            runCatching { created?.delete() }
+            if (maskTexture[0] != 0) GLES20.glDeleteTextures(1, maskTexture, 0)
+            throw VideoFrameProcessingException(error)
+        }
     }
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {

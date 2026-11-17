@@ -33,13 +33,13 @@ internal class AndroidAimogeSecretStorage(context: Context, fileName: String = "
     override fun read(): String? {
         if (!file.baseFile.exists()) return null
         val bytes = file.readFully()
-        if (bytes.size !in 29..(MAX_BYTES + 28)) return null
-        return runCatching {
+        check(bytes.size in 29..(MAX_BYTES + 28))
+        return run {
             Cipher.getInstance("AES/GCM/NoPadding").run {
                 init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
                 doFinal(bytes.copyOfRange(12, bytes.size)).decodeToString()
             }
-        }.getOrNull()
+        }
     }
 
     @Synchronized

@@ -427,7 +427,7 @@ private fun releaseCompatPreviewAudioLease(lease: IosPlaybackAudioLease) {
 @Composable
 internal actual fun CompatPostImePolicyEffect() = Unit
 
-private fun ByteArray.toNSData(): NSData = usePinned { pinned ->
+private fun ByteArray.toNSData(): NSData = if (isEmpty()) NSData.data() else usePinned { pinned ->
     NSData.create(bytes = pinned.addressOf(0), length = size.toULong())
 }
 

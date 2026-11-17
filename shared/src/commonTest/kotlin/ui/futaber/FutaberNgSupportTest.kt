@@ -25,6 +25,19 @@ class FutaberNgSupportTest {
         CompatNgRule("r-$kind-$value", kind, scope, value, 0L)
 
     @Test
+    fun sharedNgAloneNeverRunsTheWholeThreadSynchronously() {
+        val matcher = com.valoser.futacha.shared.ui.ftutter.FtutterNgMatcher(
+            listOf(com.valoser.futacha.shared.ui.ftutter.FtutterNgRule("hidden", com.valoser.futacha.shared.ui.ftutter.FtutterNgType.WORD.stored)), null
+        )
+        val prepared = futaberNgPrepare(emptyList(), emptyList(), emptyList(), "tab", "board", matcher)
+        val posts = listOf(com.valoser.futacha.shared.model.Post(id = "1", author = null, subject = null, timestamp = "", messageHtml = "hidden", imageUrl = null, thumbnailUrl = null))
+        val quick = futaberNgQuick(null, posts, prepared)
+        kotlin.test.assertFalse(quick.complete)
+        assertTrue(quick.hold)
+        assertEquals(setOf("1"), futaberNgResolve(null, posts, prepared))
+    }
+
+    @Test
     fun nothingIsHiddenWithoutRules() {
         assertTrue(futaberNgHiddenIds(posts, emptyList(), emptyList(), emptyList(), "tab", "board").isEmpty())
         assertTrue(futaberNgHiddenIds(emptyList(), listOf("x"), emptyList(), emptyList(), "tab", "board").isEmpty())

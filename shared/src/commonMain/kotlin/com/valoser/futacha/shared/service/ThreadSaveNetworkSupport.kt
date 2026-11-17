@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.service
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.media.source.OriginalMediaSource
 import com.valoser.futacha.shared.util.MediaSaveSource
 import com.valoser.futacha.shared.util.OriginalMediaSaveFailure
@@ -337,7 +338,7 @@ private suspend fun <T> withThreadSaveMediaSource(
             block(MediaSaveSource(
                 contentType = response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) },
                 declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
-                read = { channel.readAvailable(it, 0, it.size) }
+                read = { readResponseBody { channel.readAvailable(it, 0, it.size) } }
             ))
         }
     } catch (timeout: io.ktor.client.plugins.HttpRequestTimeoutException) {

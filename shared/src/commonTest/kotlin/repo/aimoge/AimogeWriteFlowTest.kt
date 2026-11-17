@@ -108,12 +108,12 @@ class AimogeWriteFlowTest {
     }
 
     private var ids = 0
-    private fun repo(storage: Memory): AimogeBoardRepository {
+    private fun repo(storage: Memory, ledgerStorage: AimogeSecretStorage = Memory()): AimogeBoardRepository {
         val http = client()
         AimogeAuthRegistry.auth = AimogeAuth(storage, AimogeAuthApi(http), persistPending = true)
         val r = AimogeBoardRepository(http)
         r.writerOverride = AimogeWriteRepository(
-            AimogeWriteApi(http), { AimogeAuthRegistry.auth }, AimogeRequestLedger(Memory()),
+            AimogeWriteApi(http), { AimogeAuthRegistry.auth }, AimogeRequestLedger(ledgerStorage),
             appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             newRequestId = { "00000000-0000-4000-8000-00000000000${ids++}" }
         )
@@ -127,6 +127,34 @@ class AimogeWriteFlowTest {
     }
 
     private fun sent(path: String) = requests.indices.filter { requests[it].url.encodedPath.endsWith(path) }
+
+    @Test
+    fun aSuccessfulPostStaysSuccessfulWhenTheDeviceLocksBeforeLedgerCleanup() = runTest {
+        var durable: String? = null
+        val ledgerStore = object : AimogeSecretStorage {
+            override fun read(): String? = durable
+            override fun write(value: String) {
+                check(sent("/posts").isEmpty()) { "Keychain locked after POST" }
+                durable = value
+            }
+        }
+        val r = repo(Memory(secrets(consented = true)), ledgerStore)
+        val number = r.replyToThread(WBOARD, WTHREAD, "", "", "", "本文", "", null, null, true)
+        assertEquals("100493594", number)
+        assertEquals(1, sent("/posts").size)
+        assertTrue(durable!!.contains("requestId"), "the original durable id stays available for idempotent recovery")
+    }
+
+    @Test
+    fun anUnreadableLedgerPreventsAllWritesToTheServer() = runTest {
+        val r = repo(Memory(secrets(consented = true)), object : AimogeSecretStorage {
+            override fun read(): String? = error("Keychain locked")
+            override fun write(value: String) = error("must not overwrite")
+        })
+        assertFailsWith<NetworkException> { r.replyToThread(WBOARD, WTHREAD, "", "", "", "本文", "", null, null, true) }
+        assertTrue(sent("/posts").isEmpty())
+        assertTrue(sent("/altcha").isEmpty())
+    }
 
     @Test
     fun aReplyCarriesTheTokenTheBoardKeyAndNoNameOrScreenKey() = runTest {

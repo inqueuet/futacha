@@ -106,6 +106,7 @@ internal actual suspend fun compressCompatPostImage(
     if (!forceJpeg) compatPostLosslessSanitizedImage(attachment.bytes, format, orientation, maxBytes)?.let { sanitized ->
         return@runSuspendCatchingPreservingCancellation ImageData(sanitized, compatPostSanitizedFileName(attachment.fileName, requireNotNull(format.extension)))
     }
+    requireCompatImagePixels(attachment.bytes, 32_000_000)
     val image = ImageIO.read(ByteArrayInputStream(attachment.bytes)) ?: run {
         // ImageIO cannot decode WebP; send it upright-as-stored rather than failing as before the orientation check.
         compatPostLosslessSanitizedImage(attachment.bytes, format, CompatImageOrientation(0, false), maxBytes)?.let { sanitized ->
@@ -200,6 +201,7 @@ internal actual fun compatPostImageAspectRatio(bytes: ByteArray): Float? =
 
 internal actual suspend fun computeCompatImagePhashFromBytes(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
     runCatching {
+        requireCompatImagePixels(bytes, 16_000_000)
         val image = ImageIO.read(ByteArrayInputStream(bytes)) ?: return@runCatching null
         require(image.width.toLong() * image.height <= 16_000_000)
         val small = BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB)
@@ -282,3 +284,8 @@ internal actual fun rememberCompatVideoAttachmentPreviewLauncher(
 
 @Composable
 internal actual fun CompatPostImePolicyEffect() = Unit
+
+internal fun requireCompatImagePixels(bytes: ByteArray, maximum: Long) {
+    val size = compatPostImageDimensions(bytes) ?: return
+    require(size.first.toLong() * size.second <= maximum) { "画像が大きすぎます" }
+}

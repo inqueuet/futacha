@@ -1554,19 +1554,20 @@ internal fun FutaberPostRow(
         val decorations = remember(post.messageHtml) { com.valoser.futacha.shared.ui.board.aimogeLineDecorations(post.messageHtml) }
         val firstSpoilers = remember(decorations) { decorations?.let { com.valoser.futacha.shared.ui.board.aimogeFirstSpoilerIndexes(it) } }
         var revealedSpoilers by remember(post.messageHtml) { mutableStateOf(emptySet<Int>()) }
+        val diceColor = com.valoser.futacha.shared.ui.board.DiceColorState.color
         Column(Modifier.padding(top = FUTABER_POST_HEADER_GAP_DP.dp)) {
             lines.forEachIndexed { lineIndex, line ->
                 val links = remember(line) { FutaberBodyLineCache.links(line) }
                 val lineDecorations = decorations?.getOrNull(lineIndex).orEmpty()
                 val hasSpoiler = lineDecorations.any { it.kind == com.valoser.futacha.shared.ui.board.AimogeDecorationKind.SPOILER }
-                val annotatedLine = remember(line, links, colors.link, lineDecorations, revealedSpoilers) { androidx.compose.ui.text.buildAnnotatedString {
+                val annotatedLine = remember(line, links, colors.link, lineDecorations, revealedSpoilers, diceColor) { androidx.compose.ui.text.buildAnnotatedString {
                     append(line)
                     links.forEach { link ->
                         addStringAnnotation("body-url", link.url, link.start, link.endExclusive)
                         addStyle(androidx.compose.ui.text.SpanStyle(color = colors.link,
                             textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline), link.start, link.endExclusive)
                     }
-                }.withAimogeDecorations(lineDecorations, revealedSpoilers, colors.body, firstSpoilers?.getOrNull(lineIndex) ?: 0) }
+                }.withAimogeDecorations(lineDecorations, revealedSpoilers, colors.body, firstSpoilers?.getOrNull(lineIndex) ?: 0, diceColor) }
                 var lineLayout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
                 val isQuote = isFutaberQuoteLine(line)
                 val canOpen = isQuote && !post.isDeleted && futaberQuoteTargetIds(post, line).isNotEmpty()
@@ -1604,7 +1605,9 @@ internal fun FutaberPostRow(
                                 annotatedLine.getStringAnnotations("body-url", offset, offset).firstOrNull()?.item?.let { url ->
                                     // あぷ・あぷ小の画像と動画は、外部のブラウザではなくアプリのビューアで開く（App Storeのレビュー 2026-11-16）。
                                     val viewer = onExtraImageTap
-                                    if (viewer != null && futaberOpensApuInViewer(url)) viewer(url) else bodyUrlLauncher(url)
+                                    // Only a picture the viewer has (not one on a quoted line, say): another opened the viewer on the wrong page
+                                    // (audit 2026-11-17 L8); that one stays in the browser as before.
+                                    if (viewer != null && futaberOpensApuInViewer(url) && futaberViewerHasInlineApu(post, url)) viewer(url) else bodyUrlLauncher(url)
                                 }
                             } },
                             onLongPress = { position ->
@@ -1643,12 +1646,18 @@ internal fun FutaberPostRow(
     }
 }
 
-/** 本文のあぷ・あぷ小のうち、レスの添付そのものでない物（引用行の分は除く）。 */
 /** 本文のリンクのうち、ビューアで開くもの：あぷ・あぷ小の画像と動画。 */
 internal fun futaberOpensApuInViewer(url: String): Boolean =
     com.valoser.futacha.shared.ui.compat.isCompatApuSmallMediaUrl(url) &&
         (com.valoser.futacha.shared.ui.compat.isCompatImageMediaUrl(url) || com.valoser.futacha.shared.ui.compat.isCompatVideoMediaUrl(url))
 
+/** [url] is one of the post's body pictures the viewer lists ([futaberInlineApuUrls]). */
+internal fun futaberViewerHasInlineApu(post: Post, url: String): Boolean {
+    val identity = com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(url)
+    return futaberInlineApuUrls(post).any { it == url || com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(it) == identity }
+}
+
+/** 本文のあぷ・あぷ小のうち、レスの添付そのものでない物（引用行の分は除く）。 */
 internal fun futaberInlineApuUrls(post: Post): List<String> {
     val main = setOfNotNull(
         com.valoser.futacha.shared.ui.compat.compatMediaFileIdentity(post.imageUrl),

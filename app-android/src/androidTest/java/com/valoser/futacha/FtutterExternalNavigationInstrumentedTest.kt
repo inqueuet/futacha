@@ -43,6 +43,8 @@ class FtutterExternalNavigationInstrumentedTest {
             return ThreadPageContent(ThreadPage(threadId, null, null, null, listOf(Post(threadId,
                 author = null, subject = null, timestamp = "", messageHtml = "m62-body-$threadId", imageUrl = null, thumbnailUrl = null))))
         }
+        override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: com.valoser.futacha.shared.model.CatalogFetchSettings): CatalogPageContent =
+            getCatalogPage(board, mode)
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent = CatalogPageContent(emptyList())
     }
     @Before fun prepare() {

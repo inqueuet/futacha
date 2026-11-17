@@ -135,7 +135,7 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 256
+        versionCode = 258
         versionName = "14.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -144,7 +144,7 @@ android {
             cmake {
                 arguments += listOf(
                     "-DVOICEVOX_ROOT=${rootProject.file("build/voicevox").invariantSeparatorsPath}",
-                    "-DOPENCV_SOURCE=${rootProject.file("build/android-tracking/opencv").invariantSeparatorsPath}",
+                    "-DOPENCV_SOURCE=${rootProject.file("build/android-tracking/opencv-5.1.0").invariantSeparatorsPath}",
                     "-DANDROID_STL=c++_static", "-DWITH_KLEIDICV=OFF", "-DWITH_CAROTENE=OFF"
                 )
                 targets += "futacha_native"
@@ -200,7 +200,7 @@ android {
 
 val prepareAndroidTracking = tasks.register<Exec>("prepareAndroidTracking") {
     inputs.file(rootProject.file("tools/prepare-android-tracking.py"))
-    outputs.dir(rootProject.layout.buildDirectory.dir("android-tracking/opencv"))
+    outputs.dir(rootProject.layout.buildDirectory.dir("android-tracking/opencv-5.1.0"))
     outputs.dir(rootProject.layout.buildDirectory.dir("android-tracking/licenses"))
     commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3",
         rootProject.file("tools/prepare-android-tracking.py"))

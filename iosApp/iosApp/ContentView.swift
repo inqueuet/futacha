@@ -374,11 +374,17 @@ private struct SavedHtmlWebView: UIViewRepresentable {
         private var worker: Task<String?, Never>?
         private var loadTask: Task<Void, Never>?
         var onLocalProbe: ((String) -> Void)?
+        private var currentURL: URL?
 
         func load(_ url: URL, into view: WKWebView) {
+            if currentURL == url { return }
             cancel()
+            currentURL = url
+            // The worker owns an independent access count until its synchronous read actually returns.
+            let accessed = url.startAccessingSecurityScopedResource()
             let worker = Task.detached(priority: .userInitiated) {
-                try? SavedHtmlDocumentLoader.load(url)
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                return try? SavedHtmlDocumentLoader.load(url)
             }
             self.worker = worker
             loadTask = Task { @MainActor [weak view] in
@@ -439,7 +445,10 @@ private struct SavedHtmlWebView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.onLocalProbe = onLocalProbe
+        context.coordinator.load(url, into: uiView)
+    }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         coordinator.cancel()

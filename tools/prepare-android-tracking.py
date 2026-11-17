@@ -5,8 +5,8 @@ import subprocess
 import shutil
 
 ROOT = Path(__file__).resolve().parent.parent
-REVISION = '40738fb16ceddb5fb3fea747585f7ce6abb0605b'
-SOURCE = ROOT / 'build/android-tracking/opencv'
+REVISION = 'e4f78fbcf1a773fbed69e14500e8b734963eb585'
+SOURCE = ROOT / 'build/android-tracking/opencv-5.1.0'
 
 
 def run(*args):
@@ -17,7 +17,7 @@ def main():
     SOURCE.parent.mkdir(parents=True, exist_ok=True)
     if not (SOURCE / '.git').exists():
         run('git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout',
-            '--branch', '5.0.0', 'https://github.com/opencv/opencv.git', SOURCE)
+            '--branch', '5.1.0', 'https://github.com/opencv/opencv.git', SOURCE)
     actual = subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip()
     if actual != REVISION:
         raise RuntimeError('Unexpected OpenCV tracking revision')

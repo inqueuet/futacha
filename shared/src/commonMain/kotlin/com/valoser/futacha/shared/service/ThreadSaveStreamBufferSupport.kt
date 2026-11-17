@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.service
 
+import com.valoser.futacha.shared.util.readResponseBody
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
@@ -38,7 +39,7 @@ internal suspend fun readThreadSaveChannelBytes(
         while (true) {
             coroutineContext.ensureActive()
             val read = withTimeoutOrNull(config.readIdleTimeoutMillis) {
-                channel.readAvailable(buffer, 0, buffer.size)
+                readResponseBody { channel.readAvailable(buffer, 0, buffer.size) }
             } ?: throw IllegalStateException(config.stalledMessage)
 
             if (read == -1) break

@@ -35,6 +35,8 @@ class FtutterCatalogOrderReturnInstrumentedTest {
     private lateinit var loader: ImageLoader
     @Volatile private var sinkAfterFirst = false
     private val repository = object : BoardRepository by FakeBoardRepository() {
+        override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: com.valoser.futacha.shared.model.CatalogFetchSettings): CatalogPageContent =
+            getCatalogPage(board, mode)
         override suspend fun getCatalogPage(board: String, mode: CatalogMode): CatalogPageContent {
             calls += board to mode
             val order = if (sinkAfterFirst && calls.size > 1) (1..100).filter { it !in 25..40 } + (25..40) else (1..100).toList()

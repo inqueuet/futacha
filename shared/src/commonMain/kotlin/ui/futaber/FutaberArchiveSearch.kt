@@ -99,7 +99,7 @@ internal fun FutaberArchiveSearchSheet(
         state = FutaberArchiveSearchState.Loading
         state = try {
             val found = futaberDistinctArchiveItems(
-                searchInqueuetArchiveThreads(httpClient, archiveSearchJson, query.trim(), extractArchiveSearchScope(board), includeAllSources = allSources)
+                searchInqueuetArchiveThreads(httpClient, archiveSearchJson, query.trim(), com.valoser.futacha.shared.network.extractPastSearchScope(board), includeAllSources = allSources)
             )
             if (found.isEmpty()) FutaberArchiveSearchState.Empty else FutaberArchiveSearchState.Results(found)
         } catch (cancelled: CancellationException) {

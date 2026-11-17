@@ -82,7 +82,7 @@ internal class FtutterTabsStage(
             .takeIf { it.isNotBlank() }.orEmpty()
 
     override suspend fun migrate(legacy: String) {
-        migrateFtutterLegacyTabs(compat, stateStore.boards.first(), stateStore.history.first(), Clock.System.now().toEpochMilliseconds())
+        migrateFtutterLegacyTabs(compat, stateStore.boards.first(), stateStore.readHistory(), Clock.System.now().toEpochMilliseconds())
     }
 }
 
@@ -100,7 +100,7 @@ internal class FutaberTabsStage(
     override suspend fun readLegacy(): String = compat.loadPreference(FutaberPreferenceKeys.TABS).orEmpty()
 
     override suspend fun migrate(legacy: String) {
-        migrateFutaberLegacyTabs(compat, stateStore.boards.first(), stateStore.history.first(), Clock.System.now().toEpochMilliseconds())
+        migrateFutaberLegacyTabs(compat, stateStore.boards.first(), stateStore.readHistory(), Clock.System.now().toEpochMilliseconds())
     }
 }
 

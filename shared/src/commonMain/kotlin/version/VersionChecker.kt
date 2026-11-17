@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.version
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
@@ -241,7 +242,7 @@ suspend fun fetchLatestVersionFromGitHub(
 ): GitHubRelease? {
     return try {
         val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
-        val response = httpClient.get(url)
+        val response = readResponseBody { httpClient.get(url) }
         val body = readBoundedVersionResponseBody(response)
         withContext(AppDispatchers.parsing) {
             json.decodeFromString<GitHubRelease>(body)
@@ -276,7 +277,7 @@ internal suspend fun readBoundedVersionResponseBody(
                 while (true) {
                     coroutineContext.ensureActive()
                     val read = withTimeoutOrNull(GITHUB_RELEASE_READ_IDLE_TIMEOUT_MILLIS) {
-                        channel.readAvailable(buffer, 0, buffer.size)
+                        readResponseBody { channel.readAvailable(buffer, 0, buffer.size) }
                     } ?: throw IllegalStateException("GitHub release response read stalled")
                     if (read == -1) {
                         fullyConsumed = true

@@ -10,17 +10,21 @@ import platform.AuthenticationServices.ASWebAuthenticationSession
 import platform.Foundation.NSURL
 import platform.UIKit.UIWindow
 import platform.darwin.NSObject
+import kotlinx.coroutines.launch
 
 /** The Keychain item for あいもげ (this device only, while unlocked; a separate service from the OpenAI keys). */
 private class IosAimogeSecretStorage(service: String = "com.valoser.futacha.aimoge") : AimogeSecretStorage {
-    private val item = IosAiConnectionStorage(serviceName = service)
+    private val item = IosAiConnectionStorage(serviceName = service, maxBytes = if (service.endsWith(".requests")) AIMOGE_LEDGER_MAX_BYTES else AIMOGE_SECRETS_MAX_BYTES)
     override fun read(): String? = item.read()
     override fun write(value: String) = item.write(value)
 }
 
 /** Installs the app's [AimogeAuth]. iOS keeps the waiting approval in memory only (the session receives the return). */
 fun installIosAimogeAuth() {
-    if (AimogeAuthRegistry.auth != null) return
+    AimogeAuthRegistry.auth?.let { auth ->
+        aimogeStoreScope.launch { runCatching { auth.refresh() } }
+        return
+    }
     AimogeWriteRegistry.ledgerStorage = IosAimogeSecretStorage("com.valoser.futacha.aimoge.requests")
     AimogeAuthRegistry.auth = AimogeAuth(
         storage = IosAimogeSecretStorage(),

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -57,6 +58,7 @@ import com.valoser.futacha.shared.model.CatalogFetchSettings
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -778,42 +780,37 @@ internal fun compatScrollIndicatorTarget(y: Float, height: Float, totalItems: In
 /** How long the bar stays draggable after a scroll stops (it fades in the meantime). */
 internal const val COMPAT_SCROLL_INDICATOR_GRAB_MILLIS = 1500L
 
-/**
- * The right edge strip that moves the list by dragging. It only takes a drag while the bar is shown (a scroll is
- * going on or just stopped), so a scroll that starts at the right edge stays a scroll otherwise; taps pass through.
- */
+/** A narrow scrollbar rail owns only explicit edge touches; ordinary content drags never become absolute jumps. */
 @Composable
 private fun BoxScope.CompatScrollIndicatorDrag(
     isScrolling: () -> Boolean,
     totalItems: () -> Int,
+    stopScroll: suspend () -> Unit,
     scrollTo: suspend (Int) -> Unit
 ) {
-    var shown by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    var dragging by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        androidx.compose.runtime.snapshotFlow { isScrolling() || dragging }.collectLatest { active ->
-            if (active) shown = true
-            else { kotlinx.coroutines.delay(COMPAT_SCROLL_INDICATOR_GRAB_MILLIS); shown = false }
-        }
-    }
-    if (!shown) return
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val targets = androidx.compose.runtime.remember { kotlinx.coroutines.channels.Channel<Int>(kotlinx.coroutines.channels.Channel.CONFLATED) }
+    val latestScrollTo by androidx.compose.runtime.rememberUpdatedState(scrollTo)
+    LaunchedEffect(targets) { targets.receiveAsFlow().collectLatest { latestScrollTo(it) } }
     androidx.compose.foundation.layout.Box(
         androidx.compose.ui.Modifier.align(androidx.compose.ui.Alignment.CenterEnd)
-            .fillMaxHeight().width(28.dp)
+            .fillMaxHeight().width(12.dp)
             .testTag("compat-scroll-indicator-drag")
             .pointerInput(Unit) {
-                val height = size.height.toFloat()
-                detectVerticalDragGestures(
-                    onDragStart = { offset ->
-                        dragging = true
-                        scope.launch { scrollTo(compatScrollIndicatorTarget(offset.y, height, totalItems())) }
-                    },
-                    onDragEnd = { dragging = false },
-                    onDragCancel = { dragging = false }
-                ) { change, _ ->
-                    change.consume()
-                    scope.launch { scrollTo(compatScrollIndicatorTarget(change.position.y, height, totalItems())) }
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = true)
+                    val stoppingFling = isScrolling()
+                    down.consume()
+                    if (stoppingFling) scope.launch { stopScroll() }
+                    else targets.trySend(compatScrollIndicatorTarget(down.position.y, size.height.toFloat(), totalItems()))
+                    // A touch that stopped a fling only stops it; a fresh touch can jump and drag.
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        change.consume()
+                        if (!change.pressed) break
+                        if (!stoppingFling) targets.trySend(compatScrollIndicatorTarget(change.position.y, size.height.toFloat(), totalItems()))
+                    }
                 }
             }
     )
@@ -828,7 +825,7 @@ internal fun BoxScope.CompatScrollIndicator(enabled: Boolean, listState: LazyLis
             .then(com.valoser.futacha.shared.ui.futaber.rememberFutaberScrollIndicator(listState, ink))
             .testTag("compat-scroll-indicator")
     )
-    CompatScrollIndicatorDrag({ listState.isScrollInProgress }, { listState.layoutInfo.totalItemsCount }, listState::scrollToItem)
+    CompatScrollIndicatorDrag({ listState.isScrollInProgress }, { listState.layoutInfo.totalItemsCount }, { listState.stopScroll() }, listState::scrollToItem)
 }
 
 @Composable
@@ -847,5 +844,11 @@ internal fun BoxScope.CompatScrollIndicator(enabled: Boolean, gridState: LazyGri
             .then(com.valoser.futacha.shared.ui.futaber.rememberFutaberScrollIndicator(gridState, columns, ink))
             .testTag("compat-scroll-indicator")
     )
-    CompatScrollIndicatorDrag({ gridState.isScrollInProgress }, { gridState.layoutInfo.totalItemsCount }, gridState::scrollToItem)
+    CompatScrollIndicatorDrag({ gridState.isScrollInProgress }, { gridState.layoutInfo.totalItemsCount }, { gridState.stopScroll() }, gridState::scrollToItem)
 }
+
+internal const val COMPAT_CATALOG_ENTRY_REFRESH_KEY = "catalogRefreshOnlyOnEntry"
+
+internal fun compatCatalogShouldReload(hasCache: Boolean, reloadOnOpen: Boolean, entryOnly: Boolean,
+    explicitOpen: Boolean, forceRefresh: Boolean): Boolean =
+    !hasCache || forceRefresh || if (entryOnly) explicitOpen else reloadOnOpen

@@ -208,15 +208,7 @@ internal fun HistoryDrawerContent(
                 }
                 items(
                     items = displayedHistory,
-                    key = {
-                        buildString {
-                            append(it.boardId)
-                            append('|')
-                            append(it.threadId)
-                            append('|')
-                            append(it.boardUrl)
-                        }
-                    }
+                    key = ::buildHistoryExportSelectionKey
                 ) { entry ->
                     DismissibleHistoryEntry(
                         entry = entry,
@@ -1008,7 +1000,7 @@ private fun buildHistorySelectionKey(index: Int, entry: ThreadHistoryEntry): Str
     return "$index|${buildHistoryExportSelectionKey(entry)}"
 }
 
-private fun buildHistoryExportSelectionKey(entry: ThreadHistoryEntry): String {
+internal fun buildHistoryExportSelectionKey(entry: ThreadHistoryEntry): String {
     return "${entry.boardId}|${entry.threadId}|${entry.boardUrl}"
 }
 
@@ -1199,6 +1191,22 @@ internal class HistoryDrawerView(
     val displayedHistory: List<ThreadHistoryEntry>
 )
 
+/** Old/imported histories may contain repeated rows; LazyColumn keys must be unique.
+ * Keep the most recently visited copy before filtering so stale copies cannot reappear
+ * under a different filter. Do not rewrite saved history or its associated files here.
+ */
+private fun uniqueHistoryDrawerEntries(history: List<ThreadHistoryEntry>): List<ThreadHistoryEntry> {
+    val entries = linkedMapOf<String, ThreadHistoryEntry>()
+    for (entry in history) {
+        val key = buildHistoryExportSelectionKey(entry)
+        val previous = entries[key]
+        if (previous == null || entry.lastVisitedEpochMillis > previous.lastVisitedEpochMillis) {
+            entries[key] = entry
+        }
+    }
+    return entries.values.toList()
+}
+
 internal fun buildHistoryDrawerView(
     history: List<ThreadHistoryEntry>,
     settings: HistoryViewSettings,
@@ -1208,7 +1216,7 @@ internal fun buildHistoryDrawerView(
     settings = settings,
     boardFilterOptions = previous?.takeIf { it.history === history }?.boardFilterOptions
         ?: buildHistoryBoardFilterOptions(history),
-    displayedHistory = applyHistoryViewSettings(history, settings)
+    displayedHistory = applyHistoryViewSettings(uniqueHistoryDrawerEntries(history), settings)
 )
 
 /**

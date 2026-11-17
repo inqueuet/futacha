@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.network.aimoge
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.network.NetworkException
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -23,11 +24,11 @@ class AimogeApi(private val client: HttpClient) {
         require(path.startsWith("/") && !path.startsWith("//")) { "path" }
         val url = AIMOGE_API_BASE + path
         val response = try {
-            client.get(url) {
+            readResponseBody { client.get(url) {
                 header("X-Api-Version", AIMOGE_API_VERSION)
                 header(HttpHeaders.Accept, "application/json")
                 boardKey?.let { header("X-Board-Key", it) }
-            }
+            } }
         } catch (e: CancellationException) {
             throw e
         } catch (e: NetworkException) {
@@ -53,8 +54,9 @@ class AimogeApi(private val client: HttpClient) {
         return body
     }
 
-    suspend fun catalog(slug: String, sort: String, limit: Int = 300): String =
-        get("/catalog/${slug.encodeURLPathPart()}?sort=${sort.encodeURLQueryComponent()}&limit=$limit", boardKey = slug)
+    suspend fun catalog(slug: String, sort: String, limit: Int = 300, page: Int = 1, seed: Long? = null): String =
+        get("/catalog/${slug.encodeURLPathPart()}?sort=${sort.encodeURLQueryComponent()}&limit=${limit.coerceIn(1, 300)}" +
+            (if (page > 1) "&page=$page" else "") + (seed?.let { "&seed=$it" } ?: ""), boardKey = slug)
 
     /** The guide asks for X-Board-Key on every request; [slug] is the board the thread is on. */
     suspend fun thread(threadId: String, slug: String? = null): String = get("/thread/${threadId.encodeURLPathPart()}", boardKey = slug)
@@ -83,4 +85,10 @@ class AimogeApi(private val client: HttpClient) {
 
     suspend fun archiveSnapshot(slug: String, threadId: String): String =
         get("/archive/${slug.encodeURLPathPart()}/threads/${threadId.encodeURLPathPart()}/snapshot.json", boardKey = slug)
+}
+
+/** Control/write responses are small; bound bytes while receiving, before allocating JSON strings. */
+internal suspend fun readAimogeControlBody(response: io.ktor.client.statement.HttpResponse): String {
+    val bytes = com.valoser.futacha.shared.network.readBoundedHttpResponseBytes(response, 1024 * 1024)
+    return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { bytes.decodeToString() }
 }

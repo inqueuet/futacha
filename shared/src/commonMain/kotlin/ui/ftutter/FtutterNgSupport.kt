@@ -244,7 +244,9 @@ internal fun ftutterNgRuleProblem(rule: FtutterNgRule): String? = when {
 
 /** 板の範囲を比べる鍵（http・https、`futaba.php`、大文字小文字の違いをそろえる）。 */
 internal fun ftutterNgBoardKey(url: String): String {
-    val base = if (url.contains("/res/")) url.substringBefore("/res/") + "/" else ftutterBoardBaseUrl(url)
+    val canonical = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl(url)?.canonicalBoardUrl
+        ?: com.valoser.futacha.shared.compat.canonicalizeSiteBoardUrl(url)?.canonicalUrl
+    val base = canonical ?: if (url.contains("/res/")) url.substringBefore("/res/") + "/" else ftutterBoardBaseUrl(url)
     return base.substringAfter("://").lowercase()
 }
 

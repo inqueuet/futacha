@@ -172,8 +172,9 @@ internal fun ThreadMessageText(
     var revealedSpoilers by remember(messageHtml) { mutableStateOf(emptySet<Int>()) }
     val aimogeDecorations = remember(messageHtml) { aimogeTextDecorations(messageHtml) }
     val spoilerCover = MaterialTheme.colorScheme.onSurfaceVariant
-    val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle, aimogeDecorations, revealedSpoilers, spoilerCover) {
-        val decorated = baseAnnotated.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover)
+    val diceColor = DiceColorState.color
+    val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle, aimogeDecorations, revealedSpoilers, spoilerCover, diceColor) {
+        val decorated = baseAnnotated.withAimogeDecorations(aimogeDecorations, revealedSpoilers, spoilerCover, diceColor = diceColor)
         val withNotices = if (isDeleted) AnnotatedString.Builder(decorated).apply {
             com.valoser.futacha.shared.model.postDeletionNoticeRanges(decorated.text).forEach { range ->
                 addStyle(SpanStyle(color = Color.Red), range.first, range.last + 1)

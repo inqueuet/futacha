@@ -383,6 +383,7 @@ internal fun GlobalSettingsLinksSection(
         icon = Icons.Rounded.Link
     ) {
         SharedSettingsLink("help", "ヘルプ", "単語検索・履歴・巡回・操作の説明")
+        SharedSettingsLink("changelog", "更新履歴", "版ごとの変更点")
         GlobalSettingsEntryRows(
             settingsEntries = settingsEntries,
             linkCallbacks = linkCallbacks

@@ -15,7 +15,7 @@ internal const val COMPAT_SELECTOR_CLOSE_REGION_BOTTOM = 0.9f
  * diagonal drag as horizontal, which made ordinary reading gestures switch
  * tabs or cancel halfway through.
  */
-internal enum class CompatPagerGestureAxis { UNDECIDED, HORIZONTAL, VERTICAL, REJECTED }
+internal enum class CompatPagerGestureAxis { UNDECIDED, HORIZONTAL, VERTICAL }
 
 internal const val COMPAT_PAGER_DIRECTION_RATIO = 1.25f
 

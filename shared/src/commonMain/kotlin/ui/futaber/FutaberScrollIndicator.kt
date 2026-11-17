@@ -29,7 +29,7 @@ import kotlinx.coroutines.flow.first
  */
 @Composable
 internal fun rememberFutaberScrollIndicator(state: LazyListState, ink: Color? = null): Modifier {
-    val memory = remember(state) { com.valoser.futacha.shared.ui.compat.ScrollSizeMemory() }
+    val memory = remember(state, androidx.compose.ui.platform.LocalDensity.current) { com.valoser.futacha.shared.ui.compat.ScrollSizeMemory() }
     return rememberFutaberScrollIndicator(
     state, isScrolling = { state.isScrollInProgress }, ink = ink
 ) { viewport ->

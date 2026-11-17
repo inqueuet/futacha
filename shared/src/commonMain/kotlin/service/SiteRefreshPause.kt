@@ -156,11 +156,14 @@ object SiteRefreshPause {
 
     suspend fun persist(fs: FileSystem?) {
         fs ?: return
+        mutex.withLock {
         val now = nowMillis()
-        val trimmed = state.copy(boards = state.boards.filterValues { it > now })
+        update { it.copy(boards = it.boards.filterValues { until -> until > now }) }
+        val trimmed = state
         runSuspendCatchingPreservingCancellation {
             fs.createDirectory(SITE_REFRESH_PAUSE_PATH.substringBeforeLast('/')).getOrThrow()
             fs.writeString(SITE_REFRESH_PAUSE_PATH, json.encodeToString(PersistedSitePause.serializer(), trimmed)).getOrThrow()
         }.onFailure { Logger.w("SiteRefreshPause", "Could not save the site pause: ${it.message}") }
+        }
     }
 }

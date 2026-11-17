@@ -1383,19 +1383,35 @@ internal fun FutaberApp(
                 // Catalog ⇄ thread slide like iOS's push (App Store review 2026-11-16). The thread a screen shows comes from the
                 // screen itself, so the thread sliding out on "back" keeps drawing its thread. One id for every thread (and one
                 // for every catalog): going from a thread to another (a tab) keeps the screen as before, without a slide.
+                // The screen keeps everything it draws (board, MIX, saved copy, thread): a thread sliding out after another board
+                // was chosen must not read the new board and fetch its own thread number there (audit 2026-11-17 M2).
+                val shownState = FutaberShownScreen(mixId, offlineView, board, thread,
+                    FutaberShownCatalog(sortMode, catalogNgIndex, catalogSharedNg, catalogPhashRules, catalogSearch, catalogView, catalogExtras))
                 val transitionScreen = when {
                     com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null && mediaServices != null ->
-                        com.valoser.futacha.shared.ui.PushPopScreen("mix:$mixId", -1, thread)
-                    offlineView != null -> com.valoser.futacha.shared.ui.PushPopScreen("offline:${offlineView?.ref?.threadId}", -1, thread)
-                    board == null -> com.valoser.futacha.shared.ui.PushPopScreen("none", -1, thread)
-                    thread != null -> com.valoser.futacha.shared.ui.PushPopScreen("thread", 1, thread)
-                    else -> com.valoser.futacha.shared.ui.PushPopScreen("catalog", 0, thread)
+                        com.valoser.futacha.shared.ui.PushPopScreen("mix:$mixId", -1, shownState)
+                    offlineView != null -> com.valoser.futacha.shared.ui.PushPopScreen("offline:${offlineView?.ref?.threadId}", -1, shownState)
+                    board == null -> com.valoser.futacha.shared.ui.PushPopScreen("none", -1, shownState)
+                    thread != null -> com.valoser.futacha.shared.ui.PushPopScreen("thread", 1, shownState)
+                    else -> com.valoser.futacha.shared.ui.PushPopScreen("catalog", 0, shownState)
                 }
                 com.valoser.futacha.shared.ui.PushPopTransition(transitionScreen) { shown ->
-                @Suppress("NAME_SHADOWING") val thread = shown.value
+                @Suppress("NAME_SHADOWING") val thread = shown.value.thread
+                @Suppress("NAME_SHADOWING") val board = shown.value.board
+                val shownCatalog = requireNotNull(shown.value.catalog)
+                @Suppress("NAME_SHADOWING") val sortMode = shownCatalog.sortMode
+                @Suppress("NAME_SHADOWING") val catalogNgIndex = shownCatalog.ngIndex
+                @Suppress("NAME_SHADOWING") val catalogSharedNg = shownCatalog.sharedNg
+                @Suppress("NAME_SHADOWING") val catalogPhashRules = shownCatalog.phashRules
+                @Suppress("NAME_SHADOWING") val catalogSearch = shownCatalog.search
+                @Suppress("NAME_SHADOWING") val catalogView = shownCatalog.view
+                @Suppress("NAME_SHADOWING") val catalogExtras = shownCatalog.extras
+                @Suppress("NAME_SHADOWING") val openKey = thread?.let { FutaberTabKey(it.boardId, it.threadId) }
+                val shownMixId = shown.value.mixId
+                val shownOffline = shown.value.offline
                 when {
-                    com.valoser.futacha.shared.compat.MixAvailability.enabled && mixId != null && mediaServices != null -> com.valoser.futacha.shared.ui.board.MixScreenHost(
-                        mixId = mixId!!,
+                    com.valoser.futacha.shared.compat.MixAvailability.enabled && shownMixId != null && mediaServices != null -> com.valoser.futacha.shared.ui.board.MixScreenHost(
+                        mixId = shownMixId,
                         store = mediaServices.store,
                         repository = repository,
                         boards = boards,
@@ -1414,7 +1430,7 @@ internal fun FutaberApp(
                             openRef(entry.board, FutaberThreadRef(entry.board.id, entry.item.id, entry.item.title.orEmpty(), entry.item.thumbnailUrl.orEmpty(), entry.replyCountOrNull ?: 0))
                         }
                     )
-                    offlineView != null -> offlineView?.let { view ->
+                    shownOffline != null -> shownOffline.let { view ->
                         val viewRepository = if (view.board.isMockBoard()) mockRepository else repository
                         val offlineRepository = remember(view) {
                             FutaberOfflineRepository(viewRepository, view.ref.threadId, view.page)
@@ -2134,3 +2150,22 @@ internal fun futaberManagePanelTopDp(threadShown: Boolean): Int =
 private fun FutaberRecomposeScope(content: @Composable () -> Unit) {
     content()
 }
+
+/** What one screen of the catalog ⇄ thread slide draws, kept while it slides out. */
+internal data class FutaberShownScreen(
+    val mixId: String?,
+    val offline: FutaberOfflineView?,
+    val board: BoardSummary?,
+    val thread: FutaberThreadRef?,
+    val catalog: FutaberShownCatalog? = null
+)
+
+internal data class FutaberShownCatalog(
+    val sortMode: com.valoser.futacha.shared.model.CatalogMode,
+    val ngIndex: com.valoser.futacha.shared.compat.CompatCatalogRuleIndex?,
+    val sharedNg: com.valoser.futacha.shared.ui.ftutter.FtutterNgMatcher?,
+    val phashRules: List<com.valoser.futacha.shared.compat.CompatNgRule>,
+    val search: FutaberCatalogSearchState,
+    val view: FutaberCatalogViewState,
+    val extras: FutaberCatalogExtras
+)

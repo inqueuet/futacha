@@ -196,7 +196,7 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
             snapshot.message?.let { Text(it) }
             message?.let { Text(it) }
             LazyColumn(Modifier.heightIn(max = 400.dp)) {
-                items(snapshot.entries, key = { it.key }) { entry ->
+                items(snapshot.entries.distinctBy { it.key }, key = { it.key }) { entry ->
                     ListItem(headlineContent = { Text(entry.title) },
                         supportingContent = { Text(futachaWatcherSubtitle(entry)) },
                         trailingContent = { TextButton(onClick = { scope.launch {

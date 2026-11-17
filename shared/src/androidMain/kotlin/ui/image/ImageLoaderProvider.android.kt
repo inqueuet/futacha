@@ -25,6 +25,8 @@ actual fun ComponentRegistry.Builder.addPlatformImageComponents() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
         add(CompatAwebpDecoder.Factory())
     }
+    // A remote video gives its first frame without downloading the whole file (audit 2026-11-17 M4).
+    add(AndroidRemoteVideoFrameFetcher.Factory())
     add(VideoFrameDecoder.Factory())
     add(CompatFallbackGifDecoder.Factory())
     // Coil's ImageDecoder-backed factory handles animated WebP on API 28+

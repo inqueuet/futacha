@@ -1,6 +1,7 @@
 @file:OptIn(coil3.annotation.ExperimentalCoilApi::class)
 package com.valoser.futacha.shared.ui.image
 
+import com.valoser.futacha.shared.util.readResponseBody
 import coil3.network.NetworkClient
 import coil3.network.NetworkRequest
 import coil3.network.NetworkResponse
@@ -21,7 +22,9 @@ internal class ImageNotCachedException : Exception("Image is not cached")
 internal class CacheOnlyAwareNetworkClient(private val delegate: NetworkClient) : NetworkClient {
     override suspend fun <T> executeRequest(request: NetworkRequest, block: suspend (NetworkResponse) -> T): T {
         if (isCacheOnlyImageRequest(request)) throw ImageNotCachedException()
-        return delegate.executeRequest(request, block)
+        // Ktor 3.6.1 reports a body cut off mid-download as a cancellation; Coil would
+        // then skip its error, retries and the fallback chains (ResponseBodyReadSupport.kt).
+        return readResponseBody { delegate.executeRequest(request, block) }
     }
 }
 

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.network.aimoge
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.compat.AIMOGE_HOST
 import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
@@ -116,7 +117,7 @@ class AimogeAuthApi(private val client: HttpClient) {
             AimogeAuthEndpoint.REVOKE -> "/app-credentials/current"
         }
         val response = try {
-            request(AIMOGE_API_BASE + path)
+            readResponseBody { request(AIMOGE_API_BASE + path) }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -124,10 +125,10 @@ class AimogeAuthApi(private val client: HttpClient) {
             throw AimogeAuthException(endpoint, null)
         }
         val status = response.status.value
-        val text = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation { response.bodyAsText() }.getOrNull()
+        val text = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation { readAimogeControlBody(response) }.getOrNull()
         if (status !in 200..299) throw AimogeAuthException(endpoint, status, parseAimogeErrorBody(text).code)
         if (status == 204 || text.isNullOrBlank()) return null
-        return runCatching { authJson.parseToJsonElement(text).jsonObject }.getOrNull()
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { authJson.parseToJsonElement(text).jsonObject }.getOrNull() }
             ?: throw AimogeAuthException(endpoint, status)
     }
 }

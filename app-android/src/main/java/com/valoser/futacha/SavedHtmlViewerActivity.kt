@@ -93,8 +93,7 @@ class SavedHtmlViewerActivity : ComponentActivity() {
             intent?.action != Intent.ACTION_VIEW ||
             uri == null ||
             uri.scheme !in setOf("content", "file") ||
-            !isSupportedSavedHtmlDocument(intent.type, uri.path) ||
-            isPrivateAppUri(uri)
+            !isSupportedSavedHtmlDocument(intent.type, uri.path)
         ) {
             finish()
             return
@@ -110,7 +109,6 @@ class SavedHtmlViewerActivity : ComponentActivity() {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return true
-                    if (isPrivateAppUri(target)) return true
                     val navigation = savedHtmlNavigation(
                         scheme = target.scheme,
                         isMainFrame = request.isForMainFrame,
@@ -118,7 +116,13 @@ class SavedHtmlViewerActivity : ComponentActivity() {
                         isRedirect = request.isRedirect,
                         isSameDocumentProvider = target.authority == sourceUri?.authority
                     )
-                    if (navigation == SavedHtmlNavigation.LOAD_IN_VIEW) return false
+                    if (navigation == SavedHtmlNavigation.LOAD_IN_VIEW) {
+                        lifecycleScope.launch {
+                            val allowed = withContext(Dispatchers.IO) { !isPrivateAppUri(target) }
+                            if (allowed && !webViewDestroyed && !isFinishing && !isDestroyed) webView.loadUrl(target.toString())
+                        }
+                        return true
+                    }
                     if (navigation == SavedHtmlNavigation.OPEN_EXTERNALLY) {
                         runCatching { startActivity(Intent(Intent.ACTION_VIEW, target)) }
                     }
@@ -152,8 +156,9 @@ class SavedHtmlViewerActivity : ComponentActivity() {
         setContentView(webView)
         lifecycleScope.launch {
             val sanitizedHtml = withContext(Dispatchers.IO) {
-                readSavedHtmlDocument(uri)?.let(::sanitizeSavedHtmlDocument)
+                if (isPrivateAppUri(uri)) null else readSavedHtmlDocument(uri)?.let(::sanitizeSavedHtmlDocument)
             }
+            if (webViewDestroyed || isFinishing || isDestroyed) return@launch
             if (sanitizedHtml == null) {
                 finish()
                 return@launch

@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.version
 
+import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -61,10 +62,10 @@ class IosVersionChecker(
         val country = SKPaymentQueue.defaultQueue().storefront?.countryCode?.lowercase() ?: "jp"
 
         return try {
-            val response = httpClient.get(APP_STORE_LOOKUP_URL) {
+            val response = readResponseBody { httpClient.get(APP_STORE_LOOKUP_URL) {
                 parameter("bundleId", bundleId)
                 parameter("country", country)
-            }
+            } }
             val body = readBoundedVersionResponseBody(
                 response = response,
                 maxResponseBytes = MAX_APP_STORE_LOOKUP_RESPONSE_BYTES

@@ -8,6 +8,27 @@ import kotlin.test.assertTrue
 
 class BoardHistoryComponentsTest {
     @Test
+    fun duplicateCrashKeyKeepsNewestCopyBeforeFiltering() {
+        val old = com.valoser.futacha.shared.model.ThreadHistoryEntry(
+            threadId = "1448176702", boardId = "b", title = "old", titleImageUrl = "", boardName = "may",
+            boardUrl = "https://may.2chan.net/b/", lastVisitedEpochMillis = 1L, replyCount = 1
+        )
+        val newest = old.copy(title = "new", lastVisitedEpochMillis = 2L, replyCount = 10)
+        val otherBoard = old.copy(boardUrl = "https://img.2chan.net/b/")
+        val otherThread = old.copy(threadId = "1448176703")
+        val history = listOf(old, newest, newest, otherBoard, otherThread)
+        val view = buildHistoryDrawerView(history, HistoryViewSettings.Default)
+
+        assertSame(history, view.history)
+        assertEquals(setOf(newest, otherBoard, otherThread), view.displayedHistory.toSet())
+        val keys = view.displayedHistory.map(::buildHistoryExportSelectionKey)
+        assertEquals(3, keys.size)
+        assertEquals(keys.size, keys.toSet().size)
+        assertTrue(buildHistoryDrawerView(history, HistoryViewSettings(titleQuery = "old"))
+            .displayedHistory.none { it.boardUrl == newest.boardUrl && it.threadId == newest.threadId })
+    }
+
+    @Test
     fun historyGrowthWarning_isShownFromOneHundredEntries() {
         assertFalse(shouldShowHistoryDrawerGrowthWarning(99))
         assertTrue(shouldShowHistoryDrawerGrowthWarning(100))
