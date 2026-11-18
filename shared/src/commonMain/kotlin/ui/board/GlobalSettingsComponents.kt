@@ -744,6 +744,37 @@ private fun HighQualityThumbnailSetting(features: FutachaSharedFeatures) {
             }
         )
     }
+    val animateGif = com.valoser.futacha.shared.ui.image.thumbnailGifAnimationEnabled(
+        features.value(HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH, com.valoser.futacha.shared.ui.image.THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY)
+    )
+    ListItem(
+        headlineContent = { Text("サムネイルのGIFを動かす") },
+        supportingContent = {
+            Text(
+                text = "高画質表示で元画像を使うサムネイルのうち、動くGIFをスレッドとカタログで動かします。" +
+                    "画面に出ている分だけ動かし、画面外とアプリが裏にある間は止めます。全モード共通の設定です。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = { Switch(checked = animateGif, onCheckedChange = null) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("thumbnail-gif-animation-switch")
+            .toggleable(value = animateGif, role = androidx.compose.ui.semantics.Role.Switch) { next ->
+                scope.launch {
+                    runCatching {
+                        features.store.savePreference(
+                            compatPreferenceStorageKey(
+                                HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH,
+                                com.valoser.futacha.shared.ui.image.THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY
+                            ),
+                            if (next) "ON" else "OFF"
+                        )
+                    }.onFailure { Logger.e("GlobalSettings", "Failed to save GIF animation", it) }
+                }
+            }
+    )
 }
 
 @Composable

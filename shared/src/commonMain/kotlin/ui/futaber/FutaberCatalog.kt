@@ -203,7 +203,7 @@ internal fun FutaberCatalogScreen(
     LaunchedEffect(viewedFirstEnabled) { if (!viewedFirstEnabled) view.viewedFirstId = null }
     val load = view.load
     var serverSearchOpen by remember(board.id) { mutableStateOf(false) }
-    val canServerSearch = archiveHttpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.url) != null
+    val canServerSearch = archiveHttpClient != null && com.valoser.futacha.shared.network.serverPostSearchTitle(board.url) != null
     if (serverSearchOpen && archiveHttpClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
         archiveHttpClient, board.url, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
     )
@@ -456,7 +456,7 @@ internal fun FutaberCatalogScreen(
     FutaberCatalogRefreshSheets(
         refreshSheet, { refreshSheet = it }, droppedSheet, { droppedSheet = it }, view, perGenerationBack, droppedItems,
         viewedFirstEnabled, onViewedFirstChange, refreshActions + listOfNotNull(
-            if (canServerSearch) FutaberPostAction("server-search", "ふたばのレス検索") { serverSearchOpen = true } else null
+            if (canServerSearch) FutaberPostAction("server-search", com.valoser.futacha.shared.network.serverPostSearchTitle(board.url).orEmpty()) { serverSearchOpen = true } else null
         ), onOpenThread
     )
     sheetItem?.let { item ->

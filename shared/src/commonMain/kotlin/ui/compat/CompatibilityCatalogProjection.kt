@@ -1,7 +1,6 @@
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.model.CatalogItem
-import com.valoser.futacha.shared.model.normalizeCatalogSearchText
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
@@ -58,12 +57,8 @@ internal fun buildCompatCatalogProjection(
         val resolvedTitle = request.resolvedTitles[item.id]
             ?.takeIf(String::isNotBlank)
             ?: item.title
-        itemsWithResolvedTitles += item.copy(
-            title = truncateCompatCatalogSourceTitle(
-                resolvedTitle,
-                request.catalogSourceTitleLength
-            )
-        )
+        // The whole title is matched (search, NG, watch words); it is cut to the display length only at the end (seq53).
+        itemsWithResolvedTitles += if (resolvedTitle == item.title) item else item.copy(title = resolvedTitle)
     }
 
     val hiddenPhashItems = mutableSetOf<String>()
@@ -92,17 +87,18 @@ internal fun buildCompatCatalogProjection(
         }
     }
 
-    val normalizedQuery = normalizeCatalogSearchText(request.searchQuery)
+    val normalizedQuery = normalizeCompatCatalogMatchText(request.searchQuery)
     val filtered = if (normalizedQuery.isBlank()) {
         ngFiltered
     } else {
         ngFiltered.filterIndexed { index, item ->
             checkpoint(index)
-            normalizeCatalogSearchText(item.title.orEmpty()).contains(normalizedQuery) ||
+            normalizeCompatCatalogMatchText(item.title.orEmpty()).contains(normalizedQuery) ||
                 item.id.contains(request.searchQuery, ignoreCase = true)
         }
     }
 
+    val normalizedWatchWords = request.watchWords.map(::normalizeCompatCatalogMatchText).filter(String::isNotBlank)
     cancellationCheckpoint()
     return projectCompatCatalogItems(
         items = filtered,
@@ -110,19 +106,21 @@ internal fun buildCompatCatalogProjection(
         replyThreshold = request.priorityThreshold,
         showNonPriority = request.preference.showNonPriority,
         isExtracted = { item ->
-            request.watchWords.any { word ->
-                item.title.orEmpty().contains(word, ignoreCase = true)
+            normalizedWatchWords.isNotEmpty() && normalizeCompatCatalogMatchText(item.title.orEmpty()).let { title ->
+                normalizedWatchWords.any(title::contains)
             } || request.catalogRuleIndex.extracts(item)
         }
-    )
+    ).map { item ->
+        val cut = truncateCompatCatalogSourceTitle(item.title, request.catalogSourceTitleLength)
+        if (cut == item.title) item else item.copy(title = cut)
+    }
 }
 
 /**
  * Matches the first title truncation performed by reference app's CatalogLoader.
  *
- * Grid/list renderers apply their own, independent limit afterwards.  Keeping
- * this source-stage truncation separate also ensures search, NG and extraction
- * never inspect characters that the reference parser already discarded.
+ * Grid/list renderers apply their own, independent limit afterwards.  Search,
+ * NG and watch words see the whole title; only the shown title is cut (seq53).
  */
 internal fun truncateCompatCatalogSourceTitle(
     title: String?,
@@ -156,4 +154,14 @@ internal fun projectCompatCatalogItems(
         addAll(ordinary)
         if (showNonPriority || effectiveThreshold == 0) addAll(nonPriority)
     }
+}
+
+/** The whole title of each thread (the head metadata's when it has one), for matching the words after the cut (seq53). */
+internal fun compatCatalogFullTitles(items: List<CatalogItem>, resolvedTitles: Map<String, String>): Map<String, String> {
+    val result = HashMap<String, String>(items.size)
+    items.forEach { item ->
+        val title = resolvedTitles[item.id]?.takeIf(String::isNotBlank) ?: item.title ?: return@forEach
+        if (item.id !in result) result[item.id] = title
+    }
+    return result
 }

@@ -192,6 +192,7 @@ internal fun FutaberRuntimeHost(
         }
     }
     val highQualityThumbnailMode = rememberHighQualityThumbnailMode(compatibilityStore)
+    val thumbnailGifAnimation = com.valoser.futacha.shared.ui.image.rememberThumbnailGifAnimation(compatibilityStore)
     val currentStore by rememberUpdatedState(compatibilityStore)
     // One object for as long as its parts stay: it is a key of the effects that fetch and hash the thread's pictures
     // (image NG), which must not restart every time the history is saved and this host is composed again.
@@ -204,6 +205,7 @@ internal fun FutaberRuntimeHost(
         // The shared settings and viewer screens read the catalog loader; this mode uses one loader for both.
         LocalFutachaCatalogImageLoader provides imageLoader,
         LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
+        com.valoser.futacha.shared.ui.image.LocalThumbnailGifAnimation provides thumbnailGifAnimation,
         LocalOriginalMediaSource provides promptMediaSource,
         LocalMediaFeatureSettings provides mediaFeatureSettings,
         LocalMediaFeatureGate provides mediaFeatureGate,

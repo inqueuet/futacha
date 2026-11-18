@@ -451,6 +451,36 @@ internal fun FutaberPostScreen(
         }
     }
 
+    SideEffect {
+        attachment.aimogeBoard = com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+    }
+    val upsComment by rememberUpdatedState(comment)
+    val upsCommentChange by rememberUpdatedState(onCommentChange)
+    attachment.pendingUps?.let { (video, question) ->
+        FutachaAppLockAwareWindow {
+            AlertDialog(
+                onDismissRequest = attachment::clearPendingUps,
+                containerColor = colors.bar,
+                titleContentColor = colors.body,
+                textContentColor = colors.body,
+                title = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_VIDEO_UPS_TITLE) },
+                text = { Text(question) },
+                confirmButton = {
+                    TextButton(modifier = Modifier.testTag("futaber-video-ups-ok"), onClick = {
+                        attachment.clearPendingUps()
+                        val client = tools.httpClient
+                        val key = deleteKey
+                        scope.launch {
+                            toolsState.message = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                                client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, tools.appVersion).getOrThrow() } },
+                                appendName = { upsCommentChange(appendCompatPostText(upsComment, it)) })
+                        }
+                    }) { Text("OK", color = colors.link) }
+                },
+                dismissButton = { TextButton(onClick = attachment::clearPendingUps) { Text("キャンセル", color = colors.link) } }
+            )
+        }
+    }
     attachment.pendingCompression?.let { big ->
         FutachaAppLockAwareWindow {
             AlertDialog(

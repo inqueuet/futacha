@@ -69,7 +69,7 @@ internal fun CatalogCard(
         boardUrl = boardUrl,
         resolvedDisplayTitle = resolvedDisplayTitle,
         resolveHeadMetadata = resolveHeadMetadata
-    )
+    ).let { futachaCatalogSourceTitle(it, item, LocalFutachaCatalogSourceTitleLimit.current) }
 
     val onLongPress = LocalFutachaCatalogLongPress.current
     ElevatedCard(
@@ -186,7 +186,7 @@ internal fun CatalogListItem(
         boardUrl = boardUrl,
         resolvedDisplayTitle = resolvedDisplayTitle,
         resolveHeadMetadata = resolveHeadMetadata
-    )
+    ).let { futachaCatalogSourceTitle(it, item, LocalFutachaCatalogSourceTitleLimit.current) }
 
     val onLongPress = LocalFutachaCatalogLongPress.current
     ElevatedCard(

@@ -370,6 +370,7 @@ internal fun FtutterPostDialog(
         }
     )
     val isAimogeBoard = remember(boardUrl) { com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE }
+    androidx.compose.runtime.SideEffect { attachment.aimogeBoard = isAimogeBoard }
     val pickMany = com.valoser.futacha.shared.ui.board.rememberMultipleImagePickerLauncher(
         maxCount = com.valoser.futacha.shared.ui.compat.compatMultiPickMax(isAimogeBoard),
         maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_UPS_PICKER_MAX_BYTES,
@@ -566,6 +567,23 @@ internal fun FtutterPostDialog(
                         TextButton(onClick = { attachment.cancelCompression() }) { Text("やめる") }
                     }
                 }
+                attachment.pendingUps?.let { (video, question) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(question, color = colors.text, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        TextButton(enabled = !upsBusy, modifier = Modifier.testTag("ftutter-video-ups-ok"), onClick = {
+                            attachment.clearPendingUps()
+                            upsBusy = true
+                            scope.launch {
+                                try {
+                                    error = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                                        uploadUps?.let { up -> { v -> up(v, deleteKeyNow).getOrThrow() } },
+                                        appendName = { comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, it) })
+                                } finally { upsBusy = false }
+                            }
+                        }) { Text("OK") }
+                        TextButton(onClick = { attachment.clearPendingUps() }) { Text("やめる") }
+                    }
+                }
                 if (deleteKeyNow.isBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("投稿には削除キーの設定が必要です", color = colors.text, fontSize = 12.sp,
@@ -669,6 +687,23 @@ internal fun FtutterPostDialog(
                         Text("容量を超えています。圧縮しますか？", color = colors.text, modifier = Modifier.weight(1f))
                         TextButton(onClick = { attachment.compress(pending, capabilities) }) { Text("圧縮") }
                         TextButton(onClick = { attachment.cancelCompression() }) { Text("やめる") }
+                    }
+                }
+                attachment.pendingUps?.let { (video, question) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(question, color = colors.text, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        TextButton(enabled = !upsBusy, modifier = Modifier.testTag("ftutter-video-ups-ok"), onClick = {
+                            attachment.clearPendingUps()
+                            upsBusy = true
+                            scope.launch {
+                                try {
+                                    error = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                                        uploadUps?.let { up -> { v -> up(v, deleteKeyNow).getOrThrow() } },
+                                        appendName = { comment = com.valoser.futacha.shared.ui.compat.appendCompatPostText(comment, it) })
+                                } finally { upsBusy = false }
+                            }
+                        }) { Text("OK") }
+                        TextButton(onClick = { attachment.clearPendingUps() }) { Text("やめる") }
                     }
                 }
             }

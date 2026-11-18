@@ -102,6 +102,33 @@ internal fun parseAimogePostSearch(body: String, slug: String): List<ArchiveSear
     }
 }
 
+/** One post of `/search` for the post search screen: the thread to open, the post number, its text. */
+internal data class AimogePostSearchRow(val threadId: String, val threadUrl: String, val seq: Int?, val text: String, val thumbnailUrl: String?)
+
+internal fun parseAimogePostSearchRows(body: String, slug: String): List<AimogePostSearchRow> =
+    aimogeSearchJson.decodeFromString(AimogeSearchDto.serializer(), body).posts.mapNotNull { post ->
+        if (post.status != null && post.status != "public") return@mapNotNull null
+        val id = post.threadId?.trim()?.lowercase()?.takeIf { it.matches(AIMOGE_UUID_REGEX) } ?: return@mapNotNull null
+        AimogePostSearchRow(id, "https://nijiurachan.net/b/$slug/thread/$id", post.seq, post.body.orEmpty().take(4000),
+            post.attachment?.thumbnailUrl?.takeIf { it.startsWith("https://") })
+    }
+
+/** `/search?q=&scope=all` (read only, at most 100 posts) with a client made for this search only. */
+internal suspend fun searchAimogePostRowsWithOwnClient(
+    slug: String,
+    query: String,
+    makeClient: () -> HttpClient = { createAimogeHttpClient(appVersion = "") }
+): List<AimogePostSearchRow> = withContext(Dispatchers.Default) {
+    val q = query.trim()
+    require(q.isNotEmpty() && q.length <= AIMOGE_SEARCH_QUERY_MAX_CHARS) { "検索語は1〜${AIMOGE_SEARCH_QUERY_MAX_CHARS}字で入力してください" }
+    val client = makeClient()
+    try {
+        parseAimogePostSearchRows(AimogeApi(client).get("/search?q=${q.encodeURLQueryComponent()}&scope=all", boardKey = slug), slug)
+    } finally {
+        withContext(NonCancellable) { client.close() }
+    }
+}
+
 /** Reads `/search?q=&scope=all` with [api]: the posts of the live threads. */
 suspend fun searchAimogeLiveThreads(api: AimogeApi, slug: String, query: String): List<ArchiveSearchItem> {
     val q = query.trim()

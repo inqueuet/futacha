@@ -64,6 +64,11 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
     var error by mutableStateOf<String?>(null)
     var pendingCompression by mutableStateOf<ImageData?>(null)
         private set
+    /** A video the board does not take, waiting for "あぷ小へ上げますか？" (aimg seq63), and the question. */
+    var pendingUps by mutableStateOf<Pair<ImageData, String>?>(null)
+        private set
+    /** あいもげ takes videos itself: no あぷ小 offer there. Set by the writing screen. */
+    var aimogeBoard: Boolean = false
     private var job: Job? = null
 
     /**
@@ -83,7 +88,13 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
         processing = false
         image = null
         pendingCompression = null
+        pendingUps = null
         error = null
+    }
+
+    /** The あぷ小 question was answered (either way). */
+    fun clearPendingUps() {
+        pendingUps = null
     }
 
     fun clearError() {
@@ -97,6 +108,12 @@ internal class FutaberAttachment(private val scope: CoroutineScope) {
     /** A file the user picked or pasted. */
     fun offer(picked: ImageData, capabilities: BoardPostingCapabilities, isReply: Boolean) {
         error = null
+        val attachmentAllowed = !isReply || capabilities.replyAttachmentsAllowed
+        when (val ups = com.valoser.futacha.shared.ui.compat.compatVideoUpsOffer(picked, capabilities.supportedExtensions, aimogeBoard, attachmentAllowed)) {
+            is com.valoser.futacha.shared.ui.compat.CompatVideoUpsOffer.Offer -> { pendingUps = picked to ups.message; return }
+            is com.valoser.futacha.shared.ui.compat.CompatVideoUpsOffer.Refuse -> { error = ups.message; return }
+            null -> Unit
+        }
         when (val verdict = futaberAttachmentVerdict(picked, capabilities, isReply)) {
             FutaberAttachmentVerdict.Accept -> finish(picked)
             FutaberAttachmentVerdict.AskCompression -> pendingCompression = picked

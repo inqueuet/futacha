@@ -317,7 +317,7 @@ internal fun FtutterCatalogScreen(
     serverSearchClient: io.ktor.client.HttpClient? = null
 ) {
     var serverSearchOpen by remember(board.id) { mutableStateOf(false) }
-    val canServerSearch = serverSearchClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.url) != null
+    val canServerSearch = serverSearchClient != null && com.valoser.futacha.shared.network.serverPostSearchTitle(board.url) != null
     if (serverSearchOpen && serverSearchClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
         serverSearchClient, board.url, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
     )
@@ -611,6 +611,7 @@ internal fun FtutterCatalogScreen(
                     onToggleViewedFirst = { savePreference(viewedFirstKey, if (viewedFirstEnabled) "OFF" else "ON") },
                     onGesture = { handleGesture(it, fromMenu = true) },
                     onServerSearch = if (canServerSearch) ({ serverSearchOpen = true }) else null,
+                    serverSearchLabel = com.valoser.futacha.shared.network.serverPostSearchTitle(board.url).orEmpty(),
                     onTogglePrivacy = { savePreference(FtutterKeys.IS_PRIVACY, (!settings.privacy).toString()) },
                     onToolbarEdit = onEditToolbar,
                     onHiddenAndNg = onOpenHiddenAndNg,
@@ -864,7 +865,8 @@ private fun FtutterCatalogMenu(
     onGesture: (FtutterGestureAction) -> Unit,
     legacy: Boolean = false,
     onOpenBrowser: () -> Unit = {},
-    onServerSearch: (() -> Unit)? = null
+    onServerSearch: (() -> Unit)? = null,
+    serverSearchLabel: String = "ふたばのレス検索"
 ) {
     val colors = LocalFtutterColors.current
     var gestureMenu by remember { mutableStateOf(false) }
@@ -881,7 +883,7 @@ private fun FtutterCatalogMenu(
     // 原作のカタログのメニュー（H9・M64）：ツールバー編集／プライバシー／非表示・NG／URLから開く／URLをコピー／ブラウザで開く。
     val original: @Composable (withViewedFirst: Boolean) -> Unit = { withViewedFirst ->
         if (withViewedFirst) viewedFirst()
-        onServerSearch?.let { action -> DropdownMenuItem(text = { Text("ふたばのレス検索") }, onClick = { open = false; action() }) }
+        onServerSearch?.let { action -> DropdownMenuItem(text = { Text(serverSearchLabel) }, onClick = { open = false; action() }) }
         DropdownMenuItem(text = { Text("ツールバー編集") }, onClick = { open = false; onToolbarEdit() })
         DropdownMenuItem(
             text = { Text("プライバシー") },

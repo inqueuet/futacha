@@ -16,7 +16,12 @@ VLC_SHA = 'c0e41e496f47edcda1fdba5e6a7f14671c87284acdbc73e669d532fc32c06824'
 OPENCV_SHA = 'e4f78fbcf1a773fbed69e14500e8b734963eb585'
 
 def run(*args):
-    subprocess.run([str(a) for a in args], check=True)
+    env = None
+    if str(args[0]) == 'xcrun':
+        # Homebrew's python3 exports SDKROOT=CommandLineTools SDK, which lacks Xcode's FoundationModels macro
+        # plugin (swiftc then fails on @Generable). Let xcrun pick the selected Xcode's SDK instead.
+        env = {k: v for k, v in os.environ.items() if k != 'SDKROOT'}
+    subprocess.run([str(a) for a in args], check=True, env=env)
 
 def sha(path):
     h = hashlib.sha256()

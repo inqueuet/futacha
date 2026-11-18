@@ -45,3 +45,23 @@ fun normalizeCompatSearchText(raw: String): String {
     }
     return normalized.toString().trim().lowercase()
 }
+
+/**
+ * The one normalization the catalog title matchers share (seq53): catalog search, the watch-word highlight, the catalog
+ * NG words and the watch-word patrol. NFKC (platform), then the reference folding above (full-width ASCII, half-width
+ * katakana, case), then katakana to hiragana, so a word that hits in one of them hits in all.
+ */
+fun normalizeCompatCatalogMatchText(raw: String): String = buildString(raw.length) {
+    // The first pass joins half-width kana with their (han)dakuten itself: on iOS the platform's compatibility
+    // mapping left ｶﾞ as カ + a combining mark, so it did not match ガ (qualityGate 2026-11-18).
+    normalizeCompatSearchText(normalizeCompatWatchText(normalizeCompatSearchText(raw))).forEach { char ->
+        append(
+            when (char) {
+                in '\u30A1'..'\u30F6' -> char - 0x60
+                '\u30FD' -> '\u309D'
+                '\u30FE' -> '\u309E'
+                else -> char
+            }
+        )
+    }
+}

@@ -221,12 +221,7 @@ class CompatibilityCatalogProjectionTest {
             val resolvedTitle = request.resolvedTitles[item.id]
                 ?.takeIf(String::isNotBlank)
                 ?: item.title
-            item.copy(
-                title = truncateCompatCatalogSourceTitle(
-                    resolvedTitle,
-                    request.catalogSourceTitleLength
-                )
-            )
+            item.copy(title = resolvedTitle)
         }
         val hiddenPhashItems = itemsWithResolvedTitles.filter { item ->
             val phash = request.catalogImagePhashes[item.id]
@@ -245,16 +240,12 @@ class CompatibilityCatalogProjectionTest {
                 request.catalogRuleIndex.hides(item) || item.id in hiddenPhashItems
             }
         }
-        val normalizedQuery = com.valoser.futacha.shared.model.normalizeCatalogSearchText(
-            request.searchQuery
-        )
+        val normalizedQuery = normalizeCompatCatalogMatchText(request.searchQuery)
         val filtered = if (normalizedQuery.isBlank()) {
             ngFiltered
         } else {
             ngFiltered.filter { item ->
-                com.valoser.futacha.shared.model.normalizeCatalogSearchText(
-                    item.title.orEmpty()
-                ).contains(normalizedQuery) ||
+                normalizeCompatCatalogMatchText(item.title.orEmpty()).contains(normalizedQuery) ||
                     item.id.contains(request.searchQuery, ignoreCase = true)
             }
         }
@@ -265,10 +256,10 @@ class CompatibilityCatalogProjectionTest {
             showNonPriority = request.preference.showNonPriority,
             isExtracted = { item ->
                 request.watchWords.any { word ->
-                    item.title.orEmpty().contains(word, ignoreCase = true)
+                    normalizeCompatCatalogMatchText(item.title.orEmpty()).contains(normalizeCompatCatalogMatchText(word))
                 } || request.catalogRuleIndex.extracts(item)
             }
-        )
+        ).map { it.copy(title = truncateCompatCatalogSourceTitle(it.title, request.catalogSourceTitleLength)) }
     }
 
     private class RecordingDispatcher : CoroutineDispatcher() {

@@ -95,3 +95,61 @@ internal suspend fun applyCompatPickedPictures(
     if (split.dropped > 0) parts += "${split.dropped}枚は数の上限を超えたので使いません"
     return parts.joinToString("。").ifEmpty { "画像を使えませんでした" }
 }
+
+/** The video kinds あぷ小 (dec.2chan.net/up2/up.htm, read 2026-11-18) lists among its extensions. */
+internal val COMPAT_UPS_VIDEO_EXTENSIONS = setOf("mp4", "webm", "mov", "m4v", "3gp", "3g2", "avi", "flv", "f4v", "mkv", "mpeg", "mpg", "wmv", "asf")
+
+/** あぷ小's size limit (3.0M on its page; [uploadCompatUps] checks the same). */
+internal const val COMPAT_UPS_VIDEO_MAX_BYTES = 3_000_000
+
+/** A video the board's own attachment does not take: offered to あぷ小 instead (aimg seq63). */
+internal sealed interface CompatVideoUpsOffer {
+    val message: String
+
+    /** Ask "あぷ小へ上げて、本文にファイル名を入れますか？". */
+    data class Offer(override val message: String) : CompatVideoUpsOffer
+
+    /** Not even あぷ小 takes it (over 3000KB): refused with the reason. */
+    data class Refuse(override val message: String) : CompatVideoUpsOffer
+}
+
+internal const val COMPAT_VIDEO_UPS_TITLE = "あぷ小へ上げますか？"
+
+/**
+ * Null when the board takes [video] as it is (or it is not a video, or the board is あいもげ, which takes videos itself);
+ * otherwise what to ask or say. [attachmentAllowed] false (an img/b reply) also offers あぷ小 for a video.
+ */
+internal fun compatVideoUpsOffer(
+    video: ImageData,
+    supportedExtensions: Set<String>,
+    isAimoge: Boolean,
+    attachmentAllowed: Boolean = true
+): CompatVideoUpsOffer? {
+    if (isAimoge || video.isHandwriting || video.bytes.isEmpty()) return null
+    val extension = compatPostAttachmentExtension(video.fileName)
+    if (extension !in COMPAT_UPS_VIDEO_EXTENSIONS) return null
+    if (attachmentAllowed && supportedExtensions.any { it.equals(extension, ignoreCase = true) }) return null
+    val label = extension.uppercase()
+    if (video.bytes.size > COMPAT_UPS_VIDEO_MAX_BYTES) {
+        return CompatVideoUpsOffer.Refuse("この板は${label}を添付できません。あぷ小も3000KBまでのため、この動画は上げられません")
+    }
+    return CompatVideoUpsOffer.Offer("この板は${label}を添付できません。あぷ小へ上げて、本文にファイル名を入れますか？")
+}
+
+/** Uploads [video] to あぷ小 and adds its name to the body; returns the message to show. */
+internal suspend fun uploadCompatVideoToUps(
+    video: ImageData,
+    upload: (suspend (ImageData) -> String)?,
+    appendName: (String) -> Unit
+): String {
+    if (upload == null) return "あぷ小へ上げられません（通信の準備ができていません）"
+    return try {
+        val name = upload(video)
+        appendName(name)
+        "$name をあぷ小へ上げ、本文にファイル名を足しました"
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        "あぷ小へ上げられませんでした" + (e.message?.takeIf(String::isNotBlank)?.let { ": $it" } ?: "")
+    }
+}

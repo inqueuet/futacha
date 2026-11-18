@@ -350,7 +350,7 @@ internal fun FutachaMixScreen(
                         val now = rememberMixDisplayTime()
                         androidx.compose.runtime.CompositionLocalProvider(
                             LocalFutachaCatalogLongPress provides { item: com.valoser.futacha.shared.model.CatalogItem ->
-                                entries.firstOrNull { it.item === item }?.takeIf { com.valoser.futacha.shared.compat.aimogeBoardShapeOf(it.board.url) == null }?.let { rowMenu = it }
+                                entries.firstOrNull { it.item === item }?.let { rowMenu = it }
                             }
                         ) { CatalogGrid(
                             items = items, embeddedHtml = emptyList(), board = null, watchWords = emptyList(),

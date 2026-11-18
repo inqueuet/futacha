@@ -33,7 +33,7 @@ fun collectCompatWatchMatches(
     existingHistory: List<CompatHistoryEntry>,
     nowEpochMillis: Long
 ): List<CompatWatchMatch> {
-    val normalizedWords = watchWords.map(::normalizeCompatWatchText).filter(String::isNotBlank).distinct()
+    val normalizedWords = watchWords.map(::normalizeCompatCatalogMatchText).filter(String::isNotBlank).distinct()
     if (normalizedWords.isEmpty()) return emptyList()
 
     val existingByUrl = existingHistory.associateBy(CompatHistoryEntry::canonicalUrl)
@@ -42,7 +42,7 @@ fun collectCompatWatchMatches(
         .distinctBy { it.id.ifBlank { it.threadUrl } }
         .filter { item ->
             val title = item.title.orEmpty()
-            val normalizedTitle = normalizeCompatWatchText(title)
+            val normalizedTitle = normalizeCompatCatalogMatchText(title)
             normalizedWords.any { normalizedTitle.contains(it) }
         }
         .mapNotNull { item ->

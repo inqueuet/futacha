@@ -955,6 +955,18 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
                 "（カタログはサイズが分からないため、取得済みの元画像だけを使います）。動画はサムネイルのままです。",
             preferenceKey = "dummyThumbHighQualityNote",
             enabled = false
+        ),
+        CompatSettingEntry(
+            "サムネイルのGIFを動かす",
+            "ON",
+            preferenceKey = com.valoser.futacha.shared.ui.image.THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY
+        ),
+        CompatSettingEntry(
+            "GIFを動かす設定の説明",
+            "高画質表示で元画像を使うサムネイルのうち、動くGIFをスレッドとカタログで動かします。" +
+                "画面に出ている分だけ動かし、画面外とアプリが裏にある間は止めます。全モード共通の設定です。",
+            preferenceKey = "dummyThumbAnimateGifNote",
+            enabled = false
         )
     )
     "image_search" -> listOf(
@@ -1094,7 +1106,8 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             "キャッシュサーバー機能" to entries.compatKeys(COMPAT_CACHE_ENABLED_KEY, COMPAT_CACHE_STATUS_KEY),
             "画像の取得" to entries.compatKeys(
                 "networkImageParallel", "dummyImageParallelNote",
-                HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY, "dummyThumbHighQualityNote"
+                HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY, "dummyThumbHighQualityNote",
+                com.valoser.futacha.shared.ui.image.THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY, "dummyThumbAnimateGifNote"
             ),
             "ふたちゃ拡張" to entries.compatKeys(COMPAT_CACHE_BASE_URL_KEY)
         ).filter { it.second.isNotEmpty() }

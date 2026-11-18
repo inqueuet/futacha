@@ -3870,7 +3870,9 @@ private class CompatCatalogCellDecorations(
     tabs: List<CompatTab>,
     private val replyDeltas: Map<String, Int>,
     private val watchWords: List<String>,
-    private val extractRules: List<CompatNgRule>
+    private val extractRules: List<CompatNgRule>,
+    /** The whole titles by thread id: the shown ones are cut to the display length, the words match the whole (seq53). */
+    private val fullTitles: Map<String, String> = emptyMap()
 ) {
     private val openTabsByUrl = tabs.associateBy(CompatTab::canonicalUrl)
     // Keyed by the item itself: a malformed catalog can repeat an id.
@@ -3890,7 +3892,9 @@ private class CompatCatalogCellDecorations(
 
     fun matchedWatchWords(item: CatalogItem): List<String> =
         matchedWords.getOrPut(item) {
-            compatCatalogMatchedWords(item = item, watchWords = watchWords, rules = extractRules)
+            val full = fullTitles[item.id]
+            compatCatalogMatchedWords(item = if (full != null && full != item.title) item.copy(title = full) else item,
+                watchWords = watchWords, rules = extractRules)
         }
 }
 
@@ -3918,9 +3922,10 @@ private fun rememberCompatCatalogCellDecorations(
     tabs: List<CompatTab>,
     replyDeltas: Map<String, Int>,
     watchWords: List<String>,
-    extractRules: List<CompatNgRule>
-): CompatCatalogCellDecorations = remember(displayedItems, tabs, replyDeltas, watchWords, extractRules) {
-    CompatCatalogCellDecorations(tabs, replyDeltas, watchWords, extractRules)
+    extractRules: List<CompatNgRule>,
+    fullTitles: Map<String, String> = emptyMap()
+): CompatCatalogCellDecorations = remember(displayedItems, tabs, replyDeltas, watchWords, extractRules, fullTitles) {
+    CompatCatalogCellDecorations(tabs, replyDeltas, watchWords, extractRules, fullTitles)
 }
 
 @Composable
@@ -3976,7 +3981,7 @@ private fun CompatCatalogScreen(
 ) {
     val scope = rememberCoroutineScope()
     var serverSearchOpen by remember(board.key) { mutableStateOf(false) }
-    val serverSearchAvailable = httpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(board.originalUrl) != null
+    val serverSearchAvailable = httpClient != null && com.valoser.futacha.shared.network.serverPostSearchTitle(board.originalUrl) != null
     if (serverSearchOpen && httpClient != null) com.valoser.futacha.shared.ui.board.FutabaServerSearchDialog(
         httpClient, board.originalUrl, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
     )
@@ -4178,6 +4183,9 @@ private fun CompatCatalogScreen(
             }
             catalogImagePhashes = cached + computed
         }
+    }
+    val catalogFullTitles = remember(items, resolvedCatalogTitles) {
+        com.valoser.futacha.shared.compat.compatCatalogFullTitles(items, resolvedCatalogTitles)
     }
     val catalogProjectionRequest = remember(
         items,
@@ -5113,7 +5121,8 @@ private fun CompatCatalogScreen(
                 tabs = tabs,
                 replyDeltas = catalogReplyDeltas,
                 watchWords = watchWords,
-                extractRules = catalogExtractRules
+                extractRules = catalogExtractRules,
+                fullTitles = catalogFullTitles
             )
             CompatBidirectionalPullRefresh(
                 enabled = catalogPullRefreshEnabled,
@@ -5308,7 +5317,7 @@ private fun CompatCatalogScreen(
             commonNgEnabled = onOpenCommonNg != null
         ).let { items ->
             if (route == CompatOtherMenuRoute.CATALOG_ROOT && serverSearchAvailable)
-                items + com.valoser.futacha.shared.compat.CompatOtherMenuItem("server_search", "ふたばのレス検索") else items
+                items + com.valoser.futacha.shared.compat.CompatOtherMenuItem("server_search", com.valoser.futacha.shared.network.serverPostSearchTitle(board.originalUrl).orEmpty()) else items
         }
         CompatHierarchicalOtherMenuDialog(
             route = route,

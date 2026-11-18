@@ -515,6 +515,8 @@ internal fun CompatPostScreen(
             message = failure.toCompatUserMessage("操作に失敗しました")
         }, block)
     var pendingCompression by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
+    /** A video the board does not take, waiting for "あぷ小へ上げますか？" (aimg seq63), and the question. */
+    var pendingVideoUps by remember(ownerKey) { mutableStateOf<Pair<ImageData, String>?>(null) }
     var attachmentPreviewOpen by remember(ownerKey) { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     var toolbarOverflowOpen by remember { mutableStateOf(false) }
@@ -798,6 +800,14 @@ internal fun CompatPostScreen(
     }
 
     fun acceptAttachment(selected: ImageData) {
+        val upsOffer = compatVideoUpsOffer(selected, postingCapabilities.supportedExtensions,
+            com.valoser.futacha.shared.compat.boardSiteOf(board.originalUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE,
+            attachmentAllowed = isBuild || postingCapabilities.replyAttachmentsAllowed)
+        when (upsOffer) {
+            is CompatVideoUpsOffer.Offer -> { pendingVideoUps = selected to upsOffer.message; return }
+            is CompatVideoUpsOffer.Refuse -> { message = upsOffer.message; return }
+            null -> Unit
+        }
         if (!isBuild && !postingCapabilities.replyAttachmentsAllowed && !selected.isHandwriting) {
             message = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
             return
@@ -1474,6 +1484,34 @@ internal fun CompatPostScreen(
         }
     }
 
+    pendingVideoUps?.let { (video, question) ->
+        com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { pendingVideoUps = null },
+                title = { Text(COMPAT_VIDEO_UPS_TITLE) },
+                text = { Text(question) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(modifier = Modifier.testTag("compat-video-ups-ok"), onClick = {
+                        pendingVideoUps = null
+                        if (!upsUploadInProgress) {
+                            upsUploadInProgress = true
+                            launchScreenAction {
+                                try {
+                                    val client = httpClient
+                                    message = uploadCompatVideoToUps(video,
+                                        client?.let { c -> { v -> uploadCompatUps(c, v, "", storedDeleteKey, appVersion).getOrThrow() } },
+                                        appendName = { replaceComment(appendCompatPostText(commentState.text.toString(), it)) })
+                                } finally {
+                                    upsUploadInProgress = false
+                                }
+                            }
+                        }
+                    }) { Text("OK") }
+                },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = { pendingVideoUps = null }) { Text("キャンセル") } }
+            )
+        }
+    }
     pendingCompression?.let { oversizedImage ->
         CompatPostImageCompressConfirmation(
             onCompress = {

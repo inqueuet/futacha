@@ -188,6 +188,7 @@ internal fun FtutterRuntimeHost(
         }
     }
     val highQualityThumbnailMode = rememberHighQualityThumbnailMode(compatibilityStore)
+    val thumbnailGifAnimation = com.valoser.futacha.shared.ui.image.rememberThumbnailGifAnimation(compatibilityStore)
     val currentStore by rememberUpdatedState(compatibilityStore)
     // The settings of this mode are written one at a time, in order; a change of a list or a count is applied to the value
     // stored at that moment (audit M2).
@@ -212,6 +213,7 @@ internal fun FtutterRuntimeHost(
         // The shared settings and viewer screens read the catalog loader; this mode uses one loader for both.
         LocalFutachaCatalogImageLoader provides imageLoader,
         LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
+        com.valoser.futacha.shared.ui.image.LocalThumbnailGifAnimation provides thumbnailGifAnimation,
         LocalOriginalMediaSource provides promptMediaSource,
         LocalMediaFeatureSettings provides mediaFeatureSettings,
         LocalMediaFeatureGate provides mediaFeatureGate,

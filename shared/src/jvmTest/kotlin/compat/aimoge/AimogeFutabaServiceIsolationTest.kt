@@ -26,24 +26,52 @@ class AimogeFutabaServiceIsolationTest {
     }
 
     @Test
-    fun theCacheSearchSendsNothingForAnAimogeBoard() = runBlocking {
-        var requests = 0
-        val client = HttpClient(MockEngine { requests++; respond("") })
-        var archiveCalls = 0
-        var legacyCalls = 0
-        val result = searchCompatCatalogCacheRemote(
-            httpClient = client,
-            boardUrl = aBoard,
-            query = "テスト",
-            searchArchive = { _, _ -> archiveCalls++; emptyList() },
-            searchLegacy = { legacyCalls++; Result.success(emptyList()) }
-        )
-        assertTrue(result.isSuccess)
-        assertEquals(emptyList(), result.getOrThrow())
-        assertEquals(0, archiveCalls)
-        assertEquals(0, legacyCalls)
-        assertEquals(0, requests)
-        client.close()
+    fun theCacheSearchAsksOnlyAimogesOwnArchiveForAnAimogeBoard() = runBlocking {
+        val before = com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+        try {
+            var requests = 0
+            val client = HttpClient(MockEngine { requests++; respond("") })
+            val scopes = mutableListOf<com.valoser.futacha.shared.network.ArchiveSearchScope>()
+            var legacyCalls = 0
+            val result = searchCompatCatalogCacheRemote(
+                httpClient = client,
+                boardUrl = aBoard,
+                query = "テスト",
+                searchArchive = { _, scope ->
+                    scopes += scope
+                    listOf(com.valoser.futacha.shared.network.ArchiveSearchItem(
+                        threadId = "0193b2c4-1a2b-7c3d-8e4f-5a6b7c8d9e0f", server = "aimoge", board = "aimoge",
+                        title = "テスト", htmlUrl = aThread
+                    ))
+                },
+                searchLegacy = { legacyCalls++; Result.success(emptyList()) }
+            )
+            assertEquals(listOf("aimoge"), scopes.map { it.aimogeSlug })
+            assertEquals(listOf(aThread), result.getOrThrow().map { it.threadUrl })
+            assertEquals(0, legacyCalls)
+            assertEquals(0, requests)
+            client.close()
+        } finally {
+            com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = before
+        }
+    }
+
+    @Test
+    fun theCacheSearchSendsNothingWhileAimogeIsOff() = runBlocking {
+        val before = com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = false
+        try {
+            var calls = 0
+            val client = HttpClient(MockEngine { calls++; respond("") })
+            val result = searchCompatCatalogCacheRemote(client, aBoard, "テスト",
+                searchArchive = { _, _ -> calls++; emptyList() }, searchLegacy = { calls++; Result.success(emptyList()) })
+            assertEquals(emptyList(), result.getOrThrow())
+            assertEquals(0, calls)
+            client.close()
+        } finally {
+            com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = before
+        }
     }
 
     @Test

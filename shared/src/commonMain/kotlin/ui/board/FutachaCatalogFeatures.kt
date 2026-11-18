@@ -28,6 +28,16 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
+/**
+ * The catalog's "スレッド文の長さ" cut, applied when a title is shown. Search, NG and watch words see the whole title
+ * (seq53: the cut used to happen before them, so a word after the cut was never found).
+ */
+internal val LocalFutachaCatalogSourceTitleLimit = compositionLocalOf<Int?> { null }
+
+/** [display] cut to [limit] when it is the catalog's own title (a head-metadata title was never cut). */
+internal fun futachaCatalogSourceTitle(display: String, item: CatalogItem, limit: Int?): String =
+    if (limit != null && display == item.title) display.take(limit) else display
+
 internal val LocalFutachaCatalogReplyIndicators = compositionLocalOf<Map<String, CompatCatalogReplyIndicator>> { emptyMap() }
 internal val LocalFutachaCatalogTools = compositionLocalOf<List<FutachaThreadTool>> { emptyList() }
 internal val LocalFutachaCatalogLongPress = compositionLocalOf<((CatalogItem) -> Unit)?> { null }
@@ -74,8 +84,13 @@ internal suspend fun requestFutachaCatalogDeletion(repository: BoardRepository, 
     repository.requestDeletion(boardUrl, item.id, item.id, "110")
 }
 
+/** The board address the ふたちゃ catalog features key on: the Futaba canonical one, or the あいもげ board shape (seq65-66). */
+internal fun futachaCatalogFeatureBoardUrl(url: String): String? =
+    com.valoser.futacha.shared.compat.storeCanonicalBoardUrlOf(url)
+
 internal fun futachaCatalogThreadUrl(boardUrl: String, item: CatalogItem): String =
-    runCatching { BoardUrlResolver.resolveThreadUrl(boardUrl, item.id) }.getOrNull()
+    // An あいもげ thread has its own address (/b/{slug}/thread/{uuid}); the Futaba res/N.htm form does not apply (seq65-66).
+    if (com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl) != null) item.threadUrl else runCatching { BoardUrlResolver.resolveThreadUrl(boardUrl, item.id) }.getOrNull()
         ?.takeIf { it.isNotBlank() } ?: item.threadUrl
 
 @Composable
@@ -93,8 +108,11 @@ internal fun FutachaCatalogFeatureHost(
     content: @Composable (CatalogUiState) -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
-    val boardUrl = board?.url?.let(::canonicalizeBoardUrl)
+    // Site-aware: an あいもげ board gets the same catalog features (long-press menu, NG) as a Futaba one (seq65-66);
+    // the Futaba-only ones (DEL, cache search, liveness probes) are gated by [futabaBoard] below.
+    val boardUrl = board?.url?.let(::futachaCatalogFeatureBoardUrl)
     if (features == null || board == null || boardUrl == null) { content(state); return }
+    val futabaBoard = canonicalizeBoardUrl(boardUrl) != null
     val cachedImageLoader = com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
     val boardKey = compatBoardKey(boardUrl)
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
@@ -186,7 +204,7 @@ internal fun FutachaCatalogFeatureHost(
                 mode.sharedCatalogSort()?.let { sort ->
                     val stored = features.store.loadCatalogSnapshot(boardKey, sort)
                     replyDeltas = buildCompatCatalogReplyDeltas(success.content.items, stored?.items.orEmpty())
-                    val trackDropped = features.value("catalog", "catalogFindThreadDeleted") == "ON"
+                    val trackDropped = futabaBoard && features.value("catalog", "catalogFindThreadDeleted") == "ON"
                     val requestedCount = features.intValue("catalog", "catalogThreadSize", 100..3000) ?: 300
                     val activeDropped = if (trackDropped && stored != null) {
                         val candidates = diffCompatCatalogGenerations(success.content.items, stored.items, requestedCount, true).vanishedWithin.take(64)
@@ -227,6 +245,7 @@ internal fun FutachaCatalogFeatureHost(
     } }
     fun requestDeletion(item: CatalogItem) {
         // Claim the action before launching: two clicks in the same frame must send only once.
+        if (!futabaBoard) { selected = null; message = "この板ではDEL依頼を送れません"; return }
         if (reporting) return
         reporting = true
         selected = null
@@ -258,11 +277,13 @@ internal fun FutachaCatalogFeatureHost(
             savePreference { it.copy(showNonPriority = show) }
         },
         FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
-        FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true },
+    ) + listOfNotNull(
+        if (futabaBoard) FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true } else null
+    ) + listOf(
         FutachaThreadTool("表示・取得の詳細設定", Icons.Rounded.Settings) { features.openSettings("catalog") }
     ) + listOfNotNull(
-        if (features.httpClient != null && com.valoser.futacha.shared.network.futabaServerSearchBase(boardUrl) != null)
-            FutachaThreadTool("ふたばのレス検索", Icons.Rounded.Search) { serverSearchOpen = true } else null
+        if (features.httpClient != null && com.valoser.futacha.shared.network.serverPostSearchTitle(boardUrl) != null)
+            FutachaThreadTool(com.valoser.futacha.shared.network.serverPostSearchTitle(boardUrl).orEmpty(), Icons.Rounded.Search) { serverSearchOpen = true } else null
     )
     if (serverSearchOpen && features.httpClient != null) FutabaServerSearchDialog(
         features.httpClient, boardUrl, { serverSearchOpen = false }, { serverSearchOpen = false; onOpenThread(it) }
@@ -332,7 +353,7 @@ internal fun FutachaCatalogFeatureHost(
     val titleLimit = features.intValue("catalog", "catalogTitleLength", 10..30)
     val delayFewReplies = features.intValue("catalog", "delayFewReplies", 0..30)
     val appendDropped = features.value("catalog", "catalogAppendDropped") == "ON"
-    val projection by produceState<FutachaCatalogProjection?>(null, items, scopedRules, rulesReady, preference, titleLimit,
+    val projection by produceState<FutachaCatalogProjection?>(null, items, scopedRules, rulesReady, preference,
         delayFewReplies, appendDropped, threshold, phashes, dropped) {
         if (!rulesReady) return@produceState
         value = FutachaCatalogProjection(items, withContext(AppDispatchers.parsing) {
@@ -345,7 +366,7 @@ internal fun FutachaCatalogFeatureHost(
                 preference.showNonPriority, index::extracts)
             val combined = appendCompatDroppedCatalogItems(prioritized, dropped.filterNot { index.hides(it.item) },
                 appendDropped)
-            if (titleLimit == null) combined else combined.map { it.copy(title = it.title?.take(titleLimit)) }
+            combined
         })
     }
     val projected = resolveFutachaCatalogProjectedItems(projection, items)
@@ -377,6 +398,7 @@ internal fun FutachaCatalogFeatureHost(
     }
     CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
         LocalFutachaCatalogReplyIndicators provides replyIndicators,
+        LocalFutachaCatalogSourceTitleLimit provides titleLimit,
         LocalFutachaTabStrip provides strip,
         LocalFutachaScrollRefreshEnabled provides (features.value("catalog", "catalogPullToRefresh") != "OFF"),
         LocalFutachaCatalogLongPress provides stableLongPress) {
@@ -410,7 +432,7 @@ internal fun FutachaCatalogFeatureHost(
             TextButton(onClick = { addTab(item) }) { Text("タブに追加") }
             TextButton(onClick = { register(item) }) { Text("NGスレッドに登録") }
             if (item.fullImageUrl != null || item.thumbnailUrl != null) TextButton(onClick = { imageNg = item; selected = null }) { Text("NG画像に登録") }
-            TextButton(enabled = !reporting, onClick = { selected = null; pendingReport = item }) {
+            if (futabaBoard) TextButton(enabled = !reporting, onClick = { selected = null; pendingReport = item }) {
                 Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "DEL依頼を送信")
             }
             TextButton(onClick = {

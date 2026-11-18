@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.compat.compatStoredPostDeleteKey
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -128,6 +129,8 @@ internal fun ThreadFormDialog(
     var attachmentProcessingError by remember { mutableStateOf<String?>(null) }
     var isSanitizingAttachment by remember { mutableStateOf(false) }
     var pendingCompression by remember { mutableStateOf<ImageData?>(null) }
+    /** A video the board does not take, waiting for "あぷ小へ上げますか？" (aimg seq63), and the question. */
+    var pendingUps by remember { mutableStateOf<Pair<ImageData, String>?>(null) }
     val postingCapabilities by produceState(com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(boardUrl), boardUrl) {
         val repository = sharedFeatures?.repository
         if (repository != null && com.valoser.futacha.shared.compat.canonicalizeBoardUrl(boardUrl) != null) {
@@ -180,6 +183,13 @@ internal fun ThreadFormDialog(
         }
     }
     fun acceptPickedImage(image: ImageData) {
+        val isAimoge = com.valoser.futacha.shared.compat.boardSiteOf(boardUrl) == com.valoser.futacha.shared.compat.BoardSite.AIMOGE
+        val attachmentAllowed = !isReply || postingCapabilities.replyAttachmentsAllowed
+        when (val ups = com.valoser.futacha.shared.ui.compat.compatVideoUpsOffer(image, postingCapabilities.supportedExtensions, isAimoge, attachmentAllowed)) {
+            is com.valoser.futacha.shared.ui.compat.CompatVideoUpsOffer.Offer -> { attachmentProcessingError = null; pendingUps = image to ups.message; return }
+            is com.valoser.futacha.shared.ui.compat.CompatVideoUpsOffer.Refuse -> { attachmentProcessingError = ups.message; return }
+            null -> Unit
+        }
         if (isReply && !postingCapabilities.replyAttachmentsAllowed && !image.isHandwriting) {
             attachmentProcessingError = "この板の返信は通常の添付に対応していません。お手書きはお絵描きから選択できます"
             return
@@ -203,6 +213,21 @@ internal fun ThreadFormDialog(
             else -> attachmentProcessingError = com.valoser.futacha.shared.ui.compat.compatPostAttachmentDecisionMessage(decision, image.fileName, limit)
         }
     }
+    val latestComment by androidx.compose.runtime.rememberUpdatedState(comment)
+    val latestCommentChange by androidx.compose.runtime.rememberUpdatedState(onCommentChange)
+    pendingUps?.let { (video, question) -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { pendingUps = null },
+        title = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_VIDEO_UPS_TITLE) }, text = { Text(question) },
+        confirmButton = { TextButton(modifier = Modifier.testTag("futacha-video-ups-ok"), onClick = {
+            pendingUps = null
+            val features = sharedFeatures
+            val client = features?.httpClient
+            val key = features?.preferences?.compatStoredPostDeleteKey().orEmpty().ifBlank { password }
+            scope.launch {
+                attachmentProcessingError = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                    client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, features.appVersion).getOrThrow() } },
+                    appendName = { latestCommentChange(com.valoser.futacha.shared.ui.compat.appendCompatPostText(latestComment, it)) })
+            }
+        }) { Text("OK") } }, dismissButton = { TextButton(onClick = { pendingUps = null }) { Text("キャンセル") } }) } }
     pendingCompression?.let { image -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { pendingCompression = null },
         title = { Text("画像を圧縮しますか？") }, text = { Text("この板の添付上限を超えています。上限に収まるよう圧縮します。") },
         confirmButton = { TextButton(onClick = {

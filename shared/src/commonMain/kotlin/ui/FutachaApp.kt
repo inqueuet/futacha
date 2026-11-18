@@ -612,6 +612,7 @@ private fun FutachaAppContent(
             }
         }
         val highQualityThumbnailMode = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode(compatibilityStore)
+        val thumbnailGifAnimation = com.valoser.futacha.shared.ui.image.rememberThumbnailGifAnimation(compatibilityStore)
         // C-3: on Android nothing else consumes the AI bridge in this mode, so
         // watch/AppFunctions commands piled up and replayed after a switch. This
         // branch returns before the modern collector, so only one is active.
@@ -654,6 +655,7 @@ private fun FutachaAppContent(
         CompositionLocalProvider(
             LocalFutachaImageLoader provides compatibilityImageLoader,
             com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
+            com.valoser.futacha.shared.ui.image.LocalThumbnailGifAnimation provides thumbnailGifAnimation,
             LocalOriginalMediaSource provides promptMediaSource,
             LocalMediaFeatureSettings provides mediaFeatureSettings,
             LocalMediaFeatureUpdater provides updateMediaFeatures,
@@ -948,10 +950,12 @@ private fun FutachaAppContent(
             fileSystem, autoSavedThreadRepository
         )
         val highQualityThumbnailMode = com.valoser.futacha.shared.ui.image.rememberHighQualityThumbnailMode(compatibilityStore)
+        val thumbnailGifAnimation = com.valoser.futacha.shared.ui.image.rememberThumbnailGifAnimation(compatibilityStore)
         CompositionLocalProvider(
             com.valoser.futacha.shared.ui.image.LocalHistoryImageRepositories provides historyImageRepositories,
             LocalFutachaImageLoader provides imageLoader,
             com.valoser.futacha.shared.ui.image.LocalHighQualityThumbnailMode provides highQualityThumbnailMode,
+            com.valoser.futacha.shared.ui.image.LocalThumbnailGifAnimation provides thumbnailGifAnimation,
             LocalOriginalMediaSource provides promptMediaSource,
             LocalMediaFeatureSettings provides mediaFeatureSettings,
             LocalMediaFeatureUpdater provides updateMediaFeatures,

@@ -14,7 +14,22 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 
 /** The site's own read-only search (the same mode=search endpoint as its search form), not a post. */
-internal fun futabaServerSearchBase(boardUrl: String): String? = canonicalizeBoardUrl(boardUrl)?.trimEnd('/')
+internal fun futabaServerSearchBase(boardUrl: String): String? =
+    if (com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl) != null) null
+    else canonicalizeBoardUrl(boardUrl)?.trimEnd('/')
+
+/** The あいもげ board slug whose post search the menu offers, or null (not あいもげ, or あいもげ is off in this build). */
+internal fun aimogePostSearchSlug(boardUrl: String): String? {
+    if (!com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled) return null
+    return com.valoser.futacha.shared.compat.aimogeBoardShapeOf(boardUrl)?.trimEnd('/')?.substringAfterLast('/')
+}
+
+/** The name of the board's post search in the 4 modes' menus, or null when the board has none. */
+internal fun serverPostSearchTitle(boardUrl: String): String? = when {
+    aimogePostSearchSlug(boardUrl) != null -> "あいもげのレス検索"
+    futabaServerSearchBase(boardUrl) != null -> "ふたばのレス検索"
+    else -> null
+}
 
 internal fun futabaServerSearchUrl(boardUrl: String, query: String): String {
     val base = requireNotNull(futabaServerSearchBase(boardUrl)) { "ふたばの板を選んでください" }

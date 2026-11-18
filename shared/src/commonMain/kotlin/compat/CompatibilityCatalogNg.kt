@@ -210,4 +210,4 @@ private fun compatCatalogMatchedWordsUnchecked(
         .forEach(::add)
 }.distinctBy(String::normalizeCompatCatalogValue)
 
-private fun String.normalizeCompatCatalogValue(): String = normalizeCompatSearchText(this)
+private fun String.normalizeCompatCatalogValue(): String = normalizeCompatCatalogMatchText(this)

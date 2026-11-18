@@ -75,6 +75,31 @@ enum class HighQualityThumbnailMode(val storedValue: String, val label: String) 
 internal const val HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH = "network"
 internal const val HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY = "networkThumbHighQuality"
 
+/** 「サムネイルのGIFを動かす」: shared by all four modes, stored ON/OFF. */
+internal const val THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY = "networkThumbAnimateGif"
+
+/**
+ * ON by default: only composed (visible) slots decode an animated original,
+ * lazy lists drop the slots scrolled away, and the iOS animator also stops while
+ * the app is in the background. Android catalogs already animated before.
+ */
+internal fun thumbnailGifAnimationEnabled(stored: String?): Boolean =
+    stored?.trim()?.uppercase() != "OFF"
+
+/** Provided by each mode's host; tests and previews keep still thumbnails. */
+val LocalThumbnailGifAnimation = compositionLocalOf { false }
+
+@Composable
+internal fun rememberThumbnailGifAnimation(store: CompatibilityStore?): Boolean {
+    val flow = remember(store) {
+        store?.preferences
+            ?.map { thumbnailGifAnimationEnabled(it.compatPreferenceValue(HIGH_QUALITY_THUMBNAIL_PREFERENCE_PATH, THUMBNAIL_GIF_ANIMATION_PREFERENCE_KEY)) }
+            ?.distinctUntilChanged()
+            ?: flowOf(true)
+    }
+    return flow.collectAsState(true).value
+}
+
 /** Below this stretch the thumbnail already looks close to the original. */
 internal const val HIGH_QUALITY_THUMBNAIL_MIN_UPSCALE = 1.5f
 
@@ -230,10 +255,12 @@ internal fun rememberHighQualityThumbnailOverride(
     imageLoader: ImageLoader
 ): Painter? {
     if (plan == null) return null
-    val cached = rememberMemoryCachedHighQualityThumbnail(plan, imageLoader)
+    val animated = LocalThumbnailGifAnimation.current
+    val effective = remember(plan, animated) { plan.copy(allowAnimation = animated) }
+    val cached = rememberMemoryCachedHighQualityThumbnail(effective, imageLoader)
     if (cached != null) return cached
     if (!thumbnailReady) return null
-    return rememberHighQualityThumbnailLoad(plan, networkWanted = true, imageLoader).painter
+    return rememberHighQualityThumbnailLoad(effective, networkWanted = true, imageLoader).painter
 }
 
 internal data class ThreadThumbnailQuality(
@@ -258,9 +285,11 @@ internal fun rememberThreadHighQualityThumbnail(
     imageLoader: ImageLoader
 ): ThreadThumbnailQuality {
     if (plan == null) return ThreadThumbnailQuality(null)
-    val cached = rememberMemoryCachedHighQualityThumbnail(plan, imageLoader)
+    val animated = LocalThumbnailGifAnimation.current
+    val effective = remember(plan, animated) { plan.copy(allowAnimation = animated) }
+    val cached = rememberMemoryCachedHighQualityThumbnail(effective, imageLoader)
     if (cached != null) return ThreadThumbnailQuality(cached, fromCache = true)
-    val load = rememberHighQualityThumbnailLoad(plan, networkWanted = thumbnailReady, imageLoader)
+    val load = rememberHighQualityThumbnailLoad(effective, networkWanted = thumbnailReady, imageLoader)
     return ThreadThumbnailQuality(load.painter, checkingCache = !load.checked)
 }
 
@@ -269,6 +298,8 @@ private fun rememberMemoryCachedHighQualityThumbnail(
     plan: HighQualityThumbnailPlan,
     imageLoader: ImageLoader
 ): Painter? {
+    // An animated slot goes through the request so the platform animator can wrap it.
+    if (plan.allowAnimation) return null
     val platformContext = LocalPlatformContext.current
     // Snapshot on entry: switching to the memory-cache branch after this slot's
     // own request succeeds would replace its painter and restart the transition.
@@ -352,7 +383,9 @@ private fun rememberHighQualityThumbnailLoad(
         }
     }
     return HighQualityThumbnailLoad(
-        painter = painter.takeIf { state is AsyncImagePainter.State.Success },
+        painter = if (state is AsyncImagePainter.State.Success) {
+            platformAnimatedViewerPainter(state, painter, plan.allowAnimation)
+        } else null,
         checked = checked || finished
     )
 }
